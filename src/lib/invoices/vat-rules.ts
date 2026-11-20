@@ -1,5 +1,15 @@
 import type { CustomerType, VatTreatment } from '@/types'
-import { countryPermitsReverseCharge } from '@/lib/vat/country-codes'
+import type { InvoiceVatOverride, InvoiceVatTreatmentOverride } from '@/lib/invoices/invoice-vat-override'
+import {
+  countryPermitsReverseCharge,
+  isEuGoodsDestination,
+  isAssignedCountryCode,
+  isEuTradeVatPrefix,
+  normalizeCountryCode,
+  vatNumberCountryPrefix,
+} from '@/lib/vat/country-codes'
+import { isValidSwedishVatNumber, normalizeVatNumber } from '@/lib/vat/vat-number'
+import { isZeroRatedInvoiceTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 
 export interface VatRateOption {
   rate: number
@@ -83,7 +93,9 @@ export function getAvailableVatRates(
  * export): an article's stored rate is its DOMESTIC rate, and adopting it
  * there would silently put Swedish VAT on a reverse-charge or export invoice
  * even though the wider permitted set would accept it. This governs PREFILL
- * only; every validation gate keeps using getPermittedVatRates().
+ * only; every validation gate keeps using getPermittedVatRates(). A recurring
+ * schedule line's stored rate is such a prefill too (executeRecurringSchedule,
+ * crm#1285).
  */
 export function getArticleVatRateAdoptionSet(
   customerType: CustomerType,
@@ -151,24 +163,6 @@ export function getPermittedVatRates(
   ]
 }
 
-/**
- * Map a numeric VAT rate to a VatTreatment.
- */
-export function getVatTreatmentForRate(rate: number): VatTreatment {
-  switch (rate) {
-    case 25:
-      return 'standard_25'
-    case 12:
-      return 'reduced_12'
-    case 6:
-      return 'reduced_6'
-    case 0:
-      return 'exempt'
-    default:
-      return 'standard_25'
-  }
-}
-
 export interface VatRule {
   treatment: VatTreatment
   rate: number
@@ -185,6 +179,23 @@ export interface VatRule {
 export const EU_REVERSE_CHARGE_NOTICE =
   'Omvänd skattskyldighet / Reverse charge - VAT to be accounted for by the recipient as per Article 196, Council Directive 2006/112/EC'
 export const EXPORT_NOTICE_SV = 'Omsättning utanför EU, ML 10 kap.'
+/**
+ * Unionsintern leverans av varor (ML 10 kap. 42 §): the exemption reference
+ * ML 17 kap. 24 § requires, in the wording the swedish-invoice-compliance
+ * skill gives ("Unionsintern leverans" or Article 138). Not the Article 196
+ * notice above: that one is the services reverse charge. Bilingual in one
+ * string like EU_REVERSE_CHARGE_NOTICE, so the PDF prints it as stored.
+ */
+export const EU_GOODS_SUPPLY_NOTICE =
+  'Unionsintern leverans / Intra-Community supply - exempt under Article 138, Council Directive 2006/112/EC (ML 10 kap. 42 §)'
+/**
+ * Omvänd betalningsskyldighet for construction services: the notation
+ * ML 17 kap. 24 § requires when the buyer accounts for the VAT, in the
+ * wording Skatteverket accepts (dnr 8-724682), with the paragraph that puts
+ * the liability on the buyer (ML 16 kap. 13 §). Stored in Swedish; the PDF
+ * renders it in the document language (localizeVatNotice).
+ */
+export const DOMESTIC_REVERSE_CHARGE_NOTICE = 'Omvänd betalningsskyldighet, byggtjänster, ML 16 kap. 13 §'
 
 /**
  * Determine VAT treatment based on customer type and VAT validation status.
@@ -288,8 +299,7 @@ export function deriveInvoiceVatHeader(
   if (!options.vatRegistered) {
     return { vat_treatment: 'exempt', moms_ruta: null, reverse_charge_text: null }
   }
-  const isSpecialTreatment =
-    vatRules.treatment === 'reverse_charge' || vatRules.treatment === 'export'
+  const isSpecialTreatment = isZeroRatedInvoiceTreatment(vatRules.treatment)
   const hasZeroRatedLine = lineVatRates.length === 0 || lineVatRates.includes(0)
   const headerRules =
     !isSpecialTreatment || hasZeroRatedLine ? vatRules : getVatRules('swedish_business')
@@ -500,28 +510,229 @@ export function requiresSwedishVatAcknowledgement(
   )
 }
 
-/**
- * Calculate VAT amount
- */
-export function calculateVat(subtotal: number, vatRate: number): number {
-  return Math.round(subtotal * vatRate) / 100
+// ---------------------------------------------------------------------------
+// Per-invoice treatment (#2906)
+// ---------------------------------------------------------------------------
+
+// The vocabulary (standard / export / reverse_charge / reverse_charge_domestic) lives in
+// ./invoice-vat-override so the request schemas share it without the rules.
+export {
+  INVOICE_VAT_TREATMENT_OVERRIDES,
+  type InvoiceVatOverride,
+  type InvoiceVatTreatmentOverride,
+} from '@/lib/invoices/invoice-vat-override'
+
+export type InvoiceVatOverrideRefusalCode =
+  /** export / reverse_charge without delivery_country, where the customer does not already get that treatment. */
+  | 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_REQUIRED'
+  /** The delivery country contradicts the treatment (export inside the EU, intra-EU supply outside it or to SE). */
+  | 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH'
+  /** Intra-EU supply of goods without the buyer's VIES-validated VAT number from another member state. */
+  | 'INVOICE_VAT_TREATMENT_BUYER_VAT_NUMBER_REQUIRED'
+  /** Domestic reverse charge (construction) to a buyer that is not a Swedish business with a Swedish VAT number. */
+  | 'INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED'
+
+export type ResolvedInvoiceVatRules =
+  | {
+      ok: true
+      rules: VatRule
+      /** The lawful rates for this invoice's lines; element 0 is the default. */
+      permittedRates: VatRateOption[]
+      /**
+       * Whether explainVatTreatment() (which reads only the customer) still
+       * describes this invoice. False once the invoice states Swedish VAT or
+       * a goods delivery: a customer-based sentence would then be wrong.
+       */
+      explainFromCustomer: boolean
+    }
+  | { ok: false; code: InvoiceVatOverrideRefusalCode; details: Record<string, unknown> }
+
+const DOMESTIC_RULE: VatRule = { treatment: 'standard_25', rate: 25, momsRuta: '05' }
+const EXPORT_GOODS_RULE: VatRule = {
+  treatment: 'export',
+  rate: 0,
+  momsRuta: '36',
+  reverseChargeText: EXPORT_NOTICE_SV,
+}
+const EU_GOODS_RULE: VatRule = {
+  treatment: 'reverse_charge',
+  rate: 0,
+  momsRuta: '35',
+  reverseChargeText: EU_GOODS_SUPPLY_NOTICE,
+}
+const DOMESTIC_REVERSE_CHARGE_RULE: VatRule = {
+  treatment: 'reverse_charge_domestic',
+  rate: 0,
+  momsRuta: '41',
+  reverseChargeText: DOMESTIC_REVERSE_CHARGE_NOTICE,
 }
 
 /**
- * Calculate total including VAT
+ * The treatment the destination implies when the invoice names a delivery
+ * country but no treatment: goods that stay in Sweden carry Swedish VAT,
+ * goods to another member state are an intra-EU supply, goods leaving the
+ * EU are an export.
  */
-export function calculateTotal(subtotal: number, vatRate: number): number {
-  return Math.round((subtotal + calculateVat(subtotal, vatRate)) * 100) / 100
+function impliedTreatmentForDelivery(country: string): InvoiceVatTreatmentOverride {
+  if (country === 'SE') return 'standard'
+  return isEuGoodsDestination(country) ? 'reverse_charge' : 'export'
 }
 
 /**
- * Format VAT rate for display
+ * Decide an invoice's VAT rule from the customer AND what the invoice says
+ * about its own supply (#2906). Fails closed: it never returns a 0 % rule
+ * the stated facts do not support.
+ *
+ * The customer record is the right default for services: a B2B service is
+ * taxed where the buyer is established (huvudregeln, ML 6 kap.), which is
+ * what the customer row describes. It is the wrong source for goods, whose
+ * exemptions (export, unionsintern leverans, ML 10 kap.) turn on where the
+ * goods are transported: a Swedish company buying goods shipped to Norway
+ * is an export (ruta 36) although the buyer is Swedish. So the one fact an
+ * invoice can add is where the goods go, and a set delivery_country
+ * declares the invoice a supply of goods:
+ *
+ *  - standard: Swedish VAT at the line rates (ruta 05), always allowed. The
+ *    conservative choice, e.g. goods without export evidence, or a distance
+ *    sale to a consumer in another member state under the OSS threshold.
+ *  - export with delivery_country: export of goods (0 %, 3105, ruta 36),
+ *    only when the country is outside the EU goods VAT area.
+ *  - reverse_charge with delivery_country: unionsintern leverans (0 %, 3108,
+ *    ruta 35), only to another member state and only with the buyer's VAT
+ *    number from a member state other than Sweden, VIES-validated
+ *    (ML 10 kap. 42-43 §§, a material condition). Printed on the invoice
+ *    (ML 17 kap. 24 § p.4), so never for a private person, whose number the
+ *    PDF withholds.
+ *  - export / reverse_charge without delivery_country: the services
+ *    treatment (3305 ruta 40 / 3308 ruta 39), accepted only where the
+ *    customer already gets it. For anyone else the only lawful 0 % route is
+ *    goods with a destination, so the caller is told to name it.
+ *  - delivery_country alone: the treatment the destination implies, then
+ *    the same checks.
+ *  - reverse_charge_domestic: omvänd betalningsskyldighet for construction
+ *    services (0 %, 3231, ruta 41, ML 16 kap. 13 §), only to a Swedish
+ *    business with a Swedish VAT number, which the invoice prints
+ *    (ML 17 kap. 24 §), and never with a delivery_country: it is a service
+ *    on a property in Sweden. Whether the buyer is a construction business
+ *    and the supply a construction service is the seller's statement; no
+ *    customer field can show it, so it is never implied.
+ *
+ * The seller's VAT registration is the caller's gate, as for getVatRules().
  */
-export function formatVatRate(rate: number): string {
-  if (rate === 0) {
-    return '0%'
+export function resolveInvoiceVatRules(
+  customer: VatTreatmentCustomer,
+  override?: InvoiceVatOverride | null,
+): ResolvedInvoiceVatRules {
+  const validated = customer.vat_number_validated ?? false
+  const customerRules = getVatRules(customer.customer_type, validated, customer.country)
+  const customerRates = getPermittedVatRates(customer.customer_type, validated, customer.country)
+
+  const deliveryCountry = normalizeCountryCode(override?.delivery_country)
+  const requested = override?.vat_treatment ?? null
+  if (!requested && !deliveryCountry) {
+    return { ok: true, rules: customerRules, permittedRates: customerRates, explainFromCustomer: true }
   }
-  return `${rate}%`
+
+  // Fail closed on a code no country carries: outside the EU table it would
+  // read as "outside the EU" and imply or permit export at 0 %. The wire
+  // schema refuses it too; this covers every caller that skips the schema.
+  if (deliveryCountry && !isAssignedCountryCode(deliveryCountry)) {
+    return {
+      ok: false,
+      code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+      details: { vat_treatment: requested, delivery_country: deliveryCountry, required: 'assigned_iso_country' },
+    }
+  }
+
+  const treatment = requested ?? impliedTreatmentForDelivery(deliveryCountry as string)
+  const base = { vat_treatment: treatment, delivery_country: deliveryCountry }
+
+  if (treatment === 'reverse_charge_domestic') {
+    if (deliveryCountry) {
+      return {
+        ok: false,
+        code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+        details: { ...base, required: 'no_delivery_country' },
+      }
+    }
+    const domesticBuyerRefusal = (reason: string) => ({
+      ok: false as const,
+      code: 'INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED' as const,
+      details: { ...base, reason, customer_id: customer.id ?? null },
+    })
+    if (customer.customer_type === 'individual') return domesticBuyerRefusal('private_person')
+    if (customer.customer_type !== 'swedish_business') return domesticBuyerRefusal('not_swedish_business')
+    const buyerVatNumber = customer.vat_number ? normalizeVatNumber(customer.vat_number) : ''
+    if (!buyerVatNumber) return domesticBuyerRefusal('missing')
+    if (!isValidSwedishVatNumber(buyerVatNumber)) return domesticBuyerRefusal('not_swedish_vat_number')
+    return {
+      ok: true,
+      rules: DOMESTIC_REVERSE_CHARGE_RULE,
+      permittedRates: [{ rate: 0, label: '0% (omvänd betalningsskyldighet)', treatment: 'reverse_charge_domestic' }],
+      explainFromCustomer: false,
+    }
+  }
+
+  if (treatment === 'standard') {
+    return {
+      ok: true,
+      rules: DOMESTIC_RULE,
+      permittedRates: getAvailableVatRates('swedish_business'),
+      explainFromCustomer: false,
+    }
+  }
+
+  if (!deliveryCountry) {
+    if (customerRules.treatment === treatment) {
+      return { ok: true, rules: customerRules, permittedRates: customerRates, explainFromCustomer: true }
+    }
+    return {
+      ok: false,
+      code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_REQUIRED',
+      details: { ...base, customer_vat_treatment: customerRules.treatment },
+    }
+  }
+
+  if (treatment === 'export') {
+    if (isEuGoodsDestination(deliveryCountry)) {
+      return {
+        ok: false,
+        code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+        details: { ...base, required: 'outside_eu' },
+      }
+    }
+    return {
+      ok: true,
+      rules: EXPORT_GOODS_RULE,
+      permittedRates: [{ rate: 0, label: '0% (export)', treatment: 'export' }],
+      explainFromCustomer: false,
+    }
+  }
+
+  // Intra-EU supply of goods.
+  if (deliveryCountry === 'SE' || !isEuGoodsDestination(deliveryCountry)) {
+    return {
+      ok: false,
+      code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+      details: { ...base, required: 'other_eu_member_state' },
+    }
+  }
+  const vatNumber = customer.vat_number?.trim() || null
+  const buyerRefusal = (reason: string) => ({
+    ok: false as const,
+    code: 'INVOICE_VAT_TREATMENT_BUYER_VAT_NUMBER_REQUIRED' as const,
+    details: { ...base, reason, customer_id: customer.id ?? null },
+  })
+  if (customer.customer_type === 'individual') return buyerRefusal('private_person')
+  if (!vatNumber) return buyerRefusal('missing')
+  if (!isEuTradeVatPrefix(vatNumberCountryPrefix(vatNumber))) return buyerRefusal('not_another_member_state')
+  if (!validated) return buyerRefusal('not_validated')
+  return {
+    ok: true,
+    rules: EU_GOODS_RULE,
+    permittedRates: [{ rate: 0, label: '0% (unionsintern leverans)', treatment: 'reverse_charge' }],
+    explainFromCustomer: false,
+  }
 }
 
 /**
@@ -533,52 +744,9 @@ export function getVatTreatmentLabel(treatment: VatTreatment): string {
     reduced_12: '12% moms',
     reduced_6: '6% moms',
     reverse_charge: 'Omvänd skattskyldighet (0%)',
+    reverse_charge_domestic: 'Omvänd betalningsskyldighet, byggtjänster (0%)',
     export: 'Export (0%)',
     exempt: 'Momsfritt',
   }
   return labels[treatment]
-}
-
-/**
- * Derive a display-friendly VAT summary from invoice line items.
- *
- * - If all items share a single rate → returns that rate's label and treatment
- * - If items have mixed rates → returns "Blandade momssatser" with null rate/treatment
- */
-export function getVatSummaryFromItems(
-  items: { vat_rate?: number | null }[]
-): { label: string; treatment: VatTreatment | null; rate: number | null; isMixed: boolean } {
-  const rates = new Set(items.map((item) => item.vat_rate ?? 0))
-
-  if (rates.size === 1) {
-    const rate = rates.values().next().value!
-    const treatment = getVatTreatmentForRate(rate)
-    return {
-      label: getVatTreatmentLabel(treatment),
-      treatment,
-      rate,
-      isMixed: false,
-    }
-  }
-
-  return {
-    label: 'Blandade momssatser',
-    treatment: null,
-    rate: null,
-    isMixed: true,
-  }
-}
-
-/**
- * Get moms ruta description
- */
-export function getMomsRutaDescription(ruta: string): string {
-  const descriptions: Record<string, string> = {
-    '05': 'Utgående moms 25%',
-    '06': 'Utgående moms 12%',
-    '07': 'Utgående moms 6%',
-    '39': 'Försäljning av tjänster till annat EU-land',
-    '40': 'Export utanför EU',
-  }
-  return descriptions[ruta] || ruta
 }

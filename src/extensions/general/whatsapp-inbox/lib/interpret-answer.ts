@@ -16,7 +16,9 @@
  */
 
 import { z } from 'zod'
-import { getAnthropic, SONNET_MODEL } from '@/lib/agent/composer/client'
+import { getAnthropic } from '@/lib/agent/composer/client'
+import { resolveTierModel } from '@/lib/ai/config'
+import { toProviderModelId } from '@/lib/ai/provider'
 import { createLogger } from '@/lib/logger'
 import { isoDateSchema } from '@/lib/invariants/zod'
 import type { QuestionType } from './conversation'
@@ -25,6 +27,11 @@ const log = createLogger('whatsapp-inbox/interpret-answer')
 
 const MAX_TOKENS = 600
 const MAX_ANSWER_CHARS = 2000
+
+// A short reply into fields is a cheap-tier reading (Haiku 5.5 by default;
+// AI_CHEAP_MODEL / BEDROCK_HAIKU_MODEL_ID override). Resolved per call so the
+// override follows the environment the way the AI service's tiers do.
+const readerModel = () => toProviderModelId(resolveTierModel('cheap') ?? 'claude-haiku-5-5')
 
 export const ChatAnswerSchema = z.object({
   is_denial: z.boolean(),
@@ -96,9 +103,9 @@ export async function interpretChatAnswer(args: {
   questionType: Extract<QuestionType, 'representation' | 'context'>
 }): Promise<InterpretResult> {
   try {
-    const anthropic = getAnthropic()
+    const anthropic = await getAnthropic()
     const response = await anthropic.messages.create({
-      model: SONNET_MODEL,
+      model: readerModel(),
       max_tokens: MAX_TOKENS,
       system: SYSTEM_PROMPT,
       messages: [

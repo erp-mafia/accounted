@@ -1,223 +1,68 @@
-import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
+import { requestClientIp, truncateIp } from '@/lib/api/ip'
+import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { createLogger } from '@/lib/logger'
 import {
-  calculateReminderAmounts,
-  REMINDER_FEE_CURRENCY,
-} from '@/lib/email/reminder-templates'
-import { resolveBrandForCompany } from '@/lib/branding/resolve'
+  recordReminderAnswer,
+  REMINDER_ANSWER_ACTIONS,
+  REMINDER_ANSWER_NOTE_MAX,
+} from '@/lib/reminders/answer'
+import type { ReminderResponseType } from '@/types'
 
-// Create a service client (no auth needed - public endpoint with token validation)
-function createServiceClient() {
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      cookies: {
-        getAll() { return [] },
-        setAll() { }
-      }
-    }
-  )
-}
+/**
+ * Records the customer's answer to a reminder, posted by the answer page
+ * (/invoice-action/[token], which reads the reminder itself on the server).
+ * Public: the link token in the reminder mail is the only credential, so it
+ * writes with the service role and reveals nothing for an unknown token.
+ * Errors are short codes the page maps to text in the customer's language.
+ */
+
+const log = createLogger('api/invoices/reminders/action')
+
+// Process-local, like the payslip link's limiter. A link answers once, so 10
+// posts per token per 10 minutes covers retries and a second tab; the client
+// budget bounds a caller trying made-up tokens, which a per-token limit never
+// sees twice.
+const tokenLimiter = createTokenRateLimiter({ max: 10, windowMs: 10 * 60_000 })
+const clientLimiter = createTokenRateLimiter({ max: 60, windowMs: 10 * 60_000 })
 
 export async function POST(request: Request) {
+  let body: { token?: unknown; action?: unknown; note?: unknown }
   try {
-    const body = await request.json()
-    const { token, action } = body
+    body = await request.json()
+  } catch {
+    // A body that is not JSON is the caller's mistake: answered 400, nothing to log.
+    return NextResponse.json({ error: 'INVALID_BODY' }, { status: 400 })
+  }
+  const { token, action } = body
+  if (typeof token !== 'string' || token === '') return NextResponse.json({ error: 'TOKEN_MISSING' }, { status: 400 })
+  if (typeof action !== 'string' || !(REMINDER_ANSWER_ACTIONS as readonly string[]).includes(action)) {
+    return NextResponse.json({ error: 'ACTION_INVALID' }, { status: 400 })
+  }
+  if (body.note !== undefined && body.note !== null && typeof body.note !== 'string') {
+    return NextResponse.json({ error: 'NOTE_INVALID' }, { status: 400 })
+  }
+  const note = typeof body.note === 'string' ? body.note.trim() : ''
+  if (note.length > REMINDER_ANSWER_NOTE_MAX) return NextResponse.json({ error: 'NOTE_TOO_LONG' }, { status: 400 })
 
-    if (!token) {
-      return NextResponse.json({ error: 'Token saknas' }, { status: 400 })
-    }
+  const client = truncateIp(requestClientIp(request))
+  if (!tokenLimiter.allow(token) || (client !== undefined && !clientLimiter.allow(client))) {
+    return NextResponse.json({ error: 'RATE_LIMITED' }, { status: 429 })
+  }
 
-    if (!action || !['marked_paid', 'disputed'].includes(action)) {
-      return NextResponse.json({ error: 'Ogiltig åtgärd' }, { status: 400 })
-    }
-
-    const supabase = createServiceClient()
-
-    // Find the reminder by action token
-    const { data: reminder, error: findError } = await supabase
-      .from('invoice_reminders')
-      .select(`
-        *,
-        invoice:invoices(
-          id,
-          invoice_number,
-          status,
-          user_id
-        )
-      `)
-      .eq('action_token', token)
-      .single()
-
-    if (findError || !reminder) {
-      return NextResponse.json(
-        { error: 'Ogiltig eller utgången länk' },
-        { status: 404 }
-      )
-    }
-
-    // Check if token was already used
-    if (reminder.action_token_used) {
-      return NextResponse.json(
-        { error: 'Denna länk har redan använts' },
-        { status: 400 }
-      )
-    }
-
-    // Update the reminder with the response
-    const { error: updateError } = await supabase
-      .from('invoice_reminders')
-      .update({
-        response_type: action,
-        response_at: new Date().toISOString(),
-        action_token_used: true
-      })
-      .eq('id', reminder.id)
-
-    if (updateError) {
-      console.error('Failed to update reminder:', updateError)
-      return NextResponse.json(
-        { error: 'Kunde inte spara ditt svar' },
-        { status: 500 }
-      )
-    }
-
-    // If customer marked as paid, we could optionally notify the business owner
-    // For now, we just log it - the business owner will see it in the UI
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const invoiceData = reminder.invoice as any
-    const invoice = Array.isArray(invoiceData) ? invoiceData[0] : invoiceData
-    console.log(`Customer responded to invoice ${invoice?.invoice_number}: ${action}`)
-
-    return NextResponse.json({
-      success: true,
-      message: action === 'marked_paid'
-        ? 'Tack! Vi har noterat att du har betalat fakturan.'
-        : 'Tack! Vi har noterat din invändning och kommer att kontakta dig.'
+  try {
+    const result = await recordReminderAnswer(createServiceClientNoCookies(), {
+      token,
+      action: action as ReminderResponseType,
+      note: note === '' ? null : note,
+      now: new Date(),
     })
+    if (result === 'not_found') return NextResponse.json({ error: 'LINK_INVALID' }, { status: 404 })
+    if (result === 'already_answered') return NextResponse.json({ error: 'ALREADY_ANSWERED' }, { status: 409 })
+    return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Action handler error:', error)
-    return NextResponse.json(
-      { error: 'Ett fel uppstod' },
-      { status: 500 }
-    )
+    log.error('reminder answer not saved', error as Error)
+    return NextResponse.json({ error: 'FAILED' }, { status: 500 })
   }
-}
-
-// GET endpoint to fetch reminder/invoice info by token (for the public page)
-export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const token = url.searchParams.get('token')
-
-  if (!token) {
-    return NextResponse.json({ error: 'Token saknas' }, { status: 400 })
-  }
-
-  const supabase = createServiceClient()
-
-  // Find the reminder by action token
-  const { data: reminder, error: findError } = await supabase
-    .from('invoice_reminders')
-    .select(`
-      id,
-      company_id,
-      reminder_level,
-      sent_at,
-      response_type,
-      action_token_used,
-      interest_amount,
-      interest_rate,
-      interest_from_date,
-      interest_days,
-      reminder_fee,
-      invoice:invoices(
-        id,
-        invoice_number,
-        invoice_date,
-        due_date,
-        total,
-        currency,
-        status,
-        customer:customers(
-          name
-        )
-      )
-    `)
-    .eq('action_token', token)
-    .single()
-
-  if (findError || !reminder) {
-    return NextResponse.json(
-      { error: 'Ogiltig eller utgången länk' },
-      { status: 404 }
-    )
-  }
-
-  // Don't expose sensitive data, just what's needed for the public page
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const invoiceData = reminder.invoice as any
-  const invoice = Array.isArray(invoiceData) ? invoiceData[0] : invoiceData
-
-  if (!invoice) {
-    return NextResponse.json(
-      { error: 'Faktura hittades inte' },
-      { status: 404 }
-    )
-  }
-
-  // Handle nested customer which may also be an array
-  const customerData = invoice.customer
-  const customer = Array.isArray(customerData) ? customerData[0] : customerData
-
-  const interestAmount = Number(reminder.interest_amount ?? 0)
-  const reminderFee = Number(reminder.reminder_fee ?? 0)
-
-  // The invoice total and the dröjsmålsränta are in the invoice currency; the
-  // påminnelseavgift is a statutory SEK amount booked 1510/3990 in SEK. They are
-  // split per currency instead of summed into one scalar: adding 60 kr to a EUR
-  // total, or relabelling it as 60 EUR, would demand the wrong money from the
-  // customer on a public page.
-  const amounts = calculateReminderAmounts({
-    invoiceTotal: Number(invoice.total),
-    interestAmount,
-    reminderFee,
-    currency: invoice.currency,
-  })
-
-  // Brand of the COMPANY the invoice concerns (WL-13): the public page styles
-  // itself by this regardless of host. Null (no brand) = today's page.
-  const brand = reminder.company_id
-    ? await resolveBrandForCompany(reminder.company_id as string)
-    : null
-
-  return NextResponse.json({
-    invoiceNumber: invoice.invoice_number,
-    invoiceDate: invoice.invoice_date,
-    dueDate: invoice.due_date,
-    total: invoice.total,
-    currency: invoice.currency,
-    customerName: customer?.name,
-    reminderLevel: reminder.reminder_level,
-    alreadyResponded: reminder.action_token_used,
-    previousResponse: reminder.response_type,
-    // Dröjsmålsränta + lagstadgad påminnelseavgift surfaced to the
-    // customer-facing action page. Numeric defaults preserve back-compat
-    // for old reminders sent before the surcharge feature shipped.
-    interestAmount,
-    interestRate: reminder.interest_rate !== null ? Number(reminder.interest_rate) : 0,
-    interestFromDate: reminder.interest_from_date,
-    interestDays: reminder.interest_days,
-    reminderFee,
-    /** Always 'SEK': the fee is a krona statute, never the invoice currency. */
-    reminderFeeCurrency: REMINDER_FEE_CURRENCY,
-    /** In `currency`. Includes the fee only when the invoice is itself in SEK. */
-    totalDue: amounts.totalDue,
-    /** In SEK. Non-zero only when the fee must be demanded outside `totalDue`. */
-    feeDueSeparately: amounts.feeDueSeparately,
-    /** White-label brand of the invoice's company; null keeps today's page. */
-    brand: brand
-      ? { appName: brand.appName, logoUrl: brand.logoUrl, brandColor: brand.brandColor }
-      : null,
-  })
 }

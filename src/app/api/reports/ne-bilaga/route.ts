@@ -3,12 +3,14 @@ import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
 import {
   generateNESRUSubmission,
   getZipFilename,
+  NESruBlockedError,
 } from '@/lib/reports/ne-bilaga/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { encodeISO88591 } from '@/lib/reports/sru-encoding'
-import JSZip from 'jszip'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
+import { buildSruZip } from '@/lib/reports/filing-report-service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/reports/ne-bilaga
@@ -36,31 +38,27 @@ export const GET = withRouteContext(
       const declaration = await generateNEDeclaration(supabase, companyId!, periodId)
 
       if (format === 'sru') {
-        const submission = generateNESRUSubmission(declaration)
-
-        // Skatteverket requires ISO 8859-1 (Latin-1); UTF-8 mojibakes å/ä/ö and is rejected.
-        const infoBytes = encodeISO88591(submission.infoSru)
-        const blanketterBytes = encodeISO88591(submission.blanketterSru)
-
-        const zip = new JSZip()
-        zip.file('INFO.SRU', infoBytes)
-        zip.file('BLANKETTER.SRU', blanketterBytes)
-
-        const zipArrayBuffer = await zip.generateAsync({ type: 'arraybuffer' })
+        // The two SRU files, ISO 8859-1 and zipped: the same builder as the v1
+        // /reports/ne-bilaga/sru download.
+        const zipBytes = await buildSruZip(generateNESRUSubmission(declaration))
         const filename = getZipFilename(declaration)
 
-        return new NextResponse(zipArrayBuffer, {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/zip',
-            'Content-Disposition': `attachment; filename="${filename}"`,
-            'X-Request-Id': requestId,
-          },
+        return fileResponse(new Uint8Array(zipBytes), {
+          filename,
+          contentType: 'application/zip',
+          headers: { 'X-Request-Id': requestId },
         })
       }
 
       return NextResponse.json({ data: declaration })
     } catch (err) {
+      if (err instanceof NESruBlockedError) {
+        return errorResponseFromCode('TAX_DECL_NE_SRU_BLOCKED', opLog, {
+          requestId,
+          details: { reason: getUserErrorMessage(err) },
+        })
+      }
+      if (err instanceof FilingIdentityError) return errorResponseFromCode(err.code, opLog, { requestId })
       opLog.error('ne-bilaga declaration generation failed', err as Error)
       return errorResponseFromCode('TAX_DECL_GENERATION_FAILED', opLog, {
         requestId,

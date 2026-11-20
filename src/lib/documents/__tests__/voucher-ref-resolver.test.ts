@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildCopyIndexes,
   buildVoucherIndex,
   candidatesForNumber,
   candidatesForRef,
+  isLiveCopy,
   periodIdForDate,
   resolveDatedRef,
+  resolveLiveDatedRef,
   sourceVoucherLabel,
   voucherLabel,
   type FiscalPeriodRow,
@@ -175,6 +178,70 @@ describe('resolveDatedRef', () => {
     expect(
       resolveDatedRef(ambiguous, periods, { series: 'A', number: 31, date: '2024-05-02' }),
     ).toBeUndefined()
+  })
+})
+
+describe('resolveLiveDatedRef (an SIE re-sync leaves a reversed copy beside the live one)', () => {
+  const live = makeVoucher({ id: 'je-live', status: 'posted' })
+  const firstCopy = makeVoucher({ id: 'je-first-copy', status: 'reversed' })
+  const year2024 = { series: 'A', number: 31, date: '2024-01-01', dateTo: '2024-12-31' }
+  const day2024 = { series: 'A', number: 31, date: '2024-03-14' }
+
+  it('treats only a reversed entry as a copy that is not live', () => {
+    expect(isLiveCopy(live)).toBe(true)
+    expect(isLiveCopy(firstCopy)).toBe(false)
+    // A row without a status stays a candidate, as the fetchers never leave one.
+    expect(isLiveCopy(makeVoucher({ id: 'je-unknown' }))).toBe(true)
+  })
+
+  it('indexes the live and the reversed copies apart', () => {
+    const copies = buildCopyIndexes([live, firstCopy])
+
+    expect(candidatesForRef(copies.live, { series: 'A', number: 31 }).map((v) => v.id)).toEqual(['je-live'])
+    expect(candidatesForRef(copies.reversed, { series: 'A', number: 31 }).map((v) => v.id)).toEqual(['je-first-copy'])
+  })
+
+  it('resolves to the live copy in a financial-year window and in a dated period', () => {
+    const copies = buildCopyIndexes([firstCopy, live])
+
+    expect(resolveLiveDatedRef(copies, periods, year2024)).toEqual({ resolved: true, entryId: 'je-live' })
+    expect(resolveLiveDatedRef(copies, periods, day2024)).toEqual({ resolved: true, entryId: 'je-live' })
+  })
+
+  it('never resolves to a reversed copy, even when it is the only candidate', () => {
+    const copies = buildCopyIndexes([firstCopy])
+
+    expect(resolveLiveDatedRef(copies, periods, year2024)).toEqual({ resolved: false, reason: 'only_reversed' })
+    expect(resolveLiveDatedRef(copies, periods, day2024)).toEqual({ resolved: false, reason: 'only_reversed' })
+  })
+
+  it('refuses two live copies, whatever reversed ones sit beside them', () => {
+    const copies = buildCopyIndexes([live, firstCopy, makeVoucher({ id: 'je-live-2', status: 'posted' })])
+
+    expect(resolveLiveDatedRef(copies, periods, year2024)).toEqual({ resolved: false, reason: 'several_posted' })
+    expect(resolveLiveDatedRef(copies, periods, day2024)).toEqual({ resolved: false, reason: 'several_posted' })
+  })
+
+  it('names a ref no copy carries in that year, and a date no fiscal period covers', () => {
+    const copies = buildCopyIndexes([live, firstCopy])
+
+    expect(resolveLiveDatedRef(copies, periods, { ...year2024, date: '2025-01-01', dateTo: '2025-12-31' }))
+      .toEqual({ resolved: false, reason: 'no_verifikat' })
+    expect(resolveLiveDatedRef(copies, periods, { ...day2024, date: '2025-03-14' }))
+      .toEqual({ resolved: false, reason: 'no_verifikat' })
+    expect(resolveLiveDatedRef(copies, periods, { ...day2024, date: '2023-03-14' }))
+      .toEqual({ resolved: false, reason: 'no_fiscal_year' })
+  })
+
+  it('keeps each year apart: a reversed copy in one year does not affect the live one in the next', () => {
+    const copies = buildCopyIndexes([
+      firstCopy,
+      makeVoucher({ id: 'je-2025', status: 'posted', fiscal_period_id: PERIOD_2025, entry_date: '2025-03-14' }),
+    ])
+
+    expect(resolveLiveDatedRef(copies, periods, year2024)).toEqual({ resolved: false, reason: 'only_reversed' })
+    expect(resolveLiveDatedRef(copies, periods, { ...year2024, date: '2025-01-01', dateTo: '2025-12-31' }))
+      .toEqual({ resolved: true, entryId: 'je-2025' })
   })
 })
 

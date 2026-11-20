@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
+  fetchEntriesWithAccountLines,
   fetchEntryLines,
   fetchLinesByEntryIds,
   type EntryLinesQuery,
@@ -290,5 +291,50 @@ describe('fetchLinesByEntryIds', () => {
     await expect(
       fetchLinesByEntryIds(supabase as unknown as SupabaseClient, ['entry-1'], 'id'),
     ).rejects.toThrow('lines boom')
+  })
+})
+
+describe('fetchEntriesWithAccountLines', () => {
+  const rpcClient = (result: { data: unknown; error: unknown }) => {
+    const rpc = vi.fn(async () => result)
+    return { client: { rpc } as unknown as SupabaseClient, rpc }
+  }
+  const options = {
+    start: '2026-09-01',
+    end: '2026-09-30',
+    accounts: ['3308', '3108'],
+    statuses: ['posted', 'reversed'] as Array<'posted' | 'reversed'>,
+    allLines: false,
+  }
+
+  it('reads the verifikat in one get_entries_with_account_lines call', async () => {
+    const rows = [{ id: 'je-1', lines: [{ id: 'l-1', account_number: '3308', debit_amount: 0, credit_amount: 100 }] }]
+    const { client, rpc } = rpcClient({ data: rows, error: null })
+
+    await expect(fetchEntriesWithAccountLines(client, 'c1', options)).resolves.toEqual(rows)
+    expect(rpc).toHaveBeenCalledWith('get_entries_with_account_lines', {
+      p_company_id: 'c1',
+      p_start: '2026-09-01',
+      p_end: '2026-09-30',
+      p_accounts: ['3308', '3108'],
+      p_statuses: ['posted', 'reversed'],
+      p_all_lines: false,
+    })
+  })
+
+  it('answers an empty list for a period without such verifikat', async () => {
+    const { client } = rpcClient({ data: null, error: null })
+    await expect(fetchEntriesWithAccountLines(client, 'c1', options)).resolves.toEqual([])
+  })
+
+  it.each(['PGRST202', '42883', '42501'])('answers null when the database has no usable function (%s)', async (code) => {
+    const { client } = rpcClient({ data: null, error: { code, message: 'no function' } })
+    await expect(fetchEntriesWithAccountLines(client, 'c1', options)).resolves.toBeNull()
+  })
+
+  it('throws any other error', async () => {
+    const { client } = rpcClient({ data: null, error: { code: '57014', message: 'statement timeout' } })
+    await expect(fetchEntriesWithAccountLines(client, 'c1', options))
+      .rejects.toThrow('get_entries_with_account_lines failed: statement timeout')
   })
 })

@@ -40,3 +40,43 @@ export function getClosableYearStart(asOfIso: string, basis: VacationYearBasis):
   const month = currentStart.slice(5, 7)
   return `${year - 1}-${month}-01`
 }
+
+/** The vacation year containing `asOfIso`, as inclusive first and last day
+ * (YYYY-MM-DD): the dates a user reads, not the half-open bounds the ledger
+ * queries with. */
+export function getCurrentVacationYear(
+  asOfIso: string,
+  basis: VacationYearBasis,
+): { start: string; end: string } {
+  const { start, end } = getVacationYearBounds(getVacationYearStart(asOfIso, basis))
+  // Day 0 of the exclusive end month is the last day of the month before it.
+  const lastDay = new Date(Date.UTC(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, 0))
+  return { start, end: lastDay.toISOString().slice(0, 10) }
+}
+
+/** GET /api/settings/vacation-year-basis: the settings service's verdict. */
+export interface VacationBasisChangeAnswer {
+  changeable: boolean
+  /** The service's refusal code when not changeable. */
+  reason: string | null
+}
+
+/**
+ * How the semesterår control renders: a choice while the settings service
+ * accepts a change, otherwise locked with the reason the service gave. It
+ * fails closed: an unanswered or failed check never offers the choice.
+ */
+export type VacationBasisControl =
+  | { state: 'checking' }
+  | { state: 'choice' }
+  | { state: 'locked'; reason: 'open_balances' | 'check_failed' }
+
+export function vacationBasisControl(answer: VacationBasisChangeAnswer | undefined, failed: boolean): VacationBasisControl {
+  if (failed) return { state: 'locked', reason: 'check_failed' }
+  if (!answer) return { state: 'checking' }
+  if (answer.changeable) return { state: 'choice' }
+  return {
+    state: 'locked',
+    reason: answer.reason === 'SETTINGS_VACATION_BASIS_OPEN_BALANCES' ? 'open_balances' : 'check_failed',
+  }
+}

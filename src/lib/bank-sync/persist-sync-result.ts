@@ -1,5 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
+import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '@/lib/bank-sync/ingest-route'
+
+/**
+ * The bank's own day (YYYY-MM-DD) and type for a balance. The RPC stores it
+ * with fetched_at = the balance_updated_at it came with; anything but a real
+ * day is stored as no reference.
+ */
+export interface BankBalanceReference {
+  date: string
+  type: string | null
+  fetched_at?: string
+}
 
 /** Provider results only. Routing and user configuration belong to other writers. */
 export interface BankSyncAccountResult {
@@ -7,6 +19,7 @@ export interface BankSyncAccountResult {
   balance?: number | null
   available_balance?: number | null
   balance_updated_at?: string | null
+  balance_reference?: BankBalanceReference | null
   accepted_history_days?: number
   dedup_scope?: string
 }
@@ -50,6 +63,7 @@ export async function persistBankSyncResult<T extends BankSyncAccountResult>(
     ...(account.balance !== undefined ? { balance: account.balance } : {}),
     ...(account.available_balance !== undefined ? { available_balance: account.available_balance } : {}),
     ...(account.balance_updated_at !== undefined ? { balance_updated_at: account.balance_updated_at } : {}),
+    ...(account.balance_reference !== undefined ? { balance_reference: account.balance_reference } : {}),
     ...(account.accepted_history_days !== undefined ? { accepted_history_days: account.accepted_history_days } : {}),
     ...(account.dedup_scope !== undefined ? { dedup_scope: account.dedup_scope } : {}),
   }))
@@ -98,4 +112,26 @@ export async function persistBankSyncFailure(
   if (error) throw dbError(error, 'Bank sync failure persistence')
   if (typeof data !== 'boolean') throw new Error('Bank sync failure persistence: missing acknowledgement')
   return data
+}
+
+/**
+ * Surface a sync that stopped on BANK_INGEST_ROUTE_UNRESOLVED without touching
+ * status, cursor or lease: the consent is fine and the row must stay 'active'
+ * (the cron selects only active rows and the account picker saves only on
+ * them). Only error_message changes, which is neither configuration nor
+ * session state, so the bank writer guards let it through without locks.
+ * persist_bank_sync_result clears it on the next successful sync.
+ */
+export async function persistBankRouteNeedsConfiguration(
+  supabase: SupabaseClient,
+  input: { companyId: string; connectionId: string },
+): Promise<void> {
+  const { error } = await supabase
+    .from('bank_connections')
+    .update({ error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE })
+    .eq('id', input.connectionId)
+    .eq('company_id', input.companyId)
+    .in('status', ['active', 'error'])
+    .is('superseded_by', null)
+  if (error) throw dbError(error, 'Bank route failure persistence')
 }

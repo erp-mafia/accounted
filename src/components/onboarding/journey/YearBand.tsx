@@ -4,7 +4,7 @@ import { InkText } from './ink'
 
 /**
  * The fiscal-year band: 24 or 36 month cells with a springy highlight span,
- * a serif label ("1 januari – 31 december") and a small note line.
+ * a serif label ("1 januari - 31 december") and a small note line.
  * Pure display; the parent drives span/label/note from hover or selection.
  */
 const MONTH_LETTERS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']

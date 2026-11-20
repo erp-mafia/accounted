@@ -7,7 +7,8 @@
  * validation, account mapping, replace-mode import) is provider-agnostic:
  * this module's only job is to produce raw SIE file contents per fiscal year.
  *
- * Shared by /preview (latest year, for stats) and /sie-data (all years).
+ * Shared by /preview (the default selection: the year picker and its counts)
+ * and /sie-data (the years the user ticked).
  */
 
 import { FortnoxClient } from '@/lib/providers/fortnox/client'
@@ -23,10 +24,44 @@ import {
   type WintSieYear,
 } from '@/lib/providers/wint/sie-builder'
 import type { ProviderName } from '@/lib/providers/types'
+import {
+  classifyProviderError,
+  providerRefusalReason,
+  type ClassifyProviderErrorOptions,
+  type ProviderCallErrorCode,
+  type ProviderRefusalReason,
+} from '@/lib/providers/with-provider-call'
 import { detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
 import { createLogger } from '@/lib/logger'
+import { todayIsoStockholm, stockholmYearMonth } from '@/lib/dates/iso'
 
 const log = createLogger('extensions/arcim-migration/sie-fetcher')
+
+/**
+ * Why a SIE fetch failed, in the classification /sie-data answers with and
+ * the migration job records (classifyProviderError, providerRefusalReason).
+ * GET /preview hands it to the wizard, which then names the cause and the way
+ * forward instead of asking for a SIE file the provider can serve (crm#1118).
+ */
+export interface SieFetchFailure {
+  /**
+   * The classified provider code, or PROVIDER_SIE_FETCH_FAILED (the code
+   * /sie-data falls back to) when nothing in the failure is provider-shaped:
+   * an empty export, a timeout, an unknown error.
+   */
+  code: ProviderCallErrorCode | 'PROVIDER_SIE_FETCH_FAILED'
+  /** PROVIDER_RESOURCE_FORBIDDEN only: a missing licence and a missing permission are fixed differently. */
+  reason?: ProviderRefusalReason
+}
+
+export function classifySieFetchFailure(
+  error: unknown,
+  options?: ClassifyProviderErrorOptions,
+): SieFetchFailure {
+  const code = classifyProviderError(error, options)
+  if (!code) return { code: 'PROVIDER_SIE_FETCH_FAILED' }
+  return code === 'PROVIDER_RESOURCE_FORBIDDEN' ? { code, reason: providerRefusalReason(error) } : { code }
+}
 
 /**
  * The DEFAULT selection of fiscal years: the current year and the two before
@@ -40,7 +75,7 @@ const log = createLogger('extensions/arcim-migration/sie-fetcher')
  * automatically at new year without a code change.
  */
 export function getAllowedFiscalYears(now: Date = new Date()): Set<number> {
-  const currentYear = now.getFullYear()
+  const currentYear = stockholmYearMonth(now).year
   return new Set([currentYear - 2, currentYear - 1, currentYear])
 }
 
@@ -76,14 +111,14 @@ export interface ProviderSieFile {
 }
 
 export interface ProviderSieFetchResult {
-  files: ProviderSieFile[]
   /**
-   * Every fiscal year available at the provider within the selection (the
-   * default window, or the explicit `years`): also populated when latestOnly
-   * fetched just one file, so /preview can show the full year list without a
-   * second round-trip.
+   * One file per selected year whose export came back, oldest first:
+   * `files.map((f) => f.fiscalYear)` is what was read, and a year whose
+   * export failed is in `failedYears` instead. (An `availableYears` list of
+   * the attempted years used to sit beside this; /preview labelled its
+   * counts with it, failed years included, crm#1037.)
    */
-  availableYears: number[]
+  files: ProviderSieFile[]
   /**
    * Every fiscal year the source has, oldest first, with the provider's own
    * bounds and whether it is in the default selection. The preview step
@@ -94,8 +129,10 @@ export interface ProviderSieFetchResult {
    * Allowed years whose export failed (or came back empty). Callers MUST
    * surface these to the user: silently importing e.g. 2024+2026 without 2025
    * breaks IB/UB continuity between the years without anyone noticing.
+   * `error` is the provider's message; `code` (and `reason`) say why in the
+   * shared classification, so a caller can name the cause and the remedy.
    */
-  failedYears: { year: number; error: string }[]
+  failedYears: (SieFetchFailure & { year: number; error: string })[]
   /**
    * Source fiscal years that were NOT part of this fetch (outside the
    * selection), oldest first. Until issue #2211 these were never mentioned:
@@ -178,7 +215,6 @@ export async function fetchProviderSieFiles(
   }
   const allowedYears = allYears.filter((fy) => selectedFiscalYears.has(fy.year))
 
-  const availableYears = allowedYears.map((fy) => fy.year)
   const toFetch = opts?.latestOnly ? allowedYears.slice(-1) : allowedYears
 
   // Both derived from the year list already fetched: naming every source
@@ -193,25 +229,34 @@ export async function fetchProviderSieFiles(
   const omittedYears = allYears.filter((fy) => !selectedFiscalYears.has(fy.year)).map(describe)
 
   const files: ProviderSieFile[] = []
-  const failedYears: { year: number; error: string }[] = []
+  const failedYears: ProviderSieFetchResult['failedYears'] = []
   for (const fy of toFetch) {
     try {
       const rawContent = await fetcher.fetchSie(accessToken, fy)
       if (rawContent) {
         files.push({ fiscalYear: fy.year, rawContent })
       } else {
-        failedYears.push({ year: fy.year, error: 'Provider returned an empty SIE export' })
+        failedYears.push({
+          year: fy.year,
+          error: 'Provider returned an empty SIE export',
+          code: 'PROVIDER_SIE_FETCH_FAILED',
+        })
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err)
+      const message = err instanceof Error ? err.message : String(err)
+      // Classified here, where the thrown error still exists. The year list
+      // just came back on this token, so the grant is proven: a 403 on the
+      // export is the provider closing the ledger, not a dead connection.
+      const failure = classifySieFetchFailure(err, { grantProven: true })
       log.warn(`Failed to fetch SIE for ${provider} fiscal year ${fy.year} (id ${fy.id})`, {
-        reason,
+        reason: message,
+        code: failure.code,
       })
-      failedYears.push({ year: fy.year, error: reason })
+      failedYears.push({ year: fy.year, error: message, ...failure })
     }
   }
 
-  return { files, availableYears, sourceYears, failedYears, omittedYears }
+  return { files, sourceYears, failedYears, omittedYears }
 }
 
 interface SieFetcher {
@@ -320,7 +365,7 @@ function getSieFetcher(
         // (that would attach the anchor balances to the wrong year). When the
         // anchor lies outside the window, its vouchers are still fetched below
         // so the derivation chain stays complete; only allowed years render.
-        const today = new Date().toISOString().slice(0, 10)
+        const today = todayIsoStockholm()
         const anchor =
           allYears.find((fy) => fy.start <= today && today <= fy.end) ?? allYears[allYears.length - 1]
 
@@ -413,7 +458,7 @@ function getSieFetcher(
           companyName: context.companyName,
           orgNumber: context.orgNumber,
           programVersion: '1.0',
-          generatedDate: new Date().toISOString().slice(0, 10),
+          generatedDate: todayIsoStockholm(),
           year: yearRef,
           previousYear,
           accounts: context.accounts,

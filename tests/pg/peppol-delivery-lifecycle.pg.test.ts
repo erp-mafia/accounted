@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
@@ -269,6 +270,210 @@ describe('Peppol delivery audit lifecycle', () => {
         )`,
         [seeded.companyId, seeded.idempotencyKey, XML, 'b'.repeat(64), '8'.repeat(64)],
       )).rejects.toThrow(/does not match the payload/)
+    })
+  })
+})
+
+/**
+ * Connector mode: every lifecycle event of a delivery made through Accounted
+ * Connect carries the connector transport's label, provider 'connector' and
+ * tenant 'connector'. The send writes both on the row with its first event;
+ * the status polls through the connector carry the same label because the
+ * transport relabels what the service returns (transports/connector.ts).
+ */
+describe('Peppol delivery lifecycle in connector mode', () => {
+  const CONNECTOR_EVENT_SQL = `SELECT (public.record_peppol_delivery_event(
+    $1, $2, 'connector', $3, $4, $5, $6, $7, $8, $9,
+    $10::jsonb, $11, $12, $13::timestamptz
+  )).*`
+
+  interface ConnectorEvent {
+    tenant: string
+    submissionId: string | null
+    eventId: string | null
+    code: string
+    status: string
+    terminal?: boolean
+    detail?: string | null
+    method: string
+    occurredAt: string
+  }
+
+  function recordEvent(
+    client: PoolClient,
+    seeded: { companyId: string; idempotencyKey: string },
+    event: ConnectorEvent,
+  ) {
+    return client.query(CONNECTOR_EVENT_SQL, [
+      seeded.companyId,
+      seeded.idempotencyKey,
+      event.tenant,
+      event.submissionId,
+      event.eventId,
+      event.code,
+      event.status,
+      event.terminal ?? false,
+      event.detail ?? null,
+      JSON.stringify({ source: event.method, code: event.code }),
+      createHash('sha256').update(`${seeded.idempotencyKey}|${event.code}|${event.status}|${event.occurredAt}`).digest('hex'),
+      event.method,
+      event.occurredAt,
+    ])
+  }
+
+  /** The three events the send records, all with the connector's own label. */
+  async function sendThroughConnector(
+    client: PoolClient,
+    seeded: { companyId: string; idempotencyKey: string },
+    submissionId: string,
+  ) {
+    const send = { tenant: 'connector', eventId: null, method: 'accounted_route' }
+    await recordEvent(client, seeded, {
+      ...send, submissionId: null, code: 'recipient_lookup', status: 'recipient_verified',
+      detail: '0007:5566778899', occurredAt: '2026-09-29T10:00:01Z',
+    })
+    await recordEvent(client, seeded, {
+      ...send, submissionId: null, code: 'submit_attempt', status: 'submitting', occurredAt: '2026-09-29T10:00:02Z',
+    })
+    await recordEvent(client, seeded, {
+      ...send, submissionId, code: 'submit_accepted', status: 'submission_accepted', occurredAt: '2026-09-29T10:00:03Z',
+    })
+  }
+
+  async function deliveryRow(deliveryId: string) {
+    const { rows } = await getPool().query(
+      `SELECT provider, provider_tenant_id, provider_submission_id, status, status_detail,
+              submitted_at, terminal_at
+       FROM public.peppol_deliveries WHERE id = $1`,
+      [deliveryId],
+    )
+    return rows[0]
+  }
+
+  it('takes a delivery from staged to transport_succeeded when every event carries the connector label', async () => {
+    const seeded = await seedStagedDelivery()
+    const submissionId = randomUUID()
+
+    await runAsServiceRole(async (client) => {
+      await sendThroughConnector(client, seeded, submissionId)
+      await recordEvent(client, seeded, {
+        tenant: 'connector',
+        submissionId,
+        eventId: `document_delivery:${submissionId}:processed`,
+        code: 'status_poll',
+        status: 'transport_succeeded',
+        detail: 'processed',
+        method: 'provider_poll',
+        occurredAt: '2026-09-29T10:05:00Z',
+      })
+    })
+
+    const delivery = await deliveryRow(seeded.deliveryId)
+    expect(delivery).toMatchObject({
+      provider: 'connector',
+      provider_tenant_id: 'connector',
+      provider_submission_id: submissionId,
+      status: 'transport_succeeded',
+      status_detail: 'processed',
+      terminal_at: null,
+    })
+    expect(delivery.submitted_at).not.toBeNull()
+
+    const events = await getPool().query(
+      `SELECT normalized_status FROM public.peppol_delivery_events
+       WHERE delivery_id = $1 ORDER BY occurred_at`,
+      [seeded.deliveryId],
+    )
+    expect(events.rows.map((row) => row.normalized_status)).toEqual([
+      'recipient_verified', 'submitting', 'submission_accepted', 'transport_succeeded',
+    ])
+  })
+
+  it('ends a connector delivery on a terminal failure after the access point accepted it', async () => {
+    const seeded = await seedStagedDelivery()
+    const submissionId = randomUUID()
+
+    await runAsServiceRole(async (client) => {
+      await sendThroughConnector(client, seeded, submissionId)
+      await recordEvent(client, seeded, {
+        tenant: 'connector',
+        submissionId,
+        eventId: `document_error:${submissionId}:error`,
+        code: 'status_poll',
+        status: 'failed',
+        terminal: true,
+        detail: 'error: receiver not registered',
+        method: 'provider_poll',
+        occurredAt: '2026-09-29T10:06:00Z',
+      })
+    })
+
+    const delivery = await deliveryRow(seeded.deliveryId)
+    expect(delivery).toMatchObject({
+      provider: 'connector',
+      provider_tenant_id: 'connector',
+      status: 'failed',
+      status_detail: 'error: receiver not registered',
+    })
+    expect(delivery.terminal_at?.toISOString()).toBe('2026-09-29T10:06:00.000Z')
+  })
+
+  // The tenant correlation guard: a row keeps the tenant its first event
+  // wrote, and an event naming any other tenant is refused whole. This is
+  // what dropped every status poll through the connector while the service's
+  // events carried the access point's own account number.
+  it('refuses an event carrying the access point account number on a connector row', async () => {
+    const seeded = await seedStagedDelivery()
+    const submissionId = randomUUID()
+    await runAsServiceRole((client) => sendThroughConnector(client, seeded, submissionId))
+
+    await expect(runAsServiceRole((client) => recordEvent(client, seeded, {
+      tenant: 'SE5595386219',
+      submissionId,
+      eventId: `document_delivery:${submissionId}:processed`,
+      code: 'status_poll',
+      status: 'transport_succeeded',
+      method: 'provider_poll',
+      occurredAt: '2026-09-29T10:05:00Z',
+    }))).rejects.toThrow(/Peppol provider tenant correlation mismatch/)
+
+    expect(await deliveryRow(seeded.deliveryId)).toMatchObject({
+      provider_tenant_id: 'connector',
+      status: 'submission_accepted',
+    })
+    const events = await getPool().query(
+      `SELECT count(*)::int AS n FROM public.peppol_delivery_events WHERE delivery_id = $1`,
+      [seeded.deliveryId],
+    )
+    expect(events.rows[0].n).toBe(3)
+  })
+
+  it('lets a resend move a retryable failure back to submitting', async () => {
+    const seeded = await seedStagedDelivery()
+    const send = { tenant: 'connector', submissionId: null, eventId: null, method: 'accounted_route' }
+
+    await runAsServiceRole(async (client) => {
+      await recordEvent(client, seeded, {
+        ...send, code: 'recipient_lookup', status: 'recipient_verified', occurredAt: '2026-09-29T10:00:01Z',
+      })
+      await recordEvent(client, seeded, {
+        ...send, code: 'submit_attempt', status: 'submitting', occurredAt: '2026-09-29T10:00:02Z',
+      })
+      await recordEvent(client, seeded, {
+        ...send, code: 'submit_failed', status: 'retryable_failure',
+        detail: 'Connector: could not reach the hosted service', occurredAt: '2026-09-29T10:00:52Z',
+      })
+    })
+    expect(await deliveryRow(seeded.deliveryId)).toMatchObject({ status: 'retryable_failure', terminal_at: null })
+
+    await runAsServiceRole((client) => recordEvent(client, seeded, {
+      ...send, code: 'submit_attempt', status: 'submitting', occurredAt: '2026-09-29T10:10:00Z',
+    }))
+    expect(await deliveryRow(seeded.deliveryId)).toMatchObject({
+      provider_tenant_id: 'connector',
+      status: 'submitting',
+      status_detail: null,
+      terminal_at: null,
     })
   })
 })

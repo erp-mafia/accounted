@@ -70,6 +70,9 @@ export const GET = withRouteContext('arkiv.agreements', async (_request, ctx) =>
     .from('agreements')
     .select('id, kind, title, status, counterparty_party_id, counterparty_name, amount, currency, period, starts_on, ends_on, source_document_id, sources')
     .eq('company_id', ctx.companyId)
+    // The archive's agreements are the ones read from its documents; the ones a
+    // person registers by hand live in Avtal och åtaganden (lib/commitments).
+    .not('source_document_id', 'is', null)
     .order('status', { ascending: true })
     .order('ends_on', { ascending: true, nullsFirst: false })
     .limit(500)

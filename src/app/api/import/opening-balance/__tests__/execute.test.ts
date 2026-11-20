@@ -117,6 +117,8 @@ describe('POST /api/import/opening-balance/execute', () => {
         period_start: '2026-01-01',
       },
     })
+    // existing-IB check: the year's pointer names it
+    enqueue({ data: { opening_balances_set: true, opening_balance_entry_id: 'entry-existing', opening_balance_entry: null } })
 
     const res = await POST(makeRequest({
       fiscal_period_id: PERIOD_ID,
@@ -134,6 +136,41 @@ describe('POST /api/import/opening-balance/execute', () => {
     ).toBe('entry-existing')
   })
 
+  // An IB booked as a voucher carries no pointer: the flag check alone let
+  // this import post a second IB on top (ÅRL 2:4, one IB per year).
+  it('returns 409 for a posted IB the year has no pointer to, without posting', async () => {
+    enqueue({
+      data: {
+        id: PERIOD_ID,
+        company_id: 'company-1',
+        is_closed: false,
+        locked_at: null,
+        opening_balances_set: false,
+        opening_balance_entry_id: null,
+        period_start: '2026-01-01',
+      },
+    })
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null } })
+    enqueue({ data: [{ id: 'ib-voucher', voucher_series: 'A', voucher_number: 4 }] })
+
+    const res = await POST(
+      makeRequest({
+        fiscal_period_id: PERIOD_ID,
+        lines: [
+          { account_number: '1930', debit_amount: 50000, credit_amount: 0 },
+          { account_number: '2099', debit_amount: 0, credit_amount: 50000 },
+        ],
+      }),
+      undefined as never,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { existingEntryId: string } } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('OB_PERIOD_ALREADY_HAS_BALANCES')
+    expect(body.error.details.existingEntryId).toBe('ib-voucher')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 400 for unbalanced lines', async () => {
     enqueue({
       data: {
@@ -145,6 +182,9 @@ describe('POST /api/import/opening-balance/execute', () => {
         period_start: '2026-01-01',
       },
     })
+    // existing-IB check: no pointer, no posted IB
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null } })
+    enqueue({ data: [] })
 
     const res = await POST(makeRequest({
       fiscal_period_id: PERIOD_ID,
@@ -170,6 +210,9 @@ describe('POST /api/import/opening-balance/execute', () => {
         period_start: '2026-01-01',
       },
     })
+    // existing-IB check: no pointer, no posted IB
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null } })
+    enqueue({ data: [] })
 
     const res = await POST(makeRequest({
       fiscal_period_id: PERIOD_ID,
@@ -196,6 +239,9 @@ describe('POST /api/import/opening-balance/execute', () => {
         period_start: '2026-01-01',
       },
     })
+    // existing-IB check: no pointer, no posted IB
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null } })
+    enqueue({ data: [] })
 
     // Fiscal period update
     enqueue({ data: null })
@@ -246,6 +292,9 @@ describe('POST /api/import/opening-balance/execute', () => {
         source_type: 'opening_balance',
         voucher_series: 'A',
       }),
+      // The posting port's ledger adapter fills commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
   })
 })

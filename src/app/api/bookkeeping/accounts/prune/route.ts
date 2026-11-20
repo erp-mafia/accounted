@@ -6,25 +6,26 @@ import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-// POST /api/bookkeeping/accounts/prune — bulk cleanup of unused accounts
+// POST /api/bookkeeping/accounts/prune - bulk cleanup of unused accounts
 // ("Rensa oanvända konton"), for charts bloated by an import from an old
 // system.
 //
 // Two phases:
 //   { dry_run: true }
 //     → returns the deletable set (non-system accounts with zero journal
-//       usage) plus the used remainder, without changing anything.
+//       usage and no budget lines) plus the used remainder, without
+//       changing anything.
 //   { dry_run: false, account_numbers: [...] }
 //     → deletes the requested accounts, re-verifying every guard server-side.
 //       The client list is a selection from the preview, not an authority:
 //       anything failing re-check at execute time is skipped and reported,
 //       never deleted and never an error.
 //
-// A used account can never be deleted through this path — its verifikat are
+// A used account can never be deleted through this path - its verifikat are
 // immutable under BFL and their lines must keep resolving to an account.
 // Deactivation (PUT is_active=false on the single-account route) remains the
 // only way to hide those. Draft usage also blocks deletion: a draft line
-// still references the account. Opening balances need no separate check —
+// still references the account. Opening balances need no separate check:
 // IB is booked as a verifikat (source_type 'opening_balance'), so the journal
 // usage count covers it. (The account_balances cache table was dropped in
 // migration 20240101000027.)
@@ -32,10 +33,10 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 // Like the sibling single-account DELETE, there is a small window between
 // the usage re-check and the delete where a concurrent posting could slip
 // in; journal_entry_lines reference accounts by number (account_id is ON
-// DELETE SET NULL), so the entry itself is never damaged — the account row
+// DELETE SET NULL), so the entry itself is never damaged - the account row
 // would just need re-adding from the BAS catalog.
 //
-// Response shapes are legacy `{ data }` / `{ error: string }` — consumed by
+// Response shapes are legacy `{ data }` / `{ error: string }` - consumed by
 // the kontoplan UI alongside the sibling account routes.
 
 interface ChartAccountRow {
@@ -62,7 +63,7 @@ export const POST = withRouteContext(
     const { dry_run, account_numbers } = validation.data
 
     try {
-      // A full imported chart can exceed PostgREST's 1000-row page — paginate.
+      // A full imported chart can exceed PostgREST's 1000-row page - paginate.
       const accounts = (await fetchAllRows(({ from, to }) =>
         supabase
           .from('chart_of_accounts')
@@ -89,8 +90,26 @@ export const POST = withRouteContext(
         ]),
       )
 
+      // An account a budget uses is not unused either (accounted#134). Its
+      // lines would go with the account (ON DELETE CASCADE), so it stays.
+      const { data: budgetUsage, error: budgetUsageError } = await supabase.rpc(
+        'get_account_budget_line_counts',
+        { p_company_id: companyId },
+      )
+      if (budgetUsageError) {
+        return NextResponse.json({ error: getUserErrorMessage(budgetUsageError) }, { status: 500 })
+      }
+      const budgetLinesByAccount = new Map<string, number>(
+        (budgetUsage ?? []).map((u: { account_number: string; budget_line_count: number }) => [
+          u.account_number,
+          Number(u.budget_line_count),
+        ]),
+      )
+
       const isDeletable = (a: ChartAccountRow) =>
-        !a.is_system_account && !usageByAccount.has(a.account_number)
+        !a.is_system_account &&
+        !usageByAccount.has(a.account_number) &&
+        !budgetLinesByAccount.has(a.account_number)
 
       if (dry_run) {
         const deletable = accounts.filter(isDeletable).map((a) => ({
@@ -108,12 +127,13 @@ export const POST = withRouteContext(
             account_name: a.account_name,
             is_system_account: a.is_system_account,
             usage_count: usageByAccount.get(a.account_number) ?? 0,
+            budget_line_count: budgetLinesByAccount.get(a.account_number) ?? 0,
           }))
         return NextResponse.json({ data: { deletable, used } })
       }
 
       // Execute: intersect the requested selection with the freshly computed
-      // deletable set — guards are re-verified here, not trusted from the
+      // deletable set - guards are re-verified here, not trusted from the
       // preview the client saw.
       const requested = [...new Set(account_numbers ?? [])]
       const deletableSet = new Set(accounts.filter(isDeletable).map((a) => a.account_number))

@@ -41,6 +41,7 @@ describe('gnubok_create_invoice: VAT-rate gate for a foreign business', () => {
   it('accepts a 12% line to a VAT-validated EU business (hotel night in Sweden)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: EU_CUSTOMER, error: null }) // customers fetch
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
     enqueue({ data: { id: 'op-hotel' }, error: null }) // pending_operations insert
@@ -66,6 +67,7 @@ describe('gnubok_create_invoice: VAT-rate gate for a foreign business', () => {
   it('still refuses a rate that is not a Swedish VAT rate', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: EU_CUSTOMER, error: null })
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
 
     await expect(
       createInvoice.execute(
@@ -86,6 +88,7 @@ describe('gnubok_create_invoice: VAT-rate gate for a foreign business', () => {
   it('keeps 0% as the default when a line omits vat_rate', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: EU_CUSTOMER, error: null })
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: { id: 'op-consulting' }, error: null })
@@ -125,6 +128,7 @@ describe('gnubok_create_invoice: says why the VAT treatment is what it is (#2749
       data: { ...EU_CUSTOMER, vat_number: 'DE123456789', vat_number_validated: false, country: 'DE' },
       error: null,
     })
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: { id: 'op-unvalidated' }, error: null })
@@ -154,6 +158,7 @@ describe('gnubok_create_invoice: says why the VAT treatment is what it is (#2749
   it('warns, without blocking, about a Swedish rate to a VIES-validated EU business (#2558)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ...EU_CUSTOMER, vat_number: 'DE123456789', country: 'DE' }, error: null })
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: { id: 'op-hotel-warned' }, error: null })
@@ -177,6 +182,7 @@ describe('gnubok_create_invoice: says why the VAT treatment is what it is (#2749
   it('stays silent on the normal reverse-charge case', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ...EU_CUSTOMER, vat_number: 'DE123456789', country: 'DE' }, error: null })
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: { id: 'op-clean' }, error: null })

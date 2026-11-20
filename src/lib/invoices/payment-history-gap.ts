@@ -1,6 +1,6 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { createLogger } from '@/lib/logger'
-import { PAYMENT_VOUCHER_SOURCE_TYPES } from '@/lib/invoices/backfill-invoice-payment-rows'
+import { PAYMENT_VOUCHER_SOURCE_TYPES } from '@/lib/invoices/payment-row-invariant'
 
 const log = createLogger('invoices/payment-history-gap')
 
@@ -19,8 +19,9 @@ const log = createLogger('invoices/payment-history-gap')
  *    exists here either; the payment lives in the previous system's books.
  *  - a "Markera som betald" from before the sub-ledger existed (#2019) left
  *    a posted invoice_paid / invoice_cash_payment voucher with no row. The
- *    backfill repaired the single-voucher cases; what remains still has the
- *    voucher to show.
+ *    2026-10-12 backfill repaired every one in production; a new one fails the
+ *    weekly invariant check (lib/invoices/payment-row-invariant.ts) and
+ *    still has the voucher to show here.
  *
  * Rendering "Inga registrerade betalningar ännu" under a paid header reads as
  * "still unpaid" and contradicts the header (#2213). The classifier below
@@ -76,7 +77,7 @@ export function classifyPaymentHistoryGap(input: {
  * when the query failed: unknown must never read as "no voucher".
  */
 export async function fetchInvoicePaymentVouchers(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   invoiceId: string,
 ): Promise<PaymentVoucherRef[] | null> {
   const { data, error } = await supabase

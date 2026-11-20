@@ -29,6 +29,26 @@ export const SkillBodySchema = z.string().trim().min(1).superRefine((body, ctx) 
 /** What a shared item is, chosen by its author at submission: a flow, knowledge or an analysis. */
 export const COMMUNITY_KINDS = ['workflow', 'rules', 'analysis'] as const
 
+/** A public author handle: lowercase letters, digits and hyphens, as shown after @ on accounted.se. */
+export const AUTHOR_HANDLE = /^[a-z0-9][a-z0-9-]{0,38}$/
+
+/**
+ * Handles nobody may publish under: they read as Accounted itself or as its
+ * staff. A handle is only a display name (authors are not verified by it), so
+ * these names must not be takeable at all.
+ */
+const RESERVED_HANDLES = new Set([
+  'accounted', 'gnubok', 'admin', 'administrator', 'support', 'help', 'hjalp', 'kundtjanst',
+  'official', 'staff', 'team', 'moderator', 'granskare', 'reviewer', 'system', 'root',
+  'skatteverket', 'bolagsverket', 'anthropic', 'claude', 'openai', 'chatgpt', 'grok', 'xai',
+])
+
+/** Whether a handle is reserved: an exact name, or one that starts with Accounted's own names (accounted-team). */
+export function isReservedHandle(handle: string): boolean {
+  const name = handle.toLowerCase()
+  return RESERVED_HANDLES.has(name) || /^(accounted|gnubok)(-|$)/.test(name)
+}
+
 export const CreateCompanySkillSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('catalog'), atom_id: z.string().min(1).max(200), scope: z.enum(['company', 'team']).default('company') }).strict(),
   z.object({ kind: z.literal('own'), name: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500), body: SkillBodySchema, scope: z.enum(['company', 'team']).default('company'), item_kind: z.enum(['workflow', 'rules', 'analysis']).default('workflow') }).strict(),
@@ -36,7 +56,12 @@ export const CreateCompanySkillSchema = z.discriminatedUnion('kind', [
 
 export const UpdateCompanySkillSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('edit'), name: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500), body: SkillBodySchema }).strict(),
-  z.object({ action: z.literal('submit'), confirmed_no_customer_data: z.literal(true), author_handle: z.string().regex(/^[a-z0-9][a-z0-9-]{0,38}$/), kind: z.enum(COMMUNITY_KINDS).optional() }).strict(),
+  z.object({
+    action: z.literal('submit'),
+    confirmed_no_customer_data: z.literal(true),
+    author_handle: z.string().regex(AUTHOR_HANDLE).refine((handle) => !isReservedHandle(handle), 'This handle is reserved.'),
+    kind: z.enum(COMMUNITY_KINDS).optional(),
+  }).strict(),
   z.object({ action: z.literal('withdraw') }).strict(),
   z.object({ action: z.literal('add') }).strict(),
 ])

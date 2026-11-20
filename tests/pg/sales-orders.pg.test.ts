@@ -464,3 +464,47 @@ describe('hardening (20260902180000)', () => {
     ).rejects.toThrow(/check/i)
   })
 })
+
+describe('dimension bags (20260928200200)', () => {
+  // Every other producer column carries this CHECK; the kundorder tables
+  // were born without it.
+  it('refuses a non-object bag on an order and on an order line, and keeps objects writable', async () => {
+    const { companyId, userId, customerId, orderId, itemId } = await seedOrderWithLine(2)
+
+    await expect(
+      getPool().query(
+        `INSERT INTO public.sales_orders (company_id, user_id, customer_id, default_dimensions)
+         VALUES ($1, $2, $3, '["6","P001"]'::jsonb)`,
+        [companyId, userId, customerId],
+      ),
+    ).rejects.toThrow(/sales_orders_default_dimensions_is_object/)
+    await expect(
+      getPool().query(`UPDATE public.sales_orders SET default_dimensions = '"P001"'::jsonb WHERE id = $1`, [orderId]),
+    ).rejects.toThrow(/sales_orders_default_dimensions_is_object/)
+
+    await expect(
+      getPool().query(
+        `INSERT INTO public.sales_order_items (company_id, sales_order_id, description, quantity, dimensions)
+         VALUES ($1, $2, 'Rad med trasig tagg', 1, '[]'::jsonb)`,
+        [companyId, orderId],
+      ),
+    ).rejects.toThrow(/sales_order_items_dimensions_is_object/)
+    await expect(
+      getPool().query(`UPDATE public.sales_order_items SET dimensions = '6'::jsonb WHERE id = $1`, [itemId]),
+    ).rejects.toThrow(/sales_order_items_dimensions_is_object/)
+
+    await getPool().query(`UPDATE public.sales_orders SET default_dimensions = '{"6":"P001"}'::jsonb WHERE id = $1`, [
+      orderId,
+    ])
+    await getPool().query(`UPDATE public.sales_order_items SET dimensions = '{"1":"KS01"}'::jsonb WHERE id = $1`, [
+      itemId,
+    ])
+    const { rows } = await getPool().query<{ default_dimensions: unknown; dimensions: unknown }>(
+      `SELECT so.default_dimensions, soi.dimensions
+         FROM public.sales_orders so JOIN public.sales_order_items soi ON soi.sales_order_id = so.id
+        WHERE soi.id = $1`,
+      [itemId],
+    )
+    expect(rows[0]).toEqual({ default_dimensions: { '6': 'P001' }, dimensions: { '1': 'KS01' } })
+  })
+})

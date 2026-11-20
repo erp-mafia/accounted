@@ -1,0 +1,132 @@
+[
+  {
+    "name": "owner trips of an aktiebolag on the default counter account",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-05-31",
+          "description": "Milersättning 2026-05-01 till 2026-05-31 (2 resor, 14.25 mil)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "7331",
+              "debit_amount": 356.25,
+              "credit_amount": 0,
+              "line_description": "Milersättning egen bil: 14.25 mil × 25 kr"
+            },
+            {
+              "account_number": "2820",
+              "debit_amount": 0,
+              "credit_amount": 356.25,
+              "line_description": "Milersättning att utbetala"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "employee trips in two vehicle types on 2820, the motpart named",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-30",
+          "description": "Milersättning 2026-06-01 till 2026-06-30 (2 resor, 16 mil, Sofie Persson)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "7331",
+              "debit_amount": 57,
+              "credit_amount": 0,
+              "line_description": "Milersättning förmånsbil (el): 6 mil × 9.5 kr"
+            },
+            {
+              "account_number": "7331",
+              "debit_amount": 250,
+              "credit_amount": 0,
+              "line_description": "Milersättning egen bil: 10 mil × 25 kr"
+            },
+            {
+              "account_number": "2820",
+              "debit_amount": 0,
+              "credit_amount": 307,
+              "line_description": "Milersättning att utbetala"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "enskild firma owner trips on the insättning account",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-07-31",
+          "description": "Milersättning 2026-07-01 till 2026-07-31 (1 resor, 23 mil)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "7331",
+              "debit_amount": 575,
+              "credit_amount": 0,
+              "line_description": "Milersättning egen bil: 23 mil × 25 kr"
+            },
+            {
+              "account_number": "2018",
+              "debit_amount": 0,
+              "credit_amount": 575,
+              "line_description": "Milersättning, egen insättning"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "owner trips paid from the bank, approved from a staged operation with the trip set frozen",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-31",
+          "description": "Milersättning 2026-08-01 till 2026-08-31 (1 resor, 1.8 mil)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "7331",
+              "debit_amount": 45,
+              "credit_amount": 0,
+              "line_description": "Milersättning egen bil: 1.8 mil × 25 kr"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 45,
+              "line_description": "Milersättning att utbetala"
+            }
+          ]
+        }
+      ]
+    ]
+  }
+]

@@ -39,38 +39,11 @@ import {
   PATCH as updateSalaryRun,
   DELETE as deleteSalaryRun,
 } from '../[id]/route'
+import { createTableMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-  count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -139,10 +112,10 @@ const SAMPLE_RUN = {
 describe('GET /api/v1/companies/:companyId/salary-runs', () => {
   it('returns paginated salary runs', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: [SAMPLE_RUN], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listSalaryRuns(
@@ -159,9 +132,9 @@ describe('GET /api/v1/companies/:companyId/salary-runs', () => {
 
   it('rejects an out-of-range period_year filter', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await listSalaryRuns(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs?period_year=1999`),
@@ -179,7 +152,7 @@ describe('GET /api/v1/companies/:companyId/salary-runs', () => {
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await listSalaryRuns(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`),
@@ -192,10 +165,10 @@ describe('GET /api/v1/companies/:companyId/salary-runs', () => {
 describe('GET /api/v1/companies/:companyId/salary-runs/:id', () => {
   it('returns the salary run', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: SAMPLE_RUN, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getSalaryRun(
@@ -210,10 +183,10 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id', () => {
 
   it('returns 404 SALARY_RUN_NOT_FOUND when missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getSalaryRun(
@@ -236,35 +209,114 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
   }
 
   it('creates a salary run and emits salary_run.created (happy path)', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue()
+    try {
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          // 1. overlap guard reads live runs, 2. the insert returns the row
+          salary_runs: [
+            { data: [], error: null },
+            { data: { ...SAMPLE_RUN, user_id: USER_ID, company_id: COMPANY_ID }, error: null },
+          ],
+          idempotency_keys: { data: null, error: null },
+        }).supabase,
+      )
+
+      const res = await createSalaryRun(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
+          method: 'POST',
+          body: JSON.stringify(validBody),
+        }),
+        companyParams(COMPANY_ID),
+      )
+
+      expect(res.status).toBe(201)
+      const body = await res.json()
+      expect(body.data.id).toBe(RUN_ID)
+      expect(body.data.status).toBe('draft')
+      // The documented projection: no internal columns.
+      expect(body.data).not.toHaveProperty('user_id')
+      expect(body.data).not.toHaveProperty('company_id')
+      expect(emitSpy).toHaveBeenCalledTimes(1)
+      expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'salary_run.created' }))
+    } finally {
+      emitSpy.mockRestore()
+    }
+  })
+
+  it("books an omitted voucher_series into the company's salary series and leaves the run empty", async () => {
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue()
+    try {
+      const mock = createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        // 1. overlap guard reads live runs, 2. the insert returns the row
+        // The standard series set: lön in K (the systemdokumentation's map).
+        company_settings: {
+          data: { default_voucher_series_per_source_type: { salary_payment: 'K' } },
+          error: null,
+        },
         salary_runs: [
           { data: [], error: null },
-          { data: SAMPLE_RUN, error: null },
+          { data: { ...SAMPLE_RUN, voucher_series: 'K' }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      })
+      mockServiceClient.mockReturnValue(mock.supabase)
+
+      const { voucher_series: _omitted, ...bodyWithoutSeries } = validBody
+      const res = await createSalaryRun(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
+          method: 'POST',
+          body: JSON.stringify(bodyWithoutSeries),
+        }),
+        companyParams(COMPANY_ID),
+      )
+
+      expect(res.status).toBe(201)
+      expect(mock.payloads('salary_runs', 'insert')[0]).toMatchObject({ voucher_series: 'K' })
+      // v1 documents an empty run: no roster read, no roster rows.
+      expect(mock.tables()).not.toContain('employees')
+      expect(mock.tables()).not.toContain('salary_run_employees')
+    } finally {
+      emitSpy.mockRestore()
+    }
+  })
+
+  it('returns 400 for a voucher_series that is not a single A-Z letter', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
     )
 
     const res = await createSalaryRun(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
         method: 'POST',
-        body: JSON.stringify(validBody),
+        body: JSON.stringify({ ...validBody, voucher_series: 'LK' }),
       }),
       companyParams(COMPANY_ID),
     )
 
-    expect(res.status).toBe(201)
-    const body = await res.json()
-    expect(body.data.id).toBe(RUN_ID)
-    expect(body.data.status).toBe('draft')
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 401 without a bearer token', async () => {
+    mockValidate.mockResolvedValue({ error: 'Missing API key', status: 401 })
+    const res = await createSalaryRun(
+      new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'b1aaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+        body: JSON.stringify(validBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(401)
   })
 
   it('returns 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP when another run already reads those days', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         company_settings: { data: { salary_deviation_period: 'previous_month' }, error: null },
         salary_runs: {
@@ -280,7 +332,7 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
           error: null,
         },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createSalaryRun(
@@ -299,10 +351,10 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
 
   it('returns 400 SALARY_RUN_DEVIATION_PERIOD_INVALID for one deviation date without the other', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createSalaryRun(
@@ -318,26 +370,19 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
     expect(body.error.code).toBe('SALARY_RUN_DEVIATION_PERIOD_INVALID')
   })
 
-  it('returns 409 SALARY_RUN_DUPLICATE_PERIOD on unique-constraint violation', async () => {
+  it('returns 409 SALARY_RUN_DUPLICATE_PERIOD on unique-constraint violation, naming the existing run', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
+          // 1. overlap guard, 2. the insert trips the live-run unique index,
+          // 3. the shared create service reads back the run that won.
           { data: [], error: null },
-          {
-            data: null,
-            error: {
-              code: '23505',
-              message: 'duplicate',
-              // The inline `UNIQUE (company_id, period_year, period_month)`
-              // constraint is auto-named `<table>_<columns>_key`. The route
-              // disambiguates 23505s by substring-matching on the columns.
-              constraint: 'salary_runs_company_id_period_year_period_month_key',
-            },
-          },
+          { data: null, error: { code: '23505', message: 'duplicate' } },
+          { data: { id: RUN_ID, status: 'review' }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createSalaryRun(
@@ -351,13 +396,47 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error.code).toBe('SALARY_RUN_DUPLICATE_PERIOD')
+    expect(body.error.details).toMatchObject({
+      field: 'period',
+      period_year: 2026,
+      period_month: 5,
+      existing_id: RUN_ID,
+      existing_status: 'review',
+    })
+  })
+
+  it("previews the company's salary series on a dry run without writing", async () => {
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      company_settings: {
+        data: { default_voucher_series_per_source_type: { salary_payment: 'K' } },
+        error: null,
+      },
+      salary_runs: { data: [], error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const { voucher_series: _omitted, ...bodyWithoutSeries } = validBody
+    const res = await createSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs?dry_run=true`, {
+        method: 'POST',
+        body: JSON.stringify(bodyWithoutSeries),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.voucher_series).toBe('K')
+    expect(mock.findCalls('salary_runs', 'insert')).toEqual([])
   })
 
   it('returns 400 for period_month out of range', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSalaryRun(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
@@ -371,9 +450,9 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
 
   it('returns 400 when Idempotency-Key is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const req = new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
@@ -429,12 +508,12 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
 describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
   it('updates a draft salary run and clears roster calculation_breakdown', async () => {
     const updated = { ...SAMPLE_RUN, payment_date: '2026-05-23' }
-    const flex = makeFlexibleSupabase({
+    const flex = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: updated, error: null }],
+      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: [SAMPLE_RUN], error: null }, { data: updated, error: null }],
       salary_run_employees: { data: null, error: null },
       idempotency_keys: { data: null, error: null },
-    })
+    }).supabase
     mockServiceClient.mockReturnValue(flex)
 
     const res = await updateSalaryRun(
@@ -457,12 +536,12 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     // Period 2026-05 paid 5 June (lön i efterskott): the verifikat books in
     // June and the AGI is declared for 202606, so nothing is out of step.
     const updated = { ...SAMPLE_RUN, payment_date: '2026-06-05' }
-    const flex = makeFlexibleSupabase({
+    const flex = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: updated, error: null }],
+      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: [SAMPLE_RUN], error: null }, { data: updated, error: null }],
       salary_run_employees: { data: null, error: null },
       idempotency_keys: { data: null, error: null },
-    })
+    }).supabase
     mockServiceClient.mockReturnValue(flex)
 
     const res = await updateSalaryRun(
@@ -483,12 +562,12 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     // out-of-period date must stay correctable within its own month.
     const grandfathered = { ...SAMPLE_RUN, payment_date: '2026-06-05' }
     const updated = { ...SAMPLE_RUN, payment_date: '2026-06-07' }
-    const flex = makeFlexibleSupabase({
+    const flex = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      salary_runs: [{ data: grandfathered, error: null }, { data: updated, error: null }],
+      salary_runs: [{ data: grandfathered, error: null }, { data: [grandfathered], error: null }, { data: updated, error: null }],
       salary_run_employees: { data: null, error: null },
       idempotency_keys: { data: null, error: null },
-    })
+    }).supabase
     mockServiceClient.mockReturnValue(flex)
 
     const res = await updateSalaryRun(
@@ -507,11 +586,11 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
   it('returns 400 SALARY_RUN_PATCH_NOT_DRAFT for non-draft status', async () => {
     const approved = { ...SAMPLE_RUN, status: 'approved' }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: approved, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateSalaryRun(
@@ -530,11 +609,11 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
 
   it('returns 404 SALARY_RUN_NOT_FOUND when row missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateSalaryRun(
@@ -548,13 +627,58 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     expect(res.status).toBe(404)
   })
 
+  it('answers an empty body with the run unchanged, writing nothing', async () => {
+    const flex = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: SAMPLE_RUN, error: null },
+      idempotency_keys: { data: null, error: null },
+    }).supabase
+    mockServiceClient.mockReturnValue(flex)
+
+    const res = await updateSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({}),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.payment_date).toBe('2026-05-25')
+    expect(flex.from).not.toHaveBeenCalledWith('salary_run_employees')
+  })
+
+  it('previews the merged row on a dry run without writing or clearing calculations', async () => {
+    const tables = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: SAMPLE_RUN, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(tables.supabase)
+
+    const res = await updateSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}?dry_run=true`, {
+        method: 'PATCH',
+        body: JSON.stringify({ payment_date: '2026-05-23' }),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.payment_date).toBe('2026-05-23')
+    expect(body.data.preview.voucher_series).toBe('L')
+    expect(tables.supabase.from).not.toHaveBeenCalledWith('salary_run_employees')
+  })
+
   it('rejects voucher_series that is not a single A-Z letter', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: SAMPLE_RUN, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateSalaryRun(
@@ -572,7 +696,7 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
 describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
   it('deletes a draft salary run', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           // First read: existing row check
@@ -581,7 +705,7 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
           { error: null, count: 1 },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteSalaryRun(
@@ -596,11 +720,11 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
 
   it('refuses to delete a non-draft salary run (BFL 5 kap immutability)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'booked' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteSalaryRun(
@@ -618,11 +742,11 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
 
   it('returns 404 SALARY_RUN_NOT_FOUND for unknown ids', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteSalaryRun(
@@ -635,6 +759,44 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
     expect(res.status).toBe(404)
   })
 
+  it('tells an API client why a draft with a payment file cannot be deleted, and what to do instead (#2831)', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: { id: RUN_ID, status: 'draft' }, error: null },
+          // The payment file (kept seven years) still points at the run.
+          {
+            error: {
+              code: '23503',
+              message:
+                'update or delete on table "salary_runs" violates foreign key constraint "salary_payment_files_salary_run_id_fkey" on table "salary_payment_files"',
+              details: `Key (id)=(${RUN_ID}) is still referenced from table "salary_payment_files".`,
+              hint: null,
+            },
+            count: null,
+          },
+        ],
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+
+    const res = await deleteSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}`, {
+        method: 'DELETE',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_DELETE_BLOCKED_BY_PAYMENT_FILE')
+    expect(body.error.message_en).toMatch(/payment file was generated/)
+    expect(body.error.message_en).not.toMatch(/violates foreign key/)
+    expect(body.error.recovery_hint).toMatch(/Edit the draft run instead/)
+    expect(body.error.details).toMatchObject({ referenced_by: 'salary_payment_files', register: 'payment_file' })
+  })
+
   it('refuses to delete a draft that already has journal-entry foreign keys set (BFL 5 kap)', async () => {
     // Defense in depth: if a hypothetical partial failure ever left a row
     // in status=draft with non-null salary_entry_id, the DELETE must NOT
@@ -642,7 +804,7 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
     // filter trips, count comes back 0, and we surface the race-style
     // 400 SALARY_RUN_DELETE_NOT_DRAFT.
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           // First read: row is status=draft (passes the pre-flight)
@@ -651,7 +813,7 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
           { error: null, count: 0 },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteSalaryRun(

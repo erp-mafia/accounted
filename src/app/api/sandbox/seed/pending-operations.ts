@@ -19,6 +19,12 @@
  * seed handler itself is one long Supabase-bound function.
  */
 
+import {
+  SANDBOX_REPRESENTATION_ACCOUNT,
+  SANDBOX_REPRESENTATION_LINE,
+  SANDBOX_STAGED_REPRESENTATION_NOTES,
+} from './representation'
+
 export interface SandboxPendingOperationsInput {
   userId: string
   companyId: string
@@ -70,35 +76,43 @@ export function buildSandboxPendingOperations({
         currency: 'SEK',
         exchange_rate: null,
         vat_treatment: 'reduced_12',
-        subtotal: 240,
-        vat_amount: 28.80,
-        total: 268.80,
-        notes: 'Representation, kundmöte (demo)',
+        subtotal: SANDBOX_REPRESENTATION_LINE.net,
+        vat_amount: SANDBOX_REPRESENTATION_LINE.vat,
+        total: SANDBOX_REPRESENTATION_LINE.total,
+        // Syfte and deltagare, as a written note (crm#1342).
+        notes: SANDBOX_STAGED_REPRESENTATION_NOTES,
         items: [
           {
             line_number: 1,
-            description: 'Kundmöte Demokafé (representation)',
+            description: SANDBOX_REPRESENTATION_LINE.description,
             quantity: 1,
             unit: 'st',
-            unit_price: 240,
-            line_total: 240,
-            account_number: '5810',
-            vat_rate: 12,
-            vat_amount: 28.80,
+            unit_price: SANDBOX_REPRESENTATION_LINE.net,
+            line_total: SANDBOX_REPRESENTATION_LINE.net,
+            account_number: SANDBOX_REPRESENTATION_ACCOUNT,
+            vat_rate: SANDBOX_REPRESENTATION_LINE.vatRatePercent,
+            vat_amount: SANDBOX_REPRESENTATION_LINE.vat,
           },
         ],
       },
       preview_data: {
-        // Representation @ 12% VAT (café meal), 240 SEK excl. VAT for a single
-        // attendee. The avdragsrätt cap is 25% × 300 SEK × antal_personer =
-        // 75 SEK / person (ML 8 kap. 9 §); since the VAT here is 28.80 SEK the
-        // full amount is deductible and the cost lands in 5810: no split.
+        // A customer lunch for two at 12 % (./representation): 6072, since a
+        // måltid is not income-tax deductible, and the VAT is deductible on a
+        // base of at most 300 kr per person (ML 13 kap. 24-25 §§), 36 kr per
+        // person at 12 %. 28,80 kr is under 2 × 36 kr, so it all goes to 2641,
+        // which is what approving books (the registration path debits the
+        // invoice's full VAT and warns when a 607x line could exceed the cap).
         // GenericPreview renders this key, so the `account`/`debit`/`credit`
         // spelling is the right one here.
         preview_lines: [
-          { account: '5810', description: 'Representation (12% moms, ≤ 75 SEK moms/pers)', debit: 240, credit: 0 },
-          { account: '2641', description: 'Ingående moms', debit: 28.80, credit: 0 },
-          { account: '2440', description: 'Leverantörsskulder', debit: 0, credit: 268.80 },
+          {
+            account: SANDBOX_REPRESENTATION_ACCOUNT,
+            description: 'Representation, ej avdragsgill (kundlunch)',
+            debit: SANDBOX_REPRESENTATION_LINE.net,
+            credit: 0,
+          },
+          { account: '2641', description: 'Ingående moms', debit: SANDBOX_REPRESENTATION_LINE.vat, credit: 0 },
+          { account: '2440', description: 'Leverantörsskulder', debit: 0, credit: SANDBOX_REPRESENTATION_LINE.total },
         ],
       },
     },

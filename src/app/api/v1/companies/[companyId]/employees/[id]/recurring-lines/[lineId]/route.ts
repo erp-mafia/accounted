@@ -60,8 +60,9 @@ function toRecurringLineResource(row: EmployeeRecurringLineRow): Record<string, 
 
 const RECURRING_LINE_PITFALLS = [
   'Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.',
-  'The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.',
-  'account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.',
+  'The amount follows the item type: a deduction is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag), and a text row (item_type text) has none: omit amount (0 is accepted) and put the words in description, e.g. how the salary is built up. The API rejects the wrong sign, or an amount on a text row, with 400 VALIDATION_ERROR on field amount.',
+  'Recurring additions (a personligt tillägg next to Grundlön, a cash allowance) are not supported: proration, absence deductions, sjuklön, semestertillägg and the OB rate read only monthly_salary, so a standing tillägg row would be paid in full through sick leave. Put a standing raise on the employee\'s monthly_salary and explain the split with a text row.',
+  'account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping. A text row has no account: account_number is ignored.',
   'Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.',
 ]
 
@@ -86,7 +87,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id/recurring-lines/:lineId',
   summary: 'Update a recurring payslip line.',
   description:
-    'Patches description, amount, account_number, valid_from, valid_to, is_active or metadata on a recurring line. The amount sign is re-checked against the stored item_type and the validity period against the merged (stored + patched) dates. item_type cannot change: delete and recreate instead. Requires an Idempotency-Key header.',
+    'Patches description, amount, account_number, valid_from, valid_to, is_active or metadata on a recurring line. The amount sign is re-checked against the stored item_type and the validity period against the merged (stored + patched) dates. A text row keeps no amount (anything but 0 is refused) and no account (account_number is ignored). item_type cannot change: delete and recreate instead. Requires an Idempotency-Key header.',
   useWhen:
     'The monthly deduction changed (new bike lease amount), the line ends on a known date (set valid_to), or it should pause without losing history (is_active=false).',
   doNotUseFor:

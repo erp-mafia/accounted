@@ -15,8 +15,7 @@ const TRANSCRIBE_SYSTEM =
 /**
  * The reader talking about the page instead of transcribing it. Before the
  * NO_TEXT answer the model wrote "The page is blank." or described a product
- * photo, and that sentence was stored and searched as if the document said it
- * (prod 2026-09-25: 90 pages in 33 companies). Only a short answer in the
+ * photo, and that sentence was stored and searched as if the document said it. Only a short answer in the
  * reader's own voice counts; a real document that happens to start "This
  * invoice..." is long and is kept.
  */

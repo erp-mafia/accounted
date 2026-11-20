@@ -1,5 +1,6 @@
 import type { FieldKind } from './schemas'
 import { roundOre } from '@/lib/money'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 
 /** One field as a model reading returned it. */
 export interface Reading {
@@ -36,25 +37,6 @@ export interface ExtractedField {
 
 export type Payload = Record<string, ExtractedField>
 
-
-/** Swedish organisation or personal identity number as ten digits; a 12-digit form drops its century. */
-export function normalizeOrgNumber(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null
-  const digits = raw.replace(/\D/g, '')
-  if (digits.length === 10) return digits
-  if (digits.length === 12 && /^(16|19|20)/.test(digits)) return digits.slice(2)
-  return null
-}
-
-/** The Luhn check digit over the first nine digits. */
-export function isValidOrgNumber(digits: string): boolean {
-  if (!/^\d{10}$/.test(digits)) return false
-  const sum = [...digits.slice(0, 9)].reduce((acc, ch, i) => {
-    const n = Number(ch) * (i % 2 === 0 ? 2 : 1)
-    return acc + (n > 9 ? n - 9 : n)
-  }, 0)
-  return (10 - (sum % 10)) % 10 === Number(digits[9])
-}
 
 /** Amounts as printed in Swedish documents: spaces or dots between thousands, decimal comma, kr or :- suffix. */
 export function normalizeAmount(raw: unknown): number | null {
@@ -110,7 +92,7 @@ export function normalizeValue(kind: FieldKind, raw: unknown): string | number |
     case 'date':
       return normalizeDate(raw)
     case 'orgnr':
-      return normalizeOrgNumber(raw)
+      return typeof raw === 'string' ? orgNumberKey(raw) : null
     case 'enum':
       return typeof raw === 'string' && raw.trim() ? raw.trim().toLowerCase() : null
     case 'text':

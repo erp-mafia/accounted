@@ -13,15 +13,21 @@ describe('tenant-scoped skill resolution', () => {
     expect((await loadCompanySkillRows(supabase as never, 'company-a')).map((row) => row.id)).toEqual(['team-skill', 'own-id'])
     expect(findCalls('companies', 'eq')).toEqual([['id', 'company-a']])
     expect(findCalls('company_skills', 'eq')).toEqual([['company_id', 'company-a'], ['team_id', 'firm-a']])
+    // Loading the rows reads no profiles: only a surface that shows the creator does.
+    expect(findCalls('profiles', 'select')).toEqual([])
   })
   it('does not resolve a guessed private slug from another tenant', async () => {
     enqueue({ data: null }); enqueue({ data: [own] })
     expect(await resolveOwnSkill(supabase as never, 'company-a', 'own/other-tenant')).toBeNull()
   })
-  it('does not expose withdrawn private content', () => {
-    expect(ownSkill({ ...own, share_status: 'withdrawn' })).toBeNull()
+  it('keeps AI-saved drafts from AIs, and a shared item usable to its own author', () => {
     expect(ownSkill({ ...own, draft: true })).toBeNull()
     expect(ownSkill(own)?.slug).toBe('own/own-id')
+    expect(ownSkill(own)).not.toHaveProperty('createdBy')
+    expect(ownSkill(own, new Map([['user', { name: 'Anna Andersson', deleted: false }]]))?.createdBy).toEqual({ name: 'Anna Andersson', deleted: false })
+    expect(ownSkill(own, new Map())?.createdBy).toEqual({ name: null, deleted: false })
+    expect(ownSkill({ ...own, share_status: 'submitted' })?.slug).toBe('own/own-id')
+    expect(ownSkill({ ...own, share_status: 'published' })?.slug).toBe('own/own-id')
   })
 })
 

@@ -75,105 +75,49 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
     expect((await parseJsonResponse(res)).status).toBe(400)
   })
 
-  // Queue order per candidate chunk mirrors resolveMissingUnderlagEntries:
-  // documents, SI references (registration FK, then payment FK), SI payment-row
-  // references, exemptions, then the
-  // customer-invoice resolver (invoices by journal_entry_id, invoice_payments).
-  it('dry_run counts only entries that are missing AND not exempt', async () => {
-    enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
-    enqueue({ data: [{ journal_entry_id: 'a' }], error: null }) // a has a document
-    enqueue({ data: [], error: null }) // no SI references with docs (registration FK)
-    enqueue({ data: [], error: null }) // no SI references with docs (payment FK)
-    enqueue({ data: [], error: null }) // no SI payment-row references
-    enqueue({ data: [{ journal_entry_id: 'b' }], error: null }) // b already exempt
-    enqueue({ data: [], error: null }) // no invoices pointing at the entries
-    enqueue({ data: [], error: null }) // no invoice payment rows
-    const res = await POST(makeReq({ dry_run: true }))
+  // The predicate lives in the list_verifikat_missing_underlag RPC (one call
+  // per page, pinned to the badge's RPC by the pg-real suites); the route
+  // only asks for the total (dry run) or pages the ids, then marks them.
+  const RPC = 'list_verifikat_missing_underlag'
+  const rpcCalls = () =>
+    mockSupabase.rpc.mock.calls.filter(([name]) => name === RPC) as unknown as [string, Record<string, unknown>][]
+
+  it('dry_run reads only the total, in one RPC call with no writes (crm#1390)', async () => {
+    enqueue({ data: { ok: true, total_count: 4600, ids: ['a'] }, error: null })
+    const res = await POST(
+      makeReq({ period_id: '550e8400-e29b-41d4-a716-446655440000', series: 'A', dry_run: true }),
+    )
     const { status, body } = await parseJsonResponse<{ data: { count: number } }>(res)
     expect(status).toBe(200)
-    expect(body.data.count).toBe(1) // only c
-  })
-
-  it('dry_run excludes entries covered by a supplier-invoice reference with an anchored doc', async () => {
-    // a: covered via supplier_invoices.registration_journal_entry_id
-    // b: covered via a supplier_invoice_payments row whose SI has an anchored doc
-    // c: genuinely missing
-    // d: SI reference exists but its doc is UNANCHORED (deletable) → still missing
-    enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }], error: null }) // candidates
-    enqueue({ data: [], error: null }) // no direct documents
-    enqueue({
-      data: [
-        {
-          registration_journal_entry_id: 'a',
-          payment_journal_entry_id: null,
-          document: { journal_entry_id: 'a' },
-        },
-        {
-          registration_journal_entry_id: 'd',
-          payment_journal_entry_id: null,
-          document: { journal_entry_id: null },
-        },
-      ],
-      error: null,
+    expect(body.data.count).toBe(4600)
+    expect(rpcCalls()).toHaveLength(1)
+    expect(rpcCalls()[0][1]).toMatchObject({
+      p_company_id: 'company-1',
+      p_period_id: '550e8400-e29b-41d4-a716-446655440000',
+      p_series: 'A',
+      p_limit: 1,
     })
-    enqueue({ data: [], error: null }) // no SI references via payment FK
-    enqueue({
-      data: [
-        {
-          journal_entry_id: 'b',
-          supplier_invoice: { document_id: 'doc-1', document: { journal_entry_id: 'x' } },
-        },
-      ],
-      error: null,
-    })
-    enqueue({ data: [], error: null }) // no exemptions
-    enqueue({ data: [], error: null }) // no invoices pointing at the entries
-    enqueue({ data: [], error: null }) // no invoice payment rows
-    const res = await POST(makeReq({ dry_run: true }))
-    const { status, body } = await parseJsonResponse<{ data: { count: number } }>(res)
-    expect(status).toBe(200)
-    expect(body.data.count).toBe(2) // c and d
+    expect(mockSupabase.from).not.toHaveBeenCalled()
   })
 
-  it('dry_run excludes entries a customer invoice points at (#2298)', async () => {
-    // a: the invoice register links it directly (invoices.journal_entry_id)
-    // b: a SIE-imported voucher matched to an invoice (invoice_payments row)
-    // c: genuinely missing
-    enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
-    enqueue({ data: [], error: null }) // no direct documents
-    enqueue({ data: [], error: null }) // no SI references (registration FK)
-    enqueue({ data: [], error: null }) // no SI references (payment FK)
-    enqueue({ data: [], error: null }) // no SI payment-row references
-    enqueue({ data: [], error: null }) // no exemptions
-    enqueue({ data: [{ id: 'inv-1', journal_entry_id: 'a' }], error: null })
-    enqueue({ data: [{ id: 'pay-1', invoice_id: 'inv-2', journal_entry_id: 'b' }], error: null })
-    const res = await POST(makeReq({ dry_run: true }), { params: Promise.resolve({}) })
-    const { status, body } = await parseJsonResponse<{ data: { count: number } }>(res)
-    expect(status).toBe(200)
-    expect(body.data.count).toBe(1) // only c
-  })
-
-  it('marks the missing entries and returns the count', async () => {
-    enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
-    enqueue({ data: [], error: null }) // no documents
-    enqueue({ data: [], error: null }) // no SI references with docs (registration FK)
-    enqueue({ data: [], error: null }) // no SI references with docs (payment FK)
-    enqueue({ data: [], error: null }) // no SI payment-row references
-    enqueue({ data: [{ journal_entry_id: 'a' }], error: null }) // a already exempt
-    enqueue({ data: [], error: null }) // no invoices pointing at the entries
-    enqueue({ data: [], error: null }) // no invoice payment rows
-    enqueue({ error: null }) // helper upsert
+  it('marks every missing entry across RPC pages and returns the count', async () => {
+    const ids = (from: number, count: number) => Array.from({ length: count }, (_, i) => `id-${from + i}`)
+    enqueue({ data: { ok: true, total_count: 1200, ids: ids(0, 1000) }, error: null })
+    enqueue({ data: { ok: true, total_count: 1200, ids: ids(1000, 200) }, error: null })
+    enqueue({ error: null }) // helper upsert, chunk 1
+    enqueue({ error: null }) // helper upsert, chunk 2
+    enqueue({ error: null }) // helper upsert, chunk 3
     const res = await POST(makeReq({ period_id: null, reason: 'Importerad' }))
     const { status, body } = await parseJsonResponse<{ data: { exempted: number } }>(res)
     expect(status).toBe(200)
-    expect(body.data.exempted).toBe(2) // b and c
+    expect(body.data.exempted).toBe(1200)
+    expect(rpcCalls().map(([, args]) => args.p_offset)).toEqual([0, 1000])
+    expect(mockSupabase.from).toHaveBeenCalledWith('journal_entry_no_doc_required')
   })
 
-  it('logs the driver error and answers with the mapped text when a lookup fails (#2395)', async () => {
-    enqueue({ data: [{ id: 'a' }], error: null }) // candidates
-    enqueue({ data: [], error: null }) // no documents
-    const driverError = { message: 'Request-URI Too Large', code: '414', details: null, hint: null }
-    enqueue({ data: null, error: driverError }) // SI by registration FK: gateway refused the URL
+  it('logs the driver error and answers with the mapped text when the RPC fails (#2395)', async () => {
+    const driverError = { message: 'canceling statement due to statement timeout', code: '57014', details: null, hint: null }
+    enqueue({ data: null, error: driverError })
     const res = await POST(makeReq({ dry_run: true }), { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(400)
@@ -183,11 +127,12 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
     expect(call![2]).toEqual({ cause: driverError })
   })
 
-  it('short-circuits to 0 when no candidates match the filters', async () => {
-    enqueue({ data: [], error: null }) // no candidates
-    const res = await POST(makeReq({ dry_run: true }))
-    const { status, body } = await parseJsonResponse<{ data: { count: number } }>(res)
+  it('writes nothing when nothing matches the filters', async () => {
+    enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
+    const res = await POST(makeReq({ reason: 'Importerad' }))
+    const { status, body } = await parseJsonResponse<{ data: { exempted: number } }>(res)
     expect(status).toBe(200)
-    expect(body.data.count).toBe(0)
+    expect(body.data.exempted).toBe(0)
+    expect(mockSupabase.from).not.toHaveBeenCalled()
   })
 })

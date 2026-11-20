@@ -9,17 +9,20 @@
  *         (enforce_dimension_value_retention, BFL 7-year philosophy) and
  *         return 409 DIMENSION_VALUE_REFERENCED: archive instead.
  *
- * Mirrors the internal /api/dimensions/[id]/values/[valueId] semantics so
- * dashboard and API behave identically.
+ * PATCH runs updateDimensionValue (lib/dimensions/registry-service.ts), the
+ * service the internal /api/dimensions/[id]/values/[valueId] route runs, so
+ * dashboard and API apply the same rules and emit the same events
+ * (dimension_value.renamed / archived / unarchived, accounted#193).
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
-import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateDimensionValueSchema } from '@/lib/api/schemas'
+import { updateDimensionValue } from '@/lib/dimensions/registry-service'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
 
 const DimensionValueShape = z.object({
   id: z.string().uuid(),
@@ -31,15 +34,13 @@ const DimensionValueShape = z.object({
   end_date: z.string().nullable(),
 })
 
-const VALUE_COLUMNS = 'id, dimension_id, code, name, is_active, start_date, end_date'
-
 registerEndpoint({
   operation: 'dimensions.values.update',
   method: 'PATCH',
   path: '/api/v1/companies/:companyId/dimensions/:id/values/:valueId',
   summary: 'Update a dimension value (rename, archive, set start/end date).',
   description:
-    'Sparse update of a dimension value (SIE #OBJEKT): name, is_active (false = archive), start_date, end_date. `code` is immutable: renaming a code would orphan every journal line tagged with it; create a new value and archive the old one instead. Dates are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt): use end_date to close a finished project. Idempotent (mandatory Idempotency-Key) and dry-runnable.',
+    'Sparse update of a dimension value (SIE #OBJEKT): name, is_active (false = archive), start_date, end_date. `code` is immutable: renaming a code would orphan every journal line tagged with it; create a new value and archive the old one instead. Dates are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt): use end_date to close a finished project. A rename emits the webhook event dimension_value.renamed (with previousName), archiving dimension_value.archived and reactivating dimension_value.unarchived. Idempotent (mandatory Idempotency-Key) and dry-runnable.',
   useWhen:
     'You need to rename a project/cost-centre, mark a finished project with an end date, or archive (is_active=false) a value that should no longer be used on new lines.',
   doNotUseFor:
@@ -131,78 +132,17 @@ export const PATCH = withApiV1<ValueRouteParams>(
 
     const parsed = UpdateDimensionValueSchema.safeParse(rawBody)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
-    const body = parsed.data
 
-    // Value dates only make sense on accumulating dimensions (projekt-style
-    // ranges). When the request carries an actual date (explicit null = clear,
-    // always allowed), check the parent dimension's resets_annually flag.
-    // Mirrors the internal route exactly.
-    if (body.start_date != null || body.end_date != null) {
-      const { data: dimension, error: dimError } = await ctx.supabase
-        .from('dimensions')
-        .select('id, resets_annually')
-        .eq('id', ids.id)
-        .eq('company_id', ctx.companyId!)
-        .maybeSingle()
-
-      if (dimError) {
-        return v1ErrorResponse(dimError, ctx.log, { requestId: ctx.requestId })
-      }
-      if (!dimension) {
-        return v1ErrorResponseFromCode('DIMENSION_NOT_FOUND', ctx.log, {
-          requestId: ctx.requestId,
-          details: { dimension_id: ids.id },
-        })
-      }
-      if (dimension.resets_annually) {
-        return v1ErrorResponseFromCode('DIMENSION_VALUE_DATES_NOT_ALLOWED', ctx.log, {
-          requestId: ctx.requestId,
-        })
-      }
-    }
-
-    const updateData: Record<string, unknown> = {}
-    for (const key of ['name', 'is_active', 'start_date', 'end_date'] as const) {
-      if (body[key] !== undefined) updateData[key] = body[key]
-    }
-
-    // Pre-flight fetch: needed for a faithful dry-run preview and a clean 404
-    // before the write.
-    const { data: current, error: fetchErr } = await ctx.supabase
-      .from('dimension_values')
-      .select(VALUE_COLUMNS)
-      .eq('id', ids.valueId)
-      .eq('dimension_id', ids.id)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!current) {
-      return v1ErrorResponseFromCode('DIMENSION_VALUE_NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    if (ctx.dryRun) {
-      return dryRunPreview({ ...current, ...updateData }, { requestId: ctx.requestId, log: ctx.log })
-    }
-
-    const { data, error } = await ctx.supabase
-      .from('dimension_values')
-      .update(updateData)
-      .eq('id', ids.valueId)
-      .eq('dimension_id', ids.id)
-      .eq('company_id', ctx.companyId!)
-      .select(VALUE_COLUMNS)
-      .single()
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    return ok(data, { requestId: ctx.requestId })
+    // The rules and the events (renamed, archived, unarchived) live in
+    // updateDimensionValue, shared with the dashboard route.
+    const outcome = await updateDimensionValue(
+      { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+      ids.id,
+      ids.valueId,
+      parsed.data,
+      { dryRun: ctx.dryRun },
+    )
+    return v1OutcomeResponse(outcome, ctx)
   },
   { requireIdempotencyKey: true },
 )

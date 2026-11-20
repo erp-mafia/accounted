@@ -220,7 +220,7 @@ describe('atomic bank booking and promotion races', () => {
         await client.query('BEGIN'); await other.query('BEGIN'); await actor(other)
         const pid = (await other.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
         await client.query('SELECT lock_cash_account_company($1)', [owner.companyId])
-        if (kind === 'depreciation') pending = other.query('SELECT * FROM commit_asset_depreciation($1, $2, $3, $4, 25)', [owner.companyId, assetId, entryId, owner.fiscalPeriodId])
+        if (kind === 'depreciation') pending = other.query('SELECT * FROM commit_asset_depreciation($1, $2, $3, $4, 25::numeric, 0::numeric, NULL::date)', [owner.companyId, assetId, entryId, owner.fiscalPeriodId])
         else if (kind === 'disposal') pending = other.query(`SELECT * FROM commit_asset_disposal($1, $2, NULL, $3, 'scrap', '2026-06-01', 0, 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL)`, [owner.companyId, assetId, owner.fiscalPeriodId])
         else if (kind === 'opening-balance') pending = other.query("SELECT * FROM commit_opening_balance_replacement($1, $2, $3, $4, '2026-01-01', 'PG replacement', 'A', '[]')", [owner.companyId, owner.fiscalPeriodId, randomUUID(), owner.userId])
         else if (kind === 'inline-correction') pending = other.query("SELECT correct_entry_lines_inline($1, $2, $3, '[]', $4)", [owner.companyId, entryId, [randomUUID()], owner.userId])

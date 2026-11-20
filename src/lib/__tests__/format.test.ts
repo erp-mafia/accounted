@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatAmount, formatWholeKr, formatDateTime, formatDate, isSaneDateString } from '@/lib/utils'
+import { formatAmount, formatRowAmount, formatWholeKr, formatDateTime, formatDate, isSaneDateString } from '@/lib/utils'
 
 // Intl sv-SE groups thousands with a non-breaking / narrow space (U+00A0 or
 // U+202F depending on ICU version) and may render negatives with U+2212. Both
@@ -16,6 +16,24 @@ describe('formatAmount', () => {
 
   it('does not include "kr" or the SEK symbol', () => {
     expect(formatAmount(100)).not.toMatch(/kr|SEK/)
+  })
+})
+
+describe('formatRowAmount', () => {
+  // Intl separates sv-SE groups with a narrow no-break space (U+202F) and
+  // writes a negative with U+2212; compare on normalised spaces.
+  const norm = (v: string) => v.replace(/[\u00a0\u202f]/g, ' ')
+
+  it('shows a krona amount as the bare number, with formatCurrency\'s digits', () => {
+    expect(norm(formatRowAmount(1234.5))).toBe('1 234,50')
+    expect(norm(formatRowAmount(1234.5, 'SEK'))).toBe('1 234,50')
+    expect(norm(formatRowAmount(1234.5, null))).toBe('1 234,50')
+    expect(norm(formatRowAmount(4521))).toBe('4 521')
+  })
+
+  it('keeps the code of any other currency', () => {
+    expect(norm(formatRowAmount(1234.5, 'EUR'))).toContain('€')
+    expect(norm(formatRowAmount(10, 'USD'))).toMatch(/US\$|\$/)
   })
 })
 

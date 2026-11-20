@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Skill } from './types'
+import { creatorOf, type Creator } from '@/lib/attribution/person-names'
 
 export interface CompanySkillRow {
   id: string
@@ -10,7 +11,7 @@ export interface CompanySkillRow {
   name: string | null
   description: string | null
   body: string | null
-  share_status: 'private' | 'submitted' | 'published' | 'withdrawn'
+  share_status: 'private' | 'submitted' | 'published'
   created_by: string
   updated_at: string
   reviewed_at: string | null
@@ -19,6 +20,10 @@ export interface CompanySkillRow {
   draft?: boolean
   /** A flow, knowledge or an analysis (company_skills.kind). */
   kind?: 'workflow' | 'rules' | 'analysis'
+  /** Where a published item lives in erp-mafia/accounted-skills. */
+  review_url?: string | null
+  /** Why Accounted sent a shared item back (it is private again). */
+  review_note?: string | null
 }
 
 /** Caller must already authorize company membership. Never cache tenant data. */
@@ -34,11 +39,17 @@ export async function loadCompanySkillRows(supabase: SupabaseClient, companyId: 
   return [...team, ...own]
 }
 
-export function ownSkill(row: CompanySkillRow): Skill | null {
-  if (row.atom_id || row.share_status === 'withdrawn' || row.draft || !row.name || !row.body) return null
+/**
+ * `creators` (resolveCreators over the rows' created_by) adds who saved the
+ * item as createdBy; without it the skill carries no creator, so callers that
+ * never show one skip the profiles read.
+ */
+export function ownSkill(row: CompanySkillRow, creators?: ReadonlyMap<string, Creator>): Skill | null {
+  if (row.atom_id || row.draft || !row.name || !row.body) return null
   return {
     slug: `own/${row.id}`, name: row.name, summary: row.description ?? '',
     body: row.body, tags: ['own'], tier: 'own', source: 'own', reviewedAt: row.reviewed_at, itemKind: row.kind ?? 'workflow',
+    ...(creators ? { createdBy: creatorOf(creators, row.created_by) } : {}),
   }
 }
 

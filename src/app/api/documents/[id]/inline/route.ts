@@ -5,6 +5,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { OPAQUE_DOCUMENT_CSP, inlineSafeMimeType } from '@/lib/core/documents/storage-proxy'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { HEIC_MIME_TYPES, decodeHeicToJpeg } from '@/lib/documents/read/image'
+import { PREVIEW_VERSION, ensurePreview, needsPreview } from '@/lib/documents/preview'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('documents/inline')
@@ -60,15 +61,17 @@ function resolveContentType(fileName: string, dbMimeType: string | null): string
 }
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'document.inline',
-  async (_request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId }, { params }) => {
     const { id } = await params
+    // ?original=1 is "open in a new tab": the file itself, not the viewer's preview.
+    const wantsOriginal = new URL(request.url).searchParams.get('original') === '1'
 
     // Authorize via the auth-bound client and the active tenant. RLS remains
     // the second layer, while the explicit company filter prevents a document
     // from another membership being opened through a guessed identifier.
     const { data: doc, error: docError } = await supabase
       .from('document_attachments')
-      .select('id, company_id, file_name, mime_type, storage_path')
+      .select('id, company_id, file_name, mime_type, storage_path, file_size_bytes')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -80,6 +83,26 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Use the service-role client to read from the non-public bucket only after
     // the active-company authorization check above has succeeded.
     const serviceClient = createServiceClient()
+    const resolvedType = resolveContentType(doc.file_name, doc.mime_type)
+
+    // The viewer gets a photo's preview: made once, kept, a fraction of the size (lib/documents/preview.ts).
+    if (!wantsOriginal && needsPreview(resolvedType, doc.file_size_bytes)) {
+      const preview = await ensurePreview(serviceClient, { id: doc.id, company_id: doc.company_id, mime: resolvedType, storage_path: doc.storage_path })
+      if (preview) {
+        return new NextResponse(new Uint8Array(preview), {
+          status: 200,
+          headers: {
+            'Content-Type': 'image/jpeg',
+            'Content-Disposition': contentDisposition('inline', `${doc.file_name.replace(/\.[^.]+$/, '')}.jpg`),
+            // The document never changes (WORM) and neither does its preview: the browser may keep it a while.
+            'Cache-Control': 'private, max-age=3600',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Preview': PREVIEW_VERSION,
+          },
+        })
+      }
+    }
+
     const { data: blob, error: downloadError } = await serviceClient.storage
       .from('documents')
       .download(doc.storage_path)
@@ -91,7 +114,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
-    let contentType = resolveContentType(doc.file_name, doc.mime_type)
+    let contentType = resolvedType
     let body: Blob | ArrayBuffer = blob
     let fileName = doc.file_name
     // An iPhone photo is HEIC, which no browser draws: the viewer showed a

@@ -50,6 +50,38 @@ const eslintConfig = defineConfig([
       "no-console": "warn",
     },
   },
+  // The Skatteverket extension handles redovisare and arbetsgivare ids, which
+  // for an enskild firma are the owner's personnummer, plus declaration
+  // payloads. Raw console.* skips the redacting logger, so here it is an error.
+  {
+    files: ["src/extensions/general/skatteverket/**/*.ts", "src/extensions/general/skatteverket/**/*.tsx"],
+    ignores: ["**/__tests__/**", "**/*.test.ts", "**/*.pg.test.ts"],
+    rules: {
+      "no-console": "error",
+    },
+  },
+  // One icon set and one way into Motion.
+  // Icons come from @/components/icons, the only module that may import the
+  // animated package: its adapter sizes them from className, plays them on
+  // hover of the surrounding control and stills them under reduced motion.
+  {
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: ["src/components/icons/**"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        paths: [
+          { name: "lucide-react", message: "Icons come from @/components/icons (Heroicons)." },
+          { name: "framer-motion", message: "Import Motion from motion/react." },
+        ],
+        patterns: [
+          {
+            group: ["@heroicons-animated/react", "@heroicons-animated/react/*"],
+            message: "Import icons from @/components/icons; add a missing one there.",
+          },
+        ],
+      }],
+    },
+  },
   globalIgnores([
     ".next/**",
     "out/**",
@@ -57,7 +89,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Claude Code session worktrees are full repo copies: without this,
     // local `npm run lint` / `check:lint` walks them (and their node_modules
-    // siblings), inflating the report until the ratchet's JSON parse fails.
+    // siblings) and reports every copy's files.
     ".claude/worktrees/**",
   ]),
 ]);

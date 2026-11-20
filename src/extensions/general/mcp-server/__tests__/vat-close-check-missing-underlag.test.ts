@@ -28,7 +28,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck } from '../server'
+import { computeVatCloseCheck } from '@/lib/reports/vat-close-check'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const PERIOD = { period_type: 'monthly', year: 2026, period: 1 }

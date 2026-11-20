@@ -221,7 +221,7 @@ const SIE_RTRANS_WITHOUT_TWIN = [
 const SIE_BRACE_ON_VER_LINE = [
   '#FLAGGA 0',
   '#SIETYP 4',
-  '#FNAMN "Brace AB"',
+  '#FNAMN "Exempelbolaget AB"',
   '#RAR 0 20240101 20241231',
   '#KONTO 1930 "Företagskonto"',
   '#KONTO 3001 "Försäljning"',
@@ -414,14 +414,15 @@ describe('parseSIEFile', () => {
       expect(result.issues.some((i) => i.severity === 'warning' && i.message.toLowerCase().includes('objektlista'))).toBe(true)
     })
 
-    it('surfaces OIB/OUB drops and dimension presence as info issues', () => {
+    it('parses OIB/OUB and surfaces the IB split and dimension presence as info issues (#3313)', () => {
       const sie = [
         '#FLAGGA 0',
         '#SIETYP 4',
         '#RAR 0 20240101 20241231',
         '#DIM 6 "Projekt"',
+        '#IB 0 1930 5000.00',
         '#OIB 0 1930 {6 "P001"} 5000.00',
-        '#OUB 0 1930 {6 "P001"} 7000.00',
+        '#OUB 0 1930 {6 "P001"} 5000.00',
         '#VER A 1 20240115 "Taggad"',
         '{',
         '#TRANS 5010 {6 "P001"} 100.00',
@@ -430,9 +431,18 @@ describe('parseSIEFile', () => {
       ].join('\n')
 
       const result = parseSIEFile(sie)
+      expect(result.objectOpeningBalances).toEqual([
+        { yearIndex: 0, account: '1930', dimNo: '6', code: 'P001', amount: 5000 },
+      ])
+      expect(result.objectClosingBalances).toEqual([
+        { yearIndex: 0, account: '1930', dimNo: '6', code: 'P001', amount: 5000 },
+      ])
       const infos = result.issues.filter((i) => i.severity === 'info').map((i) => i.message)
-      expect(infos.some((m) => m.includes('2 objektbalansrader'))).toBe(true)
+      expect(infos.some((m) => m.includes('hoppades över'))).toBe(false)
+      expect(infos.some((m) => m.startsWith('1 objektbalanser (#OIB) fördelar den ingående balansen per projekt'))).toBe(true)
       expect(infos.some((m) => m.includes('dimensionsdata'))).toBe(true)
+      // The 1930 line of the voucher is untagged, so P001's #OUB matches its #OIB.
+      expect(result.issues.some((i) => i.tag === 'OUB')).toBe(false)
       // Silence preserved for files without any dimension data.
       const plain = parseSIEFile(['#FLAGGA 0', '#SIETYP 4', '#RAR 0 20240101 20241231'].join('\n'))
       expect(plain.issues.some((i) => i.tag === 'DIM' || i.tag === 'OIB')).toBe(false)
@@ -631,6 +641,37 @@ describe('validateSIEFile', () => {
     expect(validation.errors).toHaveLength(0)
   })
 
+  it('warns when voucher texts carry characters the exporter already lost (U+FFFD)', () => {
+    const content = [
+      '#FLAGGA 0',
+      '#SIETYP 4',
+      '#FNAMN "Test"',
+      '#RAR 0 20250101 20251231',
+      '#KONTO 1930 "Bank"',
+      '#KONTO 3001 "F\uFFFDrs\uFFFDljning"',
+      '#VER A 1 20250115 "F\uFFFDrs\uFFFDljning januari"',
+      '{',
+      '#TRANS 1930 {} 100.00',
+      '#TRANS 3001 {} -100.00 20250115 "Int\uFFFDkt"',
+      '}',
+      '#VER A 2 20250116 "Bankavgift"',
+      '{',
+      '#TRANS 1930 {} -10.00',
+      '#TRANS 3001 {} 10.00',
+      '}',
+    ].join('\n')
+
+    const validation = validateSIEFile(parseSIEFile(content))
+    const warning = validation.warnings.find((w) => w.includes('saknas redan i filen'))
+    expect(warning).toBeDefined()
+    expect(warning).toMatch(/^1 verifikation har/)
+  })
+
+  it('does not warn about lost characters when voucher texts are intact', () => {
+    const validation = validateSIEFile(parseSIEFile(SIE_WITH_VOUCHERS))
+    expect(validation.warnings.some((w) => w.includes('saknas redan i filen'))).toBe(false)
+  })
+
   it('adds error for unbalanced vouchers', () => {
     const parsed = parseSIEFile(SIE_UNBALANCED_VOUCHER)
     const validation = validateSIEFile(parsed)
@@ -697,7 +738,7 @@ describe('validateSIEFile', () => {
 // A completed fiscal year whose vouchers leave a residual on P&L accounts
 // never moved its result to equity. Later imported years derive IB from
 // balance-sheet accounts only, so the residual becomes a permanent
-// balansräkning differens (prod incident: 97 kr across three years).
+// balansräkning differens (seen as 97 kr across three years).
 
 const OMFORING_HEADER = [
   '#FLAGGA 0',
@@ -760,7 +801,7 @@ describe('validateSIEFile — untransferred result (omföring saknas)', () => {
   it('does not warn for a running fiscal year', () => {
     const content = [
       ...OMFORING_HEADER,
-      // Fiscal year end far in the future — the running year legitimately
+      // Fiscal year end far in the future - the running year legitimately
       // carries its result on class 3-8 until bokslut.
       '#RAR 0 20990101 20991231',
       ...OMFORING_MISSING_VOUCHERS.map((line) =>
@@ -951,6 +992,16 @@ describe('decodeBuffer: fallback on U+FFFD', () => {
     const buf = new TextEncoder().encode('Företag').buffer
     const result = decodeBuffer(buf, 'utf8')
     expect(result).toBe('Företag')
+  })
+
+  it('keeps a U+FFFD the exporter wrote into a valid UTF-8 file instead of re-reading it as windows1252', () => {
+    // "F\uFFFDrs\uFFFDljning" as a Wint export wrote it: EF BF BD is the
+    // UTF-8 encoding of U+FFFD. Read as windows1252 it became "Fï¿½rsï¿½ljning".
+    const buf = new TextEncoder().encode('#VER A 1 20250501 "F\uFFFDrs\uFFFDljning"').buffer
+    expect(detectEncoding(buf)).toBe('utf8')
+    const result = decodeBuffer(buf, 'utf8')
+    expect(result).toBe('#VER A 1 20250501 "F\uFFFDrs\uFFFDljning"')
+    expect(result).not.toContain('ï¿½')
   })
 })
 
@@ -1238,8 +1289,8 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     '#PROGRAM\t"Bollbok"\t2078',
     '#GEN\t20260512\t""',
     '#SIETYP\t4',
-    '#ORGNR\t"950406-3679"',
-    '#FNAMN\t"Erik Hellqvist "',
+    '#ORGNR\t"950101-1234"',
+    '#FNAMN\t"Erik Exempel "',
     '#RAR 0 20250101 20251231',
     '#KPTYP\tEUBAS97',
     '#KONTO\t1510\t"Kundfordringar"',
@@ -1263,8 +1314,8 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     '#FORMAT\tPC8',
     '#GEN\t20260514\t""',
     '#SIETYP\t4',
-    '#ORGNR\t"950406-3679"',
-    '#FNAMN\t"Erik Hellqvist "',
+    '#ORGNR\t"950101-1234"',
+    '#FNAMN\t"Erik Exempel "',
     '#RAR 0 20260101 20261231',
     '#KPTYP\tEUBAS97',
     '#KONTO\t1510\t"Kundfordringar"',
@@ -1472,7 +1523,7 @@ describe('parseSIEFile: silent-failure diagnostic warnings', () => {
 })
 
 describe('getEffectiveOpeningBalances: derive IB from #UB -1 (issue #675)', () => {
-  // Issue #675 (ro66an): some systems export no #IB 0 records: the current
+  // Issue #675: some systems export no #IB 0 records: the current
   // year's IB exists only via the continuity invariant IB(0) = UB(-1).
   const SIE_NO_IB0 = [
     '#FLAGGA 0',
@@ -1497,6 +1548,14 @@ describe('getEffectiveOpeningBalances: derive IB from #UB -1 (issue #675)', () =
       { yearIndex: 0, account: '1930', amount: 37400.78 },
       { yearIndex: 0, account: '2010', amount: -37400.78 },
     ])
+  })
+
+  // crm#1294: an import that leaves the IB out derives none, so it says nothing about one.
+  it('warns about the derived IB only when the import brings the IB', () => {
+    const parsed = parseSIEFile(SIE_NO_IB0)
+    expect(validateSIEFile(parsed).warnings.join(' ')).toContain('härleds från föregående års utgående balans')
+    expect(validateSIEFile(parsed, { importOpeningBalances: true }).warnings.join(' ')).toContain('härleds')
+    expect(validateSIEFile(parsed, { importOpeningBalances: false }).warnings.join(' ')).not.toContain('härleds')
   })
 
   it('never uses #IB -1 (previous year IB) as the derivation source', () => {

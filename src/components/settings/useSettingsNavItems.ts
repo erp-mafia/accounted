@@ -4,11 +4,20 @@ import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import {
+  SETTINGS_GROUP_ORDER,
+  SETTINGS_SECTIONS_IN_AGENTS,
+  settingsMessageKey,
+  settingsOpenForRole,
+  visibleSettingsSections,
+  type SettingsGroupKey,
+} from '@/lib/navigation/settings-sections'
 
 /**
  * Byrå settings scope: settings opened from the cockpit carry ?ctx=byra
- * (links in the user menu / mobile nav). In that scope only account-level
- * and byrå-level sections show: everything company-scoped (bokföring, skatt,
+ * (links in the user menu / mobile nav). In that scope only personal and
+ * byrå-level sections show (the Du group, and API och MCP, whose connections
+ * belong to the person): everything company-scoped (bokföring, skatt,
  * fakturering, mallar, ...) is edited from inside the client company, never
  * from the cockpit. Honored only for byrå team members; cosmetic only, the
  * section pages keep their own auth.
@@ -19,7 +28,8 @@ export function useByraSettingsScope(): boolean {
   return searchParams.get('ctx') === 'byra' && !!byraTeam
 }
 
-export type SettingsGroupKey = 'account' | 'company' | 'accounting' | 'sales' | 'tools'
+export type { SettingsGroupKey } from '@/lib/navigation/settings-sections'
+export { SETTINGS_SECTION_PARENT } from '@/lib/navigation/settings-sections'
 
 export interface SettingsNavItem {
   id: string
@@ -36,85 +46,71 @@ export interface SettingsNavGroup {
   items: SettingsNavItem[]
 }
 
-// Rail group order: personal first (Du), then company-scoped buckets.
-const GROUP_ORDER: SettingsGroupKey[] = ['account', 'company', 'accounting', 'sales', 'tools']
-
 /**
- * Sections that have a page but no rail entry: each is reached from a hub
- * section and highlights that hub in the rail. Kopplingar lists the bank,
- * WhatsApp, Skatteverket and Peppol connections and links to their pages,
- * which stay at their own URLs because OAuth callbacks and deep links
- * (bank consent renewal, ?select_accounts=, ?skv_connected=) land there.
- * The assistant section is off the rail for now (founder 2026-09-24) but its
- * page stays reachable from the assistant's own "manage memory" links.
- */
-export const SETTINGS_SECTION_PARENT: Record<string, string> = {
-  banking: 'connections',
-  whatsapp: 'connections',
-  skatteverket: 'connections',
-  peppol: 'connections',
-  assistant: 'connections',
-}
-
-/**
- * Single source of truth for the settings sections, their conditional
- * visibility, and their grouping, consumed by the rail (desktop list and the
- * grouped mobile select) and its search.
+ * The settings sections (lib/navigation/settings-sections.ts, shared with the
+ * assistant's UI map), labelled for the rail (desktop list and the grouped
+ * mobile select) and its search.
  *
  * Visibility is derived from client context (no extra fetch): `isSandbox`
  * comes from CompanyContext and extension availability from the generated
  * enabled-extensions set.
  */
-export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: SettingsNavGroup[] } {
-  const { company, byraTeam } = useCompany()
+export function useSettingsNavItems(): {
+  items: SettingsNavItem[]
+  groups: SettingsNavGroup[]
+  /**
+   * Every visible section, grouped: the phone's section picker, which has no
+   * area sidebar beside it and so also lists a section the shell files under
+   * Agenter.
+   */
+  allGroups: SettingsNavGroup[]
+  /** Search-only entries that link out of settings (import, export). */
+  searchLinks: SettingsNavItem[]
+} {
+  const { company, byraTeam, role } = useCompany()
   const byraScope = useByraSettingsScope()
   const t = useTranslations('settings_nav')
 
   const hasCompany = !!company
-  const hasMcpExtension = ENABLED_EXTENSION_IDS.has('mcp-server')
 
-  const item = (id: string, href: string, group: SettingsGroupKey, show: boolean) => ({
+  const sections: SettingsNavItem[] = visibleSettingsSections({
+    hasCompany,
+    byraScope,
+    byraRole: byraTeam?.role ?? null,
+    hasMcpExtension: ENABLED_EXTENSION_IDS.has('mcp-server'),
+    role,
+  }).map((section) => ({
+    ...section,
+    label: t(settingsMessageKey(section.id)),
+    keywords: t(`keywords_${settingsMessageKey(section.id)}`),
+  }))
+  // A section the shell lists under Agenter (Koppla en agent) is left to that
+  // area inside a company: one place in the menu per page. The search still
+  // finds it. In byrå scope the cockpit has no Agenter area, so it stays.
+  const elsewhere = (section: SettingsNavItem) => !byraScope && SETTINGS_SECTIONS_IN_AGENTS.has(section.id)
+  // Hjälp och ordlista (/help) is a page of its own, open to everyone like the
+  // page: a quiet last row of the Du group, on the rail and in the picker.
+  const help: SettingsNavItem = { id: 'help', href: '/help', group: 'account', label: t('help'), keywords: t('keywords_help') }
+  // The invoicing-only role is listed nothing that would bounce it to Fakturor.
+  const open = (item: SettingsNavItem) => settingsOpenForRole(role, item.href)
+  const items = [...sections.filter((section) => !elsewhere(section)), help].filter(open)
+
+  // Pages outside settings that people look for in settings: import and
+  // export live under Bokföring (the same page also takes bank files and
+  // SIE, which are bookkeeping), so the rail search finds them and links
+  // there instead of answering "no setting by that name". Search only, never
+  // on the rail. Company-scoped, so hidden in byrå scope like the sections.
+  const searchLink = (id: string, href: string): SettingsNavItem => ({
     id,
     href,
-    group,
-    show,
-    label: t(id.replace('-', '_')),
-    keywords: t(`keywords_${id.replace('-', '_')}`),
+    group: 'accounting',
+    label: t(id),
+    keywords: t(`keywords_${id}`),
   })
-
-  // Löner shows for every company: "Företaget betalar löner" lives at the top
-  // of the section, so hiding the section for a form without default payroll
-  // would leave that switch unreachable. The rest of the section folds away
-  // while the switch is off.
-  const defs: Array<SettingsNavItem & { show: boolean }> = [
-    item('account', '/settings/account', 'account', true),
-    item('security', '/settings/security', 'account', true),
-    // Byrå scope: members & roles is the one byrå-level section; billing is
-    // company-scoped (team-billed byråer have no per-company subscription).
-    item('team', '/settings/team', 'account', byraScope),
-    // Varumärke (WL-17): byrå owner/admin edits the brand logo; members see
-    // nothing (the section would be read-only noise for them).
-    item('brand', '/settings/brand', 'account', byraScope && !!byraTeam && (byraTeam.role === 'owner' || byraTeam.role === 'admin')),
-    item('company', '/settings/company', 'company', hasCompany),
-    item('members', '/settings/members', 'company', hasCompany),
-    item('billing', '/settings/billing', 'company', !byraScope),
-    item('bookkeeping', '/settings/bookkeeping', 'accounting', hasCompany),
-    item('fiscal-years', '/settings/fiscal-years', 'accounting', hasCompany),
-    item('tax', '/settings/tax', 'accounting', hasCompany),
-    item('salary', '/settings/salary', 'accounting', hasCompany),
-    item('templates', '/settings/templates', 'accounting', hasCompany),
-    item('invoicing', '/settings/invoicing', 'sales', hasCompany),
-    item('sending', '/settings/sending', 'sales', hasCompany),
-    item('connections', '/settings/connections', 'tools', hasCompany),
-    item('api', '/settings/api', 'tools', hasCompany && hasMcpExtension),
-  ]
-
-  const items: SettingsNavItem[] = defs
-    .filter((d) => d.show)
-    // Byrå scope hides every company-scoped section: those are edited from
-    // inside the client company where it is obvious WHICH company they hit.
-    .filter((d) => !byraScope || d.group === 'account')
-    .map(({ show: _show, ...item }) => item)
+  const searchLinks: SettingsNavItem[] = [
+    ...sections.filter(elsewhere),
+    ...(hasCompany && !byraScope ? [searchLink('import', '/import'), searchLink('export', '/import?view=export')] : []),
+  ].filter(open)
 
   const groupLabels: Record<SettingsGroupKey, string> = {
     account: t('group_account'),
@@ -122,13 +118,15 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     accounting: t('group_accounting'),
     sales: t('group_sales'),
     tools: t('group_tools'),
+    byra: t('group_byra'),
   }
 
-  const groups: SettingsNavGroup[] = GROUP_ORDER.map((key) => ({
-    key,
-    label: groupLabels[key],
-    items: items.filter((i) => i.group === key),
-  })).filter((g) => g.items.length > 0)
+  const grouped = (list: SettingsNavItem[]): SettingsNavGroup[] =>
+    SETTINGS_GROUP_ORDER.map((key) => ({
+      key,
+      label: groupLabels[key],
+      items: list.filter((i) => i.group === key),
+    })).filter((g) => g.items.length > 0)
 
-  return { items, groups }
+  return { items, groups: grouped(items), allGroups: grouped([...sections, help].filter(open)), searchLinks }
 }

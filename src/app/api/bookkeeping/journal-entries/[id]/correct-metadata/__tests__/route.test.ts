@@ -81,10 +81,12 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct-metadata', () => {
     })
 
     const response = await POST(makeRequest({ description: 'Rättad text' }), params())
-    const { body } = await parseJsonResponse<{ error: string }>(response)
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(response.status).toBe(409)
-    expect(body.error).toContain('låst')
+    // Failures answer the structured envelope (sessionFailureResponse) since the
+    // route moved onto the shared operation service; the message is in error.message.
+    expect(body.error.message).toContain('låst')
   })
 
   it('maps the tenant guard (42501) to 403', async () => {
@@ -130,6 +132,33 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct-metadata', () => {
       p_entry_id: 'entry-1',
       p_description: 'Rättad text',
       p_entry_date: '2026-07-05',
+      p_user_id: 'user-1',
+      // The cookie-session door runs as actor 'user' (withRouteContext).
+      p_actor_type: 'user',
+      p_actor_label: null,
+    })
+  })
+
+  it('retries once without the actor when the database predates the actor parameters (PGRST202)', async () => {
+    // A deploy that lands before migration 20261016005000: PostgREST knows
+    // only the five-argument function. The rättelse still goes through.
+    rpcMock
+      .mockResolvedValueOnce({
+        data: null,
+        error: { code: 'PGRST202', message: 'Could not find the function public.correct_entry_metadata in the schema cache' },
+      })
+      .mockResolvedValueOnce({ data: { changed: true, log_id: 'log-3' }, error: null })
+
+    const response = await POST(makeRequest({ description: 'Rättad text' }), params())
+
+    expect(response.status).toBe(200)
+    expect(rpcMock).toHaveBeenCalledTimes(2)
+    expect(rpcMock).toHaveBeenNthCalledWith(1, 'correct_entry_metadata', expect.objectContaining({ p_actor_type: 'user' }))
+    expect(rpcMock).toHaveBeenNthCalledWith(2, 'correct_entry_metadata', {
+      p_company_id: 'company-1',
+      p_entry_id: 'entry-1',
+      p_description: 'Rättad text',
+      p_entry_date: null,
       p_user_id: 'user-1',
     })
   })

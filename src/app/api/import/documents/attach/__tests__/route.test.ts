@@ -105,7 +105,22 @@ vi.mock('@/lib/core/documents/document-service', async (importOriginal) => {
   }
 })
 
+// The service-role Storage client readUploadedFile reads a staged upload with.
+const stagedDownload = vi.fn()
+const stagedRemove = vi.fn()
+vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
+  return {
+    ...actual,
+    createServiceClientNoCookies: () => ({
+      storage: { from: () => ({ download: stagedDownload, remove: stagedRemove }) },
+    }),
+  }
+})
+
 import { POST } from '../route'
+
+const STAGED_UPLOAD_ID = '33333333-3333-4333-8333-333333333333'
 
 const emptyParams = { params: Promise.resolve({}) }
 
@@ -117,9 +132,15 @@ function makeRequest(options: {
   override?: boolean
   withFile?: boolean
   mimeType?: string
+  /** Sent straight to Storage first: the form carries the reference, not the bytes. */
+  staged?: boolean
 }) {
   const form = new FormData()
-  if (options.withFile !== false) {
+  if (options.staged) {
+    form.append('upload_id', STAGED_UPLOAD_ID)
+    form.append('file_name', options.fileName ?? 'A31_8c2db060.pdf')
+    form.append('mime_type', options.mimeType ?? 'application/pdf')
+  } else if (options.withFile !== false) {
     form.append(
       'file',
       new File(['%PDF-1.4 underlag'], options.fileName ?? 'A31_8c2db060.pdf', {
@@ -168,6 +189,33 @@ describe('POST /api/import/documents/attach', () => {
     const res = await POST(makeRequest({ withFile: false }), emptyParams)
 
     expect(res.status).toBe(400)
+  })
+
+  // Cluster B of the 2026-10 replay review: a scan over the 4.5 MB body cap
+  // died as a platform 413 in "Koppla underlag". It now arrives staged.
+  it('attaches a file staged in Storage through the same checks as an inline one', async () => {
+    const bytes = new TextEncoder().encode('%PDF-1.4 large scanned underlag')
+    stagedDownload.mockResolvedValue({ data: new Blob([bytes]), error: null })
+    stagedRemove.mockResolvedValue({ data: [], error: null })
+
+    const res = await POST(makeRequest({ staged: true }), emptyParams)
+
+    expect(res.status).toBe(200)
+    expect(stagedDownload).toHaveBeenCalledWith(
+      `documents/company-1/user-1/pending/${STAGED_UPLOAD_ID}_A31_8c2db060.pdf`,
+    )
+    const [, , , file] = uploadDocumentMock.mock.calls[0]
+    expect(file).toEqual(expect.objectContaining({ name: 'A31_8c2db060.pdf', type: 'application/pdf' }))
+    expect(new Uint8Array(file.buffer)).toEqual(bytes)
+  })
+
+  it('returns 404 when the staged file never reached Storage', async () => {
+    stagedDownload.mockResolvedValue({ data: null, error: { message: 'Object not found' } })
+
+    const res = await POST(makeRequest({ staged: true }), emptyParams)
+
+    expect(res.status).toBe(404)
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 
   it('returns 400 when journal_entry_id is missing or not a uuid', async () => {

@@ -9,7 +9,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   computeAnnualDepreciation,
-  openingAccumulatedBefore,
   openingDepreciationOf,
 } from '../depreciation-engine'
 import {
@@ -17,6 +16,7 @@ import {
   validateOpeningDepreciation,
 } from '../opening-depreciation'
 import {
+  AssetComponentsInvalidError,
   AssetCorrectionBlockedError,
   buildAssetDisposalPlan,
   createAsset,
@@ -24,6 +24,13 @@ import {
 } from '../asset-service'
 import { computeAssetNoteFigures } from '@/lib/bokslut/arsredovisning/asset-note-figures'
 import type { Asset } from '@/types'
+
+// crm#1452: the chart lookups are covered in assets/__tests__/asset-chart-accounts.test.ts.
+vi.mock('../asset-chart-accounts', () => ({
+  chartAwareDefaultAccounts: vi.fn(async (_s: unknown, _c: unknown, _cat: unknown, defaults: unknown) => defaults),
+  ensureAssetAccountsInChart: vi.fn(async () => undefined),
+  unusableAssetAccounts: vi.fn(async () => []),
+}))
 
 function makeAsset(overrides: Partial<Asset> = {}): Asset {
   return {
@@ -68,7 +75,7 @@ const MIGRATED = {
   opening_depreciation_date: '2024-12-31',
 }
 
-describe('openingDepreciationOf / openingAccumulatedBefore', () => {
+describe('openingDepreciationOf', () => {
   it('returns null without an amount or without a date', () => {
     expect(openingDepreciationOf(makeAsset())).toBeNull()
     expect(
@@ -82,12 +89,6 @@ describe('openingDepreciationOf / openingAccumulatedBefore', () => {
         makeAsset({ opening_accumulated_depreciation: '60000.50', opening_depreciation_date: '2024-12-31' }),
       ),
     ).toEqual({ amount: 60_000.5, date: '2024-12-31' })
-  })
-
-  it('counts the opening amount only for periods starting after its date', () => {
-    const asset = makeAsset(MIGRATED)
-    expect(openingAccumulatedBefore(asset, '2025-01-01')).toBe(60_000)
-    expect(openingAccumulatedBefore(asset, '2024-01-01')).toBe(0)
   })
 })
 
@@ -193,6 +194,7 @@ describe('buildAssetDisposalPlan with an opening balance', () => {
   it('clears the opening amount from 12x9 together with Accounted depreciation', () => {
     const asset = makeAsset(MIGRATED)
     const plan = buildAssetDisposalPlan({
+      proceedsAccount: '1930',
       asset,
       input: {
         disposal_type: 'scrap',
@@ -278,23 +280,31 @@ describe('validateOpeningDepreciation', () => {
     expect(kinds({ ...base, opening_accumulated_depreciation: 1_000, opening_depreciation_date: '2021-12-31' })).toEqual(['date_before_acquisition'])
   })
 
-  it('refuses the combination with K3 components', () => {
+  // The product decision of 2026-09-23 refused this combination; K3 plan
+  // decision 4 (2026-10-26) reverses it: the amount is the components' total.
+  it('accepts an opening on an asset with K3 components, capped by the components\' depreciable bases', () => {
+    const components = [
+      { name: 'Stomme', cost: 70_000, useful_life_months: 600, salvage_value: 10_000 },
+      { name: 'Mark', cost: 30_000, useful_life_months: null },
+    ]
+    expect(kinds({ ...base, ...MIGRATED, k3_components: components })).toEqual([])
     expect(
-      kinds({
-        ...base,
-        ...MIGRATED,
-        k3_components: [{ name: 'Stomme', cost: 100_000, useful_life_months: 60 }],
-      }),
-    ).toEqual(['components'])
+      kinds({ ...base, opening_accumulated_depreciation: 60_000.01, opening_depreciation_date: '2024-12-31', k3_components: components }),
+    ).toEqual(['exceeds_cost'])
   })
 })
 
 // ── Service paths ────────────────────────────────────────────────
 
-type Captured = { insert: Record<string, unknown> | null; update: Record<string, unknown> | null; tables: string[] }
+type Captured = {
+  insert: Record<string, unknown> | null
+  update: Record<string, unknown> | null
+  componentInsert: unknown
+  tables: string[]
+}
 
 function mockSupabase(asset: Asset | null, opts: { postedCount?: number; updateError?: { code: string; message: string } } = {}) {
-  const captured: Captured = { insert: null, update: null, tables: [] }
+  const captured: Captured = { insert: null, update: null, componentInsert: null, tables: [] }
   const supabase = {
     from: vi.fn((table: string) => {
       captured.tables.push(table)
@@ -304,6 +314,13 @@ function mockSupabase(asset: Asset | null, opts: { postedCount?: number; updateE
       }
       if (table === 'companies') {
         chain.single = vi.fn(async () => ({ data: { accounting_framework: 'k2' }, error: null }))
+        return chain
+      }
+      if (table === 'asset_components') {
+        chain.insert = vi.fn((payload: unknown) => {
+          captured.componentInsert = payload
+          return Promise.resolve({ data: null, error: null })
+        })
         return chain
       }
       if (table !== 'assets') {
@@ -450,12 +467,29 @@ describe('updateAsset with an opening balance', () => {
     expect(captured.update).toBeNull()
   })
 
-  it('refuses adding K3 components to an asset carrying an opening amount', async () => {
-    const { supabase } = mockSupabase(makeAsset(MIGRATED))
+  it('splits a stored opening amount over the components an asset gets, and leaves the sums to the database', async () => {
+    const { supabase, captured } = mockSupabase(makeAsset(MIGRATED))
+    await updateAsset(supabase, 'co', 'asset-1', {
+      name: 'Fastighet',
+      k3_components: [
+        { name: 'Stomme', cost: 80_000, useful_life_months: 60 },
+        { name: 'Tak', cost: 20_000, useful_life_months: 60 },
+      ],
+    })
+    const rows = captured.componentInsert as Array<Record<string, unknown>>
+    expect(rows.map((row) => row.opening_accumulated_depreciation)).toEqual([48_000, 12_000])
+    expect(rows.every((row) => row.opening_depreciation_date === '2024-12-31')).toBe(true)
+    // The asset row gets only what is its own; cost and opening are the sum.
+    expect(captured.update).toEqual({ name: 'Fastighet' })
+  })
+
+  it('refuses components that do not cover the cost on the books', async () => {
+    const { supabase, captured } = mockSupabase(makeAsset(MIGRATED))
     await expect(
       updateAsset(supabase, 'co', 'asset-1', {
-        k3_components: [{ name: 'Stomme', cost: 100_000, useful_life_months: 60 }],
+        k3_components: [{ name: 'Stomme', cost: 90_000, useful_life_months: 60 }],
       }),
-    ).rejects.toBeInstanceOf(AssetOpeningDepreciationInvalidError)
+    ).rejects.toBeInstanceOf(AssetComponentsInvalidError)
+    expect(captured.componentInsert).toBeNull()
   })
 })

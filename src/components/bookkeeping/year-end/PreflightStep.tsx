@@ -1,18 +1,24 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
+import { StepBar } from '@/components/ui/step-bar'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { AlertTriangle, Info, XCircle } from 'lucide-react'
+import { ExclamationTriangleIcon, InformationCircleIcon, XCircleIcon } from '@/components/icons'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 import { BokslutChecklist } from './BokslutChecklist'
+import { K3TransitionCard } from './K3TransitionCard'
 
 interface PreflightStepProps {
   report: BokslutReadinessReport | null
   isLoading: boolean
   error: string | null
+  /** Runs the readiness check again after a failed load. */
+  onRetry: () => void
   onContinue: () => void
 }
 
@@ -27,7 +33,7 @@ function SectionHead({ icon, children }: { icon?: React.ReactNode; children: Rea
   return (
     <div className="mb-1 flex items-center gap-2 px-1">
       {icon}
-      <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <h3 className="font-sans text-xs font-medium text-muted-foreground">
         {children}
       </h3>
       <div className="h-px flex-1 bg-border/60" />
@@ -35,20 +41,20 @@ function SectionHead({ icon, children }: { icon?: React.ReactNode; children: Rea
   )
 }
 
-export function PreflightStep({ report, isLoading, error, onContinue }: PreflightStepProps) {
+export function PreflightStep({ report, isLoading, error, onRetry, onContinue }: PreflightStepProps) {
   if (isLoading) {
     return (
-      <div className="space-y-3">
+      <LateReveal className="space-y-3">
         <Skeleton className="h-6 w-1/3" />
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-3/4" />
         <Skeleton className="h-4 w-2/3" />
-      </div>
+      </LateReveal>
     )
   }
 
   if (error) {
-    return <p className="py-4 text-sm text-destructive">{error}</p>
+    return <LoadError title={error} onRetry={onRetry} />
   }
 
   if (!report) {
@@ -62,15 +68,10 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 
   return (
     <div className="space-y-8">
-      {/* Period line: muted text for the normal state, chip only when the
-          period deviates (design.md: chips mark exceptions). */}
-      <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
-        <div className="flex items-baseline gap-3">
-          <h2 className="font-sans text-sm font-medium">{report.period.name}</h2>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {report.period.period_start} till {report.period.period_end}
-          </span>
-        </div>
+      {/* Readiness: muted text for the normal state, chip only when the
+          period deviates (chips mark exceptions). The period
+          itself is named by the picker in the top bar, so no second title. */}
+      <div className="px-1">
         {report.ready ? (
           <span className="text-xs text-muted-foreground">Redo för bokslut</span>
         ) : (
@@ -80,39 +81,45 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 
       {blockerItems.length > 0 && (
         <section>
-          <SectionHead icon={<XCircle className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />}>
+          <SectionHead icon={<XCircleIcon className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />}>
             Måste åtgärdas innan bokslut
           </SectionHead>
           {blockerItems.map((blocker, i) => (
-            <BlockerRow key={`${blocker.code ?? 'blocker'}-${i}`} blocker={blocker} />
+            <BlockerRow
+              key={`${blocker.code ?? 'blocker'}-${i}`}
+              blocker={blocker}
+              periodId={report.period.id}
+            />
           ))}
         </section>
       )}
 
       {report.warnings.length > 0 && (
         <section>
-          <SectionHead icon={<AlertTriangle className="h-3.5 w-3.5 text-attn" aria-hidden="true" />}>
+          <SectionHead icon={<ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn" aria-hidden="true" />}>
             Varningar
           </SectionHead>
           {report.warnings.map((warning, i) => (
-            <p key={i} className="border-b border-border px-1 py-3 text-[13px] leading-5 last:border-b-0">
+            <p key={i} className="border-b-hairline px-1 py-3 text-[13px] leading-5 last:border-b-0">
               {warning}
             </p>
           ))}
         </section>
       )}
 
+      <K3TransitionCard periodId={report.period.id} />
+
       <BokslutChecklist periodId={report.period.id} />
 
       {report.reminders.length > 0 && (
         <section>
-          <SectionHead icon={<Info className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />}>
+          <SectionHead icon={<InformationCircleIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />}>
             Påminnelser
           </SectionHead>
           {report.reminders.map((reminder) => (
             <div
               key={reminder.code}
-              className="flex items-baseline justify-between gap-3 border-b border-border px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
+              className="flex items-baseline justify-between gap-3 border-b-hairline px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
             >
               <p className="flex-1">{reminder.message}</p>
               {reminder.href && (
@@ -125,11 +132,11 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
         </section>
       )}
 
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={onContinue} disabled={!report.ready}>
-          Nästa: Periodiseringar →
+      <StepBar>
+        <Button onClick={onContinue} disabled={!report.ready}>
+          Nästa: Periodiseringar
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -142,7 +149,13 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
  * is deliberately link-less too: the remedy is to re-run the check, not to
  * visit a page.
  */
-function BlockerRow({ blocker }: { blocker: DisplayBlocker }) {
+/**
+ * One blocker line with its remediation link, where a surface exists for the
+ * remedy. periodId scopes links into period-oriented lists (the verifikat
+ * list's gap rows) to the räkenskapsår this preflight is for.
+ */
+function BlockerRow({ blocker, periodId }: { blocker: DisplayBlocker; periodId: string }) {
+  const t = useTranslations('year_end_preflight')
   let href: string | null = null
   let actionLabel: string | null = null
 
@@ -164,10 +177,20 @@ function BlockerRow({ blocker }: { blocker: DisplayBlocker }) {
     // existing surface for reviewing IB against prior-year UB.
     href = '/reports/trial-balance'
     actionLabel = 'Granska ingående balans'
+  } else if (blocker.code === 'UNEXPLAINED_VOUCHER_GAP') {
+    // The verifikat list shows every gap of the year above the table with the
+    // Förklara action; the param scopes the list to this räkenskapsår.
+    href = `/bookkeeping?gaps=${periodId}`
+    actionLabel = 'Förklara luckan'
+  } else if (blocker.code === 'COMPANY_LOCK_DATE') {
+    // Periodlåsning there holds both the lock date and automatic locking,
+    // the two things the message says to change.
+    href = '/settings/bookkeeping'
+    actionLabel = t('open_bookkeeping_settings')
   }
 
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-border px-1 py-3 text-[13px] leading-5 last:border-b-0">
+    <div className="flex items-baseline justify-between gap-3 border-b-hairline px-1 py-3 text-[13px] leading-5 last:border-b-0">
       <p className="flex-1">{blocker.message}</p>
       {href && actionLabel && (
         <Link href={href} className={QUIET_LINK_CLASS}>

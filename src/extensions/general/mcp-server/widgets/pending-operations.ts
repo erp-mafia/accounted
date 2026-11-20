@@ -6,8 +6,15 @@ import type { UiWidget } from './types'
  * Approve/reject are human CLICKS inside the widget, so the positive
  * acknowledgment for high-risk operations (BFL 5 kap 5§) is first-party
  * instead of agent-asserted: the widget arms the approve button and the
- * second click sends confirmed=true.
+ * second click sends confirmed=true. A click goes through the view's own
+ * door (gnubok_approve_from_view, with the token the list result handed this
+ * view) so the record names the person, not the AI (../view-approval.ts);
+ * without a token it falls back to gnubok_approve_pending_operation.
  * Triggered by gnubok_list_pending_operations with render_ui=true.
+ * A key without pending_operations:approve (the default one-click connection
+ * since issue #3408) cannot approve or reject: the list result then carries
+ * can_approve=false and the widget shows where to review instead of buttons
+ * that would fail on scope.
  */
 
 export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
@@ -102,6 +109,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
   button.reject { color: var(--text-muted); }
   .check { color: var(--success); font-weight: 600; }
   .status-note { font-size: 11px; color: var(--text-muted); }
+  .readonly-note { font-size: 12px; color: var(--text-muted); margin: 0 0 8px; }
   .error-msg { color: var(--error); font-size: 11px; margin-top: 2px; }
   .preview-row td { background: var(--bg); padding: 8px 12px; }
   .preview-row pre {
@@ -126,6 +134,14 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
   const pending = new Map();
   let operations = [];
   let handled = 0;
+  // false only when the list result says this key cannot approve or reject.
+  let canApprove = true;
+  // One token per pending operation, handed to this view in the list
+  // result's _meta (never to the model): with it a click goes through the
+  // view's own door and is recorded as the person's approval. Empty when the
+  // connection has no approval view; every click then uses the ordinary
+  // approve tool, recorded as the AI's approval.
+  let viewTokens = {};
   // A host that never answers must not strand a row in "Arbetar..." with its
   // buttons gone: time the RPC out so the catch path restores the row and
   // the user can retry. 30s covers slow commits (journal posting, emails).
@@ -172,6 +188,9 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       const sc = msg.params && msg.params.structuredContent;
       if (sc && sc.operations) {
         operations = sc.operations;
+        canApprove = sc.can_approve !== false;
+        const viewMeta = msg.params._meta && msg.params._meta['accounted/approval_view'];
+        viewTokens = (viewMeta && viewMeta.tokens) || {};
         handled = 0;
         render();
       }
@@ -213,7 +232,8 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       return;
     }
 
-    let html = '<table><thead><tr>' +
+    let html = (canApprove ? '' : '<p class="readonly-note">Den h\\u00e4r anslutningen kan inte godk\\u00e4nna eller avvisa. G\\u00f6r det i Accounted under Att g\\u00f6ra \\u203a Agentf\\u00f6rslag.</p>') +
+      '<table><thead><tr>' +
       '<th>Skapad</th><th>\\u00c5tg\\u00e4rd</th><th>Risk</th><th></th>' +
       '</tr></thead><tbody>';
 
@@ -222,7 +242,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       html += '<tr class="' + cls + '" data-idx="' + i + '">';
       html += '<td class="date">' + esc((op.created_at || '').slice(0, 10)) + '</td>';
       html += '<td><span class="title" data-toggle="' + i + '">' + esc(op.title || op.operation_type || '') + '</span>' +
-        '<div class="op-type">' + esc(op.operation_type || '') + (op.actor_label ? ' \\u00b7 ' + esc(op.actor_label) : '') + '</div>' +
+        '<div class="op-type">' + numberLabel(op) + esc(op.operation_type || '') + (proposer(op) ? ' \\u00b7 ' + esc(proposer(op)) : '') + '</div>' +
         (op._error ? '<div class="error-msg">' + esc(op._error) + '</div>' : '') +
         '</td>';
       html += '<td>' + riskChip(op.risk_level) + '</td>';
@@ -253,6 +273,22 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     });
   }
 
+  // The proposal's number in its company, as Accounted shows it
+  // ("F\\u00f6rslag 128"), so the widget and the app name the same proposal.
+  // Nothing for a row without one (an older server, or a proposal decided
+  // before numbers).
+  function numberLabel(op) {
+    return Number.isInteger(op.operation_number) && op.operation_number > 0
+      ? 'F\\u00f6rslag ' + op.operation_number + ' \\u00b7 '
+      : '';
+  }
+
+  // Who staged it, as the list tool names it ("Claude \\u00e5t Jonas Ek");
+  // the raw label from an older server that does not send proposed_by.
+  function proposer(op) {
+    return op.proposed_by || op.actor_label || '';
+  }
+
   function riskChip(level) {
     if (level === 'high') return '<span class="chip high">h\\u00f6g</span>';
     if (level === 'medium') return '<span class="chip medium">medel</span>';
@@ -263,6 +299,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     if (op._done === 'committed') return '<span class="check">\\u2713 Godk\\u00e4nd</span>';
     if (op._done === 'rejected') return '<span class="status-note">Avvisad</span>';
     if (op._working) return '<span class="status-note">Arbetar\\u2026</span>';
+    if (!canApprove) return '<span class="status-note">I Accounted</span>';
     let html = '';
     if (op._armed) {
       // Second click IS the positive BFL 5 kap 5\\u00a7 acknowledgment: it
@@ -312,7 +349,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     const args = { operation_id: op.id };
     if (op.risk_level === 'high') args.confirmed = true;
 
-    callTool('gnubok_approve_pending_operation', args).then(function(res) {
+    approveCall(op, args).then(function(res) {
       op._working = false;
       const result = parseResult(res);
       const err = errMsg(result, 'Kunde inte godk\\u00e4nna operationen.');
@@ -328,6 +365,31 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       op._working = false;
       op._error = (err && err.message) || 'Kunde inte godk\\u00e4nna operationen.';
       render();
+    });
+  }
+
+  // The person's click, through the view's own door when this view holds a
+  // token for the operation. Only when that door is unavailable (no token,
+  // a refused or expired token, a host that does not route it) does the
+  // click go through the ordinary approve tool, which the record names as
+  // the AI's approval: understated, never overstated.
+  function approveCall(op, args) {
+    const token = viewTokens[op.id];
+    if (!token) return callTool('gnubok_approve_pending_operation', args);
+    const viewArgs = Object.assign({ view_token: token }, args);
+    return callTool('gnubok_approve_from_view', viewArgs).then(function(res) {
+      const result = parseResult(res);
+      const code = result && result.error && typeof result.error === 'object' ? result.error.code : null;
+      if (code !== 'VIEW_APPROVAL_UNAVAILABLE') return res;
+      // Unavailable for this view (no view on the connection, tokens expired):
+      // later clicks go straight to the ordinary tool instead of trying twice.
+      viewTokens = {};
+      return callTool('gnubok_approve_pending_operation', args);
+    }, function(err) {
+      // A host that refused the call (a JSON-RPC error) will refuse the next
+      // one too; a timeout may be one slow commit, so the tokens stay.
+      if (err && typeof err.code === 'number') viewTokens = {};
+      return callTool('gnubok_approve_pending_operation', args);
     });
   }
 

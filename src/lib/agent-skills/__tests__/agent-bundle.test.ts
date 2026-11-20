@@ -108,16 +108,71 @@ describe('loadAgentBundle: company knowledge', () => {
       enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
       enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
       enqueue({ data: { profile_summary: 'IT-konsult i Stockholm.' } })
-      enqueue({ data: [{ content: 'Representation bokförs alltid på 6071.' }] })
+      enqueue({ data: [{ content: 'Representation bokförs alltid på 6071.', created_at: '2026-08-01T10:00:00Z' }] })
       return (await loadAgentBundle(supabase as never, 'company-a', id))!
     }
     const vat = (await run('quarterly-vat-review')).company_knowledge
     expect(vat.facts.map((f) => f.label)).toEqual(['Redovisningsmetod', 'Bokföringsmetod'])
     expect(vat).not.toHaveProperty('agreements')
-    expect(vat).toMatchObject({ name: 'Arcim Technology AB', onboarding_summary: 'IT-konsult i Stockholm.', remembered: ['Representation bokförs alltid på 6071.'], documents: { total: 300 } })
+    expect(vat).toMatchObject({ name: 'Arcim Technology AB', onboarding_summary: 'IT-konsult i Stockholm.', remembered: [{ text: 'Representation bokförs alltid på 6071.', saved_at: '2026-08-01T10:00:00Z' }], documents: { total: 300 } })
     const yearEnd = (await run('year-end-close')).company_knowledge
     expect(yearEnd.facts.map((f) => f.label)).toEqual(['Bokföringsmetod', 'Styrelse'])
     expect(yearEnd.agreements?.map((a) => a.title)).toEqual(['Lån Almi'])
+  })
+})
+
+describe('loadAgentBundle: remembered facts', () => {
+  it('dates them, newest first, and leaves out those a newer memory replaced', async () => {
+    vi.mocked(buildArkivMap).mockResolvedValue(null as never)
+    enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
+    enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
+    enqueue({ data: null })
+    // Out of date order on purpose: the bundle sorts newest first itself.
+    enqueue({ data: [
+      { id: 'm-1', kind: 'fact', content: 'K2 vs K3-valet är ej beslutat.', relevance_score: 0.8, created_at: '2026-06-02T08:00:00Z' },
+      { id: 'm-2', kind: 'fact', content: 'Bolaget tillämpar K3.', relevance_score: 0.8, created_at: '2026-09-10T08:00:00Z' },
+      { id: 'm-3', kind: 'fact', content: 'Okänt datum.', relevance_score: 0.8, created_at: null },
+    ] })
+    const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'year-end-close'))!
+    expect(bundle.company_knowledge.remembered).toEqual([
+      { fact_id: 'm-2', text: 'Bolaget tillämpar K3.', saved_at: '2026-09-10T08:00:00Z' },
+      { fact_id: 'm-1', text: 'K2 vs K3-valet är ej beslutat.', saved_at: '2026-06-02T08:00:00Z' },
+      { fact_id: 'm-3', text: 'Okänt datum.', saved_at: null },
+    ])
+    expect(findCalls('agent_memory', 'is')).toContainEqual(['superseded_by', null])
+    // All of them: no top-N cap, only the loader's row bound.
+    expect(findCalls('agent_memory', 'limit')).toContainEqual([500])
+  })
+
+  it('says who saved each fact by name, or that the account is gone, never by e-mail', async () => {
+    vi.mocked(buildArkivMap).mockResolvedValue(null as never)
+    enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
+    enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: [
+      { id: 'm-2', kind: 'fact', content: 'Bolaget tillämpar K3.', relevance_score: 0.8, created_at: '2026-09-10T08:00:00Z', created_by_user_id: 'u-anna' },
+      { id: 'm-1', kind: 'fact', content: 'Hyran är 14 000 kr.', relevance_score: 0.8, created_at: '2026-06-02T08:00:00Z', created_by_user_id: 'u-gone' },
+    ] })
+    enqueue({ data: [
+      { id: 'u-anna', full_name: 'Anna Andersson', deleted_at: null, anonymized_at: null },
+      { id: 'u-gone', full_name: null, deleted_at: '2026-10-01T00:00:00Z', anonymized_at: '2026-10-01T00:00:00Z' },
+    ] })
+    const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'year-end-close'))!
+    expect(bundle.company_knowledge.remembered).toEqual([
+      { fact_id: 'm-2', text: 'Bolaget tillämpar K3.', saved_at: '2026-09-10T08:00:00Z', created_by: 'Anna Andersson' },
+      { fact_id: 'm-1', text: 'Hyran är 14 000 kr.', saved_at: '2026-06-02T08:00:00Z', created_by_deleted: true },
+    ])
+    expect(findCalls('profiles', 'select')).toEqual([['id, full_name, deleted_at, anonymized_at']])
+  })
+
+  it('still starts the workflow, with nothing remembered, when the memory read fails', async () => {
+    vi.mocked(buildArkivMap).mockResolvedValue(null as never)
+    enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
+    enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: null, error: { message: 'rls-denied' } })
+    const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'year-end-close'))!
+    expect(bundle.company_knowledge.remembered).toEqual([])
   })
 })
 
@@ -133,25 +188,58 @@ describe('effectiveKnowledge', () => {
 })
 
 describe('loadAgentBundle: the company chooses the knowledge', () => {
-  it('inlines added packs within the budget and lists what does not fit as a reference', async () => {
+  /** One curated run whose knowledge rows are `bodies`, with the company's choices for the VAT flow. */
+  const runVat = async (choices: unknown[], bodies: unknown[]) => {
     vi.mocked(buildArkivMap).mockResolvedValue(null as never)
     enqueue({ data: null }) // profile atoms
-    enqueue({ data: [
-      { agent_id: 'quarterly-vat-review', atom_id: 'horizontal/swedish-accounting-compliance', included: false },
-      { agent_id: 'quarterly-vat-review', atom_id: 'vertical/bygg-hantverk', included: true },
-      { agent_id: 'quarterly-vat-review', atom_id: 'horizontal/swedish-e-invoicing', included: true },
-    ] })
-    enqueue({ data: [
-      atom('horizontal/swedish-vat', { body: 'v'.repeat(30_000) }),
-      atom('vertical/bygg-hantverk', { body: 'b'.repeat(28_000) }),
-      atom('horizontal/swedish-e-invoicing', { body: 'e'.repeat(9_000) }),
-    ] })
+    enqueue({ data: choices })
+    enqueue({ data: bodies })
     enqueue({ data: [] }) // references + profile atoms
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null }) // connections
     enqueue({ data: null }); enqueue({ data: [] }) // summary, memory
-    const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'quarterly-vat-review'))!
-    expect(bundle.knowledge.map((k) => [k.id, k.source])).toEqual([['horizontal/swedish-vat', 'default'], ['vertical/bygg-hantverk', 'added']])
-    expect(bundle.references[0]).toEqual({ id: 'horizontal/swedish-e-invoicing', title: 'swedish-e-invoicing' })
+    return (await loadAgentBundle(supabase as never, 'company-a', 'quarterly-vat-review'))!
+  }
+
+  it('inlines added packs within the 30K budget and lists what does not fit as a reference', async () => {
+    const bundle = await runVat([
+      { agent_id: 'quarterly-vat-review', atom_id: 'horizontal/swedish-accounting-compliance', included: false },
+      { agent_id: 'quarterly-vat-review', atom_id: 'horizontal/swedish-e-invoicing', included: true },
+      { agent_id: 'quarterly-vat-review', atom_id: 'horizontal/swedish-payroll', included: true },
+    ], [
+      atom('horizontal/swedish-vat', { body: 'v'.repeat(18_000) }),
+      atom('horizontal/swedish-e-invoicing', { body: 'e'.repeat(9_000) }),
+      atom('horizontal/swedish-payroll', { body: 'p'.repeat(9_000) }),
+    ])
+    expect(bundle.knowledge.map((k) => [k.id, k.source])).toEqual([['horizontal/swedish-vat', 'default'], ['horizontal/swedish-e-invoicing', 'added']])
+    expect(bundle.references[0]).toEqual({ id: 'horizontal/swedish-payroll', title: 'swedish-payroll' })
+  })
+
+  it('lists a whole industry pack added by hand as a reference, however small, and never inlines it', async () => {
+    const bundle = await runVat([
+      { agent_id: 'quarterly-vat-review', atom_id: 'vertical/bygg-hantverk', included: true },
+      { agent_id: 'quarterly-vat-review', atom_id: 'modifier/holding-ab', included: true },
+    ], [
+      atom('horizontal/swedish-vat', { body: '# Moms' }),
+      atom('horizontal/swedish-accounting-compliance', { body: '# BFL' }),
+      atom('vertical/bygg-hantverk', { body: '# Bygg' }),
+      atom('modifier/holding-ab', { tier: 'modifier', body: '# Holding' }),
+    ])
+    expect(bundle.knowledge.map((k) => k.id)).toEqual(['horizontal/swedish-vat', 'horizontal/swedish-accounting-compliance'])
+    expect(bundle.references.slice(0, 2)).toEqual([
+      { id: 'vertical/bygg-hantverk', title: 'bygg-hantverk' },
+      { id: 'modifier/holding-ab', title: 'holding-ab' },
+    ])
+  })
+
+  it('inlines knowledge without its frontmatter and counts only the text against the budget', async () => {
+    const frontmatter = `---\nname: swedish-vat\ndescription: ${'x'.repeat(4_000)}\n---\n\n`
+    const bundle = await runVat([], [
+      atom('horizontal/swedish-vat', { body: `${frontmatter}# Moms\n\n${'v'.repeat(14_000)}` }),
+      atom('horizontal/swedish-accounting-compliance', { body: `${frontmatter}${'c'.repeat(15_990)}` }),
+    ])
+    expect(bundle.knowledge.map((k) => k.id)).toEqual(['horizontal/swedish-vat', 'horizontal/swedish-accounting-compliance'])
+    expect(bundle.knowledge[0].body.startsWith('# Moms')).toBe(true)
+    expect(bundle.knowledge.every((k) => !k.body.includes('description:'))).toBe(true)
   })
 
   it('runs an own agent with its own instruction, the accounting law by default and the knowledge chosen for it', async () => {
@@ -169,6 +257,31 @@ describe('loadAgentBundle: the company chooses the knowledge', () => {
     expect(bundle.agent.name).toBe('Påminnelse')
     expect(bundle.knowledge.map((k) => [k.id, k.source])).toEqual([['horizontal/swedish-accounting-compliance', 'default'], ['horizontal/swedish-vat', 'added']])
     expect(bundle.connections).toEqual([])
+  })
+
+  it('inlines the company\'s own knowledge given to a flow, as it does a pack', async () => {
+    vi.mocked(buildArkivMap).mockResolvedValue(null as never)
+    const ownId = '00000000-0000-4000-8000-000000000001'
+    const rulesId = '00000000-0000-4000-8000-0000000000aa'
+    const skills = [
+      { id: ownId, company_id: 'company-a', team_id: null, atom_id: null, name: 'Påminnelse', description: 'Mejlar listan', body: '# Steg', share_status: 'private', draft: false, kind: 'workflow' },
+      { id: rulesId, company_id: 'company-a', team_id: null, atom_id: null, name: 'Våra SaaS-leverantörer', description: 'Hur vi konterar', body: '# Våra regler\n\n6540.', share_status: 'private', draft: false, kind: 'rules' },
+    ]
+    enqueue({ data: { team_id: null } }) // companies
+    enqueue({ data: skills })
+    enqueue({ data: null }) // profile atoms
+    enqueue({ data: [{ agent_id: `own/${ownId}`, atom_id: null, own_skill_id: rulesId, included: true }] })
+    enqueue({ data: [atom('horizontal/swedish-accounting-compliance', { body: '# BFL' })] })
+    enqueue({ data: { team_id: null } }) // companies, for the own knowledge
+    enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null }) // connections
+    enqueue({ data: null }); enqueue({ data: [] }) // summary, memory
+    enqueue({ data: skills }) // the own knowledge
+    const bundle = (await loadAgentBundle(supabase as never, 'company-a', `own/${ownId}`))!
+    expect(bundle.knowledge.map((k) => [k.id, k.tier, k.source, k.title])).toEqual([
+      ['horizontal/swedish-accounting-compliance', 'horizontal', 'default', 'swedish-accounting-compliance'],
+      [`own/${rulesId}`, 'own', 'added', 'Våra SaaS-leverantörer'],
+    ])
+    expect(bundle.knowledge[1].body).toContain('6540')
   })
 
   it('returns null for an unknown agent', async () => {
@@ -210,7 +323,7 @@ describe('industry sections by area', () => {
   })
 
   it('shares the budget with the knowledge and lists the sections that do not fit as references', async () => {
-    const bundle = await runBundle('year-end-close', [atom('horizontal/swedish-year-end-closing', { body: 'y'.repeat(50_000) })], [
+    const bundle = await runBundle('year-end-close', [atom('horizontal/swedish-year-end-closing', { body: 'y'.repeat(20_000) })], [
       section('3-12-rules', ['bokslut'], { body: 'a'.repeat(6_000) }),
       section('software-capitalization', ['bokslut'], { body: 'b'.repeat(6_000) }),
     ])

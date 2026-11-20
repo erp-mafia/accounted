@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { Button } from '@/components/ui/button'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import type { ArkivSearchHit, ArkivSearchView } from '@/app/api/arkiv/search/route'
 import { SourceLink } from './DefList'
@@ -68,10 +70,22 @@ function Passage({ text }: { text: string }) {
   )
 }
 
-export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryChange: (query: string) => void }) {
+export function ArkivSearch({
+  query,
+  onQueryChange,
+  filters,
+}: {
+  query: string
+  onQueryChange: (query: string) => void
+  /** The list's filters, first in the toolbar row; the search sits at its right end. */
+  filters?: ReactNode
+}) {
   const t = useTranslations('arkiv')
+  const tCommon = useTranslations('common')
   const [view, setView] = useState<ArkivSearchView | null>(null)
   const [failedQuery, setFailedQuery] = useState<string | null>(null)
+  // Bumped by "Försök igen" to run the same search again.
+  const [attempt, setAttempt] = useState(0)
   const trimmed = query.trim()
   const active = trimmed.length >= SEARCH_MIN
 
@@ -93,7 +107,7 @@ export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryCh
       cancelled = true
       clearTimeout(timer)
     }
-  }, [active, trimmed])
+  }, [active, trimmed, attempt])
 
   // The answer on screen is always the answer to the words in the field: an older one is never shown as the current one.
   const current = active && view && view.query === trimmed ? view : null
@@ -102,16 +116,33 @@ export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryCh
 
   return (
     <div className="space-y-3">
-      <ToolbarSearch id="arkiv-search" value={query} onChange={(e) => onQueryChange(e.target.value)} placeholder={t('search_documents')} containerClassName="w-full max-w-md" autoComplete="off" />
+      <div className="flex flex-wrap items-center gap-2">
+        {filters}
+        <ToolbarSearch id="arkiv-search" value={query} onChange={(e) => onQueryChange(e.target.value)} placeholder={t('search_documents')} containerClassName={TOOLBAR_SEARCH_END_CLASS} autoComplete="off" />
+      </div>
 
-      {failed && <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>}
+      {failed && (
+        <LoadError
+          onRetry={() => {
+            setFailedQuery(null)
+            setAttempt((n) => n + 1)
+          }}
+        />
+      )}
       {loading && (
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-5 w-1/3" />
           <Skeleton className="h-5 w-2/3" />
+        </LateReveal>
+      )}
+      {current && current.hits.length === 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+          <span data-ph-mask="">{t('search_empty', { query: current.query })}</span>
+          <Button variant="link" onClick={() => onQueryChange('')}>
+            {tCommon('clear_search')}
+          </Button>
         </div>
       )}
-      {current && current.hits.length === 0 && <p className="text-[13px] text-muted-foreground">{t('search_empty', { query: current.query })}</p>}
       {current && current.hits.length > 0 && (
         <div className="space-y-5">
           {GROUPS.map((group) => {
@@ -121,7 +152,7 @@ export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryCh
               const documents = groupDocumentHits(hits)
               return (
                 <section key={group.kind} aria-label={t(group.labelKey)}>
-                  <h3 className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  <h3 className="mb-1 text-xs font-medium text-muted-foreground">
                     {t(group.labelKey)} <span className="tabular-nums">({documents.length})</span>
                   </h3>
                   <ul className="divide-y divide-border">
@@ -131,15 +162,15 @@ export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryCh
                           <Link href={doc.href} className={`${QUIET_LINK_CLASS} text-[13px] text-foreground`}>
                             {doc.title}
                           </Link>
-                          {doc.subtitle ? <span className="ml-2 text-[11px] text-muted-foreground">{doc.subtitle}</span> : null}
+                          {doc.subtitle ? <span className="ml-2 text-xs text-muted-foreground">{doc.subtitle}</span> : null}
                           {doc.snippet ? (
-                            <div className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
+                            <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                               <Passage text={doc.snippet} />
                             </div>
                           ) : null}
                         </div>
                         {doc.pages.length > 0 ? (
-                          <div className="flex shrink-0 flex-wrap justify-end gap-x-2 text-[11px] text-muted-foreground">
+                          <div className="flex shrink-0 flex-wrap justify-end gap-x-2 text-xs text-muted-foreground">
                             {doc.pages.map((p) => (
                               <Link key={p.page} href={p.href} className={QUIET_LINK_CLASS}>
                                 {t('source_page_short_only', { page: p.page })}
@@ -155,7 +186,7 @@ export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryCh
             }
             return (
               <section key={group.kind} aria-label={t(group.labelKey)}>
-                <h3 className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                <h3 className="mb-1 text-xs font-medium text-muted-foreground">
                   {t(group.labelKey)} <span className="tabular-nums">({hits.length})</span>
                 </h3>
                 <ul className="divide-y divide-border">
@@ -169,9 +200,9 @@ export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryCh
                         ) : (
                           <span className="text-[13px] text-foreground">{hit.title}</span>
                         )}
-                        {hit.subtitle ? <span className="ml-2 text-[11px] text-muted-foreground">{hit.subtitle}</span> : null}
+                        {hit.subtitle ? <span className="ml-2 text-xs text-muted-foreground">{hit.subtitle}</span> : null}
                         {hit.snippet ? (
-                          <div className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
+                          <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                             <Passage text={hit.snippet} />
                           </div>
                         ) : null}

@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
@@ -14,13 +15,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { CheckCircle, Loader2, Upload } from 'lucide-react'
+import { ArrowUpTrayIcon, CheckCircleIcon, SpinnerIcon } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
+import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
+import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-campaign'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
+import { bankCoveredByOpenPayments, enableBankingOffers } from '@/lib/bank-feed/bank-coverage'
 import {
   SettingsGroup,
   SettingsRow,
@@ -30,15 +36,22 @@ import {
 } from '@/components/settings/SettingsRows'
 import { BankSelector, type Bank } from './BankSelector'
 import { BankConnectionStatus } from './BankConnectionStatus'
+import { describeEmptySync, describeOtherCurrency } from '../lib/empty-sync-text'
 import { AccountPickerDialog } from './AccountPickerDialog'
 import {
   buildPageAttentionSentence,
+  nextScheduledSyncFrom,
   selectPageAttention,
   sortConnectionsByPrecedence,
+  type SunsetPath,
+  type SyncPauseReason,
 } from '../lib/connection-state'
 import { sameBankWarning } from '../lib/connection-warning'
+import { hasSelectableAccounts } from '../lib/claimed-accounts'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import type { BankConnection } from '@/types'
 import type { StoredAccount } from '../types'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /** One "reuse an existing connection" offer, as returned by /reusable-sessions. */
 interface ReusableSessionOffer {
@@ -56,6 +69,7 @@ interface ReusableSessionOffer {
  */
 export default function BankingSettingsPanel() {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   // Stable across renders so effects can list it as a dependency without
   // re-firing on every parent render (same reason as AccountPickerDialog).
   const supabase = useMemo(() => createClient(), [])
@@ -115,6 +129,30 @@ export default function BankingSettingsPanel() {
   // Must match STALE_THRESHOLD_MS in extensions/general/enable-banking/index.ts
   const PENDING_LOCK_MS = 30 * 1000
 
+  // The switch campaign (lib/bank-feed/switch-campaign.ts) as the server
+  // computed it for this company. Once its deadline has passed the Enable
+  // Banking feed is over: every row here gets the sunset state, offering the
+  // switch where Open Payments reaches the bank and the file import where it
+  // does not (the campaign's list, lib/bank-feed/bank-coverage.ts). Only
+  // where the campaign applies (the door is open, so the switch can be
+  // made): elsewhere nothing changes.
+  const switchCampaign = useBankSwitchCampaign()
+  const sunsetActive = Boolean(switchCampaign.progress?.campaign.passed && switchCampaign.progress.company)
+  const sunsetFor = (connection: { bank_name: string | null }): SunsetPath | null =>
+    sunsetActive ? (bankCoveredByOpenPayments(connection.bank_name) ? 'switch' : 'import') : null
+  // No bank_sync capability (a trial that ended, no subscription; self-hosted,
+  // no connector key): the sync cron skips the company and Synka is refused,
+  // so every row and the page's sentence say why instead of "kör Synka".
+  const syncPause: SyncPauseReason | null = hasBankSync ? null : isSelfHosted() ? 'connector_key' : 'subscription'
+
+  // Where Open Payments reads the company's bank, a new connection goes
+  // through its Koppla bank (crm#1363): this list then offers only the banks
+  // Open Payments does not reach, the ones its "not reached" line sends here.
+  // A bank it reaches connected here instead lands on the feed that ends,
+  // and has to be switched again.
+  const openPayments = useOpenPaymentsAvailability()
+  const offeredBank = enableBankingOffers(openPayments.status === 'available')
+
   useEffect(() => {
     fetchConnections()
     return () => {
@@ -128,6 +166,17 @@ export default function BankingSettingsPanel() {
   const fetchConnectionsRef = useRef(fetchConnections)
   useEffect(() => {
     fetchConnectionsRef.current = fetchConnections
+  })
+
+  // A bank account that books on another ledger account than the books say
+  // (crm#1066), with the button that changes it; null when there is none.
+  // Rendered below only when no connection needs the page's one attention
+  // sentence more: a connection that does not sync comes first.
+  const refetchConnections = useCallback(() => void fetchConnectionsRef.current(), [])
+  const ledgerSuggestionNotice = useBankLedgerSuggestionNotice({
+    onApplied: refetchConnections,
+    onBankSettings: true,
+    className: 'px-1 pt-6 leading-relaxed',
   })
 
   // Safety net for completion signals that never reach this tab: a mobile
@@ -211,16 +260,19 @@ export default function BankingSettingsPanel() {
     if (!hasLoadedRef.current) setIsLoading(true)
     setLoadError(false)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (!user || !company) {
         setBankConnections([])
         return
       }
 
+      // This panel's actions all go to Enable Banking; an Open Payments
+      // connection is listed and handled by its own section instead.
       const { data: connections, error } = await supabase
         .from('bank_connections')
         .select('*')
         .eq('company_id', company.id)
+        .eq('aggregator', 'enable_banking')
         .order('created_at', { ascending: false })
 
       if (error) {
@@ -239,6 +291,7 @@ export default function BankingSettingsPanel() {
       const { data: allConnections } = await supabase
         .from('bank_connections')
         .select('bank_name, company_id, session_id, status')
+        .eq('aggregator', 'enable_banking')
         .in('status', ['active', 'pending_selection'])
       setOtherCompanyConnections(
         ((allConnections || []) as {
@@ -337,7 +390,7 @@ export default function BankingSettingsPanel() {
       if (!response.ok) {
         toast({
           title: 'Kunde inte återanvända anslutningen',
-          description: result?.error || 'Försök igen om en stund.',
+          description: getErrorMessage(result, { fallback: 'Försök igen om en stund.' }),
           variant: 'destructive',
         })
         return
@@ -366,8 +419,15 @@ export default function BankingSettingsPanel() {
     // connection to the bank, renewing that row is almost always what the
     // user means. A second fresh row leaves the old one stuck in "Åtgärd
     // krävs" and risks duplicate transactions on the re-import.
+    // A connection waiting for account selection with nothing to pick is not
+    // one to renew or finish, so it does not count here: the connect route
+    // replaces it with this login.
     const existing = bankConnections.find(
-      (c) => c.status !== 'revoked' && c.status !== 'pending' && c.bank_name === bank.name,
+      (c) =>
+        c.status !== 'revoked' &&
+        c.status !== 'pending' &&
+        c.bank_name === bank.name &&
+        !(c.status === 'pending_selection' && !hasSelectableAccounts(c.accounts_data as StoredAccount[] | null)),
     )
     if (existing?.status === 'pending_selection') {
       // Already authorized, accounts never chosen: neither "renew" nor
@@ -400,13 +460,6 @@ export default function BankingSettingsPanel() {
     setConnectingBankName(bank.name)
 
     try {
-      console.log('[enable-banking] Initiating bank connection', {
-        bankName: bank.name,
-        bankCountry: bank.country,
-        psuTypeOverride,
-        forceNew,
-      })
-
       const body: Record<string, string | boolean> = { aspsp_name: bank.name, aspsp_country: bank.country }
       if (psuTypeOverride) body.psu_type = psuTypeOverride
       // Deliberate second connection to a bank this company is already
@@ -443,13 +496,9 @@ export default function BankingSettingsPanel() {
           error: data.error,
           bankName: bank.name,
         })
-        throw new Error(data.error)
+        throw new Error(getErrorMessage(data))
       }
 
-      console.log('[enable-banking] Redirecting to bank authorization', {
-        connectionId: data.connection_id,
-        hasAuthUrl: !!data.authorization_url,
-      })
       window.location.href = data.authorization_url
     } catch (error) {
       console.error('[enable-banking] Connect flow failed', {
@@ -503,7 +552,7 @@ export default function BankingSettingsPanel() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error)
+        throw new Error(getErrorMessage(data))
       }
 
       window.location.href = data.authorization_url
@@ -534,8 +583,6 @@ export default function BankingSettingsPanel() {
     const timeout = setTimeout(() => controller.abort(), 180_000)
 
     try {
-      console.log('[enable-banking] Starting sync', { connectionId })
-
       const response = await fetch('/api/extensions/ext/enable-banking/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -552,27 +599,37 @@ export default function BankingSettingsPanel() {
           error: data.error,
           connectionId,
         })
-        throw new Error(data.error)
+          throw new Error(getErrorMessage(data, { fallback: 'Synkronisering misslyckades' }))
       }
-
-      console.log('[enable-banking] Sync completed', {
-        connectionId,
-        imported: data.imported,
-        duplicates: data.duplicates,
-      })
 
       // A bank that refused the requested window answered a narrower one:
       // say from which date the sync is complete instead of presenting a
-      // truncated history as a full one (#2202).
+      // truncated history as a full one (#2202). A bank that had not handed
+      // out every page is no finished sync either (PH 195).
+      // A sync that brought in nothing says why: the bank's entries are not
+      // booked yet, or the bank sent none at all (PH 221). "0 nya" next to a
+      // fresh balance read as a connection that only reads the balance.
+      const emptyText = data.incomplete
+        ? null
+        : describeEmptySync({
+          imported: data.imported,
+          duplicates: data.duplicates,
+          notBooked: data.not_booked,
+          otherCurrency: data.other_currency,
+        })
+      // Rows set aside as another currency than the account's are named even
+      // when others came in: otherwise they are missing without a word (crm#1767).
+      const otherCurrencyText = data.incomplete || emptyText !== null ? null : describeOtherCurrency(data.other_currency)
       toast({
-        title: 'Synkronisering klar',
-        description:
-          data.history_narrowed && data.history_from
+        title: data.incomplete ? 'Synkroniseringen blev inte klar' : 'Synkronisering klar',
+        description: data.incomplete
+          ? `${data.imported} nya transaktioner importerade, men banken lämnade inte ut alla sidor. Försök igen senare, eller importera kontoutdraget som bankfil.`
+          : data.history_narrowed && data.history_from
             ? `${data.imported} nya transaktioner importerade. Banken lämnade bara ut historik från ${data.history_from}.`
-            : `${data.imported} nya transaktioner importerade`,
+            : emptyText ?? [`${data.imported} nya transaktioner importerade`, otherCurrencyText].filter(Boolean).join('. '),
       })
 
-      setShowCsvFallback(false)
+      setShowCsvFallback(data.incomplete === true || emptyText !== null || otherCurrencyText !== null)
       notifyBankSyncUpdated()
       fetchConnections()
     } catch (error) {
@@ -605,10 +662,11 @@ export default function BankingSettingsPanel() {
   }
 
   // Start over for an attempt the bank never answered (abandoned 'pending'
-  // row). A fresh connect, not a reconnect: the reconnect path parks a
-  // failed retry as a permanent 'error' card, while the connect route
-  // sweeps the stale pending row before it starts. The bank identity comes
-  // off the row itself (provider slug ends with the country code).
+  // row), or for a waiting connection that leaves nothing to pick. A fresh
+  // connect, not a reconnect: the reconnect path parks a failed retry as a
+  // permanent 'error' card, while the connect route sweeps the stale pending
+  // row, or replaces the waiting one, before it starts. The bank identity
+  // comes off the row itself (provider slug ends with the country code).
   function handleRetryConnect(connection: BankConnection) {
     const country = connection.provider?.split('-').pop()?.toUpperCase() || 'SE'
     void startFreshConnect(
@@ -641,8 +699,6 @@ export default function BankingSettingsPanel() {
     if (!ok) return
 
     try {
-      console.log('[enable-banking] Disconnecting bank', { connectionId })
-
       const response = await fetch('/api/extensions/ext/enable-banking/disconnect', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -657,10 +713,9 @@ export default function BankingSettingsPanel() {
           error: data.error,
           connectionId,
         })
-        throw new Error(data.error || 'Disconnect failed')
+        throw new Error(getErrorMessage(data, { fallback: 'Disconnect failed' }))
       }
 
-      console.log('[enable-banking] Bank disconnected', { connectionId })
       toast(
         neverCompleted
           ? { title: 'Försöket borttaget', description: 'Du kan starta bankkopplingen på nytt när du vill.' }
@@ -690,11 +745,11 @@ export default function BankingSettingsPanel() {
       return (
         <div className="flex h-32 flex-col items-center justify-center gap-3">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <CheckCircle className="h-4 w-4 text-success" />
+            <CheckCircleIcon className="h-4 w-4 text-success" />
             <span>Banken är ansluten</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
             <span>Hämtar dina konton…</span>
           </div>
         </div>
@@ -721,10 +776,10 @@ export default function BankingSettingsPanel() {
           och transaktioner är oförändrade.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button variant="outline" size="sm" onClick={() => fetchConnections()}>
+          <Button variant="outline" onClick={() => fetchConnections()}>
             Försök igen
           </Button>
-          <Button variant="outline" size="sm" asChild>
+          <Button variant="outline" asChild>
             <Link href="/import?mode=bank">Importera bankfil istället</Link>
           </Button>
         </div>
@@ -737,7 +792,9 @@ export default function BankingSettingsPanel() {
   // Revoked rows stay hidden, exactly as before.
   const stateNow = Date.now()
   const visibleConnections = sortConnectionsByPrecedence(
-    bankConnections.filter((c) => c.status !== 'revoked'),
+    bankConnections
+      .filter((c) => c.status !== 'revoked')
+      .map((c) => ({ ...c, sunset: sunsetFor(c), paused: syncPause })),
     stateNow,
   )
   const hasVisibleConnections = visibleConnections.length > 0
@@ -768,7 +825,7 @@ export default function BankingSettingsPanel() {
           if (!open) setSameBankIntercept(null)
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle data-ph-mask="">
               Du har redan en koppling till {sameBankIntercept?.bank.name}
@@ -816,14 +873,28 @@ export default function BankingSettingsPanel() {
           bankName={pickerConnection.bank_name}
           accounts={pickerAccounts}
           isInitialSelection={pickerConnection.status === 'pending_selection'}
-          onSaved={() => fetchConnections()}
+          newAccountsSyncFrom={hasBankSync ? nextScheduledSyncFrom(pickerConnection, stateNow) : null}
+          onReauthorize={() => {
+            setPickerConnectionId(null)
+            handleRetryConnect(pickerConnection)
+          }}
+          onSaved={() => {
+            // Sync stopped on a stale account selection: the save is the fix,
+            // so sync right away instead of leaving the row saying it stopped
+            // until the next cron run. Success clears the stored message.
+            if (pickerConnection.status === 'active' && pickerConnection.error_message) {
+              void handleSyncTransactions(pickerConnection.id)
+            } else {
+              fetchConnections()
+            }
+          }}
         />
       )}
 
       {/* The callback landed on a connection owned by another of the user's
           companies: one ochre line naming where it went (convention 6). */}
       {pickerCompanyMismatch && (
-        <p className="px-1 pt-6 text-[12.5px] leading-relaxed text-attn">
+        <p className="px-1 pt-6 text-xs leading-relaxed text-attn">
           Bankanslutningen slutfördes för {pickerCompanyMismatch}, inte för det bolag som är aktivt
           nu. Byt till {pickerCompanyMismatch} för att välja vilka konton som ska synka.
         </p>
@@ -833,8 +904,8 @@ export default function BankingSettingsPanel() {
           kept visible as a compact line instead of a boxed strip. */}
       {showCsvFallback && (
         <div className="flex items-start gap-2 px-1 pt-6">
-          <Upload className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+          <ArrowUpTrayIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <p className="text-xs leading-relaxed text-muted-foreground">
             Har du problem med bankanslutningen? Du kan{' '}
             <Link href="/import?mode=bank" className="underline underline-offset-2 hover:text-foreground">
               importera transaktioner manuellt via bankfil
@@ -847,10 +918,12 @@ export default function BankingSettingsPanel() {
       {/* The page's one attention sentence: the worst connection state, or
           nothing (convention 6). The rows themselves stay quiet. */}
       {pageAttention && (
-        <p className="px-1 pt-6 text-[12.5px] leading-relaxed text-attn">
+        <p className="px-1 pt-6 text-xs leading-relaxed text-attn">
           {buildPageAttentionSentence(pageAttention, stateNow)}
         </p>
       )}
+
+      {!pageAttention && !pickerCompanyMismatch && ledgerSuggestionNotice}
 
       {/* All connections in one group, worst state first. Each row carries
           its own state badge and exactly one primary action. */}
@@ -860,6 +933,8 @@ export default function BankingSettingsPanel() {
             <BankConnectionStatus
               key={connection.id}
               connection={connection}
+              sunset={connection.sunset}
+              paused={connection.paused}
               onSync={handleSyncTransactions}
               onDisconnect={handleDisconnectBank}
               onReconnect={handleReconnect}
@@ -917,10 +992,10 @@ export default function BankingSettingsPanel() {
               </SettingsRowNote>
               <SettingsRowEnd>
                 <Button
-                  variant="secondary"
-                  size="sm"
+                  variant="outline"
                   onClick={() => handleReuseConnection(offer)}
-                  disabled={!!attachingConnectionId}
+                  disabled={!canWrite || !!attachingConnectionId}
+                  title={lockedTitle}
                   loading={attachingConnectionId === offer.connection_id}
                 >
                   {attachingConnectionId === offer.connection_id ? 'Kopplar' : 'Återanvänd'}
@@ -934,13 +1009,13 @@ export default function BankingSettingsPanel() {
       {/* Connect new bank. Collapsed behind one outline button whenever the
           company already has a connection (renewing the existing row is the
           primary path); the full group is the page's main content only when
-          nothing is connected yet. Non-payers keep seeing the group
-          (conversion surface) but the bank list is replaced by an upgrade
+          nothing is connected yet. Companies without the capability still see
+          the group, but the bank list is replaced by an upgrade
           note: the server gate would 403 the connect anyway. The former "Om
           bankintegration (PSD2)" card lives on as group-level help. */}
       {!connectNewExpanded ? (
         <div className="px-1 pt-8">
-          <Button variant="outline" size="sm" onClick={() => setConnectNewOpen(true)}>
+          <Button variant="outline" onClick={() => setConnectNewOpen(true)} disabled={!canWrite} title={lockedTitle}>
             Anslut en bank till
           </Button>
         </div>
@@ -995,13 +1070,15 @@ export default function BankingSettingsPanel() {
                   popover: the bank login that follows says nothing about which
                   set of books the accounts will land in. */}
               {company?.name && (
-                <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
                   Anslutningen görs för{' '}
                   <span className="font-medium text-foreground">{company.name}</span>.
                 </p>
               )}
               <BankSelector
-                onConnect={(bank) => handleConnectBank(bank, psuType)}
+                offered={offeredBank}
+                // A ?bank= deep link starts nothing for a read-only member.
+                onConnect={(bank) => (canWrite ? handleConnectBank(bank, psuType) : undefined)}
                 onPsuTypeDetected={setPsuType}
                 isConnecting={isConnecting}
                 connectingBankName={connectingBankName}

@@ -1,9 +1,10 @@
 /**
  * Shared draft-run header update: payment_date / voucher_series / notes.
  *
- * Single source of truth for the MCP staging tool (gnubok_update_salary_run)
- * and its commit executor. Mirrors the v1 PATCH semantics
- * (app/api/v1/companies/[companyId]/salary-runs/[id]): draft-only, with the
+ * Single source of truth for both PATCH routes (the dashboard's
+ * app/api/salary/runs/[id] and v1's app/api/v1/companies/[companyId]/
+ * salary-runs/[id]), the MCP staging tool (gnubok_update_salary_run) and its
+ * commit executor: draft-only, with the
  * update optimistic-locked on status='draft' so a concurrent :calculate that
  * advances the run between pre-flight and write yields a clean
  * SALARY_RUN_PATCH_NOT_DRAFT instead of a silently-accepted update. The field
@@ -18,6 +19,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { invalidateRunCalculation } from './invalidate-calculation'
 
 export type UpdateRunResult<T> =
   | { ok: true; data: T }
@@ -47,6 +49,18 @@ export interface UpdateSalaryRunData {
   voucher_series: string
   notes: string | null
   changes: SalaryRunHeaderPatch
+  /**
+   * The run row in the caller's `columns` (merged with the patch for a dry
+   * run, read back after a write), for a door that answers with the row.
+   */
+  row: Record<string, unknown>
+}
+
+const HEADER_COLUMNS = 'id, status, period_year, period_month, payment_date, voucher_series, notes'
+
+function selectColumns(columns: string | undefined): string {
+  if (!columns) return HEADER_COLUMNS
+  return columns === '*' ? '*' : `${HEADER_COLUMNS}, ${columns}`
 }
 
 const VOUCHER_SERIES_RE = /^[A-Z]$/
@@ -60,7 +74,11 @@ function validatePatch(patch: SalaryRunHeaderPatch): UpdateRunResult<SalaryRunHe
       return {
         ok: false,
         code: 'VALIDATION_ERROR',
-        details: { field: 'payment_date', message: 'Expected YYYY-MM-DD date format' },
+        details: {
+          field: 'payment_date',
+          message: 'Expected YYYY-MM-DD date format',
+          message_sv: 'Ogiltigt datum (ÅÅÅÅ-MM-DD)',
+        },
       }
     }
     changes.payment_date = patch.payment_date
@@ -70,7 +88,11 @@ function validatePatch(patch: SalaryRunHeaderPatch): UpdateRunResult<SalaryRunHe
       return {
         ok: false,
         code: 'VALIDATION_ERROR',
-        details: { field: 'voucher_series', message: 'Verifikationsserie måste vara en bokstav A-Z' },
+        details: {
+          field: 'voucher_series',
+          message: 'Verifikationsserie måste vara en bokstav A-Z',
+          message_sv: 'Verifikationsserie måste vara en bokstav A-Z',
+        },
       }
     }
     changes.voucher_series = patch.voucher_series
@@ -80,17 +102,14 @@ function validatePatch(patch: SalaryRunHeaderPatch): UpdateRunResult<SalaryRunHe
       return {
         ok: false,
         code: 'VALIDATION_ERROR',
-        details: { field: 'notes', message: `Max ${NOTES_MAX} tecken` },
+        details: {
+          field: 'notes',
+          message: `Max ${NOTES_MAX} tecken`,
+          message_sv: `Anteckningen får vara högst ${NOTES_MAX} tecken`,
+        },
       }
     }
     changes.notes = patch.notes
-  }
-  if (Object.keys(changes).length === 0) {
-    return {
-      ok: false,
-      code: 'VALIDATION_ERROR',
-      details: { message: 'At least one of payment_date, voucher_series, notes is required' },
-    }
   }
   return { ok: true, data: changes }
 }
@@ -103,6 +122,8 @@ export async function updateDraftSalaryRun(
     patch: SalaryRunHeaderPatch
     /** Validate + resolve only; return the would-be merged row without writing. */
     dryRun?: boolean
+    /** Extra salary_runs columns for `row` ('*' for all). */
+    columns?: string
   },
 ): Promise<UpdateRunResult<UpdateSalaryRunData>> {
   const validated = validatePatch(args.patch)
@@ -111,7 +132,7 @@ export async function updateDraftSalaryRun(
 
   const { data: run, error } = await supabase
     .from('salary_runs')
-    .select('id, status, period_year, period_month, payment_date, voucher_series, notes')
+    .select(selectColumns(args.columns))
     .eq('id', args.salaryRunId)
     .eq('company_id', args.companyId)
     .maybeSingle()
@@ -123,7 +144,7 @@ export async function updateDraftSalaryRun(
     return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
   }
 
-  const row = run as {
+  const row = run as unknown as {
     id: string
     status: string
     period_year: number
@@ -153,7 +174,10 @@ export async function updateDraftSalaryRun(
     notes: row.notes,
   }
 
-  if (args.dryRun) {
+  // Nothing to change (an empty PATCH): the run as it is, nothing written.
+  // The v1 PATCH has always answered this way; the MCP tool refuses to stage
+  // an empty patch before it gets here.
+  if (args.dryRun || Object.keys(changes).length === 0) {
     return {
       ok: true,
       data: {
@@ -166,8 +190,19 @@ export async function updateDraftSalaryRun(
         voucher_series: changes.voucher_series ?? previous.voucher_series,
         notes: changes.notes !== undefined ? changes.notes : previous.notes,
         changes,
+        row: { ...(run as unknown as Record<string, unknown>), ...changes },
       },
     }
+  }
+
+  // A supplied payment_date invalidates any existing calculation: skatteavdrag
+  // follows the payment date, so a recalculation must run against the new
+  // date before approval and booking accept the roster. Gated on SUPPLIED,
+  // not on changed: clearing on an equal date merely forces a redundant
+  // recalculation, which is the safe direction.
+  if (changes.payment_date !== undefined) {
+    const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunId: args.salaryRunId })
+    if (invalidated) return invalidated
   }
 
   // Optimistic lock on status='draft': a concurrent :calculate flipping the
@@ -179,7 +214,7 @@ export async function updateDraftSalaryRun(
     .eq('id', args.salaryRunId)
     .eq('company_id', args.companyId)
     .eq('status', 'draft')
-    .select('id, status, period_year, period_month, payment_date, voucher_series, notes')
+    .select(selectColumns(args.columns))
     .maybeSingle()
 
   if (updError) {
@@ -193,29 +228,7 @@ export async function updateDraftSalaryRun(
     }
   }
 
-  // A supplied payment_date invalidates any existing calculation:
-  // skatteavdrag follows the payment date, so clearing calculation_breakdown
-  // makes both book preflights refuse the roster until a recalculation has
-  // run against the new date (same invariant as setRunEmployeeSalary in
-  // lib/salary/run-employees.ts). Unlike the display-line refresh there,
-  // this clear IS the compliance guard, so a failure surfaces as an error.
-  // Gated on SUPPLIED, not on changed: after a partial failure (header
-  // committed, clear failed) a retry re-reads the run and sees the new date
-  // as current, so a changed-only gate would skip the clear forever and
-  // leave a stale calculation bookable. Clearing on an equal date merely
-  // forces a redundant recalculation, which is the safe direction.
-  if (changes.payment_date !== undefined) {
-    const { error: clearError } = await supabase
-      .from('salary_run_employees')
-      .update({ calculation_breakdown: null })
-      .eq('salary_run_id', args.salaryRunId)
-      .eq('company_id', args.companyId)
-    if (clearError) {
-      return { ok: false, code: 'INTERNAL_ERROR', details: { message: clearError.message } }
-    }
-  }
-
-  const after = updated as typeof row
+  const after = updated as unknown as typeof row
   return {
     ok: true,
     data: {
@@ -228,6 +241,7 @@ export async function updateDraftSalaryRun(
       voucher_series: after.voucher_series,
       notes: after.notes,
       changes,
+      row: updated as unknown as Record<string, unknown>,
     },
   }
 }

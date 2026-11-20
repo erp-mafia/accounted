@@ -9,11 +9,11 @@ const vacationMock = vi.fn()
 vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: (...args: unknown[]) => trialBalanceMock(...args),
 }))
-vi.mock('@/lib/reports/ar-reconciliation', () => ({
-  generateARReconciliation: (...args: unknown[]) => arMock(...args),
+vi.mock('@/lib/reports/ar-ledger', () => ({
+  generateARLedger: (...args: unknown[]) => arMock(...args),
 }))
-vi.mock('@/lib/reports/supplier-reconciliation', () => ({
-  generateReconciliation: (...args: unknown[]) => apMock(...args),
+vi.mock('@/lib/reports/supplier-ledger', () => ({
+  generateSupplierLedger: (...args: unknown[]) => apMock(...args),
 }))
 vi.mock('@/lib/reports/vacation-liability', () => ({
   generateVacationLiability: (...args: unknown[]) => vacationMock(...args),
@@ -84,8 +84,8 @@ beforeEach(() => {
   apMock.mockReset()
   vacationMock.mockReset()
   trialBalanceMock.mockResolvedValue({ rows: TB_ROWS })
-  arMock.mockResolvedValue({ ar_ledger_total: 12000, account_1510_balance: 12000, difference: 0, is_reconciled: true, unconverted_fx_count: 0 })
-  apMock.mockResolvedValue({ supplier_ledger_total: 7000, account_2440_balance: -7500, difference: -500, is_reconciled: false, unconverted_fx_count: 1 })
+  arMock.mockResolvedValue({ total_outstanding: 12000, unconverted_fx_count: 0 })
+  apMock.mockResolvedValue({ total_outstanding: 7000, unconverted_fx_count: 1 })
   vacationMock.mockResolvedValue({ rows: [], totals: { accruedAmount: 32000, accruedAvgifter: 10054, totalLiability: 42054 }, asOfDate: '2026-07-31' })
 })
 
@@ -136,7 +136,7 @@ describe('buildManualStatus', () => {
       },
     })
     expect(s.bridge.map((l) => l.key)).toEqual(['specification', 'opening_balance', 'movement', 'ledger_balance'])
-    expect(s.bridge[0].label_sv).toMatch(/idag/)
+    expect(s.bridge[0].label_sv).toMatch(/per 2026-07-31$/)
   })
 
   it('leaves the outside side unknown for an account without a specification', () => {
@@ -154,7 +154,7 @@ describe('getManualReconciliationStatus', () => {
     enqueue({ data: PERIOD })
     const s = await getManualReconciliationStatus(supabase as never, COMPANY, '1510', { asOf: '2026-07-31' })
     expect(s).toMatchObject({ external_balance: 12000, ledger_balance: 12000, difference: 0, is_reconciled: true })
-    expect(arMock).toHaveBeenCalledWith(supabase, COMPANY, 'fy-2026')
+    expect(arMock).toHaveBeenCalledWith(supabase, COMPANY, '2026-07-31', { strict: true })
     expect(apMock).not.toHaveBeenCalled()
     expect(vacationMock).not.toHaveBeenCalled()
   })

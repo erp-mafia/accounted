@@ -1,0 +1,158 @@
+/**
+ * The "Bokföring" rows of a payment verifikat that a dialog previews and lets
+ * the user edit before booking: the bank-match dialog (InvoiceMatchDialog)
+ * and the supplier invoice's payment dialog (SupplierPaymentDialog). Both
+ * render them through PaymentPreviewLinesCard; this module is the pure part
+ * (the working copy, its validation and the request lines), so the rule is
+ * stated and tested once.
+ *
+ * A working row is one positive amount with a side (debit or credit): that
+ * matches how a verifikationsrad is read and cannot hold both sides at once.
+ * It converts back to the server's { debit_amount, credit_amount } shape only
+ * at submit. Dimension bags follow payment-line-dimensions: a proposed row
+ * keeps its bag through every edit, an added row starts with the settled
+ * document's bag, and what the grid holds is what gets booked.
+ */
+import { parseAmountInput, roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { withLineDimensions, type LineDimensions } from './payment-line-dimensions'
+
+/** A row as the preview route returns it; amounts are SEK. */
+export interface PaymentPreviewLine {
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+  description: string
+  /** The bag the booking gives this line; absent when untagged. */
+  dimensions?: LineDimensions
+}
+
+/** The string-typed working copy of a row while the user edits it. */
+export interface EditablePaymentLine {
+  account_number: string
+  side: 'debit' | 'credit'
+  amount: string
+  description: string
+  /** Kept through every edit of the row and sent with it. */
+  dimensions?: LineDimensions
+}
+
+/** A row as the booking routes take it (`lines` on mark-paid and the match routes). */
+export interface PaymentLinePayload {
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+  line_description?: string
+  dimensions?: LineDimensions
+}
+
+export interface PaymentLinesValidation {
+  isBalanced: boolean
+  accountInvalid: boolean
+  isValid: boolean
+  /** Debit minus credit. */
+  diff: number
+  totalDebit: number
+  totalCredit: number
+}
+
+/** What a dialog that is not editing reports: nothing to block on. */
+export const UNEDITED_VALIDATION: PaymentLinesValidation = {
+  isBalanced: true,
+  accountInvalid: false,
+  isValid: true,
+  diff: 0,
+  totalDebit: 0,
+  totalCredit: 0,
+}
+
+export function previewToEditable(line: PaymentPreviewLine): EditablePaymentLine {
+  const isDebit = line.debit_amount > 0
+  return {
+    account_number: line.account_number,
+    side: isDebit ? 'debit' : 'credit',
+    amount: String(isDebit ? line.debit_amount : line.credit_amount),
+    description: line.description,
+    ...withLineDimensions(line.dimensions),
+  }
+}
+
+/** A row the user adds: empty, on the debit side, with the settled document's bag. */
+export function blankEditableLine(documentDimensions?: LineDimensions | null): EditablePaymentLine {
+  return {
+    account_number: '',
+    side: 'debit',
+    amount: '',
+    description: '',
+    ...withLineDimensions(documentDimensions),
+  }
+}
+
+/** An amount field as a number; what does not parse counts as 0, as it books nothing. */
+function amountOf(line: EditablePaymentLine): number {
+  return parseAmountInput(line.amount) ?? 0
+}
+
+/**
+ * Debit equals credit and both are above zero, and every row has a
+ * four-digit account. A dialog keeps its confirm disabled until this holds.
+ */
+export function validateEditableLines(lines: readonly EditablePaymentLine[]): PaymentLinesValidation {
+  const { totalDebit, totalCredit, difference, balanced: isBalanced } = lineBalance(
+    lines.map((l) => (l.side === 'debit' ? { debit_amount: amountOf(l) } : { credit_amount: amountOf(l) })),
+  )
+  const accountInvalid = lines.some((l) => !/^\d{4}$/.test(l.account_number.trim()))
+  return {
+    isBalanced,
+    accountInvalid,
+    isValid: isBalanced && !accountInvalid,
+    diff: difference,
+    totalDebit,
+    totalCredit,
+  }
+}
+
+/** The request rows for what the grid holds, each row's bag included. */
+export function toLinePayload(lines: readonly EditablePaymentLine[]): PaymentLinePayload[] {
+  return lines.map((l) => {
+    const amount = roundOre(amountOf(l))
+    return {
+      account_number: l.account_number.trim(),
+      debit_amount: l.side === 'debit' ? amount : 0,
+      credit_amount: l.side === 'credit' ? amount : 0,
+      line_description: l.description?.trim() || undefined,
+      ...withLineDimensions(l.dimensions),
+    }
+  })
+}
+
+/**
+ * The Bokföring card's edit state. `rows` null: nothing edited, the route
+ * books its own default. `rows` set: the user's rows, which book. `open`:
+ * the edit grid is showing (Redigera) or not (Klart).
+ */
+export interface PaymentEditorState {
+  rows: EditablePaymentLine[] | null
+  open: boolean
+}
+
+export const UNEDITED_EDITOR_STATE: PaymentEditorState = { rows: null, open: false }
+
+/**
+ * Redigera / Klart. Opening resumes the user's rows, or starts from the
+ * preview's. Closing keeps the rows: they are what the user chose to book
+ * (crm#1550: Klart used to drop them and book the preview instead). Rows
+ * still equal to the preview's are dropped, so a preview that refetches
+ * later keeps following the dialog's inputs.
+ */
+export function toggleEditorState(
+  state: PaymentEditorState,
+  previewLines: readonly PaymentPreviewLine[],
+): PaymentEditorState {
+  const fromPreview = previewLines.map(previewToEditable)
+  if (!state.open) return { rows: state.rows ?? fromPreview, open: true }
+  const unchanged =
+    state.rows !== null &&
+    JSON.stringify(toLinePayload(state.rows)) === JSON.stringify(toLinePayload(fromPreview))
+  return { rows: unchanged ? null : state.rows, open: false }
+}

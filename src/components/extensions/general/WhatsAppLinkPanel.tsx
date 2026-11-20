@@ -15,7 +15,9 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2, ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
+import { LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -23,6 +25,7 @@ import {
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFormat } from '@/lib/hooks/use-format'
@@ -72,6 +75,8 @@ interface MintedCode {
 export function WhatsAppLinkPanel() {
   const t = useTranslations('settings_whatsapp')
   const { toast } = useToast()
+  // Linking, unmuting and the default company are refused for a read-only member; revoking is not.
+  const { canWrite, lockedTitle } = useViewerLock()
   const { companies } = useCompany()
   const { locale, formatDateLong } = useFormat()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -187,21 +192,17 @@ export function WhatsAppLinkPanel() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 px-1 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-        {t('loading')}
-      </div>
+      // The settings rows' shape while the status loads.
+      <LateReveal aria-label={t('loading')} className="space-y-3 py-3">
+        <Skeleton className="h-4 w-48" />
+        <Skeleton className="h-8 w-full rounded-lg" />
+      </LateReveal>
     )
   }
 
   if (loadFailed) {
     return (
-      <div className="px-1 py-6 text-sm text-muted-foreground">
-        {t('load_failed')}{' '}
-        <button type="button" className="underline" onClick={() => void fetchStatus()}>
-          {t('retry')}
-        </button>
-      </div>
+      <LoadError title={t('load_failed')} onRetry={() => void fetchStatus()} />
     )
   }
 
@@ -227,8 +228,8 @@ export function WhatsAppLinkPanel() {
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              disabled={isSaving}
+              disabled={!canWrite || isSaving}
+              title={lockedTitle}
               onClick={() => void unmute()}
             >
               {t('unmute_button')}
@@ -262,7 +263,7 @@ export function WhatsAppLinkPanel() {
           <SettingsSelect
             aria-label={t('default_company_label')}
             value={status.defaultCompanyId ?? ''}
-            disabled={isSaving}
+            disabled={!canWrite || isSaving}
             onChange={(event) => void saveDefaultCompany(event.target.value)}
           >
             <option value="">{t('default_company_none')}</option>
@@ -275,7 +276,7 @@ export function WhatsAppLinkPanel() {
         </SettingsRow>
 
         <SettingsRow label={t('disconnect_label')} borderless>
-          <Button type="button" variant="outline" size="sm" disabled={isSaving} onClick={() => void revoke()}>
+          <Button type="button" variant="outline" disabled={isSaving} onClick={() => void revoke()}>
             {t('revoke_button')}
           </Button>
           <SettingsRowNote>{t('revoke_note')}</SettingsRowNote>
@@ -298,11 +299,11 @@ export function WhatsAppLinkPanel() {
                 {minted.code}
               </span>
               {minted.waLink ? (
-                <Button asChild type="button" size="sm">
+                <Button asChild type="button">
                   <a href={minted.waLink} target="_blank" rel="noreferrer">
                     <WhatsAppMark size={16} className="mr-1.5" />
                     {t('open_whatsapp')}
-                    <ExternalLink className="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
+                    <ArrowTopRightOnSquareIcon className="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
                   </a>
                 </Button>
               ) : null}
@@ -321,7 +322,7 @@ export function WhatsAppLinkPanel() {
             </p>
           </div>
         ) : (
-          <Button type="button" loading={isMinting} onClick={() => void startLinking()}>
+          <Button type="button" loading={isMinting} disabled={!canWrite} title={lockedTitle} onClick={() => void startLinking()}>
             {t('connect_button')}
           </Button>
         )}
@@ -329,5 +330,3 @@ export function WhatsAppLinkPanel() {
     </SettingsGroup>
   )
 }
-
-export default WhatsAppLinkPanel

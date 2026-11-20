@@ -33,6 +33,7 @@ function makeInvoiceInput(overrides: Partial<{
   items: InvoiceItem[]
 }> = {}) {
   return {
+    id: 'inv-1',
     invoice_number: '2025-001',
     total: 12500,
     total_sek: null,
@@ -55,6 +56,7 @@ describe('proposePaymentLines', () => {
         invoice: makeInvoiceInput(),
         accountingMethod: 'accrual',
         entityType: 'enskild_firma',
+        paymentAccount: '1930',
       })
 
       expect(lines).toHaveLength(2)
@@ -96,6 +98,7 @@ describe('proposePaymentLines', () => {
         accountingMethod: 'accrual',
         entityType: 'enskild_firma',
         exchangeRateDifference: 500,
+        paymentAccount: '1930',
       })
 
       expect(lines).toHaveLength(3)
@@ -121,6 +124,7 @@ describe('proposePaymentLines', () => {
         accountingMethod: 'accrual',
         entityType: 'enskild_firma',
         exchangeRateDifference: -300,
+        paymentAccount: '1930',
       })
 
       expect(lines).toHaveLength(3)
@@ -136,14 +140,16 @@ describe('proposePaymentLines', () => {
         invoice: makeInvoiceInput(),
         accountingMethod: 'cash',
         entityType: 'enskild_firma',
+        paymentAccount: '1930',
       })
 
+      // The texts are buildInvoiceCashLines', as createInvoiceCashEntry books them.
       expect(lines).toHaveLength(3)
       expect(lines[0]).toEqual({
         account_number: '1930',
         debit_amount: '12500',
         credit_amount: '',
-        line_description: 'Betalning faktura 2025-001',
+        line_description: 'Kontantbetalning kundfaktura 2025-001',
       })
       expect(lines[1]).toEqual({
         account_number: '3001',
@@ -155,7 +161,7 @@ describe('proposePaymentLines', () => {
         account_number: '2611',
         debit_amount: '',
         credit_amount: '2500',
-        line_description: 'Utgående moms 25%',
+        line_description: 'Utgående moms 25% faktura 2025-001',
       })
     })
 
@@ -174,6 +180,7 @@ describe('proposePaymentLines', () => {
         }),
         accountingMethod: 'cash',
         entityType: 'enskild_firma',
+        paymentAccount: '1930',
       })
 
       // 1 debit + 2 revenue + 2 VAT = 5 lines
@@ -193,6 +200,7 @@ describe('proposePaymentLines', () => {
         invoice: makeInvoiceInput(),
         accountingMethod: 'cash',
         entityType: 'enskild_firma',
+        paymentAccount: '1930',
       })
 
       expect(lines[0].account_number).toBe('1930')
@@ -223,6 +231,7 @@ describe('proposePaymentLines: öresavrundning (3740)', () => {
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
       companyOreRounding: true,
+      paymentAccount: '1930',
     })
 
     expect(lines).toHaveLength(3)
@@ -242,6 +251,7 @@ describe('proposePaymentLines: öresavrundning (3740)', () => {
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
       companyOreRounding: true,
+      paymentAccount: '1930',
     })
 
     expect(lines).toHaveLength(3)
@@ -261,6 +271,7 @@ describe('proposePaymentLines: öresavrundning (3740)', () => {
       accountingMethod: 'cash',
       entityType: 'enskild_firma',
       companyOreRounding: true,
+      paymentAccount: '1930',
     })
 
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '1235' })
@@ -277,6 +288,7 @@ describe('proposePaymentLines: öresavrundning (3740)', () => {
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
       companyOreRounding: false,
+      paymentAccount: '1930',
     })
 
     expect(lines).toHaveLength(2)
@@ -288,6 +300,7 @@ describe('proposePaymentLines: öresavrundning (3740)', () => {
       invoice: { ...makeInvoiceInput({ total: 1234.75 }), ore_rounding: true },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
       companyOreRounding: false,
     })
 
@@ -301,6 +314,7 @@ describe('proposePaymentLines: öresavrundning (3740)', () => {
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
       companyOreRounding: true,
+      paymentAccount: '1930',
     })
 
     expect(lines).toHaveLength(2)
@@ -317,6 +331,7 @@ describe('proposePaymentLines: öresavrundning (3740)', () => {
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
       companyOreRounding: true,
+      paymentAccount: '1930',
     })
 
     expect(lines.every((l) => l.account_number !== '3740')).toBe(true)
@@ -333,6 +348,7 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
       },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines).toEqual([
@@ -373,6 +389,7 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
       invoice: { ...makeInvoiceInput({ total: 12500.4 }), paid_amount: 12500 },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines[0]).toMatchObject({ account_number: '3740', debit_amount: '0.4' })
@@ -385,6 +402,7 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
       companyOreRounding: true,
+      paymentAccount: '1930',
     })
     const withZeroPaid = proposePaymentLines({
       invoice: {
@@ -394,6 +412,7 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
       },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
       companyOreRounding: true,
     })
 
@@ -412,9 +431,63 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
       },
       accountingMethod: 'cash',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '12500' })
+  })
+
+  it('a foreign invoice proposes what 1510 carries, so the öre the rate misses is not stranded', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        total_sek: 1965.43,
+        carried_sek: 1965.44,
+      } as Parameters<typeof makeInvoiceInput>[0]),
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+    })
+    expect(lines.find((l) => l.account_number === '1510')?.credit_amount).toBe('1965.44')
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('1965.44')
+  })
+
+  it('a stated difference keeps the bank at what arrived: the ledger gap lands on 3960/7960', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        total_sek: 1965.43,
+        carried_sek: 1965.44,
+      } as Parameters<typeof makeInvoiceInput>[0]),
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+      exchangeRateDifference: 13.61,
+    })
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('1979.04')
+    expect(lines.find((l) => l.account_number === '1510')?.credit_amount).toBe('1965.44')
+    expect(lines.find((l) => l.account_number === '3960')?.credit_amount).toBe('13.6')
+  })
+
+  it('adds no zero line when the stated difference closes the ledger gap', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        total_sek: 1965.43,
+        carried_sek: 1965.44,
+      } as Parameters<typeof makeInvoiceInput>[0]),
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+      exchangeRateDifference: 0.01,
+    })
+    expect(lines.map((l) => l.account_number)).toEqual(['1930', '1510'])
   })
 
   it('foreign-currency partial keeps the legacy proposal', () => {
@@ -431,6 +504,7 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
       },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '10000' })
@@ -450,6 +524,7 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
       },
       accountingMethod: 'accrual',
       entityType: 'aktiebolag',
+      paymentAccount: '1930',
     })
 
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '8750' })
@@ -467,6 +542,7 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
       },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines).toHaveLength(2)
@@ -485,6 +561,7 @@ describe('proposePaymentLines: dimensions propagation (PR7)', () => {
       invoice: { ...makeInvoiceInput(), default_dimensions: bag },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines).toHaveLength(2)
@@ -510,6 +587,7 @@ describe('proposePaymentLines: dimensions propagation (PR7)', () => {
       },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
       exchangeRateDifference: 500,
     })
 
@@ -525,6 +603,7 @@ describe('proposePaymentLines: dimensions propagation (PR7)', () => {
       invoice: { ...makeInvoiceInput(), default_dimensions: bag },
       accountingMethod: 'cash',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines).toHaveLength(3)
@@ -539,6 +618,7 @@ describe('proposePaymentLines: dimensions propagation (PR7)', () => {
       invoice: makeInvoiceInput(),
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
     for (const line of withoutBag) {
       expect('dimensions' in line).toBe(false)
@@ -548,6 +628,7 @@ describe('proposePaymentLines: dimensions propagation (PR7)', () => {
       invoice: { ...makeInvoiceInput(), default_dimensions: {} },
       accountingMethod: 'cash',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
     for (const line of withEmptyBag) {
       expect('dimensions' in line).toBe(false)
@@ -571,6 +652,7 @@ describe('proposePaymentLines: foreign currency without an exchange rate', () =>
         invoice: makeInvoiceInput({ currency: 'EUR', exchange_rate: null }),
         accountingMethod: 'cash',
         entityType: 'enskild_firma',
+        paymentAccount: '1930',
       })
     ).toThrowError(expect.objectContaining({ code: 'INVOICE_FX_RATE_MISSING', currency: 'EUR' }))
   })
@@ -581,6 +663,7 @@ describe('proposePaymentLines: foreign currency without an exchange rate', () =>
         invoice: makeInvoiceInput({ currency: 'EUR', exchange_rate: 0 }),
         accountingMethod: 'cash',
         entityType: 'enskild_firma',
+        paymentAccount: '1930',
       })
     ).toThrowError(expect.objectContaining({ code: 'INVOICE_FX_RATE_MISSING' }))
   })
@@ -597,6 +680,7 @@ describe('proposePaymentLines: foreign currency without an exchange rate', () =>
       }),
       accountingMethod: 'cash',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('11500')
@@ -613,6 +697,7 @@ describe('proposePaymentLines: foreign currency without an exchange rate', () =>
       invoice: makeInvoiceInput({ currency: 'SEK', exchange_rate: null }),
       accountingMethod: 'cash',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('12500')
@@ -638,6 +723,7 @@ describe('proposePaymentLines: foreign currency without an exchange rate', () =>
       }),
       accountingMethod: 'cash',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('11500')
@@ -656,6 +742,7 @@ describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
       invoice: rotInvoice(),
       accountingMethod: 'accrual',
       entityType: 'aktiebolag',
+      paymentAccount: '1930',
     })
     expect(lines).toHaveLength(2)
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '8750' })
@@ -667,6 +754,7 @@ describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
       invoice: { ...makeInvoiceInput({ total: 12500.4 }), deduction_total: 3750 },
       accountingMethod: 'accrual',
       entityType: 'aktiebolag',
+      paymentAccount: '1930',
       companyOreRounding: true,
     })
     // Att betala on the PDF: round(12 500,40) - 3 750 = 8 750; 1510 clears
@@ -676,16 +764,20 @@ describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
     expect(lines.find((l) => l.account_number === '3740')?.debit_amount).toBe('0.4')
   })
 
-  it('cash method: bank gets the customer share, 1513 the avdrag, revenue + moms in full', () => {
+  it("cash method: bank gets the customer share, revenue + moms on the customer's share only", () => {
+    // Bokslutsmetoden's first step (ML 2023:200 7 kap. 16 §; Skatteverket,
+    // "Så fungerar rotavdraget"): the 3 750 kr avdrag (3 000 + 750 moms) is
+    // booked when Skatteverket pays, so no 1513 leg here.
     const lines = proposePaymentLines({
-      invoice: rotInvoice(),
+      invoice: { ...rotInvoice(), items: [makeItem({ deduction_type: 'rot' })] },
       accountingMethod: 'cash',
       entityType: 'aktiebolag',
+      paymentAccount: '1930',
     })
     expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('8750')
-    expect(lines.find((l) => l.account_number === '1513')?.debit_amount).toBe('3750')
-    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('10000')
-    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('2500')
+    expect(lines.find((l) => l.account_number === '1513')).toBeUndefined()
+    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('7000')
+    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('1750')
     const debits = lines.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0)
     const credits = lines.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0)
     expect(Math.round((debits - credits) * 100)).toBe(0)
@@ -697,6 +789,7 @@ describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
         invoice: { ...makeInvoiceInput({ currency: 'EUR', total_sek: 137500, exchange_rate: null }), deduction_total: 375 },
         accountingMethod: 'accrual',
         entityType: 'aktiebolag',
+        paymentAccount: '1930',
       }),
     ).toThrow()
   })
@@ -706,6 +799,7 @@ describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
       invoice: { ...makeInvoiceInput(), deduction_total: 0 },
       accountingMethod: 'accrual',
       entityType: 'aktiebolag',
+      paymentAccount: '1930',
     })
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '12500' })
   })
@@ -725,6 +819,7 @@ describe('proposePaymentLines: ROT/RUT invoice reopened by a reclaim (rot_rut_re
       },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
 
     expect(lines).toHaveLength(2)
@@ -742,8 +837,70 @@ describe('proposePaymentLines: ROT/RUT invoice reopened by a reclaim (rot_rut_re
       },
       accountingMethod: 'accrual',
       entityType: 'enskild_firma',
+      paymentAccount: '1930',
     })
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '17500' })
     expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '17500' })
+  })
+})
+
+describe('proposePaymentLines: öresavrundning the issue verifikat already booked (crm#1553)', () => {
+  const rows = (lines: Array<{ account_number: string; debit_amount: string; credit_amount: string }>) =>
+    lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('proposes the rounded payment against what 1510 carries, with no 3740', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 17176.25 }), ore_rounding: true, carried_sek: 17176 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+      companyOreRounding: true,
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', '17176', ''],
+      ['1510', '', '17176'],
+    ])
+  })
+
+  it('rounded up at issue: the same, 3 064 both legs', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 3063.75 }), ore_rounding: true, carried_sek: 3064 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+      companyOreRounding: true,
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', '3064', ''],
+      ['1510', '', '3064'],
+    ])
+  })
+
+  it('rounding off for the invoice: the exact total arrives and 3740 gives the issue öre back', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 17176.25 }), ore_rounding: false, carried_sek: 17176 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', '17176.25', ''],
+      ['1510', '', '17176'],
+      ['3740', '', '0.25'],
+    ])
+  })
+
+  it('the rest of a part-paid invoice: 1510 what it carries, the bank the remaining, 3740 the difference', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 17176.25 }), paid_amount: 5000, remaining_amount: 12176.25, carried_sek: 12176 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', '12176.25', ''],
+      ['1510', '', '12176'],
+      ['3740', '', '0.25'],
+    ])
   })
 })

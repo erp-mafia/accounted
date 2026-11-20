@@ -3,6 +3,7 @@
  * and tool _meta wiring. Does NOT re-test the underlying VAT computation
  * (covered by existing get_vat_report tests); only the widget plumbing.
  */
+import vm from 'node:vm'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
 import { uiWidgets, findUiWidget } from '../widgets'
@@ -81,6 +82,55 @@ async function parseResult(response: Response) {
   return json.result
 }
 
+/**
+ * Runs the widget's own script against a stub page, hands it one tool result
+ * and returns what it drew, with every kind of space read as a plain one.
+ */
+function drawWidget(report: Record<string, unknown>): string {
+  const html = findUiWidget('ui://vat-review/app.html')!.html
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1]
+  const elements = new Map<string, { innerHTML: string; textContent: string }>()
+  const element = (id: string) => {
+    if (!elements.has(id)) {
+      elements.set(id, {
+        innerHTML: '',
+        textContent: '',
+        addEventListener() {},
+        classList: { add() {}, remove() {} },
+      } as never)
+    }
+    return elements.get(id)!
+  }
+  let onMessage: ((event: { data: unknown }) => void) | undefined
+  const document = {
+    getElementById: element,
+    // esc() writes text into a detached element and reads its markup back.
+    createElement: () => {
+      let text = ''
+      return {
+        set textContent(value: string) {
+          text = String(value)
+        },
+        get innerHTML() {
+          return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        },
+      }
+    },
+    documentElement: { classList: { add() {}, remove() {} } },
+  }
+  const window = {
+    parent: { postMessage() {} },
+    addEventListener: (_type: string, handler: (event: { data: unknown }) => void) => {
+      onMessage = handler
+    },
+  }
+  vm.runInNewContext(script, { window, document, navigator: {}, setTimeout })
+  onMessage!({
+    data: { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: report } },
+  })
+  return element('content').innerHTML.replace(/[\u00a0\u202f]/g, ' ')
+}
+
 describe('VAT review widget', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -103,6 +153,45 @@ describe('VAT review widget', () => {
       const uris = uiWidgets.map((w) => w.uri)
       expect(uris).toContain('ui://receipt-matcher/app.html')
       expect(uris).toContain('ui://vat-review/app.html')
+    })
+  })
+
+  describe('the amount it states', () => {
+    // crm#1171's period: the öre sum is -6 140,10, filed it is -6 141. The
+    // app, the momsverifikat and the payment say 6 141; the widget said
+    // 6 140,10 from rutor.ruta49.
+    const report = {
+      period_label: 'Q3 2026',
+      rutor: { ruta10: 1153.86, ruta30: 4127.38, ruta48: 11421.34, ruta49: -6140.1 },
+      net_filed: -6141,
+      warnings: [],
+    }
+
+    it('is the net as filed, in the headline and on row 49', () => {
+      const drawn = drawWidget(report)
+      expect(drawn).toContain('<div class="summary-label">Moms att få tillbaka</div>')
+      expect(drawn).toContain('<div class="summary-amount refund">6 141,00 kr</div>')
+      expect(drawn).toMatch(/<td class="ruta-code">49<\/td>.*?<td class="amount">[-−]6 141,00 kr<\/td>/)
+    })
+
+    it('prints the öre sum only as the note that explains the difference', () => {
+      const drawn = drawWidget(report)
+      expect(drawn.split('6 140,10 kr')).toHaveLength(2)
+      expect(drawn).toContain('<p class="ore-note">')
+      expect(drawn).toContain('Exakt i ören: 6 140,10 kr.')
+    })
+
+    it('states the öre sum for a result stored before net_filed existed, never zero', () => {
+      const { net_filed: _netFiled, ...stored } = report
+      const drawn = drawWidget(stored)
+      expect(drawn).toContain('<div class="summary-label">Moms att få tillbaka</div>')
+      expect(drawn).toContain('<div class="summary-amount refund">6 140,10 kr</div>')
+      expect(drawn).not.toContain('ore-note')
+    })
+
+    it('leaves the note out when nothing was dropped', () => {
+      const drawn = drawWidget({ ...report, rutor: { ...report.rutor, ruta49: -6141 } })
+      expect(drawn).not.toContain('ore-note')
     })
   })
 
@@ -190,7 +279,9 @@ describe('VAT review widget', () => {
         )
       ).json()
       expect(withUi.result.isError).toBeUndefined()
-      expect(withUi.result._meta).toEqual({ ui: { resourceUri: 'ui://vat-review/app.html' } })
+      // _meta also carries the company echo on every company-scoped call;
+      // the UI directive is what this test pins.
+      expect(withUi.result._meta).toMatchObject({ ui: { resourceUri: 'ui://vat-review/app.html' } })
 
       const withoutUi = await (
         await handleMcpRequest(
@@ -201,7 +292,7 @@ describe('VAT review widget', () => {
         )
       ).json()
       expect(withoutUi.result.isError).toBeUndefined()
-      expect(withoutUi.result._meta).toBeUndefined()
+      expect(withoutUi.result._meta?.ui).toBeUndefined()
     })
 
     it('refuses an external VAT report while the database holds an unfinished import', async () => {

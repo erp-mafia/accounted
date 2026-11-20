@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { currentAppVersion } from '@/lib/reports/app-version'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Program version log (`app_releases`, migration 20260901103000).
@@ -62,17 +63,28 @@ export function resetAppReleaseGuardForTests(): void {
   recordedVersion = null
 }
 
-/** Versions first seen inside [fromTs, toTs], oldest first. Readable by every signed-in user. */
+/**
+ * Versions first seen inside [fromTs, toTs], oldest first. Readable by every
+ * signed-in user. Paged: a fiscal year is thousands of versions (main takes
+ * ~570 merges a month), and one unpaged read stopped at PostgREST's 1 000-row
+ * cap without an error.
+ */
 export async function fetchAppReleases(
   supabase: Pick<SupabaseClient, 'from'>,
   window: { fromTs: string; toTs: string },
 ): Promise<AppReleaseRow[]> {
-  const { data, error } = await supabase
-    .from('app_releases')
-    .select('version, first_seen_at, source')
-    .gte('first_seen_at', window.fromTs)
-    .lte('first_seen_at', window.toTs)
-    .order('first_seen_at', { ascending: true })
-  if (error) throw new Error(`Failed to fetch app releases: ${error.message}`)
-  return (data as AppReleaseRow[] | null) ?? []
+  try {
+    return await fetchAllRows<AppReleaseRow>(({ from, to }) =>
+      supabase
+        .from('app_releases')
+        .select('version, first_seen_at, source')
+        .gte('first_seen_at', window.fromTs)
+        .lte('first_seen_at', window.toTs)
+        .order('first_seen_at', { ascending: true })
+        .order('version', { ascending: true })
+        .range(from, to),
+    )
+  } catch (err) {
+    throw new Error(`Failed to fetch app releases: ${(err as Error).message}`)
+  }
 }

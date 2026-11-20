@@ -46,13 +46,13 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
-import {
-  explainVatTreatment,
-  getPermittedVatRates,
-  getVatRules,
-  type InvoiceVatWarning,
-} from '@/lib/invoices/vat-rules'
-import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
+import type { InvoiceVatWarning } from '@/lib/invoices/vat-rules'
+import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
+import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
+import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
 import type { Invoice, InvoiceDocumentType } from '@/types'
@@ -99,9 +99,10 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response: it does not retry only the failed items.',
     'Passing all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist; omit the flag (or pass false).',
-    'Each per-item invoice still goes through the same VAT-rule validation as POST /invoices. A mismatched per-item vat_rate produces a per-item failure, not a whole-batch failure.',
+    'Each item is built exactly like POST /invoices: the same fields (line discounts, text rows, articles, posting accounts, periodisering, ROT/RUT, per-invoice VAT treatment, payee account) and the same validation and error codes. A failing item is a per-item failure, not a whole-batch failure.',
     'Currency conversion is best-effort PER ITEM. A failed Riksbanken fetch leaves that item\'s SEK columns null but does NOT fail the item.',
     'Quotes (document_type: quote) are refused per item as VALIDATION_ERROR: a quote carries its own OF-number, valid_until and quote_status. Create quotes one at a time with POST /invoices.',
+    'Self-billing invoices (is_self_billed: true) are refused per item as VALIDATION_ERROR: they are booked at once, not drafted. Register them one at a time with POST /invoices.',
   ],
   example: {
     request: {
@@ -134,7 +135,9 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'invoices:write',
+  // Drafts only (quotes and self-billed sales are refused per item):
+  // invoices:draft, which invoices:write includes.
+  scope: 'invoices:draft',
   risk: 'medium',
   idempotent: true,
   reversible: true,
@@ -153,13 +156,37 @@ interface ResultItem {
 }
 
 /**
- * Create one invoice (the bulk-create item path). Mirrors the inline logic
- * in POST /invoices/route.ts. Returns a ResultItem instead of an HTTP
+ * A per-item failure for a code the builder or the payee check returned,
+ * with the code's registered English message. The VAT rule violation keeps
+ * the snake_case details POST /invoices documents for it (the builder emits
+ * camelCase, the internal-route convention).
+ */
+function buildFailure(code: string, details?: Record<string, unknown>): NonNullable<ResultItem['error']> {
+  const wireDetails =
+    code === 'INVOICE_CREATE_VAT_RULE_VIOLATION' && details
+      ? {
+          attempted_rate: details.attemptedRate,
+          allowed_rates: details.allowedRates,
+          customer_type: details.customerType,
+        }
+      : details
+  return {
+    code,
+    message: getErrorEntry(code)?.message_en ?? 'The invoice was not created: see the error code and details.',
+    ...(wireDetails !== undefined ? { details: wireDetails } : {}),
+  }
+}
+
+/**
+ * Create one invoice (the bulk-create item path). Builds the rows with the
+ * same buildInvoiceWriteData + resolveInvoicePayeeChoice as POST
+ * /invoices/route.ts, so a bulk-created invoice is the invoice POST /invoices
+ * creates from the same body. Returns a ResultItem instead of an HTTP
  * response so the caller can aggregate.
  *
- * TODO: extract POST /invoices's create logic into a shared lib function
- * so this and the per-call POST share one implementation. Tracked as
- * cross-route cleanup.
+ * The insert, rollback and event below are a second copy of the same steps
+ * in POST /invoices (src/app/api/invoices/route.ts): a change to one belongs
+ * in the other.
  */
 async function createOneInvoice(
   supabase: SupabaseClient,
@@ -191,14 +218,32 @@ async function createOneInvoice(
     }
   }
 
-  // Customer fetch (scoped to company). We use the DB-returned `customer.id`
-  // (not `input.customer_id`) downstream as defense in depth: the .eq()
-  // pair already enforces company scoping, but echoing the trusted value
-  // from the query makes the guarantee explicit at the call site and
-  // immune to refactoring drift.
+  // A self-billing invoice (mottagen självfaktura) is not a draft: POST
+  // /invoices books it at once with the counterparty's number. Creating a
+  // draft here instead would hand the caller something it did not ask for.
+  if (input.is_self_billed) {
+    return {
+      ok: false,
+      request_index: index,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Self-billing invoices are not supported by bulk-create.',
+        details: {
+          field: 'is_self_billed',
+          message: 'Self-billing invoices are booked at once; register each one with POST /invoices.',
+        },
+      },
+    }
+  }
+
+  // Customer fetch (scoped to company), the same columns POST /invoices
+  // reads. The builder writes the DB-returned `customer.id`, not
+  // `input.customer_id` blindly: the .eq() pair already enforces company
+  // scoping, and the builder's customer type makes every column it reads a
+  // required key, so a column dropped from this literal no longer compiles.
   const { data: customer } = await supabase
     .from('customers')
-    .select('id, customer_type, vat_number, vat_number_validated, country')
+    .select('id, customer_type, vat_number, vat_number_validated, country, invoice_reference, invoice_marking')
     .eq('company_id', companyId)
     .eq('id', input.customer_id)
     .maybeSingle()
@@ -209,132 +254,48 @@ async function createOneInvoice(
       error: { code: 'INVOICE_CUSTOMER_NOT_FOUND', message: 'Customer not found in this company.' },
     }
   }
-  const verifiedCustomerId = (customer as { id: string }).id
 
-  const vatRules = getVatRules(
-    customer.customer_type as Parameters<typeof getVatRules>[0],
-    customer.vat_number_validated,
-    customer.country,
-  )
-  // Gate on the PERMITTED set, not the picker default, exactly like
-  // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
-  // (hotel/restaurang 12%, persontransport and event admission 6%,
-  // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
-  // foreign business customer. The default is still 0% (vatRules.rate is the
-  // fallback below), so a Swedish rate only lands here when sent explicitly.
-  const permittedRates = getPermittedVatRates(
-    customer.customer_type as Parameters<typeof getPermittedVatRates>[0],
-    customer.vat_number_validated,
-    customer.country,
-  )
-  const allowedRates = new Set(permittedRates.map((r) => r.rate))
-
-  // VAT registration gate, mirroring buildInvoiceWriteData (issue #1719): a
-  // non-momsregistrerad company books no output VAT, so every line is forced
-  // to 0% (momsfri) server-side no matter what the batch payload carries,
-  // explicitly or via the customer-default fallback below. 0% is a permitted
-  // rate for every customer type, so the allowedRates gate still passes.
-  const { data: vatSettings } = await supabase
-    .from('company_settings')
-    .select('vat_registered')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  const notVatRegistered = vatSettings?.vat_registered === false
-  if (notVatRegistered && documentType !== 'delivery_note') {
-    for (const item of input.items) item.vat_rate = 0
-  }
-
-  const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
-  let vatAmount = 0
-  if (documentType !== 'delivery_note') {
-    for (const item of input.items) {
-      const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-      if (!allowedRates.has(itemRate)) {
-        return {
-          ok: false,
-          request_index: index,
-          error: {
-            code: 'INVOICE_CREATE_VAT_RULE_VIOLATION',
-            message: 'A line item carries a VAT rate not allowed for the customer type.',
-            details: {
-              attempted_rate: itemRate,
-              allowed_rates: Array.from(allowedRates),
-              customer_type: customer.customer_type,
-            },
-          },
-        }
-      }
-      const lineTotal = item.quantity * item.unit_price
-      vatAmount += Math.round((lineTotal * itemRate) / 100 * 100) / 100
-    }
-  }
-  const total = documentType === 'delivery_note' ? 0 : subtotal + vatAmount
-  const uniqueRates = new Set(input.items.map((it) => it.vat_rate ?? vatRules.rate))
-  const isMixedRate = uniqueRates.size > 1
-  const headerVatRate = documentType === 'delivery_note'
-    ? 0
-    : isMixedRate
-      ? null
-      : (uniqueRates.values().next().value ?? vatRules.rate)
-
-  // Currency conversion (best-effort per item).
-  let exchangeRate: number | null = null
-  let exchangeRateDate: string | null = null
-  let subtotalSek: number | null = null
-  let vatAmountSek: number | null = null
-  let totalSek: number | null = null
-  if (input.currency !== 'SEK') {
-    try {
-      const rate = await fetchExchangeRate(input.currency)
-      if (rate) {
-        exchangeRate = rate.rate
-        exchangeRateDate = rate.date
-        subtotalSek = convertToSEK(subtotal, exchangeRate)
-        vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-        totalSek = convertToSEK(total, exchangeRate)
-      }
-    } catch (err) {
-      log.warn('bulk-create: exchange-rate fetch failed for item', err as Error, {
-        request_index: index,
-        currency: input.currency,
-      })
-    }
-  }
-
-  const itemRows = input.items.map((item, sortOrder) => {
-    const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-    const lineTotal = item.quantity * item.unit_price
-    const itemVat = documentType === 'delivery_note'
-      ? 0
-      : Math.round((lineTotal * itemRate) / 100 * 100) / 100
-    return {
-      sort_order: sortOrder,
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      line_total: lineTotal,
-      vat_rate: itemRate,
-      vat_amount: itemVat,
-      // Dimensions PR7: per-item bag, merged over the invoice's
-      // default_dimensions on the revenue line when the JE posts at :send.
-      dimensions: item.dimensions ?? {},
-    }
+  // The shared write-builder POST /invoices and the dashboard use: VAT rule
+  // gating, line discounts, text rows, article and posting-account checks,
+  // periodisering, server-side ROT/RUT and personnummer encryption, the
+  // per-invoice VAT treatment and the taxable-event exchange rate. This door
+  // used to compute its own rows from part of the schema and silently drop
+  // the rest, so a discounted line was invoiced at full price.
+  const build = await buildInvoiceWriteData({
+    supabase,
+    companyId,
+    // personal_number is withheld (PII), as on POST /invoices: a v1 caller
+    // sends deduction_personnummer for a ROT/RUT line.
+    customer: { ...customer, personal_number: null },
+    documentType,
+    // Er referens and Märkning: the request's, else the customer card's
+    // Fakturareferens (crm#1200) and Märkning (crm#1477), as on POST /invoices.
+    input: {
+      ...input,
+      your_reference: yourReferenceForNewInvoice(input.your_reference, customer) ?? undefined,
+      invoice_marking: invoiceMarkingForNewInvoice(input.invoice_marking, customer) ?? undefined,
+    },
   })
+  if (!build.ok) {
+    if ('dbError' in build) {
+      log.error('bulk-create: invoice build lookup failed', build.dbError as Error, { request_index: index })
+      const structured = getStructuredError(build.dbError)
+      return { ok: false, request_index: index, error: { code: structured.code, message: structured.message_en } }
+    }
+    return { ok: false, request_index: index, error: buildFailure(build.code, build.details) }
+  }
+  const { invoiceFields, items: itemRows } = build
+  const warningsField = build.warnings.length > 0 ? { warnings: build.warnings } : {}
 
-  // Why the treatment is what it is (#2749, #2558): same helper as the
-  // builder, read off the stored rates. Nothing to explain when the seller
-  // charges no VAT or the document carries none.
-  const warnings =
-    notVatRegistered || documentType === 'delivery_note'
-      ? []
-      : explainVatTreatment(
-          customer as Parameters<typeof explainVatTreatment>[0],
-          itemRows.map((row) => row.vat_rate),
-        )
-  const warningsField = warnings.length > 0 ? { warnings } : {}
+  const payeeChoice = await resolveInvoicePayeeChoice(supabase, companyId, input.currency, input.payment_cash_account_id)
+  if (!payeeChoice.ok) {
+    return { ok: false, request_index: index, error: buildFailure(payeeChoice.code, payeeChoice.details) }
+  }
 
   if (dryRun) {
+    // Never echo the encrypted personnummer blob in a preview; last4 is the
+    // display-safe representation, as on POST /invoices.
+    const { deduction_personnummer_encrypted: _omit, ...previewFields } = invoiceFields
     return {
       ok: true,
       request_index: index,
@@ -342,15 +303,9 @@ async function createOneInvoice(
       data: {
         preview: {
           invoice_number: null,
-          customer_id: verifiedCustomerId,
-          invoice_date: input.invoice_date,
-          due_date: input.due_date,
           status: 'draft' as const,
-          currency: input.currency,
-          subtotal: documentType === 'delivery_note' ? 0 : subtotal,
-          vat_amount: vatAmount,
-          total,
-          document_type: documentType,
+          ...previewFields,
+          ...payeeChoice.fields,
           items: itemRows,
         },
       },
@@ -363,35 +318,10 @@ async function createOneInvoice(
     .insert({
       user_id: userId,
       company_id: companyId,
-      customer_id: verifiedCustomerId,
       invoice_number: null,
-      invoice_date: input.invoice_date,
-      due_date: input.due_date,
-      delivery_date: input.delivery_date ?? null,
-      currency: input.currency,
-      exchange_rate: exchangeRate,
-      exchange_rate_date: exchangeRateDate,
-      subtotal: documentType === 'delivery_note' ? 0 : subtotal,
-      subtotal_sek: documentType === 'delivery_note' ? null : subtotalSek,
-      vat_amount: vatAmount,
-      vat_amount_sek: documentType === 'delivery_note' ? null : vatAmountSek,
-      total,
-      total_sek: documentType === 'delivery_note' ? null : totalSek,
-      remaining_amount: documentType === 'invoice' ? total : 0,
-      // Header VAT fields mirror buildInvoiceWriteData: a not-VAT-registered
-      // company stamps the sale as momsfri (treatment 'exempt', no ruta, no
-      // reverse-charge notation); every line rate is already zeroed above.
-      vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
-      vat_rate: headerVatRate,
-      moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
-      reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
-      your_reference: input.your_reference,
-      our_reference: input.our_reference,
-      notes: input.notes,
-      document_type: documentType,
-      // Dimensions PR7: invoice-level bag; the :send JE generator applies it
-      // to every line (items[].dimensions win per key).
-      default_dimensions: input.default_dimensions ?? {},
+      ...invoiceFields,
+      payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+      payment_details: payeeChoice.fields.payment_details,
     })
     .select(INVOICE_BULK_RESPONSE_COLUMNS)
     .single()
@@ -505,16 +435,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // the worst-case latency bounded.
     const results: ResultItem[] = []
     for (let i = 0; i < body.invoices.length; i++) {
-      const item = await createOneInvoice(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
-        i,
-        body.invoices[i],
-        ctx.dryRun,
-        ctx.log,
-      )
-      results.push(item)
+      // An unexpected throw (a payee or encryption failure) fails its own
+      // item: letting it escape would answer 500 for a batch whose earlier
+      // items are already inserted, and a retry would create them twice.
+      try {
+        results.push(
+          await createOneInvoice(ctx.supabase, ctx.companyId!, ctx.userId, i, body.invoices[i], ctx.dryRun, ctx.log),
+        )
+      } catch (err) {
+        ctx.log.error('bulk-create: item failed unexpectedly', err as Error, { request_index: i })
+        const structured = getStructuredError(err)
+        results.push({ ok: false, request_index: i, error: { code: structured.code, message: structured.message_en } })
+      }
     }
 
     const summary = {

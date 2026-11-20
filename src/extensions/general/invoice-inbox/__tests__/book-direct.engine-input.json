@@ -1,0 +1,254 @@
+[
+  {
+    "name": "a receipt without a bank row books the inbox item",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kvitto från Spotify",
+          "source_type": "inbox_item",
+          "source_id": "00000000-0000-4000-8000-0000000b0001",
+          "notes": "Deltagare: Anna, Per. Syfte: kundmöte",
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 79.2,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 19.8,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 99
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-0",
+      "error": null
+    }
+  },
+  {
+    "name": "a receipt booked against the bank row the caller names",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kvitto från Spotify",
+          "source_type": "bank_transaction",
+          "source_id": "00000000-0000-4000-8000-0000000a0002",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0002",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-20",
+              "amount": -99,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 79.2,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 19.8,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 99
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-1",
+      "error": null
+    }
+  },
+  {
+    "name": "a receipt whose item is already matched to a bank row",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kvitto från Spotify",
+          "source_type": "inbox_item",
+          "source_id": "00000000-0000-4000-8000-0000000b0003",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0003",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-20",
+              "amount": -99,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 79.2,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 19.8,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 99
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-2",
+      "error": null
+    }
+  },
+  {
+    "name": "the bank line link loses to a concurrent booking: the verifikat is reversed",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kvitto från Spotify",
+          "source_type": "bank_transaction",
+          "source_id": "00000000-0000-4000-8000-0000000a0004",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0004",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-20",
+              "amount": -99,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 79.2,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 19.8,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 99
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-3"
+      ]
+    ],
+    "outcome": {
+      "status": 409,
+      "journal_entry_id": null,
+      "error": "TX_CATEGORIZE_RACE"
+    }
+  },
+  {
+    "name": "another booking claimed the item first: the verifikat is reversed",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kvitto från Spotify",
+          "source_type": "inbox_item",
+          "source_id": "00000000-0000-4000-8000-0000000b0005",
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 79.2,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 19.8,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 99
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-4"
+      ]
+    ],
+    "outcome": {
+      "status": 409,
+      "journal_entry_id": null,
+      "error": "INBOX_ITEM_ALREADY_BOOKED"
+    }
+  }
+]

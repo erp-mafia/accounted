@@ -96,7 +96,7 @@ Additionally:
 ## 5. Digital filing and iXBRL
 
 ### Availability
-Digital filing available since 2018 (K2 AB) and 2019 (K3 AB). Remains **voluntary**; paper filing still accepted (post to Bolagsverket Årsredovisningar, SE-851 98 Sundsvall).
+Digital filing available since 2018 for K2 AB; for K3 AB since December 2018, when the final K3 taxonomy for aktiebolag was published (Bolagsverket's K3 taxonomy guide), and for K3 koncernredovisning since February 2021. Remains **voluntary**; paper filing still accepted (post to Bolagsverket Årsredovisningar, SE-851 98 Sundsvall).
 
 Currently supported only for **aktiebolag using K2 or K3**. Not yet available for: handelsbolag, ekonomiska föreningar, stiftelser.
 
@@ -113,7 +113,8 @@ Currently supported only for **aktiebolag using K2 or K3**. Not yet available fo
 Developed by BFN, Skatteverket, Finansinspektionen, SCB, Bolagsverket, FAR. Published at **taxonomier.se**.
 - K2 taxonomies (aktiebolag, ekonomiska föreningar, handels- och kommanditbolag, filialer): current FINAL version **2024-09-12**
 - K3 taxonomies (årsredovisning and koncernredovisning, aktiebolag): current FINAL version **2021-10-31**
-- Taxonomier.se announced updates to the latest års- and koncernredovisning taxonomies on 2026-09-09. Check taxonomier.se for the version to use for a given FY.
+- Version **2026-08-31** (updates published 2026-09-09, arkitekturbeskrivning 2.9): normgivningsrelaterade updates of the K2 årsredovisning taxonomy, minor adjustments to K3 års- och koncernredovisning, new INK2-4 versions and BAS 2026. Check taxonomier.se for the version to use for a given FY.
+- Upload types in the filing API (lämna in årsredovisning 2.1, `typ`): `arsredovisning_komplett` (with the revisionsberättelse in the same file, or none required), `arsredovisning_kompletteras` (the årsredovisning now, the revisionsberättelse as a separate file), and `revisionsberattelse` (that separate file).
 
 ### Filing process
 1. Software generates iXBRL file and uploads to Bolagsverket's "Eget utrymme"
@@ -138,7 +139,7 @@ Opt-out must be registered in bolagsordning. For parent companies, assessed at G
 ### Always-audited entities
 Publika AB, börsnoterade, banks, insurance companies, SVB-bolag, advokataktiebolag, municipally owned AB.
 
-Thresholds unchanged since 2010. SOU 2021:60 recommended raising them but there is no legislative change as of September 2026; the ÅRL size thresholds (ÅRL 1:3) are also unchanged. The inquiry on company categories in ÅRL (Ju 2025:11, dir. 2025:49) is due to report by 2026-09-29.
+Thresholds unchanged since 2010. SOU 2021:60 recommended raising them but there is no legislative change as of September 2026; the ÅRL size thresholds (ÅRL 1:3) are also unchanged. The inquiry on company categories in ÅRL (Ju 2025:11) reported in SOU 2026:59 (2026-09-30): it proposes a new category mikroföretag (medelantal anställda 3, balansomslutning 1.5 MSEK, nettoomsättning 3 MSEK) with fewer disclosures, and reliefs for medelstora företag, to apply from the FY beginning after 2027-12-31. A proposal, not law.
 
 ---
 

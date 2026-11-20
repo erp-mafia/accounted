@@ -1,40 +1,31 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { SIE_RESERVED_DIMENSIONS } from '@/lib/reports/sie-export'
+import { isValidRegistryCode } from './sie-object-balances'
 import type { ParsedSIEFile } from './types'
 
 /**
  * Registry-side of lossless SIE dimension import (dimensions plan PR5).
  *
  * Collects every dimension the file mentions: declared (#DIM/#UNDERDIM),
- * valued (#OBJEKT), or merely referenced by a #TRANS object list: and
- * inserts the missing `dimensions`/`dimension_values` rows. Existing rows
- * are NEVER touched (ON CONFLICT DO NOTHING): an import must not rename a
- * user's dimensions or values. Undeclared reserved numbers synthesize their
+ * valued (#OBJEKT), or merely referenced by a #TRANS object list. The SIE
+ * job (sie-job-preparation.ts) inserts the missing `dimensions`/
+ * `dimension_values` rows from this usage. Existing rows are NEVER touched
+ * (ON CONFLICT DO NOTHING): an import must not rename a user's dimensions
+ * or values. Undeclared reserved numbers synthesize their
  * SIE-standard names (1 Kostnadsställe, 2→1 Kostnadsbärare, 6 Projekt, 7-10);
  * unknown customs fall back to "Dimension N", exactly mirroring the export's
  * orphan synthesis so a parse→import→re-export round-trip is lossless.
  *
- * Rows created here carry `created_by_import_id` so `undo_sie_import` can
- * remove registry values that the undone import introduced (and that nothing
- * else references): the lockstep the plan requires.
+ * Rows the job creates carry `created_by_import_id` as provenance. Undoing the
+ * import keeps them: the undo every door runs (request_sie_import_undo, then
+ * undo_sie_import_chunk) is a batch storno, so the imported verifikat stay in
+ * the ledger as reversed and their reversal lines copy each line's
+ * dimensions. Both still reference these codes, and the registry must keep
+ * declaring them (SIE #OBJEKT, report column names). The registry cleanup
+ * belonged to the older delete-based undo_sie_import (migration
+ * 20260702154500), which no door calls any more; only reset_fiscal_year
+ * still removes import-created rows that no posted or reversed line
+ * references.
  */
-
-export interface DimensionImportSummary {
-  /** dimensions rows actually inserted (not pre-existing). */
-  dimensionsCreated: number
-  /** dimension_values rows actually inserted (not pre-existing). */
-  valuesCreated: number
-  /** #TRANS lines in the file carrying an object list. */
-  taggedLines: number
-  /** True when this import flipped company_settings.dimensions_enabled on. */
-  toggleEnabled: boolean
-  warnings: string[]
-}
-
-/** dimension_values.code DB CHECK: 1-40 chars, none of `"{}`. */
-function isValidRegistryCode(code: string): boolean {
-  return code.length >= 1 && code.length <= 40 && !/["{}]/.test(code)
-}
 
 export function collectSIEDimensionUsage(parsed: ParsedSIEFile): {
   dims: Map<number, { name: string; parent?: number }>
@@ -96,121 +87,16 @@ export function collectSIEDimensionUsage(parsed: ParsedSIEFile): {
       }
     }
   }
+  // Objects referenced by #OIB/#OUB (issue #3313): the IB entry tags its
+  // lines with them, so the registry must know them before it posts. A code
+  // the registry cannot hold is left out here rather than reported as
+  // invalid: the IB split skips that row with its own preview note, and an
+  // object balance must never fail an import that ignored it until now.
+  for (const row of [...(parsed.objectOpeningBalances ?? []), ...(parsed.objectClosingBalances ?? [])]) {
+    const dimNo = Number(row.dimNo)
+    if (!Number.isInteger(dimNo) || dimNo < 1 || !isValidRegistryCode(row.code)) continue
+    ensureValue(dimNo, row.code)
+  }
 
   return { dims, values, taggedLines, invalidCodes }
-}
-
-/**
- * Upsert the registry rows the file needs and flip dimensions_enabled on.
- * Returns null when the file carries no dimension data at all: companies
- * without dimensions see literally nothing changed.
- */
-export async function importDimensionRegistry(
-  supabase: SupabaseClient,
-  companyId: string,
-  parsed: ParsedSIEFile,
-  importId: string | null
-): Promise<DimensionImportSummary | null> {
-  const { dims, values, taggedLines, invalidCodes } = collectSIEDimensionUsage(parsed)
-  if (dims.size === 0 && values.size === 0 && taggedLines === 0) {
-    return null
-  }
-
-  const warnings: string[] = []
-  if (invalidCodes.size > 0) {
-    warnings.push(
-      `${invalidCodes.size} dimensionskoder kunde inte registreras (ogiltig längd eller tecken): ` +
-        [...invalidCodes].slice(0, 5).join(', ') +
-        (invalidCodes.size > 5 ? '…' : '')
-    )
-  }
-
-  // Seed system dims 1/6 (idempotent) before touching the registry.
-  await supabase.rpc('ensure_company_dimensions', { p_company_id: companyId })
-
-  // ── dimensions rows: insert missing, never rename existing ────
-  let dimensionsCreated = 0
-  if (dims.size > 0) {
-    const dimInserts = [...dims.entries()].map(([sieDimNo, info]) => ({
-      company_id: companyId,
-      sie_dim_no: sieDimNo,
-      parent_sie_dim_no: info.parent ?? null,
-      name: info.name,
-      // Dim 1 resets annually per SIE convention; projekt (6) accumulates.
-      // ensure_company_dimensions already seeded 1/6 with the right flags,
-      // so this only matters for custom dims: default to resetting.
-      resets_annually: sieDimNo !== 6,
-      is_system: false,
-      created_by_import_id: importId,
-    }))
-    const { data: insertedDims, error: dimError } = await supabase
-      .from('dimensions')
-      .upsert(dimInserts, { onConflict: 'company_id,sie_dim_no', ignoreDuplicates: true })
-      .select('id')
-    if (dimError) {
-      warnings.push(`Dimensionsregistret kunde inte uppdateras: ${dimError.message}`)
-      return { dimensionsCreated: 0, valuesCreated: 0, taggedLines, toggleEnabled: false, warnings }
-    }
-    dimensionsCreated = insertedDims?.length ?? 0
-  }
-
-  // ── dimension_values rows ───────────────────────────────────────
-  let valuesCreated = 0
-  if (values.size > 0) {
-    const { data: dimRows, error: readError } = await supabase
-      .from('dimensions')
-      .select('id, sie_dim_no')
-      .eq('company_id', companyId)
-      .in('sie_dim_no', [...new Set([...values.values()].map((v) => v.sieDimNo))])
-    if (readError || !dimRows) {
-      warnings.push(`Dimensionsvärden kunde inte registreras: ${readError?.message ?? 'okänt fel'}`)
-      return { dimensionsCreated, valuesCreated: 0, taggedLines, toggleEnabled: false, warnings }
-    }
-    const dimIdByNo = new Map(dimRows.map((d) => [Number(d.sie_dim_no), d.id as string]))
-
-    const valueInserts = [...values.values()]
-      .filter((v) => dimIdByNo.has(v.sieDimNo))
-      .map((v) => ({
-        company_id: companyId,
-        dimension_id: dimIdByNo.get(v.sieDimNo)!,
-        code: v.code,
-        name: v.name,
-        created_by_import_id: importId,
-      }))
-
-    if (valueInserts.length > 0) {
-      const { data: insertedValues, error: valueError } = await supabase
-        .from('dimension_values')
-        .upsert(valueInserts, {
-          onConflict: 'company_id,dimension_id,code',
-          ignoreDuplicates: true,
-        })
-        .select('id')
-      if (valueError) {
-        warnings.push(`Dimensionsvärden kunde inte registreras: ${valueError.message}`)
-        return { dimensionsCreated, valuesCreated: 0, taggedLines, toggleEnabled: false, warnings }
-      }
-      valuesCreated = insertedValues?.length ?? 0
-    }
-  }
-
-  // ── Auto-enable the toggle with a notice ────────────────────────
-  // The column comment pre-authorizes this: "SIE import that finds dimensions
-  // may flip this on with a notice." Idempotent; only reported as flipped
-  // when it actually changed.
-  let toggleEnabled = false
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('dimensions_enabled')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (settings && settings.dimensions_enabled !== true) {
-    const { error: toggleError } = await supabase
-      .from('company_settings')
-      .update({ dimensions_enabled: true })
-      .eq('company_id', companyId)
-    if (!toggleError) toggleEnabled = true
-  }
-
-  return { dimensionsCreated, valuesCreated, taggedLines, toggleEnabled, warnings }
 }

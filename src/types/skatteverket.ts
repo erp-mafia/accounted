@@ -9,6 +9,7 @@
  * If skatteverket is disabled, the API returns 503 and the UI just sees
  * an empty list: the types remain valid descriptors of the schema.
  */
+import type { RotRutPayoutLeg } from '@/lib/bookkeeping/rot-rut-entries'
 
 /** Row shape for the `skattekonto_transactions` table (DB → app). */
 export interface StoredSkattekontoTransaction {
@@ -67,6 +68,20 @@ export interface SkattekontoBookingSuggestion {
   account: string
   account_name?: string | null
   label?: string | null
+  /**
+   * A VAT refund that clears 1650 within 1 kr: the refund minus the
+   * receivable, booked as a third line on 3740 (positive = credit 3740). The
+   * counter account then takes the receivable. Absent otherwise.
+   */
+  ore_rounding?: number
+  /**
+   * Kontantmetodens two steps (#93): the set-off is the payout of this
+   * begäran, received on the skattekonto. Booking it posts the payout's own
+   * lines (buildRotRutPayoutLines: Skatteverket's share as försäljning and
+   * utgående moms, 1513 for any part already on it) and marks the begäran
+   * paid. Absent otherwise.
+   */
+  rot_rut_payout?: { request_id: string; request_name: string; leg: RotRutPayoutLeg }
 }
 
 /**
@@ -90,9 +105,73 @@ export interface SkattekontoTransactionWithSuggestion extends StoredSkattekontoT
 }
 
 /**
+ * A live verifikat that already carries a Skatteverket event on 1630: a
+ * candidate the match flow offers for the row (exact amount and side, inside
+ * the match window, not cancelled by a storno pair). Booking the row would
+ * record the event a second time, so the booking refuses with
+ * LEDGER_TWIN_EXISTS and names these instead.
+ */
+export interface SkattekontoLedgerTwin {
+  journal_entry_id: string
+  voucher_series: string | null
+  voucher_number: number | null
+  entry_date: string
+  description: string
+  status: 'draft' | 'posted' | 'reversed'
+  /**
+   * Present when the verifikat carries the event together with these other
+   * open rows, of the same day or the days around it (a combined candidate):
+   * linking links all of them.
+   */
+  combined_with?: Array<{
+    id: string
+    transaktionsdatum: string
+    transaktionstext: string
+    belopp_skatteverket: number
+  }>
+}
+
+/**
+ * Unbooked Skatteverket rows that the ledger already holds through verifikat
+ * on 1630 no row is linked to: typically one summarised year-end or month-end
+ * verifikat (crm#1043). The reconciliation proves it with arithmetic, never a
+ * guess (findLedgerCoverPoint): up to `through_date` those verifikat
+ * sum exactly to the open rows ('events_equal'), or 1630 already equals
+ * Skatteverket although the rows are unbooked ('ledger_agrees', the rest of
+ * the verifikat being events from before the fetched history). Booking such
+ * a row would record it a second time, so the booking refuses with
+ * LEDGER_COVER_EXISTS and names these instead; the rows are linked to the
+ * verifikat (with a remainder when the sums differ).
+ *
+ * 'planned_link' is the same refusal for a row the ledger plan assigns to one
+ * verifikat (PH 171), whatever its date: that verifikat holds exactly this
+ * row and the other rows in `event_ids`, and the reconciliation proposes the
+ * link. `through_date` is then the latest date of the link.
+ */
+export interface SkattekontoLedgerCoverInfo {
+  /** The skattekonto account the covering verifikat are on: 1630, or 2012 for an enskild firma that runs it there. */
+  account_number: string
+  through_date: string
+  kind: 'events_equal' | 'ledger_agrees' | 'planned_link'
+  /** Open rows up to through_date, this one included ('planned_link': the rows of the link). */
+  event_count: number
+  event_total: number
+  /** 'planned_link' only: every row of the link, this one included. */
+  event_ids?: string[]
+  /** The covering verifikat, largest open amount first (at most 5). */
+  entries: Array<SkattekontoLedgerTwin & { open_amount: number }>
+  entry_count: number
+}
+
+/**
  * Per-row outcome from POST /skattekonto/transaktioner/bokfor-batch.
  * `journal_entry_id` is present on success AND on COMMIT_FAILED (the draft
  * was created and stays linked; only the commit step failed).
+ * `ledger_twins` is present on LEDGER_TWIN_EXISTS, `ledger_cover` on
+ * LEDGER_COVER_EXISTS, `ledger_direct` on LEDGER_DIRECT_EXISTS: the bank
+ * verifikat without any skattekonto line that already book the event
+ * (PH 171). They cannot be linked; the row is left unbooked or booked anyway
+ * with a reason.
  */
 export interface SkattekontoBatchRowResult {
   id: string
@@ -108,9 +187,15 @@ export interface SkattekontoBatchRowResult {
     | 'NOT_SETTLED'
     | 'ROW_IGNORED'
     | 'TRANSACTION_NOT_FOUND'
+    | 'LEDGER_TWIN_EXISTS'
+    | 'LEDGER_COVER_EXISTS'
+    | 'LEDGER_DIRECT_EXISTS'
     | 'COMMIT_FAILED'
     | 'UNKNOWN'
   error_message?: string
+  ledger_twins?: SkattekontoLedgerTwin[]
+  ledger_cover?: SkattekontoLedgerCoverInfo
+  ledger_direct?: SkattekontoLedgerTwin[]
 }
 
 /** Response envelope body for the bokfor-batch endpoint. */

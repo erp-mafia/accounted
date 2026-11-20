@@ -17,13 +17,14 @@ import { STRUCTURED_MIME_TYPES } from '@/lib/documents/read/types'
  * are kept out here as the list keeps them out.
  */
 export type HistoryEventKind = 'ingested' | 'duplicate' | 'read' | 'typed' | 'retyped' | 'admitted' | 'discarded' | 'extracted' | 'derived' | 'asked' | 'replaced' | 'deleted' | 'unknown'
-export type HistoryActorKind = 'user' | 'api_key' | 'agent' | 'system' | 'arkiv'
+export type HistoryActorKind = 'user' | 'api_key' | 'service_account' | 'agent' | 'system' | 'arkiv'
 
 export interface HistoryEvent {
   id: string
   at: string
   kind: HistoryEventKind
-  actor: { kind: HistoryActorKind; label: string | null }
+  /** user_id: for a key or a service account, the person it acted for (the key's owner, the sponsor). */
+  actor: { kind: HistoryActorKind; label: string | null; user_id?: string | null }
   document: { id: string; file_name: string } | null
   detail: string | null
 }
@@ -36,8 +37,15 @@ type ProcessingRow = { event_id: string; event_type: string; aggregate_id: strin
 type ActivityRow = { id: string; document_id: string | null; kind: string; started_at: string }
 type ClassificationRow = { id: string; document_id: string; doc_type: string | null; decided_by: string; created_at: string }
 
-const personOrSystem = (row: AuditRow): HistoryEvent['actor'] =>
-  row.actor_type === 'api_key' ? { kind: 'api_key', label: row.actor_label ?? null } : row.user_id ? { kind: 'user', label: row.actor_label ?? null } : { kind: 'system', label: null }
+/** A key's kind as the log names it: a service account's key, or a person's (an OAuth connection is one). */
+const keyKind = (type: string | null | undefined): 'api_key' | 'service_account' | null =>
+  type === 'service_account' ? type : type === 'api_key' || type === 'mcp_oauth' ? 'api_key' : null
+
+const personOrSystem = (row: AuditRow): HistoryEvent['actor'] => {
+  const key = keyKind(row.actor_type)
+  if (key) return { kind: key, label: row.actor_label ?? null, user_id: row.user_id }
+  return row.user_id ? { kind: 'user', label: row.actor_label ?? null } : { kind: 'system', label: null }
+}
 
 /** The audit rows that are events: arrived, removed, admitted or discarded, read. A type change is not one here (see document_classifications). */
 function auditEvent(row: AuditRow): { kind: HistoryEventKind; actor: HistoryEvent['actor'] } | null {
@@ -136,7 +144,7 @@ export async function listArchiveHistory(supabase: SupabaseClient, companyId: st
       id: `ph:${row.event_id}`,
       at: row.occurred_at,
       kind: processingKind(row.event_type),
-      actor: { kind: actorType === 'user' ? 'user' : actorType === 'api_key' ? 'api_key' : 'system', label: row.actor?.label ?? row.actor?.id ?? null },
+      actor: { kind: actorType === 'user' ? 'user' : (keyKind(actorType) ?? 'system'), label: row.actor?.label ?? row.actor?.id ?? null },
       document: docId ? { id: docId, file_name: '' } : null,
       detail: null,
     })

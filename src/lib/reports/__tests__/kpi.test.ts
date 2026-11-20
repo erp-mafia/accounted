@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest'
+import { createReskontraClient, type ReskontraTables } from '@/tests/reskontra-rpc-port'
 import {
   calculateGrossMargin,
   calculateCashPosition,
-  calculateRevenueGrowth,
   calculateExpenseRatio,
-  calculateAvgPaymentDays,
+  averagePaymentDays,
   calculateVatLiability,
   fetchTopSupplierInvoices,
-  type KpiSupplierInvoiceRow,
+  fetchPaymentDaysInRange,
+  kpiReceivablesAsOf,
 } from '../kpi'
 import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '../vat-declaration'
 import type { IncomeStatementReport, TrialBalanceRow } from '@/types'
@@ -107,6 +108,66 @@ describe('calculateCashPosition', () => {
     ]
     expect(calculateCashPosition(rows)).toBe(-5000)
   })
+
+  it('uses the account override instead of 19xx when one is set', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '1930', closing_debit: 50000 }),
+      makeTrialBalanceRow({ account_number: '1940', closing_debit: 10000 }),
+      makeTrialBalanceRow({ account_number: '1680', closing_debit: 700 }),
+    ]
+    expect(calculateCashPosition(rows, ['1930', '1680'])).toBe(50700)
+  })
+
+  it('treats an empty override list as no override', () => {
+    const rows = [makeTrialBalanceRow({ account_number: '1930', closing_debit: 50000 })]
+    expect(calculateCashPosition(rows, [])).toBe(50000)
+  })
+})
+
+describe('kpiReceivablesAsOf', () => {
+  it('returns the range end when it has passed', () => {
+    expect(kpiReceivablesAsOf('2025-12-31', '2026-09-26')).toBe('2025-12-31')
+  })
+
+  it('returns undefined (live state) for a range ending today or later', () => {
+    expect(kpiReceivablesAsOf('2026-09-26', '2026-09-26')).toBeUndefined()
+    expect(kpiReceivablesAsOf('2026-12-31', '2026-09-26')).toBeUndefined()
+  })
+})
+
+describe('fetchPaymentDaysInRange', () => {
+  // get_paid_invoice_days, answered from the rows by its JS port
+  // (tests/reskontra-rpc-port.ts); the SQL is pinned in
+  // tests/pg/reskontra-population-rpc.pg.test.ts.
+  const paid = (invoice_date: string, paid_at: string, fields: Record<string, unknown> = {}) => ({
+    status: 'paid', invoice_date, paid_at, ...fields,
+  })
+
+  it('counts the paid invoices whose payment landed in the range, end date inclusive', async () => {
+    const books: ReskontraTables = {
+      invoices: [
+        paid('2025-12-01', '2025-12-31T10:00:00Z'), // 30 days, on the last day
+        paid('2024-12-01', '2025-01-01T00:00:00Z'), // 31 days, on the first instant
+        paid('2025-12-01', '2026-01-01T00:00:00Z'), // after the range
+        paid('2025-03-10', '2025-03-05T12:00:00Z'), // paid before the invoice date: 0 days
+        paid('2025-02-01', '2025-02-11T00:00:00Z', { status: 'sent' }), // not paid
+      ],
+    }
+    const { supabase, calls } = createReskontraClient(() => books)
+
+    const totals = await fetchPaymentDaysInRange(supabase, 'company-1', '2025-01-01', '2025-12-31')
+
+    expect(totals).toEqual({ invoiceCount: 3, totalDays: 61 })
+    // Exclusive next day, so a payment on the last day counts.
+    expect(calls).toEqual([
+      { name: 'get_paid_invoice_days', args: { p_company_id: 'company-1', p_from: '2025-01-01', p_paid_before: '2026-01-01' } },
+    ])
+  })
+
+  it('throws when the read fails', async () => {
+    const { supabase } = createReskontraClient(() => ({}), () => ({ get_paid_invoice_days: { message: 'boom' } }))
+    await expect(fetchPaymentDaysInRange(supabase, 'company-1', '2025-01-01', '2025-12-31')).rejects.toThrow('boom')
+  })
 })
 
 describe('calculateVatLiability', () => {
@@ -202,15 +263,15 @@ describe('VAT widget account lists (derived from ACCOUNT_RUTA)', () => {
   // dashboard widget's semantics: update this snapshot deliberately.
   it('output accounts cover rutor 10-12, 30-32 and 60-62', () => {
     expect([...VAT_OUTPUT_ACCOUNTS].sort()).toEqual([
-      '2610', '2611', '2612', '2613', '2614', '2615', '2616', '2618',
-      '2620', '2621', '2622', '2623', '2624', '2625', '2626', '2628',
-      '2630', '2631', '2632', '2633', '2634', '2635', '2636', '2638',
+      '2610', '2611', '2612', '2613', '2614', '2615', '2616',
+      '2620', '2621', '2622', '2623', '2624', '2625', '2626',
+      '2630', '2631', '2632', '2633', '2634', '2635', '2636',
     ])
   })
 
   it('input accounts cover ruta 48', () => {
     expect([...VAT_INPUT_ACCOUNTS].sort()).toEqual([
-      '2640', '2641', '2642', '2645', '2646', '2647', '2648', '2649',
+      '2640', '2641', '2642', '2645', '2646', '2647', '2649',
     ])
   })
 
@@ -222,26 +283,6 @@ describe('VAT widget account lists (derived from ACCOUNT_RUTA)', () => {
     for (const account of VAT_INPUT_ACCOUNTS) {
       expect(account.startsWith('264')).toBe(true)
     }
-  })
-})
-
-describe('calculateRevenueGrowth', () => {
-  it('returns positive growth', () => {
-    // (120000 - 100000) / 100000 * 100 = 20%
-    expect(calculateRevenueGrowth(120000, 100000)).toBe(20)
-  })
-
-  it('returns negative growth (decline)', () => {
-    // (80000 - 100000) / 100000 * 100 = -20%
-    expect(calculateRevenueGrowth(80000, 100000)).toBe(-20)
-  })
-
-  it('returns null when previous revenue is null', () => {
-    expect(calculateRevenueGrowth(100000, null)).toBeNull()
-  })
-
-  it('returns null when previous revenue is 0', () => {
-    expect(calculateRevenueGrowth(100000, 0)).toBeNull()
   })
 })
 
@@ -259,128 +300,76 @@ describe('calculateExpenseRatio', () => {
 })
 
 describe('fetchTopSupplierInvoices', () => {
-  const PAGE_SIZE = 1000 // fetchAllRows page size
+  // get_kpi_supplier_invoices, answered from the rows by its JS port.
+  const row = (fields: Record<string, unknown> = {}) => ({
+    supplier_id: 'sup-1',
+    supplier: { id: 'sup-1', name: 'Leverantören AB' },
+    invoice_date: '2026-03-01',
+    status: 'approved',
+    total: 1,
+    total_sek: null,
+    currency: 'SEK',
+    exchange_rate: null,
+    ...fields,
+  })
 
-  function makeRow(): KpiSupplierInvoiceRow {
-    return {
+  it('reads every invoice of the period, past the 1000-row PostgREST cap, credited ones left out', async () => {
+    // A company with 1003 supplier invoices in the period: awaiting a bare
+    // query returned only the first 1000 and silently understated the totals.
+    const books: ReskontraTables = {
+      supplier_invoices: [
+        ...Array.from({ length: 1003 }, () => row()),
+        row({ status: 'credited' }),
+        row({ invoice_date: '2025-12-31' }),
+      ],
+    }
+    const { supabase, calls } = createReskontraClient(() => books)
+
+    const { data, error } = await fetchTopSupplierInvoices(supabase, 'company-1', '2026-01-01', '2026-12-31')
+
+    expect(error).toBeNull()
+    expect(data).toHaveLength(1003)
+    expect(data?.[0]).toEqual({
       supplier_id: 'sup-1',
       total: 1,
       total_sek: null,
       currency: 'SEK',
       exchange_rate: null,
       supplier: { id: 'sup-1', name: 'Leverantören AB' },
-    }
-  }
-
-  /**
-   * Query-builder double: every filter method chains; `.range(from, to)`
-   * resolves to the page registered for `from`. Records order/range calls so
-   * the tests can pin the paging contract.
-   */
-  function pagedSupabase(
-    pagesByFrom: Record<number, unknown[] | { error: { message: string } }>,
-  ) {
-    const orderCalls: unknown[][] = []
-    const rangeCalls: Array<[number, number]> = []
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chain: any = {}
-    for (const m of ['select', 'eq', 'gte', 'lte', 'neq']) chain[m] = () => chain
-    chain.order = (...args: unknown[]) => {
-      orderCalls.push(args)
-      return chain
-    }
-    chain.range = (from: number, to: number) => {
-      rangeCalls.push([from, to])
-      const page = pagesByFrom[from] ?? []
-      if (!Array.isArray(page)) {
-        return Promise.resolve({ data: null, error: page.error })
-      }
-      return Promise.resolve({ data: page, error: null })
-    }
-    return { supabase: { from: () => chain } as never, orderCalls, rangeCalls }
-  }
-
-  it('paginates past the 1000-row PostgREST cap instead of truncating', async () => {
-    // A company with 1003 supplier invoices in the period: awaiting the bare
-    // query returned only the first 1000 and silently understated the totals.
-    const page1 = Array.from({ length: PAGE_SIZE }, () => makeRow())
-    const page2 = Array.from({ length: 3 }, () => makeRow())
-    const { supabase, rangeCalls } = pagedSupabase({ 0: page1, [PAGE_SIZE]: page2 })
-
-    const { data, error } = await fetchTopSupplierInvoices(
-      supabase,
-      'company-1',
-      '2026-01-01',
-      '2026-12-31',
-    )
-
-    expect(error).toBeNull()
-    expect(data).toHaveLength(1003)
-    expect(rangeCalls).toEqual([
-      [0, PAGE_SIZE - 1],
-      [PAGE_SIZE, 2 * PAGE_SIZE - 1],
+    })
+    expect(calls).toEqual([
+      { name: 'get_kpi_supplier_invoices', args: { p_company_id: 'company-1', p_from: '2026-01-01', p_to: '2026-12-31' } },
     ])
   })
 
-  it('orders on the id PK for stable paging', async () => {
-    const { supabase, orderCalls } = pagedSupabase({ 0: [makeRow()] })
+  it('reads a supplier it cannot see as no supplier', async () => {
+    const books: ReskontraTables = { supplier_invoices: [row({ supplier: null })] }
+    const { supabase } = createReskontraClient(() => books)
 
-    await fetchTopSupplierInvoices(supabase, 'company-1', '2026-01-01', '2026-12-31')
+    const { data } = await fetchTopSupplierInvoices(supabase, 'company-1', '2026-01-01', '2026-12-31')
 
-    // Without a stable total order, .range() paging can duplicate or skip
-    // rows on page boundaries, which would double or drop supplier spend.
-    expect(orderCalls).toContainEqual(['id', { ascending: true }])
+    expect(data?.[0].supplier).toBeNull()
   })
 
   it('returns a { data: null, error } value on query failure, never throws', async () => {
-    const { supabase } = pagedSupabase({ 0: { error: { message: 'connection reset' } } })
+    const { supabase } = createReskontraClient(() => ({}), () => ({ get_kpi_supplier_invoices: { message: 'connection reset' } }))
 
-    const result = await fetchTopSupplierInvoices(
-      supabase,
-      'company-1',
-      '2026-01-01',
-      '2026-12-31',
-    )
+    const result = await fetchTopSupplierInvoices(supabase, 'company-1', '2026-01-01', '2026-12-31')
 
     expect(result.data).toBeNull()
     expect(result.error?.message).toBe('connection reset')
   })
 })
 
-describe('calculateAvgPaymentDays', () => {
-  it('returns average for >= 5 invoices', () => {
-    const invoices = [
-      { invoice_date: '2025-01-01', paid_at: '2025-01-11' }, // 10 days
-      { invoice_date: '2025-02-01', paid_at: '2025-02-21' }, // 20 days
-      { invoice_date: '2025-03-01', paid_at: '2025-03-16' }, // 15 days
-      { invoice_date: '2025-04-01', paid_at: '2025-04-26' }, // 25 days
-      { invoice_date: '2025-05-01', paid_at: '2025-05-31' }, // 30 days
-    ]
-    // avg = (10+20+15+25+30) / 5 = 20
-    expect(calculateAvgPaymentDays(invoices)).toBe(20)
+describe('averagePaymentDays', () => {
+  it('returns the rounded average for 5 or more invoices', () => {
+    // (10 + 20 + 15 + 25 + 30) / 5 = 20
+    expect(averagePaymentDays({ invoiceCount: 5, totalDays: 100 })).toBe(20)
+    expect(averagePaymentDays({ invoiceCount: 6, totalDays: 101 })).toBe(17)
   })
 
   it('returns null for fewer than 5 invoices', () => {
-    const invoices = [
-      { invoice_date: '2025-01-01', paid_at: '2025-01-11' },
-      { invoice_date: '2025-02-01', paid_at: '2025-02-21' },
-    ]
-    expect(calculateAvgPaymentDays(invoices)).toBeNull()
-  })
-
-  it('returns null for empty array', () => {
-    expect(calculateAvgPaymentDays([])).toBeNull()
-  })
-
-  it('clamps negative days to 0', () => {
-    const invoices = [
-      { invoice_date: '2025-01-10', paid_at: '2025-01-05' }, // would be -5, clamped to 0
-      { invoice_date: '2025-02-01', paid_at: '2025-02-11' }, // 10
-      { invoice_date: '2025-03-01', paid_at: '2025-03-11' }, // 10
-      { invoice_date: '2025-04-01', paid_at: '2025-04-11' }, // 10
-      { invoice_date: '2025-05-01', paid_at: '2025-05-11' }, // 10
-    ]
-    // avg = (0+10+10+10+10) / 5 = 8
-    expect(calculateAvgPaymentDays(invoices)).toBe(8)
+    expect(averagePaymentDays({ invoiceCount: 4, totalDays: 100 })).toBeNull()
+    expect(averagePaymentDays({ invoiceCount: 0, totalDays: 0 })).toBeNull()
   })
 })

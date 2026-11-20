@@ -13,7 +13,22 @@ const mocks = vi.hoisted(() => ({
   taskInserts: [] as Record<string, unknown>[],
   taskUpdates: [] as Record<string, unknown>[],
   taskRow: null as Record<string, unknown> | null,
+  // What a guarded mcp_tasks update answers: the rows it moved, or an error.
+  updateResult: { data: null, error: null } as { data: unknown; error: unknown },
+  logError: vi.fn(),
 }))
+
+// Only the error level is swapped: the one line per abandoned task is asserted.
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      error: mocks.logError,
+    }),
+  }
+})
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
@@ -78,7 +93,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     },
     update: (patch: Record<string, unknown>) => {
       mocks.taskUpdates.push(patch)
-      return makeChain({ data: null, error: null })
+      return makeChain(mocks.updateResult)
     },
     select: () =>
       makeChain(
@@ -150,6 +165,7 @@ describe('MCP Tasks extension', () => {
     mocks.taskInserts.length = 0
     mocks.taskUpdates.length = 0
     mocks.taskRow = null
+    mocks.updateResult = { data: null, error: null }
   })
 
   describe('capability detection', () => {
@@ -239,12 +255,70 @@ describe('MCP Tasks extension', () => {
         error: null,
         poll_interval_ms: 2000,
         ttl_ms: 3600000,
-        created_at: '2026-07-29T09:00:00.000Z',
+        // Ten minutes in: inside the route's 800 s limit plus slack.
+        created_at: new Date(Date.now() - 600_000).toISOString(),
       }
       const { result } = await readBody(mcpRequest('tasks/get', { taskId: 'task-1' }))
       expect(result?.status).toBe('working')
       expect(result?.result).toBeUndefined()
       expect(result?.resultType).toBe('complete')
+      expect(mocks.taskUpdates).toHaveLength(0)
+    })
+
+    const staleWorking = () => ({
+      id: 'task-1',
+      company_id: '11111111-1111-4111-8111-111111111111',
+      user_id: 'user-1',
+      tool_name: 'gnubok_audit_package',
+      status: 'working',
+      status_message: null,
+      result: null,
+      error: null,
+      poll_interval_ms: 2000,
+      ttl_ms: 3600000,
+      // Sixteen minutes in: the invocation that ran it was cut at 800 s.
+      created_at: new Date(Date.now() - 960_000).toISOString(),
+    })
+
+    it('answers failed for a task still working after the route time limit, and logs it once', async () => {
+      mocks.taskRow = staleWorking()
+      mocks.updateResult = { data: [{ id: 'task-1' }], error: null }
+
+      const { result } = await readBody(mcpRequest('tasks/get', { taskId: 'task-1' }))
+
+      expect(result?.status).toBe('failed')
+      expect(result?.error).toMatchObject({ code: -32603 })
+      expect(result?.statusMessage).toEqual(expect.stringContaining('interrupted'))
+      expect(mocks.taskUpdates).toEqual([expect.objectContaining({ status: 'failed', result: null, error: expect.objectContaining({ code: -32603 }) })])
+      expect(mocks.logError).toHaveBeenCalledTimes(1)
+      expect(mocks.logError).toHaveBeenCalledWith(
+        'MCP task abandoned: still working after the route time limit, answered as failed',
+        expect.objectContaining({ taskId: 'task-1', toolName: 'gnubok_audit_package' }),
+      )
+    })
+
+    it('logs nothing when another poll already moved the stale task, and answers the row as it is', async () => {
+      mocks.taskRow = staleWorking()
+      // The guarded update matched no row: something else resolved it first.
+      mocks.updateResult = { data: [], error: null }
+
+      const { result } = await readBody(mcpRequest('tasks/get', { taskId: 'task-1' }))
+
+      expect(mocks.logError).not.toHaveBeenCalled()
+      // The mock still holds the working row, which is what the re-read answers.
+      expect(result?.status).toBe('working')
+    })
+
+    it('logs a terminal write the database refused as an error', async () => {
+      mocks.taskRow = staleWorking()
+      mocks.updateResult = { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+
+      await readBody(mcpRequest('tasks/get', { taskId: 'task-1' }))
+
+      expect(mocks.logError).toHaveBeenCalledWith(
+        'MCP task terminal state not stored',
+        expect.objectContaining({ taskId: 'task-1', status: 'failed', code: '57014' }),
+      )
     })
 
     it('returns the stored tool result on completion', async () => {

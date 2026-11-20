@@ -2,12 +2,13 @@
 
 import { useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsRowNote, SettingsSelect } from '@/components/settings/SettingsRows'
+import { RemoveCashAccountDialog } from '@/components/settings/RemoveCashAccountDialog'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -64,6 +65,10 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
   const [savingId, setSavingId] = useState<string | null>(null)
   // The account whose "make primary" confirmation is open.
   const [primaryTarget, setPrimaryTarget] = useState<CashAccount | null>(null)
+  // The account whose "remove" dialog is open. Offered on every account to
+  // an owner/admin: whether it can go is the server's dry run, shown in the
+  // dialog with the reason, never a second copy of the rule here.
+  const [removeTarget, setRemoveTarget] = useState<CashAccount | null>(null)
 
   // Presets first, then any configured or already-assigned letter the presets
   // do not cover, so a Select never renders blank on a value it does not offer.
@@ -203,7 +208,7 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
       <SettingsGroup label={t('per_account_heading')} help={t('per_account_help')}>
         {isLoading ? (
           <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            <SpinnerIcon className="h-4 w-4 animate-spin" aria-hidden="true" />
             {t('per_account_loading')}
           </div>
         ) : cashAccounts.length === 0 ? (
@@ -239,14 +244,13 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
                     </option>
                   ))}
                 </SettingsSelect>
-                {(account.is_primary || canMakePrimary || canDisable) && (
+                {(account.is_primary || canMakePrimary || canDisable || canManageAccounts) && (
                   <SettingsRowEnd>
                     {account.is_primary && <SettingsRowNote>{t('per_account_primary_label')}</SettingsRowNote>}
                     {canMakePrimary && (
                       <Button
                         type="button"
                         variant="ghost"
-                        size="sm"
                         onClick={() => setPrimaryTarget(account)}
                         disabled={savingId === account.id}
                         aria-label={t('per_account_make_primary_aria', { account: accountLabel(account) })}
@@ -270,6 +274,17 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
                           {t('per_account_enabled_label')}
                         </label>
                       </>
+                    )}
+                    {canManageAccounts && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => setRemoveTarget(account)}
+                        disabled={savingId === account.id}
+                        aria-label={t('per_account_remove_aria', { account: accountLabel(account) })}
+                      >
+                        {t('per_account_remove')}
+                      </Button>
                     )}
                   </SettingsRowEnd>
                 )}
@@ -300,6 +315,15 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
                 >
                   {t('per_account_enable_label')}
                 </label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setRemoveTarget(account)}
+                  disabled={savingId === account.id}
+                  aria-label={t('per_account_remove_aria', { account: accountLabel(account) })}
+                >
+                  {t('per_account_remove')}
+                </Button>
               </SettingsRowEnd>
             </SettingsRow>
           ))}
@@ -318,6 +342,11 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
         onConfirm={async () => {
           if (primaryTarget) await handleMakePrimary(primaryTarget)
         }}
+      />
+      <RemoveCashAccountDialog
+        account={removeTarget ? { id: removeTarget.id, label: accountLabel(removeTarget) } : null}
+        onClose={() => setRemoveTarget(null)}
+        onRemoved={refresh}
       />
     </>
   )

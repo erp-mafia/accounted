@@ -182,19 +182,80 @@ describe('gnubok_call_tool bridge', () => {
     expect(event.latencyMs).toBe(0)
   })
 
-  it('still refuses a staging write, and names the bridge that carries it', async () => {
-    // gnubok_call_tool is annotated read-only and may be always-allowed in a
-    // client. It must never start staging writes under that consent
-    // (issue #2800): the write half is a separate tool with a separate name.
+  it('stages an unlisted staging write too, for a client whose tools/list lacks gnubok_stage_tool', async () => {
+    // A client that kept a tools/list from before gnubok_stage_tool was
+    // listed has only this bridge, and a reconnect did not refresh it
+    // (support case 2026-10-18).
+    keyWithScopes(['payroll:write'])
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_log_mileage_trip', arguments: MILEAGE_TRIP_ARGS }),
+    )
+
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_log_mileage_trip')
+    expect(event.errorKind).not.toBe('bridge_refused')
+    expect(event.errorKind).not.toBe('scope_denied')
+  })
+
+  it('a READ-scoped key stages nothing through it: the INNER scope is enforced', async () => {
+    keyWithScopes(['transactions:read', 'reports:read', 'reconciliation:read', 'payroll:read'])
     const eventPromise = captureNextToolCalled()
 
     const response = await handleMcpRequest(
-      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_reconcile_unmatch', arguments: {} }),
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_log_mileage_trip', arguments: MILEAGE_TRIP_ARGS }),
+    )
+    const { isError } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    const event = await eventPromise
+    expect(event.errorKind).toBe('scope_denied')
+    expect(event.tool).toBe('gnubok_log_mileage_trip')
+    expect(event.latencyMs).toBe(0)
+  })
+
+  it('a TEST-mode key stages nothing through it: the write block sees the inner tool', async () => {
+    keyWithScopes(['payroll:write'], 'test')
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', {
+        tool: 'gnubok_update_salary_run',
+        arguments: { salary_run_id: '33333333-3333-4333-8333-333333333333', notes: 'x' },
+      }),
+    )
+    const { isError } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect((await eventPromise).errorKind).toBe('test_key_write_blocked')
+  })
+
+  it('refuses a write that commits directly', async () => {
+    keyWithScopes(['transactions:write'])
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_create_transactions', arguments: {} }),
     )
     const { isError, payload } = await parsedToolResult(response)
 
     expect(isError).toBe(true)
-    expect(JSON.stringify(payload)).toContain('gnubok_stage_tool')
+    expect(JSON.stringify(payload)).toMatch(/commits directly/)
+    expect((await eventPromise).errorKind).toBe('bridge_refused')
+  })
+
+  it('refuses a LISTED staging write: that tool keeps its own per-tool permission in the client', async () => {
+    keyWithScopes(['invoices:write'])
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_create_invoice', arguments: {} }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect(JSON.stringify(payload)).toMatch(/call it directly/)
     expect((await eventPromise).errorKind).toBe('bridge_refused')
   })
 
@@ -207,6 +268,27 @@ describe('gnubok_call_tool bridge', () => {
     expect(isError).toBe(true)
     const event = await eventPromise
     expect(event.errorKind).toBe('bridge_refused')
+  })
+
+  // Agents that copy the tools/call shape send `name`, some `tool_name`; each
+  // was refused "requires a tool argument" and none got through (seen over 30 days).
+  it('reads the tool from `name` when an agent copies the tools/call shape', async () => {
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(mcpToolCall('gnubok_call_tool', { name: 'gnubok_list_skills', arguments: {} }))
+
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_list_skills')
+    expect(event.errorKind).not.toBe('bridge_refused')
+  })
+
+  it('names what it got when no tool is named at all', async () => {
+    const response = await handleMcpRequest(mcpToolCall('gnubok_call_tool', { arguments: { query: 'moms' } }))
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect(JSON.stringify(payload)).toContain('got \\"arguments\\"')
+    expect(JSON.stringify(payload)).toContain('A working call looks like')
   })
 
   it('enforces the INNER tool scope, not the wrapper (which has none)', async () => {
@@ -316,9 +398,10 @@ describe('gnubok_stage_tool registration', () => {
     expect(stageBridgeTool.annotations.readOnlyHint).toBe(false)
   })
 
-  it('leaves gnubok_call_tool read-only, so consent given to it keeps its meaning', () => {
-    // The reason the write half is a second tool. A client may always-allow
-    // the read bridge; that consent must never come to cover staging writes.
+  it('leaves gnubok_call_tool annotated read-only although it also carries staging writes', () => {
+    // A client holding an older tools/list never sees a new hint, flipping it
+    // would make every bridged read prompt elsewhere, and the most the bridge
+    // adds is a pending operation that posts nothing until a separate approval.
     expect(bridgeTool.annotations.readOnlyHint).toBe(true)
   })
 
@@ -426,7 +509,22 @@ describe('gnubok_stage_tool bridge', () => {
 
     expect(isError).toBe(true)
     expect(JSON.stringify(payload)).toMatch(/call it directly/)
+    // A client that defers tool loading has the tool: loading it comes first.
+    expect(JSON.stringify(payload)).toMatch(/tool search/)
     expect((await eventPromise).errorKind).toBe('bridge_refused')
+  })
+
+  it('reads the tool from `tool_name` too', async () => {
+    keyWithScopes(['payroll:write'])
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', { tool_name: 'gnubok_log_mileage_trip', arguments: MILEAGE_TRIP_ARGS }),
+    )
+
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_log_mileage_trip')
+    expect(event.errorKind).not.toBe('bridge_refused')
   })
 
   it('refuses a read and points at gnubok_call_tool', async () => {
@@ -440,6 +538,79 @@ describe('gnubok_stage_tool bridge', () => {
     expect(isError).toBe(true)
     expect(JSON.stringify(payload)).toContain('gnubok_call_tool')
     expect((await eventPromise).errorKind).toBe('bridge_refused')
+  })
+
+  // Agent feedback seq 871035: a key without pending_operations:approve tried
+  // to reject its own staged operation through the bridge and was told to
+  // "call it directly by name", a tool its tools/list did not contain.
+  it('names the missing scope and /pending instead of a direct call the key cannot make', async () => {
+    keyWithScopes(['bookkeeping:write', 'pending_operations:read'])
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', {
+        tool: 'gnubok_reject_pending_operation',
+        arguments: { operation_id: 'op-1' },
+      }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    const text = JSON.stringify(payload)
+    expect(text).toContain('pending_operations:approve')
+    expect(text).toContain('/pending')
+    expect(text).not.toMatch(/directly by name/)
+    // Still refused at the bridge, before execute(): nothing is rejected.
+    const event = await eventPromise
+    expect(event.errorKind).toBe('bridge_refused')
+    expect(event.latencyMs).toBe(0)
+  })
+
+  it('keeps the direct-call advice for a key that holds the target scope', async () => {
+    keyWithScopes(['pending_operations:approve'])
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', {
+        tool: 'gnubok_reject_pending_operation',
+        arguments: { operation_id: 'op-1' },
+      }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect(JSON.stringify(payload)).toMatch(/directly by name/)
+  })
+
+  it('names the missing scope for a listed staging write the key cannot reach', async () => {
+    keyWithScopes(['transactions:read'])
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', { tool: 'gnubok_create_invoice', arguments: {} }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    const text = JSON.stringify(payload)
+    expect(text).toContain('invoices:draft')
+    expect(text).not.toMatch(/call it directly/)
+  })
+
+  it('names the missing scope on gnubok_call_tool too', async () => {
+    keyWithScopes(['transactions:read'])
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', {
+        tool: 'gnubok_approve_pending_operation',
+        arguments: { operation_id: 'op-1' },
+      }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    const text = JSON.stringify(payload)
+    expect(text).toContain('pending_operations:approve')
+    expect(text).toContain('/pending')
+    expect(text).not.toMatch(/directly by name/)
   })
 
   it('refuses a call with no tool name', async () => {
@@ -566,7 +737,7 @@ describe('dispatcher injects __keyScopes into gnubok_get_agent_briefing', () => 
     }
   })
   it('routes a bridged read to the API key default company when company_id is omitted', async () => {
-    // Easy Online Stores brief 2026-09-16, F6: a bridged gnubok_sie_import_status
+    // An agent evaluation brief 2026-09-16, F6: a bridged gnubok_sie_import_status
     // without company_id reached Postgres as uuid "undefined". The company
     // half was never the bug (the dispatcher resolves the key default before
     // execute); this pins that so the tool-side fix cannot be mistaken for it.
@@ -582,6 +753,41 @@ describe('dispatcher injects __keyScopes into gnubok_get_agent_briefing', () => 
     const event = await eventPromise
     expect(event.tool).toBe('gnubok_sie_import_status')
     expect((event as unknown as { companyId: string }).companyId).toBe('11111111-1111-4111-8111-111111111111')
+  })
+})
+
+// The already-explained refusal of gnubok_match_batch_allocate names the link
+// tool to use instead; without the key's scopes it named gnubok_reconcile_match
+// to a key minted before reconciliation:write existed (feedback seqs 817176,
+// 817189).
+describe('dispatcher injects __keyScopes into gnubok_match_batch_allocate', () => {
+  beforeEach(() => {
+    vi.mocked(validateApiKey).mockResolvedValueOnce({
+      userId: 'user-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      scopes: ['transactions:read', 'transactions:write'],
+      apiKeyId: 'key-1',
+      apiKeyName: 'MCP-klient (OAuth)',
+      mode: 'live',
+    } as never)
+  })
+
+  it('passes the validated key scopes as __keyScopes', async () => {
+    const allocate = tools.find((t) => t.name === 'gnubok_match_batch_allocate')!
+    const spy = vi.spyOn(allocate, 'execute').mockResolvedValue({ stubbed: true })
+    try {
+      await handleMcpRequest(
+        mcpToolCall('gnubok_match_batch_allocate', {
+          transaction_id: 'tx-1',
+          allocations: [{ kind: 'customer_invoice', invoice_id: 'inv-1', amount: 100 }],
+        }),
+      )
+      expect(spy).toHaveBeenCalledTimes(1)
+      const args = spy.mock.calls[0][0] as Record<string, unknown>
+      expect(args.__keyScopes).toEqual(['transactions:read', 'transactions:write'])
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 
@@ -666,8 +872,7 @@ describe('bridge company_id next to tool', () => {
   })
 })
 
-// Guessed names from prod telemetry (82 unknown_tool calls, 22 companies, 30
-// days): the answer names the real tool first, with how to reach it.
+// Guessed names seen in telemetry: the answer names the real tool first, with how to reach it.
 describe('unknown tool: did you mean', () => {
   beforeEach(() => {
     vi.clearAllMocks()

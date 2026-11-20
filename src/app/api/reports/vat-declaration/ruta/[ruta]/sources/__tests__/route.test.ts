@@ -21,9 +21,9 @@ interface SupabaseShape {
 }
 
 /**
- * `fiscalPeriodResult` is what a `fiscal_periods` lookup resolves to: both the
- * explicit-id lookup and the "räkenskapsår ending in `year`" lookup that
- * `resolvePeriodDates` performs for helårsmoms.
+ * `fiscalPeriodResult` is what a `fiscal_periods` lookup resolves to: the
+ * explicit-id lookup, and as a list the "räkenskapsår ending in `year`" lookup
+ * that `resolvePeriodDates` performs for helårsmoms.
  */
 function buildSupabase(
   linesResult: { data: unknown; error: unknown },
@@ -73,7 +73,12 @@ function buildSupabase(
         or: vi.fn().mockReturnThis(),
         maybeSingle: vi.fn().mockResolvedValue(fiscalPeriodResult),
         range: vi.fn().mockResolvedValue(linesResult),
-        then: (resolve: (v: unknown) => void) => resolve(linesResult),
+        then: (resolve: (v: unknown) => void) =>
+          resolve(
+            table === 'fiscal_periods'
+              ? { ...fiscalPeriodResult, data: fiscalPeriodResult.data ? [fiscalPeriodResult.data] : [] }
+              : linesResult,
+          ),
       }
     }),
   }

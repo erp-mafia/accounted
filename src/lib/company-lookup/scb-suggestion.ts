@@ -6,8 +6,9 @@ import type { CompanySuggestion } from './types'
  * vocabulary `mapSetupEntityType` and `mapPlannedLegalForm` understand: 49
  * (aktiebolag), 10 (enskild näringsidkare) and 61 (ideell förening, which
  * the flag may still refuse at setup) can be set up; 51 (ekonomisk
- * förening), 53 (bostadsrättsförening), 62 (samfällighet) and 71/72
- * (stiftelser) are planned forms the journey stops on. Bank and insurance
+ * förening), 53 (bostadsrättsförening), 62 (samfällighet), 31 (handels- or
+ * kommanditbolag) and 71/72 (stiftelser) are planned forms the journey
+ * stops on. Bank and insurance
  * AB (41, 42) and the rest stay null: the user picks the form, as after a
  * TIC lookup with an unmapped type.
  */
@@ -18,6 +19,7 @@ const LEGAL_ENTITY_TYPE_BY_SCB_CODE: Record<string, string> = {
   '51': 'Ekonomisk förening',
   '53': 'Bostadsrättsförening',
   '62': 'Samfällighetsförening',
+  '31': 'Handelsbolag eller kommanditbolag',
   '71': 'Familjestiftelse',
   '72': 'Annan stiftelse',
 }

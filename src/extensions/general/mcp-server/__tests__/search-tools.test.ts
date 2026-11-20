@@ -23,6 +23,7 @@ async function call(args: Record<string, unknown>, keyScopes: string[] = ALL_SCO
       note?: string
       inputSchema?: unknown
       outputSchema?: unknown
+      annotations?: Record<string, unknown>
     }>
     count: number
     total_matched: number
@@ -67,6 +68,9 @@ describe('gnubok_search_tools', () => {
     expect(
       (tool.inputSchema as { properties: Record<string, unknown> }).properties
     ).toHaveProperty('company_id')
+    // The MCP hints go out; the server's own effect class does not.
+    expect(tool.annotations).toHaveProperty('readOnlyHint', true)
+    expect(tool.annotations).not.toHaveProperty('effect')
   })
 
   it('does not add company_id to company-independent discovery tools', async () => {
@@ -102,7 +106,7 @@ describe('gnubok_search_tools', () => {
   })
 
   it('a bag of words that no single tool holds falls back to any-term, best match first', async () => {
-    // Every-term finds nothing here (prod, 2026-09-21: "arkiv graph source links fact history" answered 0 tools).
+    // Every-term finds nothing here (seen 2026-09-21: "arkiv graph source links fact history" answered 0 tools).
     const bag = await call({ query: 'neighbourhood zzzunmatchedzzz', limit: 50 })
     expect(bag.total_matched).toBeGreaterThan(0)
     expect(bag.tools[0].name).toBe('gnubok_get_neighbourhood')
@@ -134,6 +138,54 @@ describe('gnubok_search_tools', () => {
     const result = await call({ scope: 'invoices:write', limit: 50 })
     for (const t of result.tools) {
       expect(t.scope).toBe('invoices:write')
+    }
+  })
+
+  // crm#1548: invoices:write includes invoices:draft, so a write key still
+  // finds the draft tools; a draft-only key finds them and no exit from draft.
+  it('a narrow scope\'s tools stay visible to the broader grant that includes it', async () => {
+    const write = (await call({ query: 'invoice', limit: 100 }, ['invoices:read', 'invoices:write'])).tools.map(
+      (t: { name: string }) => t.name,
+    )
+    expect(write).toContain('gnubok_create_invoice')
+    expect(write).toContain('gnubok_send_invoice')
+
+    const draft = (await call({ query: 'invoice', limit: 100 }, ['invoices:read', 'invoices:draft'])).tools.map(
+      (t: { name: string }) => t.name,
+    )
+    expect(draft).toContain('gnubok_create_invoice')
+    expect(draft).not.toContain('gnubok_send_invoice')
+    expect(draft).not.toContain('gnubok_credit_invoice')
+  })
+
+  // crm#1931: an agent with a WooCommerce feed never found the tools that
+  // read synced shop orders, tried the kundorder list and the archive instead
+  // and reported the orders missing. Its own words now lead to them.
+  it.each([
+    'woocommerce order',
+    'webbshop',
+    'nätbutik',
+    'e-commerce',
+    'butiksorder',
+    'ordernummer',
+    'order number',
+    'orderdetaljer',
+    'order details',
+    'orderunderlag',
+  ])('"%s" finds a tool that reads synced webshop orders among the first five', async (query) => {
+    const result = await call({ query, detail: 'name', limit: 5 })
+    const names = result.tools.map((t) => t.name)
+    expect(
+      names.includes('gnubok_list_webshop_orders') || names.includes('gnubok_get_webshop_order'),
+      `${query}: ${names.join(', ')}`,
+    ).toBe(true)
+  })
+
+  it('the kundorder list says where synced webshop orders are instead, and both tools it names exist', () => {
+    const salesOrders = tools.find((t) => t.name === 'gnubok_list_sales_orders')!
+    expect(salesOrders.description).toContain('Webshop orders (Shopify, WooCommerce, Zettle): gnubok_list_webshop_orders')
+    for (const name of ['gnubok_list_webshop_orders', 'gnubok_get_sales_order']) {
+      expect(tools.some((t) => t.name === name), name).toBe(true)
     }
   })
 
@@ -211,6 +263,15 @@ describe('gnubok_search_tools', () => {
       expect(names).toContain('gnubok_book_salary_run')
     })
 
+    // A one-off kostförmån is a payslip line, not a standing förmån on the
+    // employee (crm#1349): the search returned only the standing tool.
+    it('"lägg till kostförmån" finds the payslip line door next to the standing benefit', async () => {
+      const result = await call({ query: 'lägg till kostförmån', limit: 10 })
+      const names = result.tools.map((t) => t.name)
+      expect(names).toContain('gnubok_add_payslip_line')
+      expect(names).toContain('gnubok_add_employee_benefit')
+    })
+
     it('"verifikat" finds voucher and journal tools', async () => {
       const result = await call({ query: 'verifikat', limit: 50 })
       const names = result.tools.map((t) => t.name)
@@ -258,6 +319,29 @@ describe('gnubok_search_tools', () => {
     it('"påminnelse" finds list_invoices (chasing overdue invoices)', async () => {
       const result = await call({ query: 'påminnelse', limit: 10 })
       expect(result.tools.map((t) => t.name)).toContain('gnubok_list_invoices')
+    })
+
+    // English guesses (get_customer, waive_..., list_skattekonto_rows) found no
+    // Swedish keyword; these are matcher-side too, so tools/list is unchanged.
+    it.each([
+      ['customer', 'gnubok_get_party'],
+      ['counterparty', 'gnubok_get_party'],
+      ['waiver', 'gnubok_mark_no_document_required'],
+      ['no document needed', 'gnubok_mark_no_document_required'],
+      ['skattekonto rows', 'gnubok_list_reconciliation_items'],
+      ['tax account transactions', 'gnubok_list_reconciliation_items'],
+      ['rejected operations', 'gnubok_list_pending_operations'],
+      ['get pending operation', 'gnubok_list_pending_operations'],
+    ])('English keyword %j finds %s', async (query, expected) => {
+      const result = await call({ query, detail: 'name', limit: 10 })
+      expect(result.tools.map((t) => t.name)).toContain(expected)
+    })
+
+    // PH 243: "arkivera en post i inkorgen" is the Inkorg's Ta bort ur Inkorgen
+    // (the document stays in the archive), which the agent did not find.
+    it.each(['arkivera inkorgspost', 'archive inbox item'])('%j finds gnubok_delete_inbox_item first', async (query) => {
+      const result = await call({ query, detail: 'name', limit: 5 })
+      expect(result.tools[0]?.name).toBe('gnubok_delete_inbox_item')
     })
 
     it('keywords are matcher-side only: never serialized into search results', async () => {

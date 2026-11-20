@@ -84,7 +84,7 @@ describe('sie_imports partial unique index: undone status releases the slot', ()
   })
 
   it('allows a re-import after a 0-entry vacuous import is backfilled to failed', async () => {
-    // Mirrors the Lookma AB recovery path: 0-entry 'completed' rows are
+    // Mirrors the support-case recovery path: 0-entry 'completed' rows are
     // backfilled to 'failed' by the same migration; the partial index
     // already excludes 'failed', so a fresh re-import succeeds.
     const { companyId, userId, fiscalPeriodId } = await seedCompany()

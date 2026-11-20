@@ -17,17 +17,19 @@
  */
 
 import type { CashAccount } from '@/types'
-import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 
 /**
- * A cash_accounts row with its connection's bank name embedded:
- * `select('*, bank_connection:bank_connections(bank_name)')`. The reference
+ * A cash_accounts row with its connection's bank name and status embedded:
+ * `select('*, bank_connection:bank_connections(bank_name, status)')`. The
+ * status tells a live claim from one left on a revoked connection
+ * (lib/onboarding-books/ledger.ts ledgerClaims). The reference
  * list (lib/reference-data/fetchers.ts) and the dashboard layout's seed both
  * select exactly that, as literals so the phantom-column scanner
  * (tests/schema) checks the embed.
  */
 export type CashAccountWithBank = CashAccount & {
-  bank_connection: { bank_name: string | null } | null
+  bank_connection: { bank_name: string | null; status?: string | null } | null
 }
 
 /** The bank the account belongs to, or null when nothing names it. */
@@ -38,10 +40,16 @@ export function cashAccountBankName(account: CashAccountWithBank): string | null
 /**
  * Konto cell text: the bank plus the account's last digits (from its bank
  * IBAN, the identity every sync writes), or its ledger account when the
- * account has no IBAN.
+ * account has no IBAN. A company card shows its card's last four digits.
  */
 export function cashAccountKontoLabel(account: CashAccountWithBank): string {
   const bank = cashAccountBankName(account) ?? ''
+  // A company card has no IBAN: its last four digits name it ("Eurocard
+  // ••3667"), its ledger account when none was given.
+  if (account.kind === 'card') {
+    const last4 = account.card_last4?.[0]
+    return `${bank} ${last4 ? `••${last4}` : account.ledger_account}`.trim()
+  }
   const iban = account.iban?.replace(/\s/g, '') ?? ''
   const tail = iban ? `••${iban.slice(-4)}` : account.ledger_account
   return `${bank} ${tail}`.trim()

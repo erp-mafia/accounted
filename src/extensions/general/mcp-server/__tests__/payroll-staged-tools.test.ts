@@ -23,14 +23,15 @@ const setRunSalary = tools.find((t) => t.name === 'gnubok_set_run_salary')!
 const updateSalaryRun = tools.find((t) => t.name === 'gnubok_update_salary_run')!
 const registerAbsence = tools.find((t) => t.name === 'gnubok_register_absence')!
 const bookSalaryRun = tools.find((t) => t.name === 'gnubok_book_salary_run')!
+const calculateSalaryRun = tools.find((t) => t.name === 'gnubok_calculate_salary_run')!
 const deleteAbsence = tools.find((t) => t.name === 'gnubok_delete_absence')!
 const createEmployee = tools.find((t) => t.name === 'gnubok_create_employee')!
 const updateEmployee = tools.find((t) => t.name === 'gnubok_update_employee')!
 const setOpeningBalances = tools.find((t) => t.name === 'gnubok_set_employee_opening_balances')!
 const closeVacationYear = tools.find((t) => t.name === 'gnubok_close_vacation_year')!
 
-// Synthetic fixture personnummer (year 1900, zero suffix).
-const SAMPLE_PERSONNUMMER = '190001010000'
+// Synthetic fixture personnummer (year 1900, a zero suffix with a valid check digit: staging runs the Luhn check).
+const SAMPLE_PERSONNUMMER = '190001010008'
 
 /** Flexible per-table mock that also captures insert payloads, so tests can
  * assert what stagePendingOperation persisted to pending_operations. */
@@ -198,6 +199,101 @@ describe('gnubok_set_run_salary', () => {
   })
 })
 
+describe('gnubok_set_run_salary: hours_worked', () => {
+  const HOURLY_SRE = {
+    id: 'sre-2',
+    employee_id: 'emp-2',
+    salary_type: 'hourly',
+    employment_degree: 100,
+    monthly_salary: 0,
+    hours_worked: null,
+  }
+
+  it('stages hours for an hourly employee with an hours preview and hours-only params', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } }) // draft gate
+    enqueue({ data: HOURLY_SRE }) // sre lookup
+    enqueue({ data: [] }) // no calendar days in the period
+    enqueue({ data: { hourly_rate: 200 } }) // employees.hourly_rate
+    enqueue({ data: { payment_date: '2026-03-25', period_year: 2026, period_month: 3 } }) // run for period check
+    enqueue({ data: { first_name: 'Bo', last_name: 'Berg' } }) // name for preview
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-2' }, error: null }) // pending_operations insert
+
+    const result = (await setRunSalary.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as {
+      staged: boolean
+      preview: Record<string, unknown>
+      next?: { tool: string }
+    }
+
+    expect(result.staged).toBe(true)
+    const row = findCall('pending_operations', 'insert')?.[0] as Record<string, unknown>
+    expect(String(row.title)).toContain('timmar')
+    expect(row.params).toEqual({ salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 })
+    expect(result.preview.previous_hours_worked).toBeNull()
+    expect(result.preview.new_hours_worked).toBe(160)
+    expect(result.preview.hourly_rate).toBe(200)
+    expect(result.preview).not.toHaveProperty('new_monthly_salary')
+    expect(result.next?.tool).toBe('gnubok_calculate_salary_run')
+  })
+
+  it('refuses hours when the period has calendar days (the calculation would discard them)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } })
+    enqueue({ data: HOURLY_SRE })
+    enqueue({ data: [{ hours: 8 }] })
+
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_HOURS_FROM_CALENDAR/)
+  })
+
+  it('rejects hours on a monthly employee and a salary on an hourly one', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } })
+    enqueue({ data: { ...HOURLY_SRE, salary_type: 'monthly', monthly_salary: 30000 } })
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_SALARY_FIELD_MISMATCH/)
+
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } })
+    enqueue({ data: HOURLY_SRE })
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2', monthly_salary: 30000 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_SALARY_FIELD_MISMATCH/)
+  })
+
+  it('requires exactly one of monthly_salary and hours_worked before touching the run', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/exactly one of monthly_salary or hours_worked/)
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2', monthly_salary: 1, hours_worked: 1 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/exactly one of monthly_salary or hours_worked/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+})
+
 describe('gnubok_update_salary_run', () => {
   const RUN_ROW = {
     id: 'run-1',
@@ -317,7 +413,7 @@ describe('gnubok_update_salary_run', () => {
     ).rejects.toThrow(/SALARY_RUN_NOT_FOUND/)
   })
 
-  it('rejects a malformed payment_date before touching the run', async () => {
+  it('rejects a malformed payment_date before touching the run, by code and naming the field', async () => {
     const { supabase } = createQueuedMockSupabase()
 
     await expect(
@@ -325,7 +421,7 @@ describe('gnubok_update_salary_run', () => {
         { salary_run_id: 'run-1', payment_date: '23/03/2026' },
         'company-1', 'user-1', supabase as never, { type: 'user' },
       ),
-    ).rejects.toThrow(/VALIDATION_ERROR/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringContaining('payment_date') })
   })
 
   it('rejects a call with no updatable field', async () => {
@@ -365,6 +461,24 @@ describe('gnubok_register_absence', () => {
     expect(result.preview.day_count).toBe(5)
     expect(result.preview.employee_name).toBe('Anna Andersson')
     expect((result.preview.dates_sample as string[])[0]).toBe('2026-03-02')
+  })
+
+  it('states one scheduled day of the employee when the call states no hours, and leaves the commit to resolve it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1', hours_per_week: 40, workdays_per_week: 4 } }) // service assertEmployee
+    enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-2' }, error: null }) // pending_operations insert
+
+    const result = (await registerAbsence.execute(
+      { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-03', absence_type: 'sick' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.hours_per_day).toBe(10)
   })
 
   it('throws for a range beyond the cap', async () => {
@@ -423,10 +537,46 @@ describe('gnubok_book_salary_run', () => {
     total_avgifter: 9426,
   }
 
+  const ROSTER_ROW = {
+    id: 'sre-1',
+    calculation_breakdown: { steps: [] },
+    gross_salary: 30000,
+    tax_withheld: 7000,
+    tax_withheld_override: null,
+    net_salary: 23000,
+    avgifter_amount: 9426,
+    avgifter_amount_override: null,
+    vacation_accrual: 0,
+    vacation_accrual_avgifter: 0,
+    employee: { f_skatt_status: 'a_skatt' },
+  }
+
+  it('previews the effective totals: overrides set after the calculation are applied (agent feedback seq 948847)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW }) // salary_runs lookup (stored totals predate the override)
+    enqueue({
+      data: [{ ...ROSTER_ROW, tax_withheld_override: 0, avgifter_amount_override: 0 }],
+    }) // roster preflight
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await bookSalaryRun.execute(
+      { salary_run_id: 'run-1' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.total_tax).toBe(0)
+    expect(result.preview.total_avgifter).toBe(0)
+    expect(result.preview.total_net).toBe(30000)
+    expect(result.preview.overrides_applied).toBe(true)
+  })
+
   it('stages high-risk with a totals preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: RUN_ROW }) // salary_runs lookup
-    enqueue({ data: [{ id: 'sre-1', calculation_breakdown: { steps: [] } }] }) // roster preflight
+    enqueue({ data: [ROSTER_ROW] }) // roster preflight
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
     enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
@@ -441,7 +591,46 @@ describe('gnubok_book_salary_run', () => {
     expect(result.preview.period).toBe('2026-06')
     expect(result.preview.employee_count).toBe(1)
     expect(result.preview.total_net).toBe(23000)
+    expect(result.preview.total_avgifter).toBe(9426)
+    expect(result.preview.overrides_applied).toBe(false)
     expect(result.preview.current_status).toBe('review')
+  })
+
+  // crm#1216: the verifikat credits the net pay to the bank on payment_date,
+  // so a date still ahead needs the user's word before anything is staged.
+  it('refuses a payment date ahead without confirm_payment_date_ahead, staging nothing', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, payment_date: '2999-12-31' } })
+
+    const error = (await bookSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string; remediation?: { args?: Record<string, unknown> } }
+
+    expect(error.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+    expect(error.message).toContain('2999-12-31')
+    expect(error.remediation?.args).toEqual({ salary_run_id: 'run-1', confirm_payment_date_ahead: true })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('stages a confirmed early payout, carrying the confirmation and telling the approver', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, status: 'paid', payment_date: '2999-12-31' } })
+    enqueue({ data: [ROSTER_ROW] }) // roster preflight
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await bookSalaryRun.execute(
+      { salary_run_id: 'run-1', confirm_payment_date_ahead: true },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.warnings).toEqual([
+      'Utbetalningsdagen 2999-12-31 har inte kommit än: nettolönen bokförs som utbetald från bankkontot den dagen.',
+    ])
+    const [row] = findCall('pending_operations', 'insert') as [{ params: Record<string, unknown> }]
+    expect(row.params).toEqual({ salary_run_id: 'run-1', confirm_payment_date_ahead: true })
   })
 
   it('throws for an already-booked run', async () => {
@@ -467,6 +656,118 @@ describe('gnubok_book_salary_run', () => {
         'company-1', 'user-1', supabase as never, { type: 'user' },
       ),
     ).rejects.toThrow(/lack a calculation/)
+  })
+
+  it('refuses an uncalculated roster with SALARY_RUN_NOT_CALCULATED, naming the employee', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+    enqueue({
+      data: [
+        {
+          ...ROSTER_ROW,
+          employee_id: 'e1',
+          calculation_breakdown: null,
+          employee: { first_name: 'Anna', last_name: 'Svensson', f_skatt_status: 'a_skatt' },
+        },
+      ],
+    })
+
+    const error = (await bookSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string }
+
+    expect(error.code).toBe('SALARY_RUN_NOT_CALCULATED')
+    expect(error.message).toContain('Anna Svensson')
+  })
+
+  it('names the way out of a stale run in review: only a draft calculates', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+    enqueue({ data: [{ ...ROSTER_ROW, calculation_breakdown: null }] })
+
+    const refused = (await bookSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string; remediation?: { tool?: string } }
+
+    expect(refused.code).toBe('SALARY_RUN_NOT_CALCULATED')
+    expect(refused.message).toContain('gnubok_revert_salary_run')
+    expect(refused.remediation).toMatchObject({ tool: 'gnubok_revert_salary_run', args: { salary_run_id: 'run-1' } })
+  })
+
+  it('the calculation of a run in review names the same way out', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+
+    const refused = (await calculateSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string; remediation?: { tool?: string } }
+
+    expect(refused.code).toBe('SALARY_RUN_CALCULATE_FAILED')
+    expect(refused.remediation).toMatchObject({ tool: 'gnubok_revert_salary_run', args: { salary_run_id: 'run-1' } })
+  })
+
+  it('refuses a draft that was never calculated, the review step\'s rule, even with no employees', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, status: 'draft', calculation_params: null } })
+    enqueue({ data: [] })
+
+    const error = (await bookSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string }
+
+    expect(error.code).toBe('SALARY_RUN_NOT_CALCULATED')
+    expect(error.message).toContain('never been calculated')
+  })
+
+  it('shows the approver the warnings the approval will record: bank details for a payout, missing email', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+    enqueue({
+      data: [
+        {
+          ...ROSTER_ROW,
+          employee_id: 'e1',
+          employee: {
+            first_name: 'Anna',
+            last_name: 'Svensson',
+            clearing_number: null,
+            bank_account_number: null,
+            email: null,
+            f_skatt_status: 'a_skatt',
+          },
+        },
+        {
+          ...ROSTER_ROW,
+          id: 'sre-2',
+          employee_id: 'e2',
+          net_salary: 0,
+          tax_withheld: 0,
+          employee: {
+            first_name: 'Nils',
+            last_name: 'Noll',
+            clearing_number: null,
+            bank_account_number: null,
+            email: 'nils@example.se',
+            f_skatt_status: 'a_skatt',
+          },
+        },
+      ],
+    })
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await bookSalaryRun.execute(
+      { salary_run_id: 'run-1' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: { warnings?: string[] } }
+
+    expect(result.staged).toBe(true)
+    const warnings = result.preview.warnings ?? []
+    expect(warnings.some((w) => w.startsWith('Anna Svensson:') && /bank|clearing|konto/i.test(w))).toBe(true)
+    expect(warnings).toContain('Anna Svensson: E-post saknas, lönebesked kan inte skickas')
+    // Nothing to pay out, so no bank details needed (no payment-file line).
+    expect(warnings.some((w) => w.startsWith('Nils Noll:'))).toBe(false)
   })
 })
 
@@ -543,7 +844,7 @@ describe('gnubok_create_employee', () => {
     }
     expect(inserted).toBeDefined()
     expect(inserted.params.personnummer).toBeUndefined()
-    expect(inserted.params.personnummer_last4).toBe('0000')
+    expect(inserted.params.personnummer_last4).toBe('0008')
     expect(decryptPersonnummer(inserted.params.personnummer_encrypted as string)).toBe(SAMPLE_PERSONNUMMER)
     expect(JSON.stringify(inserted.params)).not.toContain(SAMPLE_PERSONNUMMER)
     expect(JSON.stringify(inserted.preview_data)).not.toContain(SAMPLE_PERSONNUMMER)
@@ -571,6 +872,43 @@ describe('gnubok_create_employee', () => {
     expect(inserted.params.default_dimensions).toEqual({ '1': 'KS1' })
   })
 
+  it('stages personnel_category tjansteman by default and arbetare when asked', async () => {
+    for (const [args, expected] of [
+      [validArgs, 'tjansteman'],
+      [{ ...validArgs, personnel_category: 'arbetare' }, 'arbetare'],
+    ] as const) {
+      const supabaseMock = makeCapturingSupabase({
+        company_settings: { data: { entity_type: 'ab' } },
+        fiscal_periods: { data: null },
+        pending_operations: { data: { id: 'op-category' }, error: null },
+      })
+
+      const result = (await createEmployee.execute(
+        args, 'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+      )) as { staged: boolean; preview: Record<string, unknown> }
+
+      expect(result.staged).toBe(true)
+      expect(result.preview.personnel_category).toBe(expected)
+      const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: Record<string, unknown> }
+      expect(inserted.params.personnel_category).toBe(expected)
+    }
+  })
+
+  it('rejects an unknown personnel_category', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      createEmployee.execute(
+        { ...validArgs, personnel_category: 'kollektiv' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/Invalid employee/)
+  })
+
+  it('advertises personnel_category as the two-value enum', () => {
+    const props = (createEmployee.inputSchema as { properties: Record<string, { enum?: string[] }> }).properties
+    expect(props.personnel_category.enum).toEqual(['arbetare', 'tjansteman'])
+  })
+
   it('rejects invalid input via CreateEmployeeSchema (missing salary)', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
@@ -591,6 +929,52 @@ describe('gnubok_create_employee', () => {
     ).rejects.toThrow(/jamkning_valid_to/)
   })
 
+  it('stages a company owner with vacation_rule none and 0 vacation days (agent feedback seq 828138)', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      company_settings: { data: { entity_type: 'ab' } },
+      fiscal_periods: { data: null },
+      pending_operations: { data: { id: 'op-owner' }, error: null },
+    })
+
+    const result = (await createEmployee.execute(
+      { ...validArgs, employment_type: 'company_owner', vacation_rule: 'none', vacation_days_per_year: 0 },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params.vacation_days_per_year).toBe(0)
+  })
+
+  it('rejects fewer than 25 vacation days under any other vacation rule', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      createEmployee.execute(
+        { ...validArgs, vacation_rule: 'procentregeln', vacation_days_per_year: 20 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/vacation_days_per_year/)
+  })
+
+  it('accepts and stages the address fields (agent feedback seq 828138)', async () => {
+    expect(Object.keys(createEmployee.inputSchema.properties as object)).toEqual(
+      expect.arrayContaining(['address_line1', 'postal_code', 'city']),
+    )
+    const supabaseMock = makeCapturingSupabase({
+      company_settings: { data: { entity_type: 'ab' } },
+      fiscal_periods: { data: null },
+      pending_operations: { data: { id: 'op-addr' }, error: null },
+    })
+
+    await createEmployee.execute(
+      { ...validArgs, address_line1: 'Testgatan 1', postal_code: '111 22', city: 'Teststad' },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )
+
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toMatchObject({ address_line1: 'Testgatan 1', postal_code: '111 22', city: 'Teststad' })
+  })
+
   it('blocks EF owners on payroll (entity-type preflight)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { entity_type: 'ef' } }) // company_settings
@@ -601,6 +985,21 @@ describe('gnubok_create_employee', () => {
         'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
       ),
     ).rejects.toThrow()
+  })
+
+  it('advertises only fields the create writes (door parity)', async () => {
+    // Same check as on gnubok_update_employee: a key advertised here and
+    // missing from the writable set would be dropped without a word.
+    const { EMPLOYEE_CREATE_COLUMNS } = await import('@/lib/salary/employee-commands')
+    const advertised = Object.keys((createEmployee.inputSchema as { properties: object }).properties)
+    // personnummer is encrypted at staging and stored as its own pair;
+    // reason is the agent's note to the approver, never a column.
+    const dropped = advertised.filter(
+      (field) => field !== 'personnummer' && field !== 'reason' && !EMPLOYEE_CREATE_COLUMNS.has(field),
+    )
+    expect(dropped).toEqual([])
+    // A new employee is active: the flag is an update-only key.
+    expect(advertised).not.toContain('is_active')
   })
 })
 
@@ -631,6 +1030,38 @@ describe('gnubok_update_employee', () => {
     expect(result.preview.bank_details_changed).toBe(true)
     const salaryChange = result.preview.changes.find((c) => c.field === 'monthly_salary')
     expect(salaryChange).toEqual({ field: 'monthly_salary', from: 35000, to: 38000 })
+  })
+
+  it('stages a personnel_category change with a from/to preview', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, personnel_category: 'tjansteman' } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-category-upd' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', personnel_category: 'arbetare' },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes).toContainEqual({ field: 'personnel_category', from: 'tjansteman', to: 'arbetare' })
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: { patch: Record<string, unknown> } }
+    expect(inserted.params.patch).toEqual({ personnel_category: 'arbetare' })
+  })
+
+  it('refuses null and unknown values for personnel_category at staging', async () => {
+    for (const value of [null, 'kollektiv']) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: EXISTING })
+      await expect(
+        updateEmployee.execute(
+          { employee_id: 'emp-1', personnel_category: value },
+          'company-1', 'user-1', supabase as never, { type: 'user' },
+        ),
+      ).rejects.toThrow(/Invalid employee update/)
+    }
   })
 
   it('stages a default_dimensions patch, with {} as the clear-all-tags update', async () => {
@@ -668,6 +1099,34 @@ describe('gnubok_update_employee', () => {
     ).rejects.toThrow(/jamkning_valid_to/)
   })
 
+  it('stages a requested extra tax percentage', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, extra_tax_amount: null, extra_tax_percentage: null } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-extra-tax' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', extra_tax_percentage: 45 },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes).toContainEqual({ field: 'extra_tax_percentage', from: null, to: 45 })
+  })
+
+  it('refuses kronor sent while a percentage is stored, at staging time', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EXISTING, extra_tax_amount: null, extra_tax_percentage: 45 } })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', extra_tax_amount: 500 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/extra_tax_percentage|kronor eller i procent/)
+  })
+
   it('stages an unrelated edit on a legacy row that lacks valid_to (touched gate)', async () => {
     const supabaseMock = makeCapturingSupabase({
       employees: { data: { ...EXISTING, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null } },
@@ -682,6 +1141,50 @@ describe('gnubok_update_employee', () => {
     )) as { staged: boolean }
 
     expect(result.staged).toBe(true)
+  })
+
+  it('stages address fields, with null clearing one', async () => {
+    expect(Object.keys(updateEmployee.inputSchema.properties as object)).toEqual(
+      expect.arrayContaining(['address_line1', 'postal_code', 'city']),
+    )
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, address_line1: null, postal_code: null, city: 'Gamla staden' } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-addr2' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', address_line1: 'Testgatan 1', postal_code: '111 22', city: null },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: { patch: Record<string, unknown> } }
+    expect(inserted.params.patch).toEqual({ address_line1: 'Testgatan 1', postal_code: '111 22', city: null })
+  })
+
+  it('lets an owner on vacation_rule none drop to 0 vacation days, and refuses it under another rule', async () => {
+    const owner = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, vacation_rule: 'none', vacation_days_per_year: 25 } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-vac' }, error: null },
+    })
+    const ok = (await updateEmployee.execute(
+      { employee_id: 'emp-1', vacation_days_per_year: 0 },
+      'company-1', 'user-1', owner as never, { type: 'user' },
+    )) as { staged: boolean }
+    expect(ok.staged).toBe(true)
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EXISTING, vacation_rule: 'procentregeln', vacation_days_per_year: 25 } })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', vacation_days_per_year: 0 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/Invalid employee update/)
   })
 
   it('rejects personnummer changes at the tool boundary', async () => {
@@ -703,6 +1206,148 @@ describe('gnubok_update_employee', () => {
         'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
       ),
     ).rejects.toThrow(/not found/i)
+  })
+
+  // The update contract shared with the dashboard and v1 PATCH (#3008):
+  // null clears a nullable field, an omitted key is unchanged.
+  it('stages a cleared slutdatum as an explicit null in the patch', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, employment_end: '2026-06-30' } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-clear-end' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', employment_end: null },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes).toEqual([{ field: 'employment_end', from: '2026-06-30', to: null }])
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as {
+      params: { patch: Record<string, unknown> }
+    }
+    expect(inserted.params.patch).toEqual({ employment_end: null })
+  })
+
+  it('rejects null on a NOT NULL column at staging, with the same schema as the PATCH routes', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', employment_start: null },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/Invalid employee update: employment_start/)
+  })
+
+  it('rejects a malformed date at staging instead of at approval', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', employment_end: '30-06-2026' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/Invalid employee update: employment_end/)
+  })
+
+  it('rejects clearing the monthly salary of a monthly employee at staging (merged row)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EXISTING, salary_type: 'monthly' } })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', monthly_salary: null },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/monthly_salary: Månadslön krävs/)
+  })
+
+  it('advertises only fields the update writes, and null exactly where UpdateEmployeeSchema accepts it (door parity)', async () => {
+    const { UpdateEmployeeSchema } = await import('@/lib/api/schemas')
+    const { EMPLOYEE_UPDATE_COLUMNS } = await import('@/lib/salary/employee-commands')
+    const { EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS } = await import('@/lib/salary/employee-update-rules')
+    const properties = (updateEmployee.inputSchema as { properties: Record<string, { type?: unknown }> }).properties
+    const mismatches: string[] = []
+    // Advertised here, written nowhere. The schema strips a key it does not
+    // know and the executor drops one outside its writable set, and neither
+    // says so: is_active was advertised for months while this loop skipped
+    // it as "not part of the update schema" (crm#1133).
+    const dropped: string[] = []
+    for (const [field, prop] of Object.entries(properties)) {
+      // employee_id is the target of the update, not a column; reason is
+      // the agent's note to the approver.
+      if (field === 'employee_id' || field === 'reason') continue
+      const zodField = UpdateEmployeeSchema.shape[field as keyof typeof UpdateEmployeeSchema.shape]
+      // A request-only key is read by the update itself, not written.
+      if (!zodField || !(EMPLOYEE_UPDATE_COLUMNS.has(field) || EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS.has(field))) {
+        dropped.push(field)
+        continue
+      }
+      const advertisesNull = Array.isArray(prop.type) && prop.type.includes('null')
+      if (advertisesNull !== zodField.safeParse(null).success) mismatches.push(field)
+    }
+    expect(dropped).toEqual([])
+    expect(mismatches).toEqual([])
+  })
+
+  // Semesterlagen 16 § andra stycket 3-4 (#31): the executor's rule in dry
+  // run refuses at staging, and the confirmation rides in the staged patch.
+  it('refuses at staging a changed employment_degree that keeps sammalöneregeln', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EXISTING, vacation_rule: 'sammaloneregeln', employment_degree: 100 } })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', employment_degree: 80 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED/)
+  })
+
+  it('stages the change with the kollektivavtal confirmation in the patch the executor reads', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, vacation_rule: 'sammaloneregeln', employment_degree: 100 } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-sammalone' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', employment_degree: 80, sammaloneregeln_kollektivavtal_confirmed: true },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: { patch: Record<string, unknown> } }
+    expect(inserted.params.patch).toEqual({ employment_degree: 80, sammaloneregeln_kollektivavtal_confirmed: true })
+  })
+
+  it('stages a reactivation: is_active reaches the staged patch and the changes preview', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, is_active: false } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-reactivate' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', is_active: true },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes).toEqual([{ field: 'is_active', from: false, to: true }])
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: { patch: Record<string, unknown> } }
+    expect(inserted.params.patch).toEqual({ is_active: true })
+  })
+
+  it('rejects a non-boolean is_active at staging instead of at approval', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', is_active: null },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/Invalid employee update: is_active/)
   })
 })
 

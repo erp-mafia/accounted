@@ -62,6 +62,15 @@ describe('WINT mappers', () => {
       expect(mapWintToSalesInvoice({ ...base, Status: 'NotSent' }).status).toBe('draft');
     });
 
+    it('never reads a zero LeftToPay as paid on an unsent invoice (crm#1245)', () => {
+      const dto = mapWintToSalesInvoice({ ...base, Status: 'NotSent', LeftToPay: 0 });
+      expect(dto.status).toBe('draft');
+      expect(dto.paymentStatus.paid).toBe(false);
+      expect(dto.paymentStatus.balance.value).toBe(1250);
+      // An explicit paid enum still wins.
+      expect(mapWintToSalesInvoice({ ...base, Status: 'NotSent', PaymentState: 'Paid' }).paymentStatus.paid).toBe(true);
+    });
+
     it('forces balance to 0 when paid', () => {
       const dto = mapWintToSalesInvoice({ ...base, Status: 'Paid', LeftToPay: 1250 });
       expect(dto.paymentStatus.balance.value).toBe(0);
@@ -80,6 +89,57 @@ describe('WINT mappers', () => {
       expect(dto.lines[0]?.unitPrice?.value).toBe(90);
       expect(dto.lines[0]?.lineExtensionAmount.value).toBe(180);
       expect(dto.lines[0]?.taxPercent).toBe(12);
+    });
+  });
+
+  /**
+   * WINT's record id is not an invoice number (issue #51, the rule Bokio got
+   * in crm#1084): an unnumbered draft or cancelled invoice imports with no
+   * number, the id stays on `id`.
+   */
+  describe('mapWintToSalesInvoice invoice number', () => {
+    const base = {
+      Id: 42,
+      SerialNumber: 1007,
+      Status: 'Unpaid',
+      PostingDate: '2026-03-01T00:00:00',
+      Currency: 'SEK',
+      TotalAmount: 1250,
+      TotalTax: 250,
+      Rows: [],
+    };
+
+    it('keeps the serial number of a numbered invoice', () => {
+      const dto = mapWintToSalesInvoice(base);
+      expect(dto.invoiceNumber).toBe('1007');
+      expect(dto.id).toBe('42');
+    });
+
+    it('gives an unsent draft without a serial number no number, the WINT id stays the reference', () => {
+      // Detail form (Invoice): SerialNumber is nullable.
+      const dto = mapWintToSalesInvoice({ ...base, Status: 'NotSent', SerialNumber: null });
+      expect(dto.status).toBe('draft');
+      expect(dto.invoiceNumber).toBe('');
+      expect(dto.id).toBe('42');
+      const { SerialNumber: _omitted, ...withoutSerial } = base;
+      expect(mapWintToSalesInvoice({ ...withoutSerial, Status: 'NotSent' }).invoiceNumber).toBe('');
+    });
+
+    it('reads the list form\'s int64 default 0 as no number', () => {
+      // List form (InvoiceListItem): SerialNumber is a plain int64.
+      expect(mapWintToSalesInvoice({ ...base, Status: 'NotSent', SerialNumber: 0 }).invoiceNumber).toBe('');
+    });
+
+    it('gives a cancelled invoice without a serial number no number either', () => {
+      const dto = mapWintToSalesInvoice({ ...base, Status: 'Cancelled', SerialNumber: null });
+      expect(dto.status).toBe('cancelled');
+      expect(dto.invoiceNumber).toBe('');
+    });
+
+    it('keeps the id on an issued invoice without a serial number, which the insert could not store with none', () => {
+      const dto = mapWintToSalesInvoice({ ...base, SerialNumber: null });
+      expect(dto.status).toBe('sent');
+      expect(dto.invoiceNumber).toBe('42');
     });
   });
 

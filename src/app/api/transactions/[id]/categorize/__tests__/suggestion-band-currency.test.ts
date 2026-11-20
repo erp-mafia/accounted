@@ -16,6 +16,13 @@
  * empty. The finding lives entirely in the arguments.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The question about a filed momsperiod (lib/transactions/filed-vat-categorize.ts)
+// reads the row and the filing record: none here, so the queued reads stay
+// the booking's own. Its own test and route.test.ts pin it.
+vi.mock('@/lib/transactions/filed-vat-categorize', () => ({
+  filedPeriodCategorizeWarning: async () => null,
+}))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createMockRequest, parseJsonResponse, createMockRouteParams, makeTransaction } from '@/tests/helpers'
 
@@ -58,7 +65,7 @@ function createRecordingSupabase(pages: Record<string, Array<{ data?: unknown; e
   const supabase = {
     from: vi.fn(from),
     rpc: vi.fn(() => from('__rpc')),
-    auth: { getUser: vi.fn() },
+    auth: { getUser: vi.fn(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   }
 
   return { supabase, queries }
@@ -67,6 +74,14 @@ function createRecordingSupabase(pages: Record<string, Array<{ data?: unknown; e
 const initial = createRecordingSupabase({})
 let mockSupabase = initial.supabase
 let recorded: RecordedQuery[] = initial.queries
+
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase as unknown as SupabaseClient),

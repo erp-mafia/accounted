@@ -1,11 +1,26 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   createMockRequest,
+  createMockRouteParams,
   parseJsonResponse,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+// Booking review rules (accounted#130): none unless a test sets them.
+const blockRules = vi.hoisted(() => ({ list: [] as unknown[] }))
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => blockRules.list),
+}))
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -29,7 +44,15 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 // applyTemplate is the pure ratio/VAT expander used by the route. The
 // route test stubs it so we don't need a real template object.
-vi.mock('@/lib/bookkeeping/template-library', () => ({
+// The company's skattekonto account (PH 175): read only for a system
+// template that names 1630.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
+vi.mock('@/lib/bookkeeping/template-library', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/template-library')>()),
   applyTemplate: vi.fn(),
 }))
 
@@ -38,6 +61,12 @@ vi.mock('@/lib/bookkeeping/template-library', () => ({
 // lib/transactions/__tests__/inbox-underlag.test.ts.
 vi.mock('@/lib/transactions/inbox-underlag', () => ({
   propagateUnderlagForBookedTransaction: vi.fn().mockResolvedValue(undefined),
+}))
+
+// A row linked onto an existing verifikat teaches its bank text (crm#1746);
+// the learner is tested in lib/transactions/__tests__/link-learning.test.ts.
+vi.mock('@/lib/transactions/link-learning', () => ({
+  learnFromBankLink: vi.fn().mockResolvedValue({ outcome: 'learned' }),
 }))
 
 // The booking-time duplicate guard runs several queries of its own per tx;
@@ -50,13 +79,36 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
 }))
+// The company's VAT account classification, read by the importmoms guard
+// (lib/bookkeeping/import-vat-base.ts, tested there) only when a line can
+// carry importmoms: the BAS map alone here.
+vi.mock('@/lib/reports/vat-revenue-accounts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/vat-revenue-accounts')>()),
+  fetchDynamicVatAccounts: vi.fn(async () => ({
+    accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
+    rateByAccount: new Map(), staticRateByAccount: new Map(),
+    rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+    unconfiguredVatAccounts: new Map(),
+  })),
+}))
+
+// The filed-momsperiod question reads the rows and dry-runs the booking
+// (lib/transactions/filed-vat-bulk-book.ts, tested there and through the real
+// dry run in its chain test). Stubbed, so the queued client stays aligned
+// with the booking's own queries: no question unless a test sets one.
+const filedVat = vi.hoisted(() => ({ filedPeriodBulkBookWarning: vi.fn() }))
+vi.mock('@/lib/transactions/filed-vat-bulk-book', () => filedVat)
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events/bus'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { learnFromBankLink } from '@/lib/transactions/link-learning'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import { recordDecisions } from '@/lib/suggestion-log/record'
 
 const TX1 = '11111111-1111-4111-8111-111111111111'
 const TX2 = '22222222-2222-4222-8222-222222222222'
@@ -69,8 +121,53 @@ describe('POST /api/transactions/bulk-book', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    blockRules.list = []
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  // accounted#130 step 2: a row a booking review rule matches is booked on
+  // its own from its review, never in a samlingsverifikat.
+  it('refuses a samlingsverifikat with a row a booking review rule matches, before the RPC', async () => {
+    const rule = {
+      id: 'r-1', rule_id: 'r-1', version: 1, accounts: ['3001'], counterparty_key: 'kund', counterparty_label: 'Kund AB',
+      amount_from_sek: 150, vat_treatment: null, note: null, valid_from: '2026-10-29T00:00:00Z', created_by: 'u-1',
+      created_at: '2026-10-29T00:00:00Z', revoked_at: null, revoked_by: null, revoked_reason: null,
+    }
+    blockRules.list = [rule]
+    try {
+      enqueue({
+        data: [
+          { id: TX1, amount: 100, currency: 'SEK', description: 'Insättning', merchant_name: 'Kund AB', date: '2026-06-05' },
+          { id: TX2, amount: 200, currency: 'SEK', description: 'Insättning', merchant_name: 'Kund AB', date: '2026-06-05' },
+        ],
+        error: null,
+      })
+      enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+      enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
+      enqueue({ data: [], error: null })
+      const response = await POST(
+        createMockRequest('/api/transactions/bulk-book', {
+          method: 'POST',
+          body: {
+            tx_ids: [TX1, TX2],
+            entry_description: 'Samlingsverifikation',
+            manual_lines: [
+              { account_number: '1930', debit_amount: 300, credit_amount: 0, currency: 'SEK' },
+              { account_number: '3001', debit_amount: 0, credit_amount: 300, currency: 'SEK' },
+            ],
+          },
+        }),
+        createMockRouteParams({}),
+      )
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { transaction_ids: string[] } } }>(response)
+      expect(status, JSON.stringify(body)).toBe(409)
+      expect(body.error.code).toBe('BOOKING_REVIEW_BULK_REFUSED')
+      expect(body.error.details.transaction_ids).toEqual([TX2])
+      expect(mockSupabase.rpc).not.toHaveBeenCalledWith('bulk_book_transactions', expect.anything())
+    } finally {
+      blockRules.list = []
+    }
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -147,6 +244,8 @@ describe('POST /api/transactions/bulk-book', () => {
     expect(body.data.mode).toBe('link_existing')
     expect(body.data.journal_entry_id).toBe(JE)
     expect(body.data.linked_tx_count).toBe(2)
+    // Linking posts no new verifikat: nothing to announce as committed.
+    expect(eventBus.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'journal_entry.committed' }))
     // Every booked tx gets its matched inbox items completed against the
     // samlingsverifikat (underlag link + consumed stamp).
     expect(propagateUnderlagForBookedTransaction).toHaveBeenCalledWith(
@@ -161,6 +260,68 @@ describe('POST /api/transactions/bulk-book', () => {
       TX2,
       JE,
     )
+    // Two rows on one verifikat are a samlingsverifikat: nothing is learned (crm#1746).
+    expect(learnFromBankLink).not.toHaveBeenCalled()
+  })
+
+  it('one row linked onto an existing verifikat teaches its bank text from it, at once (crm#1746)', async () => {
+    enqueue({
+      data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({
+      data: { ok: true, mode: 'link_existing', journal_entry_id: JE, voucher_series: 'A', voucher_number: 12, linked_tx_count: 1, tx_sum: 100 },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+
+    expect(response.status).toBe(200)
+    expect(learnFromBankLink).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      { transactionId: TX1, journalEntryId: JE },
+      'explicit',
+    )
+  })
+
+  // Who decided: the RPC hands these to commit_journal_entry, so the
+  // samlingsverifikat records the signed-in user and bulk_accept
+  // (migration 20261011140000). Before, it recorded neither.
+  it('hands bulk_accept and the signed-in user to the RPC', async () => {
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-05' },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: { ok: true, mode: 'link_existing', journal_entry_id: JE, linked_tx_count: 2, tx_sum: 300 },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+
+    expect(response.status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'bulk_book_transactions',
+      expect.objectContaining({
+        p_commit_method: 'bulk_accept',
+        p_actor_type: 'user',
+        p_actor_label: null,
+      }),
+    )
   })
 
   it('create-new path fetches template, expands per mode, and calls RPC', async () => {
@@ -172,6 +333,7 @@ describe('POST /api/transactions/bulk-book', () => {
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     // Template fetch.
     enqueue({
       data: {
@@ -183,9 +345,21 @@ describe('POST /api/transactions/bulk-book', () => {
           { account: '2611', label: 'Utg moms 25%', side: 'credit', type: 'vat', vat_rate: 0.25 },
         ],
         is_active: true,
+        // The service re-applies the btl_select visibility rule (the v1 door
+        // runs as the service role), so the fixture carries its owner.
+        is_system: true,
       },
       error: null,
     })
+
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '2611', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
 
     // applyTemplate stub: return a balanced 3-line set per call.
     vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
@@ -194,7 +368,7 @@ describe('POST /api/transactions/bulk-book', () => {
       { account_number: '2611', debit_amount: '', credit_amount: String(total * 0.2), line_description: 'Utg moms 25%' },
     ])
 
-    // Account dimension rules pre-check (PR10) — none configured.
+    // Account dimension rules pre-check (PR10) - none configured.
     enqueue({ data: [], error: null })
     // RPC returns happy path.
     enqueue({
@@ -209,6 +383,9 @@ describe('POST /api/transactions/bulk-book', () => {
       },
       error: null,
     })
+    // The engine door reloads the posted samlingsverifikat for the event.
+    const posted = { id: JE, company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 13, lines: [] }
+    enqueue({ data: posted, error: null })
     // Event re-fetch.
     enqueue({ data: [], error: null })
 
@@ -230,6 +407,51 @@ describe('POST /api/transactions/bulk-book', () => {
     expect(body.data.journal_entry_id).toBe(JE)
     // Template expansion was invoked once per tx in one_line_per_tx mode.
     expect(vi.mocked(applyTemplate)).toHaveBeenCalledTimes(2)
+    // The new samlingsverifikat is announced like any engine commit, so
+    // webhook subscribers and the event log hear about it.
+    expect(eventBus.emit).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: posted, userId: 'user-1', companyId: 'company-1' },
+    })
+  })
+
+  it('books a system skattekonto template on 2012 for a firm that runs the skattekonto there (PH 175)', async () => {
+    vi.mocked(resolveSkattekontoAccount).mockResolvedValueOnce('2012')
+    enqueue({
+      data: [{ id: TX1, amount: -3000, currency: 'SEK', description: 'Skatteverket', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({
+      data: {
+        id: TPL,
+        name: 'Insättning skattekonto',
+        lines: [
+          { account: '1630', label: 'Skattekonto', side: 'debit', type: 'business', ratio: 1 },
+          { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1 },
+        ],
+        is_active: true,
+        is_system: true,
+      },
+      error: null,
+    })
+    vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
+      { account_number: '2012', debit_amount: String(total), credit_amount: '', line_description: 'Skattekonto' },
+      { account_number: '1930', debit_amount: '', credit_amount: String(total), line_description: 'Bank' },
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: { ok: true, mode: 'create_new', journal_entry_id: JE, voucher_series: 'A', voucher_number: 14, linked_tx_count: 1, tx_sum: -3000 }, error: null })
+    enqueue({ data: { id: JE, company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 14, lines: [] }, error: null })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1], template_id: TPL, mode: 'sum_per_account', entry_description: 'Skattekonto juni' },
+    })
+    await POST(request, { params: Promise.resolve({}) })
+    const [lines] = vi.mocked(applyTemplate).mock.calls[0]
+    expect(lines.map((l) => l.account)).toEqual(['2012', '1930'])
+    expect(resolveSkattekontoAccount).toHaveBeenCalledTimes(1)
   })
 
   it('maps RPC structured failure code to errorResponseFromCode', async () => {
@@ -254,6 +476,53 @@ describe('POST /api/transactions/bulk-book', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('BULK_BOOK_DATE_MISMATCH')
+  })
+
+  // GitHub #3507: rows linked to a verifikat whose bank leg another row
+  // already settled are refused by the RPC with the single doors' code, and
+  // answered with their message naming the verifikat.
+  it('answers a link refused for a consumed bank leg with 409 VOUCHER_BANK_LEG_CONSUMED and the Swedish message', async () => {
+    enqueue({
+      data: [
+        { id: TX1, amount: -1400, currency: 'SEK', description: 'Hyra del 1', date: '2026-07-03' },
+        { id: TX2, amount: -1400, currency: 'SEK', description: 'Hyra del 2', date: '2026-07-03' },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: {
+        ok: false,
+        code: 'VOUCHER_BANK_LEG_CONSUMED',
+        details: {
+          journal_entry_id: JE,
+          voucher_series: 'A',
+          voucher_number: 12,
+          account: '1930',
+          tx_sum: -2800,
+          booked: -2800,
+          held: -2800,
+          remaining: 0,
+        },
+      },
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_BANK_LEG_CONSUMED')
+    expect(body.error.message).toBe(
+      'Verifikat A-12 bokför -2800 på 1930, och -2800 av det är redan kopplat till andra transaktioner (kvar: 0). ' +
+        'De 2 transaktionerna på sammanlagt -2800 ryms inte i verifikatet. Är de egna affärshändelser, bokför dem som egna verifikat. ' +
+        'Är den andra kopplingen fel, koppla bort den transaktionen först.',
+    )
+    // Nothing was linked: no row is announced as reconciled.
+    expect(eventBus.emit).not.toHaveBeenCalled()
+    expect(propagateUnderlagForBookedTransaction).not.toHaveBeenCalled()
   })
 })
 
@@ -377,6 +646,7 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     // chart_of_accounts allowlist.
     enqueue({
       data: [{ account_number: '1930' }, { account_number: '3001' }],
@@ -417,6 +687,44 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
     expect(body.data.mode).toBe('create_new')
   })
 
+  // #83: importmoms on 2615 with no ruta 50 line (a company's own mall puts
+  // its fiktiv moms there) is refused before the RPC, in the dry run too.
+  it('refuses manual_lines that book importmoms with no ruta 50 line, before the RPC', async () => {
+    enqueue({
+      data: [{ id: TX1, amount: -1000, currency: 'SEK', description: 'Leverantör', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    // chart_of_accounts allowlist.
+    enqueue({
+      data: [{ account_number: '1930' }, { account_number: '4548' }, { account_number: '2645' }, { account_number: '2615' }],
+      error: null,
+    })
+    // Dimension rules: none configured.
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: {
+        tx_ids: [TX1],
+        entry_description: 'Import',
+        manual_lines: [
+          { account_number: '4548', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+          { account_number: '2645', debit_amount: 250, credit_amount: 0, currency: 'SEK' },
+          { account_number: '2615', debit_amount: 0, credit_amount: 250, currency: 'SEK' },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details).toEqual({ import_vat_accounts: ['2615'] })
+    expect(body.error.message).toContain('4545, 4546 eller 4547')
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('bulk_book_transactions', expect.anything())
+  })
+
   it('treats NULL currency as SEK and still books', async () => {
     enqueue({
       data: [
@@ -425,6 +733,7 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
     enqueue({ data: [], error: null })
     enqueue({
@@ -541,6 +850,42 @@ describe('POST /api/transactions/bulk-book: duplicate guard', () => {
     )
   })
 
+  it('passes each row\'s provider identity, so two Stripe bookings with different ids never pair (crm#1271)', async () => {
+    const STRIPE_TXS = SEK_TXS.map((tx, i) => ({
+      ...tx,
+      external_id: `stripe_acct_A_txn_${i}_fee`,
+      import_source: 'stripe',
+      bank_connection_id: null,
+    }))
+    enqueue({ data: STRIPE_TXS, error: null })
+    enqueue({
+      data: {
+        ok: true, mode: 'link_existing', journal_entry_id: JE,
+        voucher_series: 'A', voucher_number: 12, linked_tx_count: 2, tx_sum: 300,
+      },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    expect(response.status).toBe(200)
+    expect(detectBookingDuplicate).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({
+        id: TX2,
+        external_id: 'stripe_acct_A_txn_1_fee',
+        import_source: 'stripe',
+        bank_connection_id: null,
+      }),
+      expect.anything(),
+    )
+  })
+
   it('force=true books through and records each dismissed candidate in behandlingshistorik', async () => {
     enqueue({ data: SEK_TXS, error: null })
     enqueue({
@@ -573,6 +918,21 @@ describe('POST /api/transactions/bulk-book: duplicate guard', () => {
         }),
       }),
     )
+    // Each row's decision says whether force bypassed a candidate for it.
+    // Linking to an existing verifikat posts no lines: no chart or period check.
+    const decisions = vi.mocked(recordDecisions).mock.calls[0][2]
+    expect(decisions.map((d) => [d.transactionId, d.checks])).toEqual([
+      [TX1, [
+        { id: 'already_booked', result: 'pass', detail: null },
+        { id: 'currency', result: 'pass', detail: null },
+        { id: 'duplicate', result: 'pass', detail: null },
+      ]],
+      [TX2, [
+        { id: 'already_booked', result: 'pass', detail: null },
+        { id: 'currency', result: 'pass', detail: null },
+        { id: 'duplicate', result: 'warn', detail: `force:journal_entry:${CANDIDATE.journal_entry_id}` },
+      ]],
+    ])
   })
 
   it('fails open when detection itself throws (a guard failure never blocks a booking)', async () => {
@@ -593,5 +953,473 @@ describe('POST /api/transactions/bulk-book: duplicate guard', () => {
     })
     const response = await POST(request)
     expect(response.status).toBe(200)
+    // The guard that could not run is recorded as such, not as a pass.
+    const decisions = vi.mocked(recordDecisions).mock.calls[0][2]
+    expect(decisions.map((d) => d.checks?.find((c) => c.id === 'duplicate'))).toEqual([
+      { id: 'duplicate', result: 'warn', detail: 'detection_failed' },
+      { id: 'duplicate', result: 'warn', detail: 'detection_failed' },
+    ])
+  })
+})
+
+/**
+ * The shared bulk-book service runs the whole dimension policy
+ * (enforceBulkBookDimensionPolicy), registry validation included, before the
+ * RPC: the RPC books in SQL and never passes through the engine's checks.
+ */
+describe('POST /api/transactions/bulk-book: dimension policy', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const emptyParams = { params: Promise.resolve({}) }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  function manualLinesBody(dimensions: Record<string, string>) {
+    return {
+      tx_ids: [TX1],
+      entry_description: 'Samlingsverifikation',
+      manual_lines: [
+        { account_number: '1930', debit_amount: 100, credit_amount: 0, currency: 'SEK' },
+        { account_number: '3001', debit_amount: 0, credit_amount: 100, currency: 'SEK', dimensions },
+      ],
+    }
+  }
+
+  it('refuses an archived dimension value with 400 before the RPC', async () => {
+    enqueue({ data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' }], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }) // chart allowlist
+    enqueue({ data: [], error: null }) // account_dimension_rules
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: [{ id: 'dim-proj', sie_dim_no: 6, name: 'Projekt', is_active: true }], error: null })
+    enqueue({ data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: false }], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', { method: 'POST', body: manualLinesBody({ '6': 'P001' }) }),
+      emptyParams,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('DIMENSION_VALIDATION_FAILED')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('books when the tagged value is registered and active', async () => {
+    enqueue({ data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' }], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: [{ id: 'dim-proj', sie_dim_no: 6, name: 'Projekt', is_active: true }], error: null })
+    enqueue({ data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: true }], error: null })
+    enqueue({
+      data: { ok: true, mode: 'create_new', journal_entry_id: JE, voucher_series: 'A', voucher_number: 15, linked_tx_count: 1, tx_sum: 100 },
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // event re-fetch
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', { method: 'POST', body: manualLinesBody({ '6': 'P001' }) }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'bulk_book_transactions',
+      expect.objectContaining({
+        p_new_entry: expect.objectContaining({
+          lines: expect.arrayContaining([expect.objectContaining({ account_number: '3001', dimensions: { '6': 'P001' } })]),
+        }),
+      })
+    )
+  })
+})
+
+// crm#1313: the header default_dimensions tag the business lines only. The
+// bank side and the moms lines stay untagged, as categorize books them; a
+// line's own bag is the caller's explicit choice and is kept as given.
+describe('POST /api/transactions/bulk-book: default_dimensions on business lines only', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const emptyParams = { params: Promise.resolve({}) }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  function postedLines(): Array<{ account_number: string; dimensions?: Record<string, string> }> {
+    const call = mockSupabase.rpc.mock.calls.find((c) => c[0] === 'bulk_book_transactions')
+    expect(call).toBeDefined()
+    return (call![1] as { p_new_entry: { lines: Array<{ account_number: string; dimensions?: Record<string, string> }> } })
+      .p_new_entry.lines
+  }
+
+  function enqueueCommit() {
+    enqueue({ data: [], error: null }) // account_dimension_rules
+    enqueue({ data: { dimensions_enabled: false }, error: null }) // registry toggle: free text
+    enqueue({
+      data: { ok: true, mode: 'create_new', journal_entry_id: JE, voucher_series: 'A', voucher_number: 16, linked_tx_count: 1, tx_sum: 125 },
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // event re-fetch
+  }
+
+  it('template path: the settlement and vat lines stay untagged', async () => {
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-05' },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({
+      data: {
+        id: TPL,
+        name: 'Försäljning 25%',
+        lines: [
+          { account: '1930', label: 'Bank', side: 'debit', type: 'settlement' },
+          { account: '3001', label: 'Försäljning', side: 'credit', type: 'business', ratio: 0.8 },
+          { account: '2611', label: 'Utg moms 25%', side: 'credit', type: 'vat', vat_rate: 0.25 },
+        ],
+        is_active: true,
+        is_system: false,
+        company_id: 'company-1',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '2611', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
+    vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
+      { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
+      { account_number: '3001', debit_amount: '', credit_amount: String(total * 0.8), line_description: 'Försäljning' },
+      { account_number: '2611', debit_amount: '', credit_amount: String(total * 0.2), line_description: 'Utg moms 25%' },
+    ])
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: {
+          tx_ids: [TX1, TX2],
+          template_id: TPL,
+          mode: 'one_line_per_tx',
+          entry_description: 'Samlingsverifikation 2026-06-05',
+          default_dimensions: { '6': 'P001' },
+        },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    const lines = postedLines()
+    expect(lines).toHaveLength(6)
+    for (const line of lines) {
+      if (line.account_number === '3001') expect(line.dimensions).toEqual({ '6': 'P001' })
+      else expect(line.dimensions).toBeUndefined()
+    }
+  })
+
+  it('template path: a tag the mall sets on its business line wins over the header default, per key', async () => {
+    enqueue({
+      data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({
+      data: {
+        id: TPL,
+        name: 'Försäljning 25%',
+        lines: [
+          { account: '1930', label: 'Bank', side: 'debit', type: 'settlement' },
+          { account: '3001', label: 'Försäljning', side: 'credit', type: 'business', ratio: 0.8, dimensions: { '6': 'P777' } },
+          { account: '2611', label: 'Utg moms 25%', side: 'credit', type: 'vat', vat_rate: 0.25 },
+        ],
+        is_active: true,
+        is_system: false,
+        company_id: 'company-1',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '2611', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
+    // As applyTemplate answers: the mall's bag on its business line only.
+    vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
+      { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
+      { account_number: '3001', debit_amount: '', credit_amount: String(total * 0.8), line_description: 'Försäljning', dimensions: { '6': 'P777' } },
+      { account_number: '2611', debit_amount: '', credit_amount: String(total * 0.2), line_description: 'Utg moms 25%' },
+    ])
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: {
+          tx_ids: [TX1],
+          template_id: TPL,
+          mode: 'sum_per_account',
+          entry_description: 'Samlingsverifikation 2026-06-05',
+          default_dimensions: { '1': 'KS01', '6': 'P001' },
+        },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(postedLines().map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1930', undefined],
+      ['3001', { '1': 'KS01', '6': 'P777' }],
+      ['2611', undefined],
+    ])
+  })
+
+  it('template path: the mall\'s own tags are booked without a header default', async () => {
+    enqueue({
+      data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({
+      data: {
+        id: TPL,
+        name: 'Försäljning',
+        lines: [
+          { account: '1930', label: 'Bank', side: 'debit', type: 'settlement' },
+          { account: '3001', label: 'Försäljning', side: 'credit', type: 'business', ratio: 1, dimensions: { '6': 'P777' } },
+        ],
+        is_active: true,
+        is_system: false,
+        company_id: 'company-1',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
+    vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
+      { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
+      { account_number: '3001', debit_amount: '', credit_amount: String(total), line_description: 'Försäljning', dimensions: { '6': 'P777' } },
+    ])
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: { tx_ids: [TX1], template_id: TPL, mode: 'sum_per_account', entry_description: 'Samlingsverifikation 2026-06-05' },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(postedLines().map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1930', undefined],
+      ['3001', { '6': 'P777' }],
+    ])
+  })
+
+  it('manual path: the bank line and the moms line stay untagged', async () => {
+    enqueue({ data: [{ id: TX1, amount: 125, currency: 'SEK', description: 'Swish', date: '2026-06-05', cash_account_id: null }], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }, { account_number: '2611' }], error: null })
+    enqueue({ data: [], error: null }) // cash_accounts: no enabled SEK account, so the row settles on 1930
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: {
+          tx_ids: [TX1],
+          entry_description: 'Samlingsverifikation',
+          default_dimensions: { '6': 'P001' },
+          manual_lines: [
+            { account_number: '1930', debit_amount: 125, credit_amount: 0, currency: 'SEK' },
+            { account_number: '3001', debit_amount: 0, credit_amount: 100, currency: 'SEK', dimensions: { '1': 'KS01' } },
+            { account_number: '2611', debit_amount: 0, credit_amount: 25, currency: 'SEK' },
+          ],
+        },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(postedLines().map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1930', undefined],
+      ['3001', { '1': 'KS01', '6': 'P001' }],
+      ['2611', undefined],
+    ])
+  })
+
+  it('manual path: a row settling on a ledger outside 19xx (Stripe on 1686) keeps that bank line untagged, and a line\'s own bag is kept', async () => {
+    enqueue({ data: [{ id: TX1, amount: 125, currency: 'SEK', description: 'Stripe', date: '2026-06-05', cash_account_id: 'ca-stripe' }], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({ data: [{ account_number: '1686' }, { account_number: '3004' }, { account_number: '1930' }], error: null })
+    enqueue({ data: { ledger_account: '1686', currency: 'SEK' }, error: null }) // the row's cash account
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: {
+          tx_ids: [TX1],
+          entry_description: 'Stripe',
+          default_dimensions: { '6': 'P001' },
+          manual_lines: [
+            { account_number: '1686', debit_amount: 125, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
+            { account_number: '3004', debit_amount: 0, credit_amount: 125, currency: 'SEK' },
+          ],
+        },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(postedLines().map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1686', { '1': 'KS01' }],
+      ['3004', { '6': 'P001' }],
+    ])
+  })
+})
+
+/**
+ * A new samlingsverifikat dated in a momsperiod whose declaration is filed,
+ * with lines that declaration reads, is asked about before it is booked
+ * (lib/transactions/filed-vat-bulk-book.ts).
+ */
+describe('POST /api/transactions/bulk-book: the filed-momsperiod question', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const WARNING = {
+    code: 'VAT_PERIOD_ALREADY_FILED',
+    message_sv: 'Bokningen ändrar underlaget för en momsdeklaration som redan är inlämnad: 2026-Q3 (inlämnad 2026-11-11). Görs bokningen kan deklarationen behöva rättas.',
+    message_en: 'The booking changes the figures behind a VAT return already filed: 2026-Q3 (filed 2026-11-11). If it is made, the return may need correcting.',
+    details: { entry_date: '2026-09-27', filed_periods: [] },
+  }
+  const BODY = {
+    tx_ids: [TX1, TX2],
+    entry_description: 'Samlingsverifikation',
+    manual_lines: [
+      { account_number: '1930', debit_amount: 200, credit_amount: 0, currency: 'SEK' },
+      { account_number: '3001', debit_amount: 0, credit_amount: 200, currency: 'SEK' },
+    ],
+  }
+  /** The queue of 'books a single-currency manual_lines selection'. */
+  function enqueueBooking(mode: 'create_new' | 'link_existing' = 'create_new') {
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-09-27' },
+        { id: TX2, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-09-27' },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: { ok: true, mode, journal_entry_id: JE, voucher_series: 'A', voucher_number: 14, linked_tx_count: 2, tx_sum: 200 },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+  }
+  const post = (body: Record<string, unknown>) =>
+    POST(createMockRequest('/api/transactions/bulk-book', { method: 'POST', body }), createMockRouteParams({}))
+  const acknowledged = () =>
+    vi.mocked(appendProcessingHistory).mock.calls.filter(([event]) => event.eventType === 'VoucherWarningsAcknowledged')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+    filedVat.filedPeriodBulkBookWarning.mockResolvedValue(null)
+  })
+
+  it('refuses with 409 and the warning until the person confirms, and books nothing', async () => {
+    filedVat.filedPeriodBulkBookWarning.mockResolvedValue(WARNING)
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: unknown[] } } }>(await post(BODY))
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BULK_BOOK_VAT_PERIOD_FILED')
+    expect(body.error.details.warnings).toEqual([WARNING])
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(filedVat.filedPeriodBulkBookWarning).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ tx_ids: [TX1, TX2] }),
+    )
+  })
+
+  it('books with the confirmation and records the verifikat as booked past the warning', async () => {
+    filedVat.filedPeriodBulkBookWarning.mockResolvedValue(WARNING)
+    enqueueBooking()
+
+    const { status, body } = await parseJsonResponse<{ data: { journal_entry_id: string } }>(
+      await post({ ...BODY, confirm_filed_vat_period: true }),
+    )
+
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(body.data.journal_entry_id).toBe(JE)
+    // The answer stays at the door: the question is asked about the booking
+    // alone, and neither it nor the RPC is handed the field.
+    const asked = filedVat.filedPeriodBulkBookWarning.mock.calls[0][1] as Record<string, unknown>
+    expect(asked).not.toHaveProperty('confirm_filed_vat_period')
+    expect(asked.tx_ids).toEqual([TX1, TX2])
+    expect(JSON.stringify(mockSupabase.rpc.mock.calls)).not.toContain('confirm_filed_vat_period')
+    expect(acknowledged()).toHaveLength(1)
+    expect(acknowledged()[0][0]).toMatchObject({
+      aggregateId: JE,
+      payload: { journal_entry_id: JE, door: 'dashboard_bulk_book', codes: ['VAT_PERIOD_ALREADY_FILED'] },
+      actor: { type: 'user', id: 'user-1' },
+    })
+  })
+
+  it('records nothing on a verifikat the booking did not create (rows linked to one already posted)', async () => {
+    filedVat.filedPeriodBulkBookWarning.mockResolvedValue(WARNING)
+    enqueueBooking('link_existing')
+
+    const { status } = await parseJsonResponse(await post({ ...BODY, confirm_filed_vat_period: true }))
+
+    expect(status).toBe(200)
+    expect(acknowledged()).toHaveLength(0)
+  })
+
+  it('books without a question, and records nothing, when the check says nothing', async () => {
+    enqueueBooking()
+
+    const { status } = await parseJsonResponse(await post(BODY))
+
+    expect(status).toBe(200)
+    expect(acknowledged()).toHaveLength(0)
+  })
+
+  it('a confirmation sent for a booking the check says nothing about records nothing', async () => {
+    enqueueBooking()
+
+    const { status } = await parseJsonResponse(await post({ ...BODY, confirm_filed_vat_period: true }))
+
+    expect(status).toBe(200)
+    expect(acknowledged()).toHaveLength(0)
   })
 })

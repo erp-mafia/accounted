@@ -1,31 +1,26 @@
 'use client'
 
-import Link from 'next/link'
 import { useEffect, useState, useCallback } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
-import { FyPicker } from '@/components/common/FyPicker'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
+import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/info-tooltip'
-import {
-  ArrowLeft,
-  Download,
-  FileSpreadsheet,
-  AlertTriangle,
-  CheckCircle2,
-} from 'lucide-react'
-import { formatAmount, formatDate } from '@/lib/utils'
+import { ArrowDownTrayIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
+import { formatAmount } from '@/lib/utils'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
-import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
+import type { KassaflodesanalysFullReport } from '@/lib/reports/kassaflodesanalys'
+import {
+  KASSAFLODESANALYS_LAYOUT,
+  type KassaflodesanalysLayoutRow,
+  type KassaflodesanalysYear,
+} from '@/lib/reports/kassaflodesanalys-layout'
 import {
   getErrorMessage as getUserErrorMessage,
   type ErrorLocale,
@@ -45,27 +40,15 @@ function CashRow({ label, amount }: CashRowProps) {
   )
 }
 
-interface SubtotalRowProps {
-  label: string
-  amount: number
-}
-
-function SubtotalRow({ label, amount }: SubtotalRowProps) {
-  return (
-    <div className="flex items-center justify-between border-t border-border pt-3 mt-2 text-sm font-medium">
-      <span>{label}</span>
-      <span className="tabular-nums text-right">{formatAmount(amount)}</span>
-    </div>
-  )
-}
-
 export function KassaflodesanalysClient() {
   const t = useTranslations('reports')
+  const tNav = useTranslations('nav')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
-  const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
-  const [report, setReport] = useState<KassaflodesanalysReport | null>(null)
-  const [isLoadingPeriods, setIsLoadingPeriods] = useState(true)
+  // The fiscal year is app-wide context (the sidebar); a report needs one started year.
+  const { periodId: selectedPeriod, ready: periodsReady } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const [report, setReport] = useState<KassaflodesanalysFullReport | null>(null)
+  const isLoadingPeriods = !periodsReady
   const [isLoadingReport, setIsLoadingReport] = useState(false)
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -77,17 +60,17 @@ export function KassaflodesanalysClient() {
       const res = await fetch(`/api/reports/kassaflodesanalys?period_id=${periodId}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || 'Kunde inte hämta kassaflödesanalys')
+        throw new Error(getUserErrorMessage(body, { locale: locale, fallback: t('cash_flow_load_failed') }))
       }
       const { data } = await res.json()
       setReport(data)
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
+      setError(err instanceof Error ? getUserErrorMessage(err, { locale }) : t('cash_flow_load_failed'))
       setReport(null)
     } finally {
       setIsLoadingReport(false)
     }
-  }, [])
+  }, [t, locale])
 
   useEffect(() => {
     if (selectedPeriod) {
@@ -152,238 +135,188 @@ export function KassaflodesanalysClient() {
     }
   }, [selectedPeriod, report, isDownloadingPdf, locale, toast, t])
 
+  // The shell every report page shares: title, "?" and the top bar's
+  // actions (download, then the year picker far right, convention 8). No
+  // back link over the title (the nav names Rapporter), no period line (the
+  // picker names the year; ReportPrintHeader states it on paper) and no
+  // permanently disabled Excel button.
   return (
     <div className="space-y-8">
-      <Link
-        href="/reports"
-        className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Rapporter
-      </Link>
-      <PageHeader title="Kassaflödesanalys" />
-
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <FyPicker
-          value={selectedPeriod}
-          onChange={(id) => setSelectedPeriod(id)}
-          includeAllOption={false}
-          hideFuturePeriods
-          onReady={() => setIsLoadingPeriods(false)}
-        />
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={handleDownloadPdf}
-            disabled={!report || isLoadingReport}
-            loading={isDownloadingPdf}
-          >
-            {!isDownloadingPdf && <Download className="mr-2 h-4 w-4" />}
-            Ladda ner PDF
-          </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button variant="outline" disabled>
-                    <FileSpreadsheet className="mr-2 h-4 w-4" />
-                    Ladda ner Excel
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Snart tillgänglig</TooltipContent>
-            </Tooltip>
-        </div>
-      </div>
-
-      <p className="text-sm text-muted-foreground">
-        Indirekt metod enligt BFNAR 2012:1 kap 7. Totalsumman ska överensstämma
-        med förändringen i likvida medel (kontoklass 19) under perioden.
-      </p>
+      <PageHeader
+        title={t('name_kassaflodesanalys')}
+        // Reached from Fler rapporter: the quiet way back sits before the title.
+        parent={{ label: tNav('v3_more_reports'), href: '/reports' }}
+        help={<HelpPopover>{t('cash_flow_help')}</HelpPopover>}
+        action={
+          <div className="flex items-center gap-2">
+            <Button
+              size="toolbar"
+              variant="outline"
+              onClick={handleDownloadPdf}
+              disabled={!report || isLoadingReport}
+              loading={isDownloadingPdf}
+            >
+              {!isDownloadingPdf && <ArrowDownTrayIcon className="h-4 w-4" />}
+              {t('download_pdf')}
+            </Button>
+          </div>
+        }
+      />
+      <ReportPrintHeader
+        period={report ? { start: report.period_start, end: report.period_end } : null}
+      />
 
       {isLoadingPeriods ? (
-        <div className="space-y-4">
+        <LateReveal className="space-y-4">
           <Skeleton className="h-48" />
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
-        </div>
+        </LateReveal>
       ) : !selectedPeriod ? (
         <EmptyState
-          title="Välj räkenskapsår"
-          description="Välj ett räkenskapsår ovan för att generera kassaflödesanalys."
+          title={t('cash_flow_choose_year_title')}
+          description={t('cash_flow_choose_year_description')}
         />
       ) : isLoadingReport ? (
-        <div className="space-y-4">
+        <LateReveal className="space-y-4">
           <Skeleton className="h-48" />
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
-        </div>
+        </LateReveal>
       ) : error ? (
-        <Card className="border-destructive">
-          <CardContent className="p-6 text-sm text-destructive">{error}</CardContent>
-        </Card>
+        <LoadError title={error} onRetry={() => void loadReport(selectedPeriod)} />
       ) : report ? (
-        <div className="space-y-6">
-          <p className="text-sm text-muted-foreground">
-            Period: {formatDate(report.period_start)} till {formatDate(report.period_end)}
-          </p>
-
-          {/* Section 1: Löpande verksamhet */}
-          <Card>
-            <CardHeader>
-              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
-                Den löpande verksamheten
-              </h2>
-              <CardTitle className="text-base">
-                Kassaflöde från löpande verksamhet
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <CashRow
-                label="Resultat efter finansiella poster"
-                amount={report.lopande.resultat_efter_finansiella_poster}
-              />
-              <CashRow label="Avskrivningar" amount={report.lopande.avskrivningar} />
-              <CashRow
-                label="Övriga ej-kassaflödespåverkande poster"
-                amount={report.lopande.ovriga_ej_kassaflodesposter}
-              />
-              <CashRow
-                label="Förändring av kortfristiga fordringar"
-                amount={report.lopande.delta_kortfristiga_fordringar}
-              />
-              <CashRow
-                label="Förändring av varulager"
-                amount={report.lopande.delta_varulager}
-              />
-              <CashRow
-                label="Förändring av kortfristiga skulder"
-                amount={report.lopande.delta_kortfristiga_skulder}
-              />
-              <CashRow label="Betald inkomstskatt" amount={report.lopande.skatt_betald} />
-              <SubtotalRow
-                label="Summa kassaflöde löpande verksamhet"
-                amount={report.lopande.total}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Section 2: Investeringsverksamhet */}
-          <Card>
-            <CardHeader>
-              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
-                Investeringsverksamheten
-              </h2>
-              <CardTitle className="text-base">
-                Kassaflöde från investeringsverksamhet
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <CashRow
-                label="Förvärv av anläggningstillgångar"
-                amount={report.investerings.forvarv_anlaggningar}
-              />
-              <CashRow
-                label="Avyttring av anläggningstillgångar"
-                amount={report.investerings.avyttring_anlaggningar}
-              />
-              <SubtotalRow
-                label="Summa kassaflöde investeringsverksamhet"
-                amount={report.investerings.total}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Section 3: Finansieringsverksamhet */}
-          <Card>
-            <CardHeader>
-              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
-                Finansieringsverksamheten
-              </h2>
-              <CardTitle className="text-base">
-                Kassaflöde från finansieringsverksamhet
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <CashRow
-                label="Förändring av lån (långfristiga skulder)"
-                amount={report.finansierings.delta_lan}
-              />
-              <CashRow label="Utdelningar" amount={report.finansierings.utdelningar} />
-              <CashRow label="Nyemission" amount={report.finansierings.nyemission} />
-              <CashRow
-                label="Erhållna aktieägartillskott"
-                amount={report.finansierings.erhallna_aktieagartillskott}
-              />
-              <SubtotalRow
-                label="Summa kassaflöde finansieringsverksamhet"
-                amount={report.finansierings.total}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Total */}
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <span className="font-display text-lg">Årets kassaflöde</span>
-                <span className="font-display text-lg tabular-nums">
-                  {formatAmount(report.total_cash_flow)}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Reconciliation banner */}
-          <Card
-            className={
-              report.reconciliation.is_reconciled
-                ? 'border-border bg-muted/30'
-                : 'border-destructive'
-            }
-          >
-            <CardContent className="p-6 space-y-3">
-              <div className="flex items-center gap-2">
-                {report.reconciliation.is_reconciled ? (
-                  <CheckCircle2 className="h-5 w-5 text-success" />
-                ) : (
-                  <AlertTriangle className="h-5 w-5 text-destructive" />
-                )}
-                <span className="font-medium">
-                  {report.reconciliation.is_reconciled
-                    ? 'Avstämning OK: kassaflödet stämmer med 19xx'
-                    : 'Avstämning misslyckades: kontrollera bokföringen'}
-                </span>
-              </div>
-              <div className="space-y-1 text-sm">
-                <CashRow
-                  label="Ingående saldo (19xx)"
-                  amount={report.reconciliation.opening_cash_1xxx}
-                />
-                <CashRow
-                  label="Utgående saldo (19xx)"
-                  amount={report.reconciliation.closing_cash_1xxx}
-                />
-                <CashRow
-                  label="Faktisk förändring i likvida medel"
-                  amount={report.reconciliation.delta_actual}
-                />
-                <CashRow
-                  label="Beräknad förändring (summa kassaflöden)"
-                  amount={report.reconciliation.delta_calculated}
-                />
-                {!report.reconciliation.is_reconciled && (
-                  <div className="flex items-center justify-between border-t border-destructive pt-2 mt-2 text-sm font-medium text-destructive">
-                    <span>Avvikelse</span>
-                    <span className="tabular-nums text-right">
-                      {formatAmount(report.reconciliation.mismatch_amount)}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <KassaflodesanalysStatementView report={report} />
       ) : null}
+    </div>
+  )
+}
+
+/** A financial year's column heading: 2026, or 2025/26 for a broken year. */
+function yearLabel(year: KassaflodesanalysYear): string {
+  const start = year.period_start.slice(0, 4)
+  const end = year.period_end.slice(0, 4)
+  return start === end ? end : `${start}/${end.slice(2)}`
+}
+
+const SECTION_TITLE_KEYS = {
+  lopande: 'cash_flow_section_operating',
+  investering: 'cash_flow_section_investing',
+  finansiering: 'cash_flow_section_financing',
+} as const
+
+const LIQUIDITY_PARTS = [
+  ['kassamedel', 'cash_flow_liquid_cash'],
+  ['bank', 'cash_flow_liquid_bank'],
+  ['kortfristiga_placeringar', 'cash_flow_liquid_placements'],
+  ['koncernkonto', 'cash_flow_liquid_group_account'],
+] as const
+
+/**
+ * The K3 chapter 7 statement: the lines of KASSAFLODESANALYS_LAYOUT in their
+ * order, the comparative year beside the year when there is one, then
+ * likvida medel by part (7.18) and the reconciliation.
+ */
+function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysFullReport }) {
+  const t = useTranslations('reports')
+  const { current, previous } = report.statement
+  const recon = current.reconciliation
+  const shown = KASSAFLODESANALYS_LAYOUT.filter((row) => row.alwaysShow
+    || current.amounts[row.key] !== 0
+    || (previous !== null && previous.amounts[row.key] !== 0))
+  const unclassified = [...new Set([...current.unclassified_accounts, ...(previous?.unclassified_accounts ?? [])])]
+  const labelOf = (row: KassaflodesanalysLayoutRow) => row.key === 'ovriga_poster'
+    ? t('cash_flow_other_items', { accounts: unclassified.join(', ') })
+    : t(`cash_flow_lines.${row.key}`)
+
+  const amountRow = (
+    key: string,
+    label: string,
+    pick: (year: KassaflodesanalysYear) => number,
+    emphasis: boolean,
+  ) => (
+    <div
+      key={key}
+      className={
+        emphasis
+          ? 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t-hairline pt-3 mt-2 text-sm font-medium'
+          : 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-1 text-sm'
+      }
+    >
+      <span className="text-foreground">{label}</span>
+      <span className="ml-auto flex shrink-0 gap-6">
+        <span className="w-28 tabular-nums text-right">{formatAmount(pick(current))}</span>
+        {previous && (
+          <span className="w-28 tabular-nums text-right text-muted-foreground">{formatAmount(pick(previous))}</span>
+        )}
+      </span>
+    </div>
+  )
+  const yearHeader = (
+    <div className="ml-auto flex justify-end gap-6 text-xs font-medium text-muted-foreground">
+      <span className="w-28 text-right">{yearLabel(current)}</span>
+      {previous && <span className="w-28 text-right">{yearLabel(previous)}</span>}
+    </div>
+  )
+
+  return (
+    <div className="space-y-6 stagger-enter">
+      {(['lopande', 'investering', 'finansiering'] as const).map((section) => (
+        <Card key={section}>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-4">
+            <CardTitle className="text-base">{t(SECTION_TITLE_KEYS[section])}</CardTitle>
+            {yearHeader}
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {shown
+              .filter((row) => row.section === section)
+              .map((row) => amountRow(row.key, labelOf(row), (year) => year.amounts[row.key], row.kind !== 'line'))}
+          </CardContent>
+        </Card>
+      ))}
+
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-4">
+          <CardTitle className="text-base">{t('cash_flow_section_liquidity')}</CardTitle>
+          {yearHeader}
+        </CardHeader>
+        <CardContent className="space-y-1">
+          {shown
+            .filter((row) => row.section === 'likvida_medel')
+            .map((row) => amountRow(row.key, labelOf(row), (year) => year.amounts[row.key], row.kind !== 'line'))}
+          <div className="pt-4">
+            {LIQUIDITY_PARTS
+              .filter(([part]) => current.likvida_medel.ub[part] !== 0
+                || (previous !== null && previous.likvida_medel.ub[part] !== 0))
+              .map(([part, labelKey]) => amountRow(part, t(labelKey), (year) => year.likvida_medel.ub[part], false))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className={recon.is_reconciled ? 'border-border bg-muted/30' : 'border-destructive'}>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2">
+            {recon.is_reconciled ? (
+              <CheckCircleIcon className="h-5 w-5 text-success" />
+            ) : (
+              <ExclamationTriangleIcon className="h-5 w-5 text-destructive" />
+            )}
+            <span className="font-medium">
+              {recon.is_reconciled ? t('cash_flow_reconciled') : t('cash_flow_not_reconciled')}
+            </span>
+          </div>
+          <div className="space-y-1 text-sm">
+            <CashRow label={t('cash_flow_delta_actual')} amount={recon.delta_actual} />
+            <CashRow label={t('cash_flow_delta_calculated')} amount={recon.delta_calculated} />
+            {!recon.is_reconciled && (
+              <div className="flex items-center justify-between border-t border-destructive pt-2 mt-2 text-sm font-medium text-destructive">
+                <span>{t('cash_flow_mismatch')}</span>
+                <span className="tabular-nums text-right">{formatAmount(recon.mismatch_amount)}</span>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

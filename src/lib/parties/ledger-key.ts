@@ -62,7 +62,7 @@ const CORE_LEGAL_FORM = /\b(ab|aktiebolag|hb|kb|sverige|sweden|ltd|limited|oy|gm
  * which is NOT the same party (Fortnox AB and Fortnox Finans AB share one),
  * so the core only ever ranks or annotates candidates; it never merges.
  * Measured on the document-anchored gold set 2026-09-02: pair precision
- * 0.909, recall 0.776 (scripts/parties/README.md).
+ * 0.909, recall 0.776.
  */
 export function coreKey(key: string): string {
   return key

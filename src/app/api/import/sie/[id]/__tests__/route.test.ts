@@ -135,7 +135,7 @@ describe('GET/DELETE /api/import/sie/[id]', () => {
 
   it.each([GET, DELETE])('does not disguise database failure as a missing import', async route => {
     enqueue({ error: { code: '57014', message: 'statement timeout' } })
-    expect((await route(createMockRequest('/api/import/sie/import'), routeParams())).status).toBe(500)
+    expect((await route(createMockRequest('/api/import/sie/import'), routeParams())).status).toBe(503) // a statement timeout is transient, not a missing import
   })
 
   it.each([GET, DELETE])('returns a scoped 404 for a missing or inaccessible import', async route => {

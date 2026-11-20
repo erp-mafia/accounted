@@ -31,6 +31,15 @@ interface ConfirmDialogProps {
   onConfirm: () => void | Promise<void>
   /** Terracotta confirm for destructive outcomes (avvisa, makulera). */
   destructive?: boolean
+  /**
+   * A second way on, beside the confirm (e.g. "Vänd bara verifikationen"
+   * when the confirm leads with the owner's own action). It closes the
+   * dialog and hands over; it never runs while the confirm is pending.
+   */
+  secondaryLabel?: string
+  onSecondary?: () => void
+  /** Holds the confirm back while the body is not ready to act on (a preview loading or refused). */
+  confirmDisabled?: boolean
 }
 
 /**
@@ -47,6 +56,9 @@ export function ConfirmDialog({
   cancelLabel,
   onConfirm,
   destructive = false,
+  secondaryLabel,
+  onSecondary,
+  confirmDisabled = false,
 }: ConfirmDialogProps) {
   const tCommon = useTranslations('common')
   const [pending, setPending] = useState(false)
@@ -63,23 +75,23 @@ export function ConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
-      <DialogContent className="sm:min-w-[460px] sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           {/* data-ph-mask: confirm dialogs describe the object being acted
               on (convention 10), so title and description are user data in
               session replays, not chrome. Mask wins over the primitives'
               own data-ph-unmask. */}
-          <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
+          <DialogTitle data-ph-mask="">
             {title}
           </DialogTitle>
           {description && (
-            <DialogDescription data-ph-mask="" className="text-[13px] leading-relaxed">
+            <DialogDescription data-ph-mask="" className="text-[13px] leading-5">
               {description}
             </DialogDescription>
           )}
         </DialogHeader>
         {children}
-        <DialogFooter className="gap-2 sm:gap-2">
+        <DialogFooter>
           <Button
             variant="ghost"
             onClick={() => onOpenChange(false)}
@@ -87,9 +99,22 @@ export function ConfirmDialog({
           >
             {cancelLabel ?? tCommon('cancel')}
           </Button>
+          {secondaryLabel && onSecondary && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                onOpenChange(false)
+                onSecondary()
+              }}
+              disabled={pending}
+            >
+              {secondaryLabel}
+            </Button>
+          )}
           <Button
             variant={destructive ? 'destructive' : 'default'}
             onClick={() => void handleConfirm()}
+            disabled={confirmDisabled}
             loading={pending}
             className={cn(pending && 'cursor-wait')}
           >

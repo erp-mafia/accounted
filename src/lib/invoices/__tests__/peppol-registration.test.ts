@@ -4,13 +4,18 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   PEPPOL_BIS_BILLING_CREDIT_NOTE_DOCUMENT_TYPE_ID,
   PEPPOL_PENDING_STALE_MS,
+  PEPPOL_PUBLISHED_ELSEWHERE_MAX_ATTEMPTS,
+  PEPPOL_PUBLISHED_ELSEWHERE_RETRY_MS,
   PEPPOL_RECEIVING_DOCUMENT_TYPES,
   canRetryPeppolRegistration,
   deregisterCompanyFromPeppolReceiving,
   describePeppolParticipantEligibility,
+  isPublishedElsewhereRetryDue,
   isStalePeppolPending,
   preparePeppolParticipant,
   registerCompanyForPeppolReceiving,
+  registerGrantedPeppolReceivers,
+  withdrawRevokedPeppolRegistrations,
 } from '@/lib/invoices/peppol-registration'
 import { PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID } from '@/lib/invoices/peppol-bis-billing'
 import { PeppolTransportError, type PeppolTransport } from '@/lib/invoices/peppol-transport'
@@ -29,6 +34,7 @@ const settings = {
 function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTransport {
   return {
     provider: 'qvalia',
+    tenantId: 'SE5595386219',
     lookupRecipient: vi.fn(),
     submit: vi.fn(),
     verifyWebhook: vi.fn(),
@@ -96,9 +102,20 @@ describe('preparePeppolParticipant', () => {
 
   it('refuses missing numbers, personnummer and missing names', () => {
     expect(preparePeppolParticipant({ ...settings, org_number: null })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' })
-    expect(preparePeppolParticipant({ ...settings, org_number: '198001011234' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' })
+    expect(preparePeppolParticipant({ ...settings, org_number: '198001011234' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
+    expect(preparePeppolParticipant({ ...settings, org_number: '20050101-1234' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
+    expect(preparePeppolParticipant({ ...settings, org_number: '555953862191' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' })
     expect(preparePeppolParticipant({ ...settings, org_number: '8001011234' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
     expect(preparePeppolParticipant({ ...settings, company_name: ' ' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_COMPANY_NAME_REQUIRED' })
+  })
+
+  it('refuses a form whose org number is the owner\'s personnummer, whatever the stored number looks like', () => {
+    expect(preparePeppolParticipant({ ...settings, entity_type: 'enskild_firma' }))
+      .toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
+    expect(preparePeppolParticipant({ ...settings, org_number: '198001011234', entity_type: 'enskild_firma' }))
+      .toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
+    expect(preparePeppolParticipant({ ...settings, entity_type: 'aktiebolag' })).toMatchObject({ ok: true })
+    expect(preparePeppolParticipant({ ...settings, entity_type: 'ideell_forening', org_number: '802400-1234' })).toMatchObject({ ok: true })
   })
 
   it('describes eligibility as ok/code for the settings page', () => {
@@ -134,6 +151,10 @@ describe('canRetryPeppolRegistration', () => {
     expect(canRetryPeppolRegistration(row('failed', 'NOT_IN_REGISTRY'), now)).toBe(true)
     expect(canRetryPeppolRegistration(row('pending', null, staleAt), now)).toBe(true)
     expect(canRetryPeppolRegistration(row('registered', 'CONNECTOR_UPSTREAM_ERROR'), now)).toBe(true)
+  })
+
+  it('offers a retry when the id was published at another access point: it clears once that one withdraws it (crm#1556)', () => {
+    expect(canRetryPeppolRegistration(row('failed', 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE'), now)).toBe(true)
   })
 
   it('never offers a retry next to a permanent verdict or on a healthy row', () => {
@@ -481,5 +502,351 @@ describe('deregisterCompanyFromPeppolReceiving', () => {
       ok: false, code: 'PEPPOL_REGISTRATION_REJECTED', detail: 'hosted detail', reason: 'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
     })
     expect(updates()[0]).toMatchObject({ last_error_code: 'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED' })
+  })
+})
+
+describe('withdrawRevokedPeppolRegistrations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  const withdraw = (transport: PeppolTransport) => withdrawRevokedPeppolRegistrations({ service, transport })
+  const live = (companyId: string, identifier: string) => ({
+    ...registeredRow, id: `reg-${companyId}`, company_id: companyId, participant_identifier: identifier,
+  })
+
+  it('withdraws companies whose access is disabled or has receiving off, and nobody else', async () => {
+    const transport = makeTransport()
+    enqueue({ data: [{ company_id: 'c-disabled' }, { company_id: 'c-receive-off' }, { company_id: 'c-receiving' }, { company_id: 'c-no-access' }], error: null })
+    enqueue({
+      data: [
+        { company_id: 'c-disabled', status: 'disabled', receive_enabled: true },
+        { company_id: 'c-receive-off', status: 'enabled', receive_enabled: false },
+        { company_id: 'c-receiving', status: 'enabled', receive_enabled: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: [live('c-disabled', '5522334456')], error: null })
+    enqueue({ data: { ...live('c-disabled', '5522334456'), status: 'deregistered' }, error: null })
+    enqueue({ data: [live('c-receive-off', '5595386219')], error: null })
+    enqueue({ data: { ...live('c-receive-off', '5595386219'), status: 'deregistered' }, error: null })
+
+    expect(await withdraw(transport)).toEqual({ withdrawn: ['c-disabled', 'c-receive-off'], failed: [] })
+    expect(transport.unregisterRecipient).toHaveBeenCalledTimes(2)
+    expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5522334456' })
+    expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5595386219' })
+    expect(calls.find((c) => c.table === 'peppol_registrations' && c.method === 'in')?.args).toEqual(['status', ['pending', 'registered']])
+    expect(updates()).toHaveLength(2)
+  })
+
+  it('records a failed withdrawal and goes on with the next company', async () => {
+    const transport = makeTransport({
+      unregisterRecipient: vi.fn()
+        .mockRejectedValueOnce(transportFailure('CONNECTOR_UPSTREAM_ERROR', true, 'smp down'))
+        .mockResolvedValueOnce(undefined),
+    })
+    enqueue({ data: [{ company_id: 'c-a' }, { company_id: 'c-b' }], error: null })
+    enqueue({
+      data: [
+        { company_id: 'c-a', status: 'disabled', receive_enabled: false },
+        { company_id: 'c-b', status: 'disabled', receive_enabled: false },
+      ],
+      error: null,
+    })
+    enqueue({ data: [live('c-a', '5560000001')], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: [live('c-b', '5560000002')], error: null })
+    enqueue({ data: { ...live('c-b', '5560000002'), status: 'deregistered' }, error: null })
+
+    expect(await withdraw(transport)).toEqual({
+      withdrawn: ['c-b'],
+      failed: [{ companyId: 'c-a', reason: 'CONNECTOR_UPSTREAM_ERROR' }],
+    })
+  })
+
+  it('does nothing without live registrations or on a send-only transport', async () => {
+    enqueue({ data: [], error: null })
+    expect(await withdraw(makeTransport())).toEqual({ withdrawn: [], failed: [] })
+    expect(calls.some((c) => c.table === 'peppol_access')).toBe(false)
+
+    reset()
+    expect(await withdraw(makeTransport({ unregisterRecipient: undefined }))).toEqual({ withdrawn: [], failed: [] })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('throws when the access rows cannot be read', async () => {
+    enqueue({ data: [{ company_id: 'c-a' }], error: null })
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(withdraw(makeTransport())).rejects.toThrow('Failed to read Peppol access: boom')
+  })
+})
+
+describe('isPublishedElsewhereRetryDue', () => {
+  const now = Date.parse('2026-11-03T12:00:00.000Z')
+  const dayAgo = new Date(now - PEPPOL_PUBLISHED_ELSEWHERE_RETRY_MS).toISOString()
+  const hourAgo = new Date(now - 60 * 60 * 1000).toISOString()
+  const elsewhere = (updatedAt: string) => ({
+    status: 'failed' as const, updated_at: updatedAt, last_error_code: 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE',
+  })
+
+  it('is due a day after the latest attempt was published elsewhere, and not before', () => {
+    expect(isPublishedElsewhereRetryDue([elsewhere(dayAgo)], now)).toBe(true)
+    expect(isPublishedElsewhereRetryDue([elsewhere(hourAgo)], now)).toBe(false)
+  })
+
+  it('stops after the capped number of such attempts', () => {
+    const atCap = Array.from({ length: PEPPOL_PUBLISHED_ELSEWHERE_MAX_ATTEMPTS }, () => elsewhere(dayAgo))
+    expect(isPublishedElsewhereRetryDue(atCap.slice(1), now)).toBe(true)
+    expect(isPublishedElsewhereRetryDue(atCap, now)).toBe(false)
+  })
+
+  it('looks at the latest attempt only, ignores a crashed pending row, and never retries past a live row', () => {
+    const staleAt = new Date(now - PEPPOL_PENDING_STALE_MS - 60_000).toISOString()
+    const otherFailure = { status: 'failed' as const, updated_at: dayAgo, last_error_code: 'CONNECTOR_PEPPOL_PARTICIPANT_TAKEN' }
+    const older = new Date(now - 2 * PEPPOL_PUBLISHED_ELSEWHERE_RETRY_MS).toISOString()
+    expect(isPublishedElsewhereRetryDue([elsewhere(older), otherFailure], now)).toBe(false)
+    expect(isPublishedElsewhereRetryDue([elsewhere(dayAgo), { status: 'pending', updated_at: staleAt, last_error_code: null }], now)).toBe(true)
+    expect(isPublishedElsewhereRetryDue([elsewhere(dayAgo), { status: 'pending', updated_at: new Date(now - 1000).toISOString(), last_error_code: null }], now)).toBe(false)
+    expect(isPublishedElsewhereRetryDue([{ status: 'deregistered', updated_at: dayAgo, last_error_code: null }], now)).toBe(false)
+    expect(isPublishedElsewhereRetryDue([], now)).toBe(false)
+  })
+})
+
+describe('registerGrantedPeppolReceivers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  const registerGranted = (transport: PeppolTransport, limit?: number) =>
+    registerGrantedPeppolReceivers({ service, transport, limit })
+  const companySettings = (companyId: string, orgNumber: string, extra: Record<string, unknown> = {}) => ({
+    ...settings, company_id: companyId, org_number: orgNumber, entity_type: 'aktiebolag', is_sandbox: false, ...extra,
+  })
+  const staleAt = () => new Date(Date.now() - PEPPOL_PENDING_STALE_MS - 60_000).toISOString()
+
+  it('publishes granted companies with no registration history, retries a crashed attempt, and leaves the rest alone', async () => {
+    const transport = makeTransport()
+    enqueue({
+      data: [
+        { company_id: 'c-new', requested_by: 'user-1' },
+        { company_id: 'c-registered', requested_by: null },
+        { company_id: 'c-failed', requested_by: null },
+        { company_id: 'c-withdrawn', requested_by: null },
+        { company_id: 'c-crashed', requested_by: null },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: [
+        { company_id: 'c-registered', status: 'registered', updated_at: '2026-10-01T00:00:00.000Z' },
+        { company_id: 'c-failed', status: 'failed', updated_at: '2026-10-01T00:00:00.000Z' },
+        { company_id: 'c-withdrawn', status: 'deregistered', updated_at: '2026-10-01T00:00:00.000Z' },
+        { company_id: 'c-crashed', status: 'pending', updated_at: staleAt() },
+      ],
+      error: null,
+    })
+    enqueue({ data: [companySettings('c-new', '5533445564'), companySettings('c-crashed', '5595386219')], error: null })
+    // c-new: no history, insert pending, finalize
+    enqueue({ data: [], error: null })
+    enqueue({ data: { id: 'reg-new' }, error: null })
+    enqueue({ data: { ...registeredRow, id: 'reg-new', company_id: 'c-new' }, error: null })
+    // c-crashed: the stale row is retired, then a fresh attempt
+    enqueue({ data: [{ ...registeredRow, company_id: 'c-crashed', status: 'pending', registered_at: null, updated_at: staleAt() }], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'reg-crashed' }, error: null })
+    enqueue({ data: { ...registeredRow, id: 'reg-crashed', company_id: 'c-crashed' }, error: null })
+
+    expect(await registerGranted(transport)).toEqual({ registered: ['c-new', 'c-crashed'], failed: [], skipped: [] })
+    expect(transport.registerRecipient).toHaveBeenCalledTimes(2)
+    expect(transport.registerRecipient).toHaveBeenCalledWith(expect.objectContaining({
+      participant: { scheme: '0007', identifier: '5533445564' }, tenantReference: 'c-new',
+    }))
+    expect(inserts()[0]).toMatchObject({ company_id: 'c-new', user_id: 'user-1', status: 'pending' })
+    expect(inserts()[1]).toMatchObject({ company_id: 'c-crashed', user_id: null })
+    const accessFilters = calls.filter((c) => c.table === 'peppol_access' && c.method === 'eq').map((c) => c.args)
+    expect(accessFilters).toEqual([['status', 'enabled'], ['receive_enabled', true]])
+  })
+
+  it('stops at the per-run limit, oldest request first, and does not count skipped companies against it', async () => {
+    const transport = makeTransport()
+    enqueue({
+      data: [
+        { company_id: 'c-sandbox', requested_by: null },
+        { company_id: 'c-personnummer', requested_by: null },
+        { company_id: 'c-no-settings', requested_by: null },
+        { company_id: 'c-1', requested_by: null },
+        { company_id: 'c-2', requested_by: null },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: [
+        companySettings('c-sandbox', '5560000001', { is_sandbox: true }),
+        companySettings('c-personnummer', '8001011234', { entity_type: 'enskild_firma' }),
+        companySettings('c-1', '5560000002'),
+        companySettings('c-2', '5560000003'),
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { id: 'reg-1' }, error: null })
+    enqueue({ data: { ...registeredRow, company_id: 'c-1' }, error: null })
+
+    expect(await registerGranted(transport, 1)).toEqual({
+      registered: ['c-1'],
+      failed: [],
+      skipped: [
+        { companyId: 'c-sandbox', reason: 'PEPPOL_SANDBOX_NOT_ALLOWED' },
+        { companyId: 'c-personnummer', reason: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' },
+        { companyId: 'c-no-settings', reason: 'INVOICE_SEND_COMPANY_SETTINGS_MISSING' },
+      ],
+    })
+    expect(transport.registerRecipient).toHaveBeenCalledTimes(1)
+    expect(calls.find((c) => c.table === 'peppol_access' && c.method === 'order')?.args).toEqual(['requested_at', { ascending: true, nullsFirst: false }])
+  })
+
+  it('records a refusal with the transport code and goes on; stops at the contracted cap', async () => {
+    const transport = makeTransport({
+      registerRecipient: vi.fn()
+        .mockRejectedValueOnce(transportFailure('CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE', false))
+        .mockResolvedValueOnce({ status: 'registered', participant: { scheme: '0007', identifier: '5560000002' }, providerAccountReference: null, raw: {} }),
+    })
+    enqueue({ data: [{ company_id: 'c-elsewhere', requested_by: null }, { company_id: 'c-ok', requested_by: null }], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [companySettings('c-elsewhere', '5560000001'), companySettings('c-ok', '5560000002')], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { id: 'reg-elsewhere' }, error: null })
+    enqueue({ data: null, error: null })                      // failed row written
+    enqueue({ data: [], error: null })
+    enqueue({ data: { id: 'reg-ok' }, error: null })
+    enqueue({ data: { ...registeredRow, company_id: 'c-ok' }, error: null })
+
+    expect(await registerGranted(transport)).toEqual({
+      registered: ['c-ok'],
+      failed: [{ companyId: 'c-elsewhere', reason: 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE' }],
+      skipped: [],
+    })
+
+    reset()
+    process.env.PEPPOL_RECEIVING_MAX_REGISTRATIONS = '2'
+    try {
+      const capped = makeTransport()
+      enqueue({ data: [{ company_id: 'c-a', requested_by: null }, { company_id: 'c-b', requested_by: null }], error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: [companySettings('c-a', '5560000001'), companySettings('c-b', '5560000002')], error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: null, error: null, count: 2 })
+      expect(await registerGranted(capped)).toEqual({
+        registered: [],
+        failed: [{ companyId: 'c-a', reason: 'PEPPOL_REGISTRATION_CAP_REACHED' }],
+        skipped: [],
+      })
+      expect(capped.registerRecipient).not.toHaveBeenCalled()
+    } finally {
+      delete process.env.PEPPOL_RECEIVING_MAX_REGISTRATIONS
+    }
+  })
+
+  it('retries a company published elsewhere a day later, after the never-attempted ones, and does not page when it is still there (crm#1556)', async () => {
+    const now = Date.parse('2026-11-03T12:00:00.000Z')
+    const at = (msAgo: number) => new Date(now - msAgo).toISOString()
+    const day = PEPPOL_PUBLISHED_ELSEWHERE_RETRY_MS
+    const elsewhere = (companyId: string, updatedAt: string) => ({
+      company_id: companyId, status: 'failed', updated_at: updatedAt, last_error_code: 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE',
+    })
+    const transport = makeTransport({
+      registerRecipient: vi.fn()
+        .mockResolvedValueOnce({ status: 'registered', participant: { scheme: '0007', identifier: '5560000004' }, providerAccountReference: null, raw: {} })
+        .mockResolvedValueOnce({ status: 'registered', participant: { scheme: '0007', identifier: '5560000001' }, providerAccountReference: null, raw: {} })
+        .mockRejectedValueOnce(transportFailure('CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE', false)),
+    })
+    enqueue({
+      data: [
+        { company_id: 'c-moved', requested_by: null },
+        { company_id: 'c-waiting', requested_by: null },
+        { company_id: 'c-too-soon', requested_by: null },
+        { company_id: 'c-gave-up', requested_by: null },
+        { company_id: 'c-new', requested_by: null },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: [
+        elsewhere('c-moved', at(3 * day)),
+        elsewhere('c-waiting', at(day + 60_000)),
+        elsewhere('c-too-soon', at(day - 60_000)),
+        ...Array.from({ length: PEPPOL_PUBLISHED_ELSEWHERE_MAX_ATTEMPTS }, () => elsewhere('c-gave-up', at(2 * day))),
+      ],
+      error: null,
+    })
+    enqueue({
+      data: [
+        companySettings('c-moved', '5560000001'), companySettings('c-waiting', '5560000002'),
+        companySettings('c-new', '5560000004'),
+      ],
+      error: null,
+    })
+    // c-new first: never attempted
+    enqueue({ data: [], error: null })
+    enqueue({ data: { id: 'reg-new' }, error: null })
+    enqueue({ data: { ...registeredRow, company_id: 'c-new' }, error: null })
+    // c-moved (oldest attempt): the old operator withdrew, a new row registers
+    enqueue({ data: [{ ...registeredRow, company_id: 'c-moved', status: 'failed', updated_at: at(3 * day) }], error: null })
+    enqueue({ data: { id: 'reg-moved' }, error: null })
+    enqueue({ data: { ...registeredRow, company_id: 'c-moved' }, error: null })
+    // c-waiting: still published elsewhere, a new failed row
+    enqueue({ data: [{ ...registeredRow, company_id: 'c-waiting', status: 'failed', updated_at: at(day + 60_000) }], error: null })
+    enqueue({ data: { id: 'reg-waiting' }, error: null })
+    enqueue({ data: null, error: null })
+
+    expect(await registerGrantedPeppolReceivers({ service, transport, now })).toEqual({
+      registered: ['c-new', 'c-moved'],
+      failed: [],
+      skipped: [{ companyId: 'c-waiting', reason: 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE' }],
+    })
+    expect(transport.registerRecipient).toHaveBeenCalledTimes(3)
+    expect(inserts().map((row) => row.company_id)).toEqual(['c-new', 'c-moved', 'c-waiting'])
+    expect(updates().at(-1)).toMatchObject({ status: 'failed', last_error_code: 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE' })
+    const settingsIds = calls.find((c) => c.table === 'company_settings' && c.method === 'in')?.args[1]
+    expect(settingsIds).toEqual(['c-new', 'c-moved', 'c-waiting'])
+  })
+
+  it('counts a retry against the per-run limit', async () => {
+    const now = Date.parse('2026-11-03T12:00:00.000Z')
+    const transport = makeTransport()
+    enqueue({ data: [{ company_id: 'c-new', requested_by: null }, { company_id: 'c-moved', requested_by: null }], error: null })
+    enqueue({
+      data: [{
+        company_id: 'c-moved', status: 'failed', updated_at: new Date(now - 2 * PEPPOL_PUBLISHED_ELSEWHERE_RETRY_MS).toISOString(),
+        last_error_code: 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE',
+      }],
+      error: null,
+    })
+    enqueue({ data: [companySettings('c-new', '5560000004'), companySettings('c-moved', '5560000001')], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { id: 'reg-new' }, error: null })
+    enqueue({ data: { ...registeredRow, company_id: 'c-new' }, error: null })
+
+    expect(await registerGrantedPeppolReceivers({ service, transport, now, limit: 1 })).toEqual({
+      registered: ['c-new'], failed: [], skipped: [],
+    })
+    expect(transport.registerRecipient).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing on a send-only transport or without grants, and throws when the history cannot be read', async () => {
+    expect(await registerGranted(makeTransport({ registerRecipient: undefined }))).toEqual({ registered: [], failed: [], skipped: [] })
+    expect(calls).toHaveLength(0)
+
+    enqueue({ data: [], error: null })
+    expect(await registerGranted(makeTransport())).toEqual({ registered: [], failed: [], skipped: [] })
+    expect(calls.some((c) => c.table === 'peppol_registrations')).toBe(false)
+
+    reset()
+    enqueue({ data: [{ company_id: 'c-a', requested_by: null }], error: null })
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(registerGranted(makeTransport())).rejects.toThrow('Failed to read Peppol registrations: boom')
   })
 })

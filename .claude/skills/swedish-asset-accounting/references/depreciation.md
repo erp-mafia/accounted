@@ -34,8 +34,14 @@
 
 ### Depreciation Start
 
-- **K2 (10.23):** From year asset is *put into use* (tas i bruk). Full annual amount regardless of partial year.
+- **K2 (10.23):** From year asset is *put into use* (tas i bruk). The second stycke *allows* (får) the same amount every year even if the asset was in use only part of the year: an option, not a requirement. Accounted pro-rates by the days in use instead.
 - **K3 (17.18):** From when asset *can* be used (available for use). Buildings under K2 depreciate even before use.
+
+### Fiscal Year Other Than 12 Months (förlängt or förkortat räkenskapsår)
+
+- **K2 (10.23), BFN's kommentar:** "Omfattar räkenskapsåret annan tid än 12 månader behöver avskrivningen justeras utifrån räkenskapsårets längd." This holds whichever option above is chosen: a förlängt 15-month first year carries 15 months of depreciation for an asset held all of it, a förkortat 6-month year carries 6.
+- **Accounted's formula** (every path: linear, opening balance, K3 components): `12-month amount × (days in use / days in the fiscal year) × (months in the fiscal year / 12)`. The last factor is exactly 1 for every 12-month year.
+- **Example:** 12 000 kr over 60 months (2 400 kr per 12 months). Fiscal year 2025-06-01 to 2026-08-31 (15 months): held all year gives 3 000 kr; acquired 2025-09-01 gives 2 396 kr (about 12 months of use). Fiscal year 2025-07-01 to 2025-12-31 (6 months), held all year: 1 200 kr.
 
 ### Component Depreciation (Komponentavskrivning)
 
@@ -94,7 +100,7 @@ Book value must NEVER fall below tax value:
 ### K2 vs K3
 
 - **K2:** Often eliminates need for överavskrivning entirely. 5-year rule (20%) matches kompletteringsregeln. Building rates can match SKV. No deferred tax permitted.
-- **K3:** Strict separation required. Book depreciation must reflect economic consumption. Deferred tax required (ch. 29). In juridisk person, K3 29.37 permits obeskattade reserver at gross. In consolidated accounts: split into equity (79.4%) and uppskjuten skatteskuld (20.6% at current corporate tax rate).
+- **K3:** Strict separation required. Book depreciation must reflect economic consumption. Deferred tax required (ch. 29). In juridisk person, K3 29.37 requires obeskattade reserver at gross: the deferred tax on them ska inte särredovisas. Only in consolidated accounts are they split into equity (79.4%, K3 4.12) and uppskjuten skatteskuld (20.6% at current corporate tax rate).
 
 ---
 

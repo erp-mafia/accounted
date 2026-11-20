@@ -2,41 +2,50 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
 import { ApiKeysPanel } from '@/components/settings/ApiKeysPanel'
 import { McpConnectionsPanel } from '@/components/settings/McpConnectionsPanel'
 import { OAuthClientsPanel } from '@/components/settings/OAuthClientsPanel'
 import { SettingsGroup, SettingsReveal, SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useApiKeys } from '@/components/settings/useApiKeys'
+import { useByraSettingsScope } from '@/components/settings/useSettingsNavItems'
 import { cn } from '@/lib/utils'
 
 /**
  * Settings → API & MCP. What is connected comes first (or, with nothing
  * connected, how to connect Claude); the developer tools (API keys, OAuth
  * redirect registrations) sit at the bottom, because most people never need
- * them.
+ * them. Opened from the byrå cockpit (?ctx=byra) the list is the person's own
+ * connections across every client, not the open company's.
  */
 export function ApiSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_api_keys')
-  const { keys, isLoading, refetch, revoke } = useApiKeys()
+  const byraScope = useByraSettingsScope()
+  const { keys, companies, isLoading, refetch, revoke } = useApiKeys({ mine: byraScope })
   const [showOAuthClients, setShowOAuthClients] = useState(false)
 
   return (
     <div>
       <SettingsSectionHeader title={tNav('api')} intro={tIntro('api')} />
-      <McpConnectionsPanel keys={keys} isLoading={isLoading} onRevoke={revoke} />
+      <McpConnectionsPanel
+        keys={keys}
+        companies={companies}
+        isLoading={isLoading}
+        onRevoke={revoke}
+        onKeysChanged={refetch}
+      />
 
       <SettingsGroup label={t('developer_title')}>
-        <ApiKeysPanel keyCount={keys.length} onCreated={refetch} />
+        <ApiKeysPanel keyCount={keys.length} companies={companies} onCreated={refetch} />
         <button
           type="button"
           aria-expanded={showOAuthClients}
           onClick={() => setShowOAuthClients(!showOAuthClients)}
-          className="flex w-full items-center gap-2 border-b border-border px-1 py-3 text-left text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          className="flex w-full items-center gap-2 border-b-hairline px-1 py-3 text-left text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
         >
-          <ChevronDown
+          <ChevronDownIcon
             className={cn('h-3.5 w-3.5 transition-transform duration-150', !showOAuthClients && '-rotate-90')}
           />
           {t('oauth_clients_toggle')}

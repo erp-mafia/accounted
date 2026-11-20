@@ -5,7 +5,12 @@ import Image from 'next/image'
 import { useTranslations } from 'next-intl'
 import { BankIdQrCode } from './BankIdQrCode'
 import { Button } from '@/components/ui/button'
-import { Smartphone, Monitor, AlertTriangle, Loader2 } from 'lucide-react'
+import {
+  ComputerDesktopIcon,
+  DevicePhoneMobileIcon,
+  ExclamationTriangleIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 
 type BankIdStatus =
   | 'idle'
@@ -220,16 +225,13 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
           completedRef.current = true
           cleanup()
-          if (resumedRef.current) {
-            // We only probed on the chance a flow existed. It does not, so
-            // quietly offer the start button.
-            setStatus('idle')
-          } else {
-            // This tab watched its own order die. Say so: silently reverting to
-            // the start button reads as "it just did nothing".
-            setStatus('failed')
-            setErrorMessage('BankID-sessionen löpte ut. Försök igen.')
-          }
+          // Say so in both cases: silently reverting to the start button reads
+          // as "it just did nothing". A resumed flow gets here only after the
+          // person tapped Fortsätt on the confirm card (the mount probe never
+          // polls through this branch), so the dead order was theirs too, and
+          // a quiet revert left them cycling resume card, BankID, start button.
+          setStatus('failed')
+          setErrorMessage(t(resumedRef.current ? 'bankid_resumed_expired' : 'bankid_session_expired'))
           setSession(null)
           setActiveFlowId(null)
           return
@@ -379,7 +381,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         pollInFlightRef.current = false
       }
     }, 2000)
-  }, [cleanup, mode])
+  }, [cleanup, mode, t])
 
   const startSession = useCallback(async () => {
     // Collapse double-clicks: one billable TIC session per intent.
@@ -569,7 +571,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   if (status === 'cancelling') {
     return (
       <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerIcon className="h-4 w-4 animate-spin" />
         {t('bankid_cancelling')}
       </div>
     )
@@ -577,7 +579,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
   if (status === 'resumable') {
     return (
-      <div className="rounded-lg border border-border bg-muted/30 p-4">
+      <div className="rounded-lg p-4 bg-control shadow-raised">
         <div className="space-y-3">
           <div className="space-y-2">
             <p className="text-sm font-medium">{t('bankid_resume_title')}</p>
@@ -606,7 +608,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   if (status === 'complete') {
     return (
       <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerIcon className="h-4 w-4 animate-spin" />
         {t('bankid_completing')}
       </div>
     )
@@ -636,9 +638,9 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
   if (status === 'service_unavailable') {
     return (
-      <div className="rounded-lg border border-border bg-muted/30 p-4">
+      <div className="rounded-lg p-4 bg-control shadow-raised">
         <div className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
           <div className="space-y-1.5">
             <p className="text-sm font-medium">
               BankID är inte tillgängligt just nu
@@ -653,7 +655,6 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             <Button
               onClick={startSession}
               variant="ghost"
-              size="sm"
               className="mt-1 h-auto px-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             >
               Försök med BankID igen
@@ -700,10 +701,9 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             <Button
               onClick={openBankIdOnDevice}
               variant="ghost"
-              size="sm"
               className="gap-1.5 text-muted-foreground"
             >
-              <Monitor className="h-3.5 w-3.5" />
+              <ComputerDesktopIcon className="h-3.5 w-3.5" />
               BankID på den här enheten
             </Button>
           )}
@@ -712,7 +712,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
       {isMobile() && (
         <div className="flex flex-col items-center gap-2">
-          <Smartphone className="h-8 w-8 text-muted-foreground" />
+          <DevicePhoneMobileIcon className="h-8 w-8 text-muted-foreground" />
           {/* A resumed tab never launched anything, so saying "opening the
               BankID app" would be a lie followed by silence. */}
           <p className="text-sm text-muted-foreground">
@@ -729,7 +729,6 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         onClick={handleCancel}
         disabled={!activeFlowId}
         variant="ghost"
-        size="sm"
         className="text-muted-foreground"
       >
         Avbryt

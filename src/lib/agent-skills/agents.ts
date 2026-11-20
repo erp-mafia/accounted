@@ -19,7 +19,8 @@ export { AREAS, type Area } from './areas'
  *    tagged with any of the agent's areas are inlined when it starts (areas.ts).
  *  - Kopplingar: where the agent acts. `bank`, `skatteverket` and `peppol` are
  *    Accounted connections the page can check; `mail` and `browser` live in the
- *    customer's own AI client (Gmail connector, Claude in Chrome) and are only named.
+ *    customer's own AI client (Gmail connector, the Claude desktop app's browser or
+ *    Claude in Chrome) and are only named.
  *
  * Each workflow is named for its job (Kvittoagent, Momsagent). Its picture is a
  * folder in its colour (components/skills/Folder.tsx); its page stands it on a
@@ -46,11 +47,17 @@ const INVOICE = 'horizontal/swedish-invoice-compliance'
 const YEAR_END = 'horizontal/swedish-year-end-closing'
 
 /**
- * Community sharing (share, upvote, community items and authors) is built but
- * held back from this release: the page, the knowledge picker and the share
- * route all read this one switch. Flip it when community launches.
+ * Community sharing (share, upvote, community items and authors): the page,
+ * the knowledge picker and the share route all read this one switch. Shared
+ * items are reviewed by Accounted and published through the public MIT repo
+ * erp-mafia/accounted-skills (community-repo.ts, community-sync.ts).
+ *
+ * Open since 2026-09-27: withdrawing returns an item to private and
+ * hides a published text from every AI at once (migration 20260926172514);
+ * the reviewer is emailed about each share, and the author when the item's
+ * page is live on accounted.se (community-notify.ts).
  */
-export const COMMUNITY_OPEN = false
+export const COMMUNITY_OPEN = true
 
 /** What a company's own agent carries until the company changes it: the accounting law every flow stands on. */
 export const OWN_AGENT_KNOWLEDGE: readonly string[] = [COMPLIANCE]
@@ -155,15 +162,10 @@ export function isCheckable(connection: AgentConnection): connection is Checkabl
 export const CONNECTION_SETTINGS: Record<CheckableConnection, string> = {
   bank: '/settings/banking',
   skatteverket: '/settings/tax',
-  peppol: '/settings/invoicing',
+  peppol: '/settings/peppol',
 }
 
 /** Whether a string names a curated agent. */
 export function isAgentId(value: string): value is RegistrySkillId {
   return value in AGENTS
-}
-
-/** `agent:<id>` for get_task. */
-export function agentTaskKind(id: RegistrySkillId): string {
-  return `agent:${id}`
 }

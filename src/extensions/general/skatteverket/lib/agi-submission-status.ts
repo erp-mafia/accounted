@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AgiSubmissionState } from '@/lib/salary/agi-submission-state'
+import { readAgiKvittensReceipts } from './agi-kvittens-history'
 
 /**
  * The AGI submission record the run page renders, read from the two places
@@ -94,7 +95,10 @@ export function agiSubmissionFromDeclaration(
 /**
  * The submission record for a period: the cache when present (it is the only
  * place the in-flight states live and, for the interactive path, the receipt
- * too), otherwise the receipt recorded on agi_declarations.
+ * too), otherwise the receipt recorded on agi_declarations. Either way it
+ * carries every kvittens recorded for the period (`receipts`), so a run whose
+ * receipt the period record has moved past (the original of a corrected
+ * month) still finds its own.
  */
 export async function readAgiSubmissionStatus(
   supabase: SupabaseClient,
@@ -103,16 +107,25 @@ export async function readAgiSubmissionStatus(
   cached: unknown,
 ): Promise<AgiSubmissionState | null> {
   const fromCache = parseCachedAgiSubmission(cached)
-  if (fromCache) return { ...fromCache, source: 'cache' }
-  if (!PERIOD_RE.test(period)) return null
+  if (!PERIOD_RE.test(period)) return fromCache ? { ...fromCache, source: 'cache' } : null
+  const periodYear = parseInt(period.slice(0, 4), 10)
+  const periodMonth = parseInt(period.slice(4, 6), 10)
 
-  const { data } = await supabase
-    .from('agi_declarations')
-    .select('salary_run_id, status, kvittensnummer, submitted_at, response_data')
-    .eq('company_id', companyId)
-    .eq('period_year', parseInt(period.slice(0, 4), 10))
-    .eq('period_month', parseInt(period.slice(4, 6), 10))
-    .maybeSingle()
+  let record: AgiSubmissionState | null
+  if (fromCache) {
+    record = { ...fromCache, source: 'cache' }
+  } else {
+    const { data } = await supabase
+      .from('agi_declarations')
+      .select('salary_run_id, status, kvittensnummer, submitted_at, response_data')
+      .eq('company_id', companyId)
+      .eq('period_year', periodYear)
+      .eq('period_month', periodMonth)
+      .maybeSingle()
+    record = agiSubmissionFromDeclaration((data as AgiDeclarationReceiptRow | null) ?? null)
+  }
 
-  return agiSubmissionFromDeclaration((data as AgiDeclarationReceiptRow | null) ?? null)
+  const receipts = await readAgiKvittensReceipts(supabase, companyId, periodYear, periodMonth)
+  if (receipts.length === 0) return record
+  return { ...(record ?? {}), receipts }
 }

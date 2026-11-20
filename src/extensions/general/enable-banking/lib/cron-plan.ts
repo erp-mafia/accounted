@@ -10,6 +10,7 @@
  * Pure: the route fetches the rows, this decides. Every connection lands in
  * exactly one bucket, so the run can report why anything was not synced.
  */
+import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
 import type { StoredAccount } from '../types'
 
 /**
@@ -28,15 +29,26 @@ export interface PlannableConnection {
   accounts_data?: unknown
 }
 
+export interface BankSyncPlanOptions {
+  /**
+   * The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts
+   * enableBankingSunset): every connection lands in the sunset bucket and
+   * nothing is selected, so the run makes no provider call.
+   */
+  sunset?: boolean
+}
+
 export interface BankSyncPlan<T> {
   /** Due, lease free, within the batch limit. Never-synced first, then oldest sync. */
   selected: T[]
   stats: {
+    /** Set aside because the Enable Banking feed has ended: the people switch, the cron does not call. */
+    sunset: number
     /** Active connections of companies holding the bank_sync capability. */
     eligible: number
     /** Active connections excluded by design: no bank_sync grant. */
     notEntitled: number
-    /** Every account deselected: nothing to fetch. */
+    /** Nothing to fetch: every account deselected, a mirror card account aside. */
     noAccounts: number
     /** Synced within SYNC_DUE_AFTER_MS. */
     fresh: number
@@ -56,7 +68,25 @@ export function planBankSyncRun<T extends PlannableConnection>(
   entitledCompanyIds: ReadonlySet<string>,
   now: number,
   maxConnections: number,
+  options: BankSyncPlanOptions = {},
 ): BankSyncPlan<T> {
+  if (options.sunset) {
+    return {
+      selected: [],
+      stats: {
+        sunset: connections.length,
+        eligible: 0,
+        notEntitled: 0,
+        noAccounts: 0,
+        fresh: 0,
+        coolingDown: 0,
+        due: 0,
+        selected: 0,
+        deferredByBatchLimit: 0,
+        oldestOverdueHours: 0,
+      },
+    }
+  }
   const dueBefore = now - SYNC_DUE_AFTER_MS
   const due: T[] = []
   let notEntitled = 0
@@ -71,7 +101,9 @@ export function planBankSyncRun<T extends PlannableConnection>(
       continue
     }
     const accounts = (connection.accounts_data as StoredAccount[] | null) ?? []
-    if (!accounts.some(account => account.enabled !== false)) {
+    // The same rule the sync applies: a mirror card account switched on is
+    // still nothing to fetch.
+    if (!accounts.some(isSyncedAccount)) {
       noAccounts++
       continue
     }
@@ -96,6 +128,7 @@ export function planBankSyncRun<T extends PlannableConnection>(
   return {
     selected,
     stats: {
+      sunset: 0,
       eligible: connections.length - notEntitled,
       notEntitled,
       noAccounts,

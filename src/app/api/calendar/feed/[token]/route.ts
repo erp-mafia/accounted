@@ -1,3 +1,5 @@
+import { excludeCreditNotes } from '@/lib/bookkeeping/credit-note-state'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { generateCalendarFeed } from '@/lib/calendar/ics-generator'
@@ -6,6 +8,9 @@ import { createLogger } from '@/lib/logger'
 import type { Deadline, Invoice } from '@/types'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 import { UUID_RE } from '@/lib/invariants/uuid'
+import { fileResponse } from '@/lib/api/file-response'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
 
 const log = createLogger('api/calendar/feed-token')
 
@@ -60,16 +65,17 @@ export async function GET(
     return new NextResponse('Feed token has expired', { status: 410 })
   }
 
-  // The token authenticates the feed, but the feed's creator must still be a
-  // member of the company: offboarding (removal from company_members) must
-  // stop the feed, or an ex-member's subscribed calendar keeps receiving the
-  // company's deadlines and invoice details indefinitely.
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('user_id')
-    .eq('company_id', feed.company_id)
-    .eq('user_id', feed.user_id)
-    .maybeSingle()
+  // The token authenticates the feed, but the feed's creator must still reach
+  // the company: offboarding (removal from company_members) and archiving must
+  // both stop the feed, or a subscribed calendar keeps receiving the company's
+  // deadlines and invoice details indefinitely.
+  let membership: LiveMembership | null
+  try {
+    membership = await readLiveMembership(supabase, feed.user_id, feed.company_id)
+  } catch (error) {
+    log.error('Error reading the feed creator\'s membership', error as Error, { feedId: feed.id })
+    return new NextResponse('Failed to generate calendar feed', { status: 500 })
+  }
 
   if (!membership) {
     return new NextResponse('Feed not found or inactive', { status: 404 })
@@ -84,15 +90,10 @@ export async function GET(
     })
     .eq('id', feed.id)
 
-  // Calculate date range: 3 months back, 12 months forward
-  const now = new Date()
-  const startDate = new Date(now)
-  startDate.setMonth(startDate.getMonth() - 3)
-  const endDate = new Date(now)
-  endDate.setMonth(endDate.getMonth() + 12)
-
-  const startStr = startDate.toISOString().split('T')[0]
-  const endStr = endDate.toISOString().split('T')[0]
+  // Date range: 3 months back, 12 months forward from the Swedish calendar day
+  const today = todayIsoStockholm()
+  const startStr = addMonthsIso(today, -3)
+  const endStr = addMonthsIso(today, 12)
 
   try {
     // Fetch relevant data based on feed options. Deadlines are always
@@ -120,18 +121,21 @@ export async function GET(
 
       // Invoices with a real due date to remind about: drafts, cancelled and
       // credited invoices have no payable due date and would leak
-      // speculative amounts into the subscriber's calendar.
+      // speculative amounts into the subscriber's calendar. Neither has a
+      // credit note: it is never owed, whatever its status (crm#1435).
       feed.include_invoices
         ? fetchAllRows<Invoice>(
             ({ from, to }) =>
-              supabase
-                .from('invoices')
-                .select('*, customer:customers(*)')
-                .eq('company_id', feed.company_id)
-                .in('status', ['sent', 'paid', 'partially_paid', 'overdue'])
-                // A quote's due_date only mirrors its expiry; it is not a
-                // payment date. Proformas and delivery notes are not owed.
-                .eq('document_type', 'invoice')
+              excludeCreditNotes(
+                supabase
+                  .from('invoices')
+                  .select('*, customer:customers(*)')
+                  .eq('company_id', feed.company_id)
+                  .in('status', [...OWED_INVOICE_STATUSES, 'paid'])
+                  // A quote's due_date only mirrors its expiry; it is not a
+                  // payment date. Proformas and delivery notes are not owed.
+                  .eq('document_type', 'invoice'),
+              )
                 .gte('due_date', startStr)
                 .lte('due_date', endStr)
                 .order('due_date')
@@ -153,11 +157,11 @@ export async function GET(
       }
     )
 
-    return new NextResponse(icsContent, {
+    return fileResponse(icsContent, {
+      filename: 'accounted.ics',
+      contentType: 'text/calendar; charset=utf-8',
+      cacheControl: 'no-cache, no-store, must-revalidate',
       headers: {
-        'Content-Type': 'text/calendar; charset=utf-8',
-        'Content-Disposition': 'attachment; filename="accounted.ics"',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
         'Expires': '0',
       },

@@ -118,6 +118,38 @@ describe('commitPendingOperation: update_invoice', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(8, 'invoice_items')
   })
 
+  // crm#1202: the suspicion was that an edit resets a quote's state. The
+  // write carries neither lifecycle column, so an open quote stays an open,
+  // unsent quote (status and quote_status untouched).
+  it('rewrites an open quote without touching status or quote_status', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-invoice-1' } }) // claim pending -> committing
+    enqueue({
+      data: existingDraft({ document_type: 'quote', invoice_number: 'OF-001', quote_status: 'open', valid_until: '2026-07-31' }),
+    })
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+    enqueue({ data: { vat_registered: true } }) // company_settings
+    enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update (draft-guarded)
+    enqueue({ data: [] }) // invoice_items snapshot
+    enqueue({ data: null }) // invoice_items delete
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: null }) // pending_operations final status update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ invoice_id: INVOICE_ID, changes: { items: NEW_ITEMS } }),
+    )
+
+    expect(result.status).toBe('committed')
+    const updates = findCalls('invoices', 'update').map((call) => call[0] as Record<string, unknown>)
+    expect(updates).toHaveLength(1)
+    expect(updates[0]).not.toHaveProperty('status')
+    expect(updates[0]).not.toHaveProperty('quote_status')
+    expect(updates[0]).toMatchObject({ valid_until: '2026-07-31' })
+  })
+
   it('keeps the existing lines on a header-only edit (no full replace staged)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-invoice-1' } }) // claim
@@ -171,6 +203,42 @@ describe('commitPendingOperation: update_invoice', () => {
       item_count: 1,
       items_replaced: false,
     })
+  })
+
+  it('writes a staged QR mode, and leaves the stored one alone when the edit does not mention it', async () => {
+    const CURRENT_ROW = {
+      line_type: 'product',
+      description: 'Befintlig rad',
+      quantity: 1,
+      unit: 'st',
+      unit_price: 100,
+      vat_rate: 25,
+    }
+    const run = async (changes: Record<string, unknown>) => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-invoice-1' } }) // claim
+      enqueue({ data: existingDraft() }) // invoices: existing draft
+      enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+      enqueue({ data: [CURRENT_ROW] }) // invoice_items: current rows
+      enqueue({ data: { vat_registered: true } }) // company_settings
+      enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update
+      enqueue({ data: [] }) // invoice_items snapshot
+      enqueue({ data: null }) // invoice_items delete
+      enqueue({ data: null }) // invoice_items insert
+      enqueue({ data: null }) // final status update
+      const result = await commitPendingOperation(
+        supabase as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ invoice_id: INVOICE_ID, changes }),
+      )
+      expect(result.status).toBe('committed')
+      return findCalls('invoices', 'update')[0][0] as Record<string, unknown>
+    }
+
+    expect(await run({ qr_mode: 'swish' })).toMatchObject({ qr_mode: 'swish' })
+    expect(await run({ qr_mode: null })).toMatchObject({ qr_mode: null })
+    expect(await run({ notes: 'Uppdaterad anteckning' })).not.toHaveProperty('qr_mode')
   })
 
   it('re-checks the editable-draft gate at commit time (sent between staging and approval)', async () => {

@@ -4,16 +4,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Button } from '@/components/ui/button'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { TOOLBAR_FIELD_CLASS, ToolbarSearch } from '@/components/ui/toolbar-search'
+import { TOOLBAR_FIELD_CLASS, TOOLBAR_SEARCH_END_CLASS, ToolbarSearch } from '@/components/ui/toolbar-search'
 import { PageHeader } from '@/components/ui/page-header'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { AgreementListItem } from '@/app/api/arkiv/agreements/route'
 import type { AgreementKind } from '@/lib/arkiv/agreements/derive'
-import { formatCurrency, formatDateLong } from '@/lib/utils'
+import { formatDateLong, formatRowAmount } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 
 const KINDS: AgreementKind[] = ['rental', 'lease', 'loan', 'subscription']
@@ -25,12 +26,15 @@ const KINDS: AgreementKind[] = ['rental', 'lease', 'loan', 'subscription']
  */
 export function ArkivAgreements() {
   const t = useTranslations('arkiv')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const router = useRouter()
   const [items, setItems] = useState<AgreementListItem[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [kind, setKind] = useState<'all' | AgreementKind>('all')
   const [query, setQuery] = useState('')
+  // Bumped by "Försök igen" to run the fetch again.
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -46,7 +50,7 @@ export function ArkivAgreements() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [attempt])
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -74,18 +78,42 @@ export function ArkivAgreements() {
             ))}
           </SelectContent>
         </Select>
-        <ToolbarSearch id="agreement-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_agreements')} containerClassName="w-72" />
+        <ToolbarSearch id="agreement-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_agreements')} containerClassName={TOOLBAR_SEARCH_END_CLASS} />
       </div>
 
-      {failed && <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>}
+      {failed && (
+        <LoadError
+          onRetry={() => {
+            setFailed(false)
+            setAttempt((n) => n + 1)
+          }}
+        />
+      )}
       {!items && !failed && (
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-6 w-1/3" />
           <Skeleton className="h-6 w-2/3" />
+        </LateReveal>
+      )}
+      {items && items.length === 0 && <EmptyState title={t('agreements_empty_title')} description={t('agreements_empty_body')} />}
+      {items && items.length > 0 && visible.length === 0 && (
+        // No hits for the search or the type: one line in the list.
+        <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+          {query.trim() ? (
+            <>
+              <span data-ph-mask="">{t('search_empty', { query: query.trim() })}</span>
+              <Button variant="link" onClick={() => setQuery('')}>
+                {tCommon('clear_search')}
+              </Button>
+            </>
+          ) : (
+            <span>{t('agreements_filter_empty')}</span>
+          )}
         </div>
       )}
-      {items && visible.length === 0 && <EmptyState title={t('agreements_empty_title')} description={t('agreements_empty_body')} />}
       {items && visible.length > 0 && (
+        // Six nowrap heads need ~600px: on a phone the table scrolls in place instead of the page.
+        <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -114,14 +142,14 @@ export function ArkivAgreements() {
                   </div>
                 </td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>
-                  {a.amount != null ? formatCurrency(a.amount, a.currency) : ''}
+                  {a.amount != null ? formatRowAmount(a.amount, a.currency) : ''}
                   {a.amount != null && a.period ? <span className="text-muted-foreground"> {periodLabel(a.period)}</span> : null}
                 </td>
                 <td className={`${TD_CLASS} tabular-nums`}>
                   {a.next_payment ? (
                     <>
                       {formatDateLong(a.next_payment.due_on, locale)}
-                      <span className="text-muted-foreground"> · {formatCurrency(a.next_payment.amount, a.next_payment.currency)}</span>
+                      <span className="text-muted-foreground"> · {formatRowAmount(a.next_payment.amount, a.next_payment.currency)}</span>
                       <span className={a.next_payment.status === 'missed' ? ' text-destructive' : ' text-muted-foreground'}> · {t(`obligation_${a.next_payment.status}`)}</span>
                     </>
                   ) : (
@@ -139,6 +167,7 @@ export function ArkivAgreements() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )

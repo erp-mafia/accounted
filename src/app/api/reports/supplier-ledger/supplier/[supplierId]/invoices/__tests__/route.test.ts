@@ -24,59 +24,37 @@ vi.mock('@/lib/bookkeeping/currency-utils', () => ({
 }))
 
 import { GET } from '../route'
-
-interface QueryResult {
-  data: unknown
-  error: unknown
-}
+import { reskontraRpcPorts, type ReskontraTables } from '@/tests/reskontra-rpc-port'
 
 /**
- * The invoices query is paginated via fetchAllRows (.range per page), so the
- * mock serves one page result per .range() call. A single QueryResult is a
- * one-page company; pass an array to exercise multi-page paging.
+ * The supplier lookup is a table read; the invoices and their registration
+ * verifikat come from get_supplier_ledger_invoices, answered from `books` by
+ * its JS port (tests/reskontra-rpc-port.ts). Invoices are the supplier's
+ * ('sup-1') and approved unless they say otherwise.
  */
 function buildSupabase(
   supplier: { id: string; name: string } | null,
-  invoicesResults: QueryResult | QueryResult[],
-  entriesResult: QueryResult
+  books: ReskontraTables,
+  failures: Record<string, { message: string }> = {},
 ) {
-  const pages = Array.isArray(invoicesResults) ? [...invoicesResults] : [invoicesResults]
-  const rangeCalls: Array<[number, number]> = []
-  const orderCalls: unknown[][] = []
-  const supabase = {
+  const tables: ReskontraTables = {
+    ...books,
+    supplier_invoices: (books.supplier_invoices ?? []).map((row) => ({ supplier_id: 'sup-1', status: 'approved', ...row })),
+  }
+  return {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (failures[name]) return { data: null, error: failures[name] }
+      return { data: reskontraRpcPorts(tables)[name](args), error: null }
+    }),
     from: vi.fn().mockImplementation((table: string) => {
-      if (table === 'suppliers') {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          maybeSingle: vi.fn().mockResolvedValue({ data: supplier, error: null }),
-        }
-      }
-      if (table === 'supplier_invoices') {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          in: vi.fn().mockReturnThis(),
-          order: vi.fn().mockImplementation(function (this: unknown, ...args: unknown[]) {
-            orderCalls.push(args)
-            return this
-          }),
-          range: vi.fn().mockImplementation((from: number, to: number) => {
-            rangeCalls.push([from, to])
-            return Promise.resolve(pages.shift() ?? { data: [], error: null })
-          }),
-        }
-      }
-      // journal_entries
+      if (table !== 'suppliers') throw new Error(`unexpected read of ${table}`)
       return {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
-        in: vi.fn().mockReturnThis(),
-        then: (resolve: (v: QueryResult) => void) => resolve(entriesResult),
+        maybeSingle: vi.fn().mockResolvedValue({ data: supplier, error: null }),
       }
     }),
   }
-  return Object.assign(supabase, { rangeCalls, orderCalls })
 }
 
 beforeEach(() => {
@@ -87,7 +65,7 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
   it('returns 401 when not authenticated', async () => {
     requireAuthMock.mockResolvedValue({
       user: null,
-      supabase: buildSupabase(null, { data: [], error: null }, { data: [], error: null }),
+      supabase: buildSupabase(null, {}),
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
     const req = createMockRequest(
@@ -100,7 +78,7 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
   it('returns 404 when supplier is unknown', async () => {
     requireAuthMock.mockResolvedValue({
       user: { id: 'user-1' },
-      supabase: buildSupabase(null, { data: [], error: null }, { data: [], error: null }),
+      supabase: buildSupabase(null, {}),
       error: null,
     })
     const req = createMockRequest(
@@ -128,21 +106,18 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
     const entries = [
       {
         id: 'je-3',
+        status: 'posted',
         voucher_number: 33,
         voucher_series: 'B',
         description: 'Leverantörsfaktura INV-7',
         entry_date: '2026-05-10',
       },
     ]
-    requireAuthMock.mockResolvedValue({
-      user: { id: 'user-1' },
-      supabase: buildSupabase(
-        { id: 'sup-1', name: 'Office Supply AB' },
-        { data: invoices, error: null },
-        { data: entries, error: null }
-      ),
-      error: null,
-    })
+    const supabase = buildSupabase(
+      { id: 'sup-1', name: 'Office Supply AB' },
+      { supplier_invoices: invoices, journal_entries: entries },
+    )
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
     const req = createMockRequest(
       '/api/reports/supplier-ledger/supplier/sup-1/invoices'
     )
@@ -162,6 +137,12 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
       }
     }
 
+    // One read of the supplier's open invoices, verifikat included.
+    expect(supabase.rpc).toHaveBeenCalledWith('get_supplier_ledger_invoices', {
+      p_company_id: 'company-1',
+      p_as_of_date: null,
+      p_supplier_id: 'sup-1',
+    })
     expect(body.data.supplier_id).toBe('sup-1')
     expect(body.data.supplier_name).toBe('Office Supply AB')
     expect(body.data.lines).toHaveLength(1)
@@ -190,11 +171,7 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
     ]
     requireAuthMock.mockResolvedValue({
       user: { id: 'user-1' },
-      supabase: buildSupabase(
-        { id: 'sup-1', name: 'Euro Supply GmbH' },
-        { data: invoices, error: null },
-        { data: [], error: null }
-      ),
+      supabase: buildSupabase({ id: 'sup-1', name: 'Euro Supply GmbH' }, { supplier_invoices: invoices }),
       error: null,
     })
     const req = createMockRequest(
@@ -271,11 +248,7 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
     ]
     requireAuthMock.mockResolvedValue({
       user: { id: 'user-1' },
-      supabase: buildSupabase(
-        { id: 'sup-1', name: 'Euro Supply GmbH' },
-        { data: invoices, error: null },
-        { data: [], error: null }
-      ),
+      supabase: buildSupabase({ id: 'sup-1', name: 'Euro Supply GmbH' }, { supplier_invoices: invoices }),
       error: null,
     })
     const req = createMockRequest(
@@ -305,11 +278,11 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
     expect(body.data.unconverted_fx_count).toBe(1)
   })
 
-  it('paginates past the old hardcoded cap and counts FX rows over the full set', async () => {
-    // 1000 SEK invoices fill page one; page two carries one more SEK invoice
-    // plus an unconvertible FX invoice. The old 500-row limit truncated both
-    // the lines AND unconverted_fx_count while next_cursor: null claimed the
-    // list was complete.
+  it('lists every open invoice in invoice-date order and counts FX rows over the full set', async () => {
+    // 1001 SEK invoices and an unconvertible FX invoice, past PostgREST's
+    // 1000-row page. The old 500-row limit truncated both the lines AND
+    // unconverted_fx_count while next_cursor: null claimed the list was
+    // complete.
     const makeInvoice = (i: number) => ({
       id: `si-${i}`,
       supplier_invoice_number: `INV-${i}`,
@@ -322,20 +295,12 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
       exchange_rate: null,
       registration_journal_entry_id: null,
     })
-    const page1 = Array.from({ length: 1000 }, (_, i) => makeInvoice(i))
-    const page2 = [
-      makeInvoice(1000),
-      { ...makeInvoice(1001), currency: 'EUR', exchange_rate: null },
+    const invoices = [
+      { ...makeInvoice(1001), currency: 'EUR', exchange_rate: null, invoice_date: '2026-05-01' },
+      ...Array.from({ length: 1001 }, (_, i) => makeInvoice(i)),
     ]
 
-    const supabase = buildSupabase(
-      { id: 'sup-1', name: 'Volym AB' },
-      [
-        { data: page1, error: null },
-        { data: page2, error: null },
-      ],
-      { data: [], error: null }
-    )
+    const supabase = buildSupabase({ id: 'sup-1', name: 'Volym AB' }, { supplier_invoices: invoices })
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
 
     const res = await GET(
@@ -346,21 +311,17 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
 
     const body = (await res.json()) as {
       data: {
-        lines: Array<{ remaining_sek: number | null }>
+        lines: Array<{ supplier_invoice_id: string; remaining_sek: number | null }>
         unconverted_fx_count: number
         next_cursor: null
       }
     }
 
-    // Every row made it through, not just the first page.
+    // Every row made it through, by invoice date (the FX invoice is the
+    // earliest), then in the read's id order.
     expect(body.data.lines).toHaveLength(1002)
-    expect(supabase.rangeCalls).toEqual([
-      [0, 999],
-      [1000, 1999],
-    ])
-    // Stable paging order: invoice_date is not unique, so id must break ties.
-    expect(supabase.orderCalls).toContainEqual(['invoice_date', { ascending: true }])
-    expect(supabase.orderCalls).toContainEqual(['id', { ascending: true }])
+    expect(body.data.lines[0].supplier_invoice_id).toBe('si-1001')
+    expect(body.data.lines[1].supplier_invoice_id).toBe('si-0')
     // The honesty counter sees the FX row on page two.
     expect(body.data.unconverted_fx_count).toBe(1)
     // The shape is unchanged, and the null cursor is now truthful.

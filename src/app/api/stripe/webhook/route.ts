@@ -40,9 +40,19 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Throws when the state could not be written (crm#1736), so the event is
+    // not marked processed and the 500 below has Stripe deliver it again.
     await handleStripeEvent(service, getStripe(), event)
     // Mark processed only AFTER success, so a failure lets Stripe retry.
-    await service.from('stripe_webhook_events').insert({ event_id: event.id, type: event.type })
+    const { error: markError } = await service
+      .from('stripe_webhook_events')
+      .insert({ event_id: event.id, type: event.type })
+    // A unique violation is a concurrent delivery of the same event that
+    // recorded it first. Any other failure answers 500 as well: the state
+    // above is applied, and applying it again on the redelivery changes nothing.
+    if (markError && markError.code !== '23505') {
+      throw new Error(`stripe_webhook_events write failed: ${markError.message}`)
+    }
   } catch (err) {
     // Log with context before the generic 500 so a failing webhook is visible
     // to operators (Stripe will retry on the non-2xx).

@@ -64,6 +64,14 @@ describe('selectProposals', () => {
     expect(result[0].confidence).toBeGreaterThanOrEqual(HUNT_MIN_CONFIDENCE)
   })
 
+  it('never proposes a refund receipt for the purchase it refunds (crm#1779)', () => {
+    // The return receipt carries the purchase's amount below zero: money back, never this outflow.
+    const refund = item({ id: 'item-refund', document_id: 'doc-refund' }, { documentKind: 'receipt', totals: { total: -438.75, vatAmount: -87.75 } })
+    expect(selectProposals([tx()], [refund], noSuppression)).toEqual([])
+    const purchase = item({}, { documentKind: 'receipt' })
+    expect(selectProposals([tx()], [refund, purchase], noSuppression).map((p) => p.document_id)).toEqual(['doc-1'])
+  })
+
   it('returns nothing when the pool is empty', () => {
     expect(selectProposals([tx()], [], noSuppression)).toEqual([])
   })
@@ -226,6 +234,35 @@ describe('selectProposals', () => {
     expect(HUNT_MIN_CONFIDENCE).toBeGreaterThan(0.6)
     expect(AMBIGUITY_MARGIN).toBeGreaterThan(0)
   })
+
+  // crm#1962: the same seller's other charge, a few kronor off and dated
+  // nearer the purchase, outscored the document with the purchase's own sum.
+  describe('a sum near the purchase\'s against its own', () => {
+    const fee = tx({ id: 'tx-fee', date: '2026-10-19', description: 'EXEMPELBANKEN AVGIFT', merchant_name: 'Exempelbanken', amount: -182, amount_sek: -182 })
+    const invoice = (id: string, date: string, total: number) =>
+      item({ id, document_id: `doc-${id}` }, {
+        supplier: { name: 'Exempelbanken AB' },
+        invoice: { invoiceDate: date, currency: 'SEK' },
+        totals: { total, vatAmount: 0 },
+      })
+
+    it.each([
+      ['the near sum dated nearer the purchase', '2026-10-10', '2026-10-19'],
+      ['the exact sum dated nearer the purchase', '2026-10-19', '2026-10-10'],
+    ])('proposes the exact sum when %s', (_case, exactDate, nearDate) => {
+      for (const pool of [
+        [invoice('exact', exactDate, 182), invoice('near', nearDate, 185)],
+        [invoice('near', nearDate, 185), invoice('exact', exactDate, 182)],
+      ]) {
+        const result = selectProposals([fee], pool, noSuppression)
+        expect(result.map((p) => p.document_id)).toEqual(['doc-exact'])
+      }
+    })
+
+    it('proposes nothing on a near sum alone, however well name and date agree', () => {
+      expect(selectProposals([fee], [invoice('near', '2026-10-19', 185)], noSuppression)).toEqual([])
+    })
+  })
 })
 
 /**
@@ -243,10 +280,24 @@ describe('canHaveEmailReceipt', () => {
     expect(canHaveEmailReceipt('Skatt lön Juni   BG 0000050501055 Bg-bet. via internet')).toBe(false)
   })
 
+  it('skips compounded salary and tax wording an imported ledger uses (feedback seq 956543)', () => {
+    expect(canHaveEmailReceipt('Löneutbetalning: 2026.M.01 - anställd: 1')).toBe(false)
+    expect(canHaveEmailReceipt('Lönespecifikation mars')).toBe(false)
+    expect(canHaveEmailReceipt('Prel Vinstskatt')).toBe(false)
+    expect(canHaveEmailReceipt('Preliminärskatt mars')).toBe(false)
+    expect(canHaveEmailReceipt('Prel BG 0000050501055')).toBe(false)
+    expect(canHaveEmailReceipt('Överföring till skattekonto')).toBe(false)
+    expect(canHaveEmailReceipt('F-skatt september')).toBe(false)
+  })
+
+  it('does not mistake an English word starting with "lone" for salary', () => {
+    expect(canHaveEmailReceipt('Lonely Planet Kortköp/uttag')).toBe(true)
+  })
+
   it('keeps a supplier invoice paid over bankgiro', () => {
     // This one matched a real emailed invoice; skipping the whole rail would
     // have thrown away the hunt's best hit.
-    expect(canHaveEmailReceipt('Kontorsplatser j BG 0000059142596 Bg-bet. via internet')).toBe(true)
+    expect(canHaveEmailReceipt('Kontorsplatser j BG 0000001234567 Bg-bet. via internet')).toBe(true)
   })
 
   it('keeps an expense reimbursement, which has a receipt behind it', () => {
@@ -260,6 +311,27 @@ describe('canHaveEmailReceipt', () => {
 
   it('hunts a transaction with no description rather than silently dropping it', () => {
     expect(canHaveEmailReceipt(null)).toBe(true)
+  })
+
+  it('reads a note on the VAT of a purchase as a purchase, not as tax (trial run 2026-10-28)', () => {
+    // Verifikat descriptions shaped like the trial run's: the bank row had no
+    // merchant name, so the bookkeeper's note was all the classifier read.
+    expect(canHaveEmailReceipt('ANTHROPIC* CLAUDE SUB SAN FRANCISCO · Anthropic Claude Max, prenumeration. Omvänd skattskyldighet.')).toBe(true)
+    expect(canHaveEmailReceipt('Flyg SF KLM · KLM flyg Stockholm-USA, tjänsteresa. Utrikes flyg 0% moms. Kvitto saknas i Accounted.')).toBe(true)
+    expect(canHaveEmailReceipt('Partners on Booking BV K3667 · Booking.com, logi. Utländsk logi, ingen avdragsgill moms.')).toBe(true)
+    expect(canHaveEmailReceipt('OPENAI *CHATGPT SUBSCR K3667 · ChatGPT Pro. 0% debiterad moms: omvänd skattskyldighet.')).toBe(true)
+    expect(canHaveEmailReceipt('sj.se K3667 · SJ, tågresa. Persontransport 6% moms.')).toBe(true)
+    expect(canHaveEmailReceipt('Hotel at Booking.com K3667 · Hotell, svenskt boende, 12 % moms')).toBe(true)
+    expect(canHaveEmailReceipt('VEVOR 2608110 - EU-varor, omvand moms, purchase')).toBe(true)
+    expect(canHaveEmailReceipt('Stripe fee. Ej moms')).toBe(true)
+    expect(canHaveEmailReceipt('Fortnox, 1 249 kr inkl. moms')).toBe(true)
+  })
+
+  it('still skips a payment of VAT or tax that also carries a VAT note', () => {
+    expect(canHaveEmailReceipt('Betalning moms')).toBe(false)
+    expect(canHaveEmailReceipt('Skattekonto: moms')).toBe(false)
+    expect(canHaveEmailReceipt('Moms 2026-09')).toBe(false)
+    expect(canHaveEmailReceipt('Skatteverket, omvänd skattskyldighet')).toBe(false)
   })
 })
 
@@ -337,16 +409,16 @@ describe('worthFetching', () => {
 describe('worthFetching, on the search that found it', () => {
   it('fetches when the purchase that found the mail is close in time', () => {
     // The bank calls the landlord "Kontorsplatser j BG"; the invoice says
-    // "Stockholm Innovation & Growth AB". The names will never match, but the
+    // "Nordisk Kontorshub AB". The names will never match, but the
     // search that produced this mail was that purchase's own.
     const landlord = tx({
-      description: 'Kontorsplatser j BG 0000059142596 Bg-bet. via internet',
+      description: 'Kontorsplatser j BG 0000001234567 Bg-bet. via internet',
       merchant_name: null,
       amount: -15000,
       date: '2026-07-04',
     })
     const invoice = {
-      vendor: 'Stockholm Innovation & Growth AB',
+      vendor: 'Nordisk Kontorshub AB',
       date: '2026-07-02',
       amount: null,
       currency: null,
@@ -357,7 +429,7 @@ describe('worthFetching, on the search that found it', () => {
 
   it('still refuses when the dates are nowhere near each other', () => {
     const landlord = tx({ description: 'Kontorsplatser j BG', merchant_name: null, amount: -15000, date: '2026-07-04' })
-    const stale = { vendor: 'Stockholm Innovation & Growth AB', date: '2025-11-02', amount: null, currency: null }
+    const stale = { vendor: 'Nordisk Kontorshub AB', date: '2025-11-02', amount: null, currency: null }
     expect(worthFetching(stale, [landlord], [landlord])).toBe(false)
   })
 })

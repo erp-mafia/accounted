@@ -88,8 +88,9 @@ const LEGACY_OPENING_ROW = {
  */
 const NEW_LEDGER_DEFAULTS = { unpaid_days: 0, advance_days: 0, saved_days_taken: {} }
 // netLiability equals totalLiability whenever no förskottsskuld is loaded, so
-// its neutral value is the captured total, not zero.
-const NEW_LIABILITY_ROW_DEFAULTS = { advanceVacationDebt: 0, netLiability: 66235.68 }
+// its neutral value is the captured total, not zero. A five-day week has no
+// separate days-off figure (vacationDaysOffRemaining null).
+const NEW_LIABILITY_ROW_DEFAULTS = { advanceVacationDebt: 0, netLiability: 66235.68, vacationDaysOffRemaining: null }
 const NEW_LIABILITY_TOTALS_DEFAULTS = { advanceVacationDebt: 0, netLiability: 66235.68 }
 
 function omit<T extends Record<string, unknown>>(obj: T, keys: string[]): Record<string, unknown> {
@@ -105,7 +106,7 @@ const LEGACY_BOOKED_ROWS = [
     vacation_accrual: 4200,
     vacation_accrual_avgifter: 1319.64,
     avgifter_rate: 0.3142,
-    salary_run: { period_year: 2026, period_month: 7, status: 'booked' },
+    salary_run: { period_year: 2026, period_month: 7, payment_date: '2026-07-25', status: 'booked' },
   },
   {
     employee_id: EMPLOYEE_ID,
@@ -113,7 +114,7 @@ const LEGACY_BOOKED_ROWS = [
     vacation_accrual: 4200,
     vacation_accrual_avgifter: 1319.64,
     avgifter_rate: 0.3142,
-    salary_run: { period_year: 2026, period_month: 8, status: 'booked' },
+    salary_run: { period_year: 2026, period_month: 8, payment_date: '2026-08-25', status: 'booked' },
   },
 ]
 
@@ -218,7 +219,7 @@ describe('cutover parity: vacation liability without categorized fields', () => 
       employee_opening_balances: { data: [LEGACY_OPENING_ROW] },
     })
 
-    const report = await generateVacationLiability(mock.supabase, COMPANY_ID, 2026)
+    const report = await generateVacationLiability(mock.supabase, COMPANY_ID, '2026-12-31')
     expect(report.totals).toMatchObject(NEW_LIABILITY_TOTALS_DEFAULTS)
     for (const row of report.rows) expect(row).toMatchObject(NEW_LIABILITY_ROW_DEFAULTS)
     const legacyShape = {
@@ -229,13 +230,22 @@ describe('cutover parity: vacation liability without categorized fields', () => 
     expect(legacyShape).toMatchInlineSnapshot(`
       {
         "asOfDate": "2026-12-31",
+        "closedYear": null,
+        "remeasuredAt": null,
         "rows": [
           {
             "accruedAmount": 50400,
             "accruedAvgifter": 15835.68,
             "avgifterRate": 0.3142,
+            "computedAvgifter": 0,
+            "computedLiability": 0,
+            "dayValue": 0,
+            "dayValueEstimated": true,
+            "earningPay": 0,
             "employeeId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             "employeeName": "Anna Andersson",
+            "liabilityChangeAccount": "7290",
+            "liabilityDays": 14.5,
             "personnummerLast4": "0000",
             "totalLiability": 66235.68,
             "vacationDaysEntitled": 19.5,
@@ -243,13 +253,18 @@ describe('cutover parity: vacation liability without categorized fields', () => 
             "vacationDaysSaved": 7,
             "vacationDaysTaken": 12,
             "vacationRule": "procentregeln",
+            "variablePay": 0,
           },
         ],
         "totals": {
           "accruedAmount": 50400,
           "accruedAvgifter": 15835.68,
+          "computedAvgifter": 0,
+          "computedLiability": 0,
+          "computedTotal": 0,
           "totalLiability": 66235.68,
         },
+        "vacationYearStart": "2026-01-01",
       }
     `)
   })
@@ -288,11 +303,10 @@ describe('cutover parity: payslip data with a known net', () => {
         bank_account_number: '9876543',
       },
       company: { name: 'Bolaget AB', org_number: '5560000000' },
+      audience: { kind: 'employer' },
     })
     expect(data).toMatchInlineSnapshot(`
       {
-        "avgifterAmount": 10997,
-        "avgifterRate": 0.3142,
         "bankAccount": "8327-****6543",
         "breakdownSteps": [
           {
@@ -305,7 +319,15 @@ describe('cutover parity: payslip data with a known net', () => {
         "companyOrgNumber": "5560000000",
         "deviationPeriodLabel": null,
         "employeeName": "Anna Exempelsson",
+        "employerCost": {
+          "avgifterAmount": 10997,
+          "avgifterRate": 0.3142,
+          "totalEmployerCost": 51516.74,
+          "vacationAccrual": 4200,
+          "vacationAccrualAvgifter": 1319.74,
+        },
         "employmentType": "Anställd",
+        "extraTaxWithheld": 0,
         "grossSalary": 35000,
         "lineItems": [
           {
@@ -322,9 +344,6 @@ describe('cutover parity: payslip data with a known net', () => {
         "personnummerMasked": "19900101-****",
         "taxReference": "Tabell 33, kol 1",
         "taxWithheld": 8000,
-        "totalEmployerCost": 51516.74,
-        "vacationAccrual": 4200,
-        "vacationAccrualAvgifter": 1319.74,
         "ytdGross": 210000,
         "ytdNet": 162000,
         "ytdTax": 48000,

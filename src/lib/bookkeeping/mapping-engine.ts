@@ -1,18 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   generateInputVatLine,
-  generateReverseChargeLines,
-  generateReverseChargeBasisLines,
+  generateReverseChargePurchaseLines,
+  DEFAULT_REVERSE_CHARGE_KIND,
 } from './vat-entries'
-// Aliased: this file already has a local resolveSekAmountOrNull(transaction)
-// for account-selection decisions, which refuses when unconvertible.
-import { resolveSekAmount as resolveSekAmountLenient } from './currency-utils'
+import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from './chart-vat-treatments'
+import { reconcileRcBasisWithChart } from './rc-basis-reconcile'
+import { resolveSekAmount as resolveSekAmountLenient, resolveSekAmountOrNull } from './currency-utils'
 import { findMatchingTemplates, buildMappingResultFromTemplate } from './booking-templates'
 import {
   findCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
+  mappingPatternNamesCounterparty,
+  namesCounterparty,
 } from './counterparty-templates'
+import { coerceDimensionsBag, dimensionsBagKey } from './dimension-resolver'
 import { detectOwnAccountTransfer } from './own-account-detector'
+import { bankSideOf, settleBankLeg } from './bank-leg'
+import { loadCardLedgers, needsCardLedgers } from '@/lib/cash-accounts/load-card-ledgers'
 import type {
   MappingRule,
   MappingResult,
@@ -23,6 +28,7 @@ import type {
 import { createLogger } from '@/lib/logger'
 import { ownerSettlementAccount } from '@/lib/company/entity-type'
 import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
+import { resolveSkattekontoAccount, templateTouchesSkattekonto } from '@/lib/skatteverket/skattekonto-account'
 
 const log = createLogger('mapping-engine')
 
@@ -34,7 +40,16 @@ const PRISBASBELOPP_HALVES: Record<number, number> = {
 }
 const LATEST_KNOWN_YEAR = 2026
 
-function getCapitalizationThreshold(year: number): number {
+/**
+ * The years with a known threshold. A year missing here silently uses
+ * LATEST_KNOWN_YEAR, so lib/salary/__tests__/rates-calendar.test.ts fails CI
+ * once next year is due (PAYROLL_RATES_DUE) and still absent.
+ */
+export const CAPITALIZATION_THRESHOLD_YEARS: ReadonlySet<number> = new Set(
+  Object.keys(PRISBASBELOPP_HALVES).map(Number),
+)
+
+export function getCapitalizationThreshold(year: number): number {
   const threshold = PRISBASBELOPP_HALVES[year]
   if (threshold) return threshold
   log.warn(`No prisbasbelopp for ${year}, using ${LATEST_KNOWN_YEAR} value`)
@@ -42,30 +57,18 @@ function getCapitalizationThreshold(year: number): number {
 }
 
 /**
- * Resolve the SEK value of a transaction, or null when it cannot be
- * established.
+ * The SEK value of a transaction, or null when it cannot be established.
  *
- * Deliberately stricter than `resolveSekAmount()` in currency-utils: that
- * helper falls back to the raw foreign amount for legacy rows, which is
- * tolerable for a line amount (the entry still balances against itself) but
- * never for a comparison against a SEK limit. Both the halva-prisbasbeloppet
- * threshold and a rule's amount_min/amount_max band are SEK figures; feeding
- * them an unconverted foreign number silently picks the wrong branch. When no
- * rate is known we return null so the caller declines instead of guessing.
+ * The strict ladder, not `resolveSekAmount()`: that helper falls back to the
+ * raw foreign amount for legacy rows, which is tolerable for a line amount (the
+ * entry still balances against itself) but never for a comparison against a SEK
+ * limit. Both the halva-prisbasbeloppet threshold and a rule's
+ * amount_min/amount_max band are SEK figures; feeding them an unconverted
+ * foreign number silently picks the wrong branch. When no rate is known we
+ * return null so the caller declines instead of guessing.
  */
-function resolveSekAmountOrNull(transaction: Transaction): number | null {
-  const currency = (transaction.currency || 'SEK').toUpperCase()
-  if (currency === 'SEK') return transaction.amount
-
-  if (transaction.amount_sek != null) {
-    return Math.round(transaction.amount_sek * 100) / 100
-  }
-
-  if (transaction.exchange_rate != null && transaction.exchange_rate > 0) {
-    return Math.round(transaction.amount * transaction.exchange_rate * 100) / 100
-  }
-
-  return null
+function transactionSek(transaction: Transaction): number | null {
+  return resolveSekAmountOrNull(transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate)
 }
 
 /**
@@ -79,6 +82,16 @@ function resolveSekAmountOrNull(transaction: Transaction): number | null {
  * 5. Counterparty templates (learned from history, fuzzy matching)
  * 6. Static booking templates (keyword/MCC matching)
  * 7. Default fallback (uncategorized)
+ *
+ * A matched rule (1-4) still takes the learned dimensions of the counterparty
+ * template the transaction matches, when that template books the same
+ * business account (withLearnedDimensions).
+ *
+ * A reverse-charge result is settled on its cost account with the company's
+ * chart before it is returned (reconcileRcBasisWithChart), so a caller books
+ * it as it is. A caller that evaluates many transactions passes one
+ * `loadChart` for all of them, so the chart is read once; omitted, it is read
+ * only when a reverse-charge set needs it.
  */
 export async function evaluateMappingRules(
   supabase: SupabaseClient,
@@ -87,9 +100,34 @@ export async function evaluateMappingRules(
   entityType: EntityType,
   settlementAccount?: string,
   /** company_settings.vat_registered as the caller loaded it (lib/bookkeeping/vat-registration.ts). */
+  vatRegistered?: VatRegistration,
+  loadChart: ChartVatTreatmentsLoader = chartVatTreatmentsLoader(supabase, companyId),
+): Promise<MappingResult> {
+  return reconcileRcBasisWithChart(
+    await evaluateMappingRulesUnsettled(supabase, companyId, transaction, entityType, settlementAccount, vatRegistered),
+    loadChart,
+  )
+}
+
+async function evaluateMappingRulesUnsettled(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction,
+  entityType: EntityType,
+  settlementAccount?: string,
   vatRegistered?: VatRegistration
 ): Promise<MappingResult> {
   const bankAccount = settlementAccount || '1930'
+  // A proposal whose bank leg is one of the company's card ledgers (a rule or
+  // template that still carries the 2890 it was booked on) settles on this
+  // row's ledger like a stale 19xx leg. The card ledgers are read only then.
+  const settle = async (result: MappingResult): Promise<MappingResult> =>
+    applySettlementAccount(
+      result,
+      bankAccount,
+      transaction.amount,
+      needsCardLedgers(result, transaction.amount, bankAccount) ? await loadCardLedgers(supabase, companyId) : [],
+    )
 
   // Pre-step: detect intra-company transfers. When the counterparty IBAN
   // matches another cash_accounts row for the same company, book both legs
@@ -136,17 +174,18 @@ export async function evaluateMappingRules(
     const counterpartyResult = await evaluateCounterpartyTemplates(
       supabase, companyId, transaction, entityType, vatRegistered,
     )
-    if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount)
+    if (counterpartyResult) return settle(counterpartyResult)
 
-    const templateResult = evaluateTemplateRules(transaction, entityType, vatRegistered)
-    if (templateResult) return applySettlementAccount(templateResult, bankAccount)
+    const templateResult = await evaluateTemplateRules(supabase, companyId, transaction, entityType, vatRegistered)
+    if (templateResult) return settle(templateResult)
     return getDefaultResult(transaction, bankAccount)
   }
 
   // Evaluate each rule in priority order
   for (const rule of rules as MappingRule[]) {
     if (matchesRule(rule, transaction)) {
-      return applySettlementAccount(buildResult(rule, transaction, entityType, vatRegistered), bankAccount)
+      const ruleResult = buildResult(rule, transaction, entityType, vatRegistered)
+      return settle(await withLearnedDimensions(supabase, companyId, transaction, entityType, ruleResult, vatRegistered))
     }
   }
 
@@ -154,11 +193,11 @@ export async function evaluateMappingRules(
   const counterpartyResult = await evaluateCounterpartyTemplates(
     supabase, companyId, transaction, entityType, vatRegistered,
   )
-  if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount)
+  if (counterpartyResult) return settle(counterpartyResult)
 
   // Try template-based matching before default fallback
-  const templateResult = evaluateTemplateRules(transaction, entityType, vatRegistered)
-  if (templateResult) return applySettlementAccount(templateResult, bankAccount)
+  const templateResult = await evaluateTemplateRules(supabase, companyId, transaction, entityType, vatRegistered)
+  if (templateResult) return settle(templateResult)
 
   return getDefaultResult(transaction, bankAccount)
 }
@@ -167,20 +206,35 @@ export async function evaluateMappingRules(
  * Evaluate booking templates as a fallback when no DB mapping rule matches.
  * Returns the best template match if confidence >= 0.3, otherwise null.
  */
-function evaluateTemplateRules(
+async function evaluateTemplateRules(
+  supabase: SupabaseClient,
+  companyId: string,
   transaction: Transaction,
   entityType: EntityType,
   vatRegistered?: VatRegistration
-): MappingResult | null {
+): Promise<MappingResult | null> {
   const matches = findMatchingTemplates(transaction, entityType)
   if (matches.length === 0 || matches[0].confidence < 0.3) return null
 
   const best = matches[0]
+  // "Insättning skattekonto" names 1630: it books the company's skattekonto
+  // account (2012 for an enskild firma that runs it there, PH 175).
+  const t = best.template
+  let skattekontoAccount: Awaited<ReturnType<typeof resolveSkattekontoAccount>> | undefined
+  if (templateTouchesSkattekonto([t.debit_account, t.credit_account, t.debit_account_ab, t.credit_account_ab])) {
+    try {
+      skattekontoAccount = await resolveSkattekontoAccount(supabase, companyId)
+    } catch {
+      // No suggestion beats one on the wrong account.
+      return null
+    }
+  }
   const result = buildMappingResultFromTemplate(
     best.template,
     transaction,
     entityType,
-    vatRegistered
+    vatRegistered,
+    skattekontoAccount,
   )
   // Override the confidence with the auto-match confidence (not 1.0)
   result.confidence = best.confidence
@@ -219,6 +273,41 @@ async function evaluateCounterpartyTemplates(
 }
 
 /**
+ * A matched mapping rule decides the accounts, but it carries no dimensions.
+ * Every business categorize also writes a 'Learned: <merchant>' rule, so for
+ * a known merchant the rule always wins and the counterparty template, where
+ * the company's kostnadsställe/projekt habit is learned, was never read. When
+ * that template (same match and confidence bar as when it proposes on its
+ * own, same direction) books the rule's business account, its learned bag
+ * rides along on the rule's business line. A multi-line pattern lends the bag
+ * of its business line on that account, and only when that bag is unambiguous.
+ */
+async function withLearnedDimensions(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction,
+  entityType: EntityType,
+  result: MappingResult,
+  vatRegistered?: VatRegistration,
+): Promise<MappingResult> {
+  if (result.default_private || result.dimensions) return result
+  const learned = await evaluateCounterpartyTemplates(supabase, companyId, transaction, entityType, vatRegistered)
+  if (!learned || learned.direction_mismatch) return result
+
+  const isExpense = transaction.amount < 0
+  const businessAccount = isExpense ? result.debit_account : result.credit_account
+  let bag: Record<string, string> | undefined
+  if (learned.all_lines_complete) {
+    const onAccount = learned.vat_lines.filter((l) => l.business_line && l.account_number === businessAccount)
+    const keys = new Set(onAccount.map((l) => dimensionsBagKey(coerceDimensionsBag(l.dimensions))))
+    bag = keys.size === 1 ? coerceDimensionsBag(onAccount[0]?.dimensions) : undefined
+  } else if ((isExpense ? learned.debit_account : learned.credit_account) === businessAccount) {
+    bag = coerceDimensionsBag(learned.dimensions)
+  }
+  return bag ? { ...result, dimensions: bag } : result
+}
+
+/**
  * Check if a transaction matches a mapping rule
  */
 function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
@@ -233,8 +322,11 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
   // also tests original_description: since the ingest boundary started
   // stripping the trailing channel phrase off the working title
   // (classifyTransactionMethod), a rule written against the bank's full text
-  // ("Överföring via internet") only matches the immutable original.
+  // ("Telia Överföring via internet") only matches the immutable original.
+  // A rule on a text that names no one ("INSÄTTNING"), stored before
+  // saveUserMappingRule refused to learn one, matches nothing.
   if (rule.merchant_pattern) {
+    if (!mappingPatternNamesCounterparty(rule.merchant_pattern)) return false
     const merchantName = transaction.merchant_name || transaction.description || ''
     const originalName = transaction.original_description || ''
     try {
@@ -287,7 +379,7 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
   // band is not evaluable, so the rule does not apply: skipping is the honest
   // outcome, matching on an unconverted number is not.
   if (rule.amount_min != null || rule.amount_max != null) {
-    const sekAmount = resolveSekAmountOrNull(transaction)
+    const sekAmount = transactionSek(transaction)
     if (sekAmount === null) {
       log.warn('mapping rule with a SEK amount band skipped: transaction has no SEK value', {
         transactionId: transaction.id,
@@ -322,11 +414,11 @@ function buildResult(
   vatRegistered?: VatRegistration
 ): MappingResult {
   // VAT figures land on journal entry lines, which are always SEK, so they
-  // are derived from the SEK value of the transaction. The LENIENT resolver
-  // is deliberate: buildTransactionEntryLines resolves the gross with the
-  // same ladder, so the VAT lines and the bank leg can never disagree (a
-  // rateless legacy row degrades to today's behavior on both sides instead
-  // of unbalancing the net line). Mirrors buildMappingResultFromCategory.
+  // are derived from the SEK value of the transaction. The lenient resolver
+  // differs from the strict one only on a foreign row with no SEK value, and
+  // buildTransactionEntryLines refuses to book exactly that row
+  // (TX_MISSING_SEK_VALUE), so its fallback figure never reaches the ledger:
+  // it only keeps a suggestion renderable. Mirrors buildMappingResultFromCategory.
   const absSekAmount = Math.abs(resolveSekAmountLenient(
     transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
   ))
@@ -349,7 +441,7 @@ function buildResult(
   if (rule.capitalized_debit_account) {
     const year = new Date(transaction.date).getFullYear()
     const threshold = rule.capitalization_threshold ?? getCapitalizationThreshold(year)
-    const sekAmount = resolveSekAmountOrNull(transaction)
+    const sekAmount = transactionSek(transaction)
 
     if (sekAmount === null) {
       // Non-SEK row with neither amount_sek nor an exchange_rate. Both
@@ -379,13 +471,17 @@ function buildResult(
   const vatLines: VatJournalLine[] = []
   if (isExpense && !rule.default_private && vatTreatment) {
     if (vatTreatment === 'reverse_charge') {
-      // Reverse charge: emit BOTH the fiktiv-moms pair (2645/2614) AND the
-      // basbelopp pair (44xx|45xx / 4598). The basbelopp pair populates
-      // momsdeklaration rutor 20-24; without it Skatteverket rejects with
-      // FK004. Mapping rules don't carry supplier-country today, so we
-      // default to EU services: the most common reverse-charge scenario.
-      const rcRate = 0.25
-      const rcLines = generateReverseChargeLines(absSekAmount, rcRate, false)
+      // Reverse charge: the complete set, fiktiv moms (2645/2614) AND the
+      // basbelopp pair (44xx|45xx / 4598) for rutor 20-24 (FK004 without it).
+      // Mapping rules don't carry supplier-country today, so we default to EU
+      // services: the most common reverse-charge scenario. A rule whose
+      // account reports the basis itself loses the pair, and takes that
+      // account's momssats, in evaluateMappingRules (reconcileRcBasisWithChart).
+      const rcLines = generateReverseChargePurchaseLines({
+        base: absSekAmount,
+        rate: 0.25,
+        kind: DEFAULT_REVERSE_CHARGE_KIND,
+      })
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,
@@ -393,19 +489,6 @@ function buildResult(
           credit_amount: rcl.credit_amount,
           description: rcl.line_description || '',
         })
-      }
-
-      // Skip basbelopp emission if the rule already books to a basis account.
-      if (!/^4[45]\d{2}$/.test(debitAccount)) {
-        const basisLines = generateReverseChargeBasisLines(absSekAmount, rcRate, 'eu_business')
-        for (const bl of basisLines) {
-          vatLines.push({
-            account_number: bl.account_number,
-            debit_amount: bl.debit_amount,
-            credit_amount: bl.credit_amount,
-            description: bl.line_description || '',
-          })
-        }
       }
     } else if (vatTreatment === 'standard_25' || vatTreatment === 'reduced_12' || vatTreatment === 'reduced_6') {
       const vatRate =
@@ -507,17 +590,22 @@ function buildOwnAccountTransferResult(
 }
 
 /**
- * Replace any default 1930 references in a mapping result with the actual settlement account.
- * This allows mapping rules and templates that don't explicitly set a bank account
- * to work correctly with secondary bank accounts (e.g. 1931).
+ * Book a mapping result's bank leg on the transaction's actual settlement
+ * account. The bank leg is the side buildTransactionEntryLines settles the
+ * full amount on (credit for an outflow, debit for an inflow); when it names
+ * any cash ledger (the 1930 placeholder of the catalog and categories, or the
+ * ledger a counterparty template or mapping rule was learned on) it moves to
+ * the settlement account. The counter leg is never rewritten, so a transfer
+ * to another own account keeps its other end (see settleBankLeg).
  */
-export function applySettlementAccount(result: MappingResult, bankAccount: string): MappingResult {
-  if (bankAccount === '1930') return result
-  return {
-    ...result,
-    debit_account: result.debit_account === '1930' ? bankAccount : result.debit_account,
-    credit_account: result.credit_account === '1930' ? bankAccount : result.credit_account,
-  }
+export function applySettlementAccount(
+  result: MappingResult,
+  bankAccount: string,
+  transactionAmount: number,
+  /** The company's card ledgers (load-card-ledgers.ts): a bank leg on one moves too. */
+  moneyLedgers: readonly string[] = [],
+): MappingResult {
+  return settleBankLeg(result, bankSideOf(transactionAmount), bankAccount, moneyLedgers)
 }
 
 /**
@@ -531,6 +619,11 @@ export function applySettlementAccount(result: MappingResult, bankAccount: strin
  *
  * User-described rules for the same merchant replace prior user-described rules
  * (latest description wins).
+ *
+ * A merchant text that only says how the money moved ("INSÄTTNING",
+ * "KORTKÖP", "ÖVERFÖRING", "BG-BETALNING") names no one and teaches nothing:
+ * the next row with that text is someone else (crm#1707). No rule is saved
+ * then, whichever door booked the row; matchesRule ignores such a rule too.
  */
 export async function saveUserMappingRule(
   supabase: SupabaseClient,
@@ -542,6 +635,8 @@ export async function saveUserMappingRule(
   userDescription?: string,
   templateId?: string
 ): Promise<void> {
+  if (!namesCounterparty(merchantName)) return
+
   // Escape special regex characters in merchant name
   const escapedMerchant = merchantName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 

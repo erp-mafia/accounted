@@ -1,5 +1,6 @@
-import { getBranding } from '@/lib/branding/service'
+import { buildInfoSru, sruBlankettType, sruFile, sruIncomeYear, sruText } from '@/lib/reports/sru/envelope'
 import { sruAmount as formatAmount, sruDate as formatDate, sruTime as formatTime } from '@/lib/reports/sru/format'
+import { FilingIdentityError, swedishNumberKind, toRedovisare12 } from '@/lib/invariants/org-number'
 import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/reports/ne-bilaga/types'
 
 /**
@@ -10,11 +11,14 @@ import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/rep
  *   - BLANKETTER.SRU: a single NE blankett block with the räkenskapsschema rutor
  *
  * The NE-bilaga is an appendix to Inkomstdeklaration 1 (INK1) filed by a physical
- * person, so the identifier is the owner's PERSONNUMMER (12-digit YYYYMMDDNNNN):
- * NOT a juridisk-person org number with the "16" century prefix used by INK2.
+ * person, so the identifier is the owner's PERSONNUMMER (12-digit YYYYMMDDNNNN,
+ * toRedovisare12): NOT a juridisk-person org number with the "16" century prefix
+ * used by INK2. A number that is not a person's has no such identity: refused.
  *
+ * The envelope (line endings, sanitising, blankett type, INFO.SRU) is shared
+ * with INK2: lib/reports/sru/envelope.ts.
  * Encoding: ISO 8859-1 (applied by the API route via encodeISO88591).
- * Line endings: CRLF. Amounts: integers in hela kronor (öre truncated per SFL 22:1).
+ * Amounts: integers in hela kronor (öre truncated per SFL 22:1).
  *
  * Field codes (Fältkod -> Rad NE) are taken from BAS-kontogruppen's official
  * coupling table "NE - Inkomst av näringsverksamhet, Enskilda näringsidkare"
@@ -22,9 +26,6 @@ import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/rep
  *   R1 7400 · R2 7401 · R3 7402 · R4 7403 · R5 7500 · R6 7501 · R7 7502 ·
  *   R8 7503 · R9 7504 · R10 7505 · R11 7440. Period dates: 7011 (start) / 7012 (end).
  */
-
-const CRLF = '\r\n'
-const PROGRAM_VERSION = '1.0'
 
 /** Räkenskapsårets start-/slutdatum (standard period date fält, shared across blanketter). */
 const FISCAL_START_CODE = '7011'
@@ -45,96 +46,17 @@ const NE_SRU_FIELD_CODES: Record<keyof NEDeclarationRutor, string> = {
   R11: '7440', // Bokfört resultat
 }
 
-/**
- * Compute the period suffix for the blankett type string, from the month the
- * fiscal year ENDS in. Enskild firma is almost always calendar-year (-> P4).
- *   P1 = Jan-Apr, P2 = May-Aug, P4 = Sep-Dec. P3 (short first year) is handled manually.
- */
-function computePeriodSuffix(fiscalYearEnd: string): string {
-  const endMonth = parseInt(fiscalYearEnd.substring(5, 7), 10)
-  if (endMonth >= 1 && endMonth <= 4) return 'P1'
-  if (endMonth >= 5 && endMonth <= 8) return 'P2'
-  return 'P4'
-}
-
-/** The income year (inkomstår) is the year the fiscal year ends. */
-function getIncomeYear(fiscalYearEnd: string): string {
-  return fiscalYearEnd.substring(0, 4)
-}
-
-/**
- * Normalize an enskild firma identity (personnummer) to 12 digits YYYYMMDDNNNN.
- * Unlike INK2's juridisk-person formatter, this does NOT prepend "16": for a
- * physical person the century is the birth century.
- *
- * For a 10-digit number (YYMMDDNNNN) the century is inferred from age: a NE-bilaga
- * filer is an adult, so we pick the century that yields a plausible adult age
- * (≥18, <110) at the income year, preferring 1900s. This avoids mapping e.g. a
- * 1924-born filer for income year 2024 (yy=24) to 2024. (Skatteverket's '-'/'+'
- * century separator is lost once non-digits are stripped, so age is used instead.)
- *
- * Returns the all-zero placeholder for missing/unexpected input; callers validate
- * the result and surface a generation error rather than shipping an invalid file.
- */
-function formatIdentityNumber12(raw: string | null, incomeYear: number): string {
-  const digits = (raw || '').replace(/\D/g, '')
-  if (digits.length === 12) return digits
-  if (digits.length === 10) {
-    const yy = parseInt(digits.substring(0, 2), 10)
-    const ageIf2000s = incomeYear - (2000 + yy)
-    const century = ageIf2000s >= 18 && ageIf2000s < 110 ? '20' : '19'
-    return `${century}${digits}`
-  }
-  return '000000000000'
-}
-
 /** Convert a YYYY-MM-DD string to SRU date format YYYYMMDD. */
 function dateStringToSRU(dateStr: string): string {
   return dateStr.replace(/-/g, '')
 }
 
-/** Sanitize string for SRU: '#' is reserved, strip newlines, cap at 250 chars (STR_250). */
-function sanitizeString(str: string): string {
-  return str.replace(/#/g, '').replace(/[\r\n]/g, ' ').substring(0, 250)
-}
-
-/** Generate the INFO.SRU file content (submitter metadata). */
-function generateInfoSru(declaration: NEDeclaration, now: Date, identity12: string): string {
-  const lines: string[] = []
-
-  // DATABESKRIVNING block (required order)
-  lines.push('#DATABESKRIVNING_START')
-  lines.push('#PRODUKT SRU')
-  lines.push(`#SKAPAD ${formatDate(now)} ${formatTime(now)}`)
-  lines.push(`#PROGRAM ${sanitizeString(getBranding().appName.toLowerCase())} ${PROGRAM_VERSION}`)
-  lines.push('#FILNAMN BLANKETTER.SRU')
-  lines.push('#DATABESKRIVNING_SLUT')
-
-  // MEDIELEV block (mandatory: ORGNR, NAMN, POSTNR, POSTORT)
-  lines.push('#MEDIELEV_START')
-  lines.push(`#ORGNR ${identity12}`)
-  lines.push(`#NAMN ${sanitizeString(declaration.companyInfo.companyName)}`)
-  if (declaration.companyInfo.addressLine1) {
-    lines.push(`#ADRESS ${sanitizeString(declaration.companyInfo.addressLine1)}`)
-  }
-  lines.push(`#POSTNR ${(declaration.companyInfo.postalCode || '00000').replace(/\s/g, '')}`)
-  lines.push(`#POSTORT ${sanitizeString(declaration.companyInfo.city || 'Okänd')}`)
-  if (declaration.companyInfo.email) {
-    lines.push(`#EMAIL ${sanitizeString(declaration.companyInfo.email)}`)
-  }
-  lines.push('#MEDIELEV_SLUT')
-
-  return lines.join(CRLF) + CRLF
-}
-
 /** Generate the BLANKETTER.SRU file content (a single NE blankett block). */
 function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12: string): string {
   const lines: string[] = []
-  const incomeYearStr = getIncomeYear(declaration.fiscalYear.end)
-  const periodSuffix = computePeriodSuffix(declaration.fiscalYear.end)
-  const taxpayerName = sanitizeString(declaration.companyInfo.companyName)
+  const taxpayerName = sruText(declaration.companyInfo.companyName)
 
-  lines.push(`#BLANKETT NE-${incomeYearStr}${periodSuffix}`)
+  lines.push(`#BLANKETT ${sruBlankettType('NE', declaration.fiscalYear.end)}`)
   lines.push(`#IDENTITET ${identity12} ${formatDate(now)} ${formatTime(now)}`)
   lines.push(`#NAMN ${taxpayerName}`)
 
@@ -156,67 +78,60 @@ function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12
   lines.push('#BLANKETTSLUT')
   lines.push('#FIL_SLUT')
 
-  return lines.join(CRLF) + CRLF
+  return sruFile(lines)
+}
+
+/**
+ * The declaration has sruBlockers: the books must be corrected before a file
+ * can exist, so both doors answer it as a 422, not a generation failure.
+ */
+export class NESruBlockedError extends Error {
+  constructor(readonly blockers: string[]) {
+    super(blockers.join(' '))
+    this.name = 'NESruBlockedError'
+  }
 }
 
 /** Generate a complete SRU submission (INFO.SRU + BLANKETTER.SRU) for the NE-bilaga. */
 export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmission {
+  // An account outside every ruta, or an R11 that differs from the booked
+  // result, would file a näringsverksamhet that is not the one in the books.
+  // Both SRU downloads (dashboard and v1) build here, so this refuses both.
+  if (declaration.sruBlockers.length > 0) {
+    throw new NESruBlockedError(declaration.sruBlockers)
+  }
+
   const now = new Date()
-  const incomeYear = parseInt(getIncomeYear(declaration.fiscalYear.end), 10)
-  const identity12 = formatIdentityNumber12(declaration.companyInfo.orgNumber, incomeYear)
+  const { orgNumber, entityType } = declaration.companyInfo
 
   // A valid NE filing requires the owner's personnummer. Refuse rather than ship a
   // structurally well-formed file with a placeholder #IDENTITET that Skatteverket
-  // would reject at upload: surface it as a generation error the route can show.
-  if (!/^\d{12}$/.test(identity12) || identity12 === '000000000000') {
-    throw new Error(
-      'NE-bilagan kräver ett giltigt personnummer (ÅÅÅÅMMDDNNNN) för den enskilda näringsidkaren. ' +
-        'Komplettera personnumret i företagsinställningarna innan du laddar ner SRU-filen.',
-    )
-  }
+  // would reject at upload. toRedovisare12 passes a legal person's number, and an
+  // NE has no such filer, so this door asks for a person itself.
+  if (!orgNumber || swedishNumberKind(orgNumber) !== 'person') throw new FilingIdentityError()
+  const identity12 = toRedovisare12(orgNumber, entityType)
 
   return {
-    infoSru: generateInfoSru(declaration, now, identity12),
+    infoSru: buildInfoSru(
+      {
+        identity12,
+        name: declaration.companyInfo.companyName,
+        addressLine1: declaration.companyInfo.addressLine1,
+        postalCode: declaration.companyInfo.postalCode,
+        city: declaration.companyInfo.city,
+        email: declaration.companyInfo.email,
+      },
+      now,
+    ),
     blanketterSru: generateBlanketterSru(declaration, now, identity12),
     generatedAt: now.toISOString(),
-  }
-}
-
-/** Validate the generated BLANKETTER.SRU content for the mandatory NE structure. */
-export function validateBlanketterSru(content: string): {
-  isValid: boolean
-  errors: string[]
-} {
-  const errors: string[] = []
-
-  if (!/^#BLANKETT NE-/m.test(content)) errors.push('Missing #BLANKETT NE- block')
-  if (!/^#IDENTITET /m.test(content)) errors.push('Missing #IDENTITET')
-  if (!/^#NAMN /m.test(content)) errors.push('Missing #NAMN')
-  // Räkenskapsårets datum are mandatory for income declarations; their absence is
-  // a level-2 rejection at Skatteverket, so catch it in the pre-flight.
-  if (!new RegExp(`^#UPPGIFT ${FISCAL_START_CODE} `, 'm').test(content)) {
-    errors.push(`Missing #UPPGIFT ${FISCAL_START_CODE} (räkenskapsårets början)`)
-  }
-  if (!new RegExp(`^#UPPGIFT ${FISCAL_END_CODE} `, 'm').test(content)) {
-    errors.push(`Missing #UPPGIFT ${FISCAL_END_CODE} (räkenskapsårets slut)`)
-  }
-  if (!/^#FIL_SLUT/m.test(content)) errors.push('Missing #FIL_SLUT terminator')
-
-  const blankettslutCount = (content.match(/^#BLANKETTSLUT/gm) || []).length
-  if (blankettslutCount !== 1) {
-    errors.push(`Expected 1 #BLANKETTSLUT, found ${blankettslutCount}`)
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors,
   }
 }
 
 /** Get the ZIP filename for download. Uses the income year (fiscal year END) so the
  * filename matches the blankett type/identity for broken fiscal years. */
 export function getZipFilename(declaration: NEDeclaration): string {
-  const year = getIncomeYear(declaration.fiscalYear.end)
+  const year = sruIncomeYear(declaration.fiscalYear.end)
   const orgNumber = declaration.companyInfo.orgNumber?.replace(/\D/g, '') || 'unknown'
   return `NE_SRU_${orgNumber}_${year}.zip`
 }

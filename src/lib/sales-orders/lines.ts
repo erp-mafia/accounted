@@ -1,6 +1,6 @@
 import type { Customer, SalesOrderItemInput } from '@/types'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -88,7 +88,7 @@ export function normalizeSalesOrderLines(
     }
     const discount = item.discount_percent ?? 0
     const lineTotal = computeLineNet(item.quantity, item.unit_price, discount)
-    const lineVat = roundOre((lineTotal * rate) / 100)
+    const lineVat = computeLineVat(lineTotal, rate)
     subtotal = roundOre(subtotal + lineTotal)
     vat = roundOre(vat + lineVat)
     rows.push({

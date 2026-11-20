@@ -10,9 +10,17 @@ const logMock = vi.hoisted(() => {
   return log
 })
 
+// The head count of companies with receiving on, read only when the cron skips.
+const receiversCount = vi.hoisted(() => vi.fn())
+const accessEq = vi.hoisted(() => vi.fn())
+
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/api-keys', () => ({
-  createServiceClientNoCookies: () => ({ from: vi.fn() }),
+  createServiceClientNoCookies: () => ({
+    from: vi.fn((table: string) => table === 'peppol_access'
+      ? { select: () => ({ eq: (...a: unknown[]) => { accessEq(...a); return { eq: (...b: unknown[]) => { accessEq(...b); return receiversCount() } } } }) }
+      : undefined),
+  }),
 }))
 vi.mock('@/lib/logger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/logger')>()),
@@ -24,6 +32,16 @@ vi.mock('@/lib/invoices/peppol-inbound', () => ({
 }))
 vi.mock('@/lib/invoices/peppol-inbox-delivery', () => ({
   deliverPeppolDocumentToInbox: (...args: unknown[]) => deliverMock(...args),
+}))
+const withdrawMock = vi.fn()
+const registerGrantedMock = vi.fn()
+vi.mock('@/lib/invoices/peppol-registration', () => ({
+  withdrawRevokedPeppolRegistrations: (...args: unknown[]) => withdrawMock(...args),
+  registerGrantedPeppolReceivers: (...args: unknown[]) => registerGrantedMock(...args),
+}))
+const proposeMock = vi.fn()
+vi.mock('@/lib/operations/inbox-bank-match', () => ({
+  proposeBankMatchForInboxItem: (...args: unknown[]) => proposeMock(...args),
 }))
 
 import { GET } from '../route'
@@ -37,6 +55,7 @@ function request(secret: string | null): Request {
 function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTransport {
   return {
     provider: 'qvalia',
+    tenantId: 'SE5560000000',
     lookupRecipient: vi.fn(),
     submit: vi.fn(),
     verifyWebhook: vi.fn(),
@@ -60,6 +79,9 @@ describe('GET /api/peppol/inbound/cron', () => {
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'qvalia'
     syncMock.mockResolvedValue(cleanSync)
     reprocessMock.mockResolvedValue(cleanReprocess)
+    withdrawMock.mockResolvedValue({ withdrawn: [], failed: [] })
+    registerGrantedMock.mockResolvedValue({ registered: [], failed: [], skipped: [] })
+    receiversCount.mockResolvedValue({ count: 0, error: null })
   })
 
   afterEach(() => {
@@ -84,13 +106,39 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_selection_required' } })
     expect(syncMock).not.toHaveBeenCalled()
     expect(reprocessMock).not.toHaveBeenCalled()
+    // No company asked to receive: said at info, nothing pages.
+    expect(accessEq.mock.calls).toEqual([['status', 'enabled'], ['receive_enabled', true]])
+    expect(logMock.info).toHaveBeenCalledWith('peppol inbound skipped; no company has receiving on', { reason: 'provider_selection_required' })
+    expect(pages()).toHaveLength(0)
+  })
+
+  it('pages when it skips while companies have receiving on (accounted#115)', async () => {
+    delete process.env.PEPPOL_TRANSPORT_PROVIDER
+    receiversCount.mockResolvedValue({ count: 2, error: null })
+    const response = await GET(request('cron-secret'))
+    expect(response.status).toBe(200)
+    expect(pages()).toEqual([[
+      'peppol inbound skipped while companies have receiving on; their e-invoices are not fetched',
+      { alert: true, reason: 'provider_selection_required', receivers: 2 },
+    ]])
+  })
+
+  it('pages when it cannot tell whether anyone is waiting', async () => {
+    process.env.PEPPOL_TRANSPORT_PROVIDER = 'not-registered-here'
+    receiversCount.mockResolvedValue({ count: null, error: { message: 'statement timeout' } })
+    const response = await GET(request('cron-secret'))
+    expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_adapter_unavailable' } })
+    expect(logMock.error).toHaveBeenCalledWith('peppol inbound skipped, and the companies with receiving on could not be counted',
+      expect.objectContaining({ message: 'statement timeout' }), { alert: true, reason: 'provider_adapter_unavailable' })
   })
 
   it('skips a send-only transport', async () => {
     unregister = registerPeppolTransport(makeTransport({ listInboundDocuments: undefined }))
+    receiversCount.mockResolvedValue({ count: 1, error: null })
     const response = await GET(request('cron-secret'))
     expect(await response.json()).toEqual({ data: { skipped: true, reason: 'receiving_unsupported' } })
     expect(reprocessMock).not.toHaveBeenCalled()
+    expect(pages()).toEqual([[expect.any(String), { alert: true, reason: 'receiving_unsupported', receivers: 1 }]])
   })
 
   it('runs the sync, then the reprocessing pass with the same deliverer, and reports both', async () => {
@@ -104,13 +152,28 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(reprocessMock).toHaveBeenCalledTimes(1)
     expect(syncMock.mock.invocationCallOrder[0]).toBeLessThan(reprocessMock.mock.invocationCallOrder[0])
 
-    const syncArgs = syncMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown }
-    const reprocessArgs = reprocessMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown }
+    const syncArgs = syncMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown; deadline: number; functionEndsAt: number }
+    const reprocessArgs = reprocessMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown; deadline: number }
+    // Both passes are bounded inside the 300 s limit, and the reprocessing pass
+    // keeps time of its own after a listing that used all of the first budget.
+    const called = Date.now()
+    expect(syncArgs.deadline).toBeGreaterThan(called + 100_000)
+    expect(syncArgs.deadline).toBeLessThanOrEqual(called + 150_000)
+    expect(reprocessArgs.deadline - syncArgs.deadline).toBe(90_000)
+    // A listing that marks its page read may take until the reserve before the
+    // function's 300 s end, not a fixed limit of the transport's own.
+    expect(syncArgs.functionEndsAt - syncArgs.deadline).toBe(150_000)
     expect(syncArgs.transport).toBe(transport)
     expect(reprocessArgs.transport).toBe(transport)
     expect(reprocessArgs.deliver).toBe(syncArgs.deliver)
+    deliverMock.mockResolvedValueOnce({ inboxItemId: 'item-1', xmlDocumentId: null })
     await reprocessArgs.deliver({ row: {}, companyId: 'c', document: {}, xml: null })
     expect(deliverMock).toHaveBeenCalledTimes(1)
+    // Match on arrival: the delivered e-invoice is checked against the bank at once.
+    expect(proposeMock).toHaveBeenCalledWith(expect.anything(), 'c', 'item-1', expect.anything())
+    deliverMock.mockResolvedValueOnce({ inboxItemId: null, xmlDocumentId: null, holdReason: 'awaiting_xml' })
+    await syncArgs.deliver({ row: {}, companyId: 'c', document: {}, xml: null })
+    expect(proposeMock).toHaveBeenCalledTimes(1)
 
     expect(logMock.info).toHaveBeenCalledWith('peppol inbound reprocess complete', expect.objectContaining({ candidates: 2, errors: 0 }))
     expect(logMock.error).not.toHaveBeenCalled()
@@ -192,5 +255,70 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(logMock.warn).not.toHaveBeenCalledWith('peppol inbound reprocess left failures to retry', expect.anything())
     expect(logMock.error).not.toHaveBeenCalled()
     expect(pages()).toHaveLength(0)
+  })
+
+  it('withdraws revoked registrations before the sync and reports them', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    withdrawMock.mockResolvedValue({ withdrawn: ['c-box'], failed: [] })
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(withdrawMock).toHaveBeenCalledWith(expect.objectContaining({ transport }))
+    expect(withdrawMock.mock.invocationCallOrder[0]).toBeLessThan(syncMock.mock.invocationCallOrder[0])
+    expect(body.data.withdrawal).toEqual({ withdrawn: ['c-box'], failed: [] })
+    expect(logMock.info).toHaveBeenCalledWith('peppol receiving withdrawn for revoked access', { companyIds: ['c-box'] })
+    expect(pages()).toHaveLength(0)
+  })
+
+  it('pages on a failed withdrawal and still runs the sync', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    withdrawMock.mockResolvedValue({ withdrawn: [], failed: [{ companyId: 'c-box', reason: 'CONNECTOR_UPSTREAM_ERROR' }] })
+    await GET(request('cron-secret'))
+    expect(pages()).toHaveLength(1)
+    expect(pages()[0][1]).toMatchObject({ alert: true, failed: [{ companyId: 'c-box', reason: 'CONNECTOR_UPSTREAM_ERROR' }] })
+    expect(syncMock).toHaveBeenCalledTimes(1)
+
+    vi.clearAllMocks()
+    syncMock.mockResolvedValue(cleanSync)
+    reprocessMock.mockResolvedValue(cleanReprocess)
+    withdrawMock.mockRejectedValue(new Error('db down'))
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(body.data.withdrawal).toEqual({ failed: true })
+    expect(logMock.error).toHaveBeenCalledWith('peppol receiving withdrawal failed', expect.any(Error), { alert: true })
+    expect(syncMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('registers granted receivers after the withdrawal and before the sync, and reports them', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    const outcome = { registered: ['c-compiled'], failed: [], skipped: [{ companyId: 'c-ef', reason: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' }] }
+    registerGrantedMock.mockResolvedValue(outcome)
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(registerGrantedMock).toHaveBeenCalledWith(expect.objectContaining({ transport }))
+    expect(withdrawMock.mock.invocationCallOrder[0]).toBeLessThan(registerGrantedMock.mock.invocationCallOrder[0])
+    expect(registerGrantedMock.mock.invocationCallOrder[0]).toBeLessThan(syncMock.mock.invocationCallOrder[0])
+    expect(body.data.registration).toEqual(outcome)
+    expect(logMock.info).toHaveBeenCalledWith('peppol receiving registered for granted access', { companyIds: ['c-compiled'] })
+    expect(pages()).toHaveLength(0)
+  })
+
+  it('pages on a failed registration and still runs the sync', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    registerGrantedMock.mockResolvedValue({
+      registered: [], failed: [{ companyId: 'c-elsewhere', reason: 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE' }], skipped: [],
+    })
+    await GET(request('cron-secret'))
+    expect(pages()).toHaveLength(1)
+    expect(pages()[0][1]).toMatchObject({ alert: true, failed: [{ companyId: 'c-elsewhere', reason: 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE' }] })
+    expect(syncMock).toHaveBeenCalledTimes(1)
+
+    vi.clearAllMocks()
+    syncMock.mockResolvedValue(cleanSync)
+    reprocessMock.mockResolvedValue(cleanReprocess)
+    withdrawMock.mockResolvedValue({ withdrawn: [], failed: [] })
+    registerGrantedMock.mockRejectedValue(new Error('db down'))
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(body.data.registration).toEqual({ failed: true })
+    expect(logMock.error).toHaveBeenCalledWith('peppol receiving registration failed', expect.any(Error), { alert: true })
+    expect(syncMock).toHaveBeenCalledTimes(1)
   })
 })

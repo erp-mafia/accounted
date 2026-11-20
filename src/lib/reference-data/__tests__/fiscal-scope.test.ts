@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { prepareFiscalPeriods, resolveInitialFiscalScope } from '../fiscal-scope'
+import { closableFiscalPeriods, effectiveFiscalScope, prepareFiscalPeriods, resolveAppFiscalChoice, resolveInitialFiscalScope } from '../fiscal-scope'
 import { ALL_YEARS_VALUE } from '@/components/common/fiscal-year-storage'
 import type { FiscalPeriod } from '@/types'
 
@@ -85,5 +85,64 @@ describe('resolveInitialFiscalScope', () => {
       periodId: null,
       period: null,
     })
+  })
+})
+
+describe('resolveAppFiscalChoice (the sidebar year)', () => {
+  const newestFirst = [p2027, p2026, p2025, p2024]
+
+  it('opens on the newest started year when nothing is stored', () => {
+    expect(resolveAppFiscalChoice(newestFirst, null, TODAY)).toBe('p2026')
+  })
+
+  it('keeps a stored year and a stored "all years"', () => {
+    expect(resolveAppFiscalChoice(newestFirst, 'p2024', TODAY)).toBe('p2024')
+    expect(resolveAppFiscalChoice(newestFirst, ALL_YEARS_VALUE, TODAY)).toBeNull()
+  })
+
+  it('drops a stored year that no longer exists', () => {
+    expect(resolveAppFiscalChoice(newestFirst, 'gone', TODAY)).toBe('p2026')
+  })
+
+  it('opens on the only period even when it starts later', () => {
+    expect(resolveAppFiscalChoice([p2027], null, TODAY)).toBe('p2027')
+    expect(resolveAppFiscalChoice([], null, TODAY)).toBeNull()
+  })
+})
+
+describe('effectiveFiscalScope (what a page uses)', () => {
+  const newestFirst = [p2027, p2026, p2025, p2024]
+
+  it('passes the choice through where it fits', () => {
+    expect(effectiveFiscalScope(newestFirst, 'p2025', { today: TODAY }).periodId).toBe('p2025')
+    expect(effectiveFiscalScope(newestFirst, null, { today: TODAY })).toEqual({ periodId: null, period: null })
+  })
+
+  it('gives a one-year surface the current year for "all years"', () => {
+    expect(effectiveFiscalScope(newestFirst, null, { allowAll: false, today: TODAY }).periodId).toBe('p2026')
+  })
+
+  it('gives a started-only surface the current year for a future pick', () => {
+    expect(effectiveFiscalScope(newestFirst, 'p2027', { hideFuture: true, today: TODAY }).periodId).toBe('p2026')
+    expect(effectiveFiscalScope(newestFirst, 'p2027', { today: TODAY }).periodId).toBe('p2027')
+  })
+
+  it('falls back to the current year for an unknown id, and to nothing without periods', () => {
+    expect(effectiveFiscalScope(newestFirst, 'gone', { today: TODAY }).periodId).toBe('p2026')
+    expect(effectiveFiscalScope([], 'gone', { allowAll: false, today: TODAY })).toEqual({ periodId: null, period: null })
+  })
+})
+
+describe('closableFiscalPeriods (what a year-end flow may close)', () => {
+  it('keeps ended years that are not closed and have no closing entry, oldest first', () => {
+    const closed = { ...period('c', '2023-01-01', '2023-12-31'), is_closed: true }
+    const withEntry = { ...period('e', '2022-01-01', '2022-12-31'), closing_entry_id: 'je-1' }
+    const result = closableFiscalPeriods([p2025, p2024, closed, withEntry, p2026], '2026-06-15')
+    expect(result.map((p) => p.id)).toEqual([p2024.id, p2025.id])
+  })
+
+  it('keeps a year open on its last day, and closable the day after (hasEnded)', () => {
+    expect(closableFiscalPeriods([p2025], p2025.period_end)).toEqual([])
+    expect(closableFiscalPeriods([p2025], '2026-01-01').map((p) => p.id)).toEqual([p2025.id])
   })
 })

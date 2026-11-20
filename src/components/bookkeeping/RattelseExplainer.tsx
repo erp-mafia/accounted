@@ -15,7 +15,7 @@ interface RattelseExplainerProps {
  * dialogs stop maintaining near-duplicate inline paragraphs. Rendered next to
  * the DialogTitle per UI-migration convention 7 (help lives behind a "?",
  * not in the dialog flow: see MatchVoucherDialog). Stays Swedish
- * (verifikat surface, .claude/rules/i18n.md).
+ * (verifikat surface).
  *
  * Only the universally true framing lives here. The audit-trail sentence is
  * mechanism-specific (BFL 5 kap 5 §: two distinct correction tracks) and must

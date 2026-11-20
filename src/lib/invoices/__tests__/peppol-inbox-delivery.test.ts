@@ -105,11 +105,20 @@ describe('peppolDocumentToExtraction', () => {
       paymentMeans: [{ ...document.paymentMeans[0], bankgiro: '9912346', paymentId: '123456789' }],
     }
     const extracted = peppolDocumentToExtraction(credit)
+    expect(extracted.documentKind).toBe('credit_note')
     expect(extracted.supplier.bankgiro).toBe('991-2346')
     expect(extracted.invoice.paymentReference).toBe('123456789')
     expect(extracted.totals.total).toBe(-112)
     expect(extracted.lineItems[0].lineTotal).toBe(-100)
     expect(extracted.vatBreakdown[0]).toEqual({ rate: 12, base: -100, amount: -12 })
+  })
+
+  it('carries the one credited invoice number of a credit note, and none for several', () => {
+    const one = peppolDocumentToExtraction({ ...document, documentType: 'CreditNote' as const, billingReferences: ['F-1'] })
+    expect(one.invoice.creditedInvoiceNumber).toBe('F-1')
+    const many = peppolDocumentToExtraction({ ...document, documentType: 'CreditNote' as const, billingReferences: ['F-1', 'F-2'] })
+    expect(many.invoice.creditedInvoiceNumber).toBeNull()
+    expect(peppolDocumentToExtraction(document).invoice.creditedInvoiceNumber).toBeUndefined()
   })
 })
 

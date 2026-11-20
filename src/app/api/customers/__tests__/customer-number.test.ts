@@ -94,7 +94,7 @@ describe('customer_number on POST /api/customers', () => {
 
   it('stores a trimmed customer_number on create', async () => {
     queryResult = {
-      data: { id: 'cust-1', name: 'Test AB', customer_type: 'swedish_business', customer_number: '1001' },
+      data: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Test AB', customer_type: 'swedish_business', customer_number: '1001' },
       error: null,
     }
 
@@ -117,7 +117,7 @@ describe('customer_number on POST /api/customers', () => {
 
   it('normalizes an empty customer_number to null on create', async () => {
     queryResult = {
-      data: { id: 'cust-1', name: 'Test AB', customer_type: 'swedish_business', customer_number: null },
+      data: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Test AB', customer_type: 'swedish_business', customer_number: null },
       error: null,
     }
 
@@ -135,7 +135,7 @@ describe('customer_number on POST /api/customers', () => {
 
   it('defaults customer_number to null when omitted', async () => {
     queryResult = {
-      data: { id: 'cust-1', name: 'Test AB', customer_type: 'swedish_business', customer_number: null },
+      data: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Test AB', customer_type: 'swedish_business', customer_number: null },
       error: null,
     }
 
@@ -153,7 +153,7 @@ describe('customer_number on POST /api/customers', () => {
 
   it('stores customer invoice contact metadata on create', async () => {
     queryResult = {
-      data: { id: 'cust-1', name: 'Test AB', customer_type: 'swedish_business' },
+      data: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Test AB', customer_type: 'swedish_business' },
       error: null,
     }
     const request = createMockRequest('/api/customers', {
@@ -196,7 +196,7 @@ describe('customer_number on POST /api/customers', () => {
 })
 
 describe('customer_number on PATCH /api/customers/[id]', () => {
-  const routeParams = { params: Promise.resolve({ id: 'cust-1' }) }
+  const routeParams = { params: Promise.resolve({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }) }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -204,7 +204,7 @@ describe('customer_number on PATCH /api/customers/[id]', () => {
     captured.insert.length = 0
     captured.update.length = 0
     queryResult = {
-      data: { id: 'cust-1', customer_type: 'swedish_business' },
+      data: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', customer_type: 'swedish_business' },
       error: null,
     }
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
@@ -212,7 +212,7 @@ describe('customer_number on PATCH /api/customers/[id]', () => {
   })
 
   it('rejects a customer_number longer than 32 characters with 400', async () => {
-    const request = createMockRequest('/api/customers/cust-1', {
+    const request = createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc', {
       method: 'PATCH',
       body: { customer_number: 'X'.repeat(33) },
     })
@@ -225,7 +225,7 @@ describe('customer_number on PATCH /api/customers/[id]', () => {
   })
 
   it('updates the customer_number', async () => {
-    const request = createMockRequest('/api/customers/cust-1', {
+    const request = createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc', {
       method: 'PATCH',
       body: { customer_number: 'K-42' },
     })
@@ -238,7 +238,7 @@ describe('customer_number on PATCH /api/customers/[id]', () => {
   })
 
   it('clears the customer_number when null is sent', async () => {
-    const request = createMockRequest('/api/customers/cust-1', {
+    const request = createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc', {
       method: 'PATCH',
       body: { customer_number: null },
     })
@@ -251,7 +251,7 @@ describe('customer_number on PATCH /api/customers/[id]', () => {
   })
 
   it('clears the customer_number when an empty string is sent', async () => {
-    const request = createMockRequest('/api/customers/cust-1', {
+    const request = createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc', {
       method: 'PATCH',
       body: { customer_number: '' },
     })
@@ -264,7 +264,7 @@ describe('customer_number on PATCH /api/customers/[id]', () => {
   })
 
   it('leaves the customer_number untouched when the field is omitted', async () => {
-    const request = createMockRequest('/api/customers/cust-1', {
+    const request = createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc', {
       method: 'PATCH',
       body: { name: 'New Name AB' },
     })
@@ -277,7 +277,7 @@ describe('customer_number on PATCH /api/customers/[id]', () => {
   })
 
   it('updates customer invoice contact metadata', async () => {
-    const request = createMockRequest('/api/customers/cust-1', {
+    const request = createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc', {
       method: 'PATCH',
       body: {
         contact_person: '',

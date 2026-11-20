@@ -3,6 +3,7 @@ import { documentDate, documentTitle } from '@/lib/arkiv/documents/title'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * The map (phase 8): a few kilobytes an agent reads before it searches,
@@ -104,7 +105,7 @@ const group = (type: string | null): keyof ArkivMap['documents']['by_group'] =>
  * map only: the company, the documents by group and the latest ones by file
  * name and type. No agreements, facts or findings, and no title or date read
  * out of a document by a model: an agent starts from what is archived, then
- * reads the text (prod 2026-09-24: the map handed agents a stale loan date and
+ * reads the text (seen 2026-09-24: the map handed agents a stale loan date and
  * a round's total filed as one investor's amount).
  */
 export async function buildArkivMap(supabase: SupabaseClient, companyId: string, opts: { brain?: boolean } = {}): Promise<ArkivMap> {
@@ -112,14 +113,19 @@ export async function buildArkivMap(supabase: SupabaseClient, companyId: string,
   const none = Promise.resolve({ data: [], error: null, count: 0 })
   const [company, docs, agreements, facts, questions, findings] = await Promise.all([
     supabase.from('companies').select('name, org_number').eq('id', companyId).maybeSingle(),
-    supabase
-      .from('document_attachments')
-      .select('id, file_name, doc_type, created_at')
-      .eq('company_id', companyId)
-      .eq('admission_state', 'admitted')
-      .or(NOT_STRUCTURED_MIME_FILTER)
-      .order('created_at', { ascending: false })
-      .limit(2000),
+    // Every admitted document, paged: the total and the counts per group are the map's answer to
+    // "what is archived", and PostgREST cuts a single read at 1000 rows without saying so.
+    fetchAllRows<{ id: string; file_name: string; doc_type: string | null; created_at: string }>((range) =>
+      supabase
+        .from('document_attachments')
+        .select('id, file_name, doc_type, created_at')
+        .eq('company_id', companyId)
+        .eq('admission_state', 'admitted')
+        .or(NOT_STRUCTURED_MIME_FILTER)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(range.from, range.to),
+    ),
     !brain
       ? none
       : supabase
@@ -144,14 +150,9 @@ export async function buildArkivMap(supabase: SupabaseClient, companyId: string,
     !brain ? none : supabase.from('document_extractions').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('is_current', true).not('review_fields', 'eq', '{}'),
     !brain ? none : supabase.from('arkiv_findings').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'open'),
   ])
-  for (const r of [company, docs, agreements, facts, questions, findings]) if (r.error) throw new Error(`map read failed: ${r.error.message}`)
+  for (const r of [company, agreements, facts, questions, findings]) if (r.error) throw new Error(`map read failed: ${r.error.message}`)
 
-  const documents = (docs.data ?? []) as Array<{
-    id: string
-    file_name: string
-    doc_type: string | null
-    created_at: string
-  }>
+  const documents = docs
   const by_group: ArkivMap['documents']['by_group'] = {
     agreements: 0,
     authority: 0,

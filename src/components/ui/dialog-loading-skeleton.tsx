@@ -9,7 +9,7 @@ export function DialogLoadingSkeleton() {
 
   return (
     <Dialog open>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent size="wide">
         <DialogTitle className="sr-only">{t('loading')}</DialogTitle>
         <div className="space-y-4 py-4" role="status">
           <Skeleton className="h-7 w-48" />

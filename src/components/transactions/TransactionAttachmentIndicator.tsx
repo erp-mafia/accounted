@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { Paperclip, Loader2 } from 'lucide-react'
+import { PaperClipIcon, SpinnerIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
@@ -26,7 +26,7 @@ interface Props {
   className?: string
 }
 
-const badgeClass = 'h-4 gap-1 px-1.5 py-0 text-[11px] font-normal'
+const badgeClass = 'h-4 gap-1 px-1.5 py-0 text-xs font-normal'
 // Enlarges the hit area beyond the 16px badge without shifting layout.
 const hitAreaClass = 'shrink-0 p-1 -m-1'
 
@@ -97,9 +97,9 @@ export function TransactionAttachmentIndicator({
       >
         <Badge variant="secondary" className={badgeClass}>
           {isLoading ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <SpinnerIcon className="h-3 w-3 animate-spin" />
           ) : (
-            <Paperclip className="h-3 w-3" />
+            <PaperClipIcon className="h-3 w-3" />
           )}
           {t('attached_label')}
         </Badge>
@@ -117,7 +117,7 @@ export function TransactionAttachmentIndicator({
         className={cn(hitAreaClass, className)}
       >
         <Badge variant="secondary" className={badgeClass}>
-          <Paperclip className="h-3 w-3" />
+          <PaperClipIcon className="h-3 w-3" />
           {t('attached_label')}
         </Badge>
       </Link>
@@ -127,7 +127,7 @@ export function TransactionAttachmentIndicator({
   if (missing) {
     const badge = (
       <Badge variant="outline" className={cn(badgeClass, 'text-muted-foreground')}>
-        <Paperclip className="h-3 w-3" />
+        <PaperClipIcon className="h-3 w-3" />
         {t('missing_label')}
       </Badge>
     )

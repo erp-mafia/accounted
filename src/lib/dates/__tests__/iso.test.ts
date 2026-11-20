@@ -1,5 +1,33 @@
 import { describe, it, expect } from 'vitest'
-import { addDaysIso, daysBetweenIso, todayIsoStockholm, toIsoDate } from '../iso'
+import {
+  addDaysIso,
+  addMonthsIso,
+  bankBookingDay,
+  daysBetweenIso,
+  endOfDayIsoStockholm,
+  hasEnded,
+  stockholmWallTimeToUtc,
+  todayIsoStockholm,
+  toIsoDate,
+  daysPastDue,
+  isPastDue,
+  previousMonthEndIso,
+  stockholmYearMonth,
+} from '../iso'
+
+describe('hasEnded', () => {
+  it('is false on the last day: it is still running', () => {
+    expect(hasEnded('2026-12-31', '2026-12-31')).toBe(false)
+  })
+
+  it('is true the day after', () => {
+    expect(hasEnded('2026-12-31', '2027-01-01')).toBe(true)
+  })
+
+  it('is false before it', () => {
+    expect(hasEnded('2026-12-31', '2026-12-30')).toBe(false)
+  })
+})
 
 describe('todayIsoStockholm', () => {
   it('rolls over to the next Swedish calendar day before UTC midnight (CEST, UTC+2)', () => {
@@ -20,11 +48,65 @@ describe('todayIsoStockholm', () => {
   })
 })
 
+describe('bankBookingDay', () => {
+  it('keeps a date-only value as the bank wrote it', () => {
+    expect(bankBookingDay('2026-09-01')).toBe('2026-09-01')
+    expect(bankBookingDay(' 2026-08-31 ')).toBe('2026-08-31')
+  })
+
+  it('keeps a date with a zone, and a local date-time, on the day written', () => {
+    expect(bankBookingDay('2026-01-05+01:00')).toBe('2026-01-05')
+    expect(bankBookingDay('2026-01-05Z')).toBe('2026-01-05')
+    expect(bankBookingDay('2026-09-01T00:01:00')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-09-01 00:01')).toBe('2026-09-01')
+  })
+
+  it('dates 00:01 on 1 September in Stockholm on 1 September, however the instant is written (summer, UTC+2)', () => {
+    expect(bankBookingDay('2026-08-31T22:01:00Z')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-08-31T22:01:00.000+00:00')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-09-01T00:01:00+02:00')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-08-31T23:01:00+0100')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-08-31T22:01+00')).toBe('2026-09-01')
+    // One minute before midnight in Stockholm is still the last of August.
+    expect(bankBookingDay('2026-08-31T21:59:00Z')).toBe('2026-08-31')
+  })
+
+  it('moves to the next day one hour later in winter (UTC+1)', () => {
+    expect(bankBookingDay('2026-11-15T23:01:00Z')).toBe('2026-11-16')
+    expect(bankBookingDay('2026-11-15T22:59:00Z')).toBe('2026-11-15')
+    expect(bankBookingDay('2026-11-16T00:01:00+01:00')).toBe('2026-11-16')
+    expect(bankBookingDay('2026-01-02T00:00:00.000+01:00')).toBe('2026-01-02')
+  })
+
+  it('reads the offset in force on the day clocks change', () => {
+    // 01:30 CET on 29 March, half an hour before summer time.
+    expect(bankBookingDay('2026-03-29T00:30:00Z')).toBe('2026-03-29')
+    // 00:30 CEST on 25 October, before the clocks go back.
+    expect(bankBookingDay('2026-10-24T22:30:00Z')).toBe('2026-10-25')
+  })
+
+  it('is null for a value that does not start with a real date', () => {
+    expect(bankBookingDay(null)).toBeNull()
+    expect(bankBookingDay(undefined)).toBeNull()
+    expect(bankBookingDay('')).toBeNull()
+    expect(bankBookingDay('31/08/2026')).toBeNull()
+    expect(bankBookingDay('2026-02-31')).toBeNull()
+  })
+})
+
 describe('UTC helpers', () => {
   it('addDaysIso is pure UTC arithmetic', () => {
     expect(addDaysIso('2026-02-28', 1)).toBe('2026-03-01')
     expect(addDaysIso('2026-03-29', 1)).toBe('2026-03-30')
     expect(addDaysIso('2026-01-01', -1)).toBe('2025-12-31')
+  })
+
+  it('addMonthsIso clamps to the last day of the target month', () => {
+    expect(addMonthsIso('2026-03-31', -1)).toBe('2026-02-28')
+    expect(addMonthsIso('2028-02-29', -12)).toBe('2027-02-28')
+    expect(addMonthsIso('2026-01-16', -12)).toBe('2025-01-16')
+    expect(addMonthsIso('2026-11-30', 3)).toBe('2027-02-28')
+    expect(addMonthsIso('2026-07-02', 12)).toBe('2027-07-02')
   })
 
   it('daysBetweenIso is signed', () => {
@@ -36,5 +118,65 @@ describe('UTC helpers', () => {
     const late = new Date('2026-06-30T22:30:00Z')
     expect(toIsoDate(late)).toBe('2026-06-30')
     expect(todayIsoStockholm(late)).toBe('2026-07-01')
+  })
+})
+
+describe('endOfDayIsoStockholm', () => {
+  it('ends a summer day at 21:59:59Z and a winter day at 22:59:59Z', () => {
+    expect(endOfDayIsoStockholm('2027-04-10')).toBe('2027-04-10T21:59:59Z')
+    expect(endOfDayIsoStockholm('2027-01-15')).toBe('2027-01-15T22:59:59Z')
+  })
+
+  it('handles the clock-change days themselves (last Sunday of March and October)', () => {
+    expect(endOfDayIsoStockholm('2027-03-28')).toBe('2027-03-28T21:59:59Z')
+    expect(endOfDayIsoStockholm('2027-10-31')).toBe('2027-10-31T22:59:59Z')
+    expect(endOfDayIsoStockholm('2027-03-27')).toBe('2027-03-27T22:59:59Z')
+  })
+
+  it('is still inside the Swedish day it names', () => {
+    expect(todayIsoStockholm(new Date(endOfDayIsoStockholm('2027-04-10')))).toBe('2027-04-10')
+    expect(todayIsoStockholm(new Date(new Date(endOfDayIsoStockholm('2027-04-10')).getTime() + 1000))).toBe('2027-04-11')
+  })
+})
+
+describe('stockholmWallTimeToUtc', () => {
+  it('reads a Swedish wall-clock time in winter and in summer', () => {
+    expect(stockholmWallTimeToUtc('2027-02-12', '09:00').toISOString()).toBe('2027-02-12T08:00:00.000Z')
+    expect(stockholmWallTimeToUtc('2027-06-30', '09:00').toISOString()).toBe('2027-06-30T07:00:00.000Z')
+    expect(stockholmWallTimeToUtc('2027-02-12', '14:30:00').toISOString()).toBe('2027-02-12T13:30:00.000Z')
+  })
+
+  it('lands right on the days the clocks change', () => {
+    // Summer time starts 2027-03-28 at 02:00 local, ends 2027-10-31 at 03:00 local.
+    expect(stockholmWallTimeToUtc('2027-03-28', '09:00').toISOString()).toBe('2027-03-28T07:00:00.000Z')
+    expect(stockholmWallTimeToUtc('2027-10-31', '09:00').toISOString()).toBe('2027-10-31T08:00:00.000Z')
+  })
+})
+
+describe('stockholmYearMonth', () => {
+  it('is the Swedish year and month, not the UTC ones', () => {
+    expect(stockholmYearMonth(new Date('2026-12-31T23:30:00Z'))).toEqual({ year: 2027, month: 1 })
+    expect(stockholmYearMonth(new Date('2026-06-30T22:30:00Z'))).toEqual({ year: 2026, month: 7 })
+    expect(stockholmYearMonth(new Date('2026-06-30T21:30:00Z'))).toEqual({ year: 2026, month: 6 })
+  })
+})
+
+describe('previousMonthEndIso', () => {
+  it('is the last day of the month before, across a year and a leap day', () => {
+    expect(previousMonthEndIso('2027-01-01')).toBe('2026-12-31')
+    expect(previousMonthEndIso('2028-03-15')).toBe('2028-02-29')
+    expect(previousMonthEndIso('2026-11-30')).toBe('2026-10-31')
+  })
+})
+
+describe('isPastDue and daysPastDue', () => {
+  it('the due date itself is on time, the day after is day one', () => {
+    expect(isPastDue('2026-11-02', '2026-11-01')).toBe(false)
+    expect(isPastDue('2026-11-02', '2026-11-02')).toBe(false)
+    expect(isPastDue('2026-11-02', '2026-11-03')).toBe(true)
+    expect(daysPastDue('2026-11-02', '2026-11-01')).toBe(0)
+    expect(daysPastDue('2026-11-02', '2026-11-02')).toBe(0)
+    expect(daysPastDue('2026-11-02', '2026-11-03')).toBe(1)
+    expect(daysPastDue('2026-11-02', '2026-12-03')).toBe(31)
   })
 })

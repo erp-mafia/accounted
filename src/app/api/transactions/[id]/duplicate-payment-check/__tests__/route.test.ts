@@ -98,6 +98,23 @@ describe('GET /api/transactions/[id]/duplicate-payment-check', () => {
     )
   })
 
+  it('asks for the supplier match reading with ?side=supplier, and the customer one without (accounted#58)', async () => {
+    const row = { id: TX_UUID, date: '2026-04-21', amount: -1500, currency: 'SEK', amount_sek: null, exchange_rate: null, journal_entry_id: null, cash_account_id: null }
+    enqueue({ data: row, error: null })
+    await GET(
+      createMockRequest(`/api/transactions/${TX_UUID}/duplicate-payment-check?side=supplier`),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+    expect(mockDetectOne).toHaveBeenLastCalledWith(mockSupabase, expect.objectContaining({ transactionAmount: -1500 }), { skipClaimed: true })
+
+    enqueue({ data: row, error: null })
+    await GET(
+      createMockRequest(`/api/transactions/${TX_UUID}/duplicate-payment-check`),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+    expect(mockDetectOne).toHaveBeenLastCalledWith(mockSupabase, expect.anything(), { skipClaimed: false })
+  })
+
   it('fails open per detector: a throwing set detector still returns the 1:1 candidate', async () => {
     enqueue({ data: { id: TX_UUID, date: '2026-07-31', amount: 100, currency: 'SEK', journal_entry_id: null }, error: null })
     const candidate = { journal_entry_id: 'je-1', voucher_label: 'A1', entry_date: '2026-07-31', description: null, amount: 100, bank_account_number: '1930', reason: 'exact_amount_same_date', amount_verified: true, unverified_reason: null }

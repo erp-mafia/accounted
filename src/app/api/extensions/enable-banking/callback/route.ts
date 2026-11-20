@@ -1,11 +1,11 @@
-import { randomBytes } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
+import { requestCspNonce } from '@/lib/security/csp'
 import { NextResponse, after } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { createSession, extractBban, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
-import { isMirrorCardAccount } from '@/extensions/general/enable-banking/lib/mirror-card-account'
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
+import { resolveAccountCurrency } from '@/extensions/general/enable-banking/lib/account-currency'
 import { eventBus } from '@/lib/events/bus'
 import {
   resolvePsd2LedgerAccount,
@@ -26,13 +26,6 @@ import {
   requireFlowInitiator,
   FLOW_INITIATOR_MISMATCH_MESSAGE,
 } from '@/lib/auth/oauth-flow-binding'
-
-// This route emits bank_connection.consent_granted / .finalize_failed
-// (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
-// load so registerEventLogHandler() has subscribed before the first emit();
-// otherwise the audit row is silently dropped on a cold instance where this
-// redirect route is the first event-emitting code path to execute.
-ensureInitialized()
 
 // Structured logger for audit-trail failures (ISO 27001 A.8.15): a failed
 // audit-event emission must be visible to log-based alerting, not just a raw
@@ -127,16 +120,18 @@ export async function GET(request: Request) {
     // Previously the raw provider text was passed through verbatim, which
     // gave a stuck user nothing to act on (issue #1716).
     const userMessage = getBankConnectionErrorMessage(error, errorDescription)
-    // A cancel at the bank is an expected outcome, not a runtime error. The
-    // same classifier decides the user message, so "Invalid credentials"
-    // (a missing fullmakt) and "cannot retrieve account information" stay
-    // at error level instead of hiding among the cancels.
+    // Whatever the bank answers here (a cancel, a refused login, a missing
+    // fullmakt, the bank's own server_error) is the bank's outcome, not a
+    // failure of ours: warn level. The classifier that picks the user
+    // message also names the reason in the log line, so a fullmakt problem
+    // stays filterable apart from the cancels, and every attempt is kept in
+    // event_log as bank_connection.consent_denied below.
     const denialReason = classifyBankConnectionDenial(error, errorDescription)
-    const isUserCancel = denialReason === 'cancelled'
-    const logDenied = isUserCancel ? console.warn : console.error
-    logDenied('[enable-banking] Bank authorization denied', {
+    const logReason = denialReason ?? 'provider_error'
+    console.warn('[enable-banking] Bank authorization denied', {
       error,
       error_description: errorDescription,
+      reason: logReason,
       has_state: !!state,
     })
 
@@ -156,12 +151,13 @@ export async function GET(request: Request) {
           .single()
 
         if (pendingConn) {
-          logDenied('[enable-banking] Authorization denied details', {
+          console.warn('[enable-banking] Authorization denied details', {
             connection_id: pendingConn.id,
             user_id: pendingConn.user_id,
             bank_name: pendingConn.bank_name,
             error_code: error,
             error_description: errorDescription,
+            reason: logReason,
           })
 
           if (pendingConn.status === 'pending') {
@@ -282,11 +278,18 @@ export async function GET(request: Request) {
     .single()
 
   if (findError || !pendingConnection) {
-    console.error('[enable-banking] No pending connection for oauth_state', {
-      findError: findError ? { message: findError.message, code: findError.code, details: findError.details } : null,
-      state,
-      hasCode: !!code,
-    })
+    // No row (PGRST116) is the person's outcome: an old tab, a callback that
+    // already completed, or an attempt replaced by a newer one. The landing
+    // banner tells them to start over. Only a failed lookup is ours.
+    if (findError && findError.code !== 'PGRST116') {
+      console.error('[enable-banking] No pending connection for oauth_state', {
+        findError: { message: findError.message, code: findError.code, details: findError.details },
+        state,
+        hasCode: !!code,
+      })
+    } else {
+      console.warn('[enable-banking] No pending connection for oauth_state', { state, hasCode: !!code })
+    }
     return NextResponse.redirect(
       `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(getBankConnectionErrorMessage('invalid_state'))}`
     )
@@ -343,12 +346,19 @@ export async function GET(request: Request) {
     } catch (finalizeError) {
       const reason =
         finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
-      console.error('[enable-banking] Callback error', {
-        message: reason,
-        stack: finalizeError instanceof Error ? finalizeError.stack : undefined,
-        name: finalizeError instanceof Error ? finalizeError.name : undefined,
-        connectionId: pendingConnection.id,
-      })
+      // A named PT409 refusal from finalize_bank_callback (the account is
+      // held by another connection, the attempt changed underneath) is the
+      // database refusing on purpose: warn. Anything else is a real failure.
+      if ((finalizeError as { code?: unknown } | null)?.code === 'PT409') {
+        console.warn('[enable-banking] Callback error', { message: reason, connectionId: pendingConnection.id })
+      } else {
+        console.error('[enable-banking] Callback error', {
+          message: reason,
+          stack: finalizeError instanceof Error ? finalizeError.stack : undefined,
+          name: finalizeError instanceof Error ? finalizeError.name : undefined,
+          connectionId: pendingConnection.id,
+        })
+      }
       // Durable audit trail (issue #1716): the fresh-connect row is deleted by
       // the cleanup below and console logs expire, so event_log is the only
       // place support can later see that this attempt failed and why.
@@ -384,10 +394,11 @@ export async function GET(request: Request) {
   }
 
   // Per-request CSP nonce for the two inline scripts on the finalize page
-  // (ASVS V3.3): mirrors the mcp-oauth consent page. The global next.config
-  // CSP also applies; the intersection means inline scripts on THIS response
-  // must carry the nonce.
-  const cspNonce = randomBytes(16).toString('base64')
+  // (ASVS V3.3): mirrors the mcp-oauth consent page. It is the proxy's nonce
+  // for this request, so the scripts run under the proxy's CSP header as well
+  // as under the one set below (a self-hosted `next start` delivers only the
+  // proxy's).
+  const cspNonce = requestCspNonce(request.headers)
   const csp = [
     "default-src 'none'",
     `script-src 'nonce-${cspNonce}'`,
@@ -449,7 +460,7 @@ async function finalizeConnection(
 
   const userId = pendingConnection.user_id
 
-  console.log('[enable-banking] Exchanging code for session', {
+  log.info('Exchanging code for session', {
     connectionId: pendingConnection.id,
     userId,
     codeLength: code.length,
@@ -478,7 +489,7 @@ async function persistBankSession(
   const { session_id, accounts, access } = sessionData
   const consentExpiresAt = access.valid_until
 
-  console.log('[enable-banking] Session created successfully', {
+  log.info('Session created successfully', {
     connectionId: pendingConnection.id,
     sessionId: '[REDACTED]',
     accountCount: accounts.length,
@@ -493,15 +504,28 @@ async function persistBankSession(
   // user deselects never have their balance pulled.
   const priorAccounts = pendingConnection.accounts_data ?? []
   const priorByNewUid = new Map<string, StoredAccount>()
+  // One currency rule for everything compared or stored below
+  // (lib/account-currency.ts): an account reported as 'XXX' is stored under a
+  // real currency. A prior still stored as 'XXX' compares as what it resolves
+  // to, so finalize_bank_callback refuses the stale row until it is repaired
+  // instead of this code missing the pair and re-keying a no-IBAN account's
+  // dedup scope (a re-import of its history).
+  const currencyOf = (row: { currency?: string | null }) => resolveAccountCurrency(row.currency)
+  const ibanCompatible = (a?: string | null, b?: string | null) =>
+    !normalizeIban(a) || !normalizeIban(b) || normalizeIban(a) === normalizeIban(b)
   const compatible = (prior: { currency: string; iban?: string | null }, current: { currency: string; iban?: string | null }) =>
-    prior.currency.toUpperCase() === current.currency.toUpperCase() &&
-    (!normalizeIban(prior.iban) || !normalizeIban(current.iban) || normalizeIban(prior.iban) === normalizeIban(current.iban))
+    currencyOf(prior) === currencyOf(current) && ibanCompatible(prior.iban, current.iban)
   const accountsMetadata: StoredAccount[] = accounts.map((account: AccountInfo) => {
     const iban = normalizeIban(account.account_id?.iban)
-    const currency = account.currency.toUpperCase()
+    // An unknown reported currency keeps the one this physical account
+    // already has here: the same uid, else the only prior with its IBAN.
+    const sameIban = iban ? priorAccounts.filter(p => normalizeIban(p.iban) === iban) : []
+    const known = priorAccounts.find(p => p.uid === account.uid && ibanCompatible(p.iban, iban))
+      ?? (sameIban.length === 1 ? sameIban[0] : undefined)
+    const currency = resolveAccountCurrency(account.currency, [known?.currency])
     let prior = priorAccounts.find(p => p.uid === account.uid && compatible(p, { currency, iban }))
     if (!prior && iban) {
-      const matches = priorAccounts.filter(p => p.currency.toUpperCase() === currency && normalizeIban(p.iban) === iban)
+      const matches = priorAccounts.filter(p => currencyOf(p) === currency && normalizeIban(p.iban) === iban)
       if (matches.length > 1) throw new Error('Bank callback identity ambiguous')
       prior = matches[0]
     }
@@ -518,7 +542,7 @@ async function persistBankSession(
   const matchedPriorUids = new Set([...priorByNewUid.values()].map(p => p.uid))
   for (const account of accountsMetadata) {
     if (priorByNewUid.has(account.uid) || normalizeIban(account.iban)) continue
-    const old = priorAccounts.filter(p => !matchedPriorUids.has(p.uid) && p.currency.toUpperCase() === account.currency)
+    const old = priorAccounts.filter(p => !matchedPriorUids.has(p.uid) && currencyOf(p) === account.currency)
     const fresh = accountsMetadata.filter(a => !priorByNewUid.has(a.uid) && a.currency === account.currency)
     if (old.length !== 1 || fresh.length !== 1 || normalizeIban(old[0].iban)) continue
     const prior = old[0]
@@ -584,10 +608,9 @@ async function persistBankSession(
           claimedCount += 1
         }
       }
-      // Preserve the explanation while it stays disabled. Existing own
-      // mirrors are re-keyed later; an unmirrored card stays unmirrored.
+      // Existing own mirrors are re-keyed later; an unmirrored card stays
+      // unmirrored.
       if (account.enabled === false && isMirrorCardAccount(account)) {
-        account.mirror_card_account = true
         guardDisabledUids.add(account.uid)
       }
       continue
@@ -596,13 +619,12 @@ async function persistBankSession(
     if (isMirrorCardAccount(account)) {
       // Known card sub-account that only mirrors the main account (Svea's
       // BOKIO_Debit_Business, issue #2565): every purchase already arrives on
-      // the main account, and this one adds an opposite-sign, description-
-      // less twin per purchase that can be neither booked nor deleted. Off by
-      // default, flagged so the picker says why; the user can still turn it
-      // on. Checked before the IBAN-keyed guards below, which a no-IBAN
-      // account would fall through anyway.
+      // the main account, and this one adds an opposite-sign twin per
+      // purchase that can be neither booked nor deleted. Always off: the
+      // selection save never switches it on and the pickers show it as a
+      // muted line, not a choice. Checked before the IBAN-keyed guards below,
+      // which a no-IBAN account would fall through anyway.
       account.enabled = false
-      account.mirror_card_account = true
       guardDisabledUids.add(account.uid)
       continue
     }
@@ -664,6 +686,9 @@ async function persistBankSession(
     if (row && compatible(row, account)) ownRows.set(account.uid, row)
   }
   const assignedLedgers = new Set([...ownRows.values()].map(row => row.ledger_account))
+  // The accounts placed below: the seeded row goes to the one its onboarding
+  // payment details name, not to whichever the bank lists first (crm#1498).
+  const placed = accountsMetadata.filter(account => !ownRows.has(account.uid) && !guardDisabledUids.has(account.uid))
   const mirrors: BankMirrorPlan[] = []
   for (const account of accountsMetadata) {
     const own = ownRows.get(account.uid)
@@ -672,8 +697,8 @@ async function persistBankSession(
     if (guardDisabledUids.has(account.uid) && !own) continue
     const resolved = own ? { ledgerAccount: own.ledger_account, reuseCashAccountId: own.id }
       : await resolvePsd2LedgerAccount(supabase, pendingConnection.company_id, userId, {
-        iban: account.iban, currency: account.currency, accountName: account.name,
-        exclude: assignedLedgers, prepareOnly: true,
+        iban: account.iban, bban: account.bban, currency: account.currency, accountName: account.name,
+        consent: placed, exclude: assignedLedgers, prepareOnly: true,
       })
     if (!resolved) throw new Error('Bank callback ledger allocation failed')
     account.ledger_account = resolved.ledgerAccount

@@ -8,6 +8,7 @@
  *   - Endpoint count
  *   - Endpoint key set (method + path tuples)
  *   - Set of distinct scopes referenced across all endpoints
+ *   - Endpoint count per module (lib/modules/manifest.ts)
  *
  * When you intentionally add or remove an endpoint, run the test once
  * locally with `--update` to refresh the snapshot, review the diff, and
@@ -20,7 +21,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { listEndpoints } from '../registry'
+import { endpointModule, listEndpoints } from '../registry'
 // Side-effect import: every route file's registerEndpoint() runs at
 // module load time and populates the shared ENDPOINTS map.
 import '../load-routes'
@@ -47,6 +48,19 @@ describe('v1 spec snapshot', () => {
       new Set(endpoints.map((e) => e.scope ?? 'public')),
     ).sort()
     expect(scopes).toMatchSnapshot('endpoint-scopes')
+  })
+
+  it('matches the recorded module catalogue', () => {
+    // How many endpoints each module owns (the OpenAPI tag and x-module). A
+    // module reassignment surfaces here as a reviewable diff, like an added
+    // endpoint does in the key set.
+    const counts: Record<string, number> = {}
+    for (const e of endpoints) {
+      const id = endpointModule(e) ?? 'unresolved'
+      counts[id] = (counts[id] ?? 0) + 1
+    }
+    const sorted = Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)))
+    expect(sorted).toMatchSnapshot('endpoint-modules')
   })
 
   it('every endpoint has the agent-facing metadata that the docs depend on', () => {

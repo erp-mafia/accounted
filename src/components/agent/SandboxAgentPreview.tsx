@@ -1,16 +1,15 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { Sparkles, ArrowRight } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { ArrowRightIcon, SparklesIcon } from '@/components/icons'
+import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 
 /**
  * Stand-in for AgentChat in the sandbox. The real chat surface POSTs to
  * /api/agent/invoke which is server-gated by guardSandbox(), so the input
  * would just produce a 403. Instead of showing that as a raw error, we
- * render a brief description of what the assistant does in prod and a
+ * render a brief description of what the assistant does in production and a
  * single "Skapa konto" CTA. Same chrome (header) as the real chat: only
  * the body swaps out.
  *
@@ -23,29 +22,22 @@ export default function SandboxAgentPreview({
 }: {
   agentName: string | null
 }) {
-  const router = useRouter()
   const name = agentName?.trim() || 'din assistent'
 
   async function handleCreateAccount() {
-    const supabase = createClient()
-    // Sign-out is best-effort: a transient Supabase failure shouldn't
-    // strand the user on a dead button; navigate to /register either way
-    // and let the registration flow re-init auth state.
-    try {
-      await supabase.auth.signOut()
-    } catch {
-      // Intentionally swallowed: see comment above.
-    }
-    router.push('/register')
+    // Sign-out is best-effort: a transient failure shouldn't strand the user
+    // on a dead button; navigate to /register either way and let the
+    // registration flow re-init auth state.
+    await signOutAndNavigate('/register')
   }
 
   return (
     <div className="flex-1 flex flex-col">
       <div className="flex-1 overflow-y-auto px-5 py-8">
         <div className="mx-auto max-w-md space-y-6">
-          <div className="rounded-lg border border-border bg-secondary/40 p-5">
+          <div className="rounded-lg bg-secondary/40 p-5 bg-control shadow-raised">
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Sparkles className="h-4 w-4" />
+              <SparklesIcon className="h-4 w-4" />
               Förhandsvisning i sandlådan
             </div>
             <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
@@ -87,7 +79,7 @@ export default function SandboxAgentPreview({
         </div>
       </div>
 
-      <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
+      <div className="border-t-hairline px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
         <div className="flex items-center gap-2">
           <Button
             type="button"
@@ -95,10 +87,10 @@ export default function SandboxAgentPreview({
             onClick={handleCreateAccount}
           >
             Skapa konto för att använda {name}
-            <ArrowRight className="ml-1.5 h-4 w-4" />
+            <ArrowRightIcon className="h-4 w-4" />
           </Button>
         </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">
+        <p className="mt-2 text-xs text-muted-foreground">
           Sandlådedata raderas efter 24 timmar.{' '}
           <Link href="/register" className="underline underline-offset-2 hover:text-foreground">
             Skapa konto

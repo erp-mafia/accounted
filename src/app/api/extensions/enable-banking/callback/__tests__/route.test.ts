@@ -87,9 +87,32 @@ describe('callback authentication and redirects', () => {
   })
   it('rejects an unknown state without consulting the user or exchanging the code', async () => {
     pending = null
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { response } = await complete()
     expect(decodeURIComponent(response.headers.get('location') ?? '')).toContain('Starta bankkopplingen på nytt')
     expect(mocks.getUser).not.toHaveBeenCalled(); expect(mocks.createSession).not.toHaveBeenCalled()
+    // An old tab or a callback that already ran: the person's outcome, not ours.
+    expect(warn).toHaveBeenCalledWith('[enable-banking] No pending connection for oauth_state', expect.anything())
+    expect(err).not.toHaveBeenCalled()
+  })
+  it('keeps a failed state lookup at error level', async () => {
+    mocks.from.mockImplementation(() => chain(null, { message: 'boom', code: '57014', details: null }))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { response } = await complete()
+    expect(response.headers.get('location')).toContain('bank_error=')
+    expect(err).toHaveBeenCalledWith('[enable-banking] No pending connection for oauth_state', expect.anything())
+  })
+  it('logs a named PT409 finalize refusal at warn and any other finalize failure at error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.finalize.mockRejectedValueOnce(Object.assign(new Error('BANK_CALLBACK_MIRROR_CLAIMED'), { code: 'PT409' }))
+    await complete()
+    expect(warn).toHaveBeenCalledWith('[enable-banking] Callback error', expect.objectContaining({ message: 'BANK_CALLBACK_MIRROR_CLAIMED' }))
+    expect(err).not.toHaveBeenCalledWith('[enable-banking] Callback error', expect.anything())
+    mocks.finalize.mockRejectedValueOnce(Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }))
+    await complete()
+    expect(err).toHaveBeenCalledWith('[enable-banking] Callback error', expect.objectContaining({ message: 'canceling statement due to statement timeout' }))
   })
   it('refuses a different initiator without changing the row', async () => {
     mocks.getUser.mockResolvedValue({ data: { user: { id: 'other-user' } } })
@@ -144,8 +167,21 @@ describe('one callback transaction', () => {
       mirrors: [{ uid: 'a', ledger_account: '1930' }, { uid: 'b', ledger_account: '1931' }] })
     for (const c of chains) { expect(c.update).not.toHaveBeenCalled(); expect(c.delete).not.toHaveBeenCalled() }
     for (const call of mocks.resolve.mock.calls) expect(call[3].prepareOnly).toBe(true)
+    // Each account is placed knowing the whole consent: the seeded row goes to the one its details name (crm#1498).
+    for (const call of mocks.resolve.mock.calls) expect(call[3].consent.map((a: { uid: string }) => a.uid)).toEqual(['a', 'b'])
     expect(mocks.balance).not.toHaveBeenCalled()
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_granted' }))
+  })
+  it("stamps the proxy's nonce so the finalize page runs under the proxy's CSP header too", async () => {
+    // A self-hosted `next start` delivers only the proxy's header (src/proxy.ts),
+    // so both inline scripts must carry the nonce that header trusts.
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [account] })
+    const proxyNonce = 'cHJveHktbm9uY2UtMTIzNDU2Nzg='
+    const response = await GET(new Request(request().url, { headers: { 'x-nonce': proxyNonce } }))
+    const body = await response.text()
+    expect(response.headers.get('content-security-policy')).toContain(`script-src 'nonce-${proxyNonce}'`)
+    expect(body.split(`<script nonce="${proxyNonce}">`).length - 1).toBe(2)
+    expect(body).not.toMatch(/<script(?![^>]*nonce=)/)
   })
   it('accepts an empty bank response and leaves the picker to report it', async () => {
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [] })
@@ -261,7 +297,9 @@ describe('account identity and standing choices', () => {
     cashRows = [{ id: 'cash', external_uid: 'old-card', ledger_account: '1935', currency: 'SEK', iban: null }]
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ uid: 'new-card', name: 'BOKIO_Debit_Business', currency: 'SEK' }] })
     await complete()
-    expect(plan()).toMatchObject({ noIbanPairs: { 'new-card': 'old-card' }, accounts: [{ enabled: false, dedup_scope: 'legacy-card', mirror_card_account: true }], mirrors: [{ uid: 'new-card', reuse_cash_account_id: 'cash' }] })
+    expect(plan()).toMatchObject({ noIbanPairs: { 'new-card': 'old-card' }, accounts: [{ enabled: false, dedup_scope: 'legacy-card' }], mirrors: [{ uid: 'new-card', reuse_cash_account_id: 'cash' }] })
+    // "Is a card account" is derived from name + no IBAN + no BBAN, never stored.
+    expect(plan().accounts[0]).not.toHaveProperty('mirror_card_account')
   })
   it.each(['two-prior', 'two-new', 'prior-iban'])('does not guess a no-IBAN pair with %s', async kind => {
     reconnect([{ uid: 'old', currency: 'SEK', ...(kind === 'prior-iban' ? { iban } : {}) }, ...(kind === 'two-prior' ? [{ uid: 'old-2', currency: 'SEK' }] : [])])
@@ -274,6 +312,38 @@ describe('account identity and standing choices', () => {
   })
 })
 
+// Feedback seq 753539: the bank reported the account currency as 'XXX' (ISO
+// 4217 "no currency"), it was stored verbatim, and no SEK transaction on the
+// account could be booked: the bank-booking guards look the account up by the
+// transaction's currency.
+describe('unknown provider currency', () => {
+  it.each(['XXX', 'xxx', '', undefined])('stores and mirrors a new account reported as %j under SEK', async currency => {
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ ...account, currency }] })
+    await complete()
+    expect(plan().accounts[0].currency).toBe('SEK')
+    expect(plan().mirrors).toEqual([{ uid: 'a', ledger_account: '1930', reuse_cash_account_id: null }])
+    expect(mocks.resolve).toHaveBeenCalledWith(expect.anything(), row.company_id, row.user_id, expect.objectContaining({ currency: 'SEK' }))
+  })
+  it.each(['uid', 'iban'])('keeps the currency the account is already stored under, matched by %s', async matching => {
+    reconnect([{ uid: matching === 'uid' ? 'a' : 'old', currency: 'EUR', iban, enabled: false, dedup_scope: 'eur-scope' }])
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ ...account, currency: 'XXX' }] })
+    await complete(); expect(plan().accounts[0]).toMatchObject({ currency: 'EUR', enabled: false, dedup_scope: 'eur-scope' })
+  })
+  it('meets a no-IBAN account stored as XXX before the fix instead of re-keying its history', async () => {
+    // finalize_bank_callback compares stored currencies strictly, so it refuses
+    // this pair until the repair rewrites the stored 'XXX'. The silent
+    // alternative, a fresh dedup scope that re-imports the history, must not
+    // be what this code sends.
+    reconnect([{ uid: 'old-card', name: 'PayPal', currency: 'XXX', enabled: true, dedup_scope: 'legacy-card' }])
+    cashRows = [{ id: 'cash', external_uid: 'old-card', ledger_account: '1940', currency: 'XXX', iban: null }]
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ uid: 'new-card', name: 'PayPal', currency: 'XXX' }] })
+    await complete()
+    expect(plan()).toMatchObject({ noIbanPairs: { 'new-card': 'old-card' }, accounts: [{ currency: 'SEK', dedup_scope: 'legacy-card' }],
+      mirrors: [{ uid: 'new-card', ledger_account: '1940', reuse_cash_account_id: 'cash' }] })
+    expect(mocks.resolve).not.toHaveBeenCalled()
+  })
+})
+
 describe('cross-company and mirror-card defaults', () => {
   it.each(['claimed', 'deselected', 'lookup-failed', 'mirror-card'])('disables new %s accounts without allocating or mirroring', async reason => {
     if (reason === 'lookup-failed') mocks.crossCompany.mockResolvedValue(null)
@@ -283,7 +353,7 @@ describe('cross-company and mirror-card defaults', () => {
     await complete(); expect(plan().accounts[0].enabled).toBe(false); expect(plan().mirrors).toEqual([]); expect(mocks.resolve).not.toHaveBeenCalled()
     if (reason === 'claimed') expect(plan().accounts[0]).toMatchObject({ claimed_by_company_id: 'other', claimed_by_company_name: 'Other company' })
     if (reason === 'deselected') expect(plan().accounts[0].deselected_elsewhere).toBe(true)
-    if (reason === 'mirror-card') expect(plan().accounts[0].mirror_card_account).toBe(true)
+    if (reason === 'mirror-card') expect(plan().accounts[0]).not.toHaveProperty('mirror_card_account')
   })
   it.each([true, false])('preserves the standing enabled=%s choice when another company claims the IBAN', async enabled => {
     reconnect([{ uid: 'old', iban, currency: 'SEK', enabled }])
@@ -296,7 +366,10 @@ describe('cross-company and mirror-card defaults', () => {
     reconnect([{ uid: 'a', iban, currency: 'SEK', enabled: false, claimed_by_company_id: 'old-claim' }])
     await complete(); expect(plan().accounts[0]).not.toHaveProperty('claimed_by_company_id'); expect(plan().accounts[0].enabled).toBe(false)
   })
-  it.each([true, false])('preserves the user mirror-card choice enabled=%s', async enabled => {
+  // A card account switched on before the selection save refused it keeps its
+  // state through a renewal (finalize_bank_callback carries the prior row's
+  // flag); the next selection save is what turns it off.
+  it.each([true, false])('carries a card account\'s standing enabled=%s state through a renewal', async enabled => {
     reconnect([{ uid: 'a', currency: 'SEK', enabled }])
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ uid: 'a', currency: 'SEK', name: 'BOKIO_Debit_Business' }] })
     await complete(); expect(plan().accounts[0].enabled).toBe(enabled)
@@ -320,6 +393,18 @@ describe('bank denial', () => {
     expect(status === 'pending' ? cleanup.delete : cleanup.update).toHaveBeenCalled()
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_denied' }))
     expect(mocks.createSession).not.toHaveBeenCalled()
+  })
+  it.each([
+    ['access_denied', 'Invalid credentials', 'invalid_credentials'],
+    ['server_error', '', 'provider_error'],
+    ['access_denied', 'Cancelled by user', 'cancelled'],
+  ])('logs the bank answer %s %s at warn level with its reason, never error', async (error, description, reason) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await complete({ error, state: 'valid-state', ...(description ? { error_description: description } : {}) })
+    expect(err).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('[enable-banking] Bank authorization denied', expect.objectContaining({ reason }))
+    expect(warn).toHaveBeenCalledWith('[enable-banking] Authorization denied details', expect.objectContaining({ reason }))
   })
   it('keeps an established connection expired when the bank reports session expiry', async () => {
     pending!.status = 'expired'

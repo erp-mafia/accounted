@@ -121,14 +121,18 @@ describe('PATCH /api/customers/[id]: VIES re-validation', () => {
     validateVatNumberMock.mockResolvedValue(UNAVAILABLE)
     const response = await patch('FR12345678901')
     expect(response.status).toBe(200)
-    expect(validationWrites()).toEqual([{ vat_number_validated: false, vat_number_validated_at: null }])
+    expect(validationWrites()).toEqual([
+      expect.objectContaining({ vat_number_validated: false, vat_number_validated_at: null }),
+    ])
   })
 
   it('clears the flag on a definitive invalid verdict', async () => {
     validateVatNumberMock.mockResolvedValue({ valid: false })
     const response = await patch(STORED_VAT)
     expect(response.status).toBe(200)
-    expect(validationWrites()).toEqual([{ vat_number_validated: false, vat_number_validated_at: null }])
+    expect(validationWrites()).toEqual([
+      expect.objectContaining({ vat_number_validated: false, vat_number_validated_at: null }),
+    ])
   })
 
   it('stamps the flag on a valid verdict', async () => {

@@ -242,8 +242,8 @@ describe('combined ack', () => {
 
     expect(sendTextMock).toHaveBeenCalledTimes(1)
     const body = sendTextMock.mock.calls[0][1].body
-    expect(body).toContain('250 EUR')
-    expect(body).not.toContain('250 kr')
+    expect(body).toContain('250\u00a0€')
+    expect(body).not.toMatch(/250\s*kr/)
   })
 
   it('still says kr for SEK and for an unstated currency', async () => {
@@ -258,7 +258,7 @@ describe('combined ack', () => {
     })
 
     await finalizeBurst(mock.supabase as unknown as SupabaseClient, 'conv-1')
-    expect(sendTextMock.mock.calls[0][1].body).toContain('234 kr')
+    expect(sendTextMock.mock.calls[0][1].body).toContain('234\u00a0kr')
   })
 
   it('leaves the rows unacked when the send failed so the sweep retries', async () => {

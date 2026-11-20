@@ -267,6 +267,20 @@ describe('POST /api/invoices/bulk-book', () => {
     expect(mockBookDeferred).not.toHaveBeenCalled()
   })
 
+  it('rejects a credit note imported without a link per item, before anything is issued', async () => {
+    enqueue({ data: accrualSettings, error: null })
+    enqueue({ data: [{ ...makeDraft(UUID_1), total: -500 }], error: null })
+
+    const { body } = await parseJsonResponse<{
+      data: { results: Array<{ id: string; status: string; error_code?: string }> }
+    }>(await bulkRequest([UUID_1]))
+
+    expect(body.data.results).toEqual([
+      expect.objectContaining({ id: UUID_1, status: 'failed', error_code: 'INVOICE_BOOK_NOT_BOOKABLE' }),
+    ])
+    expect(mockIssueAndBook).not.toHaveBeenCalled()
+  })
+
   it('rejects credit notes and non-invoice document types per item', async () => {
     enqueue({ data: accrualSettings, error: null })
     enqueue({
@@ -299,6 +313,23 @@ describe('POST /api/invoices/bulk-book', () => {
     expect(body.data.results[0]).toEqual(
       expect.objectContaining({ status: 'failed', error_code: 'INVOICE_BOOK_INVALID_STATUS' }),
     )
+  })
+
+  it('fails a draft in a locked period per item before it is issued (no F-number spent)', async () => {
+    enqueue({ data: accrualSettings, error: null })
+    enqueue({ data: [makeDraft(UUID_1)], error: null })
+    // Period-lock pre-check: the company lock date covers the invoice date.
+    enqueue({ data: { bookkeeping_locked_through: '2099-12-31' }, error: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { results: Array<{ id: string; status: string; error_code?: string }> }
+    }>(await bulkRequest([UUID_1]))
+
+    expect(status).toBe(200)
+    expect(body.data.results).toEqual([
+      expect.objectContaining({ id: UUID_1, status: 'failed', error_code: 'PERIOD_LOCKED' }),
+    ])
+    expect(mockIssueAndBook).not.toHaveBeenCalled()
   })
 
   it('continues past failures and reports a mixed summary', async () => {

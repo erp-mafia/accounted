@@ -1,23 +1,33 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { fetchTrialBalanceChart, generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { CashFlowTaxAllocationError } from '@/lib/reports/cash-flow-tax'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
+import { registerWriteDownsByAccount, writeDownMovement } from '@/lib/bokslut/assets/value-adjustments'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
+import type { DeferredTaxMovement } from '@/lib/bokslut/tax-provision/deferred-tax-service'
 import { roundOre } from '@/lib/money'
+import { pickPreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import {
+  k2LegalFormOf,
   mapTrialBalancesToK2,
+  type K2LegalForm,
   type K2MappingResult,
   type TrialBalancePair,
 } from '@/lib/bokslut/ixbrl/k2-mapper'
 import { buildBrRows, buildRrRows } from './statement-rows'
 import { getNarrative, type NarrativeRow } from './narrative-service'
+import { loadRegisterNoteTexts } from '@/lib/commitments/disclosures'
+import {
+  effectiveDisclosureTexts,
+  registerOverrideWarnings,
+  type RegisterDisclosureTexts,
+} from './register-disclosures'
 import { applyNoteOverrides, normalizeNoteOverrides } from './note-overrides'
 import {
   anyAssetHasComponents,
-  buildEquityChangesNote,
   buildK3RedovisningsPrinciper,
   buildMateriellaAnlaggningsNot,
   buildUppskjutenSkattNot,
@@ -25,9 +35,26 @@ import {
 import {
   buildAnlaggningstillgangarNote,
   computeRollforwardTotals,
+  depreciationPrincipleLines,
+  holdsWriteDowns,
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
-import { computeAssetNoteFigures, loadPostedSchedules } from './asset-note-figures'
+import {
+  computeAssetNoteFigures,
+  hasComponentRows,
+  loadPostedSchedules,
+  loadTransitionSplitOpenings,
+  noteAsset,
+} from './asset-note-figures'
+import { k2EquityPosts, loadEquitySpecification } from './equity-specification'
+import { K3_SPLITS, k3EquityPosts, toK3Presentation } from './k3-presentation'
+import { USER_CLASSIFIABLE_KINDS, type EquityMovementKind } from './equity-kinds'
+import { collectDisclosureFacts, normalizeDisclosureAnswers, type DisclosureAnswers, type DisclosureFacts } from './disclosures'
+import {
+  buildFinancialFixedAssetsNote,
+  buildTangibleImpairmentNote,
+  tangibleImpairmentBalance,
+} from './ledger-fixed-asset-notes'
 import { hasMedelantalOverride, resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
 import type {
   ArsredovisningData,
@@ -35,8 +62,16 @@ import type {
   FlerarsoversiktRow,
   NoteEntry,
   KassaflodesAnalysisSummary,
+  MemberDisclosures,
 } from './types'
-import type { AccountingFramework, Asset, TrialBalanceRow } from '@/types'
+import type { Asset, TrialBalanceRow } from '@/types'
+
+import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
+import {
+  getFiscalPeriodFramework,
+  previousYearFrameworkOf,
+  type PreviousYearFramework,
+} from '@/lib/company/accounting-framework'
 
 /** Warning when the K3 kassaflödesanalys cannot be generated. Exported so
  *  buildCanonicalAnnualReport can drop it when the statement is omitted by
@@ -53,6 +88,51 @@ export function k3ContentsNotice(hasCashFlow: boolean): string {
     + (hasCashFlow ? 'kassaflödesanalys, förändring av eget kapital och utökade noter' : 'förändring av eget kapital och utökade noter')
     + ': granska innehållet mot er specifika redovisning innan inlämning.'
   )
+}
+
+/**
+ * The statements an annual report was built from, handed on so the iXBRL
+ * input reuses them instead of building its own trial balances and mapping
+ * (buildIxbrlInput). Not part of ArsredovisningData: the data is versioned
+ * and hashed, the statements are only how it was computed.
+ */
+export interface AnnualReportStatements {
+  /** The K2 mapping of the current year against the comparison year. */
+  mapping: K2MappingResult
+  /**
+   * The comparison year (the year ending the day before this one starts,
+   * pickPreviousFiscalPeriod), null when there is none. `loaded` is false when its trial balances could not be built:
+   * the statements then carry no comparison column.
+   */
+  comparison: { id: string; period_start: string; period_end: string; loaded: boolean } | null
+}
+
+/** Registered share capital behind the Aktiekapital note (ÅRL 5 kap. 14 §). */
+export interface ShareCapital {
+  aktiekapital: number
+  antalAktier: number
+}
+
+/**
+ * What a K3 report hands the model for the steps that need the size class
+ * and the compliance profile (model.ts): the facts of the books for the
+ * disclosure matrix, the user's answers, and what Accounted knows about the
+ * previous year's framework (the first-K3-year check).
+ */
+export interface K3BuildContext {
+  facts: Omit<DisclosureFacts, 'publicCompany'>
+  answers: DisclosureAnswers
+  previousYear: PreviousYearFramework
+}
+
+export interface ArsredovisningBuild {
+  data: ArsredovisningData
+  statements: AnnualReportStatements
+  /** K3 only: the inputs of the disclosure matrix and the K3 scope checks. */
+  k3?: K3BuildContext | null
+  /** The figures the Aktiekapital note prints, so the iXBRL document can tag
+   *  its amount; null when there is no such note. */
+  shareCapital?: ShareCapital | null
 }
 
 /**
@@ -74,6 +154,20 @@ export async function buildArsredovisningData(
   fiscalPeriodId: string,
   overrides: Partial<ArsredovisningData['forvaltningsberattelse']> = {},
 ): Promise<ArsredovisningData> {
+  return (await buildArsredovisningReport(supabase, companyId, fiscalPeriodId, overrides)).data
+}
+
+/**
+ * buildArsredovisningData plus the statements it was computed from. Every
+ * trial balance is built once per period and variant, all of them on one
+ * read of the chart of accounts.
+ */
+export async function buildArsredovisningReport(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  overrides: Partial<ArsredovisningData['forvaltningsberattelse']> = {},
+): Promise<ArsredovisningBuild> {
   // The RR/BR are rendered at ÅRL post level from the same K2 risbs mapping
   // that drives the iXBRL filing, never from per-account report rows.
   // Bolagsverket rejects balans-/resultaträkningar med kontonummer, so the
@@ -81,7 +175,10 @@ export async function buildArsredovisningData(
   // variants per year (see TrialBalancePair): the FULL trial balance drives
   // the BR (2099 booked), the PRE-CLOSING one drives the RR (class 3-8
   // still open).
-  const [periodResult, settingsResult, companyResult, periodList, tbFull, tbPreClosing, narrative] = await Promise.all([
+  // One chart read for every trial balance below; the read runs alongside
+  // the first wave, as each balance's own read did.
+  const chart = fetchTrialBalanceChart(supabase, companyId)
+  const [periodResult, settingsResult, companyResult, periodList, tbFull, tbPreClosing, narrative, yearFramework] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('id, name, period_start, period_end, previous_period_id, closing_entry_id')
@@ -90,15 +187,14 @@ export async function buildArsredovisningData(
       .single(),
     supabase
       .from('company_settings')
-      .select('company_name, org_number, city, entity_type')
+      .select('company_name, org_number, registered_office, entity_type')
       .eq('company_id', companyId)
       .maybeSingle(),
-    // Source-of-truth for entity_type and accounting_framework lives on
-    // companies. company_settings.entity_type is a legacy mirror; the
-    // framework column was added later and only exists on companies.
+    // Source-of-truth for entity_type lives on companies.
+    // company_settings.entity_type is a legacy mirror.
     supabase
       .from('companies')
-      .select('entity_type, accounting_framework')
+      .select('entity_type')
       .eq('id', companyId)
       .maybeSingle(),
     fetchAllRows(({ from, to }) =>
@@ -109,23 +205,31 @@ export async function buildArsredovisningData(
         .order('period_start', { ascending: false })
         .range(from, to),
     ),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'exclude-final' }),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include', chart }),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'exclude-final', chart }),
     // Load persisted narrative overrides: replaces the URL-query-param
     // carry from earlier phases. Caller-supplied overrides (passed in via
     // the second arg) still win, so the API can layer per-request edits on
     // top of the saved baseline if needed.
     getNarrative(supabase, companyId, fiscalPeriodId).catch(() => null),
+    // The framework of THIS räkenskapsår (BFNAR 2012:4), never the company's
+    // current choice: a later switch must not rebuild an earlier year.
+    getFiscalPeriodFramework(supabase, companyId, fiscalPeriodId),
   ])
 
   if (periodResult.error || !periodResult.data) {
     throw new Error('Fiscal period not found')
   }
   const period = periodResult.data
+  const accountingFramework = yearFramework.framework
   const settings = settingsResult.data
-  const companyRow = companyResult.data as
-    | { entity_type?: string | null; accounting_framework?: AccountingFramework | null }
-    | null
+  // Avtal och åtaganden (Bolaget rollout): the registers write the
+  // säkerheter, eventualförpliktelser and parent texts; the narrative's
+  // free text overrides them (register-disclosures.ts). Null outside the
+  // rollout and when nothing is registered, which leaves the document as
+  // it was.
+  const registerTexts = await loadRegisterNoteTexts(supabase, companyId, period.period_end)
+  const companyRow = companyResult.data as { entity_type?: string | null } | null
   const companyName = settings?.company_name ?? 'Bolaget'
   const orgNumber = settings?.org_number ?? ''
   // Default to 'unknown' (not 'aktiebolag') when entity_type isn't set:   // otherwise the K2 guard in buildK2Noter would claim K2 for every
@@ -136,24 +240,26 @@ export async function buildArsredovisningData(
     companyRow?.entity_type
     ?? (settings as { entity_type?: string } | null)?.entity_type
     ?? 'unknown'
-  // K3 is opt-in; only AB ever set it. Default to K2 when not set.
-  const accountingFramework: AccountingFramework =
-    companyRow?.accounting_framework === 'k3' ? 'k3' : 'k2'
-
   // company_settings stores the address as flat columns (address_line1,
   // postal_code, city): there is no `address` json column. Selecting one
   // made the whole settings query fail, so every ÅR fell back to "Bolaget"
   // with an empty org number.
-  const city = (settings as { city?: string | null } | null)?.city ?? null
+  //
+  // Säte is its own column (registered_office), never the postal town
+  // (`city`): the two differ whenever the post goes to another town than the
+  // municipality of the seat. Without a säte the report carries none, and
+  // completeness refuses to finalise it (AR-COMPANY-REGISTERED-OFFICE).
+  const registeredOffice =
+    (settings as { registered_office?: string | null } | null)?.registered_office?.trim() || null
 
   // Previous fiscal year → jämförelsesiffror (ÅRL 3:5 §). Resolved from the
   // already-fetched period list; a TB failure downgrades to "no comparison
   // year" with a warning instead of blocking the whole document (partial SIE
   // imports can leave prior years without IB continuity).
   const statementWarnings: string[] = []
-  const prevPeriodRow = period.previous_period_id
-    ? ((periodList ?? []) as PeriodRow[]).find((p) => p.id === period.previous_period_id) ?? null
-    : null
+  // The year ending the day before this one starts (pickPreviousFiscalPeriod):
+  // the link when it is adjacent, the date otherwise, never across a gap.
+  const prevPeriodRow = pickPreviousFiscalPeriod(period, (periodList ?? []) as PeriodRow[])
 
   // Flerårsöversikt window: the current period + up to 3 prior (oldest
   // first). Resolved here so the prior-period trial balances it needs can
@@ -183,8 +289,8 @@ export async function buildArsredovisningData(
     [...tbTargets.values()].map(async (p) => {
       try {
         const [full, preClosing] = await Promise.all([
-          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'include' }),
-          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'exclude-final' }),
+          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'include', chart }),
+          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'exclude-final', chart }),
         ])
         tbPairs.set(p.id, { full: full.rows, preClosing: preClosing.rows })
       } catch {
@@ -216,9 +322,14 @@ export async function buildArsredovisningData(
       `Föregående räkenskapsår (${prevPeriodRow.name}) saknar bokföring i Accounted, så jämförelsesiffrorna visar 0 kr. ÅRL 3 kap. 5 § kräver föregående års belopp för varje post. Bokför eller SIE-importera året innan årsredovisningen lämnas in; ett klarmarkerat år öppnas igen under Inställningar > Bokföring > Räkenskapsår.`,
     )
   }
+  const isForening = entityType === 'ekonomisk_forening'
+  // One equity table for every year the document presents (ÅRL 3 kap.
+  // 10 a-10 b §§): the flerårsöversikt maps its earlier years with it too.
+  const legalForm = k2LegalFormOf(entityType)
   const mapping = mapTrialBalancesToK2(
     { full: tbFull.rows, preClosing: tbPreClosing.rows },
     previousTb,
+    { legalForm },
   )
   const previousPeriod =
     prevPeriodRow && previousTb
@@ -236,20 +347,45 @@ export async function buildArsredovisningData(
   const persistedRd = narrative?.resultatdisposition ?? undefined
   const persistedAgmDate = narrative?.agm_date ?? null
 
-  const flerarsoversikt = buildFlerarsoversikt(overviewSlice, fiscalPeriodId, mapping, tbPairs)
+  const flerarsoversikt = buildFlerarsoversikt(overviewSlice, fiscalPeriodId, mapping, tbPairs, legalForm)
+
+  // K3's own balance sheet posts (K3 4.3, ÅRL bilaga 1), carved out of the
+  // K2 posts: the K2 mapping stays the source of every total, the
+  // resultatdisposition and the iXBRL; a K2 report never passes here.
+  const k3Presentation =
+    accountingFramework === 'k3'
+      ? toK3Presentation(mapping, tbFull.rows, previousTb ? previousTb.full : null)
+      : null
+  const balanceSheetMapping = k3Presentation ?? mapping
 
   const egen_kapital_changes = buildEquityChanges(mapping)
+  // ÅRL 6 kap. 2 § andra stycket, K3 6.3: the changes in equity from the
+  // year's verifikat, tied to the balance sheet below. One builder for K2
+  // and K3 (equity-specification.ts); the K2 iXBRL equity table reads it too.
+  const equity_specification = await loadEquitySpecification(supabase, companyId, {
+    posts: k3Presentation ? k3EquityPosts(legalForm) : k2EquityPosts(legalForm),
+    current: { period, tbRows: tbFull.rows },
+    previous: prevPeriodRow && previousTb
+      ? { period: prevPeriodRow, tbRows: previousTb.full as TrialBalanceRow[] }
+      : null,
+    balanceSheet: balanceSheetMapping,
+    overrides: equityMovementOverridesFrom(narrative?.equity_movement_overrides),
+    placement: k3Presentation && narrative?.equity_statement_separate ? 'separate_statement' : 'management_report',
+  })
+  const memberDisclosures = isForening ? memberDisclosuresFrom(narrative) : null
   const proposedDividend = narrative?.proposed_dividend ?? 0
   const retainedEarnings = mapping.br['BalanseratResultat']?.current ?? 0
   const sharePremiumReserve = mapping.br['Overkursfond']?.current ?? 0
   const currentYearResult = mapping.br['AretsResultatEgetKapital']?.current ?? 0
   const distributableEquity = mapping.totals.frittEgetKapital.current
 
-  // Duplicate-value consistency with the RR (mirrors build-input.ts): the
-  // flerårsöversikt is computed from the income statement (ALL class-3
-  // revenue), but nettoomsättning per ÅRL is strictly 3000-3799. Override
-  // the current + previous year so the FB table ties to the RR two pages
-  // later. Older years have no RR in the document and keep the IS values.
+  // Duplicate-value consistency with the RR (mirrors build-input.ts). Since
+  // #1116 buildFlerarsoversikt maps every year through mapTrialBalancesToK2
+  // on the pre-closing trial balance (Nettoomsattning = 3000-3799), so this
+  // is not a class-3 correction: it pins the current and previous year to
+  // the very mapping the RR is built from, so the FB table ties to the RR
+  // two pages later by construction rather than by a second computation.
+  // Older years have no RR in the document and keep their own mapping.
   if (flerarsoversikt.length > 0) {
     const lastIdx = flerarsoversikt.length - 1
     flerarsoversikt[lastIdx] = {
@@ -278,10 +414,12 @@ export async function buildArsredovisningData(
   // noter warnings so the warnings array order is unchanged.
   let noter: NoteEntry[]
   let noterWarnings: string[]
+  // Faults that make the document wrong as filed: completeness blocks on them.
+  let noterErrors: string[] = []
+  let shareCapital: ShareCapital | null = null
+  let k3Assets: Asset[] = []
+  let k3FixedAssetNoteFromRegister = false
   let kassaflodesanalys: KassaflodesAnalysisSummary | undefined
-  let equity_changes_statement:
-    | { rows: EgenKapitalRow[]; closing_total: number }
-    | undefined
   if (accountingFramework === 'k3') {
     const [noterResult, cashFlowSettled] = await Promise.all([
       buildK3Noter(
@@ -294,6 +432,7 @@ export async function buildArsredovisningData(
         tbFull.rows,
         fiscalPeriodId,
         (periodList ?? []) as PeriodRow[],
+        registerTexts,
       ),
       generateKassaflodesanalys(supabase, companyId, fiscalPeriodId).then(
         (cashFlow) => ({ ok: true as const, cashFlow }),
@@ -304,6 +443,9 @@ export async function buildArsredovisningData(
     // which this override path does not cover).
     noter = applyNoteOverrides(noterResult.notes, normalizeNoteOverrides(narrative?.note_overrides))
     noterWarnings = noterResult.warnings
+    noterErrors = noterResult.errors
+    k3Assets = noterResult.assets
+    k3FixedAssetNoteFromRegister = noterResult.fixedAssetNoteFromRegister
     if (cashFlowSettled.ok) {
       const { cashFlow } = cashFlowSettled
       // Strip fiscal_period_id from the embedded report: period info is
@@ -316,6 +458,7 @@ export async function buildArsredovisningData(
         investerings: cashFlow.investerings,
         finansierings: cashFlow.finansierings,
         total_cash_flow: cashFlow.total_cash_flow,
+        unclassified_accounts: cashFlow.unclassified_accounts,
         reconciliation: cashFlow.reconciliation,
       }
     } else {
@@ -325,11 +468,6 @@ export async function buildArsredovisningData(
         ? K3_CASH_FLOW_TAX_ALLOCATION_WARNING
         : K3_CASH_FLOW_FAILED_WARNING)
     }
-
-    // Equity-changes statement: derived from the post-level mapping. We
-    // reuse buildEquityChangesNote's roll-forward to keep one source of
-    // truth for the closing total.
-    equity_changes_statement = buildK3EquityChangesStatement(mapping)
   } else {
     const k2Noter = await buildK2Noter(
       supabase,
@@ -341,13 +479,39 @@ export async function buildArsredovisningData(
       tbFull.rows,
       fiscalPeriodId,
       (periodList ?? []) as PeriodRow[],
+      yearFramework.change_reason,
+      registerTexts,
     )
     noter = k2Noter.notes
     noterWarnings = k2Noter.warnings
+    noterErrors = k2Noter.errors
+    shareCapital = k2Noter.shareCapital
   }
 
   const resultatrakning = buildRrRows(mapping)
-  const brRows = buildBrRows(mapping)
+  const brRows = buildBrRows(balanceSheetMapping)
+
+  // K3: the inputs of the disclosure matrix and of the K3 scope checks,
+  // evaluated by the model once the size class and the profile are known.
+  let k3: K3BuildContext | null = null
+  if (accountingFramework === 'k3') {
+    const shareCapitalRow = brRows.equityLiabilities.find((row) => row.semantic_key === 'balance_sheet_share_capital')?.current ?? null
+    const equityRow = brRows.equityLiabilities.find((row) => row.semantic_key === 'balance_sheet_equity_total')?.current ?? null
+    const { publicCompany: _publicCompany, ...facts } = collectDisclosureFacts({
+      tbFullRows: tbFull.rows,
+      assets: k3Assets,
+      equitySpecification: equity_specification,
+      fixedAssetNoteFromRegister: k3FixedAssetNoteFromRegister,
+      equityBelowHalfShareCapital:
+        shareCapitalRow !== null && equityRow !== null && shareCapitalRow > 0 && equityRow * 2 < shareCapitalRow,
+      publicCompany: null,
+    })
+    k3 = {
+      facts,
+      answers: k3DisclosureAnswers(narrative),
+      previousYear: await previousYearFrameworkOf(supabase, companyId, prevPeriodRow?.id ?? null),
+    }
+  }
   const balansrakning = {
     assets: brRows.assets,
     total_assets: mapping.totals.tillgangar.current,
@@ -361,10 +525,21 @@ export async function buildArsredovisningData(
   // accounts whose balances are MISSING from the document, RR ≠ 2099,
   // obalans, reclass review nudges), surfacing them pre-download is what
   // keeps a non-fileable PDF from reaching Bolagsverket.
-  const warnings: string[] = [...statementWarnings, ...mapping.warnings, ...noterWarnings]
-  if (entityType !== 'aktiebolag' && entityType !== 'unknown') {
+  const warnings: string[] = [
+    ...statementWarnings,
+    ...balanceSheetMapping.warnings,
+    ...noterWarnings,
+    ...equity_specification.warnings,
+    ...registerOverrideWarnings(narrative, registerTexts),
+  ]
+  if (entityType !== 'aktiebolag' && entityType !== 'ekonomisk_forening' && entityType !== 'unknown') {
     warnings.push(
       'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
+    )
+  }
+  if (isForening && accountingFramework === 'k3') {
+    warnings.push(
+      'K3-dokumentet för ekonomisk förening använder aktiebolagets uppställning för förändringar i eget kapital: granska insatsposterna manuellt innan inlämning.',
     )
   }
   if (entityType === 'aktiebolag' && accountingFramework === 'k3') {
@@ -385,18 +560,23 @@ export async function buildArsredovisningData(
       'Företagsform saknas i inställningarna: fyll i Inställningar → Företag för att få rätt redovisningsprinciper i not 1.',
     )
   }
+  // The adopting meeting is the årsstämma of an aktiebolag (ABL 7 kap. 10 §)
+  // or the ordinarie föreningsstämma of an ekonomisk förening (EFL 6 kap.
+  // 9 §); both fall within six months of the fiscal year end.
+  const meetingLabel = isForening ? 'föreningsstämma' : 'årsstämma'
+  const meetingRule = isForening ? 'EFL 6 kap. 9 §' : 'ABL 7 kap. 10 §'
   if (!persistedAgmDate) {
     warnings.push(
-      'Datum för årsstämma saknas. Fastställelseintyget i PDF:en lämnas tomt på datumraden tills det fylls i nedan.',
+      `Datum för ${meetingLabel} saknas. Fastställelseintyget i PDF:en lämnas tomt på datumraden tills det fylls i nedan.`,
     )
   } else {
-    // ÅRL 8 kap 3 § + ÅRL 7 kap 10 §: AGM must be held after the räkenskapsår
-    // ends and within 6 months of period end (för privat AB). A date before
-    // period_end is logically impossible; after the deadline is a legally
-    // defective fastställelseintyg.
+    // ÅRL 8 kap 3 §: the meeting must be held after the räkenskapsår ends
+    // and within 6 months of period end. A date before period_end is
+    // logically impossible; after the deadline is a legally defective
+    // fastställelseintyg.
     if (persistedAgmDate <= period.period_end) {
       warnings.push(
-        `Datum för årsstämma (${persistedAgmDate}) ligger på eller före räkenskapsårets slut (${period.period_end}): fastställelseintyget blir juridiskt felaktigt. Kontrollera datumet.`,
+        `Datum för ${meetingLabel} (${persistedAgmDate}) ligger på eller före räkenskapsårets slut (${period.period_end}): fastställelseintyget blir juridiskt felaktigt. Kontrollera datumet.`,
       )
     } else {
       const periodEndDate = new Date(`${period.period_end}T00:00:00Z`)
@@ -405,18 +585,18 @@ export async function buildArsredovisningData(
       const deadlineIso = deadline.toISOString().slice(0, 10)
       if (persistedAgmDate > deadlineIso) {
         warnings.push(
-          `Datum för årsstämma (${persistedAgmDate}) är efter 6-månadersgränsen (${deadlineIso}). För privat AB ska årsstämman hållas inom 6 månader från räkenskapsårets slut (ÅRL 7 kap 10 §).`,
+          `Datum för ${meetingLabel} (${persistedAgmDate}) är efter 6-månadersgränsen (${deadlineIso}). ${isForening ? 'Ordinarie föreningsstämma' : 'Årsstämman'} ska hållas inom 6 månader från räkenskapsårets slut (${meetingRule}).`,
         )
       }
     }
   }
 
-  return {
+  const data: ArsredovisningData = {
     company: {
       name: companyName,
       org_number: orgNumber,
       entity_type: entityType,
-      city,
+      registered_office: registeredOffice,
     },
     fiscal_period: {
       id: period.id,
@@ -430,7 +610,9 @@ export async function buildArsredovisningData(
       description:
         overrides.description ??
         persistedDescription ??
-        `${companyName} bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.`,
+        (isForening
+          ? `${companyName} bedriver verksamhet enligt ändamålet i föreningens stadgar.`
+          : `${companyName} bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.`),
       important_events:
         overrides.important_events ??
         persistedEvents ??
@@ -452,15 +634,21 @@ export async function buildArsredovisningData(
         carried_forward: distributableEquity - proposedDividend,
       },
       agm_date: persistedAgmDate,
+      // Only present for an ekonomisk förening: an absent key keeps the
+      // content hash of every existing aktiebolag report unchanged.
+      ...(memberDisclosures ? { member_disclosures: memberDisclosures } : {}),
       agm_disposition_outcome: narrative?.agm_disposition_outcome ?? null,
       agm_disposition_decision: narrative?.agm_disposition_decision ?? null,
     },
     resultatrakning,
     warnings,
+    // Present only when there is one: an absent key keeps the content hash of
+    // every report without a fault unchanged.
+    ...(noterErrors.length > 0 ? { errors: noterErrors } : {}),
     balansrakning,
     noter,
     kassaflodesanalys,
-    equity_changes_statement,
+    equity_specification,
     signatures: [], // populated by signature-flow service in a later phase step
     disclosures: {
       long_term_debt_over_five_years: narrative?.long_term_debt_over_five_years ?? null,
@@ -469,10 +657,29 @@ export async function buildArsredovisningData(
       parent_company_name: narrative?.parent_company_name ?? null,
       parent_company_org_number: narrative?.parent_company_org_number ?? null,
       parent_company_city: narrative?.parent_company_city ?? null,
+      // Present only when a register has something to say: an absent key
+      // keeps the content hash of every other report unchanged.
+      ...(registerTexts ? { from_registers: registerTexts } : {}),
       medelantal_anstallda_override: narrative?.medelantal_anstallda_override ?? null,
+      ...(memberDisclosures
+        ? {
+            member_count_change: memberDisclosures.member_count_change,
+            insatser_repayable_next_year: memberDisclosures.insatser_repayable_next_year,
+            forlagsinsatser_dividend_right: memberDisclosures.forlagsinsatser_dividend_right,
+            forlagsinsatser_redeemable_two_years: memberDisclosures.forlagsinsatser_redeemable_two_years,
+          }
+        : {}),
       omit_kassaflodesanalys: narrative?.omit_kassaflodesanalys ?? false,
       kassaflodesanalys_omission_confirmed:
         narrative?.kassaflodesanalys_omission_confirmed ?? false,
+      // K3 only, so a K2 report's data and content hash are unchanged.
+      ...(accountingFramework === 'k3'
+        ? {
+            disclosure_answers: k3DisclosureAnswers(narrative),
+            equity_movement_overrides: equityMovementOverridesFrom(narrative?.equity_movement_overrides),
+            equity_statement_separate: narrative?.equity_statement_separate ?? false,
+          }
+        : {}),
       confirmations: {
         long_term_debt_over_five_years:
           narrative?.long_term_debt_over_five_years_confirmed ?? false,
@@ -482,6 +689,50 @@ export async function buildArsredovisningData(
       },
     },
   }
+  return {
+    data,
+    statements: {
+      mapping,
+      comparison: prevPeriodRow
+        ? {
+            id: prevPeriodRow.id,
+            period_start: prevPeriodRow.period_start,
+            period_end: prevPeriodRow.period_end,
+            loaded: previousTb !== null,
+          }
+        : null,
+    },
+    shareCapital,
+    k3,
+  }
+}
+
+/**
+ * The stored answers to the K3 disclosure matrix. A text the user wrote for
+ * the note on väsentliga händelser efter balansdagen before the matrix
+ * existed (note_overrides) stands as the answer until the matrix question is
+ * answered, so no user text is dropped.
+ */
+function k3DisclosureAnswers(
+  narrative: { disclosure_answers?: unknown; note_overrides?: unknown } | null | undefined,
+): DisclosureAnswers {
+  const answers = normalizeDisclosureAnswers(narrative?.disclosure_answers)
+  const legacyEventsAfter = normalizeNoteOverrides(narrative?.note_overrides).vasentliga_handelser_efter_balansdagen
+  if (answers[EVENTS_AFTER_REQUIREMENT] || !legacyEventsAfter) return answers
+  return { ...answers, [EVENTS_AFTER_REQUIREMENT]: { applies: true, text: legacyEventsAfter } }
+}
+
+const EVENTS_AFTER_REQUIREMENT = 'not.handelser_efter_balansdagen'
+
+/** The stored classifications, keeping only kinds a user may assign. */
+function equityMovementOverridesFrom(value: unknown): Record<string, EquityMovementKind> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const allowed = new Set<string>(USER_CLASSIFIABLE_KINDS)
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, EquityMovementKind] => typeof entry[1] === 'string' && allowed.has(entry[1]),
+    ),
+  )
 }
 
 interface PeriodRow {
@@ -507,6 +758,8 @@ export function resolveMedelantalNote(args: {
   medelantal: number
   hasOverride: boolean
   tbFullRows: Array<Pick<TrialBalanceRow, 'account_number' | 'period_debit' | 'period_credit'>>
+  /** "Bolaget" for an aktiebolag, "Föreningen" for an ekonomisk förening. */
+  subject?: string
 }): { body: string; warning: string | null } {
   if (args.medelantal > 0) {
     return {
@@ -529,7 +782,10 @@ export function resolveMedelantalNote(args: {
         'Löner är bokförda på konto 7000-7399 men medelantal anställda kunde inte beräknas (inga anställda registrerade under Löner): ange antalet under Årsredovisning (not Medelantal anställda).',
     }
   }
-  return { body: 'Bolaget har inte haft några anställda under räkenskapsåret.', warning: null }
+  return {
+    body: `${args.subject ?? 'Bolaget'} har inte haft några anställda under räkenskapsåret.`,
+    warning: null,
+  }
 }
 
 export function calculateSoliditet(mapping: K2MappingResult): number | null {
@@ -552,6 +808,7 @@ function buildFlerarsoversikt(
   currentPeriodId: string,
   currentMapping: K2MappingResult,
   tbPairs: Map<string, TrialBalancePair | null>,
+  legalForm: K2LegalForm,
 ): FlerarsoversiktRow[] {
   const rows: FlerarsoversiktRow[] = []
   for (const p of overviewSlice) {
@@ -560,7 +817,13 @@ function buildFlerarsoversikt(
       if (p.id !== currentPeriodId) {
         const pair = tbPairs.get(p.id)
         if (!pair) throw new Error('trial balance unavailable')
-        mapping = mapTrialBalancesToK2(pair, null)
+        // A prior year that was never closed in these books has its result
+        // derived, as in the balance sheet's comparison column: soliditet
+        // would otherwise be computed on equity without that year's result.
+        // Same equity table as the current year: an ekonomisk förening's
+        // soliditet is read from medlemsinsatser and förlagsinsatser every
+        // year, never from the aktiebolag table.
+        mapping = mapTrialBalancesToK2(pair, null, { currentIsPriorYear: true, legalForm })
       }
       const netRevenue = mapping.rr['Nettoomsattning']?.current ?? 0
       const resultAfterFinancial = mapping.totals.resultatEfterFinansiellaPoster.current
@@ -588,6 +851,23 @@ function buildFlerarsoversikt(
   return rows
 }
 
+/** ÅRL 6 kap. 3 § inputs for an ekonomisk förening, read from the narrative row. */
+function memberDisclosuresFrom(
+  narrative: {
+    member_count_change?: string | null
+    insatser_repayable_next_year?: number | null
+    forlagsinsatser_dividend_right?: string | null
+    forlagsinsatser_redeemable_two_years?: number | null
+  } | null,
+): MemberDisclosures {
+  return {
+    member_count_change: narrative?.member_count_change ?? null,
+    insatser_repayable_next_year: narrative?.insatser_repayable_next_year ?? null,
+    forlagsinsatser_dividend_right: narrative?.forlagsinsatser_dividend_right ?? null,
+    forlagsinsatser_redeemable_two_years: narrative?.forlagsinsatser_redeemable_two_years ?? null,
+  }
+}
+
 /**
  * Förvaltningsberättelsens "Förändring av eget kapital" table, post-level
  * labels only (no kontonummer). Only genuine equity posts (20xx) appear;
@@ -595,16 +875,27 @@ function buildFlerarsoversikt(
  * when the account-row version was replaced by the mapping-driven one.
  */
 function buildEquityChanges(mapping: K2MappingResult): EgenKapitalRow[] {
-  const posts: Array<{ label: string; concept: string; alwaysShow?: boolean }> = [
-    { label: 'Aktiekapital', concept: 'Aktiekapital', alwaysShow: true },
-    { label: 'Ej registrerat aktiekapital', concept: 'EjRegistreratAktiekapital' },
-    { label: 'Bunden överkursfond', concept: 'OverkursfondBunden' },
-    { label: 'Uppskrivningsfond', concept: 'Uppskrivningsfond' },
-    { label: 'Reservfond', concept: 'Reservfond' },
-    { label: 'Överkursfond', concept: 'Overkursfond' },
-    { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
-    { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
-  ]
+  const posts: Array<{ label: string; concept: string; alwaysShow?: boolean }> =
+    mapping.legalForm === 'ekonomisk_forening'
+      ? [
+          // ÅRL 3 kap. 10 b §: insatser as their own posts, no share capital.
+          { label: 'Medlemsinsatser', concept: 'Medlemsinsatser', alwaysShow: true },
+          { label: 'Förlagsinsatser', concept: 'Forlagsinsatser' },
+          { label: 'Uppskrivningsfond', concept: 'Uppskrivningsfond' },
+          { label: 'Reservfond', concept: 'Reservfond' },
+          { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
+          { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
+        ]
+      : [
+          { label: 'Aktiekapital', concept: 'Aktiekapital', alwaysShow: true },
+          { label: 'Ej registrerat aktiekapital', concept: 'EjRegistreratAktiekapital' },
+          { label: 'Bunden överkursfond', concept: 'OverkursfondBunden' },
+          { label: 'Uppskrivningsfond', concept: 'Uppskrivningsfond' },
+          { label: 'Reservfond', concept: 'Reservfond' },
+          { label: 'Överkursfond', concept: 'Overkursfond' },
+          { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
+          { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
+        ]
   const rows: EgenKapitalRow[] = []
   for (const post of posts) {
     const amount = mapping.br[post.concept]?.current ?? 0
@@ -629,14 +920,24 @@ async function buildRollforwardAssets(
   fiscalPeriodId: string,
 ): Promise<AnlaggningAsset[]> {
   if (assets.length === 0) return []
-  const schedules = await loadPostedSchedules(supabase, companyId)
+  // Only an asset with components can have been split at the transition to K3.
+  const [schedules, transitionSplits] = await Promise.all([
+    loadPostedSchedules(supabase, companyId),
+    assets.some(hasComponentRows) ? loadTransitionSplitOpenings(supabase, companyId) : Promise.resolve([]),
+  ])
   const figures = computeAssetNoteFigures({
     assets,
     postedSchedules: schedules,
     fiscalPeriods: allPeriods,
     currentPeriodId: fiscalPeriodId,
+    transitionSplits,
   })
-  return assets.map((a) => ({
+  const period = allPeriods.find((row) => row.id === fiscalPeriodId)
+  const splitByAsset = new Map(transitionSplits.map((split) => [split.asset_id, split]))
+  // A year before a K3 transition split reads the plain asset it was then.
+  const asOfPeriod = (asset: Asset) =>
+    period ? noteAsset(asset, splitByAsset.get(asset.id), period.period_start) : asset
+  return assets.map(asOfPeriod).map((a) => ({
     category: a.category,
     acquisition_date: a.acquisition_date,
     acquisition_cost: a.acquisition_cost,
@@ -644,6 +945,8 @@ async function buildRollforwardAssets(
     useful_life_months: a.useful_life_months,
     disposed_at: a.disposed_at,
     figures: figures.get(a.id) ?? { ibAck: 0, aretsAvskrivning: 0, avgaendeAck: 0 },
+    // ÅRL 5 kap. 8 § p. 5: the year's nedskrivningar, from posted vouchers.
+    ...(period ? { writeDowns: writeDownMovement(a, period.period_start, period.period_end) } : {}),
   }))
 }
 
@@ -651,22 +954,37 @@ async function buildRollforwardAssets(
  * Cross-check the roll-forward note's closing book value against the
  * balansräkning (full TB net of accounts 1000-1299: immateriella +
  * materiella anläggningstillgångar; 13xx financial assets are outside the
- * note). Returns a user-facing warning when they diverge by more than 1 kr,
- * which is the exact inconsistency ÅRL 5:8 § forbids in a filed document.
+ * note). Returns the user-facing message when they diverge by more than
+ * 1 kr, which is the exact inconsistency ÅRL 5:8 § forbids in a filed
+ * document. Blocking when the register holds write-downs: the note then
+ * reports nedskrivningar that do not tie to the books, so the document may
+ * not be locked as it stands; otherwise a warning (a register approximated
+ * before onboarding can differ by design).
  */
-function rollforwardTieOutWarning(
+function rollforwardTieOut(
   rollforwardAssets: AnlaggningAsset[],
   tbFullRows: TrialBalanceRow[],
   periodStart: string,
   periodEnd: string,
-): string | null {
+  /**
+   * Accumulated nedskrivningar booked outside the register, net debit: the
+   * ledger note discloses them, so the comparison counts them once
+   * (tangibleImpairmentBalance). The register's own are in the roll-forward.
+   */
+  impairments = 0,
+): { message: string; blocking: boolean } | null {
   const totals = computeRollforwardTotals(rollforwardAssets, periodStart, periodEnd)
   const tbNet = tbFullRows
     .filter((r) => r.account_number >= '1000' && r.account_number < '1300')
     .reduce((sum, r) => sum + (r.closing_debit || 0) - (r.closing_credit || 0), 0)
-  if (Math.abs(totals.ubRedovisat - tbNet) <= 1) return null
+  if (Math.abs(totals.ubRedovisat + impairments - tbNet) <= 1) return null
   const fmtKr = (n: number) => Math.round(n).toLocaleString('sv-SE')
-  return `Anläggningsnotens utgående redovisade värde (${fmtKr(totals.ubRedovisat)} kr) stämmer inte med balansräkningens bokförda värde för konto 1000-1299 (${fmtKr(tbNet)} kr). Kontrollera att anläggningsregistret är komplett och att årets avskrivningar är bokförda.`
+  const message = `Anläggningsnotens utgående redovisade värde (${fmtKr(totals.ubRedovisat + impairments)} kr) stämmer inte med balansräkningens bokförda värde för konto 1000-1299 (${fmtKr(tbNet)} kr). Kontrollera att anläggningsregistret är komplett och att årets avskrivningar är bokförda.`
+  if (!holdsWriteDowns(rollforwardAssets)) return { message, blocking: false }
+  return {
+    message: `${message} Anläggningsregistret har nedskrivningar (ÅRL 4 kap. 5 §): noten måste stämma mot balansräkningen innan årsredovisningen kan låsas. Kontrollera att nedskrivningarna och deras återföringar är bokförda på tillgångarnas konton.`,
+    blocking: true,
+  }
 }
 
 async function buildK2Noter(
@@ -679,20 +997,36 @@ async function buildK2Noter(
   tbFullRows: TrialBalanceRow[],
   fiscalPeriodId: string,
   allPeriods: PeriodRow[],
-): Promise<{ notes: NoteEntry[]; warnings: string[] }> {
+  /** BFNAR 2012:4 punkt 3: the stated reasons when the year switched from K3 to K2. */
+  frameworkSwitchReason: string | null = null,
+  registerTexts: RegisterDisclosureTexts | null = null,
+): Promise<{ notes: NoteEntry[]; warnings: string[]; errors: string[]; shareCapital: ShareCapital | null }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
+  const errors: string[] = []
+  let shareCapital: ShareCapital | null = null
   // Note 1: framework. Only claim K2 explicitly when we know the company is
   // an AB and using K2: otherwise emit a generic principles note so the
   // ÅR doesn't falsely assert a framework the company isn't on.
-  // K3 election isn't yet tracked separately; we treat any non-AB as not-K2.
+  // Every form that prepares an årsredovisning here (aktiebolag, ekonomisk
+  // förening) is on K2 in this builder; an unknown or other form gets the
+  // generic wording so the note never asserts a framework it is not on.
+  const preparesAnnualReport = isEntityType(entityType) && preparesArsredovisning(entityType)
   const isAbK2 = entityType === 'aktiebolag'
+  const principles = preparesAnnualReport
+    ? 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).'
+    : 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd.'
   notes.push({
     number: 1,
     title: 'Redovisnings- och värderingsprinciper',
-    body: isAbK2
-      ? 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).'
-      : 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd.',
+    // A switch of K-regelverk is a change of accounting principle, and a
+    // company that left K3 for K2 states its reasons in a note (BFNAR 2012:4
+    // punkt 3). It sits in the principles note, the note the iXBRL document
+    // tags as RedovisningsVarderingsprinciper; without a switch the body is
+    // unchanged.
+    body: frameworkSwitchReason?.trim()
+      ? `${principles}\n\nByte av regelverk: Från och med detta räkenskapsår tillämpar företaget BFNAR 2016:10 (K2) i stället för BFNAR 2012:1 (K3). Skälen för bytet: ${frameworkSwitchReason.trim()}`
+      : principles,
   })
 
   // Note: aktiekapital. K2 punkt 18.x requires AB to disclose share-capital
@@ -728,11 +1062,13 @@ async function buildK2Noter(
     const aktiekapital = ak?.aktiekapital ?? null
     const antalAktier = ak?.antal_aktier ?? null
     // Kvotvärde is defined (ABL 1 kap 6 §) as aktiekapital / antal aktier;
-    // deriving it here keeps the filed note internally consistent. ÅRL
-    // 5 kap 14 § requires BOTH the registered amount and the number of
-    // shares, so a partial pair is treated as missing (warn, no note).
+    // deriving it here keeps the filed note internally consistent. The note
+    // is voluntary for a mindre företag; ÅRL 5 kap. 34 § requires the number
+    // of shares and the kvotvärde of a större företag, so a partial pair is
+    // treated as missing (warn, no note).
     if (aktiekapital && antalAktier) {
       const kvotvarde = roundOre(aktiekapital / antalAktier)
+      shareCapital = { aktiekapital, antalAktier }
       notes.push({
         number: notes.length + 1,
         title: 'Aktiekapital',
@@ -756,37 +1092,13 @@ async function buildK2Noter(
 
   // Avskrivningstider: derive from asset register (supplementary
   // disclosure; the statutory ÅRL 5:8 § roll-forward follows below).
-  if (assets.length > 0) {
-    const byCategory = new Map<string, Set<number>>()
-    for (const a of assets) {
-      if (a.disposed_at) continue
-      const years = Math.round(a.useful_life_months / 12)
-      if (!byCategory.has(a.category)) byCategory.set(a.category, new Set())
-      byCategory.get(a.category)!.add(years)
-    }
-    if (byCategory.size > 0) {
-      const lines: string[] = ['Avskrivningar görs linjärt över bedömd nyttjandeperiod:']
-      const categoryLabels: Record<string, string> = {
-        immaterial: 'Immateriella anläggningstillgångar',
-        building: 'Byggnader',
-        land_improvement: 'Markanläggningar',
-        machinery: 'Maskiner',
-        equipment: 'Inventarier',
-        vehicle: 'Fordon',
-        computer: 'Datorer',
-        other_tangible: 'Övriga materiella anläggningstillgångar',
-      }
-      for (const [cat, yearsSet] of byCategory.entries()) {
-        const yrs = Array.from(yearsSet).sort((a, b) => a - b)
-        const yrsLabel = yrs.length === 1 ? `${yrs[0]} år` : `${yrs[0]}-${yrs[yrs.length - 1]} år`
-        lines.push(`• ${categoryLabels[cat] ?? cat}: ${yrsLabel}`)
-      }
-      notes.push({
-        number: notes.length + 1,
-        title: 'Avskrivningar',
-        body: lines.join('\n'),
-      })
-    }
+  const depreciationLines = depreciationPrincipleLines(assets)
+  if (depreciationLines.length > 0) {
+    notes.push({
+      number: notes.length + 1,
+      title: 'Avskrivningar',
+      body: depreciationLines.join('\n'),
+    })
   }
 
   // Anläggningstillgångar roll-forward (ÅRL 5:8 §). Per-category IB →
@@ -807,16 +1119,23 @@ async function buildK2Noter(
     periodStart,
     periodEnd,
   })
+  // One source per nedskrivning, as under K3: the register's in the
+  // roll-forward, the rest of the ledger's write-down accounts in their own
+  // note (a write-down booked by hand is disclosed, never twice).
+  const registeredWriteDowns = registerWriteDownsByAccount(assets, periodStart, periodEnd)
   if (rollforwardNote) {
     notes.push(rollforwardNote)
-    const tieOut = rollforwardTieOutWarning(
+    const tieOut = rollforwardTieOut(
       rollforwardAssets,
       tbFullRows,
       periodStart,
       periodEnd,
+      tangibleImpairmentBalance(tbFullRows, registeredWriteDowns),
     )
-    if (tieOut) warnings.push(tieOut)
+    if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)
   }
+  const impairmentNote = buildTangibleImpairmentNote(tbFullRows, notes.length + 1, registeredWriteDowns)
+  if (impairmentNote) notes.push(impairmentNote)
 
   // Medelantal anställda: FTE-weighted average per ÅRL 5:20 §. We fetch the
   // full employment-window data because the column 'is_active' doesn't exist
@@ -837,8 +1156,9 @@ async function buildK2Noter(
     periodStart,
     periodEnd,
   )
-  if (medelantal > 0 || entityType === 'aktiebolag') {
+  if (medelantal > 0 || (isEntityType(entityType) && preparesArsredovisning(entityType))) {
     const medelantalNote = resolveMedelantalNote({
+      subject: entityType === 'ekonomisk_forening' ? 'Föreningen' : 'Bolaget',
       medelantal,
       hasOverride: hasMedelantalOverride(narrative?.medelantal_anstallda_override),
       tbFullRows,
@@ -866,30 +1186,32 @@ async function buildK2Noter(
   })
 
   // Ställda säkerheter (ÅRL 5:14 §): separate disclosure from
-  // eventualförpliktelser. Manual override on arsredovisning_narratives,
-  // defaulting to "Inga.".
+  // eventualförpliktelser. The register in Avtal och åtaganden writes it;
+  // the manual text on arsredovisning_narratives overrides; "Inga." when
+  // neither says anything (register-disclosures.ts).
+  const disclosed = effectiveDisclosureTexts(narrative, registerTexts)
   notes.push({
     number: notes.length + 1,
     title: 'Ställda säkerheter',
-    body: narrative?.securities_pledged?.trim() || 'Inga.',
+    body: disclosed.securities_pledged || 'Inga.',
   })
 
   // Eventualförpliktelser (ÅRL 5:15 §)
   notes.push({
     number: notes.length + 1,
     title: 'Eventualförpliktelser',
-    body: narrative?.contingent_liabilities?.trim() || 'Inga.',
+    body: disclosed.contingent_liabilities || 'Inga.',
   })
 
   // Koncernförhållanden (BFNAR 2016:10 kap. 19). Emitted only when a parent
-  // company is configured: companies without a parent skip this note.
-  const parentName = narrative?.parent_company_name?.trim()
+  // company is configured or registered: companies without one skip it.
+  const parentName = disclosed.parent_company_name
   if (parentName) {
     const parts: string[] = [`Moderföretag: ${parentName}.`]
-    if (narrative?.parent_company_org_number)
-      parts.push(`Organisationsnummer: ${narrative.parent_company_org_number}.`)
-    if (narrative?.parent_company_city)
-      parts.push(`Säte: ${narrative.parent_company_city}.`)
+    if (disclosed.parent_company_org_number)
+      parts.push(`Organisationsnummer: ${disclosed.parent_company_org_number}.`)
+    if (disclosed.parent_company_city)
+      parts.push(`Säte: ${disclosed.parent_company_city}.`)
     notes.push({
       number: notes.length + 1,
       title: 'Koncernförhållanden',
@@ -897,29 +1219,47 @@ async function buildK2Noter(
     })
   }
 
-  return { notes, warnings }
+  return { notes, warnings, errors, shareCapital }
 }
 
 interface LatentTaxMovement {
-  /** Opening balance on 2240 (credit-normal, so positive = liability). */
-  opening: number
-  /** Year movement, taken from 8940 when the account was used. */
-  change: number
-  /** Closing balance on 2240. */
-  closing: number
+  /** Uppskjuten skatteskuld (the K3 post on 2240-2249), credit-positive. */
+  liability: DeferredTaxMovement
+  /** Uppskjuten skattefordran (the K3 post on 1370-1379), debit-positive. */
+  asset: DeferredTaxMovement
+  /** The year's uppskjuten skatt in the resultaträkning (8940-8949), a cost positive. */
+  expense: number
+}
+
+/** The balansräkning carries the post at the start or the end of the year. */
+function holdsBalance(post: DeferredTaxMovement): boolean {
+  return post.opening !== 0 || post.closing !== 0
+}
+
+const DEFERRED_TAX_EXPENSE_RANGE = { start: '8940', end: '8949' } as const
+
+/** The BAS ranges of a K3 balance sheet post (k3-presentation.ts K3_SPLITS). */
+function k3PostRanges(concept: string): ReadonlyArray<{ start: string; end: string }> {
+  const split = K3_SPLITS.find((row) => row.concept === concept)
+  if (!split) throw new Error(`Unknown K3 post ${concept}`)
+  return split.ranges
 }
 
 /**
  * Derive the uppskjuten-skatt movement from the current-period full trial
- * balance: 2240 (latent tax liability) and 8940 (latent tax expense).
+ * balance, on the same BAS ranges as the K3 balance sheet's own posts: the
+ * uppskjuten skatteskuld (2240), the uppskjuten skattefordran (1370, a
+ * deductible temporary difference or a recognised loss carried forward, K3
+ * 29.19 and 29.29) and the year's uppskjuten skatt in the resultaträkning
+ * (8940). Each post's change is its own closing less its opening, so the note
+ * ties to the balansräkning whichever side the year's deferred tax moved.
  *
  * Returns `movement: null` when the company has no such activity at all,
- * which is the normal case: a 2240 balance only appears when the K3
- * uppskjuten-skatt disposition was posted, or from legacy postings and
- * imported history. Both the redovisningsprinciper paragraph and the
- * "Uppskjutna skatter" note are driven by this one result, so they can never
- * disagree about whether a deferred tax on obeskattade reserver is
- * separately recognized.
+ * which is the normal case: a balance only appears when the K3 deferred tax
+ * was posted (commit_deferred_tax books 8940 against 2240 and 1370), or from
+ * legacy postings and imported history. Both the redovisningsprinciper
+ * paragraph and the "Uppskjutna skatter" note are driven by this one result,
+ * so they can never disagree about whether deferred tax is recognised.
  *
  * `ok: false` means the figures could not be read at all; the caller warns
  * rather than blocking the document.
@@ -928,36 +1268,36 @@ function deriveLatentTaxMovement(
   tbFullRows: TrialBalanceRow[],
 ): { ok: true; movement: LatentTaxMovement | null } | { ok: false } {
   try {
-    const row2240 = tbFullRows.find((r) => r.account_number === '2240')
-    const row8940 = tbFullRows.find((r) => r.account_number === '8940')
-    // 2240 is credit-normal liability: opening = opening_credit - opening_debit
-    const opening2240 = row2240
-      ? (row2240.opening_credit || 0) - (row2240.opening_debit || 0)
-      : 0
-    const closing2240 = row2240
-      ? (row2240.closing_credit || 0) - (row2240.closing_debit || 0)
-      : 0
-    // 8940 is an expense (debit-normal): movement = period_debit - period_credit
-    // A positive movement = additional avsättning (cost incurred = liability
-    // grew). The 2240 balance moves by the same magnitude (with opposite
-    // sign convention since 2240 is on the credit side).
-    const change8940 = row8940
-      ? (row8940.period_debit || 0) - (row8940.period_credit || 0)
-      : closing2240 - opening2240
-    if (opening2240 === 0 && closing2240 === 0 && change8940 === 0) {
+    const sum = (
+      ranges: ReadonlyArray<{ start: string; end: string }>,
+      pick: (row: TrialBalanceRow) => number,
+    ) =>
+      roundOre(
+        tbFullRows
+          .filter((row) => ranges.some((range) => row.account_number >= range.start && row.account_number <= range.end))
+          .reduce((total, row) => total + pick(row), 0),
+      )
+    const balance = (ranges: ReadonlyArray<{ start: string; end: string }>, side: 'debit' | 'credit'): DeferredTaxMovement => {
+      const sign = side === 'debit' ? 1 : -1
+      const opening = sum(ranges, (row) => sign * ((row.opening_debit || 0) - (row.opening_credit || 0)))
+      const closing = sum(ranges, (row) => sign * ((row.closing_debit || 0) - (row.closing_credit || 0)))
+      return { opening, change: roundOre(closing - opening), closing }
+    }
+    const liability = balance(k3PostRanges('UppskjutenSkatteskuld'), 'credit')
+    const asset = balance(k3PostRanges('UppskjutenSkattefordran'), 'debit')
+    const expense = sum([DEFERRED_TAX_EXPENSE_RANGE], (row) => (row.period_debit || 0) - (row.period_credit || 0))
+    if (!holdsBalance(liability) && !holdsBalance(asset) && expense === 0) {
       return { ok: true, movement: null }
     }
-    return {
-      ok: true,
-      movement: {
-        opening: opening2240,
-        change: change8940,
-        closing: closing2240,
-      },
-    }
+    return { ok: true, movement: { liability, asset, expense } }
   } catch {
     return { ok: false }
   }
+}
+
+/** Which deferred tax posts the balansräkning carries: none when only 8940 moved. */
+function latentTaxSides(movement: LatentTaxMovement): { liability: boolean; asset: boolean } {
+  return { liability: holdsBalance(movement.liability), asset: holdsBalance(movement.asset) }
 }
 
 /**
@@ -1031,9 +1371,11 @@ async function buildK3Noter(
   tbFullRows: TrialBalanceRow[],
   fiscalPeriodId: string,
   allPeriods: PeriodRow[],
-): Promise<{ notes: NoteEntry[]; warnings: string[] }> {
+  registerTexts: RegisterDisclosureTexts | null = null,
+): Promise<{ notes: NoteEntry[]; warnings: string[]; errors: string[]; assets: Asset[]; fixedAssetNoteFromRegister: boolean }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
+  const errors: string[] = []
 
   const isAb = entityType === 'aktiebolag'
   const maybeAb = isAb || entityType === 'unknown'
@@ -1120,7 +1462,7 @@ async function buildK3Noter(
   const latentTax = deriveLatentTaxMovement(tbFullRows)
   if (!latentTax.ok) {
     warnings.push(
-      'Uppskjutna skatter-noten kunde inte beräknas automatiskt. Kontrollera kontot 2240 och kör om bokslutet.',
+      'Uppskjutna skatter-noten kunde inte beräknas automatiskt. Kontrollera kontona 2240, 1370 och 8940 och kör om bokslutet.',
     )
   }
   const latentTaxMovement = latentTax.ok ? latentTax.movement : null
@@ -1138,7 +1480,9 @@ async function buildK3Noter(
         : latentTaxMovement !== null
           ? 'recognized'
           : 'none',
+      deferredTaxSides: latentTaxMovement ? latentTaxSides(latentTaxMovement) : undefined,
       hasCapitalizedLease,
+      holdsLand: assets.some((a) => !a.disposed_at && a.category === 'land'),
     }),
   )
 
@@ -1169,7 +1513,7 @@ async function buildK3Noter(
       })
     } else if (isAb) {
       warnings.push(
-        'Aktiekapitalnoten saknas eftersom uppgifter om aktiekapital inte finns i Inställningar → Företag. K3 / ÅRL kräver att noten innehåller registrerat belopp innan inlämning till Bolagsverket.',
+        'Aktiekapitalnoten utelämnas eftersom uppgifter om aktiekapital saknas i Inställningar → Företag. För ett mindre företag är noten frivillig; ett större företag ska ange antal aktier och kvotvärde (ÅRL 5 kap. 34 §).',
       )
     }
   }
@@ -1202,29 +1546,43 @@ async function buildK3Noter(
     periodStart: periodStartIso,
     periodEnd: periodEndIso,
   })
+  // One source per nedskrivning (ÅRL 5 kap. 8 § p. 5): the register's in the
+  // roll-forward, the rest of the ledger's write-down accounts in the note
+  // below (ledger-fixed-asset-notes.ts).
+  const registeredWriteDowns = registerWriteDownsByAccount(assets, periodStartIso, periodEndIso)
   if (rollforwardNote) {
     notes.push(rollforwardNote)
-    const tieOut = rollforwardTieOutWarning(
+    const tieOut = rollforwardTieOut(
       rollforwardAssets,
       tbFullRows,
       periodStartIso,
       periodEndIso,
+      tangibleImpairmentBalance(tbFullRows, registeredWriteDowns),
     )
-    if (tieOut) warnings.push(tieOut)
+    if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)
   }
+  // ÅRL 5 kap. 8 §: nedskrivningar of immateriella and materiella
+  // anläggningstillgångar booked outside the register, and the finansiella
+  // anläggningstillgångar the register never reaches, from the ledger.
+  const impairmentNote = buildTangibleImpairmentNote(tbFullRows, notes.length + 1, registeredWriteDowns)
+  if (impairmentNote) notes.push(impairmentNote)
+  const financialNote = buildFinancialFixedAssetsNote(tbFullRows, notes.length + 1)
+  if (financialNote) notes.push(financialNote)
 
-  // 4. Uppskjutna skatter. K3 ch.29 requires disclosure of opening,
-  // movement, and closing balance of uppskjuten skatteskuld. The figures
-  // were derived above (deriveLatentTaxMovement) so that note 1 and this
-  // note tell the same story; a null movement means no 2240/8940 activity
-  // exists and the note is omitted.
+  // 4. Uppskjutna skatter. K3 ch.29: the opening, movement and closing of
+  // the uppskjuten skatteskuld and the uppskjuten skattefordran, and the
+  // year's uppskjuten skatt. The figures were derived above
+  // (deriveLatentTaxMovement) so that note 1 and this note tell the same
+  // story; a null movement means no 2240, 1370 or 8940 activity exists and
+  // the note is omitted.
   if (latentTaxMovement) {
+    const sides = latentTaxSides(latentTaxMovement)
     notes.push(
       buildUppskjutenSkattNot({
         noteNumber: notes.length + 1,
-        latentTaxOpening: latentTaxMovement.opening,
-        latentTaxChange: latentTaxMovement.change,
-        latentTaxClosing: latentTaxMovement.closing,
+        liability: sides.liability ? latentTaxMovement.liability : null,
+        asset: sides.asset ? latentTaxMovement.asset : null,
+        expense: latentTaxMovement.expense,
       }),
     )
   }
@@ -1243,8 +1601,9 @@ async function buildK3Noter(
     periodStartIso,
     periodEndIso,
   )
-  if (medelantal > 0 || entityType === 'aktiebolag') {
+  if (medelantal > 0 || (isEntityType(entityType) && preparesArsredovisning(entityType))) {
     const medelantalNote = resolveMedelantalNote({
+      subject: entityType === 'ekonomisk_forening' ? 'Föreningen' : 'Bolaget',
       medelantal,
       hasOverride: hasMedelantalOverride(narrative?.medelantal_anstallda_override),
       tbFullRows,
@@ -1268,29 +1627,31 @@ async function buildK3Noter(
         : 'Inga skulder förfaller till betalning senare än fem år efter balansdagen.',
   })
 
-  // 7. Eventualförpliktelser (K3 punkt 21: separate disclosure).
+  // 7. Eventualförpliktelser (K3 punkt 21: separate disclosure). The
+  // register writes it, the manual text overrides (register-disclosures.ts).
+  const disclosed = effectiveDisclosureTexts(narrative, registerTexts)
   notes.push({
     number: notes.length + 1,
     title: 'Eventualförpliktelser',
-    body: narrative?.contingent_liabilities?.trim() || 'Inga.',
+    body: disclosed.contingent_liabilities || 'Inga.',
   })
 
   // 8. Ställda säkerheter (ÅRL 5:14 §).
   notes.push({
     number: notes.length + 1,
     title: 'Ställda säkerheter',
-    body: narrative?.securities_pledged?.trim() || 'Inga.',
+    body: disclosed.securities_pledged || 'Inga.',
   })
 
   // 9. Koncernförhållanden (BFNAR 2012:1 kap. 8: moderföretagets namn,
-  // organisationsnummer och säte). Emitted only when configured.
-  const parentName = narrative?.parent_company_name?.trim()
+  // organisationsnummer och säte). Emitted only when configured or registered.
+  const parentName = disclosed.parent_company_name
   if (parentName) {
     const parts: string[] = [`Moderföretag: ${parentName}.`]
-    if (narrative?.parent_company_org_number)
-      parts.push(`Organisationsnummer: ${narrative.parent_company_org_number}.`)
-    if (narrative?.parent_company_city)
-      parts.push(`Säte: ${narrative.parent_company_city}.`)
+    if (disclosed.parent_company_org_number)
+      parts.push(`Organisationsnummer: ${disclosed.parent_company_org_number}.`)
+    if (disclosed.parent_company_city)
+      parts.push(`Säte: ${disclosed.parent_company_city}.`)
     notes.push({
       number: notes.length + 1,
       title: 'Koncernförhållanden',
@@ -1298,67 +1659,10 @@ async function buildK3Noter(
     })
   }
 
-  // 10. Väsentliga händelser efter balansdagen (K3 ch.32)
-  notes.push({
-    number: notes.length + 1,
-    title: 'Väsentliga händelser efter balansdagen',
-    body: 'Inga väsentliga händelser har inträffat efter räkenskapsårets utgång som påverkar bedömningen av företagets ställning och resultat.',
-  })
+  // Väsentliga händelser efter balansdagen (ÅRL 5 kap. 22 §, K3 32.4) is a
+  // disclosure the user answers: the disclosure matrix prints it
+  // (disclosures/k3-mindre.ts, applied in model.ts), never a default "Inga".
 
-  return { notes, warnings }
-}
-
-/**
- * K3 separate "Förändring av eget kapital" statement, derived from the
- * post-level mapping. With a previous fiscal year the opening balances are
- * the REAL prior-year UB values (mapping .previous), and the year's
- * movements are derived so the roll-forward ties exactly to the booked UB:
- * bundet-EK growth is presented as nyemission, a fritt-EK shortfall beyond
- * årets resultat as utdelning (the overwhelmingly common cases; a positive
- * fritt residual, e.g. aktieägartillskott, is folded into nyemission
- * rather than invent an unbookable row). First fiscal year falls back to
- * opening = closing - årets resultat.
- */
-function buildK3EquityChangesStatement(
-  mapping: K2MappingResult,
-): { rows: EgenKapitalRow[]; closing_total: number } {
-  const cur = (concept: string): number => mapping.br[concept]?.current ?? 0
-  const prev = (concept: string): number => mapping.br[concept]?.previous ?? 0
-
-  const aretsResultat = cur('AretsResultatEgetKapital')
-  const aktiekapitalClosing = cur('Aktiekapital') + cur('EjRegistreratAktiekapital')
-  const bundnaClosing = mapping.totals.bundetEgetKapital.current - aktiekapitalClosing
-  const frittClosing = mapping.totals.frittEgetKapital.current
-
-  const hasPrevious = mapping.totals.egetKapital.previous !== null
-  let opening: { aktiekapital: number; bundna_reserver: number; balanserade_vinstmedel: number }
-  let nyemission = 0
-  let utdelning = 0
-  if (hasPrevious) {
-    const aktiekapitalOpening = prev('Aktiekapital') + prev('EjRegistreratAktiekapital')
-    const bundnaOpening =
-      (mapping.totals.bundetEgetKapital.previous ?? 0) - aktiekapitalOpening
-    const frittOpening = mapping.totals.frittEgetKapital.previous ?? 0
-    opening = {
-      aktiekapital: aktiekapitalOpening,
-      bundna_reserver: bundnaOpening,
-      balanserade_vinstmedel: frittOpening,
-    }
-    nyemission =
-      aktiekapitalClosing - aktiekapitalOpening + (bundnaClosing - bundnaOpening)
-    const frittResidual = frittClosing - frittOpening - aretsResultat
-    if (frittResidual < 0) utdelning = frittResidual
-    else nyemission += frittResidual
-  } else {
-    opening = {
-      aktiekapital: aktiekapitalClosing,
-      bundna_reserver: bundnaClosing,
-      balanserade_vinstmedel: frittClosing - aretsResultat,
-    }
-  }
-  return buildEquityChangesNote({
-    opening,
-    changes: { nyemission, utdelning, arets_resultat: aretsResultat },
-  })
+  return { notes, warnings, errors, assets, fixedAssetNoteFromRegister: rollforwardNote !== null }
 }
 

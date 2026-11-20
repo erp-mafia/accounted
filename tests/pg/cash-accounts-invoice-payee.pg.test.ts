@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember } from './fixtures'
+import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember, setActiveCompany } from './fixtures'
 import { getPool, withUserContext } from './setup'
 
 /**
@@ -8,15 +8,6 @@ import { getPool, withUserContext } from './setup'
  * and the mirror that keeps company_settings.invoice_payment_accounts plus the
  * legacy SEK columns equal to the default account per currency.
  */
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
-}
 
 async function insertSettings(userId: string, companyId: string): Promise<void> {
   await getPool().query(

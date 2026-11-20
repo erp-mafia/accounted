@@ -10,6 +10,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 import { applyAccountOverride } from '../account-override'
+import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
+import { chartVatTreatmentsOf } from '../vat-entries'
 import { buildMappingResultFromCategory } from '../category-mapping'
 import { buildTransactionEntryLines } from '../transaction-entries'
 import type { MappingResult, Transaction } from '@/types'
@@ -67,13 +69,15 @@ describe('applyAccountOverride', () => {
     expect(result.credit_account).toBe('3021')
   })
 
+  // Coded as the v1 categorize route answers for the same account_override,
+  // so an MCP agent gets a refusal it can dispatch on, not UNKNOWN_ERROR.
   it('throws with an actionable message when the account is not in the chart', async () => {
     const { supabase, mockResult } = createMockSupabase()
     mockResult({ data: null })
 
     await expect(
       applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping(), true),
-    ).rejects.toThrow(/finns inte i kontoplanen/)
+    ).rejects.toMatchObject({ code: 'TX_CATEGORIZE_INVALID_ACCOUNT', message: expect.stringMatching(/finns inte i kontoplanen/) })
   })
 
   it('throws with an activation hint when the account exists but is inactive', async () => {
@@ -82,7 +86,7 @@ describe('applyAccountOverride', () => {
 
     await expect(
       applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping(), true),
-    ).rejects.toThrow(/inaktivt/)
+    ).rejects.toMatchObject({ code: 'TX_CATEGORIZE_INVALID_ACCOUNT', message: expect.stringMatching(/inaktivt/) })
   })
 
   it('drops auto-VAT lines for a class-2 override outside the moms-line range', async () => {
@@ -158,5 +162,64 @@ describe('applyAccountOverride', () => {
     await expect(
       applyAccountOverride(supabase as never, 'company-1', '1930', -479, mapping(), true),
     ).rejects.toThrow(/samma konto/)
+  })
+})
+
+// #2919 / crm#1096: the category path books the 45xx/4598 basis pair for its
+// own default cost account. applyAccountOverride leaves it as booked; the door
+// then settles it on the account the cost line landed on, with the company's
+// momskoder (reconcileRcBasisWithCostLines): an account that reports ruta
+// 20-24 by itself loses the pair, or the declaration counts the purchase twice
+// (RC_OUTPUT_MISSING); any other account keeps it.
+describe('applyAccountOverride: reverse-charge basis pair', () => {
+  const rcTx = { amount: -250, amount_sek: -250, currency: 'SEK', exchange_rate: 1, description: 'GOOGLE PLAY' } as Transaction
+  const rcMapping = () => buildMappingResultFromCategory('expense_software', rcTx, true, 'aktiebolag', 'reverse_charge')
+
+  const overridden = async (row: Record<string, unknown>, override: string) => {
+    const { supabase, mockResult } = createMockSupabase()
+    mockResult({ data: chartRow({ account_number: override, ...row }) })
+    return applyAccountOverride(supabase as never, 'company-1', override, -250, rcMapping(), true)
+  }
+  const accountsAfter = async (row: Record<string, unknown>, override: string, treatment: string | null = null) =>
+    reconcileRcBasisWithCostLines(
+      await overridden(row, override),
+      chartVatTreatmentsOf([{ account_number: override, default_vat_treatment: treatment }]),
+    )
+      .vat_lines.map((l) => l.account_number)
+
+  it('leaves the pair as the category booked it: the door settles it on the final account', async () => {
+    const result = await overridden({ account_class: 4 }, '4535')
+    expect(result.debit_account).toBe('4535')
+    expect(result.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+  })
+
+  it('keeps the pair on an ordinary cost account (the issue case, 6540)', async () => {
+    expect(await accountsAfter({ account_class: 6 }, '6540'))
+      .toEqual(['2645', '2614', '4535', '4598'])
+  })
+
+  it('drops the pair on a BAS basis account (4535 already reports ruta 21)', async () => {
+    expect(await accountsAfter({ account_class: 4 }, '4535'))
+      .toEqual(['2645', '2614'])
+  })
+
+  it('drops the pair on a cost account configured with a reverse_charge_* treatment', async () => {
+    expect(await accountsAfter({ account_class: 6 }, '6541', 'reverse_charge_non_eu_services'))
+      .toEqual(['2645', '2614'])
+  })
+
+  it('keeps the pair on a company 45xx account with no treatment (it reports no box)', async () => {
+    expect(await accountsAfter({ account_class: 4 }, '4538'))
+      .toEqual(['2645', '2614', '4535', '4598'])
+  })
+
+  it('the resulting verifikat balances with the pair dropped', async () => {
+    const result = reconcileRcBasisWithCostLines(await overridden({ account_class: 4 }, '4531'), new Map())
+    const lines = buildTransactionEntryLines(rcTx, result)
+    const debit = lines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round(debit * 100) / 100).toBe(Math.round(credit * 100) / 100)
+    expect(lines.find((l) => l.account_number === '4531')?.debit_amount).toBe(250)
+    expect(lines.some((l) => l.account_number === '4598')).toBe(false)
   })
 })

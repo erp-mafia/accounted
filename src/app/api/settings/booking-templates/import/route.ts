@@ -9,7 +9,9 @@ const ImportTemplateSchema = z.object({
   description: z.string().max(2000).default(''),
   category: BookingTemplateCategorySchema.default('other'),
   entity_type: BookingTemplateEntityTypeSchema.default('all'),
-  lines: z.array(BookingTemplateLineSchema).min(2),
+  // A line's dimensions are not imported: the codes are the exporting
+  // company's own, not this company's.
+  lines: z.array(BookingTemplateLineSchema.omit({ dimensions: true })).min(2),
 })
 
 const ImportPayloadSchema = z.object({

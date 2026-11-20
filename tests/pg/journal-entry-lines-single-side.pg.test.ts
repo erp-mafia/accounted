@@ -175,7 +175,7 @@ describe('constraint shape', () => {
     const row = res.rows[0]
     expect(row.contype).toBe('c')
     // NOT VALID: prod may hold both-sides rows written before this landed.
-    // They are repaired by a separate founder-approved data fix; VALIDATE
+    // They are repaired by a separate approved data fix; VALIDATE
     // CONSTRAINT follows once prod reports zero offending rows.
     expect(row.convalidated).toBe(false)
     expect(row.def).toContain('NOT VALID')

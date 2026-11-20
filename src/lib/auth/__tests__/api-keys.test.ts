@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
@@ -15,16 +15,21 @@ vi.mock('@/lib/company/active-company', () => ({
 import {
   generateApiKey,
   hashApiKey,
+  hashRefreshToken,
+  deriveRotatedCredentials,
   extractBearerToken,
   validateScopes,
   hasScope,
   validateApiKey,
+  credentialActor,
+  OAUTH_MCP_KEY_NAME,
   findStageApproveConflict,
   DEFAULT_SCOPES,
   DEFAULT_OAUTH_SCOPES,
   STAGING_SCOPES,
   TOOL_SCOPE_MAP,
   API_KEY_SCOPES,
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
 } from '../api-keys'
 import { createClient } from '@supabase/supabase-js'
 
@@ -87,6 +92,52 @@ describe('hashApiKey', () => {
     const hash1 = hashApiKey('gnubok_sk_key-a')
     const hash2 = hashApiKey('gnubok_sk_key-b')
     expect(hash1).not.toBe(hash2)
+  })
+})
+
+// ============================================================
+// deriveRotatedCredentials (crm#1043)
+// ============================================================
+
+describe('deriveRotatedCredentials', () => {
+  beforeEach(() => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-role-secret')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('rotates the same refresh token into the same pair every time', () => {
+    const a = deriveRotatedCredentials('gnubok_rt_presented')
+    const b = deriveRotatedCredentials('gnubok_rt_presented')
+    expect(b).toEqual(a)
+  })
+
+  it('returns well-formed tokens whose hashes are what the database stores', () => {
+    const { refresh, key } = deriveRotatedCredentials('gnubok_rt_presented')
+    expect(refresh.token).toMatch(/^gnubok_rt_[A-Za-z0-9_-]{43}$/)
+    expect(key.key).toMatch(/^gnubok_sk_[A-Za-z0-9_-]{43}$/)
+    expect(refresh.hash).toBe(hashRefreshToken(refresh.token))
+    expect(key.hash).toBe(hashApiKey(key.key))
+    expect(key.prefix).toBe(key.key.slice(0, 'gnubok_sk_'.length + 8))
+  })
+
+  it('gives different tokens a different successor, and never the token itself', () => {
+    const a = deriveRotatedCredentials('gnubok_rt_one')
+    const b = deriveRotatedCredentials('gnubok_rt_two')
+    expect(a.refresh.token).not.toBe(b.refresh.token)
+    expect(a.key.key).not.toBe(b.key.key)
+    expect(a.refresh.token).not.toBe('gnubok_rt_one')
+    // Access key and refresh token are independent derivations.
+    expect(a.key.key.slice('gnubok_sk_'.length)).not.toBe(a.refresh.token.slice('gnubok_rt_'.length))
+  })
+
+  it('cannot be computed without the server secret', () => {
+    const withSecret = deriveRotatedCredentials('gnubok_rt_presented')
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'another-secret')
+    expect(deriveRotatedCredentials('gnubok_rt_presented').refresh.token).not.toBe(withSecret.refresh.token)
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', '')
+    expect(() => deriveRotatedCredentials('gnubok_rt_presented')).toThrow('SUPABASE_SERVICE_ROLE_KEY')
   })
 })
 
@@ -269,14 +320,57 @@ describe('validateApiKey', () => {
     expect(result).toEqual({ error: 'Invalid API key', status: 401 })
   })
 
-  it('returns rate limit error when rate_limited is true', async () => {
+  it('returns rate limit error with the upper-bound wait when the row carries none (DB without 20261119081500)', async () => {
     setupMockRpc({
       data: [{ user_id: 'u1', company_id: 'c1', scopes: null, rate_limited: true }],
       error: null,
     })
 
     const result = await validateApiKey('gnubok_sk_test-key-value')
-    expect(result).toEqual({ error: 'Rate limit exceeded', status: 429 })
+    expect(result).toEqual({
+      error: 'Rate limit exceeded',
+      status: 429,
+      rateLimit: {
+        retryAfterSeconds: RATE_LIMIT_RETRY_AFTER_SECONDS,
+        limitPerMinute: null,
+        apiKeyId: null,
+        userId: 'u1',
+        companyId: 'c1',
+      },
+    })
+  })
+
+  it('returns the seconds left in the window and the key limit when the row carries them', async () => {
+    setupMockRpc({
+      data: [{
+        user_id: 'u1',
+        company_id: 'c1',
+        api_key_id: 'key-1',
+        scopes: null,
+        rate_limited: true,
+        rate_limit_per_minute: 100,
+        retry_after_seconds: 17,
+      }],
+      error: null,
+    })
+
+    const result = await validateApiKey('gnubok_sk_test-key-value')
+    expect(result).toEqual({
+      error: 'Rate limit exceeded',
+      status: 429,
+      rateLimit: { retryAfterSeconds: 17, limitPerMinute: 100, apiKeyId: 'key-1', userId: 'u1', companyId: 'c1' },
+    })
+  })
+
+  it('never answers a wait above the window length or below one second', async () => {
+    for (const [stored, expected] of [[600, 60], [0, 60], [-3, 60], ['17', 60]] as const) {
+      setupMockRpc({
+        data: [{ user_id: 'u1', company_id: 'c1', scopes: null, rate_limited: true, retry_after_seconds: stored }],
+        error: null,
+      })
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect('rateLimit' in result && result.rateLimit?.retryAfterSeconds).toBe(expected)
+    }
   })
 
   it('returns userId, companyId, scopes on success', async () => {
@@ -299,6 +393,12 @@ describe('validateApiKey', () => {
       scopes: ['transactions:read', 'reports:read'],
       mode: 'live',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
+      readOnlyCompanyIds: null,
+      serviceAccount: null,
+      agentIdentityId: null,
+      client: null,
+      clientName: null,
     })
   })
 
@@ -322,6 +422,12 @@ describe('validateApiKey', () => {
       scopes: DEFAULT_SCOPES,
       mode: 'live',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
+      readOnlyCompanyIds: null,
+      serviceAccount: null,
+      agentIdentityId: null,
+      client: null,
+      clientName: null,
     })
   })
 
@@ -348,6 +454,212 @@ describe('validateApiKey', () => {
       scopes: ['transactions:read'],
       mode: 'test',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
+      readOnlyCompanyIds: null,
+      serviceAccount: null,
+      agentIdentityId: null,
+      client: null,
+      clientName: null,
+    })
+  })
+
+  describe('agent identities', () => {
+    it('returns the agent identity and the client the key belongs to', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'user-1',
+          company_id: 'company-1',
+          api_key_id: 'ak_oauth',
+          api_key_name: 'MCP-klient (OAuth)',
+          scopes: ['transactions:read'],
+          rate_limited: false,
+          agent_identity_id: 'identity-1',
+          client: 'claude',
+        }],
+        error: null,
+      })
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toMatchObject({
+        userId: 'user-1',
+        agentIdentityId: 'identity-1',
+        client: 'claude',
+      })
+    })
+
+    it('answers a paused agent 403 AGENT_PAUSED, not the bare 401', async () => {
+      const mockRpc = vi.fn(async (name: string) =>
+        name === 'api_key_refusal' ? { data: 'AGENT_PAUSED', error: null } : { data: [], error: null },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toEqual({ error: expect.stringMatching(/paused/i), status: 403, code: 'AGENT_PAUSED' })
+    })
+
+    it('ignores a refusal code it does not know: the bare 401', async () => {
+      const mockRpc = vi.fn(async (name: string) =>
+        name === 'api_key_refusal' ? { data: 'SOMETHING_NEW', error: null } : { data: [], error: null },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toEqual({ error: 'Invalid API key', status: 401 })
+    })
+  })
+
+  describe('service accounts', () => {
+    it('returns the service account the key belongs to', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'sponsor-1',
+          company_id: 'company-456',
+          api_key_id: 'ak_sa',
+          api_key_name: 'Nyckel 1',
+          scopes: ['invoices:read'],
+          rate_limited: false,
+          allowed_company_ids: ['company-456'],
+          read_only_company_ids: null,
+          service_account_id: 'sa-1',
+          service_account_name: 'Nattlig fakturasynk',
+        }],
+        error: null,
+      })
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({
+        userId: 'sponsor-1',
+        allowedCompanyIds: ['company-456'],
+        serviceAccount: { id: 'sa-1', name: 'Nattlig fakturasynk' },
+      })
+    })
+
+    it('answers a suspended service account with its own code, not the bare 401', async () => {
+      const mockRpc = vi.fn(async (name: string) =>
+        name === 'api_key_refusal'
+          ? { data: 'SERVICE_ACCOUNT_SUSPENDED', error: null }
+          : { data: [], error: null },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ status: 403, code: 'SERVICE_ACCOUNT_SUSPENDED' })
+      expect(mockRpc).toHaveBeenCalledWith('api_key_refusal', { p_key_hash: expect.any(String) })
+    })
+
+    it('falls back to the bare 401 when the refusal lookup fails (a DB without the function)', async () => {
+      const mockRpc = vi.fn(async (name: string) =>
+        name === 'api_key_refusal'
+          ? { data: null, error: { code: 'PGRST202', message: 'not found' } }
+          : { data: [], error: null },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toEqual({ error: 'Invalid API key', status: 401 })
+    })
+
+    it('does not look up a refusal when the validation itself failed', async () => {
+      const mockRpc = vi.fn().mockResolvedValue({ data: null, error: { message: 'db error' } })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toEqual({ error: 'Invalid API key', status: 401 })
+      expect(mockRpc).toHaveBeenCalledTimes(1)
+    })
+
+    it('names the actor service_account for a service account key, api_key otherwise', () => {
+      expect(credentialActor({ apiKeyName: 'Nyckel 1', serviceAccount: { id: 'sa-1', name: 'Synk' } })).toEqual({
+        type: 'service_account',
+        label: 'Synk',
+      })
+      expect(credentialActor({ apiKeyName: 'Nyckel 1', serviceAccount: null })).toEqual({
+        type: 'api_key',
+        label: 'Nyckel 1',
+      })
+      expect(credentialActor({ serviceAccount: null })).toEqual({ type: 'api_key', label: 'Unnamed API key' })
+    })
+
+    it("reads a registered client's own name once, for the records", async () => {
+      const client = 'registered:11111111-1111-4111-8111-111111111111'
+      const maybeSingle = vi.fn().mockResolvedValue({ data: { client_name: 'Egen klient' }, error: null })
+      const from = vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }))
+      const rpc = vi.fn().mockResolvedValue({
+        data: [{ user_id: 'user-123', company_id: 'company-456', api_key_name: OAUTH_MCP_KEY_NAME, rate_limited: false, client }],
+        error: null,
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc, from } as any)
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+
+      expect(result).toMatchObject({ client, clientName: 'Egen klient (registered client)' })
+      expect(from).toHaveBeenCalledWith('oauth_client_registrations')
+    })
+
+    it('does not look a built-in client up', async () => {
+      const from = vi.fn()
+      const rpc = vi.fn().mockResolvedValue({
+        data: [{ user_id: 'user-123', company_id: 'company-456', api_key_name: OAUTH_MCP_KEY_NAME, rate_limited: false, client: 'claude' }],
+        error: null,
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc, from } as any)
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toMatchObject({ client: 'claude', clientName: null })
+      expect(from).not.toHaveBeenCalled()
+    })
+
+    it('names an OAuth key mcp_oauth with its client, whichever door reads it', () => {
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'claude', serviceAccount: null })).toEqual({
+        type: 'mcp_oauth',
+        label: 'Claude (Anthropic)',
+      })
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'chatgpt', serviceAccount: null }).label).toBe('ChatGPT (OpenAI)')
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'squidler', serviceAccount: null }).label).toBe('Squidler')
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'celemine', serviceAccount: null }).label).toBe('Celemine')
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'flytt_extension', serviceAccount: null }).label).toBe('Flytta till Accounted')
+    })
+
+    it('names a registered client by its own name', () => {
+      expect(
+        credentialActor({
+          apiKeyName: OAUTH_MCP_KEY_NAME,
+          client: 'registered:11111111-1111-4111-8111-111111111111',
+          clientName: 'Egen klient (registered client)',
+          serviceAccount: null,
+        }),
+      ).toEqual({ type: 'mcp_oauth', label: 'Egen klient (registered client)' })
+    })
+
+    it('keeps the reserved name on a connector whose client is not known', () => {
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: null, serviceAccount: null })).toEqual({
+        type: 'mcp_oauth',
+        label: OAUTH_MCP_KEY_NAME,
+      })
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'something-new', serviceAccount: null }).label).toBe(OAUTH_MCP_KEY_NAME)
+    })
+
+    it('never names a service account an OAuth key, whatever the key is called', () => {
+      expect(
+        credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, serviceAccount: { id: 'sa-1', name: 'Synk' } }),
+      ).toEqual({ type: 'service_account', label: 'Synk' })
+    })
+
+    it('carries the key\'s unattended ceiling, so every door the request reaches is bound by it (#125)', () => {
+      expect(credentialActor({ apiKeyName: 'Nyckel 1', serviceAccount: null, unattendedCommitLimit: 5000 })).toEqual({
+        type: 'api_key',
+        label: 'Nyckel 1',
+        unattendedCommitLimit: 5000,
+      })
+      expect(
+        credentialActor({ serviceAccount: { id: 'sa-1', name: 'Synk' }, unattendedCommitLimit: 5000 }),
+      ).toMatchObject({ type: 'service_account', unattendedCommitLimit: 5000 })
+      expect(credentialActor({ apiKeyName: 'Nyckel 1', serviceAccount: null, unattendedCommitLimit: null })).toEqual({
+        type: 'api_key',
+        label: 'Nyckel 1',
+      })
     })
   })
 
@@ -385,6 +697,114 @@ describe('validateApiKey', () => {
         })
         const result = await validateApiKey('gnubok_sk_test-key-value')
         expect(result).toMatchObject({ unattendedCommitLimit: null })
+      }
+    })
+  })
+
+  describe('allowed company ids (per-key allowlist, migration 20260928112721)', () => {
+    it('surfaces the allowlist from the RPC row', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'user-123',
+          company_id: 'company-456',
+          scopes: ['transactions:read'],
+          rate_limited: false,
+          allowed_company_ids: ['company-456', 'company-789'],
+        }],
+        error: null,
+      })
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ allowedCompanyIds: ['company-456', 'company-789'] })
+    })
+
+    it('reads an absent or null value as no allowlist', async () => {
+      // Absent = a DB that has not run the migration: the key keeps reaching
+      // every membership, exactly as before the column existed.
+      for (const raw of [undefined, null]) {
+        setupMockRpc({
+          data: [{
+            user_id: 'user-123',
+            company_id: 'company-456',
+            scopes: ['transactions:read'],
+            rate_limited: false,
+            allowed_company_ids: raw,
+          }],
+          error: null,
+        })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ allowedCompanyIds: null })
+      }
+    })
+
+    it('refuses the key when the allowlist is present but empty or malformed', async () => {
+      // Fail closed: reading these as null would turn a restricted key into
+      // one that reaches every company the user belongs to.
+      for (const raw of [[], 'company-456', { 0: 'x' }, [42], ['']]) {
+        setupMockRpc({
+          data: [{
+            user_id: 'user-123',
+            company_id: 'company-456',
+            scopes: ['transactions:read'],
+            rate_limited: false,
+            allowed_company_ids: raw,
+          }],
+          error: null,
+        })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toEqual({ error: 'Invalid API key', status: 401 })
+      }
+    })
+  })
+
+  describe('read-only company ids (per-company access level, migration 20260928112724)', () => {
+    function rpcRow(allowed: unknown, readOnly: unknown) {
+      return {
+        data: [{
+          user_id: 'user-123',
+          company_id: 'company-456',
+          scopes: ['transactions:read', 'invoices:write'],
+          rate_limited: false,
+          allowed_company_ids: allowed,
+          read_only_company_ids: readOnly,
+        }],
+        error: null,
+      }
+    }
+
+    it('surfaces the read-only companies from the RPC row', async () => {
+      setupMockRpc(rpcRow(['company-456', 'company-789'], ['company-789']))
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({
+        allowedCompanyIds: ['company-456', 'company-789'],
+        readOnlyCompanyIds: ['company-789'],
+      })
+    })
+
+    it('reads an absent or null value as no read-only company', async () => {
+      // Absent = a DB without the column, where no read-only row can exist.
+      for (const raw of [undefined, null]) {
+        setupMockRpc(rpcRow(['company-456'], raw))
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ readOnlyCompanyIds: null })
+      }
+    })
+
+    it('refuses the key when the read-only list is present but unreadable or outside the allowlist', async () => {
+      // Fail closed: reading any of these as "none" would let the key write
+      // in a company the user chose read-only for.
+      const cases: Array<[unknown, unknown]> = [
+        [['company-456'], []],
+        [['company-456'], 'company-456'],
+        [['company-456'], [42]],
+        [['company-456'], ['company-789']],
+        [null, ['company-456']],
+      ]
+      for (const [allowed, readOnly] of cases) {
+        setupMockRpc(rpcRow(allowed, readOnly))
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toEqual({ error: 'Invalid API key', status: 401 })
       }
     })
   })

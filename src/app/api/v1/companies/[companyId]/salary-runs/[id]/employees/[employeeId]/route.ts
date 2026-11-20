@@ -2,8 +2,9 @@
  * /api/v1/companies/{companyId}/salary-runs/{id}/employees/{employeeId}
  *
  * GET: one employee's full payslip within a salary run: the calculated
- * aggregates, every payslip line item, and the step-by-step
- * calculation_breakdown the engine recorded.
+ * aggregates, `effective` (the same figures with the review overrides
+ * applied, lib/salary/effective-figures.ts effectiveRow), every payslip
+ * line item, and the step-by-step calculation_breakdown the engine recorded.
  *
  * GDPR Art.5(1)(c): personnummer stays MASKED here. A payslip is a pay
  * document, not an identity record; the deliberate identity drill-in is
@@ -17,9 +18,11 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
+import { maskPersonnummer } from '@/lib/salary/personnummer-format'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-employees'
+import { effectiveRow, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
+import { EffectiveFiguresSchema } from '@/lib/salary/effective-figures-schema'
 
 const PayslipLineItem = z.object({
   /** Qualified id of the salary_line_items row. */
@@ -54,6 +57,8 @@ const PayslipDetail = z.object({
   benefit_values: z.number(),
   taxable_income: z.number(),
   tax_withheld: z.number(),
+  /** The employee's requested förhöjt skatteavdrag inside tax_withheld (0 when none). */
+  extra_tax_withheld: z.number(),
   tax_withheld_override: z.number().nullable(),
   net_deductions: z.number(),
   net_salary: z.number(),
@@ -76,6 +81,7 @@ const PayslipDetail = z.object({
   ytd_gross: z.number(),
   ytd_tax: z.number(),
   ytd_net: z.number(),
+  effective: EffectiveFiguresSchema,
   /** Step-by-step engine breakdown; null until :calculate has run. */
   calculation_breakdown: z.unknown().nullable(),
   line_items: z.array(PayslipLineItem),
@@ -85,12 +91,12 @@ const PayslipDetail = z.object({
 
 const PAYSLIP_DETAIL_COLUMNS =
   'id, salary_run_id, employee_id, salary_type, employment_degree, monthly_salary, hours_worked, ' +
-  'gross_salary, gross_deductions, benefit_values, taxable_income, tax_withheld, tax_withheld_override, ' +
+  'gross_salary, gross_deductions, benefit_values, taxable_income, tax_withheld, extra_tax_withheld, tax_withheld_override, ' +
   'net_deductions, net_salary, avgifter_rate, avgifter_basis, avgifter_amount, avgifter_basis_override, ' +
   'avgifter_amount_override, avgifter_category, override_reason, vacation_accrual, vacation_accrual_avgifter, ' +
   'tax_table_number, tax_column, tax_table_year, sick_days, vab_days, parental_days, vacation_days_taken, ' +
   'ytd_gross, ytd_tax, ytd_net, calculation_breakdown, created_at, updated_at, ' +
-  'employee:employees(first_name, last_name, personnummer), ' +
+  'employee:employees(first_name, last_name, personnummer, f_skatt_status), ' +
   'line_items:salary_line_items(id, item_type, description, quantity, unit_price, amount, is_taxable, is_avgift_basis, is_vacation_basis, is_gross_deduction, is_net_deduction, account_number, sort_order)'
 
 registerEndpoint({
@@ -107,7 +113,7 @@ registerEndpoint({
   pitfalls: [
     'calculation_breakdown is null and aggregates are 0 until POST /calculate has run.',
     'line_items include engine-derived rows (absence, benefits) that are regenerated on every :calculate; manual rows survive recalculation.',
-    'The effective tax is COALESCE(tax_withheld_override, tax_withheld); same for avgifter overrides.',
+    'effective is what is booked, declared and paid; the plain columns are the calculation\'s values. A tax override also moves the net payout, and an avgifter override is ignored for an F-skatt payee, so read effective instead of applying the overrides yourself.',
     'personnummer is masked here (GDPR Art.5(1)(c)); GET /employees/{id} is the identity drill-in.',
   ],
   example: {
@@ -117,7 +123,7 @@ registerEndpoint({
         employee_id: 'emp_77b2…',
         first_name: 'Anna',
         last_name: 'Andersson',
-        personnummer_masked: 'YYYYMMDDXXXX',
+        personnummer_masked: 'YYYYMMDD-XXXX',
         gross_salary: 35000,
         tax_withheld: -8200,
         net_salary: 26800,
@@ -190,7 +196,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string; 
       id: string
       salary_run_id: string
       employee_id: string
-      employee: { first_name: string; last_name: string; personnummer: string } | null
+      employee: {
+        first_name: string
+        last_name: string
+        personnummer: string
+        f_skatt_status: string | null
+      } | null
       line_items: Array<{
         id: string
         item_type: string
@@ -221,6 +232,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string; 
         personnummer_masked: employee
           ? maskPersonnummer(decryptPersonnummer(employee.personnummer))
           : '',
+        effective: effectiveRow({ ...(rest as unknown as EffectiveFiguresInput), employee }),
         line_items: (lineItems ?? [])
           .slice()
           .sort((a, b) => a.sort_order - b.sort_order)

@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatDate, formatRowAmount } from '@/lib/utils'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 /** One flagged row, as the list needs to show it. */
@@ -52,7 +52,7 @@ export default function BatchDuplicateDialog({
         if (!open) onCancel()
       }}
     >
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('dialog_batch_duplicate_title')}</DialogTitle>
         </DialogHeader>
@@ -60,7 +60,7 @@ export default function BatchDuplicateDialog({
           <p className="text-sm text-muted-foreground">
             {t('dialog_batch_duplicate_body', { count: rows?.length ?? 0 })}
           </p>
-          <div className="max-h-[45vh] overflow-y-auto rounded-lg border">
+          <div className="max-h-[45vh] overflow-y-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -75,13 +75,13 @@ export default function BatchDuplicateDialog({
               <TableBody>
                 {(rows ?? []).map((row) => (
                   <TableRow key={row.transactionId}>
-                    <TableCell className="tabular-nums text-muted-foreground">
+                    <TableCell className="date-figures text-muted-foreground">
                       {row.date ? formatDate(row.date) : ''}
                     </TableCell>
                     <TableCell className="max-w-[16rem] truncate">{row.description}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {row.amount != null
-                        ? formatCurrency(row.amount, row.currency ?? 'SEK')
+                        ? formatRowAmount(row.amount, row.currency ?? 'SEK')
                         : t('dialog_duplicate_amount_unknown')}
                     </TableCell>
                     <TableCell>

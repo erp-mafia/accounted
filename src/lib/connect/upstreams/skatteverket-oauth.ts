@@ -1,38 +1,68 @@
 import crypto from 'node:crypto'
 import { fetchWithTimeout, OAUTH_TIMEOUT_MS, SKATTEVERKET_EXCHANGE_TIMEOUT_MS } from '@/lib/http/fetch-with-timeout'
+import { requireHttpsUrl } from '@/lib/http/require-https'
 
 /**
- * Skatteverket OAuth2 (`per`/BankID flow) helpers for the hosted connector
- * broker. The instance-side extension has its own copy (it runs its own flow
- * on hosted); this module is the CORE copy the connector proxy uses, so core
- * does not import from @/extensions/. Same endpoints and client credentials
- * (SKV registers ONE integrator = Arcim), the difference is only who calls:
- * here the hosted proxy exchanges the code/refresh on behalf of a self-hosted
- * instance and returns the tokens for the instance to store.
+ * Skatteverket OAuth2 (`per`/BankID flow) helpers. The one implementation:
+ * the hosted connector broker calls it on behalf of a self-hosted instance
+ * (exchanging the code/refresh and returning the tokens for the instance to
+ * store), and the skatteverket extension's direct path calls it for its own
+ * flow. It lives in core so core does not import from @/extensions/. Same
+ * endpoints and client credentials either way (SKV registers ONE integrator
+ * = Arcim).
  */
 
 const DEFAULT_OAUTH_BASE_URL = 'https://peroauth2.test.skatteverket.se/oauth2/v1/per'
-// AGI needs both agd and agdredovisningperiod; skattekonto needs ska (do not
-// "clean up"): the exact set is documented in the extension's oauth.ts.
+// `agd` is the AGI (arbetsgivardeklaration) scope. Source: SKV's service
+// description PDF, Tjänstebeskrivning Arbetsgivardeklaration inlämning v1.7,
+// section 4.1.2.2: the 403 "Felaktigt access scope" example shows
+// `"description": "The required scope agd has been requested for that access token."`
+// The other tokens match the path segments of their respective APIs,
+// EXCEPT skattekonto. The scope names there, learned the hard way:
+//   - `ska`       = the interactive skattekonto REST API (saldo +
+//                   transaktioner). Requested since the extension's first
+//                   commit; removed 2026-05-10 by a "remove unused scopes"
+//                   cleanup (#431 series), which instantly broke skattekonto
+//                   sync for every token issued after that hour: the API
+//                   answers 403 "The required scopes are not authorized"
+//                   without it. Re-added 2026-07-20. Do not "clean up" again.
+//   - `skahmst`   = a DIFFERENT bulk service (Skattekonto Hämta huvudmäns
+//                   saldo och transaktioner, file via E-transport for
+//                   juridiska läsombud).
+//                   Not what the sync uses, but harmless to request.
+//   - `skattekonto` is NOT a real SKV scope name: SKV silently drops it
+//                   from every grant. Kept only so a future SKV rename in
+//                   our favor costs nothing.
+//
+// AGI needs TWO scopes, one per backing API, and missing the second one is
+// invisible until the very last step of a filing:
+//   - `agd`                  = arbetsgivardeklaration/inlamning (POST underlag,
+//                              kontrollresultat, spara, skapaGranskningsunderlag).
+//   - `agdredovisningperiod` = arbetsgivardeklaration/hanteraredovisningsperiod
+//                              (kvittenser, las, lasUpp). Note the spelling:
+//                              "redovisningperiod", no genitive s, exactly as
+//                              SKV registers it. Added 2026-08-13 after a real
+//                              prod filing signed fine and then failed on
+//                              "Hämta kvittens" with 403 {"error": "The
+//                              required scopes are not authorized"}: the token
+//                              carried `agd` only, so the hantera API refused
+//                              while inlämning kept working. Same body as the
+//                              APIGW subscription gap (#973), which is why the
+//                              gateway/token distinction has to be made with
+//                              the APIGW client, not from this string alone.
+//
+// The string is pinned byte for byte in the extension's oauth-direct test.
 const DEFAULT_SCOPES = 'momsdeklaration inkforetag skahmst skattekonto ska agd agdredovisningperiod'
 
 /**
- * Every SKV base URL must be https (http only for loopback dev): the OAuth
- * exchange carries Arcim's client secret and the data calls carry the
- * gateway Client_Secret, so a plaintext override would ship credentials
- * unencrypted. Throws so a bad env fails the request, never the build.
+ * Every SKV base URL must be https: the OAuth exchange carries Arcim's client
+ * secret and the data calls carry the gateway Client_Secret, so a plaintext
+ * override would ship credentials unencrypted. requireHttpsUrl throws so a
+ * bad env fails the request, never the build; the extension's direct data
+ * path runs the same check on its own base URLs (api-client.ts).
  */
-function httpsOnly(raw: string, name: string): string {
-  const url = new URL(raw)
-  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
-    throw new Error(`${name} must be https: Skatteverket credentials ride in these requests`)
-  }
-  return raw
-}
-
 export function skvOauthBaseUrl(): string {
-  return httpsOnly(process.env.SKATTEVERKET_OAUTH_BASE_URL || DEFAULT_OAUTH_BASE_URL, 'SKATTEVERKET_OAUTH_BASE_URL')
+  return requireHttpsUrl(process.env.SKATTEVERKET_OAUTH_BASE_URL || DEFAULT_OAUTH_BASE_URL, 'SKATTEVERKET_OAUTH_BASE_URL')
 }
 export function skvDefaultScopes(): string {
   return DEFAULT_SCOPES
@@ -151,10 +181,10 @@ export function generatePkcePair(): { verifier: string; challenge: string } {
  * addresses them as /api/connect/skv/api/<service>/<path>.
  */
 export const SKV_API_BASES: Record<string, () => string> = {
-  moms: () => httpsOnly(process.env.SKATTEVERKET_API_BASE_URL || 'https://api.test.skatteverket.se/momsdeklaration/v1', 'SKATTEVERKET_API_BASE_URL'),
-  skattekonto: () => httpsOnly(process.env.SKATTEVERKET_SKATTEKONTO_API_BASE_URL || 'https://api.test.skatteverket.se/beskattning/skattekonto/v2', 'SKATTEVERKET_SKATTEKONTO_API_BASE_URL'),
-  'agd-inlamning': () => httpsOnly(process.env.SKATTEVERKET_AGD_INLAMNING_API_BASE_URL || 'https://api.test.skatteverket.se/arbetsgivardeklaration/inlamning/v1', 'SKATTEVERKET_AGD_INLAMNING_API_BASE_URL'),
-  'agd-period': () => httpsOnly(process.env.SKATTEVERKET_AGD_PERIOD_API_BASE_URL || 'https://api.test.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1', 'SKATTEVERKET_AGD_PERIOD_API_BASE_URL'),
+  moms: () => requireHttpsUrl(process.env.SKATTEVERKET_API_BASE_URL || 'https://api.test.skatteverket.se/momsdeklaration/v1', 'SKATTEVERKET_API_BASE_URL'),
+  skattekonto: () => requireHttpsUrl(process.env.SKATTEVERKET_SKATTEKONTO_API_BASE_URL || 'https://api.test.skatteverket.se/beskattning/skattekonto/v2', 'SKATTEVERKET_SKATTEKONTO_API_BASE_URL'),
+  'agd-inlamning': () => requireHttpsUrl(process.env.SKATTEVERKET_AGD_INLAMNING_API_BASE_URL || 'https://api.test.skatteverket.se/arbetsgivardeklaration/inlamning/v1', 'SKATTEVERKET_AGD_INLAMNING_API_BASE_URL'),
+  'agd-period': () => requireHttpsUrl(process.env.SKATTEVERKET_AGD_PERIOD_API_BASE_URL || 'https://api.test.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1', 'SKATTEVERKET_AGD_PERIOD_API_BASE_URL'),
 }
 
 function apigwClientId(): string {

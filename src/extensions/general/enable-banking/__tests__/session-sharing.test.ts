@@ -4,7 +4,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   unclaimedAccountsFor,
   findReusableSessions,
-  countLiveSiblings,
   fanOutSessionRenewal,
 } from '../lib/session-sharing'
 import type { StoredAccount } from '../types'
@@ -263,27 +262,6 @@ describe('findReusableSessions', () => {
       bank_connections: [{ data: null, error: { message: 'rls' } }],
     })
     expect(await findReusableSessions(supabase, 'user-1', 'company-b')).toEqual([])
-  })
-})
-
-describe('countLiveSiblings', () => {
-  it('counts the other non-revoked connections on the session', async () => {
-    const supabase = makeSupabase({ bank_connections: [{ count: 2, error: null }] })
-
-    const count = await countLiveSiblings(supabase, 'sess-1', 'conn-a')
-
-    expect(count).toBe(2)
-    const filters = supabase.used.bank_connections[0].calls
-    expect(filters).toContainEqual(['eq', ['session_id', 'sess-1']])
-    expect(filters).toContainEqual(['neq', ['id', 'conn-a']])
-    expect(filters).toContainEqual(['neq', ['status', 'revoked']])
-  })
-
-  it('reports a sibling when the count fails, so the session is never revoked', async () => {
-    const supabase = makeSupabase({
-      bank_connections: [{ count: null, error: { message: 'timeout' } }],
-    })
-    expect(await countLiveSiblings(supabase, 'sess-1', 'conn-a')).toBe(1)
   })
 })
 

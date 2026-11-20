@@ -1,10 +1,18 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, Landmark, Loader2, Search } from 'lucide-react'
+import { useTranslations } from 'next-intl'
+import {
+  BuildingLibraryIcon,
+  ChevronRightIcon,
+  MagnifyingGlassIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
+import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
 import { cn } from '@/lib/utils'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { matchBankByName } from '../lib/bank-match'
 
 export interface Bank {
@@ -23,6 +31,8 @@ const POPULAR_SWEDISH_BANKS = [
 ]
 
 interface BankSelectorProps {
+  /** The banks this door offers; every bank when absent. */
+  offered?: (bank: Bank) => boolean
   onConnect: (bank: Bank) => void
   onPsuTypeDetected?: (psuType: 'personal' | 'business') => void
   isConnecting?: boolean
@@ -36,7 +46,7 @@ interface BankSelectorProps {
  */
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <h3 className="px-1 pb-2 text-xs font-medium text-muted-foreground">
       {children}
     </h3>
   )
@@ -54,7 +64,7 @@ function BankMark({ bank, connecting }: { bank: Bank; connecting: boolean }) {
   if (connecting) {
     return (
       <span className="flex h-8 w-8 shrink-0 items-center justify-center">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
+        <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
       </span>
     )
   }
@@ -70,7 +80,7 @@ function BankMark({ bank, connecting }: { bank: Bank; connecting: boolean }) {
 
   return (
     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-secondary">
-      <Landmark className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+      <BuildingLibraryIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
     </span>
   )
 }
@@ -82,11 +92,13 @@ function BankRow({ bank, isConnecting, connectingBankName, onConnect }: {
   onConnect: (bank: Bank) => void
 }) {
   const connecting = isConnecting && connectingBankName === bank.name
+  const { canWrite, lockedTitle } = useViewerLock()
 
   return (
     <button
       type="button"
-      disabled={isConnecting}
+      disabled={!canWrite || isConnecting}
+      title={lockedTitle}
       onClick={() => onConnect(bank)}
       className={cn(
         // 32px mark + py-2 keeps the row at 48px: comfortably past the 44px
@@ -111,19 +123,21 @@ function BankRow({ bank, isConnecting, connectingBankName, onConnect }: {
           share of the state, the wording lives once in the line below the
           list. */}
       {!connecting && (
-        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       )}
     </button>
   )
 }
 
 export function BankSelector({
+  offered,
   onConnect,
   onPsuTypeDetected,
   isConnecting = false,
   connectingBankName = null,
   className,
 }: BankSelectorProps) {
+  const t = useTranslations('settings_banking')
   const [banks, setBanks] = useState<Bank[]>([])
   const [isSandbox, setIsSandbox] = useState(true)
   const [isLoading, setIsLoading] = useState(true)
@@ -156,7 +170,7 @@ export function BankSelector({
       '',
       `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`
     )
-    const match = matchBankByName(banks, requested)
+    const match = matchBankByName(offered ? banks.filter(offered) : banks, requested)
     if (match) {
       onConnect(match)
     } else {
@@ -198,9 +212,9 @@ export function BankSelector({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- onPsuTypeDetected is a stable setter, only run on mount
   }, [onPsuTypeDetected])
 
-  const filteredBanks = banks.filter((bank) =>
-    bank.name.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const offeredBanks = offered ? banks.filter(offered) : banks
+  const filteredBanks = offeredBanks.filter((bank) => bankMatchesQuery(bank, searchQuery))
+  const aliasHint = searchAliasHint(filteredBanks, searchQuery)
 
   const showPopular = !isSandbox && !searchQuery
   const popularBanks = showPopular
@@ -214,7 +228,7 @@ export function BankSelector({
     <div className={cn('space-y-4', className)}>
       {/* Search input */}
       <div className="relative">
-        <Search
+        <MagnifyingGlassIcon
           className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
           aria-hidden="true"
         />
@@ -247,7 +261,7 @@ export function BankSelector({
       {/* Error state: one quiet line, not a tinted panel. role="alert" so the
           failure is announced rather than only redrawn. */}
       {error && (
-        <p role="alert" className="px-1 text-[12.5px] leading-relaxed text-destructive">{error}</p>
+        <p role="alert" className="px-1 text-xs leading-relaxed text-destructive">{error}</p>
       )}
 
       {/* Bank list */}
@@ -261,7 +275,7 @@ export function BankSelector({
                   : 'Inga banker tillgängliga'}
               </p>
               {searchQuery && (
-                <p className="mt-1 text-xs text-muted-foreground/70">
+                <p className="mt-1 text-xs text-muted-foreground">
                   Försök med ett annat sökord
                 </p>
               )}
@@ -277,7 +291,7 @@ export function BankSelector({
               {popularBanks.length > 0 && (
                 <section>
                   <SectionLabel>Populära banker</SectionLabel>
-                  <div className="divide-y divide-border border-t border-border">
+                  <div className="divide-y divide-border border-t-hairline">
                     {popularBanks.map((bank) => (
                       <BankRow key={bank.name} bank={bank} isConnecting={isConnecting} connectingBankName={connectingBankName} onConnect={onConnect} />
                     ))}
@@ -287,7 +301,7 @@ export function BankSelector({
               {otherBanks.length > 0 && (
                 <section>
                   {popularBanks.length > 0 && <SectionLabel>Alla banker</SectionLabel>}
-                  <div className="divide-y divide-border border-t border-border">
+                  <div className="divide-y divide-border border-t-hairline">
                     {otherBanks.map((bank) => (
                       <BankRow key={bank.name} bank={bank} isConnecting={isConnecting} connectingBankName={connectingBankName} onConnect={onConnect} />
                     ))}
@@ -296,6 +310,13 @@ export function BankSelector({
               )}
             </div>
           )}
+          {/* A row found through a brand name ("Bokio") is named after the
+              bank that holds the account: one muted line says why. */}
+          {aliasHint && (
+            <p className="px-1 text-xs leading-relaxed text-muted-foreground">
+              {t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}
+            </p>
+          )}
         </>
       )}
 
@@ -303,10 +324,10 @@ export function BankSelector({
           than a tinted bordered panel, and it names the bank so the state is
           still readable when the chosen row has scrolled out of view. */}
       {isConnecting && connectingBankName && (
-        <p role="status" className="flex items-center gap-2 px-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+        <div role="status" className="flex items-center gap-2 px-1 text-xs leading-relaxed text-muted-foreground">
+          <SpinnerIcon className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
           Ansluter till {connectingBankName}...
-        </p>
+        </div>
       )}
     </div>
   )

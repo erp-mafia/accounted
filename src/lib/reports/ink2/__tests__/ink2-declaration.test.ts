@@ -18,13 +18,17 @@ vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
+  // INK2S 4.9 (lib/bokslut/assets/building-tax-service): no buildings here.
+  loadBuildingTaxAdjustment: vi.fn(async () => ({ net: 0, lines: [], warnings: [] })),
   loadTaxAdjustmentSnapshot: vi.fn(),
+  MEMBERSHIP_FEE_ACCOUNT: '3901',
 }))
 
 import { generateINK2Declaration } from '../ink2-engine'
-import { generateSRUSubmission, validateBlanketterSru } from '../sru-generator'
+import { generateSRUSubmission } from '../sru-generator'
+import { validateInk2BlanketterSru } from '@/tests/sru-validators'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
-import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
+import { loadBuildingTaxAdjustment, loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import type { TrialBalanceRow } from '@/types'
 
 const COMPANY_ID = 'company-1'
@@ -94,6 +98,8 @@ function makeSupabase(options?: {
   closingEntryId?: string | null
   closingEntryStatus?: string
   isClosed?: boolean
+  periodStart?: string
+  periodEnd?: string
 }): SupabaseStub {
   const closingEntryId =
     options?.closingEntryId === undefined ? CLOSING_ENTRY_ID : options.closingEntryId
@@ -109,8 +115,8 @@ function makeSupabase(options?: {
                   data: {
                     id: PERIOD_ID,
                     name: 'Räkenskapsår 1',
-                    period_start: '2025-01-01',
-                    period_end: '2025-12-31',
+                    period_start: options?.periodStart ?? '2025-01-01',
+                    period_end: options?.periodEnd ?? '2025-12-31',
                     is_closed: options?.isClosed ?? true,
                     closing_entry_id: closingEntryId,
                   },
@@ -184,6 +190,37 @@ beforeEach(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any)
   stubTrialBalances(CLOSED_ROWS, PRE_CLOSING_ROWS)
+})
+
+describe('generateINK2Declaration: the number it files under', () => {
+  it('reads a number held only on the company row', async () => {
+    const stub = makeSupabase()
+    const companyRowOnly = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: { company_name: 'Testbolaget AB', org_number: null, entity_type: 'aktiebolag' }, error: null }),
+              }),
+            }),
+          }
+        }
+        if (table === 'companies') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' }, error: null }),
+              }),
+            }),
+          }
+        }
+        return stub.from(table)
+      },
+    } as unknown as SupabaseStub
+    const result = await generateINK2Declaration(anySupabase(companyRowOnly), COMPANY_ID, PERIOD_ID)
+    expect(result.companyInfo.orgNumber).toBe('556677-8899')
+  })
 })
 
 describe('generateINK2Declaration: closed fiscal year', () => {
@@ -267,6 +304,69 @@ describe('generateINK2Declaration: closed fiscal year', () => {
   })
 })
 
+describe('generateINK2Declaration: schablonintäkt on periodiseringsfonder (INK2S 4.6a)', () => {
+  /** The same year, with a fond of 200 000 already there when the year opened. */
+  function withOpeningFond(rows: TrialBalanceRow[]): TrialBalanceRow[] {
+    return [...rows, { ...row('2124', 'Periodiseringsfond 2024', -200_000), opening_credit: 200_000, period_credit: 0 }]
+  }
+
+  it('adds the schablonintäkt to the taxable result and files it on 7654', async () => {
+    stubTrialBalances(withOpeningFond(CLOSED_ROWS), withOpeningFond(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    // 200 000 x 1,96 % (statslåneräntan 30 nov 2024) = 3 920. 506 000 + 3 920.
+    expect(result.ink2s['7654']).toBe(3_920)
+    expect(result.ink2s['7670']).toBe(509_920)
+    expect(result.ink2['7104']).toBe(509_920)
+    const sru = generateSRUSubmission(result).blanketterSru
+    expect(sru).toContain('#UPPGIFT 7654 3920')
+    expect(validateInk2BlanketterSru(sru).errors).toEqual([])
+    expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
+  })
+
+  it('yields nothing for a fond avsatt in this year\'s bokslut', async () => {
+    // The default fixture: 2125 has a closing balance but opened at 0.
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2s['7654']).toBe(0)
+    expect(result.ink2s['7670']).toBe(506_000)
+    expect(generateSRUSubmission(result).blanketterSru).not.toContain('#UPPGIFT 7654')
+    expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
+  })
+
+  it('computes 4.6a for a brutet räkenskapsår with the rate of the year it ends in', async () => {
+    stubTrialBalances(withOpeningFond(CLOSED_ROWS), withOpeningFond(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ periodStart: '2025-03-01', periodEnd: '2026-02-28' })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    // Ends 2026: 200 000 x 2,55 % (statslåneräntan 30 nov 2025) = 5 100.
+    expect(result.ink2s['7654']).toBe(5_100)
+    expect(result.ink2s['7670']).toBe(511_100)
+    expect(generateSRUSubmission(result).blanketterSru).toContain('#UPPGIFT 7654 5100')
+    expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
+  })
+
+  it('leaves 4.6a to the user for a year that ends mid-month and says so', async () => {
+    stubTrialBalances(withOpeningFond(CLOSED_ROWS), withOpeningFond(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ periodStart: '2025-01-01', periodEnd: '2025-10-15' })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.ink2s['7654']).toBe(0)
+    expect(result.ink2s['7670']).toBe(506_000)
+    expect(generateSRUSubmission(result).blanketterSru).not.toContain('#UPPGIFT 7654')
+    expect(result.warnings).toContainEqual(expect.stringMatching(/200000 kr vid beskattningsårets ingång.*punkt 4\.6a/))
+  })
+})
+
 describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
   it('deducts the saved deficit from the taxable result and files it on 7763', async () => {
     vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
@@ -319,7 +419,70 @@ describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
     const sru = generateSRUSubmission(withDeficit).blanketterSru
     expect(sru).toContain('#UPPGIFT 7763 100000')
     expect(sru).toContain('#UPPGIFT 7670 406000')
-    expect(validateBlanketterSru(sru).isValid).toBe(true)
+    expect(validateInk2BlanketterSru(sru).isValid).toBe(true)
+  })
+
+  it('warns that 4.14 a is net when the underskottsregister holds spärrade amounts', async () => {
+    const register = (overridden: boolean, amountBlockReduction: number) => ({
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 0,
+      deficitCarryforward: 100_000 - amountBlockReduction,
+      lossRegister: {
+        row: {
+          taxLossCarryforwardId: 'tlc-1',
+          broughtForward: 100_000,
+          amountBlockReduction,
+          groupBlockReduction: 0,
+          deductible: 100_000 - amountBlockReduction,
+          source: 'tax_assessment',
+        },
+        overridden,
+      },
+    })
+    const blocked = (warnings: string[]) => warnings.filter((w) => w.startsWith('Underskottsregistret'))
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(register(false, 20_000) as any)
+    const netted = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(netted.ink2s['7763']).toBe(80_000)
+    expect(netted.ink2s['7670']).toBe(426_000)
+    expect(blocked(netted.warnings)).toEqual([
+      'Underskottsregistret har spärrade belopp, så punkt 4.14 a visar underskottet netto (80000 kr). I deklarationen ska 4.14 a vara 100000 kr, 4.14 b 20000 kr och 4.14 c 0 kr (4.14 c även i punkt 1.2). Ange dem i Skatteverkets e-tjänst.',
+    ])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(register(false, 0) as any)
+    expect(blocked((await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)).warnings)).toEqual([])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(register(true, 20_000) as any)
+    expect(blocked((await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)).warnings)).toEqual([])
+  })
+})
+
+describe('generateINK2Declaration: buildings on their tax plan (INK2S 4.9)', () => {
+  it('adds a book depreciation above the tax plan back on 7666 and a deduction below it on 7765', async () => {
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 0,
+      deficitCarryforward: 0,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+    vi.mocked(loadBuildingTaxAdjustment).mockResolvedValueOnce({ net: 10_000.6, lines: [], warnings: ['Lager: ange skattemässig avskrivning'] })
+    const plus = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    // Whole kronor: 506 000 + 10 000.
+    expect(plus.ink2s['7666']).toBe(10_000)
+    expect(plus.ink2s['7765']).toBe(0)
+    expect(plus.ink2s['7670']).toBe(516_000)
+    expect(plus.warnings).toContain('Lager: ange skattemässig avskrivning')
+    const sru = generateSRUSubmission(plus).blanketterSru
+    expect(sru).toContain('#UPPGIFT 7666 10000')
+    expect(validateInk2BlanketterSru(sru).isValid).toBe(true)
+
+    vi.mocked(loadBuildingTaxAdjustment).mockResolvedValueOnce({ net: -6_000, lines: [], warnings: [] })
+    const minus = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(minus.ink2s['7765']).toBe(6_000)
+    expect(minus.ink2s['7670']).toBe(500_000)
   })
 })
 
@@ -506,7 +669,7 @@ describe('generateINK2Declaration: guards', () => {
             select: () => ({
               eq: () => ({
                 single: async () => ({
-                  data: { entity_type: 'enskild_firma' },
+                  data: { entity_type: 'enskild_firma', org_number: '5566778899' },
                   error: null,
                 }),
               }),
@@ -520,6 +683,122 @@ describe('generateINK2Declaration: guards', () => {
     await expect(
       generateINK2Declaration(anySupabase(supabase), COMPANY_ID, PERIOD_ID),
     ).rejects.toThrow(/aktiebolag/i)
+  })
+
+  it('accepts an ekonomisk förening: the same INK2 return as an aktiebolag', async () => {
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    company_name: 'Testkooperativet ek. för.',
+                    org_number: '7696001234',
+                    entity_type: 'ekonomisk_forening',
+                    address_line1: 'Testgatan 1',
+                    postal_code: '11122',
+                    city: 'Stockholm',
+                    email: 'test@example.com',
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    }
+
+    const result = await generateINK2Declaration(anySupabase(supabase), COMPANY_ID, PERIOD_ID)
+    expect(result.fiscalYear.id).toBe(PERIOD_ID)
+    expect(result.ink2r).toBeDefined()
+    expect(result.ink2s).toBeDefined()
+  })
+
+  it('warns an ekonomisk förening about the 4.3c add-back until it is entered', async () => {
+    const forening = () => ({
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: { entity_type: 'ekonomisk_forening', company_name: 'Kooperativet', org_number: '7696001234' },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    })
+    const membershipItem = {
+      sourceKey: 'account:3901',
+      source: 'detected' as const,
+      adjustmentType: 'non_taxable_income' as const,
+      description: 'Medlemsavgifter',
+      accountNumber: '3901',
+      amount: 12_000,
+      included: true,
+    }
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      items: [membershipItem],
+      nonDeductibleExpenses: 0,
+      nonTaxableIncome: 12_000,
+      deficitCarryforward: 0,
+    })
+    const withoutAddBack = await generateINK2Declaration(anySupabase(forening()), COMPANY_ID, PERIOD_ID)
+    expect(withoutAddBack.warnings.some((w) => w.includes('4.3c'))).toBe(true)
+    expect(withoutAddBack.ink2s['7754']).toBe(12_000)
+
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      items: [
+        membershipItem,
+        {
+          sourceKey: 'manual:non_deductible_expenses',
+          source: 'manual',
+          adjustmentType: 'non_deductible_expense',
+          description: 'Ytterligare ej avdragsgilla kostnader',
+          accountNumber: null,
+          amount: 4_000,
+          included: true,
+        },
+      ],
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 12_000,
+      deficitCarryforward: 0,
+    })
+    const withAddBack = await generateINK2Declaration(anySupabase(forening()), COMPANY_ID, PERIOD_ID)
+    expect(withAddBack.warnings.some((w) => w.includes('4.3c'))).toBe(false)
+    expect(withAddBack.ink2s['7653']).toBe(4_000)
+  })
+
+  it('rejects an ideell förening (INK3, not modelled)', async () => {
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: { entity_type: 'ideell_forening', org_number: '5566778899' },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    }
+
+    await expect(
+      generateINK2Declaration(anySupabase(supabase), COMPANY_ID, PERIOD_ID),
+    ).rejects.toThrow(/aktiebolag and ekonomisk förening/i)
   })
 
   it('warns about a BAS account with no SRU mapping', async () => {
@@ -606,7 +885,7 @@ describe('generateINK2Declaration: whole-krona drift (#2597)', () => {
     expect(result.breakdown['7410'].total).toBe(expected)
 
     const { blanketterSru } = generateSRUSubmission(result)
-    expect(validateBlanketterSru(blanketterSru)).toEqual({ isValid: true, errors: [] })
+    expect(validateInk2BlanketterSru(blanketterSru)).toEqual({ isValid: true, errors: [] })
     const revenueFields = blanketterSru.split('\r\n').filter((line) => line.startsWith('#UPPGIFT 7410 '))
     expect(revenueFields).toEqual(expected === 0 ? [] : [`#UPPGIFT 7410 ${expected}`])
   })

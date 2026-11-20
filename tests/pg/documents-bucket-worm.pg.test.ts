@@ -143,9 +143,7 @@ describe('documents bucket: WORM (no client-side DELETE)', () => {
   }
 
   it('no client-reachable DELETE, UPDATE or FOR ALL policy covers the documents bucket', async () => {
-    // receipts_delete is a different bucket and is intentionally deletable:
-    // receipts are pre-bookkeeping scratch, not rakenskapsinformation. An
-    // UPDATE policy would be as damaging as a DELETE one: it lets a user
+    // An UPDATE policy would be as damaging as a DELETE one: it lets a user
     // rewrite an object in place, defeating the version chain.
     expect(await destructivePoliciesOverDocuments()).toEqual([])
   })
@@ -200,9 +198,10 @@ describe('documents bucket: WORM (no client-side DELETE)', () => {
   })
 
   it('a policy scoped to another bucket is not flagged', async () => {
-    // The counterweight to the rule above: receipts_delete is real, lives in
-    // migration 20260710102000, and must not trip this ratchet. A ratchet
-    // that cries wolf on unrelated buckets gets switched off.
+    // The counterweight to the rule above: a delete policy on another bucket
+    // (production's receipts bucket carried one until 20261102200354) must
+    // not trip this ratchet. A ratchet that cries wolf on unrelated buckets
+    // gets switched off.
     await getPool().query(
       `CREATE POLICY worm_ratchet_other_bucket ON storage.objects
          FOR DELETE TO authenticated

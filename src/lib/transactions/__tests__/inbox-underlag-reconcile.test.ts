@@ -163,6 +163,8 @@ describe('reconcileStrandedInboxUnderlag', () => {
 
     expect(summary).toMatchObject({ repaired: 0, stillUnlinked: 1, historyAppended: 0 })
     expect(appendHistory).not.toHaveBeenCalled()
+    // A link that failed is retried by the next run: no error for it.
+    expect(log.error).not.toHaveBeenCalled()
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('still unlinked'),
       expect.objectContaining({ inbox_item_id: 'i1', transaction_id: TX1 }),
@@ -188,6 +190,12 @@ describe('reconcileStrandedInboxUnderlag', () => {
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('another verifikat'),
       expect.objectContaining({ inbox_item_id: 'i1', document_journal_entry_id: 'je-other' }),
+    )
+    // The warning reaches nobody: the run says it once as an error, with the counts.
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith(
+      'inbox underlag reconcile: documents anchored to another verifikat need a human',
+      { anchored_elsewhere: 1, unlinked_locked: 0, still_unlinked: 0, stranded_on_booked: 1 },
     )
   })
 
@@ -224,6 +232,51 @@ describe('reconcileStrandedInboxUnderlag', () => {
     expect(resolveBooked).toHaveBeenCalledWith(expect.anything(), C2, [TX2])
     expect(summary).toMatchObject({ scanned: 2, strandedOnBooked: 1, companiesTouched: 1, repaired: 1 })
     expect(propagate).toHaveBeenCalledTimes(1)
+  })
+
+  // Since 2026-10-02 the daily run retried items of a company archived by a
+  // migration reset and the immutability trigger refused every write.
+  it('skips companies archived by a migration reset: no resolve, no write, counted', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [item('i1', C1, TX1), item('i2', C2, TX2), item('i3', C2, TX3)] })
+    enqueue({ data: [{ source_company_id: C2 }] }) // company_migration_resets
+    resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
+    resolveAnchoring
+      .mockResolvedValueOnce(anchoring({ i1: 'unlinked' }))
+      .mockResolvedValueOnce(anchoring({ i1: 'anchored' }))
+
+    const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
+      execute: true,
+      log: log as never,
+    })
+
+    expect(findCalls('company_migration_resets', 'select')).toEqual([['source_company_id']])
+    expect(resolveBooked).toHaveBeenCalledTimes(1)
+    expect(resolveBooked).toHaveBeenCalledWith(expect.anything(), C1, [TX1])
+    expect(propagate).toHaveBeenCalledTimes(1)
+    expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX1, JE1)
+    expect(summary).toMatchObject({ scanned: 3, skippedResetArchives: 2, repaired: 1, failures: 0 })
+  })
+
+  it('still runs, skipping nothing, when the reset archives cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [item('i1', C1, TX1)] })
+    enqueue({ data: null, error: { message: 'connection reset' } }) // company_migration_resets
+    resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
+    resolveAnchoring
+      .mockResolvedValueOnce(anchoring({ i1: 'unlinked' }))
+      .mockResolvedValueOnce(anchoring({ i1: 'anchored' }))
+
+    const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
+      execute: true,
+      log: log as never,
+    })
+
+    expect(summary).toMatchObject({ skippedResetArchives: 0, repaired: 1, failures: 0 })
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('migration reset archives'),
+      expect.anything(),
+    )
   })
 
   it('reads every candidate and spends maxItems on unlinked items only, deferring the rest', async () => {

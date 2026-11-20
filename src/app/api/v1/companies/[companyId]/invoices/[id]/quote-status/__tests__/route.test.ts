@@ -29,42 +29,10 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as setQuoteStatus } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-type RecordedCall = { table: string; method: string; args: unknown[] }
-function makeFlexibleSupabase(
-  byTable: Record<string, MockResult | MockResult[]>,
-  calls?: RecordedCall[],
-) {
-  // Per-table queue: arrays return results in order across multiple calls
-  // to .from('table'); single values return the same result every time.
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls?.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const QUOTE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -112,7 +80,7 @@ beforeEach(() => {
 
 describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
   it('returns 401 without a bearer token', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await setQuoteStatus(
       makeRequest({ status: 'accepted' }, { auth: false }),
@@ -125,7 +93,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
   })
 
   it('returns 400 VALIDATION_ERROR for an unknown status', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ company_members: MEMBER }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ company_members: MEMBER }).supabase)
 
     const res = await setQuoteStatus(
       makeRequest({ status: 'expired' }),
@@ -138,7 +106,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
   })
 
   it('returns 400 VALIDATION_ERROR for a non-UUID id', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ company_members: MEMBER }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ company_members: MEMBER }).supabase)
 
     const res = await setQuoteStatus(
       makeRequest({ status: 'accepted' }, { id: 'not-a-uuid' }),
@@ -153,10 +121,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
 
   it('returns 404 NOT_FOUND when the quote does not exist in the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: MEMBER,
         invoices: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await setQuoteStatus(
@@ -171,10 +139,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
 
   it('returns 400 INVOICE_NOT_A_QUOTE for a regular invoice', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: MEMBER,
         invoices: { data: { ...OPEN_QUOTE, document_type: 'invoice', quote_status: null }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await setQuoteStatus(
@@ -190,10 +158,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
 
   it('returns 400 INVOICE_QUOTE_NOT_DECIDABLE for a cancelled quote', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: MEMBER,
         invoices: { data: { ...OPEN_QUOTE, status: 'cancelled' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await setQuoteStatus(
@@ -208,14 +176,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
 
   it('returns 409 INVOICE_QUOTE_ALREADY_INVOICED once an active invoice was converted from it', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: MEMBER,
         invoices: [
           { data: { ...OPEN_QUOTE, quote_status: 'accepted' }, error: null },
           // converted_from_id lookup: an active invoice exists.
           { data: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', invoice_number: '2026-0042' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const res = await setQuoteStatus(
@@ -231,14 +199,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
 
   it('returns 409 INVOICE_QUOTE_ALREADY_ORDERED when the decision guard refuses because a live kundorder exists', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: MEMBER,
         invoices: [
           { data: { ...OPEN_QUOTE, quote_status: 'accepted' }, error: null },
           { data: null, error: null }, // no converted invoice
           { data: null, error: { code: 'P0001', message: `INVOICE_QUOTE_ALREADY_ORDERED: quote ${QUOTE_ID} has a live kundorder` } },
         ],
-      }),
+      }).supabase,
     )
 
     const res = await setQuoteStatus(
@@ -252,11 +220,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
   })
 
   it('records the decision and returns the effective status', async () => {
-    const calls: RecordedCall[] = []
     const decidedAt = '2026-09-02T09:14:33.000Z'
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: MEMBER,
           invoices: [
             { data: OPEN_QUOTE, error: null },
@@ -264,9 +229,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
             { data: null, error: null },
             { data: { ...OPEN_QUOTE, quote_status: 'accepted', quote_decided_at: decidedAt }, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const res = await setQuoteStatus(
@@ -290,14 +255,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
 
   it('reports expired for an open quote past valid_until (derived, never stored)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: MEMBER,
         invoices: [
           { data: { ...OPEN_QUOTE, valid_until: '2020-01-01' }, error: null },
           { data: null, error: null },
           { data: { ...OPEN_QUOTE, valid_until: '2020-01-01' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const res = await setQuoteStatus(
@@ -312,18 +277,15 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
   })
 
   it('dry-run previews the decision without writing', async () => {
-    const calls: RecordedCall[] = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: MEMBER,
           invoices: [
             { data: OPEN_QUOTE, error: null },
             { data: null, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const res = await setQuoteStatus(

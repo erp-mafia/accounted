@@ -11,11 +11,15 @@ import { onboardingSkill } from './onboarding'
 import { bookkeepSkill } from './bookkeep'
 import { taxPlanningSkill } from './tax-planning'
 import { createSkillSkill } from './create-skill'
+import { companyFactsImportSkill } from './company-facts-import'
+import { analysisSkills } from '../analyses'
 import type { Skill } from '../types'
 
 export const workflowSkills: Skill[] = [
   bookkeepSkill, monthEndCloseSkill, quarterlyVatReviewSkill, yearEndCloseSkill,
   invoicingRulesSkill, payrollMonthlySkill, bankReconciliationSkill,
   kreditfakturaProcessSkill, customerOnboardingSkill, reconcileMonthSkill, onboardingSkill,
-  taxPlanningSkill, createSkillSkill,
+  taxPlanningSkill, createSkillSkill, companyFactsImportSkill,
+  // Accounted's own analyses (itemKind analysis): loadable like any skill, listed under Analyser.
+  ...analysisSkills,
 ]

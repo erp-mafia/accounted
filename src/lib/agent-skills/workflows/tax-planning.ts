@@ -65,7 +65,7 @@ Along the way, ask one precise question when a number surprises you: "The result
 - \`gnubok_get_balance_sheet({ period_id })\`: equity, cash, obeskattade reserver.
 - \`gnubok_get_general_ledger({ period_id, account_from: "2110", account_to: "2139" })\` (AB): existing periodiseringsfonder, one account per year. Account 2150 is överavskrivningar, not periodiseringsfond: never mix them.
 - \`gnubok_propose_dispositioner({ fiscal_period_id })\` (AB): Accounted's own calculation of mandatory återföring, överavskrivningar, periodiseringsfond avsättning, SLP and bolagsskatt. It is based on what is **booked so far**, so mid-year it is a floor, not the full-year answer. Read \`warnings\` and \`completedDispositions\`.
-- \`gnubok_preview_ef_declaration({ fiscal_period_id, category, kapitalunderlag, prior_year_schablonavdrag, prior_year_actual_charged, pfond_desired_amount })\` (EF): egenavgifter, räntefördelning, periodiseringsfond, expansionsfond. Pass only values the owner gave you; leave the rest out rather than guessing. It also works on booked-so-far figures.
+- \`gnubok_preview_ef_declaration({ fiscal_period_id, category, kapitalunderlag, sparat_fordelningsbelopp, prior_year_schablonavdrag, prior_year_actual_charged, pfond_desired_amount, pfond_existing_fonder })\` (EF): egenavgifter, räntefördelning, periodiseringsfond, expansionsfond. Pass only values the owner gave you; leave the rest out rather than guessing. \`kapitalunderlag\` is the SKV 2196 figure, any sparat fördelningsbelopp already added; \`sparat_fordelningsbelopp\` is the saved amount from last year's NE (Övriga uppgifter). \`pfond_existing_fonder\` is the owner's earlier periodiseringsfonder (year and balance, from each year's NE R34): the one in its sixth year comes back as a mandatory återföring in R32, and \`pfondFonder\` says when each other fund must return. \`rutor\` is NE R29 to R43 in the form's order, \`ovrigaUppgifter\` the kapitalunderlag fields the form asks for, and \`warnings\` what the figures leave out (R13 to R28 are not included). It also works on booked-so-far figures.
 - \`gnubok_list_assets\` if the owner plans purchases or asks about avskrivningar.
 
 **Projection.** If the year is not over: full-year result estimate = booked result / months booked x months in the year, adjusted for what the owner told you. Round every money figure to whole öre (never with toFixed), then present in whole kronor. Account numbers are strings.
@@ -105,7 +105,7 @@ When the owner has decided:
 
 ## When a tool call fails
 
-- **Validation error / unknown argument:** fix the arguments from the tool description and try once more. \`gnubok_get_kpi_report\` takes only \`period_id\`.
+- **Validation error / unknown argument:** fix the arguments from the tool description and try once more. \`gnubok_get_kpi_report\` takes \`period_id\`, optional \`from_date\`/\`to_date\` and \`metrics\` (metric names such as \`cash_position\` or \`net_result\`; the period and range fields always come back).
 - **"Fiscal period not found" / "No fiscal periods found":** re-read \`gnubok_list_fiscal_periods\` and use a real \`id\`; if none exists, stop (Step 0.2).
 - **\`EF_DECLARATION_WRONG_LEGAL_FORM\`:** the company is not an enskild firma. Go back to Step 0.1; do not force the EF track.
 - **\`gnubok_propose_dispositioner\` returns empty \`proposals\`:** for an EF this is expected (no corporate dispositions). For an AB, check that the result is positive and the books are up to date before concluding there is nothing to do.

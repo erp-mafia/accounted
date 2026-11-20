@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
-import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { unlockFiscalPeriod } from '@/lib/core/bookkeeping/fiscal-year-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
+// Unlock a locked, not closed, räkenskapsår. The refusal codes
+// (PERIOD_NOT_FOUND, PERIOD_UNLOCK_CLOSED, PERIOD_UNLOCK_NOT_LOCKED) come from
+// lib/core/bookkeeping/fiscal-year-service.ts, shared with the v1 operation
+// fiscal-periods.unlock.
 export const POST = withRouteContext(
   'period.unlock',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
@@ -10,26 +14,10 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
 
-    try {
-      const period = await unlockPeriod(supabase, companyId!, user.id, id)
-      return NextResponse.json({ data: period })
-    } catch (err) {
-      opLog.error('failed to unlock period', err as Error)
-      // unlockPeriod() throws plain Error with messages like "Fiscal period not
-      // found", "Cannot unlock a closed period" or "Period is not locked":
-      // translate to envelope codes, mirroring the sibling lock route.
-      const message = err instanceof Error ? err.message : ''
-      if (/not found/i.test(message)) {
-        return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
-      }
-      if (/closed/i.test(message)) {
-        return errorResponseFromCode('PERIOD_UNLOCK_CLOSED', opLog, { requestId })
-      }
-      if (/not locked/i.test(message)) {
-        return errorResponseFromCode('PERIOD_UNLOCK_NOT_LOCKED', opLog, { requestId })
-      }
-      return errorResponse(err, opLog, { requestId })
-    }
+    const outcome = await unlockFiscalPeriod({ supabase, companyId, userId: user.id, log: opLog }, id)
+    if (!outcome.ok) return sessionFailureResponse(outcome, opLog, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

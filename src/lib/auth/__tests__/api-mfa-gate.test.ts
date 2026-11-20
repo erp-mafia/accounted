@@ -44,4 +44,31 @@ describe('apiPathSkipsMfaGate', () => {
     expect(apiPathSkipsMfaGate('/api/accounts', false)).toBe(false)
     expect(apiPathSkipsMfaGate('/api/account', false)).toBe(false)
   })
+
+  it('lets the AAL1 session routes through (sign-in, MFA step-up, /me, logout)', () => {
+    for (const path of [
+      '/api/auth/login',
+      '/api/auth/logout',
+      '/api/auth/otp',
+      '/api/auth/sso',
+      '/api/auth/oauth',
+      '/api/auth/anonymous',
+      '/api/auth/me',
+      '/api/auth/mfa',
+      '/api/auth/mfa/verify',
+      '/api/auth/mfa/enroll',
+      '/api/auth/mfa/unenroll',
+    ]) {
+      expect(apiPathSkipsMfaGate(path, false)).toBe(true)
+    }
+  })
+
+  it('keeps the session-token route behind the gate like any data route', () => {
+    expect(apiPathSkipsMfaGate('/api/auth/session-token', false)).toBe(false)
+    expect(apiPathSkipsMfaGate('/api/auth/heartbeat', false)).toBe(false)
+    // Lookalikes of the exact routes do not match.
+    expect(apiPathSkipsMfaGate('/api/auth/login-history', false)).toBe(false)
+    expect(apiPathSkipsMfaGate('/api/auth/me/extra', false)).toBe(false)
+    expect(apiPathSkipsMfaGate('/api/auth/mfa-bypass', false)).toBe(false)
+  })
 })

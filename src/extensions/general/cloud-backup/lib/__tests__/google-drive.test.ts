@@ -7,6 +7,7 @@ import {
   updateFile,
   uploadFile,
 } from '../google-drive'
+import { CloudScopeMissingError } from '../cloud-provider'
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -293,5 +294,89 @@ describe('getFileMeta', () => {
       new Response('server error', { status: 500 })
     )
     await expect(getFileMeta('at', 'f-1')).rejects.toThrow(/500/)
+  })
+})
+
+/**
+ * The answer production got every night for grants made with the Drive box
+ * unticked at Google's consent screen (B12): 403, insufficient scopes.
+ */
+function insufficientScopeResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: 403,
+        message: 'Request had insufficient authentication scopes.',
+        errors: [
+          { message: 'Insufficient Permission', domain: 'global', reason: 'insufficientPermissions' },
+        ],
+        status: 'PERMISSION_DENIED',
+        details: [
+          {
+            '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+            reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
+            domain: 'googleapis.com',
+          },
+        ],
+      },
+    }),
+    {
+      status: 403,
+      headers: {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate':
+          'Bearer realm="https://accounts.google.com/", error="insufficient_scope", scope="https://www.googleapis.com/auth/drive.file"',
+      },
+    }
+  )
+}
+
+describe('a grant without the Drive scope', () => {
+  it('fails the folder lookup with CloudScopeMissingError', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(insufficientScopeResponse())
+    const err = await ensureFolder('at', 'gnubok', null).catch((e) => e)
+    expect(err).toBeInstanceOf(CloudScopeMissingError)
+    expect(err.message).toContain('403')
+  })
+
+  it('fails the folder revalidation with CloudScopeMissingError', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(insufficientScopeResponse())
+    await expect(getFileMeta('at', 'f-1')).rejects.toBeInstanceOf(CloudScopeMissingError)
+  })
+
+  it('fails an upload at session init with CloudScopeMissingError', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(insufficientScopeResponse())
+    await expect(
+      uploadFile('at', 'folder-1', 'Arkiv 2024.zip', new ArrayBuffer(4))
+    ).rejects.toBeInstanceOf(CloudScopeMissingError)
+  })
+
+  it('recognises the challenge header alone', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', {
+        status: 403,
+        headers: { 'WWW-Authenticate': 'Bearer error="insufficient_scope"' },
+      })
+    )
+    await expect(getFileMeta('at', 'f-1')).rejects.toBeInstanceOf(CloudScopeMissingError)
+  })
+
+  it('keeps a file-level 403 an ordinary error, not a reconnect', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 403,
+            message: 'The user does not have sufficient permissions for file f-1.',
+            errors: [{ reason: 'insufficientFilePermissions' }],
+          },
+        }),
+        { status: 403 }
+      )
+    )
+    const err = await getFileMeta('at', 'f-1').catch((e) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(CloudScopeMissingError)
+    expect(err.message).toContain('403')
   })
 })

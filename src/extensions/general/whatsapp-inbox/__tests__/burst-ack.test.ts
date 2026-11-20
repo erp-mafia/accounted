@@ -20,7 +20,7 @@ vi.mock('@/lib/processing-history/append', () => ({
 
 import { sendText } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { finalizeBurst } from '@/extensions/general/whatsapp-inbox/lib/process-inbound'
-import { stockholmDayKey } from '@/extensions/general/whatsapp-inbox/lib/conversation'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 
 const sendTextMock = vi.mocked(sendText)
@@ -143,8 +143,8 @@ describe('finalizeBurst', () => {
     const message = sendTextMock.mock.calls[0][1]
     expect(message.template).toBe(TEMPLATE.m5BurstAck)
     expect(message.body).toContain('*2* kvitton')
-    expect(message.body).toContain('1. ICA Maxi, 234 kr')
-    expect(message.body).toContain('2. SJ, 456 kr')
+    expect(message.body).toContain('1. ICA Maxi, 234\u00a0kr')
+    expect(message.body).toContain('2. SJ, 456\u00a0kr')
 
     // acked_at stamped on exactly the covered rows.
     const stamp = findCalls('whatsapp_messages', 'update').at(-1)![0] as Record<string, unknown>
@@ -169,7 +169,7 @@ describe('finalizeBurst', () => {
     const message = sendTextMock.mock.calls[0][1]
     expect(message.template).toBe(TEMPLATE.m4Ack)
     expect(message.body).toContain('ICA Maxi')
-    expect(message.body).toContain('234 kr')
+    expect(message.body).toContain('234\u00a0kr')
     expect(message.body).toContain('2026-07-30')
     expect(message.inboxItemId).toBe('item-1')
   })
@@ -253,12 +253,62 @@ describe('finalizeBurst', () => {
     expect(itemPatch.channel_context.quality?.resend_requested_at).toBeTruthy()
   })
 
+  it('an unread photo (no AI reading on the plan) is acked as unread, never asked for again (crm#1779)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'conv-1' }] })
+    enqueue({ data: makeConversation() })
+    // A nameless chat photo under the compressed-photo size: the shape the resend trigger fires on.
+    enqueue({ data: [makeDoneRow(1, { media_filename: null })] })
+    enqueue({
+      data: [
+        makeItem(
+          1,
+          { documentKind: null, legibility: null, supplier: { name: null }, invoice: {}, totals: { total: null }, lineItems: [] },
+          { extraction_skipped: true },
+        ),
+      ],
+    })
+    enqueue({ data: [{ id: 'doc-1', file_size_bytes: 88_000 }] })
+    enqueue({ data: null }) // conversation update
+    enqueue({ data: null }) // acked stamp
+
+    await finalizeBurst(supabase as unknown as SupabaseClient, 'conv-1')
+
+    const message = sendTextMock.mock.calls[0][1]
+    expect(message.template).toBe(TEMPLATE.m4AckUnread)
+    expect(message.body).toContain('lästes inte av')
+    const conversationPatch = findCalls('whatsapp_conversations', 'update').at(-1)![0] as { state: string }
+    expect(conversationPatch.state).toBe('idle')
+  })
+
+  it('a burst names an unread receipt as unread, not as missing an amount', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'conv-1' }] })
+    enqueue({ data: makeConversation() })
+    enqueue({ data: [makeDoneRow(1), makeDoneRow(2)] })
+    enqueue({
+      data: [
+        makeItem(1, CLEAN_RECEIPT),
+        makeItem(2, { documentKind: null, legibility: null, supplier: { name: null }, invoice: {}, totals: { total: null }, lineItems: [] }, { extraction_skipped: true }),
+      ],
+    })
+    enqueue({ data: [{ id: 'doc-1', file_size_bytes: 500_000 }, { id: 'doc-2', file_size_bytes: 500_000 }] })
+    enqueue({ data: null }) // conversation update
+    enqueue({ data: null }) // acked stamp
+
+    await finalizeBurst(supabase as unknown as SupabaseClient, 'conv-1')
+
+    const message = sendTextMock.mock.calls[0][1]
+    expect(message.template).toBe(TEMPLATE.m5BurstAck)
+    expect(message.body).toContain('kvitto-2.jpg, inte avläst')
+  })
+
   it('daily budget exhausted: ack only, question moved_to_app', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'conv-1' }] })
     enqueue({
       data: makeConversation({
-        context: { budget: { day_key: stockholmDayKey(), count: 6 } },
+        context: { budget: { day_key: todayIsoStockholm(), count: 6 } },
       }),
     })
     enqueue({ data: [makeDoneRow(1)] })

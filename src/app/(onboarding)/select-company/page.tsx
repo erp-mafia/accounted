@@ -5,9 +5,8 @@ import {
   acceptPendingInviteByToken,
   hasPendingInviteForEmail,
 } from '@/lib/company/pending-invites'
-import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
+import { addableEngagements } from '@/lib/company-lookup/engagements'
 import BankIdCompanyPicker from '@/components/onboarding/BankIdCompanyPicker'
-import { orgNumberKey, registrationNumberKey } from '@/lib/invariants/org-number'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,14 +15,16 @@ const ENRICHMENT_TTL_DAYS = 7
 /**
  * /select-company: the door to adding a company.
  *
- * Reached from "Lägg till företag" in the app (?choose=1) and as the landing
- * after a BankID login. It renders only when there is something to choose:
- * companies the user's BankID says they run (CompanyRoles) that are not in
- * Accounted yet. Everything else goes straight through (founder direction
- * 2026-09-14): no new engagements means the onboarding journey, and a
- * BankID login that finds nothing new opens the company the user already
- * has. Companies the user already belongs to are never listed here; opening
- * one is the in-app switcher's job.
+ * Reached from "Lägg till företag" in the app (?choose=1), and as the landing
+ * of a signed-in user without a company whose BankID login stored
+ * engagements (the middleware sends them here; a BankID login of a user who
+ * has a company opens that company, like any other login, crm#1034). It
+ * renders only when there is something to choose: companies the user's
+ * BankID says they run (CompanyRoles) that still exist and are not in
+ * Accounted yet. Everything else goes straight through (product direction
+ * 2026-09-14): no new engagements means the onboarding journey, or the
+ * company the user already has. Companies the user already belongs to are
+ * never listed here; opening one is the in-app switcher's job.
  */
 export default async function SelectCompanyPage({
   searchParams,
@@ -46,12 +47,11 @@ export default async function SelectCompanyPage({
   }
 
   // All lookups key only on user.id/email, one parallel batch instead of
-  // serial round-trips on the post-BankID-login landing page.
+  // serial round-trips on a landing page.
   const [
     // Existing memberships: only to keep already-added companies out of the
     // engagement list and to know where "nothing to choose" leads.
     { data: memberships },
-    { data: teamMembership },
     // Greeting name.
     { data: profile },
     // BankID enrichment (CompanyRoles from Bolagsverket via TIC). Stored
@@ -72,12 +72,6 @@ export default async function SelectCompanyPage({
         )
       `)
       .eq('user_id', user.id),
-    supabase
-      .from('team_members')
-      .select('team_id')
-      .eq('user_id', user.id)
-      .limit(1)
-      .maybeSingle(),
     supabase.from('profiles').select('full_name').eq('id', user.id).single(),
     supabase
       .from('bankid_enrichment')
@@ -101,59 +95,16 @@ export default async function SelectCompanyPage({
     .map((m) => (Array.isArray(m.company) ? m.company[0] ?? null : m.company))
     .filter((c): c is CompanyRow => !!c && !c.archived_at)
 
-  // Both sides keyed the same way: a sole trader's CompanyRoles entry is the
-  // 16-digit TIC registration number, the stored firm the 10-digit
-  // personnummer, and only the shared key sees them as one company.
-  const memberOrgNumbers = new Set(
-    memberCompanies
-      .map((c) => orgNumberKey(c.org_number))
-      .filter((n): n is string => !!n),
-  )
-
-  // Ensure the user has a team (same pattern as /onboarding).
-  let teamId = teamMembership?.team_id
-  if (!teamId) {
-    const { data: ensured } = await supabase.rpc('ensure_user_team')
-    teamId = ensured ?? null
-  }
-  if (!teamId) {
-    redirect('/login')
-  }
-
   const firstName = profile?.full_name?.split(' ')[0] ?? null
 
-  const enrichmentValue = enrichmentRow
-    ? { companyRoles: enrichmentRow.company_roles as EnrichmentCompanyRole[] }
-    : null
-
-  // "Currently a director" = no position end date. We deliberately do NOT
-  // also require companyStatus === 'Aktivt': real TIC payloads have been
-  // observed with other values (locale/tenant variants), and filtering too
-  // strictly silently hides the user's real directorships.
-  //
-  // Ceased/struck-off companies would still render here, but two later
-  // guards block provisioning:
-  //   1. BankIdCompanyPicker calls TIC /lookup before provisioning and
-  //      short-circuits with a toast when isCeased=true.
-  //   2. createCompanyFromTicRole refuses to provision when lookup.isCeased.
-  // Both guards are required: don't remove one without removing both.
-  //
-  // Loose `== null` on purpose: TIC payloads have been observed returning
-  // `undefined` for open-ended positions, which `=== null` would miss.
-  const activeRoles = (enrichmentValue?.companyRoles ?? []).filter(
-    (r) => r.positionEnd == null,
-  )
-
-  // Drop roles for companies the user already belongs to: those are added.
-  const rolesNotAlreadyMine = activeRoles.filter(
-    (r) => {
-      const key = registrationNumberKey(r.companyRegistrationNumber)
-      return !key || !memberOrgNumbers.has(key)
-    },
-  )
-
+  // Engagements in companies that still exist and are not the user's yet.
+  // Struck-off, merged and dissolved companies keep their last board in the
+  // register for good, so they are dropped on the company's status (crm#1034).
   // Other accounts can independently use the same organisation number.
-  const candidates = rolesNotAlreadyMine
+  const candidates = addableEngagements(
+    enrichmentRow?.company_roles,
+    memberCompanies.map((c) => c.org_number),
+  )
 
   const enrichmentTimestamp = enrichmentRow?.updated_at ?? enrichmentRow?.created_at ?? null
   const enrichmentStale = enrichmentTimestamp
@@ -161,8 +112,8 @@ export default async function SelectCompanyPage({
     : false
 
   // Nothing to choose from: "Lägg till företag" (?choose=1) and a user with
-  // no company go straight into the journey; a BankID login that found no
-  // new engagement opens the company the user already has (the middleware
+  // no company go straight into the journey; anyone else who reaches the page
+  // (an old link) opens the company they already have (the middleware
   // resolves which). The stale-enrichment hint and the pending-invite hint
   // both have a home on the journey's first step, so nothing is lost.
   const { choose } = await searchParams
@@ -173,7 +124,6 @@ export default async function SelectCompanyPage({
   return (
     <BankIdCompanyPicker
       firstName={firstName}
-      teamId={teamId}
       roles={candidates}
       enrichmentStale={enrichmentStale}
       hasPendingInvite={hasPendingInvite}

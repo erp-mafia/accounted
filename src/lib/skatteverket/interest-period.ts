@@ -9,9 +9,8 @@
  *
  * The skattekonto table shows Datum / Händelse / Belopp, so such a decision
  * renders as N pixel-identical rows. That reads as duplicates from the
- * automatic Skatteverket fetch, which is a well-known failure mode in this
- * market and has cost us at least one customer who booked all of them and then
- * could not tell whether he had to reverse fourteen of them.
+ * automatic Skatteverket fetch: a person can book all of them and then not
+ * know which to reverse.
  *
  * We surface `ranteberakningsdatum` only on rows where it actually carries
  * information, so it stays an exception marker (design convention 5) rather

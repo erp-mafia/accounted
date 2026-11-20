@@ -25,7 +25,7 @@ export interface DimensionDto {
   is_system: boolean
   is_active: boolean
   sort_order: number
-  /** SIE #UNDERDIM parent — the sie_dim_no of the parent dimension, or null. */
+  /** SIE #UNDERDIM parent - the sie_dim_no of the parent dimension, or null. */
   parent_sie_dim_no: number | null
   /** Sorted by code by the API. */
   values: DimensionValueDto[]
@@ -34,7 +34,7 @@ export interface DimensionDto {
 export type DimensionRuleType = 'required' | 'default' | 'fixed'
 
 /**
- * Per-account dimension rule as served by GET /api/dimensions/rules —
+ * Per-account dimension rule as served by GET /api/dimensions/rules:
  * a flattened join row (rule + dimension + optional pinned value).
  */
 export interface AccountDimensionRuleDto {
@@ -49,9 +49,6 @@ export interface AccountDimensionRuleDto {
   value_name: string | null
   is_active: boolean
 }
-
-/** SIE dimension number whose values carry start/end dates (Projekt). */
-export const PROJECT_DIM_NO = 6
 
 /**
  * Strict Fortnox-compatible code format enforced by the API for user-created

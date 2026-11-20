@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { dispatchDueDeliveries } from '@/lib/webhooks/dispatcher'
+import { runDueVerifications } from '@/lib/webhooks/verification'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 
 /**
@@ -33,6 +34,12 @@ export const maxDuration = 300
 
 export const GET = withCronContext('cron.webhook_dispatch', async (_request, ctx) => {
   const supabase = createServiceClientNoCookies()
+
+  // Endpoint ownership handshakes that are due (lib/webhooks/verification.ts)
+  // run first: at most a handful per tick, in parallel, so one tick spends at
+  // most one receiver timeout on them. Running them before the dispatch cycle
+  // lets deliveries withheld for a just-verified endpoint go out this tick.
+  const verification = await runDueVerifications({ supabase })
   const summary = await dispatchDueDeliveries({ supabase })
 
   ctx.log.info('webhook dispatch cycle complete', {
@@ -42,11 +49,15 @@ export const GET = withCronContext('cron.webhook_dispatch', async (_request, ctx
     dead: summary.dead,
     skipped: summary.skipped,
     released: summary.released,
+    withheld: summary.withheld,
     // The sweep's own outcome. recoveredDead > 0 means this tick took
     // deliveries to the terminal, immutable 'dead' state: alertable.
     recovered: summary.recovered,
     recoveredDead: summary.recoveredDead,
+    verificationPicked: verification.picked,
+    verificationVerified: verification.verified,
+    verificationFailed: verification.failed,
   })
 
-  return NextResponse.json({ data: summary })
+  return NextResponse.json({ data: { ...summary, verification } })
 })

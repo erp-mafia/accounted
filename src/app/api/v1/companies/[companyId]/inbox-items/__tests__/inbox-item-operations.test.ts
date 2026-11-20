@@ -1,0 +1,910 @@
+/**
+ * The invoice inbox through the v1 door of the operation registry
+ * (src/lib/operations/inbox-items.ts via lib/operations/v1.ts):
+ *   GET    /api/v1/companies/:companyId/inbox-items
+ *   GET    /api/v1/companies/:companyId/inbox-items/:id
+ *   PATCH  /api/v1/companies/:companyId/inbox-items/:id
+ *   DELETE /api/v1/companies/:companyId/inbox-items/:id
+ *   GET    /api/v1/companies/:companyId/inbox-items/removed
+ *   POST   /api/v1/companies/:companyId/inbox-items/:id/restore
+ *   POST   /api/v1/companies/:companyId/inbox-items/:id/unmatch-transaction
+ *   POST   /api/v1/companies/:companyId/inbox-items/:id/convert
+ *
+ * The rules are the services' (lib/documents/inbox-item-actions.ts,
+ * lib/operations/inbox-convert.ts), shared with the extension's dashboard
+ * routes: converted items are frozen, booked ones cannot be discarded, a
+ * discarded one is kept and can be put back once, the list carries no e-mail
+ * body or full reading, and a dry run writes nothing (for convert: no
+ * ankomstnummer either).
+ */
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+beforeAll(() => {
+  if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'
+})
+
+vi.mock('@/lib/auth/api-keys', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth/api-keys')>('@/lib/auth/api-keys')
+  return { ...actual, validateApiKey: vi.fn(), createServiceClientNoCookies: vi.fn() }
+})
+vi.mock('@supabase/supabase-js', async () => {
+  const actual = await vi.importActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js')
+  return { ...actual, createClient: vi.fn().mockReturnValue({}) }
+})
+vi.mock('@/lib/entitlements/multi-user', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/entitlements/multi-user')>('@/lib/entitlements/multi-user')
+  return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'active' }), isMembershipDormant: () => false }
+})
+vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
+vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
+  createSupplierInvoiceRegistrationEntry: vi.fn().mockResolvedValue({ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' }),
+}))
+
+import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { GET as listItems } from '../route'
+import { GET as getItem, PATCH as patchItem, DELETE as deleteItem } from '../[id]/route'
+import { POST as unmatch } from '../[id]/unmatch-transaction/route'
+import { GET as listRemoved } from '../removed/route'
+import { POST as restore } from '../[id]/restore/route'
+import { POST as convert } from '../[id]/convert/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
+
+const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
+const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
+
+interface TableResp {
+  data?: unknown
+  error?: unknown
+}
+
+/** Per-table queue mock that also records every (table, method, args). */
+function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
+  const queues = new Map<string, TableResp[]>()
+  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
+  const calls: Array<{ table: string; method: string; args: unknown[] }> = []
+  const buildChain = (key: string): unknown =>
+    new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) => {
+              const q = queues.get(key)
+              resolve(q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null }))
+            }
+          }
+          return (...args: unknown[]) => {
+            calls.push({ table: key, method: String(prop), args })
+            return buildChain(key)
+          }
+        },
+      },
+    )
+  const rpc = vi.fn((...args: unknown[]) => {
+    calls.push({ table: 'rpc', method: 'rpc', args })
+    return buildChain('rpc')
+  })
+  const storage = { from: vi.fn(() => buildChain('storage')) }
+  return { calls, from: vi.fn((table: string) => buildChain(table)), rpc, storage }
+}
+
+const WRITES = new Set(['insert', 'update', 'upsert', 'delete', 'remove'])
+/** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
+const BOOKS = new Set(['document_attachments', 'transactions', 'invoice_inbox_items', 'supplier_invoices', 'supplier_invoice_items', 'suppliers', 'processing_history'])
+const wrote = (client: ReturnType<typeof makeClient>) =>
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
+
+const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const ITEM_ID = '22222222-2222-4222-8222-222222222222'
+const DOC_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+const TX_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+const SUPPLIER_ID = '33333333-3333-4333-8333-333333333333'
+const INVOICE_ID = '44444444-4444-4444-8444-444444444444'
+const JE_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+const MEMBER = { data: { company_id: COMPANY_ID, role: 'member' }, error: null }
+const BASE = `https://x.test/api/v1/companies/${COMPANY_ID}/inbox-items`
+
+function request(url: string, init: RequestInit = {}): Request {
+  return new Request(url, {
+    ...init,
+    headers: {
+      Authorization: 'Bearer test-fixture-not-a-real-key',
+      'Idempotency-Key': crypto.randomUUID(),
+      'Content-Type': 'application/json',
+      ...((init.headers as Record<string, string>) ?? {}),
+    },
+  })
+}
+
+const companyParams = { params: Promise.resolve({ companyId: COMPANY_ID }) }
+const itemParams = (id = ITEM_ID) => ({ params: Promise.resolve({ companyId: COMPANY_ID, id }) })
+
+const READING = {
+  supplier: { name: 'Clas Ohlson AB', orgNumber: '556035-8672' },
+  invoice: { invoiceNumber: 'F-1', invoiceDate: '2026-09-01', currency: 'SEK' },
+  totals: { subtotal: 399.2, vatAmount: 99.8, total: 499 },
+  lineItems: [{ description: 'Kabel' }],
+  vatBreakdown: [],
+  confidence: 0.9,
+  documentKind: 'receipt',
+}
+
+function itemRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ITEM_ID,
+    status: 'received',
+    source: 'email',
+    created_at: '2026-09-02T07:41:10.000Z',
+    updated_at: '2026-09-02T07:41:30.000Z',
+    document_id: DOC_ID,
+    extracted_data: READING,
+    extraction_skipped: false,
+    matched_supplier_id: null,
+    matched_transaction_id: null,
+    created_supplier_invoice_id: null,
+    created_journal_entry_id: null,
+    email_from: 'kvitto@clasohlson.se',
+    email_subject: 'Ditt kvitto',
+    email_received_at: '2026-09-02T07:41:02.000Z',
+    email_body_text: 'Hej Anna, tack för ditt köp',
+    error_message: null,
+    kind_hint: null,
+    channel_context: null,
+    ...overrides,
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockValidate.mockResolvedValue({
+    userId: 'user-1',
+    companyId: COMPANY_ID,
+    apiKeyId: 'ak_1',
+    apiKeyName: 'CI key',
+    scopes: ['documents:read', 'documents:write', 'suppliers:write'],
+    mode: 'live',
+  })
+})
+
+describe('GET /inbox-items', () => {
+  const get = (query = '') => listItems(request(`${BASE}${query}`, { method: 'GET' }), companyParams)
+
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeClient({}))
+    expect((await get()).status).toBe(401)
+  })
+
+  it('403 without documents:read', async () => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: COMPANY_ID, scopes: ['transactions:read'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await get()).status).toBe(403)
+  })
+
+  it('400 on an unknown status', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await get('?status=booked')).status).toBe(400)
+  })
+
+  it('summarises the reading and leaves the e-mail body and full reading out', async () => {
+    const client = makeClient({ company_members: MEMBER, invoice_inbox_items: { data: [itemRow()], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get('?unprocessed_only=true')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.next_cursor).toBeNull()
+    expect(body.data.inbox_items[0]).toMatchObject({
+      inbox_item_id: ITEM_ID,
+      vendor_name: 'Clas Ohlson AB',
+      amount: 499,
+      currency: 'SEK',
+      invoice_date: '2026-09-01',
+      processed: false,
+    })
+    expect(body.data.inbox_items[0].email_body_text).toBeUndefined()
+    expect(body.data.inbox_items[0].extracted_data).toBeUndefined()
+    const itemCalls = client.calls.filter((c) => c.table === 'invoice_inbox_items')
+    expect(itemCalls).toContainEqual(expect.objectContaining({ method: 'is', args: ['created_supplier_invoice_id', null] }))
+  })
+})
+
+describe('GET /inbox-items/:id', () => {
+  const get = (id = ITEM_ID) => getItem(request(`${BASE}/${id}`, { method: 'GET' }), itemParams(id))
+
+  it('400 on a non-UUID id', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await get('nope')).status).toBe(400)
+  })
+
+  it('404 INBOX_ITEM_NOT_FOUND outside the company', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER, invoice_inbox_items: { data: null, error: null } }))
+    const res = await get()
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_NOT_FOUND')
+  })
+
+  it('answers the full reading, the e-mail text and the file name', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        invoice_inbox_items: { data: itemRow(), error: null },
+        document_attachments: { data: { id: DOC_ID, file_name: 'kvitto.pdf', extracted_data: null }, error: null },
+      }),
+    )
+    const res = await get()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({
+      inbox_item_id: ITEM_ID,
+      file_name: 'kvitto.pdf',
+      email_body_text: 'Hej Anna, tack för ditt köp',
+      extracted_data: { documentKind: 'receipt' },
+      intake_source: 'intake_email',
+    })
+  })
+
+  it.each([
+    ['an Arkiv-queued item by its stamp', { source: 'upload', channel_context: { intake_source: 'partner_api' } }, 'api', 'partner_api'],
+    ['an unstamped upload over an api document as mcp', { source: 'upload' }, 'api', 'mcp'],
+    ['a dashboard upload', { source: 'upload' }, 'file_upload', 'upload'],
+    ['a receipt-hunt item by its channel', { source: 'mail_hunt', channel_context: { channel: 'mail_hunt' } }, 'mail_hunt', 'mailbox'],
+  ])('names the door it came through: %s', async (_label, overrides, uploadSource, intakeSource) => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow(overrides), error: null },
+      document_attachments: { data: { id: DOC_ID, file_name: 'kvitto.pdf', extracted_data: null, upload_source: uploadSource }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.source).toBe(overrides.source)
+    expect(body.data.intake_source).toBe(intakeSource)
+    const docSelect = client.calls.find((c) => c.table === 'document_attachments' && c.method === 'select')
+    expect(docSelect?.args[0]).toContain('upload_source')
+  })
+})
+
+describe('GET /inbox-items/:id?include=reading', () => {
+  const get = (query: string) => getItem(request(`${BASE}/${ITEM_ID}${query}`, { method: 'GET' }), itemParams())
+  const MODEL = 'claude-sonnet-4-6'
+  const READ_AT = '2026-09-02T07:41:20.000Z'
+
+  it('400 for an include it does not know', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await get('?include=everything')).status).toBe(400)
+  })
+
+  it('leaves the reading out, and reads nothing for it, unless asked', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow(), error: null },
+      document_attachments: { data: { id: DOC_ID, file_name: 'kvitto.pdf', extracted_data: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const body = await (await get('')).json()
+    expect(body.data.reading).toBeUndefined()
+    expect(client.calls.some((c) => c.table === 'document_extractions')).toBe(false)
+  })
+
+  it("answers each field's source and evidence: the model's reading, a person's correction as Ditt val", async () => {
+    const corrected = { ...READING, invoice: { ...READING.invoice, invoiceNumber: 'F-2' } }
+    const document = {
+      id: DOC_ID,
+      file_name: 'kvitto.pdf',
+      mime_type: 'application/pdf',
+      upload_source: 'email',
+      extracted_data: corrected,
+      extraction_model: MODEL,
+      extracted_at: READ_AT,
+      model_reading: { extracted_data: READING, extraction_model: MODEL, extracted_at: READ_AT },
+    }
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: corrected }), error: null },
+      document_attachments: { data: document, error: null },
+      document_extractions: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get('?include=reading')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.reading).toMatchObject({
+      inbox_item_id: ITEM_ID,
+      document_id: DOC_ID,
+      fields: {
+        seller_name: { value: 'Clas Ohlson AB', source: 'vision', evidence: 'trolig' },
+        invoice_number: { value: 'F-2', source: 'person', evidence: 'ditt_val' },
+        amount_due_for_payment: { value: 499, source: 'vision' },
+        document_type: { value: 'receipt', source: 'vision' },
+      },
+      door: { intake_source: 'intake_email', sender: 'kvitto@clasohlson.se' },
+      notes: [],
+    })
+    expect(body.data.extracted_data).toMatchObject({ invoice: { invoiceNumber: 'F-2' } })
+    const extractionReads = client.calls.filter((c) => c.table === 'document_extractions' && c.method === 'eq')
+    expect(extractionReads).toContainEqual(expect.objectContaining({ args: ['company_id', COMPANY_ID] }))
+  })
+
+  it('500 when the reading cannot be read, rather than a partial one', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        invoice_inbox_items: { data: itemRow(), error: null },
+        document_attachments: [
+          { data: { id: DOC_ID, file_name: 'kvitto.pdf', extracted_data: null }, error: null },
+          { data: null, error: { message: 'statement timeout' } },
+        ],
+      }),
+    )
+    expect((await get('?include=reading')).status).toBe(500)
+  })
+})
+
+describe('PATCH /inbox-items/:id', () => {
+  const patch = (body: unknown, query = '') =>
+    patchItem(request(`${BASE}/${ITEM_ID}${query}`, { method: 'PATCH', body: JSON.stringify(body) }), itemParams())
+
+  it('403 without documents:write', async () => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: COMPANY_ID, scopes: ['documents:read'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await patch({ totals: { total: 500 } })).status).toBe(403)
+  })
+
+  it('400 for an empty body or a malformed date', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await patch({})).status).toBe(400)
+    expect((await patch({ invoice: { invoiceDate: '2026-13-01' } })).status).toBe(400)
+  })
+
+  it('409 INBOX_ITEM_EDIT_LOCKED once converted, writing nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ created_supplier_invoice_id: INVOICE_ID }), error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await patch({ totals: { total: 500 } })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_EDIT_LOCKED')
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run previews the merged reading and writes nothing', async () => {
+    const client = makeClient({ company_members: MEMBER, invoice_inbox_items: { data: itemRow(), error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await patch({ totals: { total: 500 } }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.extracted_data).toMatchObject({ totals: { total: 500, subtotal: 399.2 }, documentKind: 'receipt' })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('merges the correction (keeping unnamed fields) under optimistic concurrency', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: [
+        { data: itemRow(), error: null },
+        { data: { id: ITEM_ID, extracted_data: { ...READING, totals: { ...READING.totals, total: 500 } } }, error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await patch({ totals: { total: 500 } })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.inbox_item_id).toBe(ITEM_ID)
+    const update = client.calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'update')
+    expect(update?.args[0]).toMatchObject({ extracted_data: { documentKind: 'receipt', totalSource: null, totals: { total: 500 } } })
+    expect(client.calls).toContainEqual(
+      expect.objectContaining({ table: 'invoice_inbox_items', method: 'eq', args: ['updated_at', '2026-09-02T07:41:30.000Z'] }),
+    )
+  })
+
+  it('409 INBOX_ITEM_EDIT_CONFLICT when the row moved under the edit', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({ company_members: MEMBER, invoice_inbox_items: [{ data: itemRow(), error: null }, { data: null, error: null }] }),
+    )
+    const res = await patch({ totals: { total: 500 } })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_EDIT_CONFLICT')
+  })
+})
+
+describe('DELETE /inbox-items/:id', () => {
+  const del = (query = '') => deleteItem(request(`${BASE}/${ITEM_ID}${query}`, { method: 'DELETE' }), itemParams())
+
+  it('404 outside the company', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER, invoice_inbox_items: { data: null, error: null } }))
+    expect((await del()).status).toBe(404)
+  })
+
+  it('409 for a converted item and for a booked one, writing nothing', async () => {
+    const converted = makeClient({ company_members: MEMBER, invoice_inbox_items: { data: itemRow({ created_supplier_invoice_id: INVOICE_ID }), error: null } })
+    mockServiceClient.mockReturnValue(converted)
+    const a = await del()
+    expect(a.status).toBe(409)
+    expect((await a.json()).error.code).toBe('INBOX_ITEM_DELETE_CONVERTED')
+    expect(wrote(converted)).toBe(false)
+
+    const booked = makeClient({ company_members: MEMBER, invoice_inbox_items: { data: itemRow({ created_journal_entry_id: JE_ID }), error: null } })
+    mockServiceClient.mockReturnValue(booked)
+    const b = await del()
+    expect(b.status).toBe(409)
+    expect((await b.json()).error.code).toBe('INBOX_ITEM_DELETE_BOOKED')
+    expect(wrote(booked)).toBe(false)
+  })
+
+  it('a dry run writes nothing; the commit deletes the item only', async () => {
+    const dry = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow(), error: null },
+      document_attachments: { data: { file_name: 'kvitto-0901.pdf' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(dry)
+    const preview = await del('?dry_run=true')
+    expect(preview.status).toBe(200)
+    // What approving removes, said outright, and what tells this item from the next (crm#1411, crm#1412):
+    // `would_delete` beside the document id read as if the file went too.
+    expect((await preview.json()).data.preview).toEqual({
+      inbox_item_id: ITEM_ID,
+      document_id: DOC_ID,
+      inbox_item_deleted: true,
+      document_kept: true,
+      // It carries a document and nothing holds it: the removal can be undone (POST .../restore).
+      can_be_put_back: true,
+      file_name: 'kvitto-0901.pdf',
+      supplier_name: 'Clas Ohlson AB',
+      amount: 499,
+      currency: 'SEK',
+      invoice_date: '2026-09-01',
+      email_from: 'kvitto@clasohlson.se',
+      email_subject: 'Ditt kvitto',
+      received_at: '2026-09-02T07:41:10.000Z',
+    })
+    expect(wrote(dry)).toBe(false)
+
+    const client = makeClient({ company_members: MEMBER, invoice_inbox_items: [{ data: itemRow(), error: null }, { data: null, error: null }] })
+    mockServiceClient.mockReturnValue(client)
+    const res = await del()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ inbox_item_id: ITEM_ID, deleted: true })
+    const writes = client.calls
+      .filter((c) => BOOKS.has(c.table) && WRITES.has(c.method))
+      .map((c) => `${c.table}.${c.method}`)
+    expect(writes).toEqual(['invoice_inbox_items.delete'])
+    // The deletion's decision keeps the item as it was, mail text included: what puts it back.
+    const decision = client.calls.find((c) => c.table === 'suggestion_log' && c.method === 'insert')?.args[0]
+    expect(decision).toMatchObject({ outcome: 'dismissed', inbox_item_id: null, document_id: DOC_ID, removed_item: itemRow() })
+  })
+})
+
+describe('GET /inbox-items/removed', () => {
+  const get = () => listRemoved(request(`${BASE}/removed`, { method: 'GET' }), companyParams)
+  const decision = {
+    created_at: '2026-11-16T09:12:44.000Z',
+    actor_type: 'user',
+    resolved_by: 'user-1',
+    document_id: DOC_ID,
+    removed_item_id: ITEM_ID,
+    email_from: 'kvitto@clasohlson.se',
+    email_subject: 'Ditt kvitto',
+    supplier: READING.supplier,
+    invoice: READING.invoice,
+    totals: READING.totals,
+  }
+
+  it('403 without documents:read', async () => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: COMPANY_ID, apiKeyId: 'ak_1', apiKeyName: 'k', scopes: ['suppliers:write'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await get()).status).toBe(403)
+  })
+
+  it('lists what can be put back, without the e-mail body or the full reading', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        suggestion_log: { data: [decision], error: null },
+        document_attachments: { data: [{ id: DOC_ID, file_name: 'kvitto-0901.pdf', sha256_hash: 'h', journal_entry_id: null, entry: null }], error: null },
+        invoice_inbox_items: { data: [], error: null },
+      }),
+    )
+    const res = await get()
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.data.removed_items).toEqual([
+      {
+        inbox_item_id: ITEM_ID,
+        document_id: DOC_ID,
+        file_name: 'kvitto-0901.pdf',
+        vendor_name: 'Clas Ohlson AB',
+        amount: 499,
+        currency: 'SEK',
+        email_from: 'kvitto@clasohlson.se',
+        email_subject: 'Ditt kvitto',
+        removed_at: '2026-11-16T09:12:44.000Z',
+        removed_by: { actor_type: 'user', user_id: 'user-1' },
+      },
+    ])
+  })
+})
+
+describe('POST /inbox-items/:id/restore', () => {
+  const post = (query = '', id = ITEM_ID) => restore(request(`${BASE}/${id}/restore${query}`, { method: 'POST' }), itemParams(id))
+  const kept = { created_at: '2026-11-16T09:12:44.000Z', document_id: DOC_ID, removed_item: { ...itemRow(), user_id: 'user-9', company_id: COMPANY_ID } }
+  const free = {
+    company_members: MEMBER,
+    suggestion_log: { data: [kept], error: null },
+    // The document as it stands, then its byte-identical copies: none.
+    document_attachments: [
+      { data: [{ id: DOC_ID, file_name: 'kvitto-0901.pdf', sha256_hash: 'h', journal_entry_id: null, entry: null }], error: null },
+      { data: [], error: null },
+    ],
+    invoice_inbox_items: { data: [], error: null },
+  }
+
+  it('403 without documents:write', async () => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: COMPANY_ID, apiKeyId: 'ak_1', apiKeyName: 'k', scopes: ['documents:read'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await post()).status).toBe(403)
+  })
+
+  it('400 on a non-UUID id', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await post('', 'not-a-uuid')).status).toBe(400)
+  })
+
+  it('404 INBOX_ITEM_RESTORE_NOT_FOUND when the company deleted no such item', async () => {
+    const client = makeClient({ company_members: MEMBER, suggestion_log: { data: [], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_RESTORE_NOT_FOUND')
+    // Only this company's decisions were asked for.
+    expect(client.calls).toContainEqual({ table: 'suggestion_log', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('409 INBOX_ITEM_RESTORE_IN_INBOX once it is back, writing nothing', async () => {
+    const client = makeClient({ ...free, invoice_inbox_items: { data: [{ id: ITEM_ID, document_id: DOC_ID }], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_RESTORE_IN_INBOX')
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('409 INBOX_ITEM_RESTORE_BOOKED when a verifikat holds the document since', async () => {
+    const client = makeClient({
+      ...free,
+      document_attachments: { data: [{ id: DOC_ID, file_name: 'kvitto-0901.pdf', sha256_hash: 'h', journal_entry_id: JE_ID, entry: { status: 'posted' } }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error.code).toBe('INBOX_ITEM_RESTORE_BOOKED')
+    expect(json.error.details).toEqual({ journal_entry_id: JE_ID })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run writes nothing; the commit re-creates the item under its own id', async () => {
+    const dry = makeClient(free)
+    mockServiceClient.mockReturnValue(dry)
+    const preview = await post('?dry_run=true')
+    expect(preview.status).toBe(200)
+    expect((await preview.json()).data.preview).toMatchObject({
+      inbox_item_id: ITEM_ID,
+      document_id: DOC_ID,
+      inbox_item_restored: true,
+      file_name: 'kvitto-0901.pdf',
+      supplier_name: 'Clas Ohlson AB',
+      amount: 499,
+    })
+    expect(wrote(dry)).toBe(false)
+
+    const client = makeClient(free)
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ inbox_item_id: ITEM_ID, document_id: DOC_ID, restored: true })
+    const writes = client.calls.filter((c) => BOOKS.has(c.table) && WRITES.has(c.method))
+    // The item, then match on arrival's look in the bank for its payment (the bank_match columns).
+    expect(writes.map((c) => `${c.table}.${c.method}`)).toEqual(['invoice_inbox_items.insert', 'invoice_inbox_items.update'])
+    expect(Object.keys(writes[1].args[0] as object).every((column) => column.startsWith('bank_match_'))).toBe(true)
+    // As it arrived: the same id, reading, mail text and month, in the key's company.
+    expect(writes[0].args[0]).toMatchObject({
+      id: ITEM_ID,
+      company_id: COMPANY_ID,
+      user_id: 'user-9',
+      document_id: DOC_ID,
+      status: 'received',
+      extracted_data: READING,
+      extraction_skipped: false,
+      email_body_text: 'Hej Anna, tack för ditt köp',
+      created_at: '2026-09-02T07:41:10.000Z',
+    })
+    // No decision row and no reading: nothing is counted or read a second time.
+    expect(client.calls.some((c) => c.table === 'suggestion_log' && WRITES.has(c.method))).toBe(false)
+  })
+})
+
+describe('POST /inbox-items/:id/unmatch-transaction', () => {
+  const post = (query = '') => unmatch(request(`${BASE}/${ITEM_ID}/unmatch-transaction${query}`, { method: 'POST' }), itemParams())
+
+  it('404 outside the company', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER, invoice_inbox_items: { data: null, error: null } }))
+    const res = await post()
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_NOT_FOUND')
+  })
+
+  it('a dry run writes nothing', async () => {
+    const client = makeClient({ company_members: MEMBER, invoice_inbox_items: { data: itemRow({ matched_transaction_id: TX_ID }), error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post('?dry_run=true')
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview).toEqual({
+      inbox_item_id: ITEM_ID,
+      released_transaction_id: TX_ID,
+      clears_transaction_document: true,
+    })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('releases the match and clears the pin only while it is still this item\'s document', async () => {
+    const client = makeClient({ company_members: MEMBER, invoice_inbox_items: { data: itemRow({ matched_transaction_id: TX_ID }), error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ inbox_item_id: ITEM_ID, matched_transaction_id: null, released_transaction_id: TX_ID })
+    expect(client.calls).toContainEqual(expect.objectContaining({ table: 'transactions', method: 'update', args: [{ document_id: null }] }))
+    expect(client.calls).toContainEqual(expect.objectContaining({ table: 'transactions', method: 'eq', args: ['document_id', DOC_ID] }))
+  })
+})
+
+describe('POST /inbox-items/:id/convert', () => {
+  const BODY = {
+    supplier_id: SUPPLIER_ID,
+    supplier_invoice_number: 'F-1',
+    invoice_date: '2026-09-01',
+    due_date: '2026-09-30',
+    items: [{ description: 'Kabel', amount: 399.2, account_number: '6110', vat_rate: 0.25 }],
+  }
+  const post = (body: unknown, query = '') =>
+    convert(request(`${BASE}/${ITEM_ID}/convert${query}`, { method: 'POST', body: JSON.stringify(body) }), itemParams())
+
+  it('403 without suppliers:write', async () => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: COMPANY_ID, scopes: ['documents:write'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await post(BODY)).status).toBe(403)
+  })
+
+  it('400 for a field the conversion does not honour, and for a line contradicting the VAT treatment', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    // A line's own vat_amount is honoured since crm#1367; öresavrundning is not.
+    const dropped = await post({ ...BODY, ore_rounding: true })
+    expect(dropped.status).toBe(400)
+    const exempt = await post({ ...BODY, vat_treatment: 'exempt' })
+    expect(exempt.status).toBe(400)
+    expect((await exempt.json()).error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('404 for an item or a supplier outside the company', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER, invoice_inbox_items: { data: null, error: null } }))
+    expect((await post(BODY)).status).toBe(404)
+    mockServiceClient.mockReturnValue(
+      makeClient({ company_members: MEMBER, invoice_inbox_items: { data: itemRow(), error: null }, suppliers: { data: null, error: null } }),
+    )
+    const res = await post(BODY)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('SUPPLIER_NOT_FOUND')
+  })
+
+  it('409 INBOX_ITEM_ALREADY_CONVERTED', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({ company_members: MEMBER, invoice_inbox_items: { data: itemRow({ created_supplier_invoice_id: INVOICE_ID }), error: null } }),
+    )
+    const res = await post(BODY)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_ALREADY_CONVERTED')
+  })
+
+  it('400 SI_CREATE_SLP_INVALID_ACCOUNT for särskild löneskatt outside 741x', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        invoice_inbox_items: { data: itemRow({ extracted_data: null }), error: null },
+        suppliers: { data: { id: SUPPLIER_ID, name: 'Clas Ohlson AB', supplier_type: 'swedish_business' }, error: null },
+      }),
+    )
+    const res = await post({ ...BODY, items: [{ ...BODY.items[0], apply_slp: true }] })
+    expect((await res.json()).error.code).toBe('SI_CREATE_SLP_INVALID_ACCOUNT')
+  })
+
+  // Omvänd skattskyldighet (ML 16 kap 6-16 §§): the seller charges no Swedish
+  // moms, so a line rate other than 0 is refused as POST /supplier-invoices
+  // refuses it, and a foreign supplier without the flag registers the net.
+  it('400 VALIDATION_ERROR for reverse charge with a non-zero line rate, writing nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: null }), error: null },
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Cloud GmbH', supplier_type: 'eu_business' }, error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ ...BODY, reverse_charge: true })
+    expect(res.status).toBe(400)
+    const { error } = await res.json()
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run for a foreign supplier without the flag previews reverse charge and the net payable', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: null }), error: null },
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Cloud GmbH', supplier_type: 'eu_business' }, error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const { vat_rate: _rate, ...line } = BODY.items[0]
+    const res = await post({ ...BODY, items: [line] }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview).toMatchObject({
+      vat_treatment: 'reverse_charge',
+      reverse_charge: true,
+      subtotal: 399.2,
+      vat_amount: 0,
+      total: 399.2,
+    })
+  })
+
+  it('a dry run computes the invoice without an ankomstnummer, a supplier backfill or any write', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: { supplier: { name: 'Clas Ohlson AB', bankgiro: '5050-1055' } } }), error: null },
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Clas Ohlson AB', supplier_type: 'swedish_business', bankgiro: null }, error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(BODY, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview).toMatchObject({
+      inbox_item_id: ITEM_ID,
+      subtotal: 399.2,
+      vat_amount: 99.8,
+      total: 499,
+      total_sek: 499,
+      document_id: DOC_ID,
+      would_create_registration_journal_entry: true,
+    })
+    expect(wrote(client)).toBe(false)
+    expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('a dry run for a non-VAT-registered company shows the seller VAT added to the cost (feedback 708521)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: null }), error: null },
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Clas Ohlson AB', supplier_type: 'swedish_business' }, error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false, vat_registered: false }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(BODY, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const { preview } = (await res.json()).data
+    expect(preview).toMatchObject({ subtotal: 499, vat_amount: 0, total: 499, total_sek: 499 })
+    expect(preview.items[0]).toMatchObject({ line_total: 499, unit_price: 499, vat_rate: 0, vat_amount: 0 })
+    expect(preview.vat_registration).toMatchObject({ vat_registered: false, seller_vat_added_to_cost: 99.8 })
+    expect(preview.vat_registration.note).toMatch(/not VAT-registered/)
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('201 registers the invoice, books the registration verifikat and marks the item converted', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: [{ data: itemRow({ extracted_data: null }), error: null }, { data: null, error: null }],
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Clas Ohlson AB', supplier_type: 'swedish_business' }, error: null },
+      rpc: { data: 118, error: null },
+      supplier_invoices: [
+        {
+          data: { id: INVOICE_ID, arrival_number: 118, status: 'registered', currency: 'SEK', total: 499, total_sek: 499, invoice_date: '2026-09-01' },
+          error: null,
+        },
+        { data: null, error: null },
+      ],
+      supplier_invoice_items: { data: [{ id: '55555555-5555-4555-8555-555555555555', sort_order: 0 }], error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
+      journal_entries: { data: { id: JE_ID }, error: null },
+      document_attachments: { data: { id: DOC_ID }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(BODY)
+    expect(res.status).toBe(201)
+    expect((await res.json()).data).toEqual({
+      supplier_invoice_id: INVOICE_ID,
+      arrival_number: 118,
+      status: 'registered',
+      currency: 'SEK',
+      total: 499,
+      total_sek: 499,
+      registration_journal_entry_id: JE_ID,
+      inbox_item_id: ITEM_ID,
+    })
+    const insert = client.calls.find((c) => c.table === 'supplier_invoices' && c.method === 'insert')
+    expect(insert?.args[0]).toMatchObject({ company_id: COMPANY_ID, document_id: DOC_ID, total: 499, arrival_number: 118 })
+    expect(client.calls).toContainEqual(
+      expect.objectContaining({ table: 'invoice_inbox_items', method: 'update', args: [{ created_supplier_invoice_id: INVOICE_ID }] }),
+    )
+    expect(client.calls).toContainEqual(
+      expect.objectContaining({
+        table: 'document_attachments',
+        method: 'update',
+        // Booked from the document by an API key: nobody approved it in Accounted.
+        args: [{ journal_entry_id: JE_ID, journal_entry_line_id: null, link_basis: 'client_asserted', link_evidence: null }],
+      }),
+    )
+  })
+
+  // Parity with the dashboard door and the MCP one: the bags are accepted and
+  // land on the invoice and its items, where the registration, periodisering
+  // and payment generators read them.
+  const TAGGED = {
+    ...BODY,
+    default_dimensions: { '1': 'KS01', '6': 'P001' },
+    items: [{ ...BODY.items[0], dimensions: { '6': 'P002', '20': 'KUND42' } }],
+  }
+
+  it('201 carries default_dimensions onto the invoice and each line\'s bag onto its item and the verifikat', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: [{ data: itemRow({ extracted_data: null }), error: null }, { data: null, error: null }],
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Clas Ohlson AB', supplier_type: 'swedish_business' }, error: null },
+      rpc: { data: 118, error: null },
+      supplier_invoices: [
+        {
+          data: { id: INVOICE_ID, arrival_number: 118, status: 'registered', currency: 'SEK', total: 499, total_sek: 499, invoice_date: '2026-09-01' },
+          error: null,
+        },
+        { data: null, error: null },
+      ],
+      supplier_invoice_items: { data: [{ id: '55555555-5555-4555-8555-555555555555', sort_order: 0 }], error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
+      document_attachments: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(TAGGED)
+    expect(res.status).toBe(201)
+
+    const insert = client.calls.find((c) => c.table === 'supplier_invoices' && c.method === 'insert')
+    expect(insert?.args[0]).toMatchObject({ default_dimensions: { '1': 'KS01', '6': 'P001' } })
+    const items = client.calls.find((c) => c.table === 'supplier_invoice_items' && c.method === 'insert')
+    expect((items?.args[0] as Array<{ dimensions: Record<string, string> }>)[0].dimensions).toEqual({ '6': 'P002', '20': 'KUND42' })
+    const booked = vi.mocked(createSupplierInvoiceRegistrationEntry).mock.calls[0][4] as Array<{ dimensions: Record<string, string> }>
+    expect(booked[0].dimensions).toEqual({ '6': 'P002', '20': 'KUND42' })
+  })
+
+  it('a dry run previews the bags and writes nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: null }), error: null },
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Clas Ohlson AB', supplier_type: 'swedish_business' }, error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(TAGGED, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const { preview } = (await res.json()).data
+    expect(preview.default_dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(preview.items[0].dimensions).toEqual({ '6': 'P002', '20': 'KUND42' })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('400 for a malformed dimensions bag', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    const res = await post({ ...BODY, default_dimensions: { projekt: 'P001' } })
+    expect(res.status).toBe(400)
+  })
+})

@@ -2,17 +2,44 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { classifyUnclassifiedDocuments } from '@/lib/documents/classify/classify'
+import { requeueStaleVerdicts } from '@/lib/documents/classify/stale'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { withAiDeadline } from '@/lib/ai/call-limit'
 
 /**
  * GET /api/documents/classify/cron
  * Arkiv phase 2 backfill: classifies documents that have page text but no
- * type yet, for companies in the rollout, a bounded batch per company.
+ * type yet, for companies in the rollout, a bounded batch per company. Then
+ * re-queues model verdicts the current rules might change (rules.ts), a
+ * bounded batch per run, so a classifier fix reaches old verdicts too
+ * (2026-09-27: it never did, and six supplier invoices sat under Arcim's
+ * Kundfakturor for a week).
  */
 export const maxDuration = 300
 
 const BATCH_PER_COMPANY = 10
 const MAX_COMPANIES = 20
+/**
+ * No document is started past this point, counted from when the request
+ * arrived. A classification is one model call, a few seconds normally and
+ * ~15 s in a Bedrock 503 burst (the SDK's own retries), so twenty companies of
+ * ten documents could take ten minutes and Vercel killed the run at 300 s (17
+ * times in the week to 2026-10-26). The first budget was an estimate between
+ * companies, at an assumed 20 s a document; one slow batch still ran past it
+ * and the run was killed 18 more times in the 30 days to 2026-11-12. The
+ * check now sits in front of every document. What is left stays untyped, and
+ * the next run five minutes later takes it.
+ */
+const TIME_BUDGET_MS = 200_000
+/**
+ * No model call is still open past this point (lib/ai/call-limit.ts): a
+ * document started just inside the budget gets what is left up to here, and
+ * the 30 s after it are for recording the outcome and re-queueing stale
+ * verdicts inside maxDuration.
+ */
+const MODEL_STOP_MS = 270_000
+/** Every 5 minutes: at most 7 200 re-runs a day while a rule change drains, one cheap model call each. */
+const STALE_PER_RUN = 25
 
 export const GET = withCronContext('documents.classify', async (_request, ctx) => {
   const supabase = createServiceRoleClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
@@ -30,11 +57,24 @@ export const GET = withCronContext('documents.classify', async (_request, ctx) =
     return NextResponse.json({ ok: false, error: getErrorMessage(error) }, { status: 500 })
   }
   const companies = [...new Set(((data ?? []) as Array<{ company_id: string | null }>).map((r) => r.company_id).filter((c): c is string => !!c))].slice(0, MAX_COMPANIES)
-  const totals = { companies: companies.length, processed: 0, classified: 0, held: 0, skipped: 0, errors: 0 }
-  for (const companyId of companies) {
-    const c = await classifyUnclassifiedDocuments(supabase, companyId, BATCH_PER_COMPANY)
-    totals.processed += c.processed; totals.classified += c.classified; totals.held += c.held; totals.skipped += c.skipped; totals.errors += c.errors
+  const totals = { companies: companies.length, processed: 0, classified: 0, held: 0, skipped: 0, errors: 0, deferred: 0, deferredCompanies: 0 }
+  const deadlineAt = ctx.startedAt + TIME_BUDGET_MS
+  await withAiDeadline(ctx.startedAt + MODEL_STOP_MS, async () => {
+    for (const [index, companyId] of companies.entries()) {
+      if (Date.now() >= deadlineAt) {
+        totals.deferredCompanies = companies.length - index
+        break
+      }
+      const c = await classifyUnclassifiedDocuments(supabase, companyId, BATCH_PER_COMPANY, { deadlineAt })
+      totals.processed += c.processed; totals.classified += c.classified; totals.held += c.held; totals.skipped += c.skipped; totals.errors += c.errors; totals.deferred += c.deferred
+    }
+  })
+  let stale = { candidates: 0, queued: 0, skipped: 0 }
+  try {
+    stale = await requeueStaleVerdicts(supabase, STALE_PER_RUN)
+  } catch (err) {
+    ctx.log.error('stale verdicts requeue failed', { reason: err instanceof Error ? err.message : String(err) })
   }
-  ctx.log.info('document classify backfill', totals)
-  return NextResponse.json({ ok: true, ...totals })
+  ctx.log.info('document classify backfill', { ...totals, stale })
+  return NextResponse.json({ ok: true, ...totals, stale })
 })

@@ -54,17 +54,23 @@ Ask them together, in one message, with what you already found:
 \`gnubok_create_salary_run({ period_year, period_month, payment_date })\` stages a draft run seeded with every active employee whose employment overlaps the month.
 
 - **Avvikelseperiod:** absence and worked days are read from a deviation window. Default is the company setting (same month, or the common "föregående månads avvikelser"). The staged preview shows the resolved window; tell the user which dates it covers. Override only on request, with both \`deviation_period_start\` and \`deviation_period_end\`. A window that overlaps another run is refused (the same sick day would be deducted twice).
-- **"Salary run already exists for this period":** one run per company and month. Do not create another. Ask whether the user means that run (under Löner in Accounted) and get its id from there or from the earlier approval result.
+- **"Salary run already exists for this period":** one run per company and month. Do not create another. The error names the existing run's id and status; or call \`gnubok_get_salary_run({ period_year, period_month })\`. Ask whether the user means that run.
 - After approval the run id is in the approved operation's result. Keep it for every later step.
 
 To change a draft's payment date, voucher series or note: \`gnubok_update_salary_run\` (search-only write: stage it through \`gnubok_stage_tool\` if it is not in your tool list). Changing the payment date clears the calculation.
 
 ### Step 2: Register this month's changes (before calculating)
 
-- **Owner salary or other variable base pay:** \`gnubok_set_run_salary({ salary_run_id, employee_id, monthly_salary })\`. Per-run value; the employee's fixed salary is untouched. \`0\` is a nollkörning. Never edit the base salary payslip line instead: recalculation rebuilds it from this value.
-- **Sick leave, VAB, parental leave, unpaid leave:** \`gnubok_register_absence({ employee_id, from, to, absence_type, hours_per_day })\` with type \`sick\`, \`vab\`, \`parental\`, \`pregnancy\`, \`care_relative\`, \`study\`, \`unpaid_leave\` or \`other_leave\`. Max 92 days per call; weekends are skipped unless \`include_weekends\`. Use \`hours_per_day: 4\` for half days. The dates must be inside the run's avvikelseperiod to count this month. Check what is already registered with \`gnubok_list_absence\` (search-only read) and remove a wrong range with \`gnubok_delete_absence\`. Accounted derives karensavdrag and sjuklön (80 % for day 2 to 14) from these rows. Läkarintyg applies from day 8; from day 15 Försäkringskassan pays, not the employer: tell the user when a sick period passes day 14.
-- **Vacation days taken:** \`gnubok_register_absence\` has no vacation type. Vacation lines are added to the employee's payslip in the salary run in Accounted. Check the balance first with \`gnubok_get_vacation_balance({ employee_id })\` (search-only read) and tell the user if more days are taken than remain.
-- **Förmåner, overtime, OB, bonus, traktamente:** benefits are registered per employee in Accounted (the employee's förmåner), and the calculation adds a taxable, avgift-bearing line for each active benefit. Overtime, bonus and other extra lines are added to the run in the web UI. Over MCP you can only edit an existing line on a draft run: \`gnubok_update_payslip_line({ salary_run_id, salary_line_item_id, amount | quantity | unit_price | description })\`. Guide the user to the web UI for new lines and wait until they say it is done. A benefit is taxable even though no cash is paid: never drop a benefit the user mentions.
+- **Owner salary or other variable base pay:** \`gnubok_set_run_salary({ salary_run_id, employee_id, monthly_salary })\` (hourly-paid: \`hours_worked\` instead, only when the period has no calendar days). Per-run value; the employee's fixed salary is untouched. \`0\` is a nollkörning. Never edit the base salary payslip line instead: recalculation rebuilds it from this value.
+- **Sick leave, VAB, parental leave, unpaid leave:** \`gnubok_register_absence({ employee_id, from, to, absence_type, hours_per_day })\` with type \`sick\`, \`vab\`, \`parental\`, \`pregnancy\`, \`care_relative\`, \`study\`, \`unpaid_leave\` or \`other_leave\`. Max 92 days per call; weekends are skipped unless \`include_weekends\`. Leave \`hours_per_day\` out for full days: one scheduled day of the employee. A half day is half of that. For an hourly employee (timlön), \`hours_per_day\` is the hours they were scheduled to work that day, for every absence type: their sjuklön is 80 % of timlön × those hours, and under procentregeln the semesterunderlag counts the sick, VAB and parental hours at full timlön (Semesterlagen 16 b §). The dates must be inside the run's avvikelseperiod to count this month. Check what is already registered with \`gnubok_list_absence\` (search-only read) and remove a wrong range with \`gnubok_delete_absence\`. Accounted derives karensavdrag and sjuklön (80 % for day 2 to 14) from these rows. Läkarintyg applies from day 8; from day 15 Försäkringskassan pays, not the employer: tell the user when a sick period passes day 14.
+- **Vacation days taken:** \`gnubok_register_absence\` has no vacation type. Add an \`item_type: 'vacation'\` line with \`quantity\` = the days the employee is actually off through \`gnubok_add_payslip_line\` (see the next point); \`vacation_category\` says which pool the days come from (paid when omitted). The balance counts paid days: for someone working fewer than five days a week each day off uses more than one paid day (25 paid days are 20 days off at four days a week, Semesterlagen 12 a §), and Accounted converts the line itself, so never scale the quantity by hand. Check the balance first with \`gnubok_get_vacation_balance({ employee_id })\` (search-only read) and tell the user if more days are taken than remain. Send the days without an amount: \`gnubok_calculate_salary_run\` prices them from the employee's vacation rule (semestertillägg under sammalöneregeln; semesterlöneavdrag plus semesterlön under procentregeln; an avdrag for unpaid days; nothing for förskott). An amount on the line replaces that and is paid as entered, so send one only when the user gives you the figure from their agreement. If the calculation refuses with \`SALARY_RUN_VACATION_PAY_UNDETERMINED\` (for example a procentregeln employee whose previous year is not in Accounted), ask the user for the semesterlön; never estimate it.
+- **Overtime, OB, bonus, traktamente, deductions:** \`gnubok_add_payslip_line({ salary_run_id, employee_id, item_type, description, amount, ... })\` adds a line to a draft run; \`gnubok_delete_payslip_line\` removes one and \`gnubok_update_payslip_line\` edits one. Put one-off övertid on \`item_type: 'overtime'\` and one-off OB on \`'other'\`: the calculation rebuilds \`overtime_50\`, \`overtime_100\`, \`ob_*\` and absence lines from worked hours and absence, so such a line added by hand is gone after the next calculation. The tax flags follow from \`item_type\`, so pick the type that says what the row is (skattefri traktamente is \`traktamente_taxfree\`); leave \`account_number\` out: the booking picks the employee's account (owners 7220, and 70xx for an employee whose \`personnel_category\` is \`arbetare\`). Deductions carry a negative amount; a positive \`net_deduction_*\` repays the employee.
+- **Hours for hourly staff:** \`gnubok_set_worked_days({ employee_id, days: [{ work_date, hours }] })\`; check with \`gnubok_list_worked_days\` and remove a wrong day with \`gnubok_delete_worked_days\`. The calculation reads them for the run's avvikelseperiod.
+- **Förmåner:** \`gnubok_add_employee_benefit\` registers one per employee (\`gnubok_list_employee_benefits\`, \`gnubok_update_employee_benefit\`, \`gnubok_delete_employee_benefit\`), and the calculation adds a taxable, avgift-bearing line for each active benefit. The monthly value comes from the user: Accounted does not compute a car benefit's value. A benefit is taxable even though no cash is paid: never drop a benefit the user mentions.
+- **Deductions every month** (union fee and the like): \`gnubok_add_employee_recurring_line\` applies to every run from \`valid_from\`, with a negative amount (\`gnubok_list_employee_recurring_lines\`, \`gnubok_update_employee_recurring_line\`, \`gnubok_delete_employee_recurring_line\`). The employee's own payment for a benefit is a \`net_deduction_benefit_payment\`: it lowers that benefit's taxable value. Set \`benefit_type\` (car, meals, ...) to the benefit it pays for; with two or more benefits it is required.
+- **Who is on the run:** \`gnubok_add_salary_run_employee\` and \`gnubok_remove_salary_run_employee\` on a draft run; removing an employee also removes their lines on it.
+
+These tools are search-only: stage them through \`gnubok_stage_tool\` (reads through \`gnubok_call_tool\`) when they are not in your tool list.
 
 Each of these stages a pending operation. Get them approved before calculating, or the calculation will not see them.
 
@@ -80,7 +86,7 @@ After any approved change (salary, absence, payslip line, payment date) calculat
 
 ### Step 5: Review with the user
 
-\`gnubok_get_salary_run({ salary_run_id })\` for totals and per-employee figures; \`gnubok_get_payslip({ salary_run_id, employee_id })\` (search-only read) for one employee's lines and calculation breakdown.
+\`gnubok_get_salary_run({ salary_run_id })\` (or \`{ period_year, period_month }\`) for totals and per-employee figures; \`gnubok_get_payslip({ salary_run_id, employee_id })\` (search-only read) for one employee's lines and calculation breakdown.
 
 Present per employee: gross, skatteavdrag, net, arbetsgivaravgifter; then run totals. Point out what a consultant would notice: a net much higher than usual without a reason, tax of 0 on a normal salary, a reduced avgift rate, 0 gross that is not a planned nollkörning, a sick deduction that looks too large or too small.
 
@@ -90,14 +96,14 @@ Ask one explicit question: "Stämmer beloppen? När jag bokför skapas ett verif
 
 ### Step 7: Book
 
-\`gnubok_book_salary_run({ salary_run_id })\` stages the booking; every employee must be calculated first. The approval is high risk and needs \`confirmed: true\` on \`gnubok_approve_pending_operation\` (or the user approves in Granskning). On commit the run becomes booked and the lön verifikat is posted: salary cost 7210 (7220 for company owners), withheld tax 2710, avgifter 7510 against 2731, vacation accrual to 2920 and 2940, net pay against 1930.
+\`gnubok_book_salary_run({ salary_run_id })\` stages the booking; every employee must be calculated first. The approval is high risk and needs \`confirmed: true\` on \`gnubok_approve_pending_operation\` (or the user approves in Granskning). On commit the run becomes booked and the lön verifikat is posted: salary cost 7210 (7220 for company owners), withheld tax 2710, avgifter 7510 against 2731, vacation accrual to 2920 and 2940, net pay against the company's bank account (the ledger account of its primary cash account, 1930 unless the company moved it).
 
-That verifikat already credits 1930 and books the tax and avgift liabilities. When the bank payment and the skattekonto draw show up, they are matched against it, never booked a second time (\`bank-reconciliation\`).
+That verifikat already credits the bank account and books the tax and avgift liabilities. When the bank payment and the skattekonto draw show up, they are matched against it, never booked a second time (\`bank-reconciliation\`).
 
 ### Step 8: AGI
 
 1. **Generate:** \`gnubok_generate_agi({ salary_run_id })\` stages the AGI underlag. The run must be past draft; book first so the AGI matches the books.
-2. **File, when Skatteverket is connected:** \`gnubok_agi_submit({ salary_run_id })\` stages the filing. Approval sends the underlag and returns a BankID signing link: **nothing is filed until the user signs** at Skatteverket. Afterwards \`gnubok_agi_status({ salary_run_id })\` (search-only read) shows the filing state and kvittensnummer.
+2. **File, when Skatteverket is connected:** \`gnubok_agi_submit({ salary_run_id })\` stages the filing. Approval sends the underlag and returns a BankID signing link: **nothing is filed until the user signs** at Skatteverket. Approved by the user in Accounted instead: read it with \`gnubok_list_pending_operations({ status: "committed", operation_type: "submit_agi" })\`, \`result_data.signing_url\`. Afterwards \`gnubok_agi_status({ salary_run_id })\` (search-only read) shows the filing state and kvittensnummer.
 3. **Not connected** (\`connected: false\`, or a filing error about the connection): give the user the \`connect_url\` from \`gnubok_connect_skatteverket\` (they authorise with BankID as firmatecknare) and offer the manual path. **Not available** (\`available: false\`, or error \`EXTENSION_DISABLED\`): only the manual path exists. Manual path: download the AGI file from the salary run in Accounted and upload it in Skatteverket's e-tjänst for arbetsgivardeklaration, then sign there.
 
 **Deadline:** the AGI and payment of tax and avgifter are due on the 12th of the month after the payment month; in January and August it is the 17th for companies with turnover up to 40 MSEK; a weekend or holiday moves it to the next business day. The money must be on the skattekonto by then. Late filing costs a förseningsavgift (625 kr, 1 250 kr when repeated). Always state the concrete date for this run, and warn clearly if it is close or past.
@@ -108,7 +114,7 @@ A month with nobody paid: a registered employer still files an AGI with only the
 
 \`gnubok_book_salary_run\` answers "already booked" and \`gnubok_calculate_salary_run\` refuses anything past draft. A booked salary verifikat is never edited or deleted (BFL 5 kap 5 §). If the user finds an error (wrong salary, missed sick day, forgotten benefit):
 
-- The fix is a **rättelsekörning**, started from the booked run under Löner in Accounted. It reverses the original verifikat with storno entries and creates a new draft run for the same period with the same lines. There is no MCP tool for it: guide the user there.
+- The fix is a **rättelsekörning**: \`gnubok_correct_salary_run({ salary_run_id })\` (search-only, stage it through \`gnubok_stage_tool\`; high risk, the approval needs \`confirmed: true\`). It reverses the original verifikat with storno entries, marks the run corrected, and creates a new draft run for the same period with the same employees and lines. Walk the user through the preview before approval.
 - Then continue from Step 2 on the new draft run: change, calculate, review, book.
 - The AGI must be corrected too: a corrected AGI replaces the whole declaration for that period. Generate and file it for the new run; if the original was already filed, tell the user the corrected one must be filed as well.
 - If the period is locked or the year closed, stop (see Stop conditions).
@@ -118,7 +124,8 @@ A month with nobody paid: a registered employer still files an AGI with only the
 - **Validation** ("must be YYYY-MM-DD", "Invalid employee: ...", jämkning dates missing): fix the argument from facts you have, or ask. Never fill a field with a plausible guess.
 - **\`VALIDATION_ERROR\` from calculation:** an employee lacks required data (tax table for A-skatt, hourly rate, negative salary, a work schedule that does not fit the company's calculation rules). Check each employee with \`gnubok_get_employee\`, name the gap to the user, stage the fix, calculate again.
 - **\`SALARY_RUN_TAX_TABLE_MISSING\`:** tax tables could not be fetched. Retry once after a short wait; if it fails again, stop and tell the user.
-- **\`SALARY_RUN_CALCULATE_FAILED\`:** the run is not a draft. Read its status with \`gnubok_get_salary_run\`. Booked: see "A run that is already booked".
+- **\`SALARY_RUN_NOT_CALCULATED\`:** an input changed after the last calculation (a line, a day, a förmån, the employee card), so approval and booking refuse the old figures. Draft: calculate again. In review: \`gnubok_revert_salary_run\`, approve that, then calculate.
+- **\`SALARY_RUN_CALCULATE_FAILED\`:** the run is not a draft. Read its status with \`gnubok_get_salary_run\`. In review: \`gnubok_revert_salary_run\`, approve that, then calculate. Booked: see "A run that is already booked".
 - **Not found** (run or employee): wrong id or wrong company. Recheck \`company_id\` first.
 - **Conflict** ("already exists for this period", overlapping avvikelseperiod, "already booked"): the state is not what you assumed. Read it, explain it, ask. Never create a duplicate.
 - **Period locked or closed** (\`period_status\` in a preview, or the commit is refused): do not work around it, and do not move the payment date to dodge the lock. Tell the user; unlocking is their decision (\`month-end-close\`).
@@ -157,7 +164,7 @@ In the user's language, short groups:
 - **Done:** run, period, payment date, totals (gross, tax, avgifter, net).
 - **Staged for approval:** each pending operation.
 - **Needs your answer:** each open question, with the facts.
-- **Could not do (and why):** e.g. lines that must be added in the web UI, Skatteverket not connected.
+- **Could not do (and why):** e.g. Skatteverket not connected, a value only the user can give.
 - **Next step:** the AGI deadline (the date), paying net salaries and the skattekonto before it, matching the payments in \`bank-reconciliation\`.
 
 ## Tools
@@ -165,11 +172,17 @@ In the user's language, short groups:
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`, \`gnubok_list_fiscal_periods\`, \`gnubok_connect_skatteverket\` (orientation, read)
 - \`gnubok_list_employees\`, \`gnubok_get_employee\`, \`gnubok_get_salary_journal\` (read; the last two via \`gnubok_call_tool\` when not listed)
 - \`gnubok_create_employee\`, \`gnubok_update_employee\`, \`gnubok_set_employee_opening_balances\` (staged writes)
+- \`gnubok_list_salary_runs\` (read, via \`gnubok_call_tool\` when not listed)
 - \`gnubok_create_salary_run\`, \`gnubok_update_salary_run\` (via \`gnubok_stage_tool\` when not listed), \`gnubok_set_run_salary\`, \`gnubok_update_payslip_line\` (staged writes, draft runs)
+- \`gnubok_add_payslip_line\`, \`gnubok_delete_payslip_line\`, \`gnubok_add_salary_run_employee\`, \`gnubok_remove_salary_run_employee\` (staged writes, draft runs, via \`gnubok_stage_tool\` when not listed)
+- \`gnubok_set_worked_days\`, \`gnubok_delete_worked_days\`, \`gnubok_add_employee_benefit\`, \`gnubok_update_employee_benefit\`, \`gnubok_delete_employee_benefit\`, \`gnubok_add_employee_recurring_line\`, \`gnubok_update_employee_recurring_line\`, \`gnubok_delete_employee_recurring_line\` (staged, via \`gnubok_stage_tool\`); \`gnubok_list_worked_days\`, \`gnubok_list_employee_benefits\`, \`gnubok_list_employee_recurring_lines\` (read, via \`gnubok_call_tool\`)
 - \`gnubok_register_absence\`, \`gnubok_delete_absence\` (staged), \`gnubok_list_absence\`, \`gnubok_get_vacation_balance\` (read)
 - \`gnubok_calculate_salary_run\` (draft only, rerunnable), \`gnubok_get_salary_run\`, \`gnubok_get_payslip\` (read)
-- \`gnubok_book_salary_run\` (staged, high risk)
+- \`gnubok_book_salary_run\` (staged, high risk; marks the run paid on the way), \`gnubok_mark_salary_run_paid\` (staged, when the pay-out is recorded before booking)
+- \`gnubok_correct_salary_run\` (staged, high risk: rättelsekörning of a booked run)
+- \`gnubok_list_salary_payment_files\` (read: which bank payment files were generated; the file itself is downloaded on the salary run page)
 - \`gnubok_generate_agi\`, \`gnubok_agi_submit\` (staged; filing needs BankID), \`gnubok_agi_status\` (read)
+- \`gnubok_get_fora_report\` (read, via \`gnubok_call_tool\`: what the monthly Fora file says for a payment month, for arbetare with a Fora code \`fora_fok_id\` on the employee; the file itself is downloaded on the salary run page and uploaded on Fora's Mina sidor by the last day of the following month)
 - \`gnubok_close_vacation_year\` (staged, high risk, yearly)
 - \`gnubok_list_pending_operations\`, \`gnubok_approve_pending_operation\` (approval)
 `

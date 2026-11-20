@@ -1,0 +1,638 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { collectionsOnboardingRequestSchema, type CollectionsFeatures } from '@accounted/connect-contract'
+import type { OnboardingBody } from '../activation-form'
+import {
+  createFakeCollectionsAdapter,
+  createFakeCollectionsStore,
+  FAKE_COLLECTIONS_FEATURES,
+  FAKE_PROVIDER_PROFILE,
+} from '../adapters/fake'
+import type { CatalogueCapabilityEntry } from '../catalogue'
+import { isLostApplication, LOST_APPLICATION_AFTER_MS } from '../connection'
+import {
+  acceptTerms,
+  ActivationValidationError,
+  buildOnboardingRequest,
+  connectionIdempotencyKey,
+  endConnection,
+  loadActivationContext,
+  recordConsent,
+  refreshConnection,
+  startSignature,
+  submitOnboarding,
+  updateConnectionSettings,
+  type ConnectionServiceDeps,
+} from '../connection-service'
+import { CollectionsError } from '../errors'
+import { readCollectionsEnv } from '../flags'
+import type { CollectionsAdapter } from '../port'
+import { ADMIN_ID, CASH_ACCOUNT_ID, COMPANY_ID, createMemorySupabase, seedCompany, type MemorySupabase } from './memory-supabase'
+
+const NOW = new Date('2026-10-04T08:00:00Z')
+const ENTRY: CatalogueCapabilityEntry<CollectionsFeatures> = { provider: FAKE_PROVIDER_PROFILE, features: FAKE_COLLECTIONS_FEATURES }
+
+let db: MemorySupabase
+let adapter: CollectionsAdapter
+
+function deps(overrides: Partial<ConnectionServiceDeps> = {}): ConnectionServiceDeps {
+  return {
+    db: db.client,
+    companyId: COMPANY_ID,
+    actor: { userId: ADMIN_ID, name: 'Ada Admin', email: 'ada@test.se' },
+    env: readCollectionsEnv({ COLLECTIONS_ENABLED: '1', COLLECTIONS_PILOT_COMPANIES: '*', COLLECTIONS_FAKE_ADAPTER: '1', NODE_ENV: 'test' }),
+    adapterFor: () => adapter,
+    provider: async () => ENTRY,
+    isSandbox: async () => false,
+    now: () => NOW,
+    ...overrides,
+  }
+}
+
+function onboardingBody(overrides: { company?: Partial<OnboardingBody['company']>; rules?: Partial<OnboardingBody['rules']> } = {}): OnboardingBody {
+  return {
+    company: {
+      name: 'Test AB',
+      addressLine1: 'Storgatan 1',
+      addressLine2: null,
+      postalCode: '111 22',
+      city: 'Stockholm',
+      email: 'faktura@test.se',
+      phone: null,
+      vatRegistered: true,
+      vatNumber: 'SE556012579001',
+      payout: { cashAccountId: CASH_ACCOUNT_ID, kind: 'bankgiro' },
+      ...overrides.company,
+    },
+    kyc: {
+      businessDescription: 'Konsulttjänster inom IT',
+      invoicesAbroad: false,
+      invoicesAbroadDescription: null,
+      pep: false,
+      pepDescription: null,
+      sanctions: false,
+      sanctionsDescription: null,
+    },
+    rules: {
+      minimumAmount: 250,
+      defaultStartStep: 'reminder',
+      reminderFeeTermsSince: '2025-01-01',
+      lateInterest: null,
+      ladderMode: 'off',
+      ...overrides.rules,
+    },
+  }
+}
+
+const consent = () => recordConsent(deps(), { termsVersion: 'fake-2026-10', dpaVersion: null, acceptTerms: true, acceptDataSharing: true })
+
+function liveRow() {
+  return db.rows('collection_connections').find((r) => r.state !== 'disconnected')!
+}
+
+async function expectCode(promise: Promise<unknown>, code: string) {
+  await expect(promise).rejects.toMatchObject({ code })
+}
+
+beforeEach(() => {
+  db = createMemorySupabase()
+  seedCompany(db)
+  adapter = createFakeCollectionsAdapter({ store: createFakeCollectionsStore(), now: () => NOW })
+})
+
+describe('recordConsent', () => {
+  it('creates the row with the consent and calls no provider', async () => {
+    const calls = (Object.keys(adapter) as (keyof CollectionsAdapter)[])
+      .filter((k) => typeof adapter[k] === 'function')
+      .map((k) => vi.spyOn(adapter, k as 'onboard'))
+    const spy = vi.spyOn(adapter, 'onboard')
+    const row = await consent()
+    for (const call of calls) expect(call).not.toHaveBeenCalled()
+    expect(row).toMatchObject({
+      company_id: COMPANY_ID,
+      route: 'fake',
+      provider_ref: 'acme-inkasso',
+      display_name: 'Acme Inkasso',
+      state: 'connecting',
+      sub_status: 'not_started',
+      catalogue_terms_version: 'fake-2026-10',
+      dpa_version: null,
+      consented_by: ADMIN_ID,
+      consented_at: NOW.toISOString(),
+      user_id: ADMIN_ID,
+    })
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('starts a new connection with automatic booking off for collected payments and payouts', async () => {
+    const row = await consent()
+    expect(row).toMatchObject({ auto_book_collected_payments: false, auto_book_settlements: false })
+  })
+
+  it('routes a real company to Connect and a sandbox to the fake', async () => {
+    const real = await recordConsent(deps({ env: readCollectionsEnv({ COLLECTIONS_ENABLED: '1' }) }), {
+      termsVersion: 'fake-2026-10',
+      dpaVersion: null,
+      acceptTerms: true,
+      acceptDataSharing: true,
+    })
+    expect(real.route).toBe('connect')
+    db = createMemorySupabase()
+    seedCompany(db)
+    const sandbox = await recordConsent(deps({ env: readCollectionsEnv({ COLLECTIONS_ENABLED: '1' }), isSandbox: async () => true }), {
+      termsVersion: 'fake-2026-10',
+      dpaVersion: null,
+      acceptTerms: true,
+      acceptDataSharing: true,
+    })
+    expect(sandbox.route).toBe('fake')
+  })
+
+  it('refuses a second live connection, other terms, a missing catalogue and a provider that cannot approve steps', async () => {
+    await consent()
+    await expectCode(consent(), 'COLLECTIONS_CONNECTION_EXISTS')
+
+    db = createMemorySupabase()
+    seedCompany(db)
+    await expectCode(
+      recordConsent(deps(), { termsVersion: 'older', dpaVersion: null, acceptTerms: true, acceptDataSharing: true }),
+      'COLLECTIONS_TERMS_CHANGED',
+    )
+    await expectCode(recordConsent(deps({ provider: async () => null }), { termsVersion: 'x', dpaVersion: null, acceptTerms: true, acceptDataSharing: true }), 'COLLECTIONS_PROVIDER_UNAVAILABLE')
+    await expectCode(
+      recordConsent(deps({ provider: async () => ({ ...ENTRY, features: { ...ENTRY.features, stepApprovalAction: false } }) }), {
+        termsVersion: 'fake-2026-10',
+        dpaVersion: null,
+        acceptTerms: true,
+        acceptDataSharing: true,
+      }),
+      'COLLECTIONS_DISABLED',
+    )
+    await expectCode(
+      recordConsent(deps({ adapterFor: () => null }), { termsVersion: 'fake-2026-10', dpaVersion: null, acceptTerms: true, acceptDataSharing: true }),
+      'COLLECTIONS_UNAVAILABLE',
+    )
+  })
+})
+
+describe('the activation, step by step against the fake', () => {
+  it('reaches active: application, the consented terms accepted with it, signature, status read', async () => {
+    const onboard = vi.spyOn(adapter, 'onboard')
+    const terms = vi.spyOn(adapter, 'acceptTerms')
+    await consent()
+
+    const submitted = await submitOnboarding(deps(), onboardingBody())
+    // The provider asked for the very version consented to: accepted with that consent.
+    expect(terms).toHaveBeenCalledTimes(1)
+    expect(terms.mock.calls[0]![1]).toMatchObject({ termsVersion: 'fake-2026-10', acceptedByName: 'Ada Admin', acceptedAt: NOW.toISOString() })
+    expect(submitted).toMatchObject({
+      state: 'connecting',
+      sub_status: 'awaiting_signature',
+      terms_version: 'fake-2026-10',
+      terms_accepted_by: ADMIN_ID,
+      minimum_amount: 250,
+      reminder_fee_terms_since: '2025-01-01',
+      ladder_mode: 'off',
+      payout_account: '1930',
+      submitted_at: NOW.toISOString(),
+      health: 'ok',
+    })
+    expect(submitted.connection_handle).toBeTruthy()
+
+    const request = onboard.mock.calls[0]![1]
+    expect(request.creditor).toMatchObject({
+      kind: 'company',
+      orgNumber: '5560125790',
+      personalNumber: null,
+      vatNumber: 'SE556012579001',
+      address: { line1: 'Storgatan 1', postalCode: '11122', city: 'Stockholm', countryCode: 'SE' },
+      payout: { kind: 'bankgiro', number: '1234567' },
+    })
+    expect(request.settings).toEqual({ approveBeforeLegalAction: true, approveBeforeCollectionNotice: true, minimumAmount: 250, deliveryEnabled: false })
+    expect(request.consent).toMatchObject({ termsVersion: 'fake-2026-10', consentedByName: 'Ada Admin' })
+    expect(request.idempotencyKey).toMatch(new RegExp(`^${submitted.id}:onboard:[0-9a-f]{16}$`))
+
+    const signed = await startSignature(deps(), { sendToSigner: false, signerEmail: null, language: 'sv' }, { redirectUrl: 'https://app.test/settings/collections?signed=1', language: 'sv' })
+    expect(signed.signUrl).toBeNull()
+    expect(signed.connection).toMatchObject({ state: 'active', sub_status: null, activated_at: NOW.toISOString() })
+  })
+
+  it('leaves another terms version for the admin to accept, and accepts only the version presented', async () => {
+    const terms = vi.spyOn(adapter, 'acceptTerms')
+    await recordConsent(deps({ provider: async () => ({ ...ENTRY, provider: { ...ENTRY.provider, termsVersion: 'catalogue-v0' } }) }), {
+      termsVersion: 'catalogue-v0',
+      dpaVersion: null,
+      acceptTerms: true,
+      acceptDataSharing: true,
+    })
+    const row = await submitOnboarding(deps(), onboardingBody())
+    expect(row.sub_status).toBe('awaiting_terms')
+    expect(row.provider_terms).toMatchObject({ version: 'fake-2026-10', accepted: false })
+    expect(terms).not.toHaveBeenCalled()
+
+    await expectCode(acceptTerms(deps(), { termsVersion: 'catalogue-v0', accept: true }), 'COLLECTIONS_TERMS_CHANGED')
+    const accepted = await acceptTerms(deps(), { termsVersion: 'fake-2026-10', accept: true })
+    expect(accepted).toMatchObject({ sub_status: 'awaiting_signature', terms_version: 'fake-2026-10', terms_accepted_by: ADMIN_ID })
+  })
+
+  it('refuses a step out of order', async () => {
+    await expectCode(submitOnboarding(deps(), onboardingBody()), 'COLLECTIONS_CONNECTION_NOT_FOUND')
+    await consent()
+    await expectCode(acceptTerms(deps(), { termsVersion: 'fake-2026-10', accept: true }), 'COLLECTIONS_CONNECTION_STEP')
+    await expectCode(
+      startSignature(deps(), { sendToSigner: false, signerEmail: null, language: 'sv' }, { redirectUrl: 'https://app.test/x', language: 'sv' }),
+      'COLLECTIONS_CONNECTION_STEP',
+    )
+    await submitOnboarding(deps(), onboardingBody())
+    await expectCode(submitOnboarding(deps(), onboardingBody()), 'COLLECTIONS_CONNECTION_STEP')
+  })
+
+  it('answers the form errors by field, with keys', async () => {
+    await consent()
+    const error = await submitOnboarding(
+      deps(),
+      onboardingBody({ company: { postalCode: '1234', email: 'nope', vatNumber: 'SE1' }, rules: { minimumAmount: 1.005, reminderFeeTermsSince: '2027-01-01' } }),
+    ).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ActivationValidationError)
+    expect((error as ActivationValidationError).errors).toEqual({
+      'company.postalCode': 'invalid_postal_code',
+      'company.email': 'invalid_email',
+      'company.vatNumber': 'invalid_vat_number',
+      'rules.minimumAmount': 'invalid_amount',
+      'rules.reminderFeeTermsSince': 'date_in_future',
+    })
+    expect(liveRow().submitted_at).toBeNull()
+  })
+
+  it('refuses a payout account that is not one of the company\'s bank accounts with that number', async () => {
+    await consent()
+    await expectCode(
+      submitOnboarding(deps(), onboardingBody({ company: { payout: { cashAccountId: CASH_ACCOUNT_ID, kind: 'plusgiro' } } })),
+      'COLLECTIONS_PAYOUT_ACCOUNT_INVALID',
+    )
+  })
+
+  it('offers the reminder batch only where its flag is on', async () => {
+    await consent()
+    await expectCode(submitOnboarding(deps(), onboardingBody({ rules: { ladderMode: 'staged' } })), 'COLLECTIONS_DISABLED')
+    const withLadder = deps({ env: readCollectionsEnv({ COLLECTIONS_ENABLED: '1', COLLECTIONS_LADDER_ENABLED: '1', COLLECTIONS_FAKE_ADAPTER: '1', NODE_ENV: 'test' }) })
+    const row = await submitOnboarding(withLadder, onboardingBody({ rules: { ladderMode: 'staged' } }))
+    expect(row).toMatchObject({ ladder_mode: 'staged', ladder_enabled_by: ADMIN_ID, ladder_enabled_at: NOW.toISOString() })
+  })
+
+  it('requires the reminder choice when the batch is offered', async () => {
+    await consent()
+    const withLadder = deps({ env: readCollectionsEnv({ COLLECTIONS_ENABLED: '1', COLLECTIONS_LADDER_ENABLED: '1', COLLECTIONS_FAKE_ADAPTER: '1', NODE_ENV: 'test' }) })
+    const error = await submitOnboarding(withLadder, onboardingBody({ rules: { ladderMode: null } })).catch((e: unknown) => e)
+    expect((error as ActivationValidationError).errors).toEqual({ 'rules.ladderMode': 'required' })
+    // Where the batch is not offered, no choice means "I send from each invoice".
+    const row = await submitOnboarding(deps(), onboardingBody({ rules: { ladderMode: null } }))
+    expect(row.ladder_mode).toBe('off')
+  })
+})
+
+describe('the creditor number', () => {
+  it('reads through the one reader: an empty company copy hides nothing', async () => {
+    db = createMemorySupabase()
+    db.seed('companies', [{ id: COMPANY_ID, name: 'Test AB', org_number: '', entity_type: 'aktiebolag' }])
+    db.seed('company_settings', [{ company_id: COMPANY_ID, entity_type: 'aktiebolag', company_name: 'Test AB', org_number: '556012-5790' }])
+    const context = await loadActivationContext(db.client, COMPANY_ID)
+    expect(context.company.orgNumber).toBe('5560125790')
+  })
+})
+
+describe('a sole trader', () => {
+  beforeEach(() => {
+    db = createMemorySupabase()
+    // 19500118-2046, on Skatteverket's published list of test personnummer: the firm's org number.
+    seedCompany(db, { entityType: 'enskild_firma', orgNumber: '5001182046' })
+  })
+
+  it('onboards the firm with its org number alone, without asking for the owner\'s personnummer', async () => {
+    const context = await loadActivationContext(db.client, COMPANY_ID)
+    expect(context.company).toMatchObject({ soleTrader: true, orgNumber: '5001182046' })
+    expect(context.company).not.toHaveProperty('ownerPersonalNumber')
+    const onboard = vi.spyOn(adapter, 'onboard')
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    // The provider (2026-10-07) onboards an enskild firma as a business with its
+    // organisationsnummer: nothing else about the owner is asked or sent.
+    const request = onboard.mock.calls[0]![1]
+    expect(request.creditor).toMatchObject({ kind: 'sole_trader', orgNumber: '5001182046', personalNumber: null })
+    expect(JSON.stringify(request)).not.toContain('195001182046')
+    expect(collectionsOnboardingRequestSchema.safeParse(request).success).toBe(true)
+  })
+
+  it('onboards as a business with the ten-digit org number, whatever form the company stored it in', async () => {
+    // The provider (2026-10-07): an enskild firma onboards as a business with its
+    // organisationsnummer, which is the owner's personnummer, not as a private person.
+    const forms: Array<[string, string]> = [
+      // Test personnummer from Skatteverket's published list (open data "Testpersonnummer").
+      ['5001182046', '5001182046'],
+      ['500118-2046', '5001182046'],
+      ['195001182046', '5001182046'],
+      ['19500118-2046', '5001182046'],
+      [' 500118 2046 ', '5001182046'],
+      // A plus marks an owner aged 100 or more: the same ten digits (18900101-9802).
+      ['900101+9802', '9001019802'],
+    ]
+    for (const [stored, orgNumber] of forms) {
+      db = createMemorySupabase()
+      seedCompany(db, { entityType: 'enskild_firma', orgNumber: stored })
+      const context = await loadActivationContext(db.client, COMPANY_ID)
+      expect(context.company, stored).toMatchObject({ soleTrader: true, orgNumber })
+      const onboard = vi.spyOn(adapter, 'onboard')
+      await consent()
+      await submitOnboarding(deps(), onboardingBody())
+      expect(onboard.mock.calls.at(-1)![1].creditor, stored).toMatchObject({ kind: 'sole_trader', orgNumber, personalNumber: null })
+    }
+  })
+})
+
+describe('failures at the provider', () => {
+  it('keeps a timed-out application submitted for the status poll, and lets a refused one be corrected', async () => {
+    await consent()
+    vi.spyOn(adapter, 'onboard').mockRejectedValueOnce(new CollectionsError('timeout', { code: 'CONNECTOR_UNREACHABLE', retryable: true }))
+    await expectCode(submitOnboarding(deps(), onboardingBody()), 'CONNECTOR_UNREACHABLE')
+    expect(liveRow()).toMatchObject({ submitted_at: NOW.toISOString(), health: 'degraded', health_cause: 'CONNECTOR_UNREACHABLE', health_action: 'retry_later', failures_in_row: 1 })
+
+    db = createMemorySupabase()
+    seedCompany(db)
+    await consent()
+    vi.spyOn(adapter, 'onboard').mockRejectedValueOnce(new CollectionsError('bad', { code: 'CONNECTOR_REQUEST_INVALID', retryable: false }))
+    await expectCode(submitOnboarding(deps(), onboardingBody()), 'CONNECTOR_REQUEST_INVALID')
+    expect(liveRow()).toMatchObject({ submitted_at: null, health: 'action_required', health_action: 'contact_support' })
+    // Corrected and sent again: a new body is a new request.
+    const row = await submitOnboarding(deps(), onboardingBody({ rules: { minimumAmount: 300 } }))
+    expect(row.sub_status).toBe('awaiting_signature')
+  })
+
+  it('hands a lost application back: a timed-out send the provider still does not hold ten minutes on', async () => {
+    await consent()
+    vi.spyOn(adapter, 'onboard').mockRejectedValueOnce(new CollectionsError('timeout', { code: 'CONNECTOR_UPSTREAM_ERROR', retryable: true }))
+    await expectCode(submitOnboarding(deps(), onboardingBody()), 'CONNECTOR_UPSTREAM_ERROR')
+
+    // Inside the send's deadlines the read follows it as submitted.
+    let row = await refreshConnection(deps({ now: () => new Date(NOW.getTime() + 5 * 60_000) }))
+    expect(row).toMatchObject({ submitted_at: NOW.toISOString(), sub_status: 'not_started' })
+
+    row = await refreshConnection(deps({ now: () => new Date(NOW.getTime() + LOST_APPLICATION_AFTER_MS) }))
+    expect(row).toMatchObject({
+      state: 'connecting',
+      sub_status: 'not_started',
+      submitted_at: null,
+      health: 'degraded',
+      health_cause: 'COLLECTIONS_APPLICATION_NOT_RECEIVED',
+      health_action: 'retry_later',
+      user_id: null,
+    })
+
+    // Sent again, it goes through and the reason is gone.
+    row = await submitOnboarding(deps(), onboardingBody())
+    expect(row).toMatchObject({ sub_status: 'awaiting_signature', health: 'ok', health_cause: null })
+  })
+
+  it('takes an application for lost only when nobody holds it past the deadlines', () => {
+    const sent = { submitted_at: NOW.toISOString(), connection_handle: null }
+    const nothing = { state: 'connecting', subStatus: 'not_started', connectionHandle: null } as const
+    const due = new Date(NOW.getTime() + LOST_APPLICATION_AFTER_MS)
+    expect(isLostApplication(sent, nothing, due)).toBe(true)
+    expect(isLostApplication(sent, nothing, new Date(due.getTime() - 1))).toBe(false)
+    expect(isLostApplication({ ...sent, submitted_at: null }, nothing, due)).toBe(false)
+    expect(isLostApplication({ ...sent, connection_handle: 'h' }, nothing, due)).toBe(false)
+    expect(isLostApplication(sent, { ...nothing, connectionHandle: 'h' }, due)).toBe(false)
+    expect(isLostApplication(sent, { ...nothing, subStatus: 'awaiting_terms' }, due)).toBe(false)
+  })
+
+  it('never lets the provider end a connection: a vanished one asks a person to look', async () => {
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    vi.spyOn(adapter, 'connection').mockResolvedValueOnce({
+      state: 'disconnected',
+      subStatus: null,
+      providerStatus: 'gone',
+      connectionHandle: null,
+      terms: null,
+      signers: [],
+      settings: null,
+      updatedAt: NOW.toISOString(),
+    })
+    const row = await refreshConnection(deps())
+    expect(row).toMatchObject({ state: 'connecting', sub_status: 'awaiting_signature', health: 'action_required', health_cause: 'PROVIDER_DISCONNECTED' })
+    expect(row.connection_handle).toBeTruthy()
+  })
+
+  it('stores a status read as the system, whoever asked for it', async () => {
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    await refreshConnection(deps())
+    expect(liveRow().user_id).toBeNull()
+  })
+})
+
+describe('ending a connection', () => {
+  it('cancels an activation at the provider, then locally', async () => {
+    const cancel = vi.spyOn(adapter, 'cancelOnboarding')
+    const row = await consent()
+    // Nothing reached the provider yet: ended locally only.
+    const ended = await endConnection(deps(), 'cancel')
+    expect(cancel).not.toHaveBeenCalled()
+    expect(ended).toMatchObject({ state: 'disconnected', sub_status: null, ended_by: ADMIN_ID, ended_at: NOW.toISOString() })
+
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    await endConnection(deps(), 'cancel')
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel.mock.calls[0]![1]).toEqual({ idempotencyKey: `${liveRowOrLast().id}:cancel` })
+    expect(row.id).not.toBe(liveRowOrLast().id)
+  })
+
+  it('starts over after a cancel: a new row, a new consent, the same company at the provider', async () => {
+    const first = await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    await endConnection(deps(), 'cancel')
+    const second = await consent()
+    expect(second.id).not.toBe(first.id)
+    expect(second).toMatchObject({ state: 'connecting', sub_status: 'not_started', connection_handle: null })
+    const again = await submitOnboarding(deps(), onboardingBody())
+    expect(again.sub_status).toBe('awaiting_signature')
+    expect(db.rows('collection_connections').map((r) => r.state)).toEqual(['disconnected', 'connecting'])
+  })
+
+  it('refuses to cancel an active connection and to disconnect with open work', async () => {
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    await startSignature(deps(), { sendToSigner: false, signerEmail: null, language: 'sv' }, { redirectUrl: 'https://app.test/x', language: 'sv' })
+    await expectCode(endConnection(deps(), 'cancel'), 'COLLECTIONS_CONNECTION_STEP')
+    db.rpcs.set('collection_obligation_counts', () => [{ open_cases: 1, unbooked_collected_payments: 0, unbooked_settlements: 0 }])
+    const disconnect = vi.spyOn(adapter, 'disconnect')
+    await expectCode(endConnection(deps(), 'disconnect'), 'COLLECTIONS_DISCONNECT_BLOCKED')
+    expect(disconnect).not.toHaveBeenCalled()
+    db.rpcs.set('collection_obligation_counts', () => [{ open_cases: 0, unbooked_collected_payments: 0, unbooked_settlements: 0 }])
+    // A batch of new handovers only (no open case) does not hold the disconnect back.
+    db.seed('pending_operations', [
+      { id: 'batch-1', company_id: COMPANY_ID, operation_type: 'collections_daily_batch', status: 'pending' },
+      { id: 'other-1', company_id: COMPANY_ID, operation_type: 'create_invoice', status: 'pending' },
+    ])
+    const ended = await endConnection(deps(), 'disconnect')
+    expect(ended.state).toBe('disconnected')
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    // It can no longer be approved, so it is withdrawn rather than left in Att göra.
+    expect(db.rows('pending_operations')).toEqual([
+      expect.objectContaining({ id: 'batch-1', status: 'rejected', result_data: { auto_rejected: true, reason: 'connection_ended' } }),
+      expect.objectContaining({ id: 'other-1', status: 'pending' }),
+    ])
+  })
+
+  it('cancels locally when this installation can no longer reach the provider, but never disconnects blind', async () => {
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    await expectCode(endConnection(deps({ adapterFor: () => null }), 'disconnect'), 'COLLECTIONS_UNAVAILABLE')
+    const ended = await endConnection(deps({ adapterFor: () => null }), 'cancel')
+    expect(ended.state).toBe('disconnected')
+  })
+})
+
+function liveRowOrLast() {
+  const all = db.rows('collection_connections')
+  return all[all.length - 1]!
+}
+
+describe('settings', () => {
+  it('tells the provider only what it holds, with both approvals locked on', async () => {
+    const update = vi.spyOn(adapter, 'updateSettings')
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+
+    const local = await updateConnectionSettings(deps(), { defaultStartStep: 'collection', lateInterest: { percent: 12, agreedSince: '2025-06-01' } })
+    expect(update).not.toHaveBeenCalled()
+    expect(local).toMatchObject({ default_start_step: 'collection', late_interest_percent: 12, late_interest_agreed_since: '2025-06-01' })
+
+    const sent = await updateConnectionSettings(deps(), { minimumAmount: 500 })
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update.mock.calls[0]![1]).toMatchObject({ approveBeforeLegalAction: true, approveBeforeCollectionNotice: true, minimumAmount: 500, deliveryEnabled: false })
+    expect(sent.minimum_amount).toBe(500)
+
+    await updateConnectionSettings(deps(), { lateInterest: null, reminderFeeTermsSince: null })
+    expect(liveRow()).toMatchObject({ late_interest_percent: null, late_interest_agreed_since: null, reminder_fee_terms_since: null })
+  })
+
+  it('tells the provider again when a setting goes back and forth: no key of an earlier change is reused', async () => {
+    const update = vi.spyOn(adapter, 'updateSettings')
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      for (const [i, minimumAmount] of [500, 250, 500].entries()) {
+        vi.setSystemTime(new Date(Date.UTC(2026, 9, 4, 9, i)))
+        await updateConnectionSettings(deps(), { minimumAmount })
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(update).toHaveBeenCalledTimes(3)
+    const keys = update.mock.calls.map((call) => call[1].idempotencyKey)
+    expect(new Set(keys).size).toBe(3)
+    expect(update.mock.calls[2]![1]).toMatchObject({ minimumAmount: 500 })
+    expect(liveRow().minimum_amount).toBe(500)
+  })
+
+  it('records who chose the daily batch, and turning it off withdraws the batch waiting for approval', async () => {
+    const update = vi.spyOn(adapter, 'updateSettings')
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    const staged = await updateConnectionSettings(deps(), { ladderMode: 'staged', ladderDaysAfterDue: 14 })
+    expect(staged).toMatchObject({ ladder_mode: 'staged', ladder_days_after_due: 14, ladder_enabled_by: ADMIN_ID, ladder_enabled_at: NOW.toISOString() })
+    expect(update).not.toHaveBeenCalled()
+
+    db.seed('pending_operations', [
+      { id: 'batch-1', company_id: COMPANY_ID, operation_type: 'collections_daily_batch', status: 'pending' },
+      { id: 'other-1', company_id: COMPANY_ID, operation_type: 'create_invoice', status: 'pending' },
+    ])
+    const off = await updateConnectionSettings(deps(), { ladderMode: 'off' })
+    expect(off).toMatchObject({ ladder_mode: 'off', ladder_enabled_by: null, ladder_enabled_at: null })
+    expect(db.rows('pending_operations')).toEqual([
+      expect.objectContaining({ id: 'batch-1', status: 'rejected', result_data: { auto_rejected: true, reason: 'ladder_off' } }),
+      expect.objectContaining({ id: 'other-1', status: 'pending' }),
+    ])
+  })
+
+  it('refuses a date in the future and an interest rate out of range', async () => {
+    await consent()
+    const error = await updateConnectionSettings(deps(), { reminderFeeTermsSince: '2030-01-01', lateInterest: { percent: 0, agreedSince: '2025-01-01' } }).catch(
+      (e: unknown) => e,
+    )
+    expect((error as ActivationValidationError).errors).toEqual({ reminderFeeTermsSince: 'date_in_future', lateInterestPercent: 'invalid_percent' })
+  })
+})
+
+describe('booking settings', () => {
+  it('keeps the accounts and the automatic booking in the ledger, never tells the provider', async () => {
+    const update = vi.spyOn(adapter, 'updateSettings')
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    const row = await updateConnectionSettings(deps(), {
+      clearingAccount: '1680',
+      payoutAccount: '1940',
+      autoBookCollectedPayments: true,
+      autoBookSettlements: true,
+    })
+    expect(update).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ clearing_account: '1680', payout_account: '1940', auto_book_collected_payments: true, auto_book_settlements: true })
+    expect(liveRow().user_id).toBe(ADMIN_ID)
+
+    await updateConnectionSettings(deps(), { autoBookSettlements: false })
+    expect(liveRow()).toMatchObject({ clearing_account: '1680', payout_account: '1940', auto_book_collected_payments: true, auto_book_settlements: false })
+  })
+
+  it('refuses a clearing account outside the receivables, a payout account that is no bank account, and an account the chart cannot hold', async () => {
+    await consent()
+    const errorsOf = async (patch: Parameters<typeof updateConnectionSettings>[1]) =>
+      ((await updateConnectionSettings(deps(), patch).catch((e: unknown) => e)) as ActivationValidationError).errors
+    expect(await errorsOf({ clearingAccount: '1930', payoutAccount: '1689' })).toEqual({
+      clearingAccount: 'invalid_clearing_account',
+      payoutAccount: 'invalid_payout_account',
+    })
+    expect(await errorsOf({ clearingAccount: '3010' })).toEqual({ clearingAccount: 'invalid_clearing_account' })
+    expect(await errorsOf({ clearingAccount: '16890' })).toEqual({ clearingAccount: 'invalid_clearing_account' })
+    expect(await errorsOf({ clearingAccount: '1001' })).toEqual({ clearingAccount: 'account_not_in_chart' })
+    expect(liveRow()).toMatchObject({ clearing_account: '1689', payout_account: '1930' })
+  })
+
+  it('keeps the clearing account while collected payments booked on it wait for their payout', async () => {
+    await consent()
+    const errorsOf = async (patch: Parameters<typeof updateConnectionSettings>[1]) =>
+      ((await updateConnectionSettings(deps(), patch).catch((e: unknown) => e)) as ActivationValidationError).errors
+    db.seed('collection_collected_payments', [
+      { id: 'cp-settled', company_id: COMPANY_ID, status: 'booked', settlement_id: 'settlement-1' },
+      { id: 'cp-pending', company_id: COMPANY_ID, status: 'pending', settlement_id: null },
+      { id: 'cp-other-company', company_id: 'other-company', status: 'booked', settlement_id: null },
+    ])
+    // Nothing waits on 1689: the change goes through.
+    await updateConnectionSettings(deps(), { clearingAccount: '1680' })
+    expect(liveRow().clearing_account).toBe('1680')
+
+    db.seed('collection_collected_payments', [{ id: 'cp-open', company_id: COMPANY_ID, status: 'booked', settlement_id: null }])
+    expect(await errorsOf({ clearingAccount: '1689' })).toEqual({ clearingAccount: 'clearing_account_in_use' })
+    expect(liveRow().clearing_account).toBe('1680')
+    // The same account, the payout account and the automatic booking stay changeable.
+    await updateConnectionSettings(deps(), { clearingAccount: '1680', payoutAccount: '1940', autoBookSettlements: true })
+    expect(liveRow()).toMatchObject({ clearing_account: '1680', payout_account: '1940', auto_book_settlements: true })
+  })
+})
+
+describe('idempotency keys', () => {
+  it('are the row id and operation, plus a digest of the body where content may change', () => {
+    expect(connectionIdempotencyKey('row', 'cancel')).toBe('row:cancel')
+    const a = connectionIdempotencyKey('row', 'settings', { b: 1, a: 2 })
+    expect(a).toBe(connectionIdempotencyKey('row', 'settings', { a: 2, b: 1 }))
+    expect(a).not.toBe(connectionIdempotencyKey('row', 'settings', { a: 3, b: 1 }))
+    expect(a.length).toBeLessThanOrEqual(128)
+  })
+
+  it('builds the same application request for the same form', async () => {
+    const row = await consent()
+    const context = await loadActivationContext(db.client, COMPANY_ID)
+    const input = { row, body: onboardingBody(), context, consentedByName: 'Ada Admin', requireLadderChoice: true, now: NOW }
+    expect(buildOnboardingRequest(input).request).toEqual(buildOnboardingRequest(input).request)
+  })
+})

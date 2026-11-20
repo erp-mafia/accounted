@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const otherAccountHintMock = vi.hoisted(() => vi.fn())
+const ombudReadAccessMock = vi.hoisted(() => vi.fn(async () => false))
 
 vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({
   ENABLED_EXTENSION_IDS: new Set(['cloud-backup', 'skatteverket']),
@@ -11,19 +13,33 @@ vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({
 vi.mock('@/lib/company/other-account-hint', () => ({
   shouldShowOtherAccountHint: otherAccountHintMock,
 }))
+vi.mock('@/lib/skatteverket/ombud-access', () => ({
+  hasSkatteverketOmbudReadAccess: ombudReadAccessMock,
+}))
+const switchStateMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bank-feed/switch-campaign', () => ({
+  switchStateFor: (...args: unknown[]) => switchStateMock(...args),
+}))
 
 import {
+  bankSwitchNeededNotice,
+  bankSwitchUncoveredNotice,
   detectBackupFailing,
+  detectBankSwitchNeeded,
+  detectBankSwitchNotices,
+  detectBankSwitchUncovered,
   detectBrokenBankConnections,
   detectExpiringBankConnections,
   detectNoFiscalYear,
   detectOtherAccountHint,
+  detectPosConnectionAction,
   detectSkvDisconnected,
   detectSkvUnexplained,
   expiringBankConnectionsFrom,
   skvAuthErrorNeedsReconnect,
   skvStatusNeedsReconnect,
 } from '../categories'
+import { skvConnectionState } from '../predicates'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
@@ -92,6 +108,29 @@ describe('skvStatusNeedsReconnect (pure)', () => {
       skvStatusNeedsReconnect({ connected: true, disabled: true, needsReconsent: true }),
     ).toBe(false)
   })
+  it('stays quiet while reads run on the ombud grant, whatever the session says', () => {
+    expect(skvStatusNeedsReconnect({ connected: true, ombud: true, needsReconsent: true })).toBe(false)
+    expect(skvStatusNeedsReconnect({ connected: true, ombud: true, expired: true, canRefresh: false })).toBe(false)
+  })
+})
+
+// The Kopplingar overview row (crm#1622): a stored session is not a working
+// one. The row used to count token rows and showed Ansluten for a session
+// that had expired a week earlier.
+describe('skvConnectionState (pure)', () => {
+  it('a dead stored session is reconnect, never connected', () => {
+    expect(skvConnectionState({ connected: true, needsReconsent: true, expired: true, canRefresh: false })).toBe('reconnect')
+    expect(skvConnectionState({ connected: true, expired: true, canRefresh: false })).toBe('reconnect')
+  })
+  it('a live or still refreshable session is connected', () => {
+    expect(skvConnectionState({ connected: true, expired: false, canRefresh: true })).toBe('connected')
+    expect(skvConnectionState({ connected: true, expired: true, canRefresh: true })).toBe('connected')
+  })
+  it('no session is off, unless the company reads on the ombud grant', () => {
+    expect(skvConnectionState({ connected: false })).toBe('off')
+    expect(skvConnectionState({ connected: false, ombud: true })).toBe('connected')
+    expect(skvConnectionState({ connected: true, ombud: true, needsReconsent: true })).toBe('connected')
+  })
 })
 
 describe('skvAuthErrorNeedsReconnect (pure)', () => {
@@ -107,11 +146,143 @@ describe('skvAuthErrorNeedsReconnect (pure)', () => {
   })
 })
 
+describe('bank switch notices', () => {
+  const DEADLINE_PARAM = Date.parse('2026-11-09T12:00:00Z')
+  const state = (overrides: Record<string, unknown> = {}) => ({
+    state: 'pending',
+    pending: [{ connection_id: 'c1', bank_name: 'Swedbank' }],
+    uncovered: [],
+    open_payments: 0,
+    deadline: '2026-11-09',
+    days_left: 20,
+    passed: false,
+    urgent: false,
+    ...overrides,
+  })
+
+  it('stays quiet while the campaign is off or does not apply (switchStateFor answers null)', async () => {
+    switchStateMock.mockResolvedValue(null)
+    await expect(detectBankSwitchNeeded(supabase, COMPANY, NOW)).resolves.toBeNull()
+    await expect(detectBankSwitchUncovered(supabase, COMPANY, NOW)).resolves.toBeNull()
+    await expect(detectBankSwitchNotices(supabase, COMPANY, NOW)).resolves.toEqual([])
+    expect(switchStateMock).toHaveBeenCalledWith({ supabase, companyId: COMPANY }, { now: NOW })
+  })
+
+  it('asks to update the one connection, its "här" linking straight into the switch', async () => {
+    switchStateMock.mockResolvedValue(state())
+    const notice = await detectBankSwitchNeeded(supabase, COMPANY, NOW)
+    expect(notice).toEqual({
+      id: 'bank_switch_needed:c1=2026-11-09',
+      category: 'bank_switch_needed',
+      severity: 'warning',
+      messageKey: 'bank_switch_update_one',
+      messageParams: { bank: 'Swedbank', deadline: DEADLINE_PARAM },
+      actionKey: 'bank_switch_here',
+      actionHref: '/settings/connections?bank_connect_switch=c1',
+    })
+    // An unnamed connection gets the same plain line.
+    expect(bankSwitchNeededNotice(state({ pending: [{ connection_id: 'c1', bank_name: '' }] }) as never)?.messageKey).toBe('bank_switch_update_one')
+  })
+
+  it('folds several connections into one counted notice linking to Kopplingar, with a bounded id', async () => {
+    const digest = createHash('sha256').update('c1=2026-11-09,c2=2026-11-09').digest('hex').slice(0, 8)
+    const notice = bankSwitchNeededNotice(state({ pending: [{ connection_id: 'c2', bank_name: 'SEB' }, { connection_id: 'c1', bank_name: 'Swedbank' }] }) as never)
+    expect(notice).toMatchObject({
+      id: `bank_switch_needed:2@${digest}`,
+      messageKey: 'bank_switch_update_many',
+      messageParams: { count: 2, deadline: DEADLINE_PARAM },
+      actionKey: 'bank_switch_here',
+      actionHref: '/settings/connections',
+    })
+  })
+
+  it('becomes the broken-connection wording past the deadline, under a new id so a dismissal resurfaces', () => {
+    const notice = bankSwitchNeededNotice(state({ passed: true, days_left: -1, urgent: true }) as never)
+    expect(notice).toMatchObject({
+      id: 'bank_switch_needed:c1=2026-11-09:stopped',
+      severity: 'error',
+      messageKey: 'bank_switch_stopped_one',
+      messageParams: { bank: 'Swedbank', deadline: DEADLINE_PARAM },
+      actionKey: 'bank_switch_action',
+      actionHref: '/settings/connections?bank_connect_switch=c1',
+    })
+    expect(bankSwitchNeededNotice(state({ pending: [] }) as never)).toBeNull()
+  })
+
+  it('sends banks the new provider does not reach to the file import', async () => {
+    switchStateMock.mockResolvedValue(state({ state: 'uncovered', pending: [], uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }] }))
+    const notice = await detectBankSwitchUncovered(supabase, COMPANY, NOW)
+    expect(notice).toEqual({
+      id: 'bank_switch_uncovered:c9',
+      category: 'bank_switch_uncovered',
+      severity: 'warning',
+      messageKey: 'bank_uncovered_one',
+      messageParams: { bank: 'Wise' },
+      actionKey: 'bank_uncovered_action',
+      actionHref: '/import',
+    })
+    expect(bankSwitchUncoveredNotice(state({ uncovered: [{ connection_id: 'a', bank_name: 'Wise' }, { connection_id: 'b', bank_name: 'PayPal' }] }) as never)).toMatchObject({
+      messageKey: 'bank_uncovered_many',
+      messageParams: { count: 2 },
+    })
+  })
+
+  it('says past the deadline that the old connection to an unreachable bank has ended, under a new id', () => {
+    const notice = bankSwitchUncoveredNotice(state({ state: 'uncovered', pending: [], uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }], passed: true, days_left: -1 }) as never)
+    expect(notice).toEqual({
+      id: 'bank_switch_uncovered:c9:stopped',
+      category: 'bank_switch_uncovered',
+      severity: 'warning',
+      messageKey: 'bank_uncovered_stopped_one',
+      messageParams: { bank: 'Wise' },
+      actionKey: 'bank_uncovered_action',
+      actionHref: '/import',
+    })
+    expect(bankSwitchUncoveredNotice(state({ passed: true, uncovered: [{ connection_id: 'a', bank_name: '' }] }) as never)?.messageKey).toBe('bank_uncovered_stopped_one_unnamed')
+    expect(bankSwitchUncoveredNotice(state({ passed: true, uncovered: [{ connection_id: 'a', bank_name: 'Wise' }, { connection_id: 'b', bank_name: 'PayPal' }] }) as never)?.messageKey).toBe('bank_uncovered_stopped_many')
+  })
+
+  it('has every past-deadline wording in both locales, saying the connection has ended', async () => {
+    const sv = (await import('@/messages/sv.json')).default as { notices: Record<string, string>; dashboard: Record<string, string> }
+    const en = (await import('@/messages/en.json')).default as { notices: Record<string, string>; dashboard: Record<string, string> }
+    for (const key of ['bank_switch_stopped_one', 'bank_switch_stopped_one_unnamed', 'bank_switch_stopped_many', 'bank_uncovered_stopped_one', 'bank_uncovered_stopped_one_unnamed', 'bank_uncovered_stopped_many']) {
+      expect(sv.notices[key]).toContain('upphört')
+      expect(en.notices[key]).toContain('ended')
+    }
+    expect(sv.dashboard.row_bank_switch_stopped).toContain('har upphört')
+    expect(en.dashboard.row_bank_switch_stopped).toContain('has ended')
+  })
+
+  it('derives both notices from one read of the state', async () => {
+    switchStateMock.mockResolvedValue(state({ uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }] }))
+    const notices = await detectBankSwitchNotices(supabase, COMPANY, NOW)
+    expect(notices.map((n) => n.category)).toEqual(['bank_switch_needed', 'bank_switch_uncovered'])
+    expect(switchStateMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('soft-fails to nothing when the state cannot be read', async () => {
+    switchStateMock.mockRejectedValue(new Error('boom'))
+    await expect(detectBankSwitchNeeded(supabase, COMPANY, NOW)).resolves.toBeNull()
+    await expect(detectBankSwitchNotices(supabase, COMPANY, NOW)).resolves.toEqual([])
+  })
+})
+
 describe('detectBrokenBankConnections', () => {
   it('returns null when no connection is broken', async () => {
     enqueue({ data: [] })
     await expect(detectBrokenBankConnections(supabase, COMPANY)).resolves.toBeNull()
     expect(findCall('bank_connections', 'in')).toEqual(['status', ['expired', 'error']])
+  })
+
+  it('treats an Open Payments connection exactly like an Enable Banking one: no aggregator or provider filter', async () => {
+    enqueue({ data: [{ id: 'c1', status: 'expired', bank_name: 'Swedbank' }] })
+    const notice = await detectBrokenBankConnections(supabase, COMPANY)
+    expect(notice).toMatchObject({ messageKey: 'bank_broken_one', messageParams: { bank: 'Swedbank' }, actionHref: '/settings/banking' })
+    expect(findCalls('bank_connections', 'eq')).toEqual([['company_id', COMPANY]])
+    enqueue({ data: [{ id: 'c2', bank_name: 'Swedbank', consent_expires: new Date(NOW.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString() }] })
+    const expiring = await detectExpiringBankConnections(supabase, COMPANY, NOW)
+    expect(expiring).toMatchObject({ messageKey: 'bank_expiring_one', messageParams: { bank: 'Swedbank', days: 3 }, actionHref: '/settings/banking' })
+    expect(findCalls('bank_connections', 'eq')).toEqual([['company_id', COMPANY], ['company_id', COMPANY], ['status', 'active']])
   })
 
   it('shapes a single broken connection with its bank name', async () => {
@@ -224,6 +395,27 @@ describe('detectExpiringBankConnections', () => {
 })
 
 describe('detectSkvDisconnected', () => {
+  it('stays silent on a dead session when the company reads through Accounted as ombud', async () => {
+    enqueue({
+      data: {
+        status: 'needs_reconsent',
+        expires_at: '2026-08-19T10:00:00Z',
+        refresh_token: 'ciphertext',
+        refresh_count: 1,
+        last_error_at: '2026-08-18T03:00:00Z',
+      },
+    })
+    ombudReadAccessMock.mockResolvedValueOnce(true)
+    await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
+    expect(ombudReadAccessMock).toHaveBeenCalledWith(COMPANY)
+  })
+
+  it('never asks about the ombud for a healthy session', async () => {
+    enqueue({ data: null })
+    await detectSkvDisconnected(supabase, USER, COMPANY, NOW)
+    expect(ombudReadAccessMock).not.toHaveBeenCalled()
+  })
+
   it('returns null when no token row exists (not connected)', async () => {
     enqueue({ data: null })
     await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
@@ -413,7 +605,7 @@ describe('detectBackupFailing', () => {
 describe('detectOtherAccountHint', () => {
   it('shapes the hint as the lowest-priority notice when the detector fires', async () => {
     otherAccountHintMock.mockResolvedValue(true)
-    await expect(detectOtherAccountHint(supabase, COMPANY)).resolves.toMatchObject({
+    await expect(detectOtherAccountHint(supabase, COMPANY, USER)).resolves.toMatchObject({
       id: 'other_account_hint',
       category: 'other_account_hint',
       severity: 'warning',
@@ -422,12 +614,12 @@ describe('detectOtherAccountHint', () => {
 
   it('returns null when the detector stays quiet', async () => {
     otherAccountHintMock.mockResolvedValue(false)
-    await expect(detectOtherAccountHint(supabase, COMPANY)).resolves.toBeNull()
+    await expect(detectOtherAccountHint(supabase, COMPANY, USER)).resolves.toBeNull()
   })
 
   it('soft-fails to null when the detector throws', async () => {
     otherAccountHintMock.mockRejectedValue(new Error('boom'))
-    await expect(detectOtherAccountHint(supabase, COMPANY)).resolves.toBeNull()
+    await expect(detectOtherAccountHint(supabase, COMPANY, USER)).resolves.toBeNull()
   })
 })
 
@@ -443,8 +635,62 @@ describe('never-throws contract', () => {
     await expect(detectExpiringBankConnections(throwing, COMPANY, NOW)).resolves.toBeNull()
     await expect(detectSkvDisconnected(throwing, USER, COMPANY, NOW)).resolves.toBeNull()
     await expect(detectBackupFailing(throwing, COMPANY)).resolves.toBeNull()
-    await expect(detectOtherAccountHint(throwing, COMPANY)).resolves.toBeNull()
+    await expect(detectOtherAccountHint(throwing, COMPANY, USER)).resolves.toBeNull()
     await expect(detectNoFiscalYear(throwing, COMPANY)).resolves.toBeNull()
+    await expect(detectPosConnectionAction(throwing, COMPANY)).resolves.toBeNull()
+  })
+})
+
+// Before: a POS connection waiting for a person showed only on the Kassa page
+// and in its settings.
+describe('detectPosConnectionAction', () => {
+  it('stays quiet when no active connection waits for a person', async () => {
+    enqueue({ data: [] })
+    await expect(detectPosConnectionAction(supabase, COMPANY)).resolves.toBeNull()
+    expect(findCalls('pos_connections', 'eq')).toEqual([
+      ['company_id', COMPANY],
+      ['status', 'active'],
+      ['health', 'action_required'],
+    ])
+  })
+
+  it('names the one venue and links to the Kassa settings', async () => {
+    enqueue({ data: [{ id: 'p1', venue_name: 'Restaurang Exempel' }] })
+    await expect(detectPosConnectionAction(supabase, COMPANY)).resolves.toEqual({
+      id: 'pos_connection_action:p1',
+      category: 'pos_connection_action',
+      severity: 'error',
+      messageKey: 'pos_action_one',
+      messageParams: { venue: 'Restaurang Exempel' },
+      actionKey: 'pos_action_action',
+      actionHref: '/settings/pos',
+    })
+  })
+
+  it('folds several venues into one counted notice with an id stable across orderings', async () => {
+    enqueue({ data: [{ id: 'p1', venue_name: 'A' }, { id: 'p2', venue_name: 'B' }] })
+    const first = await detectPosConnectionAction(supabase, COMPANY)
+    enqueue({ data: [{ id: 'p2', venue_name: 'B' }, { id: 'p1', venue_name: 'A' }] })
+    const second = await detectPosConnectionAction(supabase, COMPANY)
+    expect(first).toMatchObject({ messageKey: 'pos_action_many', messageParams: { count: 2 } })
+    expect(first!.id).toMatch(/^pos_connection_action:2@[0-9a-f]{8}$/)
+    expect(second!.id).toBe(first!.id)
+  })
+
+  it('soft-fails to null on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(detectPosConnectionAction(supabase, COMPANY)).resolves.toBeNull()
+  })
+
+  it('has its wording in both locales', () => {
+    // Read from disk: importing the two message files through the test
+    // transform takes seconds on a loaded machine.
+    for (const locale of ['sv', 'en']) {
+      const { notices } = JSON.parse(readFileSync(`src/messages/${locale}.json`, 'utf8')) as { notices: Record<string, string> }
+      for (const key of ['pos_action_one', 'pos_action_many', 'pos_action_action']) {
+        expect(notices[key], `${locale}.${key}`).toBeTruthy()
+      }
+    }
   })
 })
 
@@ -460,7 +706,7 @@ describe('detectNoFiscalYear', () => {
       severity: 'warning',
       messageKey: 'no_fiscal_year',
       actionKey: 'no_fiscal_year_action',
-      actionHref: '/settings/bookkeeping',
+      actionHref: '/settings/fiscal-years',
     })
     expect(findCall('fiscal_periods', 'eq')).toEqual(['company_id', COMPANY])
   })

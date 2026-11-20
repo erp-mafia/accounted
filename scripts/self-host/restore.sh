@@ -141,9 +141,11 @@ else
   # functions and USAGE on types, nothing on tables and sequences), so the
   # dump's explicit GRANT/REVOKE statements apply to the base they were
   # computed against. The dump's own last section (DEFAULT ACL) re-creates
-  # the stack's default privileges once every object exists, so migrations
-  # applied later still get the grants PostgREST needs; the check after
-  # pg_restore confirms that.
+  # the source's default privileges once every object exists, so migrations
+  # applied later behave as they would have on the source. Since migration
+  # 20260929220000_own_default_privileges that means the function default
+  # only: new tables and sequences get their grants from the migration that
+  # creates them. The check after pg_restore confirms a default came back.
   psql -X -q -v ON_ERROR_STOP=1 "$RESTORE_DATABASE_URL" <<'SQL'
 DO $$
 DECLARE
@@ -243,7 +245,7 @@ SQL
   DEFACL_ROWS="$(psql -X -A -t -q -v ON_ERROR_STOP=1 "$RESTORE_DATABASE_URL" \
     -c "select count(*) from pg_default_acl where defaclrole = (select oid from pg_roles where rolname = current_user) and defaclnamespace = 'public'::regnamespace")"
   if [ "${DEFACL_ROWS:-0}" = "0" ]; then
-    echo "restore: WARNING: no default privileges for the restoring role in schema public after the restore; re-apply the stack's ALTER DEFAULT PRIVILEGES (tables, functions, sequences to anon, authenticated, service_role) before running further migrations" >&2
+    echo "restore: WARNING: no default privileges for the restoring role in schema public after the restore; before running further migrations, re-apply the stack's function default (ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role). Do not re-grant table or sequence defaults unless this backup predates migration 20260929220000_own_default_privileges, which switches them off again: new tables grant themselves" >&2
   fi
 fi
 

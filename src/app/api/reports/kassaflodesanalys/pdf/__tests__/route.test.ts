@@ -52,12 +52,13 @@ vi.mock('@react-pdf/renderer', () => ({
 }))
 
 vi.mock('@/lib/reports/kassaflodesanalys', () => ({
-  generateKassaflodesanalys: vi.fn(),
+  generateKassaflodesanalysWithStatement: vi.fn(),
 }))
 
 import { GET } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
-import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
+import { generateKassaflodesanalysWithStatement } from '@/lib/reports/kassaflodesanalys'
+import { buildKassaflodesanalysYear, likvidaMedelDefinition } from '@/lib/reports/kassaflodesanalys-statement'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -75,11 +76,14 @@ function makeReport() {
       delta_varulager: 0,
       delta_kortfristiga_skulder: 3000,
       skatt_betald: -25000,
+      koncernbidrag: 0,
+      ovriga_poster: 0,
       total: 113000,
     },
     investerings: {
       forvarv_anlaggningar: -40000,
       avyttring_anlaggningar: 0,
+      kortfristiga_placeringar: 0,
       total: -40000,
     },
     finansierings: {
@@ -90,6 +94,21 @@ function makeReport() {
       total: -30000,
     },
     total_cash_flow: 43000,
+    // The K3 chapter 7 statement the template prints (an empty year here).
+    statement: {
+      method: 'indirect',
+      current: buildKassaflodesanalysYear({
+        periodStart: PERIOD.period_start,
+        periodEnd: PERIOD.period_end,
+        rows: [],
+        tax: { paidIncomeTax: 0, otherTaxLiabilityChange: 0, expenseInOperatingProfit: 0 },
+        vouchers: null,
+        definition: likvidaMedelDefinition(PERIOD.period_start),
+      }),
+      previous: null,
+      previous_status: 'no_previous_period',
+    },
+    unclassified_accounts: [],
     reconciliation: {
       opening_cash_1xxx: 100000,
       closing_cash_1xxx: 143000,
@@ -134,7 +153,7 @@ describe('GET /api/reports/kassaflodesanalys/pdf', () => {
     mockSupabase.from.mockImplementation((table: string) =>
       tableQuery(table === 'fiscal_periods' ? periodRow : companyRow),
     )
-    vi.mocked(generateKassaflodesanalys).mockResolvedValue(makeReport() as never)
+    vi.mocked(generateKassaflodesanalysWithStatement).mockResolvedValue(makeReport() as never)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -146,13 +165,13 @@ describe('GET /api/reports/kassaflodesanalys/pdf', () => {
 
     const res = await call('?period_id=period-1')
     expect(res.status).toBe(401)
-    expect(generateKassaflodesanalys).not.toHaveBeenCalled()
+    expect(generateKassaflodesanalysWithStatement).not.toHaveBeenCalled()
   })
 
   it('returns 400 when period_id is missing', async () => {
     const res = await call()
     expect(res.status).toBe(400)
-    expect(generateKassaflodesanalys).not.toHaveBeenCalled()
+    expect(generateKassaflodesanalysWithStatement).not.toHaveBeenCalled()
   })
 
   it('refuses to render when the fiscal period cannot be read', async () => {
@@ -162,7 +181,7 @@ describe('GET /api/reports/kassaflodesanalys/pdf', () => {
 
     const res = await call('?period_id=missing')
     expect(res.status).toBe(400)
-    expect(generateKassaflodesanalys).not.toHaveBeenCalled()
+    expect(generateKassaflodesanalysWithStatement).not.toHaveBeenCalled()
   })
 
   it('returns 404 when company settings are missing', async () => {
@@ -170,7 +189,7 @@ describe('GET /api/reports/kassaflodesanalys/pdf', () => {
 
     const res = await call('?period_id=period-1')
     expect(res.status).toBe(404)
-    expect(generateKassaflodesanalys).not.toHaveBeenCalled()
+    expect(generateKassaflodesanalysWithStatement).not.toHaveBeenCalled()
   })
 
   it('names the file the way the client saves it', async () => {
@@ -182,13 +201,15 @@ describe('GET /api/reports/kassaflodesanalys/pdf', () => {
     // already holds. Both sides read period_start from the same generator
     // output, so this literal is the contract between them.
     expect(res.headers.get('Content-Disposition')).toBe(
-      'attachment; filename="kassaflodesanalys-2025-01-01.pdf"',
+      `attachment; filename="kassaflodesanalys-2025-01-01.pdf"; filename*=UTF-8''kassaflodesanalys-2025-01-01.pdf`,
     )
-    expect(generateKassaflodesanalys).toHaveBeenCalledWith(mockSupabase, 'company-1', 'period-1')
+    expect(generateKassaflodesanalysWithStatement).toHaveBeenCalledWith(mockSupabase, 'company-1', 'period-1', {
+      includePreviousYear: true,
+    })
   })
 
   it('returns 500 when the generator throws', async () => {
-    vi.mocked(generateKassaflodesanalys).mockRejectedValue(new Error('boom'))
+    vi.mocked(generateKassaflodesanalysWithStatement).mockRejectedValue(new Error('boom'))
 
     const res = await call('?period_id=period-1')
     expect(res.status).toBe(500)

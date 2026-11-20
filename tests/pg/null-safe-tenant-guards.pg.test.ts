@@ -3,7 +3,7 @@ import { getPool, withUserContext } from './setup'
 import { seedCompany, insertAuthUser } from './fixtures'
 
 /**
- * NULL-safe tenant guards (mcp_optimization_plan P2-3 / PR #872 review):
+ * NULL-safe tenant guards:
  * `x NOT IN (SELECT public.user_company_ids())` skips the deny branch on
  * UNKNOWN. Migration 20260703180000 introduces caller_is_company_member()
  * and mechanically rewrites every public function carrying the raw pattern.

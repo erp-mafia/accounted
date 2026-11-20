@@ -28,7 +28,7 @@ export function merchantKey(raw: string | null | undefined): string {
 
 /**
  * Bank texts that name how money moved, not whom it moved to: a salary
- * transfer typed by the owner ("LÖN Juli Emil Överföring VIA Internet"),
+ * transfer typed by the owner ("LÖN Juli Anna Överföring VIA Internet"),
  * the bank's own "Utbetalning", an own deposit or withdrawal. The payee of
  * those is an employee, the owner or the company itself, never a merchant.
  */

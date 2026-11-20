@@ -4,7 +4,9 @@ import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
-import { ChevronDown } from 'lucide-react'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
+import { ChevronDownIcon } from '@/components/icons'
 import {
   SettingsGroup,
   SettingsReveal,
@@ -12,12 +14,13 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { cn } from '@/lib/utils'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   buildVoucherSeriesOptions,
   isStandardVoucherSeriesMap,
+  resolveDefaultSeriesForSource,
   STANDARD_VOUCHER_SERIES_MAP,
+  type VoucherSeriesMap,
 } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CompanySettings, JournalEntrySourceType } from '@/types'
 
@@ -39,7 +42,9 @@ const VISIBLE_SOURCE_TYPES: Array<{ key: JournalEntrySourceType; labelKey: strin
   { key: 'bank_transaction', labelKey: 'bank_transaction' },
   { key: 'reminder_fee', labelKey: 'reminder_fee' },
   { key: 'webshop_order', labelKey: 'webshop_order' },
+  { key: 'pos_daily_sales', labelKey: 'pos_daily_sales' },
   { key: 'vat_settlement', labelKey: 'vat_settlement' },
+  { key: 'tax_account', labelKey: 'tax_account' },
   { key: 'opening_balance', labelKey: 'opening_balance' },
   { key: 'year_end', labelKey: 'year_end' },
 ]
@@ -76,7 +81,9 @@ const SV_LABELS: Record<string, string> = {
   bank_transaction: 'Banktransaktioner',
   reminder_fee: 'Påminnelseavgifter',
   webshop_order: 'Webshopordrar',
+  pos_daily_sales: 'Dagskassor (kassasystem)',
   vat_settlement: 'Momsredovisning',
+  tax_account: 'Skattekonto',
   opening_balance: 'Ingående balanser',
   year_end: 'Bokslut',
 }
@@ -92,6 +99,8 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const tCommon = useTranslations('dashboard')
   const t = useTranslations('settings_bookkeeping')
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
+  const saveSettings = useSaveSettings()
   const initialMap = settings.default_voucher_series_per_source_type || {}
   const [draft, setDraft] = useState<Partial<Record<JournalEntrySourceType, string>>>(
     initialMap as Partial<Record<JournalEntrySourceType, string>>,
@@ -142,34 +151,17 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const handleSave = async () => {
     setIsSaving(true)
     try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          default_voucher_series_per_source_type: draft,
-        }),
-      })
-      const json = await res.json()
-      if (!res.ok) {
-        toast({
-          title: 'Kunde inte spara',
-          description: getErrorMessage(json, { context: 'settings', statusCode: res.status }),
-          variant: 'destructive',
-        })
-        return
-      }
+      const saved = await saveSettings(
+        { default_voucher_series_per_source_type: draft as Record<JournalEntrySourceType, string> },
+        { failedTitle: 'Kunde inte spara' },
+      )
+      if (!saved) return
       onSettingsUpdated({
         default_voucher_series_per_source_type: draft as Record<JournalEntrySourceType, string>,
       })
       toast({
         title: 'Verifikationsserier sparade',
         description: 'Nya verifikat använder de uppdaterade serierna.',
-      })
-    } catch (err) {
-      toast({
-        title: 'Kunde inte spara',
-        description: getErrorMessage(err, { context: 'settings' }),
-        variant: 'destructive',
       })
     } finally {
       setIsSaving(false)
@@ -195,7 +187,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
       >
         <SettingsSelect
           id={`series-${key}`}
-          value={(draft[key] as string | undefined) || 'A'}
+          // The letter the engine books with: a type without its own key
+          // shows the series it falls back to (Skattekonto follows System).
+          value={resolveDefaultSeriesForSource(draft as VoucherSeriesMap, key)}
           onChange={(e) => handleChange(key, e.target.value)}
           className="font-mono"
         >
@@ -229,7 +223,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
         aria-expanded={showAll}
         className="flex items-center gap-1.5 px-1 py-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
       >
-        <ChevronDown
+        <ChevronDownIcon
           aria-hidden="true"
           className={cn('h-3.5 w-3.5 transition-transform duration-150', showAll && 'rotate-180')}
         />
@@ -245,9 +239,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             onClick={handleUseStandardSet}
-            disabled={onStandardSet || isSaving}
+            disabled={!canWrite || onStandardSet || isSaving}
+            title={lockedTitle}
           >
             {t('series_standard_set_button')}
           </Button>
@@ -255,9 +249,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
         </div>
         <Button
           type="button"
-          size="sm"
           onClick={handleSave}
-          disabled={!hasChanges}
+          disabled={!canWrite || !hasChanges}
+          title={lockedTitle}
           loading={isSaving}
         >
           Spara serier

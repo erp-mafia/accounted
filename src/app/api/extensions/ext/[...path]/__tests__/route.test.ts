@@ -27,10 +27,11 @@ vi.mock('@/lib/extensions/context-factory', () => ({
   }),
 }))
 
-// Default to "MFA not enforced" so existing tests authenticate normally;
-// the AAL2-gate regression test below flips this on.
+// Default to "no MFA gate applies" so existing tests authenticate normally;
+// the AAL2-gate regression test below flips the step-up on.
 vi.mock('@/lib/auth/mfa', () => ({
   shouldEnforceMfa: vi.fn(() => false),
+  mfaStepUpApplies: vi.fn(() => false),
 }))
 
 // Drive the paywall gate directly. Keep the module's real exports (the resolver
@@ -49,17 +50,32 @@ vi.mock('@/lib/extensions/sectors', async (importOriginal) => ({
   requiredCapabilityForExtensionId: vi.fn(),
 }))
 
+// The role gates a route declares: driven directly, with the real 403 envelope.
+vi.mock('@/lib/auth/require-write', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/require-write')>()),
+  requireWritePermission: vi.fn(),
+  isCompanyAdmin: vi.fn(),
+}))
+
 import { createClient } from '@/lib/supabase/server'
-import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { isCompanyAdmin, requireWritePermission } from '@/lib/auth/require-write'
+import { mfaStepUpApplies, shouldEnforceMfa } from '@/lib/auth/mfa'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { GET, POST } from '../route'
+import { requireCompanyId } from '@/lib/company/context'
+import { getActor } from '@/lib/bookkeeping/actor-context'
+import { DELETE, GET, PATCH, POST, PUT } from '../route'
+import { getTraceId } from '@/lib/observability/trace-context'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockShouldEnforceMfa = vi.mocked(shouldEnforceMfa)
+const mockMfaStepUpApplies = vi.mocked(mfaStepUpApplies)
 const mockRequireCapability = vi.mocked(requireCapability)
 const mockRequiredCapabilityForExtensionId = vi.mocked(requiredCapabilityForExtensionId)
+const mockRequireWritePermission = vi.mocked(requireWritePermission)
+const mockIsCompanyAdmin = vi.mocked(isCompanyAdmin)
 
 function createPathParams(path: string[]) {
   return { params: Promise.resolve({ path }) }
@@ -71,11 +87,14 @@ describe('Extension Catch-All Route', () => {
     // clearAllMocks doesn't reset implementations: re-assert the default so the
     // AAL2 test's mockReturnValue(true) can't leak into later cases.
     mockShouldEnforceMfa.mockReturnValue(false)
+    mockMfaStepUpApplies.mockReturnValue(false)
     // Default: capability present (allowed). Gated-extension tests override this.
     mockRequireCapability.mockResolvedValue(null)
     // Default: extension requires no capability, so the gate is a no-op and
     // existing dispatch tests behave as before. Paywall tests override this.
     mockRequiredCapabilityForExtensionId.mockReturnValue(undefined)
+    // Default: the caller may write. The viewer cases below override this.
+    mockRequireWritePermission.mockResolvedValue({ ok: true })
     extensionRegistry.clear()
   })
 
@@ -141,8 +160,9 @@ describe('Extension Catch-All Route', () => {
       data: { user: { id: 'user-1', app_metadata: {} } },
       error: null,
     })
-    // MFA is required for this user, but only AAL1 has been reached.
+    // The step-up applies to this user, but only AAL1 has been reached.
     mockShouldEnforceMfa.mockReturnValue(true)
+    mockMfaStepUpApplies.mockReturnValue(true)
     ;(supabase.auth as unknown as { mfa: unknown }).mfa = {
       getAuthenticatorAssuranceLevel: vi
         .fn()
@@ -209,6 +229,166 @@ describe('Extension Catch-All Route', () => {
     expect(handler).toHaveBeenCalledWith(request, expect.objectContaining({
       extensionId: 'test-ext',
     }))
+  })
+
+  it('runs the handler as the signed-in user, named by id for the audit log of its service-role writes', async () => {
+    let seen: ReturnType<typeof getActor>
+    const handler = vi.fn(async () => {
+      seen = getActor()
+      return NextResponse.json({ ok: true })
+    })
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'POST', path: '/book', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/book', { method: 'POST', body: {} })
+    const response = await POST(request, createPathParams(['test-ext', 'book']))
+
+    expect(response.status).toBe(200)
+    expect(seen).toEqual({ type: 'user', userId: 'user-1' })
+    expect(getActor()).toBeUndefined()
+  })
+
+  // A Swedish JSON body sent without a declared charset is read as Latin-1 by
+  // clients that fall back that way, and "är" arrives as "Ã¤r". The bytes were
+  // always right; only the declaration was missing.
+  it('declares charset=utf-8 on JSON so Swedish text cannot be read as Latin-1', async () => {
+    // The feature flag is checked after the extension is found, so the
+    // disabled path needs a registered skatteverket to reach.
+    vi.stubEnv('SKATTEVERKET_ENABLED', '')
+    extensionRegistry.register({
+      id: 'skatteverket',
+      name: 'Skatteverket',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/status', handler: vi.fn() }],
+    })
+
+    try {
+      const request = createMockRequest('/api/extensions/ext/skatteverket/status')
+      const response = await GET(request, createPathParams(['skatteverket', 'status']))
+
+      expect(response.status).toBe(503)
+      expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+
+      // The body still decodes as UTF-8, and reading those same bytes as Latin-1
+      // is what produced the reported mojibake.
+      const bytes = new Uint8Array(await response.clone().arrayBuffer())
+      expect(new TextDecoder('utf-8').decode(bytes)).toContain('miljö')
+      expect(new TextDecoder('latin1').decode(bytes)).toContain('miljÃ¶')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('declares the charset on the error envelope it rebuilds with a requestId', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      NextResponse.json({ error: { code: 'NOT_FOUND', message: 'Hittades inte' } }, { status: 404 })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/missing', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/missing')
+    const response = await GET(request, createPathParams(['test-ext', 'missing']))
+    const { status, body } = await parseJsonResponse<{ error: { requestId?: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.requestId).toMatch(/^req_/)
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+  })
+
+  it('does not double a charset the handler already declared', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      new NextResponse('{"ok":true}', { headers: { 'content-type': 'application/json; charset=UTF-8' } })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/declared', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/declared')
+    const response = await GET(request, createPathParams(['test-ext', 'declared']))
+
+    expect(response.headers.get('content-type')).toBe('application/json; charset=UTF-8')
+  })
+
+  it('leaves a non-JSON content-type alone', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      new NextResponse('%PDF-1.7', { headers: { 'content-type': 'application/pdf' } })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/file', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/file')
+    const response = await GET(request, createPathParams(['test-ext', 'file']))
+
+    expect(response.headers.get('content-type')).toBe('application/pdf')
+  })
+
+  it('sends the JSON of a skipAuth route (a webhook, the MCP endpoint) with the content-type the handler set', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      NextResponse.json({ error: { code: 'UNAUTHORIZED', message: 'Nyckeln saknas' } }, { status: 401 })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'POST', path: '/mcp', handler, skipAuth: true }],
+    })
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/mcp', { method: 'POST', body: {} })
+    const response = await POST(request, createPathParams(['test-ext', 'mcp']))
+    const { status, body } = await parseJsonResponse<{ error: { requestId?: string } }>(response)
+
+    expect(status).toBe(401)
+    // The requestId is still added to the envelope; only the header is kept.
+    expect(body.error.requestId).toMatch(/^req_/)
+    expect(response.headers.get('content-type')).toBe('application/json')
   })
 
   it('dispatches POST requests correctly', async () => {
@@ -324,5 +504,300 @@ describe('Extension Catch-All Route', () => {
     expect(response.status).toBe(200)
     expect(handler).toHaveBeenCalled()
     expect(mockRequireCapability).not.toHaveBeenCalled()
+  })
+
+  describe('request trace', () => {
+    const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736'
+    const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`
+
+    it('names a minted trace on a refusal before any route matched', async () => {
+      const response = await GET(createMockRequest('/api/extensions/ext/'), createPathParams([]))
+      expect(response.status).toBe(400)
+      expect(response.headers.get('X-Trace-Id')).toMatch(/^[0-9a-f]{32}$/)
+    })
+
+    it('runs the handler in the trace of a valid traceparent header and names it in X-Trace-Id', async () => {
+      let seen: string | undefined
+      const handler = vi.fn(async () => {
+        seen = getTraceId()
+        return NextResponse.json({ ok: true })
+      })
+      extensionRegistry.register({
+        id: 'test-ext',
+        name: 'Test',
+        version: '1.0.0',
+        apiRoutes: [{ method: 'GET', path: '/thing', handler }],
+      })
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateClient.mockResolvedValue(supabase as never)
+
+      const response = await GET(
+        createMockRequest('/api/extensions/ext/test-ext/thing', { headers: { traceparent: TRACEPARENT } }),
+        createPathParams(['test-ext', 'thing']),
+      )
+
+      expect(response.status).toBe(200)
+      expect(seen).toBe(TRACE_ID)
+      expect(response.headers.get('X-Trace-Id')).toBe(TRACE_ID)
+      expect(response.headers.get('X-Request-Id')).toMatch(/^req_/)
+    })
+
+    it("keeps the trace a skipAuth handler's own door named (the MCP dispatch)", async () => {
+      const inner = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      const outer: Array<string | undefined> = []
+      const handler = vi.fn(async () => {
+        outer.push(getTraceId())
+        const response = await runWithTrace(inner, async () => NextResponse.json({ ok: true }))
+        response.headers.set('X-Trace-Id', inner)
+        return response
+      })
+      extensionRegistry.register({
+        id: 'mcp-like',
+        name: 'MCP-like',
+        version: '1.0.0',
+        apiRoutes: [{ method: 'POST', path: '/mcp', handler, skipAuth: true }],
+      })
+
+      const response = await POST(
+        createMockRequest('/api/extensions/ext/mcp-like/mcp', { method: 'POST', body: {}, headers: { traceparent: TRACEPARENT } }),
+        createPathParams(['mcp-like', 'mcp']),
+      )
+
+      expect(outer).toEqual([TRACE_ID])
+      expect(response.headers.get('X-Trace-Id')).toBe(inner)
+    })
+  })
+
+  describe('declared role gates', () => {
+    function signIn() {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateClient.mockResolvedValue(supabase as never)
+    }
+
+    function register(route: Record<string, unknown>) {
+      extensionRegistry.register({
+        id: 'test-ext',
+        name: 'Test',
+        version: '1.0.0',
+        apiRoutes: [{ method: 'POST', path: '/write', ...route } as never],
+      })
+    }
+
+    const call = () =>
+      POST(
+        createMockRequest('/api/extensions/ext/test-ext/write', { method: 'POST', body: {} }),
+        createPathParams(['test-ext', 'write']),
+      )
+
+    it('refuses the invoicing-only role on any route before the handler runs', async () => {
+      const handler = vi.fn()
+      register({ handler })
+      signIn()
+      vi.mocked(requireCompanyId).mockImplementationOnce(async (_s, _u, facts) => {
+        if (facts) facts.role = 'invoicer'
+        return 'company-1'
+      })
+
+      const response = await call()
+
+      expect(response.status).toBe(403)
+      expect(JSON.stringify(await response.json())).toContain('INVOICER_ROUTE_NOT_ALLOWED')
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('refuses a viewer on a requireWrite route before the handler runs', async () => {
+      const handler = vi.fn()
+      register({ requireWrite: true, handler })
+      signIn()
+      mockRequireWritePermission.mockResolvedValue({
+        ok: false,
+        response: NextResponse.json({ error: 'Du har endast läsbehörighet i detta företag.' }, { status: 403 }),
+      })
+
+      const response = await call()
+
+      expect(response.status).toBe(403)
+      expect(handler).not.toHaveBeenCalled()
+      expect(mockRequireWritePermission).toHaveBeenCalledWith(expect.anything(), 'user-1', { companyId: 'company-1' })
+    })
+
+    it('dispatches a requireWrite route for a writer', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register({ requireWrite: true, handler })
+      signIn()
+      mockRequireWritePermission.mockResolvedValue({ ok: true })
+
+      const response = await call()
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ userId: 'user-1' }))
+    })
+
+    it('refuses a non-admin on a requireAdmin route with the FORBIDDEN envelope', async () => {
+      const handler = vi.fn()
+      register({ requireAdmin: true, handler })
+      signIn()
+      mockIsCompanyAdmin.mockResolvedValue(false)
+
+      const response = await call()
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(403)
+      expect(body.error.code).toBe('FORBIDDEN')
+      expect(handler).not.toHaveBeenCalled()
+      expect(mockIsCompanyAdmin).toHaveBeenCalledWith(expect.anything(), 'company-1')
+      // requireAdmin implies requireWrite: one check, not two.
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+    })
+
+    it('dispatches a requireAdmin route for an owner or admin', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register({ requireAdmin: true, handler })
+      signIn()
+      mockIsCompanyAdmin.mockResolvedValue(true)
+
+      const response = await call()
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalled()
+    })
+
+  })
+
+  // A write method refuses viewers unless the route declares viewerMay, so a
+  // route that forgets its gate is closed, not open. The real write check
+  // runs here, fed the role the company resolver reports.
+  describe('default viewer refusal on write methods', () => {
+    const handlers = { GET, POST, PUT, PATCH, DELETE }
+    type Method = keyof typeof handlers
+
+    function signIn() {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateClient.mockResolvedValue(supabase as never)
+    }
+
+    async function asRole(role: string) {
+      const actual = await vi.importActual<typeof import('@/lib/auth/require-write')>('@/lib/auth/require-write')
+      mockRequireWritePermission.mockImplementation(actual.requireWritePermission)
+      vi.mocked(requireCompanyId).mockImplementationOnce(async (_s, _u, facts) => {
+        if (facts) facts.role = role as never
+        return 'company-1'
+      })
+    }
+
+    function register(method: Method, route: Record<string, unknown>) {
+      extensionRegistry.register({
+        id: 'test-ext',
+        name: 'Test',
+        version: '1.0.0',
+        apiRoutes: [{ method, path: '/thing', ...route } as never],
+      })
+    }
+
+    const call = (method: Method) =>
+      handlers[method](
+        createMockRequest('/api/extensions/ext/test-ext/thing', method === 'GET' ? undefined : { method, body: {} }),
+        createPathParams(['test-ext', 'thing']),
+      )
+
+    it.each(['POST', 'PUT', 'PATCH', 'DELETE'] as const)(
+      'refuses a viewer on an undeclared %s route before the handler runs',
+      async (method) => {
+        const handler = vi.fn()
+        register(method, { handler })
+        signIn()
+        await asRole('viewer')
+
+        const response = await call(method)
+        const { status, body } = await parseJsonResponse<{ error: { code: string; details: { code: string } } }>(response)
+
+        expect(status).toBe(403)
+        expect(body.error).toMatchObject({ code: 'FORBIDDEN', details: { code: 'ROLE_READ_ONLY' } })
+        expect(handler).not.toHaveBeenCalled()
+      },
+    )
+
+    it('lets a member through on an undeclared write route', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register('POST', { handler })
+      signIn()
+      await asRole('member')
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ userId: 'user-1' }))
+    })
+
+    it('lets a viewer through on a write route that declares viewerMay', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register('POST', { viewerMay: true, handler })
+      signIn()
+      await asRole('viewer')
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalled()
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+    })
+
+    it('still refuses a viewer on a requireWrite route that also says viewerMay', async () => {
+      const handler = vi.fn()
+      register('POST', { requireWrite: true, viewerMay: true, handler })
+      signIn()
+      await asRole('viewer')
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(403)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('runs no role check on an undeclared GET route, so a viewer reads', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register('GET', { handler })
+      signIn()
+      await asRole('viewer')
+
+      const response = await call('GET')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalled()
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+      expect(mockIsCompanyAdmin).not.toHaveBeenCalled()
+    })
+
+    it('dispatches a skipAuth write route (a webhook) without a session or a role check', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ received: true }))
+      register('POST', { skipAuth: true, handler })
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: { message: 'no session' } })
+      mockCreateClient.mockResolvedValue(supabase as never)
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(supabase.auth.getUser).not.toHaveBeenCalled()
+      expect(requireCompanyId).not.toHaveBeenCalled()
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+    })
+
+    it('dispatches a skipCompanyContext write route (onboarding) without a role check', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register('POST', { skipCompanyContext: true, handler })
+      signIn()
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(requireCompanyId).not.toHaveBeenCalled()
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+    })
   })
 })

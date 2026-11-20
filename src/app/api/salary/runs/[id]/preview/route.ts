@@ -1,27 +1,29 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import {
   buildSalaryRunEntryLines,
+  planRunVacationRemeasure,
   salaryRunDataFromRows,
   salaryRunDescription,
+  vacationVoucherDescription,
   type SalaryRosterRow,
   type SalaryRunRow,
 } from '@/lib/salary/salary-entries'
-import { roundOre } from '@/lib/money'
+import { runRemeasuresVacationLiability } from '@/lib/salary/vacation-liability-method'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { loadPostedSalaryRunEntries, PostedSalaryEntriesReadError } from '@/lib/salary/posted-run-entries'
 import type { CreateJournalEntryLineInput } from '@/types'
-
-ensureInitialized()
 
 /**
  * Preview the journal entries that would be created when booking this salary run.
- * Shows exact BAS accounts and amounts: this is a key differentiator.
+ * Shows exact BAS accounts and amounts.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.preview',
   async (_request, ctx, { params }) => {
     const { id } = await params
-    const { supabase, companyId } = ctx
+    const { supabase, companyId, log } = ctx
 
     const { data: run, error: runError } = await supabase
       .from('salary_runs')
@@ -42,84 +44,54 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // label and the entry id carried as their own fields so the UI can link
     // to the verifikat instead of printing a dead label.
     if (run.status === 'booked' || run.status === 'corrected') {
-      const { data: posted, error: postedError } = await supabase
-        .from('journal_entries')
-        .select(
-          'id, description, voucher_series, voucher_number, lines:journal_entry_lines(account_number, line_description, debit_amount, credit_amount)',
-        )
-        .eq('company_id', companyId)
-        .eq('source_type', 'salary_payment')
-        .eq('source_id', id)
-
-      // A failed lookup must not masquerade as "booked run with no vouchers".
-      if (postedError) {
-        return NextResponse.json(
-          { error: 'Kunde inte läsa lönekörningens bokförda verifikat' },
-          { status: 500 },
-        )
-      }
-
-      const byId = new Map(
-        ((posted ?? []) as Array<{ id: string }>).map((e) => [e.id, e] as const),
-      )
-      const toEntry = (entryId: unknown) => {
-        const entry = entryId ? (byId.get(entryId as string) as
-          | {
-              description: string
-              voucher_series: string | null
-              voucher_number: number | null
-              lines: Array<{
-                account_number: string
-                line_description: string | null
-                debit_amount: number | null
-                credit_amount: number | null
-              }>
-            }
-          | undefined) : undefined
-        if (!entry) return null
-        const voucher =
-          entry.voucher_number != null
-            ? `${entry.voucher_series ?? ''}${entry.voucher_series ? '-' : ''}${entry.voucher_number}`
-            : null
-        return {
-          description: entry.description,
-          // The link target the salary run page turns the voucher label into.
-          // The label used to be concatenated into the description here, which
-          // named a verifikat the reader could not open.
-          journal_entry_id: entryId as string,
-          voucher,
-          lines: entry.lines.map((l) => ({
-            account_number: l.account_number,
-            line_description: l.line_description ?? '',
-            debit_amount: l.debit_amount,
-            credit_amount: l.credit_amount,
-          })),
+      let posted
+      try {
+        posted = await loadPostedSalaryRunEntries(supabase, companyId, run)
+      } catch (err) {
+        // A failed lookup must not masquerade as "booked run with no vouchers".
+        if (err instanceof PostedSalaryEntriesReadError) {
+          return NextResponse.json(
+            { error: 'Kunde inte läsa lönekörningens bokförda verifikat' },
+            { status: 500 },
+          )
         }
+        throw err
       }
-
-      return NextResponse.json({
-        data: {
-          booked: true,
-          salaryEntry: toEntry(run.salary_entry_id),
-          avgifterEntry: toEntry(run.avgifter_entry_id),
-          vacationEntry: toEntry(run.vacation_entry_id),
-          pensionEntry: toEntry(run.pension_entry_id),
-        },
-      })
+      return NextResponse.json({ data: { booked: true, ...posted } })
     }
 
     // Load employees with line items: the columns the booking reads
     // (book-run.ts ROSTER_SELECT), so preview and voucher are built from
     // one input.
-    const { data: employees } = await supabase
+    const { data: employees, error: employeesError } = await supabase
       .from('salary_run_employees')
       .select(
-        '*, employee:employees(employment_type, default_dimensions, f_skatt_status), line_items:salary_line_items(*)',
+        '*, employee:employees(employment_type, personnel_category, default_dimensions, f_skatt_status), line_items:salary_line_items(*)',
       )
       .eq('salary_run_id', id)
 
-    if (!employees || employees.length === 0) {
-      return NextResponse.json({ error: 'Inga beräknade resultat: kör beräkning först' }, { status: 400 })
+    // A failed read must not masquerade as "run without employees".
+    if (employeesError || !employees) {
+      log.error('salary run preview: roster read failed', { salaryRunId: id, message: employeesError?.message })
+      return NextResponse.json({ error: 'Kunde inte läsa lönekörningens anställda' }, { status: 500 })
+    }
+
+    // A run without employees is valid: the calculation accepts an empty
+    // roster (run-calculation.ts, the nolldeklaration month) and the booking
+    // posts nothing for it (book-run.ts isNollkorning). So the preview is the
+    // empty one, every entry null, which the page renders as "inga verifikat
+    // bokförs". This used to answer 400, an error for a state that is not one
+    // (for #206).
+    if (employees.length === 0) {
+      return NextResponse.json({
+        data: {
+          balanced: true,
+          salaryEntry: null,
+          avgifterEntry: null,
+          vacationEntry: null,
+          pensionEntry: null,
+        },
+      })
     }
 
     // The preview IS the booking's line builder (buildSalaryRunEntryLines):
@@ -127,34 +99,42 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // (it debited 7385 for a bilförmån with no counter line, so the previewed
     // voucher was off by exactly the benefit, feedback seq 384229). A rule
     // now lives in one place or nowhere.
+    // The net pay's bank account comes from the resolver the booking calls
+    // (createSalaryRunEntries), so the previewed bank leg is the posted one.
     const runRow = run as SalaryRunRow
     const desc = salaryRunDescription(runRow)
+    // A run calculated under the 'remeasure' method previews the
+    // semesterlöneskuld remeasurement the booking computes the same way, as
+    // of its payment date with this run counted as booked.
+    const remeasure = runRemeasuresVacationLiability(runRow.calculation_params)
+    const remeasureLines = remeasure
+      ? (await planRunVacationRemeasure(supabase, companyId, runRow)).lines
+      : undefined
     const built = buildSalaryRunEntryLines(
       salaryRunDataFromRows(runRow, employees as SalaryRosterRow[]),
       desc,
+      await resolvePrimaryBankAccount(supabase, companyId, log),
+      remeasureLines,
     )
 
     // Each entry is null when it has nothing to post: a nollkörning posts
     // nothing (book-run.ts), so the salary and avgifter entries fall away
     // just like vacation/pension do, and the UI simply skips the null ones.
-    // The avgifter builder keeps its zero-shaped legacy lines for a run with
-    // no avgifter; those never post, so previewing them would imply a
-    // verifikat that is never created.
+    // A run with no avgifter builds no avgifter lines at all, and the
+    // booking posts no avgifter voucher for it (createSalaryRunEntries).
     //
     // balanced/difference is the assertion that makes a future preview vs
     // booking divergence visible instead of silent: the DB trigger refuses
     // an unbalanced voucher at booking time, the preview never had a check.
     const toEntry = (description: string, lines: CreateJournalEntryLineInput[]) => {
       if (lines.every((l) => l.debit_amount === 0 && l.credit_amount === 0)) return null
-      const totalDebit = roundOre(lines.reduce((sum, l) => sum + l.debit_amount, 0))
-      const totalCredit = roundOre(lines.reduce((sum, l) => sum + l.credit_amount, 0))
-      const difference = roundOre(totalDebit - totalCredit)
-      return { description, lines, balanced: difference === 0, difference }
+      const { balanced, difference } = lineBalance(lines)
+      return { description, lines, balanced, difference }
     }
 
     const salaryEntry = toEntry(desc, built.salaryLines)
     const avgifterEntry = toEntry(`${desc}: Arbetsgivaravgifter`, built.avgifterLines)
-    const vacationEntry = toEntry(`${desc}: Semesteravsättning`, built.vacationLines)
+    const vacationEntry = built.vacationLines.length > 0 ? toEntry(vacationVoucherDescription(desc, remeasure), built.vacationLines) : null
     const pensionEntry = toEntry(`${desc}: Pensionsavsättning`, built.pensionLines)
 
     return NextResponse.json({

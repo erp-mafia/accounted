@@ -9,6 +9,13 @@ describe('currentVatPeriod', () => {
     expect(currentVatPeriod('quarterly', today)).toEqual({ year: 2026, period: 3 })
     expect(currentVatPeriod('monthly', today)).toEqual({ year: 2026, period: 9 })
   })
+
+  it('returns the running räkenskapsår, keyed by the year it ends', () => {
+    const today = new Date(2026, 8, 17) // 2026-09-17
+    expect(currentVatPeriod('yearly', today)).toEqual({ year: 2026, period: 1 })
+    expect(currentVatPeriod('yearly', today, { fiscalYearEndMonth: 6 })).toEqual({ year: 2027, period: 1 })
+    expect(currentVatPeriod('yearly', today, { fiscalYearEndMonth: 9 })).toEqual({ year: 2026, period: 1 })
+  })
 })
 
 describe('nextVatPeriod', () => {
@@ -20,6 +27,7 @@ describe('nextVatPeriod', () => {
   it('rolls over the year boundary', () => {
     expect(nextVatPeriod('quarterly', { year: 2025, period: 4 })).toEqual({ year: 2026, period: 1 })
     expect(nextVatPeriod('monthly', { year: 2025, period: 12 })).toEqual({ year: 2026, period: 1 })
+    expect(nextVatPeriod('yearly', { year: 2025, period: 1 })).toEqual({ year: 2026, period: 1 })
   })
 })
 

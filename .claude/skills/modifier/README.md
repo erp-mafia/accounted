@@ -56,5 +56,5 @@ version: 1
 ## Adding / removing
 
 Same workflow as `industry/`: write the SKILL.md, run
-`npx tsx scripts/seed-agent-atom-registry.ts`. Set `is_active: false` to
+`npm run skills:generate`. Set `is_active: false` to
 deprecate.

@@ -72,6 +72,27 @@ describe('plantedRowTouched', () => {
     const snapshot = snapshotPlantedRow(plantedRow())
     expect(plantedRowTouched(plantedRow({ account_number: '4010' }), snapshot)).toBe(false)
   })
+
+  // Issue #227: a row planted before reverse charge was switched on was
+  // counted as touched once the editor gave it a reverse-charge sats.
+  describe('reverse charge switched on after the plant', () => {
+    const plantedWithout = (overrides: Partial<SupplierInvoiceLineItem> = {}) =>
+      plantedRow({ reverse_charge_rate: undefined, ...overrides })
+
+    it('is false with the default sats the editor gives the row', () => {
+      expect(plantedRowTouched(plantedWithout({ reverse_charge_rate: 0.25 }), snapshotPlantedRow(plantedWithout()))).toBe(false)
+      const reduced = plantedWithout({ vat_rate: 0.12 })
+      expect(plantedRowTouched({ ...reduced, reverse_charge_rate: 0.12 }, snapshotPlantedRow(reduced))).toBe(false)
+      const zero = plantedWithout({ vat_rate: 0 })
+      expect(plantedRowTouched({ ...zero, reverse_charge_rate: 0.25 }, snapshotPlantedRow(zero))).toBe(false)
+    })
+
+    it('is true with a sats the person chose', () => {
+      expect(plantedRowTouched(plantedWithout({ reverse_charge_rate: 0.06 }), snapshotPlantedRow(plantedWithout()))).toBe(true)
+      // A row planted with a sats keeps it: any other is the person's.
+      expect(plantedRowTouched(plantedRow({ reverse_charge_rate: 0.12 }), snapshotPlantedRow(plantedRow()))).toBe(true)
+    })
+  })
 })
 
 describe('snapshotPlantedRow', () => {

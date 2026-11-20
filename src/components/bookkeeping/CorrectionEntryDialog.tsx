@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -13,20 +13,28 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import {
   autoCorrectionDescription,
   correctionDescriptionForSubmit,
 } from '@/components/bookkeeping/correction-entry-description'
 import { nextLineDescriptionForAccountChange } from '@/components/bookkeeping/correction-line-description'
+import {
+  correctionLinesNegateOriginal,
+  originalToCorrectionLines,
+  type CorrectionFormLine,
+} from '@/components/bookkeeping/correction-negation'
 import { useToast } from '@/components/ui/use-toast'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Loader2, Plus, Trash2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
@@ -37,11 +45,14 @@ import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-pref
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
-interface CorrectionLine {
-  account_number: string
-  debit_amount: string
-  credit_amount: string
-  line_description: string
+type CorrectionLine = CorrectionFormLine
+
+/** The overrides a resubmit carries after the user confirmed a refusal. */
+interface SubmitFlags {
+  allowDeepChain?: boolean
+  sidesSwapped?: boolean
+  /** The booking-time warning codes the person confirmed (VoucherWarningsDialog). */
+  acknowledgedWarnings?: string[]
 }
 
 interface Props {
@@ -69,10 +80,20 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         : 'ready'
   const [lines, setLines] = useState<CorrectionLine[]>([])
   const [description, setDescription] = useState('')
+  // The rättelse's own date (crm#1368). Prefilled with the original's; the
+  // storno always stays on the original's date.
+  const [entryDate, setEntryDate] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Non-null when the server refused with CORRECTION_CHAIN_TOO_DEEP: holds the
   // reported chain depth and opens the bypass confirm ("Rätta ändå").
   const [deepChainDepth, setDeepChainDepth] = useState<number | null>(null)
+  // True when the server refused lines that are the original with debit and
+  // credit swapped (MEANINGLESS_CORRECTION, negates_original): a second
+  // reversal unless the original itself had the sides swapped (crm#1397).
+  const [negatesOriginal, setNegatesOriginal] = useState(false)
+  const [voucherWarnings, setVoucherWarnings] = useState<VoucherWarning[] | null>(null)
+  // The overrides of the last submit, so a second confirm keeps the first.
+  const lastFlags = useRef<SubmitFlags>({})
   // Index of the line whose combobox opened the create dialog, and the search
   // string it was showing. Null index = the dialog is closed.
   const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
@@ -97,18 +118,13 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
   useEffect(() => {
     if (open) {
-      // Pre-fill with original entry's lines
-      setLines(
-        originalLines.map((l) => ({
-          account_number: l.account_number,
-          debit_amount: Number(l.debit_amount) > 0 ? String(Number(l.debit_amount)) : '',
-          credit_amount: Number(l.credit_amount) > 0 ? String(Number(l.credit_amount)) : '',
-          line_description: l.line_description || '',
-        }))
-      )
+      // Pre-fill with the original entry's lines, sides as posted: the user
+      // edits what the verifikat should have been, the storno is automatic.
+      setLines(originalToCorrectionLines(originalLines))
       // Pre-fill the verifikationstext with the same auto text the server
       // would generate; only a user edit is sent along (see handleSubmit).
       setDescription(autoCorrectionDescription(entry.description))
+      setEntryDate(entry.entry_date?.slice(0, 10) || '')
       void loadCatalog()
     }
   }, [open, entry.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -190,17 +206,28 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
     closeCreateAccount()
   }
 
-  const totalDebit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
-  const totalCredit = lines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-  const roundedDebit = Math.round(totalDebit * 100) / 100
-  const roundedCredit = Math.round(totalCredit * 100) / 100
-  const isBalanced = roundedDebit === roundedCredit && roundedDebit > 0
+  const { totalDebit: roundedDebit, totalCredit: roundedCredit, balanced: isBalanced } = lineBalance(lines)
 
   const hasValidLines = lines.length >= 2 && lines.every((l) => l.account_number.length === 4)
 
-  async function handleSubmit(allowDeepChain = false) {
+  const originalDate = entry.entry_date?.slice(0, 10) || ''
+  const dateChanged = entryDate.length > 0 && entryDate !== originalDate
+
+  // The lines are the original with debit and credit swapped: typing the
+  // reversal by hand on top of the automatic storno reverses it twice
+  // (crm#1397). Same verdict as the engine's guard, known before posting.
+  const linesNegateOriginal = isBalanced && hasValidLines && correctionLinesNegateOriginal(lines, originalLines)
+
+  async function handleSubmit(flags: SubmitFlags = {}) {
     if (!isBalanced || !hasValidLines) return
 
+    lastFlags.current = flags
+    // Ask first; only a user who says the original had the sides swapped
+    // resubmits (the engine refuses it anyway without that override).
+    if (!flags.sidesSwapped && linesNegateOriginal) {
+      setNegatesOriginal(true)
+      return
+    }
     setIsSubmitting(true)
     try {
       const apiLines = lines.map((l) => ({
@@ -218,7 +245,10 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           // Only sent when the user changed the auto prefill: the server
           // fallback ("Rättelse: <original>") stays the source of truth.
           description: correctionDescriptionForSubmit(description, entry.description),
-          ...(allowDeepChain ? { allow_deep_chain: true } : {}),
+          ...(dateChanged ? { entry_date: entryDate } : {}),
+          ...(flags.allowDeepChain ? { allow_deep_chain: true } : {}),
+          ...(flags.sidesSwapped ? { sides_swapped: true } : {}),
+          ...(flags.acknowledgedWarnings ? { acknowledged_warnings: flags.acknowledgedWarnings } : {}),
         }),
       })
 
@@ -227,9 +257,21 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
       if (!res.ok) {
         // Chain-depth guard: open the bypass confirm instead of a dead-end
         // toast. "Rätta ändå" resubmits with allow_deep_chain=true.
-        const structured = (result as { error?: { code?: string; details?: { depth?: number } } })?.error
+        const structured = (result as { error?: { code?: string; details?: { depth?: number; reason?: string; warnings?: VoucherWarning[] } } })?.error
+        // Booking-time warnings on the corrected lines: "Bokför ändå" resends
+        // with every flag of this attempt plus the codes the dialog showed.
+        if (structured?.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(structured.details?.warnings)) {
+          setVoucherWarnings(structured.details.warnings)
+          return
+        }
         if (structured?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
           setDeepChainDepth(structured.details?.depth ?? 3)
+          return
+        }
+        // A second reversal: ask instead of a dead-end toast. Only a user
+        // who says the original had the sides swapped resubmits it.
+        if (structured?.code === 'MEANINGLESS_CORRECTION' && structured.details?.reason === 'negates_original') {
+          setNegatesOriginal(true)
           return
         }
         const error = new Error('Failed to create correction') as Error & { body?: unknown; status?: number }
@@ -238,6 +280,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         throw error
       }
       setDeepChainDepth(null)
+      setNegatesOriginal(false)
 
       const correctedId = result.data?.corrected?.id
 
@@ -245,7 +288,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         title: 'Ändringsverifikation skapad',
         description: 'Storno och rättelse har bokförts.',
         action: correctedId ? (
-          <Button variant="outline" size="sm" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
+          <Button variant="outline" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
             Visa rättelsen
           </Button>
         ) : undefined,
@@ -266,7 +309,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
@@ -276,8 +319,8 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
               <p>
                 Här skapas automatiskt en stornoverifikation som nollställer
                 originalet och en ny verifikation med dina rättade uppgifter.
-                Rättelsen bokförs i samma räkenskapsperiod som originalet: du
-                hittar den under originalets räkenskapsår.
+                Stornon bokförs på originalets datum, rättelsen på det datum du
+                anger: samma som originalets om du inte ändrar det.
               </p>
               <p>
                 Spårbarheten ligger i stornokedjan: originalet,
@@ -326,94 +369,68 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </p>
         </div>
 
+        {/* The rättelse's date: the storno keeps the original's (crm#1368). */}
+        <div className="space-y-1">
+          <Label htmlFor="correction-entry-date">{t('correction_date_label')}</Label>
+          <Input
+            id="correction-entry-date"
+            type="date"
+            value={entryDate}
+            onChange={(e) => setEntryDate(e.target.value)}
+            className="w-44"
+          />
+          <p className="text-xs text-muted-foreground">
+            {t('correction_date_hint', { date: formatDate(entry.entry_date) })}
+          </p>
+        </div>
+
         {/* Corrected lines (editable) */}
         <div className="space-y-2">
           <div className="space-y-1">
             <p className="text-sm font-medium">Rättade rader</p>
             <p className="text-xs text-muted-foreground">
-              Det här är hela den nya verifikationen: alla konton som ska finnas kvar måste stå kvar.
+              {t('correction_lines_hint', { voucher: formatVoucher(entry) })}
             </p>
           </div>
 
           {accountsStatus !== 'ready' && (
-            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground">
+            <div className="flex items-center justify-between gap-3 rounded-lg p-3 text-sm text-muted-foreground bg-control shadow-raised">
               <span className="flex items-center gap-2">
-                {accountsStatus === 'loading' && <Loader2 className="h-4 w-4 animate-spin" />}
+                {accountsStatus === 'loading' && <SpinnerIcon className="h-4 w-4 animate-spin" />}
                 {accountsStatus === 'loading' ? t('accounts_loading') : t('accounts_load_failed')}
               </span>
               {accountsStatus === 'error' && (
-                <Button variant="outline" size="sm" onClick={() => void refreshAccounts()}>
+                <Button variant="outline" onClick={() => void refreshAccounts()}>
                   {t('accounts_retry')}
                 </Button>
               )}
             </div>
           )}
 
-          <div className="space-y-2">
-            {lines.map((line, index) => (
-              <div key={index} className="space-y-2 sm:space-y-0 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_auto] sm:gap-2 sm:items-start border-b sm:border-0 pb-3 sm:pb-0 last:border-0">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] sm:contents gap-2">
-                  {/* min-w-0: at sm: the sm:contents wrapper promotes this cell
-                      to a direct grid item; without it the combobox refuses to
-                      shrink below its content and overflows the dialog (same
-                      pattern as SendInvoiceDialog's desktop rows). */}
-                  <div className="min-w-0">
-                    <AccountCombobox
-                      value={line.account_number}
-                      accounts={activeAccounts}
-                      catalog={selectableCatalog}
-                      onChange={(v) => updateLineAccount(index, v)}
-                      onCreateAccount={(prefill) => {
-                        setCreatingAccountForLine(index)
-                        setCreateAccountPrefill(prefill)
-                      }}
-                      disabled={accountsStatus !== 'ready'}
-                    />
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="sm:order-last"
-                    onClick={() => removeLine(index)}
-                    disabled={lines.length <= 2}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                <Input
-                  value={line.line_description}
-                  onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-                  placeholder="Beskrivning"
-                  className="h-8"
-                />
-                <div className="grid grid-cols-2 gap-2 sm:contents">
-                  <Input
-                    type="number"
-                    value={line.debit_amount}
-                    onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                    placeholder="Debet"
-                    className="h-8 text-right"
-                    min={0}
-                    step="0.01"
-                  />
-                  <Input
-                    type="number"
-                    value={line.credit_amount}
-                    onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                    placeholder="Kredit"
-                    className="h-8 text-right"
-                    min={0}
-                    step="0.01"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <Button variant="outline" size="sm" onClick={addLine}>
-            <Plus className="h-4 w-4 mr-1" />
-            Lägg till rad
-          </Button>
+          <KonteringLinesEditor
+            lines={lines}
+            accounts={activeAccounts}
+            catalog={selectableCatalog}
+            onAccountChange={updateLineAccount}
+            onAmountChange={(index, field, value) => updateLine(index, field, value)}
+            onDescriptionChange={(index, value) => updateLine(index, 'line_description', value)}
+            onAdd={addLine}
+            onRemove={removeLine}
+            onCreateAccount={(index, prefill) => {
+              setCreatingAccountForLine(index)
+              setCreateAccountPrefill(prefill)
+            }}
+            accountsDisabled={accountsStatus !== 'ready'}
+            header={false}
+            labels={{
+              account: 'Konto',
+              description: 'Beskrivning',
+              debit: 'Debet',
+              credit: 'Kredit',
+              addRow: 'Lägg till rad',
+              removeRow: 'Ta bort rad',
+            }}
+          />
 
           {/* Balance summary */}
           <div className="flex justify-end gap-6 text-sm pt-2 border-t">
@@ -436,6 +453,19 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
               Debet och kredit måste vara lika och större än 0.
             </p>
           )}
+
+          {linesNegateOriginal && (
+            <p className="attn text-xs">
+              {t('negates_original_inline', { voucher: formatVoucher(entry) })}{' '}
+              <button
+                type="button"
+                className="underline underline-offset-4"
+                onClick={() => setLines(originalToCorrectionLines(originalLines))}
+              >
+                {t('negates_original_reset')}
+              </button>
+            </p>
+          )}
         </div>
 
         <DialogFooter>
@@ -444,7 +474,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </Button>
           <Button
             onClick={() => handleSubmit()}
-            disabled={!isBalanced || !hasValidLines || isSubmitting}
+            disabled={!isBalanced || !hasValidLines || entryDate.length === 0 || isSubmitting}
           >
             {isSubmitting ? 'Skapar...' : 'Skapa ändringsverifikation'}
           </Button>
@@ -454,7 +484,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             already sits deep in a rättelse chain. Advisory, never a dead end:
             "Rätta ändå" resubmits with allow_deep_chain=true. */}
         <Dialog open={deepChainDepth != null} onOpenChange={(next) => { if (!next) setDeepChainDepth(null) }}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent size="confirm">
             <DialogHeader>
               <DialogTitle>{t('deep_chain_title')}</DialogTitle>
             </DialogHeader>
@@ -466,7 +496,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
                 {t('deep_chain_cancel')}
               </Button>
               <Button
-                onClick={() => { setDeepChainDepth(null); void handleSubmit(true) }}
+                onClick={() => { setDeepChainDepth(null); void handleSubmit({ ...lastFlags.current, allowDeepChain: true }) }}
                 disabled={isSubmitting}
               >
                 {t('deep_chain_correct_anyway')}
@@ -474,7 +504,43 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Second-reversal confirm (crm#1397): the lines are the original
+            with debit and credit swapped. Cancelling is the default; the
+            override is for an original booked the wrong way round. */}
+        <Dialog open={negatesOriginal} onOpenChange={(next) => { if (!next) setNegatesOriginal(false) }}>
+          <DialogContent size="confirm">
+            <DialogHeader>
+              <DialogTitle>{t('negates_original_title')}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              {t('negates_original_body', { voucher: formatVoucher(entry) })}
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setNegatesOriginal(false)} disabled={isSubmitting}>
+                {t('negates_original_cancel')}
+              </Button>
+              <Button
+                onClick={() => { setNegatesOriginal(false); void handleSubmit({ ...lastFlags.current, sidesSwapped: true }) }}
+                disabled={isSubmitting}
+              >
+                {t('negates_original_confirm')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
+
+      <VoucherWarningsDialog
+        warnings={voucherWarnings}
+        processing={isSubmitting}
+        onCancel={() => setVoucherWarnings(null)}
+        onConfirm={() => {
+          const codes = (voucherWarnings ?? []).map((w) => w.code)
+          setVoucherWarnings(null)
+          void handleSubmit({ ...lastFlags.current, acknowledgedWarnings: codes })
+        }}
+      />
 
       {/* Nested on purpose: closing this one (Esc, click-outside, Avbryt) must
           leave the half-filled ändringsverifikation behind it untouched. */}

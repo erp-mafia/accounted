@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { persistBankSyncResult, persistBankSyncFailure } from '../persist-sync-result'
+import { persistBankSyncResult, persistBankSyncFailure, persistBankRouteNeedsConfiguration } from '../persist-sync-result'
+import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '../ingest-route'
 
 const input = {
   companyId: 'company', connectionId: 'connection', sessionId: 'session',
@@ -33,6 +34,18 @@ describe('persistBankSyncResult', () => {
     })
     expect(rpc.mock.calls[0][1].p_accounts).toEqual([
       { uid: 'uid', available_balance: null, accepted_history_days: 90, dedup_scope: 'scope' },
+    ])
+  })
+
+  it('passes the bank\'s day and type with the balance, and an explicit null that clears it', async () => {
+    const { rpc, db } = client({ data: { applied: true }, error: null })
+    const reference = { date: '2026-09-20', type: 'closingBooked' }
+    await persistBankSyncResult(db, {
+      ...input, accounts: [{ ...input.accounts[0], balance_reference: reference }, { uid: 'other', balance: 5, balance_updated_at: input.completedAt, balance_reference: null }],
+    })
+    expect(rpc.mock.calls[0][1].p_accounts).toEqual([
+      { ...input.accounts[0], balance_reference: reference },
+      { uid: 'other', balance: 5, balance_updated_at: input.completedAt, balance_reference: null },
     ])
   })
 
@@ -82,5 +95,41 @@ describe('persistBankSyncFailure', () => {
     await expect(persistBankSyncFailure(errorClient.db, failure)).rejects.toMatchObject({ code: '57014' })
     const missing = client({ data: null, error: null })
     await expect(persistBankSyncFailure(missing.db, failure)).rejects.toThrow('missing acknowledgement')
+  })
+})
+
+describe('persistBankRouteNeedsConfiguration', () => {
+  function chainClient(result: { error: unknown }) {
+    const calls: Array<[string, ...unknown[]]> = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chain: any = {}
+    for (const method of ['update', 'eq', 'in', 'is']) {
+      chain[method] = vi.fn((...args: unknown[]) => {
+        calls.push([method, ...args])
+        return chain
+      })
+    }
+    chain.then = (resolve: (value: unknown) => unknown) => Promise.resolve(result).then(resolve)
+    const from = vi.fn(() => chain)
+    return { calls, from, db: { from } as unknown as SupabaseClient }
+  }
+
+  it('writes only the advice, scoped to the live row of the company, never status or cursor', async () => {
+    const { calls, from, db } = chainClient({ error: null })
+    await persistBankRouteNeedsConfiguration(db, { companyId: 'company', connectionId: 'connection' })
+    expect(from).toHaveBeenCalledWith('bank_connections')
+    expect(calls).toEqual([
+      ['update', { error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE }],
+      ['eq', 'id', 'connection'],
+      ['eq', 'company_id', 'company'],
+      ['in', 'status', ['active', 'error']],
+      ['is', 'superseded_by', null],
+    ])
+  })
+
+  it('keeps the database error identity', async () => {
+    const { db } = chainClient({ error: { code: '42501', message: 'denied' } })
+    await expect(persistBankRouteNeedsConfiguration(db, { companyId: 'company', connectionId: 'connection' }))
+      .rejects.toMatchObject({ code: '42501' })
   })
 })

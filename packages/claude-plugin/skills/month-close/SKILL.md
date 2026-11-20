@@ -10,7 +10,7 @@ Run the monthly close as a checklist against live data. The authoritative checkl
 
 ## Flow
 
-1. If not already done this session, call `accounted_get_agent_briefing` and read `Accounted://period/active` to confirm which period is being closed.
+1. If not already done this session, call `accounted_get_agent_briefing` and read `Accounted://period/active` (for a company other than the default: `Accounted://company/{company_id}/period/active`) to confirm which period is being closed.
 2. Load the checklist: `accounted_load_skill("month-end-close")`. Follow it step by step with the company's real numbers.
 3. Bank first: if unreconciled transactions exist in the period, load `accounted_load_skill("bank-reconciliation")` and clear them before anything else. Unbooked items route through the `/accounted:bookkeep` flow.
 4. Work the remaining checklist items (accruals, recurring vouchers, control balances). Every correction is staged and individually approved by the user; use storno-style corrections through the product's tools, never edit posted entries.
@@ -23,3 +23,5 @@ Run the monthly close as a checklist against live data. The authoritative checkl
 - The server-side checklist is authoritative; do not substitute a generic month-end list from memory.
 - Every write stages a pending operation; the user approves each before it is booked.
 - Never work around a locked or closed period; surface it and stop.
+- Flow names: `/accounted:<name>` is how Claude Code spells this plugin's flows. In another client, use the skill or command named `<name>`, and give the user the name that client shows.
+- Company context: if the working directory (or a parent, nearest wins) contains `.accounted.json` with `{ "company_id": "<uuid>", "name": "<name>" }`, pass that `company_id` on every company-scoped call and say the company name once at the start. Otherwise, if `accounted_list_companies` is among your tools, the account reaches several companies: call it and ask once which company the task concerns (or whether it spans all of them) before any write, never write to a company the user did not name, and read back the `company: { company_id, name, is_default }` block that opens every result whenever it is not the company they named. If `accounted_list_companies` is not among your tools, the account has one company: results carry no company block and none of this applies.

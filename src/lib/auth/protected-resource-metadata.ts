@@ -17,17 +17,18 @@ export const MCP_RESOURCE_PATH = '/api/extensions/ext/mcp-server/mcp'
  *   - `/api/extensions/ext/mcp-server/mcp/.well-known/oauth-protected-resource`
  *     (endpoint-appended form, tried by the same client as a fallback).
  *
- * The resource/AS URLs reflect the (allowlisted) request host: MCP clients
- * validate the advertised resource against the server URL they were
- * configured with, and existing connectors point at the legacy
- * app.gnubok.se domain after the app.accounted.se cutover.
+ * The resource/AS URLs reflect the request host when this deployment serves
+ * it (see resolveDiscoveryBaseUrl): MCP clients validate the advertised
+ * resource against the server URL they were configured with, existing
+ * connectors point at the legacy app.gnubok.se domain after the
+ * app.accounted.se cutover, and byrå users connect through their brand domain.
  */
-export function buildProtectedResourceMetadata(request: Request): {
+export async function buildProtectedResourceMetadata(request: Request): Promise<{
   resource: string
   authorization_servers: string[]
   scopes_supported: string[]
-} {
-  const appUrl = resolveDiscoveryBaseUrl(request)
+}> {
+  const appUrl = await resolveDiscoveryBaseUrl(request)
   const resource = new URL(MCP_RESOURCE_PATH, appUrl)
   // `accounted` is the COMPLETE allow-list of reflectable namespaces. We never
   // echo the inbound parameter value: on an exact match we set the fixed

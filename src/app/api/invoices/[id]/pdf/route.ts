@@ -1,19 +1,18 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-store'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { invoicePdfFilename, paymentConfirmationPdfFilename } from '@/lib/invoices/pdf-filename'
 import { isPaymentConfirmationEligible } from '@/lib/invoices/payment-confirmation'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 
 /**
  * `?disposition=inline` serves the PDF for in-browser review instead of forcing
@@ -67,6 +66,12 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       { error: 'Invoice not found' },
       { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
     )
+  }
+
+  // No buyer to print (customer deleted, crm#263): a clear refusal, which the
+  // preview probe below shows as a message, instead of a render that throws.
+  if (invoiceLacksCustomer(invoice)) {
+    return privateNoStore(errorResponseFromCode('INVOICE_CUSTOMER_MISSING', log, { requestId }))
   }
 
   const variant = resolveVariant(request)
@@ -127,28 +132,14 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   try {
     // Generate PDF
-    const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-      company as CompanySettings,
-      (invoice as Invoice).currency,
-      {
-        paymentAccountRequired: invoiceRequiresPaymentAccount(invoice as Invoice),
-        payee: (invoice as Invoice).payment_details ?? null,
-      },
-    )
-    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, invoice as Invoice)
-    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice)
-    const pdfBuffer = await renderToBuffer(
-      InvoicePDF({
-        invoice: invoice as Invoice,
-        customer: invoice.customer as Customer,
-        items,
-        company: renderCompany,
-        originalInvoiceNumber,
-        branding,
-        swishQrDataUrl,
-        paymentLinkQrDataUrl,
-      })
-    )
+    const { buffer: pdfBuffer } = await renderInvoicePdfBuffer({
+      invoice: invoice as Invoice,
+      customer: invoice.customer as Customer,
+      items,
+      company: company as CompanySettings,
+      originalInvoiceNumber,
+      paymentAccountRequired: invoiceRequiresPaymentAccount(invoice as Invoice),
+    })
 
     // Convert Node.js Buffer to Uint8Array for Response
     const uint8Array = new Uint8Array(pdfBuffer)

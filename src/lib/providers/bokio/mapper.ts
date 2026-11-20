@@ -15,7 +15,8 @@ import {
   lineVatFromPercent,
   multiplyIfBothPresent,
 } from '../amounts';
-import { creditNoteTypeCode } from '../dto';
+import { salesDocumentNumber, statedDocumentNumber } from '../dto';
+import { documentPayment, documentState } from '../document-state';
 
 /**
  * Bokio's live payloads have repeatedly differed from its published spec (the
@@ -49,25 +50,16 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
  * so this must not be used for them: every one of them would fall through
  * to 'draft'.
  */
-function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
-  const status = (raw['status'] as string | undefined)?.toLowerCase();
+function deriveInvoiceStatus(status: string | undefined): InvoiceStatusCode {
   switch (status) {
-    case 'cancelled': return 'cancelled';
     case 'paid':
     case 'overpaid': return 'paid';
     case 'overdue': return 'overdue';
     case 'published':
     case 'underpaid': return 'sent';
-    case 'credited':
-    case 'credit': return 'credited';
-    case 'draft': return 'draft';
+    case 'credited': return 'credited';
     default: return 'draft';
   }
-}
-
-/** An /invoices row whose status says the row itself is a credit document. */
-function isBokioCreditStatus(raw: Record<string, unknown>): boolean {
-  return (raw['status'] as string | undefined)?.toLowerCase() === 'credit';
 }
 
 /**
@@ -108,16 +100,117 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
 }
 
 /**
- * Bokio's sales line items (`salesInvoiceItem`), shared by invoices and
- * credit notes: description, quantity, unitPrice, taxRate, unitType. The
+ * Bokio's `unitType` enum (company-api, salesInvoiceItem.unitType, default
+ * `unspecified`) to the unit Accounted stores and prints. The enum values are
+ * identifiers, not labels: copied verbatim they printed "2 unspecified" and
+ * "1 piece" on migrated invoices (crm#1084). The codes are the Swedish ones
+ * the invoice editor offers (lib/invoices/units.ts), and the conventional
+ * abbreviation where the editor offers none. `mile` is the Scandinavian mil
+ * (10 km): Bokio is a Swedish product and the unit is what milersättning is
+ * invoiced in. `unspecified` is no unit at all, so it stays empty rather
+ * than becoming "st". `custom` carries its text in `customUnitType`. A value
+ * this table does not know is kept as Bokio sent it.
+ */
+const BOKIO_UNIT_TYPES: Record<string, string> = {
+  unspecified: '',
+  piece: 'st',
+  hour: 'tim',
+  minute: 'min',
+  day: 'dag',
+  week: 'vecka',
+  month: 'månad',
+  year: 'år',
+  gram: 'g',
+  kilogram: 'kg',
+  ton: 'ton',
+  liter: 'l',
+  millimeter: 'mm',
+  centimeter: 'cm',
+  meter: 'm',
+  kilometer: 'km',
+  mile: 'mil',
+  meterSquared: 'kvm',
+  meterCubic: 'm3',
+  hectar: 'ha',
+  megabyte: 'MB',
+  gigabyte: 'GB',
+  words: 'ord',
+};
+
+/** Same cap as invoice_items.unit takes through the API (lib/invoices/units.ts UNIT_MAX_LENGTH). */
+const BOKIO_CUSTOM_UNIT_MAX_LENGTH = 32;
+
+/**
+ * The unit of one Bokio line item, or undefined when the line states none
+ * (a descriptionOnlyItem has no unitType; the importer then applies its own
+ * default). An empty string is a stated "no unit".
+ */
+export function bokioUnit(line: Record<string, unknown>): string | undefined {
+  const unitType = line['unitType'];
+  if (typeof unitType !== 'string') return undefined;
+  if (unitType === 'custom') {
+    const custom = line['customUnitType'];
+    return typeof custom === 'string'
+      ? custom.trim().replace(/\s+/g, ' ').slice(0, BOKIO_CUSTOM_UNIT_MAX_LENGTH).trim()
+      : '';
+  }
+  return Object.prototype.hasOwnProperty.call(BOKIO_UNIT_TYPES, unitType)
+    ? BOKIO_UNIT_TYPES[unitType]
+    : unitType;
+}
+
+/**
+ * The row kind Bokio states for a line item: `itemType` is `salesItem` or
+ * `descriptionOnlyItem` (the oneOf in the company-api spec). Undefined when
+ * the field is absent or unknown, so the importer falls back to inferring a
+ * text row from its missing amounts.
+ */
+function bokioLineType(line: Record<string, unknown>): SalesInvoiceLineDto['lineType'] {
+  const itemType = line['itemType'];
+  if (itemType === 'descriptionOnlyItem') return 'text';
+  if (itemType === 'salesItem') return 'product';
+  return undefined;
+}
+
+/**
+ * Bokio's sales line items in the order Bokio prints them on the invoice.
+ *
+ * A line item has no position field, and the array's order is not stable
+ * between calls. On 2026-10-04 and 10-07 the /invoices list served four of
+ * one company's invoices with their lines in strictly descending line id; a
+ * week later the same endpoint served them in ascending id, the order their
+ * PDFs print (crm#1190, proven against the import's payload hashes). A line
+ * id is assigned when the line is added, so an invoice nobody rearranged
+ * prints in ascending id. The fifth multi-line invoice, rearranged in Bokio
+ * (its first line was added last), was served in its printed order on every
+ * call. So a strictly descending id sequence is Bokio's backwards reading of
+ * an unarranged invoice and is turned round; any other order is kept as
+ * served. The one order this misreads is lines a user arranged in exactly
+ * reverse creation order.
+ */
+function bokioLinesInPrintOrder(lines: Record<string, unknown>[]): Record<string, unknown>[] {
+  if (lines.length < 2) return lines;
+  const ids = lines.map((line) => line['id']);
+  if (!ids.every((id): id is number => typeof id === 'number' && Number.isSafeInteger(id))) return lines;
+  return ids.every((id, i) => i === 0 || ids[i - 1] > id) ? [...lines].reverse() : lines;
+}
+
+/**
+ * Bokio's sales line items (`salesInvoiceItem` and
+ * `descriptionOnlyInvoiceItem`), shared by invoices and credit notes:
+ * itemType, description, quantity, unitPrice, taxRate, unitType. The
  * line's `discount` is not applied here; the header totals come from
  * Bokio's own totalAmount/totalTax, which already include it.
+ *
+ * `itemRef` (the Bokio item a line was made from) is not carried: Bokio's
+ * item register is not imported, and its items have no article number, so
+ * there is no Accounted article it could point at (crm#1084).
  */
 function mapBokioSalesLines(
   rawLines: Record<string, unknown>[] | undefined,
   currency: string,
 ): SalesInvoiceLineDto[] {
-  return (rawLines ?? []).map((line, idx) => {
+  return bokioLinesInPrintOrder(rawLines ?? []).map((line, idx) => {
     const unitPrice = readNumber(line, ['unitPrice']);
     const quantity = readNumber(line, ['quantity']);
     const lineTotal = multiplyIfBothPresent(unitPrice, quantity);
@@ -126,9 +219,10 @@ function mapBokioSalesLines(
 
     return {
       id: String(line['id'] ?? idx + 1),
+      lineType: bokioLineType(line),
       description: line['description'] as string | undefined,
       quantity,
-      unitCode: line['unitType'] as string | undefined,
+      unitCode: bokioUnit(line),
       unitPrice: unitPrice != null ? amount(unitPrice, currency) : undefined,
       lineExtensionAmount: amount(lineTotal, currency),
       taxPercent,
@@ -143,7 +237,7 @@ function mapBokioSalesLines(
  * Bokio Invoice fields (company-api spec, schema `invoice`):
  * - id, invoiceNumber, status (see deriveInvoiceStatus)
  * - invoiceDate, dueDate, currency, totalAmount, totalTax, paidAmount
- * - customerRef: { id, name }, lineItems: [{ id, description, quantity, unitPrice, taxRate, unitType }]
+ * - customerRef: { id, name }, lineItems: [{ id, itemType, description, quantity, unitPrice, taxRate, unitType }]
  * - creditNoteRefs: [{ id }] on an invoice that has been credited
  *
  * A payload in the `creditNote` shape is handed to mapBokioToCreditNote:
@@ -156,7 +250,27 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   const currency = (raw['currency'] as string) ?? 'SEK';
   const totalAmount = (raw['totalAmount'] as number) ?? 0;
   const paidAmount = (raw['paidAmount'] as number) ?? 0;
-  const balance = totalAmount - paidAmount;
+
+  const bokioStatus = (raw['status'] as string | undefined)?.toLowerCase();
+  // An /invoices row Bokio itself labels `credit` is a credit document,
+  // stated in magnitudes like everything else Bokio sends; the importer
+  // applies the sign. The /credit-notes form of the same document is
+  // preferred when both are listed (it names the credited invoice), see
+  // provider-data-fetcher.
+  const doc = documentState({
+    issued: bokioStatus !== 'draft',
+    cancelled: bokioStatus === 'cancelled',
+    creditFlag: bokioStatus === 'credit',
+    total: totalAmount,
+  });
+  const lifecycle = deriveInvoiceStatus(bokioStatus);
+  // Bokio's enum saying paid settles the invoice as its amount does: a paid
+  // row whose paidAmount is absent or short of the total owes nothing.
+  const statedPaid = lifecycle === 'paid' || (paidAmount >= totalAmount && totalAmount > 0);
+  const { paid, balance } = documentPayment(doc, totalAmount, {
+    paid: statedPaid,
+    balance: lifecycle === 'paid' ? 0 : totalAmount - paidAmount,
+  });
 
   const customerRef = raw['customerRef'] as Record<string, unknown> | undefined;
   const lines = mapBokioSalesLines(raw['lineItems'] as Record<string, unknown>[] | undefined, currency);
@@ -173,23 +287,20 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: paidAmount >= totalAmount && totalAmount > 0,
+    paid,
     balance: amount(balance, currency),
   };
 
+  const status = doc.status ?? lifecycle;
+
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: String(raw['invoiceNumber'] ?? raw['id'] ?? ''),
+    invoiceNumber: salesDocumentNumber(raw['invoiceNumber'], raw['id'], status),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
-    // An /invoices row Bokio itself labels `credit` is a credit document,
-    // stated in magnitudes like everything else Bokio sends; the importer
-    // applies the sign. The /credit-notes form of the same document is
-    // preferred when both are listed (it names the credited invoice), see
-    // provider-data-fetcher.
-    invoiceTypeCode: isBokioCreditStatus(raw) ? '381' : undefined,
+    invoiceTypeCode: doc.invoiceTypeCode,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
+    status,
     supplier: buildParty(''),
     customer: buildParty(
       (customerRef?.['name'] as string) ?? '',
@@ -226,7 +337,19 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
   const currency = (raw['currency'] as string) ?? 'SEK';
   const totalAmount = (raw['totalAmount'] as number) ?? 0;
   const paidAmount = (raw['paidAmount'] as number) ?? 0;
-  const balance = totalAmount - paidAmount;
+
+  // Bokio's credit-note enum is draft | published. A draft has not been
+  // issued and stays a draft; anything else is a terminal credit.
+  const doc = documentState({
+    issued: (raw['status'] as string | undefined)?.toLowerCase() !== 'draft',
+    cancelled: false,
+    creditFlag: true,
+    total: totalAmount,
+  });
+  const { paid, balance } = documentPayment(doc, totalAmount, {
+    paid: paidAmount >= totalAmount && totalAmount > 0,
+    balance: totalAmount - paidAmount,
+  });
 
   const customerRef = raw['customerRef'] as Record<string, unknown> | undefined;
   const invoiceRef = raw['invoiceRef'] as Record<string, unknown> | null | undefined;
@@ -244,7 +367,7 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: paidAmount >= totalAmount && totalAmount > 0,
+    paid,
     balance: amount(balance, currency),
   };
 
@@ -258,17 +381,17 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
         }
       : undefined;
 
+  const status = doc.status ?? 'credited';
+
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: String(raw['invoiceNumber'] ?? raw['id'] ?? ''),
+    invoiceNumber: salesDocumentNumber(raw['invoiceNumber'], raw['id'], status),
     issueDate: (raw['creditDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
-    invoiceTypeCode: '381',
+    invoiceTypeCode: doc.invoiceTypeCode,
     creditedInvoiceRef,
     currencyCode: currency,
-    // Bokio's credit-note enum is draft | published. A draft has not been
-    // issued and stays a draft; anything else is a terminal credit.
-    status: (raw['status'] as string | undefined)?.toLowerCase() === 'draft' ? 'draft' : 'credited',
+    status,
     supplier: buildParty(''),
     customer: buildParty(
       (customerRef?.['name'] as string) ?? '',
@@ -284,31 +407,35 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
 /**
  * Map Bokio Customer to CustomerDto.
  *
- * Bokio Customer fields:
- * - id, name, type (company|individual), orgNumber, vatNumber, paymentTerms
+ * Bokio Customer fields (`customer` in Bokio's published company-api spec):
+ * - id, name, type (company|private), orgNumber, vatNumber, paymentTerms
  * - address: { line1, line2, city, postalCode, country }
- * - contactsDetails: [{ email, phone, name }]
+ * - contactsDetails: [{ email, phone, name, isDefault }]
+ *
+ * The type was read as individual or person, words Bokio does not use, so
+ * every private customer arrived as a company with its personnummer in
+ * plain text as the org number (crm#1436).
  */
 export function mapBokioToCustomer(raw: Record<string, unknown>): CustomerDto {
   const name = (raw['name'] as string) ?? '';
   const orgNumber = raw['orgNumber'] as string | undefined;
   const address = raw['address'] as Record<string, unknown> | undefined;
   const contacts = (raw['contactsDetails'] as Record<string, unknown>[] | undefined) ?? [];
-  const firstContact = contacts[0];
+  const contact = contacts.find((c) => c['isDefault'] === true) ?? contacts[0];
 
   const party = buildParty(name, orgNumber, address);
-  if (firstContact) {
+  if (contact) {
     party.contact = {
-      email: firstContact['email'] as string | undefined,
-      telephone: firstContact['phone'] as string | undefined,
-      name: firstContact['name'] as string | undefined,
+      email: contact['email'] as string | undefined,
+      telephone: contact['phone'] as string | undefined,
+      name: contact['name'] as string | undefined,
     };
   }
 
   return {
     id: String(raw['id'] ?? ''),
     customerNumber: String(raw['id'] ?? ''),
-    type: (raw['type'] === 'individual' || raw['type'] === 'person') ? 'private' : 'company',
+    type: raw['type'] === 'private' ? 'private' : 'company',
     party,
     active: true,
     vatNumber: raw['vatNumber'] as string | undefined,
@@ -377,42 +504,50 @@ export function mapBokioToAccountingAccount(raw: Record<string, unknown>): Accou
 /**
  * Map Bokio Supplier to SupplierDto.
  *
- * Bokio Supplier fields:
- * - id, name, orgNumber, vatNumber, paymentTerms
+ * Bokio Supplier fields (`supplier` in Bokio's published company-api spec):
+ * - id, name, orgNumber, vatNumber, currency
  * - address: { line1, line2, city, postalCode, country }
- * - contactsDetails: [{ email, phone, name }]
- * - bankAccount, bankgiro, plusgiro
+ * - paymentDetails: one of { type: bankgiro, bankgiroNumber },
+ *   { type: plusgiro, plusgiroNumber }, { type: transfer, clearingNumber,
+ *   accountNumber } and { type: internationalPayment, iban, bic }
+ *
+ * A Bokio supplier has no contacts and no payment terms. The giro and
+ * account numbers were read from the top level, where Bokio has none, so no
+ * Bokio supplier arrived with them (crm#1436).
  */
 export function mapBokioToSupplier(raw: Record<string, unknown>): SupplierDto {
   const name = (raw['name'] as string) ?? '';
   const orgNumber = raw['orgNumber'] as string | undefined;
   const address = raw['address'] as Record<string, unknown> | undefined;
-  const contacts = (raw['contactsDetails'] as Record<string, unknown>[] | undefined) ?? [];
-  const firstContact = contacts[0];
-
-  const party = buildParty(name, orgNumber, address);
-  if (firstContact) {
-    party.contact = {
-      email: firstContact['email'] as string | undefined,
-      telephone: firstContact['phone'] as string | undefined,
-      name: firstContact['name'] as string | undefined,
-    };
-  }
+  const currency = raw['currency'];
 
   return {
     id: String(raw['id'] ?? ''),
     supplierNumber: String(raw['id'] ?? ''),
-    party,
+    party: buildParty(name, orgNumber, address),
     active: true,
     vatNumber: raw['vatNumber'] as string | undefined,
-    bankAccount: raw['bankAccount'] as string | undefined,
-    bankGiro: raw['bankgiro'] as string | undefined,
-    plusGiro: raw['plusgiro'] as string | undefined,
-    defaultPaymentTermsDays: raw['paymentTerms'] != null && !isNaN(Number(raw['paymentTerms']))
-      ? Number(raw['paymentTerms'])
-      : undefined,
+    ...supplierPaymentDetails(raw['paymentDetails']),
+    currencyCode: typeof currency === 'string' && currency.trim() ? currency.trim() : undefined,
     _raw: raw,
   };
+}
+
+/** The one way a Bokio supplier is paid, as the giro or account it names. */
+function supplierPaymentDetails(value: unknown): Pick<SupplierDto, 'bankGiro' | 'plusGiro' | 'bankAccount' | 'clearingNumber' | 'iban' | 'bic'> {
+  if (!value || typeof value !== 'object') return {};
+  const details = value as Record<string, unknown>;
+  const text = (key: string) => {
+    const v = details[key];
+    return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+  };
+  switch (details['type']) {
+    case 'bankgiro': return { bankGiro: text('bankgiroNumber') };
+    case 'plusgiro': return { plusGiro: text('plusgiroNumber') };
+    case 'transfer': return { clearingNumber: text('clearingNumber'), bankAccount: text('accountNumber') };
+    case 'internationalPayment': return { iban: text('iban'), bic: text('bic') };
+    default: return {};
+  }
 }
 
 /**
@@ -468,7 +603,7 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
       id: String(line['id'] ?? idx + 1),
       description: line['description'] as string | undefined,
       quantity,
-      unitCode: line['unitType'] as string | undefined,
+      unitCode: bokioUnit(line),
       unitPrice: unitPrice != null ? amount(unitPrice, currency) : undefined,
       lineExtensionAmount: amount(lineTotal, currency),
       taxPercent,
@@ -500,13 +635,11 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
   // entry), or merely registered. 'sent' and 'booked' both land as
   // 'registered' in the migration; the distinction is kept because the DTO
   // has it and the next consumer may not collapse them.
-  // 381 for a supplier kreditfaktura: the one signal the importer reads (dto.ts).
-  const invoiceTypeCode = creditNoteTypeCode(false, totalAmount);
-  const status: InvoiceStatusCode = invoiceTypeCode
-    ? 'credited'
-    : paid
-      ? 'paid'
-      : (journalEntryRef?.['id'] ? 'booked' : 'sent');
+  // The schema has no lifecycle: the total alone says what the document is.
+  const doc = documentState({ issued: true, cancelled: false, creditFlag: false, total: totalAmount });
+  const status: InvoiceStatusCode = doc.status ?? (paid
+    ? 'paid'
+    : (journalEntryRef?.['id'] ? 'booked' : 'sent'));
 
   return {
     id: String(raw['id'] ?? ''),
@@ -514,10 +647,10 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
     // invoice number: substituting it put a UUID in "Fakturanummer" on every
     // number-less invoice. Empty becomes NULL at the insert, and the import
     // recognises a number-less invoice by supplier, date and amount instead.
-    invoiceNumber: raw['invoiceNumber'] == null ? '' : String(raw['invoiceNumber']).trim(),
+    invoiceNumber: statedDocumentNumber(raw['invoiceNumber']),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
-    invoiceTypeCode,
+    invoiceTypeCode: doc.invoiceTypeCode,
     currencyCode: currency,
     status,
     supplier: buildParty(

@@ -1,10 +1,14 @@
 /**
- * Executor tests for the staged kontoplan + verifikat-note operations:
- * commitCreateAccount, commitUpdateAccount, commitSetVoucherNote. The
- * executors are private to lib/pending-operations/commit.ts and reached
- * through commitPendingOperation, same pattern as
- * dimension-value-executor.test.ts. Staging-side coverage (the MCP tools'
- * pre-flight gates) lives in extensions/general/mcp-server/__tests__/.
+ * Commit tests for the staged kontoplan + verifikat-note operations, reached
+ * through commitPendingOperation. create_account / update_account have no
+ * hand-written executor any more: the registry's default branch runs the
+ * operations accounts.create / accounts.update (src/lib/operations/accounts.ts),
+ * the same run() the v1 endpoints use, so rows staged before the move still
+ * commit. Refusals carry the structured codes (result.code) and the registry
+ * message; the assertions below pin the codes instead of the old executor
+ * strings. set_voucher_note likewise runs journal-entries.set-note. Staging-side
+ * coverage (the MCP tools' pre-flight gates) lives in
+ * extensions/general/mcp-server/__tests__/.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -75,6 +79,7 @@ describe('commitPendingOperation: create_account', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key value' } }) // insert conflict
+    enqueue({ data: { is_active: true } }) // which duplicate: a live one
     enqueue({ data: null }) // dispatcher reject update
 
     const op = makePendingOp({ params: validParams })
@@ -84,7 +89,33 @@ describe('commitPendingOperation: create_account', () => {
     expect(result.status).toBe('rejected')
     expect(result.auto_rejected).toBe(true)
     expect(result.http_status).toBe(409)
+    expect(result.code).toBe('ACCOUNT_EXISTS')
     expect(result.error).toMatch(/finns redan/)
+  })
+
+  it('rows staged before the move (resolved params incl. plan_type) still commit', async () => {
+    // The old gnubok_create_account staged the BAS-resolved row; plan_type is
+    // not an input of accounts.create and is stripped, then re-derived.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: { account_number: '5410', account_name: 'Förbrukningsinventarier' } }) // insert
+    enqueue({ data: null }) // finalize update
+
+    const op = makePendingOp({ params: { ...validParams, description: 'Legacy', default_vat_rate: 0.25 } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCalls('chart_of_accounts', 'insert')[0]?.[0]).toMatchObject({
+      account_number: '5410',
+      account_class: 5,
+      account_group: '54',
+      plan_type: 'full_bas',
+      description: 'Legacy',
+      default_vat_rate: 0.25,
+      sru_code: '7321',
+      company_id: 'company-1',
+      user_id: 'user-1',
+    })
   })
 
   it('re-validates staged params at the commit boundary (tampered account_type rejected)', async () => {
@@ -114,7 +145,8 @@ describe('commitPendingOperation: create_account', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/Invalid account_number/)
+    expect(result.code).toBe('VALIDATION_ERROR')
+    expect(result.error).toMatch(/4 siffror/)
   })
 
   it('rejects an account_type inconsistent with the BAS class digit', async () => {
@@ -131,7 +163,7 @@ describe('commitPendingOperation: create_account', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/BAS class 2/)
+    expect(result.code).toBe('ACCOUNT_TYPE_CLASS_CONFLICT')
   })
 
   it('accepts class 8 revenue and class 2 untaxed_reserves (legal combinations)', async () => {
@@ -249,7 +281,7 @@ describe('commitPendingOperation: update_account', () => {
     expect(result.status).toBe('rejected')
     expect(result.auto_rejected).toBe(true)
     expect(result.http_status).toBe(404)
-    expect(result.error).toMatch(/hittades inte/)
+    expect(result.code).toBe('ACCOUNT_NOT_FOUND')
   })
 
   it('rejects an empty change set (tampered params)', async () => {
@@ -265,7 +297,7 @@ describe('commitPendingOperation: update_account', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/Inget att uppdatera/)
+    expect(result.code).toBe('ACCOUNT_NOTHING_TO_UPDATE')
   })
 })
 
@@ -273,7 +305,7 @@ describe('commitPendingOperation: set_voucher_note', () => {
   const JE_ID = '3f1a2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b'
 
   it('happy path: notes-only update returns the voucher reference', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim
     enqueue({ data: { id: JE_ID, voucher_series: 'A', voucher_number: 42 } }) // update
     enqueue({ data: null }) // finalize update
@@ -285,6 +317,9 @@ describe('commitPendingOperation: set_voucher_note', () => {
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
+    // The same notes-only write the hand-written executor made: the
+    // immutability trigger allows exactly this on a posted entry.
+    expect(findCalls('journal_entries', 'update')).toEqual([[{ notes: 'Avser Q1-hyran' }]])
     expect(result.data).toMatchObject({
       journal_entry_id: JE_ID,
       voucher_series: 'A',
@@ -324,7 +359,7 @@ describe('commitPendingOperation: set_voucher_note', () => {
     expect(result.status).toBe('rejected')
     expect(result.auto_rejected).toBe(true)
     expect(result.http_status).toBe(404)
-    expect(result.error).toMatch(/hittades inte/)
+    expect(result.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
   })
 
   it('re-validates staged params at the commit boundary (oversized note rejected)', async () => {
@@ -355,7 +390,33 @@ describe('commitPendingOperation: set_voucher_note', () => {
     })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(result.status).toBe('failed')
+    expect(result.status).toBe('rejected')
     expect(result.error).toMatch(/låst/)
+  })
+
+  it('a period closed after staging is refused in the note\'s words, never "a verifikation cannot be created" (crm#1234)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({
+      data: null,
+      error: {
+        code: 'P0001',
+        message: 'Cannot write to locked/closed fiscal period "Räkenskapsår 2024" (is_closed=t, locked_at=2025-02-01 00:00:00+00)',
+      },
+    }) // enforce_period_lock refuses the notes-only update
+    enqueue({ data: null }) // dispatcher reject update
+
+    const op = makePendingOp({
+      operation_type: 'set_voucher_note',
+      params: { journal_entry_id: JE_ID, notes: 'x' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.auto_rejected).toBe(true)
+    expect(result.code).toBe('JOURNAL_ENTRY_NOTE_PERIOD_LOCKED')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toBe('Perioden är stängd eller låst, anteckningen kan inte ändras.')
+    expect(result.error).not.toMatch(/skapas/)
   })
 })

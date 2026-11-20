@@ -1,0 +1,432 @@
+/**
+ * Systemdokumentation generator: the pure builder against a facts fixture,
+ * and the loader against a table-keyed mock (the loader issues its reads in
+ * parallel, so a queued mock would pin an order that is not part of the
+ * contract).
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { buildSystemdokumentation, loadSystemdokumentationFacts, type SystemdokumentationFacts } from '../systemdokumentation'
+import { CASH_PARTIAL_PAYMENT_RULE, COUNTERPARTY_SETOFF_RULE, EU_GOODS_REGISTRATION_DATE_RULE, KONTANTMETOD_CUTOFF_RULES, KONTANTMETOD_EU_GOODS_RULE, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
+
+vi.mock('@/lib/branding/service', () => ({
+  getBranding: () => ({ appName: 'Accounted', appUrl: 'https://app.accounted.se' }),
+}))
+
+function facts(overrides: Partial<SystemdokumentationFacts> = {}): SystemdokumentationFacts {
+  return {
+    company: { name: 'Test AB', org_number: '5560000000', accounting_framework: 'k2' },
+    settings: {
+      entity_type: 'aktiebolag',
+      accounting_method: 'accrual',
+      moms_period: 'quarterly',
+      vat_registered: true,
+      pays_salaries: false,
+      fiscal_year_start_month: 1,
+      bookkeeping_locked_through: '2026-03-31',
+      auto_lock_period_days: null,
+      default_voucher_series: 'A',
+      default_voucher_series_per_source_type: { invoice_created: 'B', salary_payment: 'K' },
+      voucher_series_labels: { K: 'Löner' },
+      ore_rounding: false,
+      dimensions_enabled: true,
+      recurring_invoices_enabled: false,
+      invoice_payment_links_enabled: false,
+    },
+    period: { id: 'p1', name: 'Räkenskapsår 2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null },
+    accounts: [
+      { account_number: '1930', account_name: 'Företagskonto', account_class: 1, sru_code: '7281' },
+      { account_number: '2440', account_name: 'Leverantörsskulder', account_class: 2, sru_code: null },
+      { account_number: '2641', account_name: 'Ingående moms', account_class: 2, sru_code: null },
+      { account_number: '3001', account_name: 'Försäljning 25%', account_class: 3, sru_code: '7410' },
+    ],
+    sequences: [
+      { voucher_series: 'B', last_number: 12 },
+      { voucher_series: 'A', last_number: 340 },
+    ],
+    cashAccounts: [
+      { name: 'Företagskonto', ledger_account: '1930', voucher_series: null, source: 'enable_banking', enabled: true },
+      { name: 'Sparkonto', ledger_account: '1940', voucher_series: 'F', source: 'manual', enabled: true },
+      { name: 'Gammalt konto', ledger_account: '1950', voucher_series: 'G', source: 'manual', enabled: false },
+    ],
+    members: [
+      { user_id: 'u-member', role: 'member', joined_at: '2026-02-01T00:00:00Z' },
+      { user_id: 'u-owner', role: 'owner', joined_at: '2026-01-01T00:00:00Z' },
+    ],
+    apiKeys: [
+      { name: 'Byråns assistent', key_prefix: 'gnubok_sk_ab12', user_id: 'u-owner', scopes: ['bookkeeping:write', 'reports:read'], created_at: '2026-03-01T00:00:00Z', last_used_at: null, unattended_commit_limit: '5000.00' },
+    ],
+    dimensions: [{ name: 'Kostnadsställe' }, { name: 'Projekt' }],
+    connections: { bank: true, skatteverket: true, peppol: false, stripe: true, shopify: false, woocommerce: false, zettle: false, whatsapp: false, email_inbox: false, cloud_backup: false },
+    labels: new Map([
+      ['u-owner', 'anna@example.se'],
+      ['u-member', 'Bo Bokförare'],
+    ]),
+    env: { appName: 'Accounted', appUrl: 'https://app.accounted.se', hosted: true, mfaRequired: true, appVersion: 'abc1234', generatedAt: '2026-09-25T10:00:00.000Z' },
+    ...overrides,
+  }
+}
+
+describe('buildSystemdokumentation', () => {
+  it('describes company, period and kontoplan from the facts', () => {
+    const r = buildSystemdokumentation(facts())
+    expect(r.company).toMatchObject({ name: 'Test AB', entity_type: 'aktiebolag', accounting_method: 'accrual', accounting_framework: 'k2', vat_registered: true })
+    expect(r.period).toEqual({ id: 'p1', name: 'Räkenskapsår 2026', start: '2026-01-01', end: '2026-12-31', is_closed: false, locked_at: null })
+    expect(r.kontoplan.accounts).toHaveLength(4)
+    expect(r.kontoplan.class_summary).toEqual([
+      { account_class: 1, count: 1 },
+      { account_class: 2, count: 2 },
+      { account_class: 3, count: 1 },
+    ])
+    expect(r.app_version).toBe('abc1234')
+    expect(r.system).toEqual({ name: 'Accounted', url: 'https://app.accounted.se', hosted: true })
+  })
+
+  it('resolves the series per source type through the company map and names custom letters with the company label', () => {
+    const r = buildSystemdokumentation(facts())
+    const byType = Object.fromEntries(r.verifikationsserier.per_source_type.map((row) => [row.source_type, row]))
+    expect(byType.invoice_created).toMatchObject({ series: 'B', series_label: 'Kundfakturor', label: 'Kundfaktura' })
+    expect(byType.salary_payment).toMatchObject({ series: 'K', series_label: 'Löner' })
+    expect(byType.manual).toMatchObject({ series: 'A', series_label: 'Redovisning' })
+    expect(byType.supplier_invoice_registered.series).toBe('A')
+  })
+
+  it('lists cash account series overrides for enabled accounts only, and the sequences of the year in series order', () => {
+    const r = buildSystemdokumentation(facts())
+    expect(r.verifikationsserier.cash_account_overrides).toEqual([{ account_name: 'Sparkonto', ledger_account: '1940', series: 'F', series_label: 'Kassa' }])
+    expect(r.verifikationsserier.sequences).toEqual([
+      { series: 'A', series_label: 'Redovisning', last_number: 340 },
+      { series: 'B', series_label: 'Kundfakturor', last_number: 12 },
+    ])
+    expect(r.verifikationsserier.ordning).toEqual([...VOUCHER_SERIES_RULES.ordning])
+  })
+
+  it('marks delsystem and integrations active from connections and settings', () => {
+    const r = buildSystemdokumentation(facts())
+    const active = Object.fromEntries(r.delsystem.map((d) => [d.key, d.active]))
+    expect(active).toMatchObject({ bank: true, stripe: true, webbutik: false, loner: false, moms: true, dimensioner: true, kundfakturering: true })
+    expect(r.delsystem.find((d) => d.key === 'dimensioner')?.description).toContain('Kostnadsställe, Projekt')
+    const integrations = Object.fromEntries(r.integrationer.map((i) => [i.key, i.active]))
+    expect(integrations).toMatchObject({ enable_banking: true, skatteverket: true, stripe: true, peppol: false, shopify: false, ai: true })
+  })
+
+  it('documents a collections connection and its rules only when the company has one', () => {
+    const without = buildSystemdokumentation(facts())
+    expect(without.integrationer.find((i) => i.key === 'collections')).toBeUndefined()
+    expect(without.behandlingsregler.find((x) => x.rubrik === 'Påminnelser och inkasso')).toBeUndefined()
+
+    const r = buildSystemdokumentation({
+      ...facts(),
+      collections: {
+        display_name: 'Acme Inkasso',
+        state: 'active',
+        minimum_amount: '250.00',
+        default_start_step: 'reminder',
+        reminder_fee_terms_since: '2025-01-01',
+        late_interest_percent: null,
+        late_interest_agreed_since: null,
+        clearing_account: '1689',
+        payout_account: '1930',
+        auto_book_collected_payments: false,
+        auto_book_settlements: false,
+      },
+    })
+    expect(r.integrationer.find((i) => i.key === 'collections')).toMatchObject({ label: 'Påminnelser och inkasso (Acme Inkasso, via Accounted Connect)', active: true })
+    const rule = r.behandlingsregler.find((x) => x.rubrik === 'Påminnelser och inkasso')!.text
+    expect(rule).toContain('från 250 kr')
+    expect(rule).toContain('från och med 2025-01-01')
+    expect(rule).toContain('Dröjsmålsränta enligt räntelagen.')
+    expect(rule).toContain('konto 1689')
+    expect(rule).toContain('efter att en användare har godkänt varje bokföring')
+    expect(rule).toContain('kan inte makuleras med en vanlig storno')
+    expect(rule).toContain('betalningsunderlag')
+    expect(rule).toContain('bokföras om under Avräkningar')
+    expect(rule).toContain('inte är en dubblett')
+    expect(rule).toContain('Bankraden för en bokförd utbetalning')
+    expect(rule).toContain('på det bankkonto utbetalningen bokförs mot')
+    expect(rule).toContain('anger vilken verifikation det ersätter')
+    // The handover rules (bank check, a person's approval, no reminders of our own beside the provider's).
+    expect(rule).toContain('banken inte visar en obokförd inbetalning')
+    expect(rule).toContain('Bara en person godkänner en överlämning')
+    expect(rule).toContain('skickar Accounted inga egna påminnelser och bokför inga egna påminnelseavgifter')
+  })
+
+  it('describes Stripe as a feed the user books, never as automatic booking', () => {
+    // The Stripe connection is feed-only (no cron books payments or payouts),
+    // so the systemdokumentation must not claim automatic booking.
+    const r = buildSystemdokumentation(facts())
+    const stripe = r.delsystem.find((d) => d.key === 'stripe')!
+    expect(stripe.description).toContain('bokförs när användaren godkänner dem')
+    expect(stripe.kontering).toContain('Utbetalning: debet 1930, kredit 1686')
+    // Fee rows are booked one way or the other, never twice.
+    expect(stripe.description).toContain('aldrig båda')
+    const automatic = r.behandlingsregler.find((x) => x.rubrik === 'Maskinell och automatisk bokföring')!
+    expect(automatic.text).not.toContain('Stripe')
+  })
+
+  it('carries the shared behandlingsregler and the per-company rounding and lock settings', () => {
+    const r = buildSystemdokumentation(facts())
+    const byTitle = Object.fromEntries(r.behandlingsregler.map((x) => [x.rubrik, x.text]))
+    expect(byTitle['Öresavrundning på leverantörsfakturor']).toBe(SUPPLIER_INVOICE_ROUNDING_RULES.val)
+    expect(byTitle['Öresavrundning på kundfakturor']).toContain('avstängd')
+    // #3440: the kontantmetoden year end is årsomföring per invoice, no vändning.
+    expect(byTitle['Bokslut enligt kontantmetoden']).toBe(KONTANTMETOD_CUTOFF_RULES)
+    expect(byTitle['Bokslut enligt kontantmetoden']).toContain('Ingen vändning bokförs.')
+    expect(byTitle['Automatisk låsning']).toBeUndefined()
+    expect(r.rattelse_och_las.lock_date).toBe('2026-03-31')
+
+    const withAutoLock = buildSystemdokumentation(facts({ settings: { ...facts().settings!, ore_rounding: true, auto_lock_period_days: 45 } }))
+    const t2 = Object.fromEntries(withAutoLock.behandlingsregler.map((x) => [x.rubrik, x.text]))
+    expect(t2['Öresavrundning på kundfakturor']).toContain('3740')
+    // The nightly job locks calendar months (lib/company/auto-lock.ts), whatever the moms period.
+    expect(t2['Automatisk låsning']).toBe('Låsdatumet flyttas fram automatiskt 45 dagar efter varje kalendermånads slut.')
+  })
+
+  // #73: ML 2023:200 7 kap. 26 och 40 §§; listed where the company books by kontantmetoden.
+  it('describes the EU goods registration rule for a cash-method company only', () => {
+    const rubrik = 'Varor från annat EU-land, kontantmetoden'
+    expect(buildSystemdokumentation(facts()).behandlingsregler.find((x) => x.rubrik === rubrik)).toBeUndefined()
+    const cash = buildSystemdokumentation(facts({ settings: { ...facts().settings!, accounting_method: 'cash' as const } }))
+    const rule = cash.behandlingsregler.find((x) => x.rubrik === rubrik)
+    expect(rule?.text).toBe(KONTANTMETOD_EU_GOODS_RULE)
+    expect(rule?.text).toContain('ML 7 kap. 26 och 40 §§')
+  })
+
+  // #93: ML 2023:200 7 kap. 26 och 40 §§; both methods date the registration by it.
+  it('describes the EU goods registration date for every company', () => {
+    const rubrik = 'Varor från annat EU-land, registreringsdatum'
+    for (const accounting_method of ['accrual', 'cash'] as const) {
+      const r = buildSystemdokumentation(facts({ settings: { ...facts().settings!, accounting_method } }))
+      const rule = r.behandlingsregler.find((x) => x.rubrik === rubrik)
+      expect(rule?.text).toBe(EU_GOODS_REGISTRATION_DATE_RULE)
+      expect(rule?.text).toContain('senast den 15:e i månaden efter')
+      expect(rule?.text).toContain('ML 7 kap. 12, 26 och 40 §§')
+    }
+  })
+
+  it('describes the kontantmetoden part-payment rule while its switch is on for a cash-method company, or once it booked', () => {
+    const rubrik = 'Delbetalningar, kontantmetoden'
+    const on = { switches: { cashPartialPayments: true, collections: false, customerLoss: false }, vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false } }
+    const cashSettings = { ...facts().settings!, accounting_method: 'cash' as const }
+    // Switch off, nothing booked by the rule: not described, cash or not.
+    expect(buildSystemdokumentation(facts({ settings: cashSettings })).behandlingsregler.find((x) => x.rubrik === rubrik)).toBeUndefined()
+    // Switch on: only a cash-method company books by it.
+    expect(buildSystemdokumentation(facts({ switchedRules: on })).behandlingsregler.find((x) => x.rubrik === rubrik)).toBeUndefined()
+    // Switched off again after it booked: still described, for as long as the books hold its vouchers.
+    const used = { ...on, switches: { ...on.switches, cashPartialPayments: false }, vouchers: { ...on.vouchers, cashPartialPayments: true } }
+    expect(buildSystemdokumentation(facts({ switchedRules: used })).behandlingsregler.find((x) => x.rubrik === rubrik)?.text).toBe(CASH_PARTIAL_PAYMENT_RULE)
+
+    const cash = buildSystemdokumentation(facts({ settings: cashSettings, switchedRules: on }))
+    const rule = cash.behandlingsregler.find((x) => x.rubrik === rubrik)
+    expect(rule?.text).toBe(CASH_PARTIAL_PAYMENT_RULE)
+    expect(rule?.text).toContain('i proportion till det inbetalda beloppet')
+    // The exclusions match what the code refuses (cashProRataUnsupportedReason
+    // and the doors that still refuse every partial).
+    expect(rule?.text).toContain('utländsk valuta')
+    expect(rule?.text).toContain('skattereduktion för grön teknik')
+    expect(rule?.text).toContain('bankmatchning eller med API-nyckel')
+  })
+
+  it('lists the series of the collections payout and kundförlust while their switch is on or once they booked', () => {
+    const listed = (r: ReturnType<typeof buildSystemdokumentation>) => r.verifikationsserier.per_source_type.map((row) => row.source_type)
+    const none = { switches: { cashPartialPayments: false, collections: false, customerLoss: false }, vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false } }
+
+    const dark = listed(buildSystemdokumentation(facts()))
+    expect(dark).not.toContain('collection_settlement')
+    expect(dark).not.toContain('customer_loss')
+    expect(dark).toContain('invoice_cash_payment')
+
+    const switchedOn = listed(buildSystemdokumentation(facts({ switchedRules: { ...none, switches: { ...none.switches, collections: true, customerLoss: true } } })))
+    expect(switchedOn).toContain('collection_settlement')
+    expect(switchedOn).toContain('customer_loss')
+
+    // Switched off after use: the series that were used stay described.
+    const usedPayout = listed(buildSystemdokumentation(facts({ switchedRules: { ...none, vouchers: { ...none.vouchers, collectionSettlement: true } } })))
+    expect(usedPayout).toContain('collection_settlement')
+    expect(usedPayout).not.toContain('customer_loss')
+    const usedLoss = listed(buildSystemdokumentation(facts({ switchedRules: { ...none, vouchers: { ...none.vouchers, customerLoss: true } } })))
+    expect(usedLoss).toContain('customer_loss')
+    expect(usedLoss).not.toContain('collection_settlement')
+  })
+
+  it('describes kvittning and lists its series while its switch is on or once a set-off was booked', () => {
+    const listed = (r: ReturnType<typeof buildSystemdokumentation>) => r.verifikationsserier.per_source_type.map((row) => row.source_type)
+    const rule = (r: ReturnType<typeof buildSystemdokumentation>) => r.behandlingsregler.find((x) => x.rubrik === 'Kvittning')?.text
+    const none = { switches: { cashPartialPayments: false, collections: false, customerLoss: false }, vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false } }
+
+    const dark = buildSystemdokumentation(facts({ switchedRules: none }))
+    expect(listed(dark)).not.toContain('counterparty_setoff')
+    expect(rule(dark)).toBeUndefined()
+
+    const switchedOn = buildSystemdokumentation(facts({ switchedRules: { ...none, switches: { ...none.switches, counterpartySetoff: true } } }))
+    expect(listed(switchedOn)).toContain('counterparty_setoff')
+    expect(rule(switchedOn)).toBe(COUNTERPARTY_SETOFF_RULE)
+
+    // Switched off after use: the series and the rule that were used stay described.
+    const used = buildSystemdokumentation(facts({ switchedRules: { ...none, vouchers: { ...none.vouchers, counterpartySetoff: true } } }))
+    expect(listed(used)).toContain('counterparty_setoff')
+    expect(rule(used)).toBe(COUNTERPARTY_SETOFF_RULE)
+  })
+
+  it('lists members by role with labels and API keys with scope labels and the numeric cap', () => {
+    const r = buildSystemdokumentation(facts())
+    expect(r.behorigheter.mfa_required).toBe(true)
+    expect(r.behorigheter.members.map((m) => [m.role, m.label])).toEqual([
+      ['owner', 'anna@example.se'],
+      ['member', 'Bo Bokförare'],
+    ])
+    expect(r.behorigheter.api_keys).toEqual([
+      expect.objectContaining({ name: 'Byråns assistent', owner_label: 'anna@example.se', unattended_commit_limit: 5000, scopes: ['Bokföring: skriv', 'Rapporter: läs'] }),
+    ])
+  })
+
+  it('falls back to defaults when the company has no settings row', () => {
+    const r = buildSystemdokumentation(facts({ settings: null, apiKeys: [], members: [], labels: new Map() }))
+    expect(r.company.accounting_method).toBeNull()
+    expect(r.verifikationsserier.per_source_type.every((row) => row.series === 'A')).toBe(true)
+    expect(r.rattelse_och_las.lock_date).toBeNull()
+    expect(r.behorigheter.api_keys).toEqual([])
+  })
+})
+
+/**
+ * Table-keyed mock: every builder chain on `table` resolves to its configured
+ * result whatever methods are chained. `calls` records (table, method, args).
+ */
+function tableMock(results: Record<string, { data?: unknown; error?: { message: string } | null }>) {
+  const calls: { table: string; method: string; args: unknown[] }[] = []
+  const chain = (table: string): unknown => {
+    const result = results[table] ?? { data: [], error: null }
+    const handler: ProxyHandler<object> = {
+      get(_t, prop) {
+        if (prop === 'then') return (resolve: (v: unknown) => void) => resolve({ data: result.data ?? null, error: result.error ?? null })
+        return (...args: unknown[]) => {
+          calls.push({ table, method: String(prop), args })
+          return new Proxy({}, handler)
+        }
+      },
+    }
+    return new Proxy({}, handler)
+  }
+  const from = vi.fn((table: string) => chain(table))
+  return { client: { from } as unknown as SupabaseClient, calls, from }
+}
+
+const PERIOD = { id: 'p1', name: 'Räkenskapsår 2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null }
+
+describe('loadSystemdokumentationFacts', () => {
+  beforeEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('returns null when the period does not belong to the company', async () => {
+    const db = tableMock({ fiscal_periods: { data: null }, companies: { data: { name: 'Test AB', org_number: null } } })
+    await expect(loadSystemdokumentationFacts(db.client, 'company-1', 'p-other')).resolves.toBeNull()
+    expect(db.calls.find((c) => c.table === 'fiscal_periods' && c.method === 'eq')?.args).toEqual(['id', 'p-other'])
+  })
+
+  it('derives connections from the side tables and tolerates one that fails', async () => {
+    const db = tableMock({
+      fiscal_periods: { data: PERIOD },
+      companies: { data: { name: 'Test AB', org_number: '5560000000', accounting_framework: 'k3' } },
+      company_settings: { data: { entity_type: 'aktiebolag', pays_salaries: true } },
+      chart_of_accounts: { data: [{ account_number: '1930', account_name: 'Företagskonto', account_class: 1, sru_code: null }] },
+      voucher_sequences: { data: [{ voucher_series: 'A', last_number: 3 }] },
+      cash_accounts: { data: [{ name: 'Bank', ledger_account: '1930', voucher_series: null, source: 'enable_banking', enabled: true }] },
+      company_members: { data: [{ user_id: 'u1', role: 'owner', joined_at: '2026-01-01T00:00:00Z' }] },
+      stripe_connections: { data: [{ id: 's1' }] },
+      peppol_registrations: { data: [] },
+      skatteverket_company_connections: { error: { message: 'relation does not exist' } },
+      extension_data: { data: [{ id: 'cb' }] },
+    })
+    const service = tableMock({ api_keys: { data: [{ name: 'k', key_prefix: 'gnubok_sk_x', user_id: 'u1', scopes: null, created_at: '2026-01-02T00:00:00Z', last_used_at: null, unattended_commit_limit: null }] } })
+    const resolveUserLabels = vi.fn().mockResolvedValue(new Map([['u1', 'anna@example.se']]))
+
+    const f = await loadSystemdokumentationFacts(db.client, 'company-1', 'p1', {
+      serviceClient: service.client as unknown as Pick<SupabaseClient, 'from'>,
+      resolveUserLabels,
+      appVersion: 'v1',
+      now: new Date('2026-09-25T10:00:00Z'),
+    })
+    expect(f).not.toBeNull()
+    expect(f!.company.accounting_framework).toBe('k3')
+    expect(f!.connections).toEqual({ bank: true, skatteverket: false, peppol: false, stripe: true, shopify: false, woocommerce: false, zettle: false, whatsapp: false, email_inbox: false, cloud_backup: true })
+    expect(f!.collections).toBeNull()
+    expect(f!.accounts).toHaveLength(1)
+    expect(f!.sequences).toEqual([{ voucher_series: 'A', last_number: 3 }])
+    expect(f!.apiKeys).toHaveLength(1)
+    expect(service.calls.find((c) => c.table === 'api_keys' && c.method === 'in')?.args).toEqual(['user_id', ['u1']])
+    // Keys bound to another company never enter this company's document.
+    expect(service.calls.find((c) => c.table === 'api_keys' && c.method === 'eq')?.args).toEqual(['company_id', 'company-1'])
+    expect(resolveUserLabels).toHaveBeenCalledWith(['u1'])
+    expect(f!.labels.get('u1')).toBe('anna@example.se')
+    expect(f!.env).toMatchObject({ appVersion: 'v1', generatedAt: '2026-09-25T10:00:00.000Z', appName: 'Accounted' })
+    // Every company-scoped read filters by company_id (defense in depth beside RLS).
+    for (const table of ['chart_of_accounts', 'voucher_sequences', 'cash_accounts', 'company_members', 'stripe_connections', 'extension_data']) {
+      expect(db.calls.some((c) => c.table === table && c.method === 'eq' && c.args[0] === 'company_id' && c.args[1] === 'company-1')).toBe(true)
+    }
+  })
+
+  it('reads the switches and whether the books hold vouchers only a switched rule writes', async () => {
+    const base = {
+      fiscal_periods: { data: PERIOD },
+      companies: { data: { name: 'Test AB', org_number: null } },
+      company_members: { data: [{ user_id: 'u1', role: 'owner', joined_at: '2026-01-01T00:00:00Z' }] },
+    }
+    const dark = await loadSystemdokumentationFacts(tableMock({ ...base, journal_entries: { data: [] } }).client, 'company-1', 'p1')
+    expect(dark!.switchedRules).toEqual({
+      switches: { cashPartialPayments: false, collections: false, customerLoss: false, counterpartySetoff: false },
+      vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false, counterpartySetoff: false },
+    })
+
+    vi.stubEnv('CASH_PARTIAL_PAYMENTS_ENABLED', '1')
+    vi.stubEnv('COLLECTIONS_ENABLED', 'true')
+    vi.stubEnv('CUSTOMER_LOSS_ENABLED', '1')
+    vi.stubEnv('COUNTERPARTY_SETOFF_ENABLED', '1')
+    const db = tableMock({ ...base, journal_entries: { data: [{ id: 'je-1' }] } })
+    const used = await loadSystemdokumentationFacts(db.client, 'company-1', 'p1')
+    expect(used!.switchedRules).toEqual({
+      switches: { cashPartialPayments: true, collections: true, customerLoss: true, counterpartySetoff: true },
+      vouchers: { cashPartialPayments: true, collectionSettlement: true, customerLoss: true, counterpartySetoff: true },
+    })
+    const voucherReads = db.calls.filter((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'source_type').map((c) => c.args[1])
+    expect(voucherReads.sort()).toEqual(['collection_settlement', 'counterparty_setoff', 'customer_loss', 'invoice_cash_payment'])
+    expect(db.calls.find((c) => c.table === 'journal_entries' && c.method === 'like')?.args).toEqual(['description', 'Kontant delbetalning kundfaktura%'])
+    expect(db.calls.filter((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'company_id')).toHaveLength(4)
+  })
+
+  it('refuses the document when the voucher read fails: a used series left out would be wrong', async () => {
+    const db = tableMock({
+      fiscal_periods: { data: PERIOD },
+      companies: { data: { name: 'Test AB', org_number: null } },
+      company_members: { data: [{ user_id: 'u1', role: 'owner', joined_at: '2026-01-01T00:00:00Z' }] },
+      journal_entries: { error: { message: 'timeout' } },
+    })
+    await expect(loadSystemdokumentationFacts(db.client, 'company-1', 'p1')).rejects.toThrow('verifikationer')
+  })
+
+  it('refuses the document when the member read fails: an empty access section would be wrong, not degraded', async () => {
+    const db = tableMock({
+      fiscal_periods: { data: PERIOD },
+      companies: { data: { name: 'Test AB', org_number: null } },
+      company_members: { error: { message: 'permission denied' } },
+    })
+    await expect(loadSystemdokumentationFacts(db.client, 'company-1', 'p1')).rejects.toThrow('medlemmar')
+  })
+
+  it('skips the API key lookup without a service client and reads mfa/self-hosted from the flags', async () => {
+    vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const db = tableMock({
+      fiscal_periods: { data: PERIOD },
+      companies: { data: { name: 'Test AB', org_number: null } },
+      company_settings: { data: null },
+      company_members: { data: [{ user_id: 'u1', role: 'owner', joined_at: '2026-01-01T00:00:00Z' }] },
+    })
+    const f = await loadSystemdokumentationFacts(db.client, 'company-1', 'p1')
+    expect(f!.apiKeys).toEqual([])
+    expect(f!.env.mfaRequired).toBe(true)
+    expect(f!.env.hosted).toBe(false)
+    expect(db.calls.some((c) => c.table === 'api_keys')).toBe(false)
+  })
+})

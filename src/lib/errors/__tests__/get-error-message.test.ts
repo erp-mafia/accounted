@@ -5,14 +5,17 @@ import {
   isSwedishUserMessage,
   looksLikeUserFacingSwedish,
 } from '../get-error-message'
-import { getErrorEntry, listErrorCodes } from '../structured-errors'
+import { getErrorEntry, listErrorCodes, SI_CREATE_INVALID_INPUT_REASONS } from '../structured-errors'
+import { errorResponse, errorResponseFromCode, getStructuredError } from '../get-structured-error'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotEditNonDraftError,
   CannotReverseStornoError,
   JournalEntryNotBalancedError,
+  TargetPeriodClosedError,
 } from '@/lib/bookkeeping/errors'
+import { OPEN_BANKING_FAILURE_TEXTS } from '@/lib/bank-feed/failure-text'
 
 describe('getErrorMessage: typed bookkeeping error codes', () => {
   it('ACCOUNTS_NOT_IN_CHART → lists accounts to activate', () => {
@@ -247,12 +250,12 @@ describe('getErrorMessage: accumulated validation details', () => {
     const msg = getErrorMessage(
       {
         error: 'Valideringsfel: korrigera innan godkännande',
-        details: ['Tomas Tysén: Bankuppgifter saknas (clearingnummer och/eller kontonummer)'],
+        details: ['Anna Andersson: Bankuppgifter saknas (clearingnummer och/eller kontonummer)'],
         warnings: [],
       },
       { context: 'salary', statusCode: 400 },
     )
-    expect(msg).toContain('Tomas Tysén')
+    expect(msg).toContain('Anna Andersson')
     expect(msg).toContain('Bankuppgifter saknas')
     expect(msg).toContain('Valideringsfel')
     // Must NOT collapse to the generic HTTP-400 fallback.
@@ -307,6 +310,29 @@ describe('getErrorMessage: payment-file route messages surface (issue #945)', ()
   })
 })
 
+describe('getErrorMessage: the paying account of a payment file (crm#1483)', () => {
+  const body = {
+    error: {
+      code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS',
+      message:
+        'Betalfilen betalar från Företagskonto (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+      message_en:
+        'The payment file pays from Företagskonto (1930), but the account has no IBAN. Fill in its IBAN under Settings → Invoices, Bank accounts for customer invoices.',
+    },
+  }
+
+  it('shows the sentence naming the account in an English UI, not the registry line', () => {
+    expect(getErrorMessage(body, { locale: 'en', statusCode: 422 })).toBe(body.error.message_en)
+  })
+
+  it('keeps the registry line in English when the refusal composed none (an LB file without bankgiro)', () => {
+    const lb = { error: { code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS', message: 'x' } }
+    expect(getErrorMessage(lb, { locale: 'en', statusCode: 422 })).toBe(
+      getErrorEntry('SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS')?.message_en,
+    )
+  })
+})
+
 describe('getErrorMessage: existing patterns still work', () => {
   it('regex match for "Entry date ... outside fiscal period" on plain string', () => {
     const msg = getErrorMessage('Entry date 2024-06-15 is outside fiscal period "FY 2025"')
@@ -321,6 +347,11 @@ describe('getErrorMessage: existing patterns still work', () => {
   it('Swedish message passes through unchanged', () => {
     const msg = getErrorMessage('Bokföringen är låst t.o.m. 2024-12-31.')
     expect(msg).toBe('Bokföringen är låst t.o.m. 2024-12-31.')
+  })
+
+  it('explains the refusal to cancel an invoice with an open collection case', () => {
+    const dbError = Object.assign(new Error('COLLECTION_CASE_OPEN: withdraw the open collection case before cancelling the invoice'), { code: '23514' })
+    expect(getErrorMessage(dbError)).toBe('Fakturan har ett öppet inkassoärende. Återkalla ärendet på fakturan innan du makulerar den.')
   })
 
   it('falls through to context fallback when no pattern matches', () => {
@@ -500,7 +531,7 @@ describe('getErrorMessage: Swedish heuristic covers real route sentences', () =>
     )
   })
 
-  // The CashLeads Fortnox migration (2026-08-06): the sie-import finalizer's
+  // A Fortnox migration (2026-08-06): the sie-import finalizer's
   // guard message reached the wizard as a thrown Error, matched none of the
   // patterns, and the user saw the generic fallback instead of the reason the
   // migration stopped. Pins the added patterns: verifikation / importen.
@@ -621,6 +652,85 @@ describe('getErrorMessage: INVOICE_SEND_PAYMENT_ACCOUNT_MISSING (#2126)', () => 
 })
 
 
+// #96, crm#1377: every SI_CREATE_INVALID_INPUT showed "Ogiltig kombination av
+// fakturafält", so the customer could not tell which rule refused the save.
+describe('getErrorMessage: SI_CREATE_INVALID_INPUT names the rule (details.reason)', () => {
+  const generic = getErrorEntry('SI_CREATE_INVALID_INPUT')!
+  const envelope = (details?: unknown) => ({
+    error: {
+      code: 'SI_CREATE_INVALID_INPUT',
+      message: generic.message_sv,
+      message_en: generic.message_en,
+      ...(details !== undefined ? { details } : {}),
+    },
+  })
+  const log = { error: () => {}, warn: () => {} }
+
+  it('shows the reason\'s own Swedish sentence, and the English one for an English UI', () => {
+    const body = envelope({ reason: 'accrual_requires_accrual_method' })
+    expect(getErrorMessage(body, { context: 'supplier_invoice', statusCode: 400 })).toBe(
+      SI_CREATE_INVALID_INPUT_REASONS.accrual_requires_accrual_method.message_sv,
+    )
+    expect(getErrorMessage(body, { locale: 'en' })).toBe(
+      SI_CREATE_INVALID_INPUT_REASONS.accrual_requires_accrual_method.message_en,
+    )
+  })
+
+  it('keeps the registry sentence without a reason or for one it does not list', () => {
+    expect(getErrorMessage(envelope(), { statusCode: 400 })).toBe(generic.message_sv)
+    expect(getErrorMessage(envelope({ reason: 'something_new' }), { statusCode: 400 })).toBe(generic.message_sv)
+    expect(getErrorMessage(envelope({ reason: 'toString' }), { statusCode: 400 })).toBe(generic.message_sv)
+    expect(getErrorMessage(envelope({ reason: 'something_new' }), { locale: 'en' })).toBe(generic.message_en)
+  })
+
+  it('every reason has a Swedish sentence the toast keeps and an English one, without dashes', () => {
+    for (const [reason, messages] of Object.entries(SI_CREATE_INVALID_INPUT_REASONS)) {
+      expect(messages.message_sv, reason).not.toBe(generic.message_sv)
+      expect(messages.message_sv, reason).not.toMatch(/[\u2013\u2014]/)
+      expect(messages.message_en, reason).not.toMatch(/[\u2013\u2014]/)
+      expect(messages.message_sv.length, reason).toBeLessThan(220)
+    }
+  })
+
+  it('the REST envelope carries the reason\'s sentences in message and message_en', async () => {
+    const res = errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+      details: { reason: 'vat_on_non_vat_registered' },
+    })
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.error.details).toEqual({ reason: 'vat_on_non_vat_registered' })
+    expect(body.error.message).toBe(SI_CREATE_INVALID_INPUT_REASONS.vat_on_non_vat_registered.message_sv)
+    expect(body.error.message_en).toBe(SI_CREATE_INVALID_INPUT_REASONS.vat_on_non_vat_registered.message_en)
+    // The dashboard toast reads the same envelope.
+    expect(getErrorMessage(body, { context: 'supplier_invoice', statusCode: 400 })).toBe(body.error.message)
+  })
+
+  it('the REST envelope keeps the registry sentence for an unlisted reason and an authored one over the reason', async () => {
+    const unlisted = await errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, { details: { reason: 'pg_check' } }).json()
+    expect(unlisted.error.message).toBe(generic.message_sv)
+    expect(unlisted.error.message_en).toBe(generic.message_en)
+
+    const authored = await errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+      details: { reason: 'vat_on_non_vat_registered' },
+      messageSv: 'Egen mening.',
+      messageEn: 'Own sentence.',
+    }).json()
+    expect(authored.error.message).toBe('Egen mening.')
+    expect(authored.error.message_en).toBe('Own sentence.')
+  })
+
+  it('an MCP refusal thrown with a reason gets the Swedish sentence and keeps its own English', () => {
+    const thrown = Object.assign(new Error('No line items were extracted (document total 100).'), {
+      code: 'SI_CREATE_INVALID_INPUT',
+      reason: 'lines_missing',
+    })
+    const structured = getStructuredError(thrown)
+    expect(structured.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(structured.message_sv).toBe(SI_CREATE_INVALID_INPUT_REASONS.lines_missing.message_sv)
+    expect(structured.message_en).toBe('No line items were extracted (document total 100).')
+  })
+})
+
 // Issue #2086: the keyword heuristic dropped correct Swedish route messages
 // that happened to lack one of its ~30 keywords and replaced them with generic
 // HTTP text whose advice was sometimes wrong. A sentence that reads as Swedish
@@ -693,14 +803,44 @@ describe('SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', () => {
       },
     }
     const sv = getErrorMessage(body)
-    expect(sv).toContain('Konto 9999 har belopp')
+    expect(sv).toContain('Målkonto 9999 ligger utanför 1000-8999')
     expect(sv).toContain('2999 OBS-konto')
-    expect(getErrorMessage({ error: { ...body.error, details: { account_numbers: ['9998', '9999'] } } })).toContain('Kontona 9998, 9999 har belopp')
+    expect(getErrorMessage({ error: { ...body.error, details: { account_numbers: ['9998', '9999'] } } })).toContain('Målkontona 9998, 9999 ligger')
+  })
+
+  // #3312: every import entry now routes class 9 amounts to 2999 itself, so the
+  // refusal answers a target someone chose. It points back at that choice, not
+  // at a page outside the onboarding flow the customer was in.
+  it('does not send the user to a page outside their flow', () => {
+    const sv = getErrorMessage({ error: { code: 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', message: 'x', details: { account_numbers: ['9998'] } } })
+    expect(sv).not.toContain('Import, SIE-fil')
+    expect(sv).toContain('i kontomappningen')
   })
 
   it('falls back to the registry sentence without details', () => {
     expect(getErrorMessage({ error: { code: 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', message: 'Konton med belopp måste mappas till konton 1000-8999 före import.' } }))
       .toContain('1000-8999')
+  })
+})
+
+describe('SIE_IMPORT_ORG_NUMBER_MISMATCH', () => {
+  const error = {
+    code: 'SIE_IMPORT_ORG_NUMBER_MISMATCH',
+    // What the route's envelope carries: the registry sentence.
+    message: getErrorEntry('SIE_IMPORT_ORG_NUMBER_MISMATCH')!.message_sv,
+    details: { file_org_number: '556677-8899', company_org_number: '5599887766' },
+  }
+
+  it('names both numbers in Swedish', () => {
+    expect(getErrorMessage({ error })).toBe(
+      'SIE-filen gäller organisationsnummer 556677-8899, men företaget har 5599887766. Kontrollera att det är rätt fil och rätt företag, och bekräfta för att importera ändå.',
+    )
+  })
+
+  it('falls back to the registry sentence without details, and to English for an English reader', () => {
+    expect(getErrorMessage({ error: { code: error.code, message: error.message } }))
+      .toBe(getErrorEntry('SIE_IMPORT_ORG_NUMBER_MISMATCH')!.message_sv)
+    expect(getErrorMessage({ error }, { locale: 'en' })).toBe(getErrorEntry('SIE_IMPORT_ORG_NUMBER_MISMATCH')!.message_en)
   })
 })
 
@@ -721,8 +861,252 @@ describe('getErrorMessage: PT409 database refusals', () => {
       .toBe(getErrorEntry('BANK_BOOKING_SETTLEMENT_CHANGED')!.message_sv)
   })
 
+  it('tells the user to save the account picker again when the bank route cannot be resolved', () => {
+    const err = { code: 'PT409', message: 'BANK_INGEST_ROUTE_UNRESOLVED' }
+    expect(getErrorMessage(err)).toBe(getErrorEntry('BANK_INGEST_ROUTE_UNRESOLVED')!.message_sv)
+    expect(getErrorMessage(err)).toContain('Välj konton')
+    expect(getErrorMessage(err, { locale: 'en' })).toBe(getErrorEntry('BANK_INGEST_ROUTE_UNRESOLVED')!.message_en)
+  })
+
   it('keeps the generic conflict for an unregistered name, never echoing it', () => {
     const message = getErrorMessage({ code: 'PT409', message: 'SOME_UNREGISTERED_REFUSAL' })
     expect(message).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
+  })
+})
+
+describe('getErrorMessage: the caller fallback', () => {
+  it('answers the caller sentence when nothing in the error is readable', () => {
+    const fallback = 'Kunde inte nollställa året.'
+    expect(getErrorMessage(null, { fallback })).toBe(fallback)
+    expect(getErrorMessage({}, { fallback })).toBe(fallback)
+    // Raw English never reaches the user; the caller sentence does.
+    expect(getErrorMessage({ error: 'Internal server error' }, { fallback })).toBe(fallback)
+    expect(getErrorMessage(new TypeError('x is undefined'), { locale: 'en', fallback: 'Could not reset' })).toBe(
+      'Could not reset',
+    )
+  })
+
+  it('still prefers a readable envelope in the user language over the fallback', () => {
+    const body = {
+      error: {
+        code: 'FISCAL_YEAR_RESET_CONFIRMATION_MISMATCH',
+        message: 'Räkenskapsårets namn stämmer inte överens.',
+        message_en: 'The fiscal year name does not match.',
+      },
+    }
+    expect(getErrorMessage(body, { locale: 'sv', fallback: 'FB' })).toBe('Räkenskapsårets namn stämmer inte överens.')
+    expect(getErrorMessage(body, { locale: 'en', fallback: 'FB' })).toBe('The fiscal year name does not match.')
+  })
+
+  it('ranks a known HTTP status above the fallback, and ignores a blank fallback', () => {
+    expect(getErrorMessage(null, { statusCode: 403, fallback: 'FB' })).toBe(
+      'Du har inte behörighet att utföra denna åtgärd.',
+    )
+    expect(getErrorMessage(null, { fallback: '  ' })).toBe(getErrorMessage(null))
+  })
+})
+
+describe('getErrorMessage: the bank\'s organisationsnummer refusals (crm#1206)', () => {
+  it.each(['BANK_CONSENT_ORG_NUMBER_MISSING', 'PAYMENT_ORG_NUMBER_MISSING'])('%s says what is missing and where it is filled in, never the generic sentence', (code) => {
+    const body = { error: { code, message: 'x', details: { field: 'org_number', reason: 'missing' } } }
+    const sv = getErrorMessage(body)
+    expect(sv).toContain('organisationsnummer saknas')
+    expect(sv).toContain('Inställningar, Företaget, Företagsuppgifter')
+    expect(sv).not.toBe(getErrorEntry('VALIDATION_ERROR')?.message_sv)
+    expect(getErrorMessage(body, { locale: 'en' })).toContain('Settings, Company, Company details')
+  })
+})
+
+// accounted#18: the fiscal-year dialog reads its refusals in the UI locale.
+describe('getErrorMessage: fiscal-year refusals in an English UI', () => {
+  const blocked = {
+    error: {
+      code: 'FISCAL_PERIOD_DATES_BLOCKED',
+      message:
+        'Datumen kan inte ändras. En bokförd verifikation ligger utanför de nya datumen: A1 (2025-04-24). ' +
+        'Bokföringen är låst t.o.m. 2025-06-30 och ändringen rör dagar i den låsta delen. Flytta låsdatumet först.',
+      details: {
+        blockers: [
+          { code: 'entries_outside', message_sv: 'En bokförd verifikation ligger utanför de nya datumen: A1 (2025-04-24).', count: 1 },
+          {
+            code: 'company_lock_date',
+            message_sv: 'Bokföringen är låst t.o.m. 2025-06-30 och ändringen rör dagar i den låsta delen. Flytta låsdatumet först.',
+          },
+        ],
+      },
+    },
+  }
+
+  it('keeps the named blockers after the English lead, never the agent text', () => {
+    const msg = getErrorMessage(blocked, { locale: 'en' })
+    expect(msg).toBe(
+      'The dates cannot be changed: something in the fiscal year would be affected. The name can still be changed. ' +
+        'En bokförd verifikation ligger utanför de nya datumen: A1 (2025-04-24). ' +
+        'Bokföringen är låst t.o.m. 2025-06-30 och ändringen rör dagar i den låsta delen. Flytta låsdatumet först.',
+    )
+    expect(msg).not.toContain('details.')
+  })
+
+  it('reads the thrown Swedish sentence unchanged in a Swedish UI', () => {
+    expect(getErrorMessage(blocked, { locale: 'sv' })).toBe(blocked.error.message)
+  })
+
+  it('falls back to the English lead when no blocker is named', () => {
+    expect(getErrorMessage({ error: { code: 'FISCAL_PERIOD_DATES_BLOCKED', message: 'Datumen kan inte ändras.' } }, { locale: 'en' })).toBe(
+      'The dates cannot be changed: something in the fiscal year would be affected. The name can still be changed.',
+    )
+  })
+
+  it.each([
+    'FISCAL_PERIOD_INVALID_DATES',
+    'FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH',
+    'FISCAL_PERIOD_END_NOT_MONTH_END',
+    'FISCAL_PERIOD_TOO_LONG',
+    'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
+    'FISCAL_PERIOD_NOT_CONTIGUOUS',
+    'FISCAL_PERIOD_OVERLAP',
+    'FISCAL_PERIOD_DATES_BLOCKED',
+    'FISCAL_PERIOD_UPDATE_CLOSED',
+    'FISCAL_PERIOD_UPDATE_LOCKED',
+  ])('%s: the English is written for a person, the agent pointers live in the remediation', (code) => {
+    const entry = getErrorEntry(code)
+    expect(entry?.message_en).toBeTruthy()
+    expect(entry?.message_en).not.toMatch(/details\.|period_start|period_end/)
+  })
+})
+
+// crm#1290: a storno or rättelse of a verifikat in a year closed with a
+// year-end closing. The dialog used to say the year "kan inte återöppnas",
+// which is untrue while the årsredovisning is unsigned, and gave no way on.
+// The registry sentence is now the one answer in both locales and names both
+// paths: the owner reopens an unsigned year under Räkenskapsår, a signed,
+// adopted or filed year is corrected with a new verifikat in the open year.
+describe('getErrorMessage: TARGET_PERIOD_CLOSED (crm#1290)', () => {
+  async function routeBody() {
+    const res = errorResponse(new TargetPeriodClosedError('2026-04-21'), { error: () => {} })
+    expect(res.status).toBe(409)
+    return res.json()
+  }
+
+  it('the route answer reads as the registry sentence in Swedish, with both ways forward', async () => {
+    const msg = getErrorMessage(await routeBody(), { statusCode: 409, context: 'journal_entry' })
+    expect(msg).toBe(getErrorEntry('TARGET_PERIOD_CLOSED')?.message_sv)
+    expect(msg).toContain('inte undertecknad, fastställd eller inskickad')
+    expect(msg).toContain('företagets ägare öppna året igen under Inställningar → Bokföring → Räkenskapsår')
+    expect(msg).toContain('nytt verifikat i det öppna räkenskapsåret')
+    expect(msg).not.toMatch(/kan inte (åter)?öppnas/)
+  })
+
+  it('the route answer reads as the registry sentence in English', async () => {
+    const msg = getErrorMessage(await routeBody(), { statusCode: 409, locale: 'en' })
+    expect(msg).toBe(getErrorEntry('TARGET_PERIOD_CLOSED')?.message_en)
+    expect(msg).toContain('Settings → Bookkeeping → Fiscal years')
+    expect(msg).not.toMatch(/cannot be reopened/i)
+  })
+
+  it('the typed error itself resolves to the same sentence', () => {
+    expect(getErrorMessage(new TargetPeriodClosedError('2026-04-21'))).toBe(
+      getErrorEntry('TARGET_PERIOD_CLOSED')?.message_sv,
+    )
+  })
+
+  it('tells agents not to unlock and how to correct instead', () => {
+    const remediation = getErrorEntry('TARGET_PERIOD_CLOSED')?.remediation
+    expect(remediation?.tool).toBe('gnubok_create_voucher')
+    expect(remediation?.description).toMatch(/do not unlock/i)
+    expect(remediation?.description).toMatch(/signed, adopted or filed/)
+    expect(remediation?.description).toMatch(/no API or MCP door/)
+  })
+
+  it('the unlock and reopen refusals for a closed year name the same way on', () => {
+    for (const code of ['PERIOD_UNLOCK_CLOSED', 'PERIOD_REOPEN_NOT_EXTERNAL']) {
+      const entry = getErrorEntry(code)
+      expect(entry?.message_sv, code).toContain('Inställningar → Bokföring → Räkenskapsår')
+      expect(entry?.message_sv, code).toContain('nya verifikat i det öppna räkenskapsåret')
+      expect(entry?.message_en, code).toContain('Settings → Bookkeeping → Fiscal years')
+      expect(entry?.message_sv, code).not.toContain('supporten')
+    }
+  })
+})
+
+describe('getErrorMessage: a bank sync held back says when (BANK_SYNC_COOLDOWN, BANK_RATE_LIMITED, BANK_THROTTLED)', () => {
+  // The envelope the session sync route answers, as the Synka nu button
+  // hands it over. Inside the cooldown the registry sentence pointed at a
+  // field: "Vänta tills next_allowed_at innan du synkar igen".
+  const quiet = { error: () => {}, warn: () => {} }
+  const envelope = (code: string, details: Record<string, unknown>) => errorResponseFromCode(code, quiet, { details }).json() as Promise<unknown>
+  const NEXT = '2026-11-11T14:43:00.000Z' // 15:43 in Stockholm
+  const HOLDS = ['BANK_SYNC_COOLDOWN', 'BANK_RATE_LIMITED', 'BANK_THROTTLED']
+  const fieldName = /\b[a-z]+(?:_[a-z0-9]+)+\b/
+
+  it('reads the time out of the envelope instead of naming the field, in both languages', async () => {
+    for (const code of ['BANK_SYNC_COOLDOWN', 'BANK_RATE_LIMITED']) {
+      const body = await envelope(code, { connection_id: 'c-1', next_allowed_at: NEXT, retry_after_seconds: 821 })
+      expect(getErrorMessage(body), code).toMatch(/tidigast (\d{1,2} \w+\.? )?15:43\./)
+      expect(getErrorMessage(body, { locale: 'en' }), code).toMatch(/at (\d{1,2} \w+ )?15:43 \(Swedish time\) at the earliest/)
+    }
+  })
+
+  it('no hold reaches a person with a field name in it: either language, with the time and without', async () => {
+    for (const code of HOLDS) {
+      for (const details of [{ connection_id: 'c-1', next_allowed_at: NEXT, retry_after_seconds: 821 }, {}]) {
+        const body = await envelope(code, details)
+        for (const locale of ['sv', 'en'] as const) {
+          expect(getErrorMessage(body, { locale }), `${code} ${locale} ${JSON.stringify(details)}`).not.toMatch(fieldName)
+        }
+      }
+    }
+  })
+
+  it('without a time the Swedish registry sentence stands', async () => {
+    for (const code of HOLDS) {
+      expect(getErrorMessage(await envelope(code, {})), code).toBe(getErrorEntry(code)?.message_sv)
+    }
+  })
+
+  it('no Swedish sentence for a bank failure names a field of the answer', () => {
+    // A person reads the Swedish half as it is: a snake_case token in it is a
+    // field name meant for an agent, which reads the English half and details.
+    const offenders = listErrorCodes()
+      .filter((code) => code.startsWith('BANK_') || code.startsWith('OPEN_BANKING_'))
+      .filter((code) => fieldName.test(getErrorEntry(code)?.message_sv ?? ''))
+    expect(offenders).toEqual([])
+  })
+})
+
+describe('getErrorMessage: a bank\'s refusal reads in the reader\'s language (BANK_PROVIDER_REFUSED, BANK_PROVIDER_UNAVAILABLE)', () => {
+  // The envelope the bank feed's session routes answer (sessionFailureResponse:
+  // the bank's code in details, its Swedish sentence as the message), as the
+  // connect flow and Synka nu hand it over. An English reader got the
+  // registry's line for every refusal: "The bank did not accept the request.
+  // Check the details and try again."
+  const quiet = { error: () => {}, warn: () => {} }
+  const refusal = (code: string, providerCode: string) => {
+    const text = OPEN_BANKING_FAILURE_TEXTS[providerCode]
+    return errorResponseFromCode(code, quiet, { details: { provider_code: providerCode }, ...(text ? { messageSv: text.sv } : {}) }).json() as Promise<unknown>
+  }
+
+  it('names what the bank said in both languages (Swedbank, 2026-11-12: a BankID session from a cancelled attempt was still open)', async () => {
+    const body = await refusal('BANK_PROVIDER_REFUSED', 'AUTHENTICATION_SESSION_ONGOING')
+    expect(getErrorMessage(body, { locale: 'en' })).toBe('Another login session is already in progress. Wait a few minutes and try again.')
+    expect(getErrorMessage(body, { locale: 'sv' })).toBe('En annan inloggningssession pågår redan. Vänta några minuter och försök igen.')
+  })
+
+  it('every code the bank feed has a sentence for reaches an English reader as that sentence, never the generic line', async () => {
+    for (const code of ['BANK_PROVIDER_REFUSED', 'BANK_PROVIDER_UNAVAILABLE']) {
+      const generic = getErrorEntry(code)?.message_en
+      for (const [providerCode, text] of Object.entries(OPEN_BANKING_FAILURE_TEXTS)) {
+        const body = await refusal(code, providerCode)
+        expect(getErrorMessage(body, { locale: 'en' }), `${code} ${providerCode}`).toBe(text.en)
+        expect(getErrorMessage(body, { locale: 'en' }), `${code} ${providerCode}`).not.toBe(generic)
+        expect(getErrorMessage(body, { locale: 'sv' }), `${code} ${providerCode}`).toBe(text.sv)
+      }
+    }
+  })
+
+  it('a code without a sentence keeps the registry line in both languages', async () => {
+    const body = await refusal('BANK_PROVIDER_REFUSED', 'FORMAT_ERROR')
+    expect(getErrorMessage(body, { locale: 'en' })).toBe(getErrorEntry('BANK_PROVIDER_REFUSED')?.message_en)
+    expect(getErrorMessage(body, { locale: 'sv' })).toBe(getErrorEntry('BANK_PROVIDER_REFUSED')?.message_sv)
   })
 })

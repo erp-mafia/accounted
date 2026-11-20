@@ -2,7 +2,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
+import { ERROR_CODE_SEGMENT } from "./src/lib/api/v1/error-docs";
 import { LEGACY_HOST_REDIRECT_EXCLUSIONS } from "./src/lib/domains/legacy-redirect";
+import {
+  STATIC_POLICY_SOURCE,
+  buildContentSecurityPolicy,
+  cspOriginsFromEnv,
+} from "./src/lib/security/csp";
 
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
@@ -11,28 +17,6 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === "development";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-
-// Hosted builds only widen the CSP when Turnstile is prepared. The generic
-// Docker image builds with a site-key sentinel, so it always includes this
-// origin and can safely enable Turnstile later through runtime substitution.
-const turnstileOrigin = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY
-  ? " https://challenges.cloudflare.com"
-  : "";
-
-// WebSocket origin for Supabase Realtime. Hosted projects are covered by the
-// wss://*.supabase.co wildcard below, but a SELF-HOSTED Supabase URL is not:
-// Realtime opens wss://<supabase-host>/realtime/v1/websocket, and WebKit
-// throws synchronously on a CSP-blocked `new WebSocket()`, unmounting the
-// dashboard into the error boundary (issue #893). The Docker image bakes the
-// __NEXT_PUBLIC_SUPABASE_WS_URL__ sentinel at build time and
-// docker-entrypoint.sh substitutes the real value at runtime (a build-time
-// https-to-wss replace would only rewrite the sentinel); the fallback derives
-// wss:/ws: from the https/http URL for non-Docker builds where the real URL
-// is present at build time. Empty supabaseUrl stays empty, mirroring how
-// ${supabaseUrl} is interpolated below (extra whitespace is valid in CSP).
-const supabaseWsUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_WS_URL ??
-  supabaseUrl.replace(/^http(s?):/, "ws$1:");
 
 // Brand logos (WL-12 slice A3) are served from Supabase Storage public
 // objects. The tenant-logo <Image> elements (components/branding/) render
@@ -52,31 +36,25 @@ try {
   supabaseImageHostname = "";
 }
 
-const cspDirectives = [
-  "default-src 'self'",
-  // No analytics hosts here on purpose. PostHog replaced Recapt and is
-  // routed through the same-origin `/rl` rewrite below, so ingestion is
-  // covered by `connect-src 'self'` and its lazy-loaded replay/survey
-  // bundles by `script-src 'self'`. Adding `*.posthog.com` back would
-  // re-widen the policy for no benefit and undo the ad-blocker resistance.
-  `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com`,
-  `style-src 'self' 'unsafe-inline' https://*.enablebanking.com`,
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com${turnstileOrigin}`,
-  "img-src 'self' data: blob: https:",
-  "font-src 'self'",
-  "worker-src 'self' blob:",
-  // object-src must explicitly allow blob:: Chrome's built-in PDF viewer
-  // renders inline PDFs via an internal <embed>, which falls under
-  // object-src. Without this, blob:-URL invoice previews (created via
-  // URL.createObjectURL on /api/invoices/preview-pdf responses) show
-  // "Det här innehållet har blockerats" in Chrome. Firefox uses PDF.js and
-  // Edge uses its own viewer, so neither hits this. See crbug.com/271452.
-  "object-src 'self' blob:",
-  `frame-src 'self' blob: ${supabaseUrl}${turnstileOrigin}`,
-  "frame-ancestors 'none'",
-].join("; ");
+// The CSP for every response the proxy does not stamp with its per-request
+// nonce policy: static assets, the /rl analytics rewrite, .well-known, the
+// storage proxy. Built at build time from the public env; the generic Docker
+// image carries sentinels here that docker-entrypoint.sh substitutes in
+// routes-manifest.json. See lib/security/csp.ts for both policies.
+const staticContentSecurityPolicy = buildContentSecurityPolicy({
+  origins: cspOriginsFromEnv(),
+  isDev,
+});
 
 const nextConfig: NextConfig = {
+  // No `X-Powered-By: Next.js`: it only tells a scanner which framework (and
+  // which set of known issues) to try.
+  poweredByHeader: false,
+  // `next dev` otherwise writes its own agent-rules block into the tracked
+  // AGENTS.md whenever an AI agent starts it (npm run local:up does), a diff
+  // every agent then had to revert by hand. AGENTS.md is curated and points
+  // agents at CLAUDE.md.
+  agentRules: false,
   // Standalone output feeds the Docker image (Dockerfile copies
   // .next/standalone). Vercel never reads it: its build adapter
   // (onBuildComplete) traces and packages functions itself, and as of Next
@@ -86,6 +64,15 @@ const nextConfig: NextConfig = {
   // system env var on every Vercel build; self-hosted and local builds keep
   // the standalone directory.
   output: process.env.VERCEL ? undefined : 'standalone',
+  // The support assistant reads the page texts the build wrote
+  // (scripts/generate-support-page-texts.ts, package.json prebuild) from disk
+  // at run time. No module imports the file, so it is named here for the one
+  // function that reads it; without this it is left out of the function on
+  // Vercel and out of .next/standalone, and the assistant answers from the
+  // menu alone (src/lib/agent/support/page-texts.ts logs that as an error).
+  outputFileTracingIncludes: {
+    '/api/support/ask': ['./src/lib/agent/support/_generated/page-texts.json'],
+  },
   ...(supabaseImageHostname
     ? {
         images: {
@@ -114,11 +101,26 @@ const nextConfig: NextConfig = {
   // debt that vitest never type-checks (see DECISIONS.md 2026-08-20).
   typescript: {
     tsconfigPath: 'tsconfig.build.json',
+    // CI's build job sets SKIP_BUILD_TYPECHECK: its checks job runs
+    // tsc over tsconfig.json after `next typegen`, a superset of this check.
+    // Vercel builds never set it, so every deploy still type-checks.
+    ignoreBuildErrors: process.env.SKIP_BUILD_TYPECHECK === '1',
   },
   // Multiple lockfiles exist above this project (e.g. a parent yarn.lock),
   // which makes Turbopack infer the wrong workspace root. Pin it explicitly.
   turbopack: {
     root: projectRoot,
+    // Browser bundles get a copy of the error registry without the
+    // agent-facing remediation texts; server code, tests and tsc read the
+    // real module. Rationale in the loader. The leading **/ is needed: a
+    // project-relative glob did not match in Next 16.3 (checked on a build).
+    rules: {
+      '**/src/lib/errors/structured-errors.ts': {
+        condition: { all: ['browser', { not: 'foreign' }] },
+        loaders: [path.join(projectRoot, 'scripts/build/structured-errors-browser-loader.js')],
+        as: '*.js',
+      },
+    },
   },
   // PostHog sends trailing-slash API requests; without this Next 308s them
   // and the events are lost. Required by the reverse proxy below.
@@ -127,10 +129,27 @@ const nextConfig: NextConfig = {
   // reader for Office files: its prebuilt .node binary must be required at
   // runtime, never bundled. unpdf (pdf.js, pure JavaScript) is kept external
   // too, so the hosted function runs the same files Node runs in the tests
-  // rather than a re-bundled copy of pdf.js.
-  serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', 'heic-decode', 'libheif-js'],
+  // rather than a re-bundled copy of pdf.js. heic-convert is external, so
+  // Node loads its heic-decode and libheif-js (WebAssembly) from node_modules
+  // with it; they need no entries of their own.
+  //
+  // The Bedrock SDK (lib/ai/provider) is external as well: bundling it splits
+  // its AWS SDK / @smithy dependency tree across server chunks, and on
+  // 2026-10-04 Turbopack named two different splits the same chunk
+  // ("Two or more assets with different content were emitted to the same
+  // output path"), which failed every production build from main. Loaded
+  // from node_modules at runtime, the AWS SDK never enters the bundle.
+  //
+  // @libpdf/core (lib/signing/pades-seal) is external because it reaches for
+  // two optional packages we do not install (@google-cloud/kms and
+  // secret-manager, for a signer we do not use) through import(): a bundler
+  // tries to resolve them at build time, Node only if that signer is asked
+  // for.
+  serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', '@anthropic-ai/bedrock-sdk', '@libpdf/core'],
   experimental: {
-    optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
+    // recharts and date-fns are on Next's built-in list already. motion/react
+    // re-exports framer-motion wholesale, so both barrels are listed.
+    optimizePackageImports: ['motion/react', 'framer-motion'],
     // Client router cache for dynamic routes: a page visited in the last
     // 30 s (back/forward, re-clicking a nav item) re-renders from the cached
     // RSC payload instead of a new server request through the auth proxy.
@@ -152,10 +171,11 @@ const nextConfig: NextConfig = {
     cpus: 2,
   },
   // PostHog reverse proxy. Keeping analytics same-origin buys three things:
-  // the strict CSP below needs NO posthog hosts (`connect-src 'self'` already
-  // covers ingestion, `script-src 'self'` the lazy-loaded replay/survey
-  // bundles), tracking blockers have no third-party host to match, and the
-  // Recapt host allowlist is replaced by nothing at all.
+  // the strict CSP needs NO posthog hosts (`connect-src 'self'` already
+  // covers ingestion, and the lazy-loaded replay/survey bundles are inserted
+  // by the nonce-trusted SDK, which 'strict-dynamic' allows), tracking
+  // blockers have no third-party host to match, and the Recapt host
+  // allowlist is replaced by nothing at all.
   //
   // `/rl` is deliberately meaningless: PostHog's own guidance is that obvious
   // prefixes (/analytics, /tracking, /telemetry, /posthog, and increasingly
@@ -197,24 +217,70 @@ const nextConfig: NextConfig = {
         destination: '/chart-of-accounts',
         permanent: false,
       },
-      // Docs canonicalised to docs.gnubok.se. Every `docs_url` field on the
-      // v1 error envelope still points at this host; the 308 forwards both
-      // humans and agents to the docs subdomain without us needing to
-      // mass-update structured-errors.
+      // Addresses without a page of their own. Temporary, as the page-level
+      // redirect() they replace was; the request's query string is forwarded.
+      {
+        source: '/settings',
+        destination: '/settings/company',
+        permanent: false,
+      },
+      // The Stripe connect/sync surface moved to the import page (2026-07).
+      {
+        source: '/settings/payments',
+        destination: '/import?mode=stripe',
+        permanent: false,
+      },
+      // The Inköp landing until 2026-09-09: the invoice list says more.
+      {
+        source: '/purchases',
+        destination: '/supplier-invoices',
+        permanent: false,
+      },
+      // The Avstämning account list merged into Konton (2026-10-18): the bare
+      // address lands on that list; ?account= still opens one account's
+      // reconciliation here. The query string is forwarded (?autorun=1).
+      {
+        source: '/reconciliation',
+        missing: [{ type: 'query', key: 'account' }],
+        destination: '/accounts',
+        permanent: false,
+      },
+      // Docs canonicalised to docs.accounted.se: the 308 forwards both
+      // humans and agents to the docs subdomain. One path is left out: an
+      // error code's old per-code address (/docs/api/errors/<CODE>, the v1
+      // envelope's `docs_url` until 2026-11), which the docs site has no
+      // page for. src/app/docs/api/errors/[code]/route.ts forwards it to the
+      // code's anchor in the error catalogue.
       {
         source: '/docs/api',
-        destination: 'https://docs.gnubok.se/',
+        destination: 'https://docs.accounted.se/',
         permanent: true,
       },
       {
-        source: '/docs/api/:path*',
-        destination: 'https://docs.gnubok.se/:path*',
+        source: `/docs/api/:path((?!errors/${ERROR_CODE_SEGMENT}$).*)`,
+        destination: 'https://docs.accounted.se/:path',
         permanent: true,
       },
       {
         source: '/llms-full.txt',
-        destination: 'https://docs.gnubok.se/llms-full.txt',
+        destination: 'https://docs.accounted.se/llms-full.txt',
         permanent: true,
+      },
+      // The skills catalogue lives at /.well-known/skills/index.json. Agents
+      // and scanners also probe the bare directory, which has no route of its
+      // own; on Vercel that path fell through to a pages-router lookup and
+      // answered 500 ("Cannot find module .../pages/.well-known/skills.js").
+      // Both spellings are listed: Next's trailing-slash redirect does not
+      // cover /.well-known on Vercel. The query string is forwarded.
+      {
+        source: '/.well-known/skills',
+        destination: '/.well-known/skills/index.json',
+        permanent: false,
+      },
+      {
+        source: '/.well-known/skills/',
+        destination: '/.well-known/skills/index.json',
+        permanent: false,
       },
       // Dual-domain cutover (2026-07): the user-facing app moves to
       // app.accounted.se; app.gnubok.se stays alive for machine traffic
@@ -249,14 +315,15 @@ const nextConfig: NextConfig = {
     ]
   },
   async headers() {
-    // The catch-all excludes /api/documents/:id/inline so the strict
-    // X-Frame-Options: DENY + frame-ancestors 'none' don't conflict with
-    // the embeddable override below: Next.js applies every matching
-    // header rule, and duplicate X-Frame-Options/CSP values trigger
-    // "Det här innehållet har blockerats" in Chromium browsers.
+    // The catch-all excludes the embeddable document routes so the strict
+    // X-Frame-Options: DENY doesn't conflict with their override below (the
+    // proxy likewise leaves those routes' CSP alone, so their
+    // frame-ancestors 'self' is the only one): Next.js applies every
+    // matching header rule, and duplicate X-Frame-Options/CSP values
+    // trigger "Det här innehållet har blockerats" in Chromium browsers.
     return [
       {
-        source: "/((?!api/documents/[^/]+/inline$).*)",
+        source: "/((?!api/documents/[^/]+/inline$|api/signera/[^/]+/document$|api/signing/me/[^/]+/document$).*)",
         headers: [
           {
             key: "Strict-Transport-Security",
@@ -278,16 +345,26 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=(), payment=()",
           },
+        ],
+      },
+      // Content-Security-Policy, only where the proxy does not set its
+      // per-request nonce policy (src/proxy.ts): the paths its matcher skips
+      // and the storage proxy route. Never on a path the proxy stamps, or the
+      // browser would enforce both headers (lib/security/csp.ts).
+      {
+        source: STATIC_POLICY_SOURCE,
+        headers: [
           {
             key: "Content-Security-Policy",
-            value: cspDirectives,
+            value: staticContentSecurityPolicy,
           },
         ],
       },
       // Document inline-preview proxy must be embeddable in same-origin
-      // iframes (used by the verifikat document preview Sheet). Excluded
-      // from the catch-all above so these values aren't shadowed by the
-      // stricter defaults.
+      // iframes (used by the verifikat document preview Sheet), and so must
+      // the PDF a signer reads on /signera/:token and in the app's signing
+      // step (<object> on the signing page). Excluded from the catch-all
+      // above so these values aren't shadowed by the stricter defaults.
       //
       // CSP is intentionally minimal: only `frame-ancestors 'self'`
       // prevents cross-origin clickjacking on the user's documents.
@@ -299,8 +376,12 @@ const nextConfig: NextConfig = {
       // this. See crbug.com/271452. X-Content-Type-Options: nosniff plus
       // the explicit Content-Type from the route handler already prevent
       // MIME-confusion abuse.
-      {
-        source: "/api/documents/:id/inline",
+      ...[
+        "/api/documents/:id/inline",
+        "/api/signera/:token/document",
+        "/api/signing/me/:signerId/document",
+      ].map((source) => ({
+        source,
         headers: [
           {
             key: "Strict-Transport-Security",
@@ -327,7 +408,7 @@ const nextConfig: NextConfig = {
             value: "frame-ancestors 'self'",
           },
         ],
-      },
+      })),
     ];
   },
 };

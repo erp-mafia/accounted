@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,21 +11,45 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { SettingsSectionHeader, SettingsSeg } from '@/components/settings/SettingsRows'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import {
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+  SettingsSectionHeader,
+  SettingsSeg,
+} from '@/components/settings/SettingsRows'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { useFormat } from '@/lib/hooks/use-format'
 import { BillingActions } from '@/components/settings/BillingActions'
 import { ConnectorSettingsSection } from '@/components/settings/ConnectorSettingsSection'
-import { PLAN_PRICES } from '@/components/settings/billing-plans'
+import { PLAN_PRICES, planPrice } from '@/components/settings/billing-plans'
 import type { BillingPlan } from '@/lib/stripe/client'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useSigningAvailability } from '@/components/signing/use-signing-availability'
+import { BuyPaymentPacksDialog, usePaymentPacks } from '@/components/payments/BankPaymentsAllowance'
+import { UsagePanel } from '@/components/settings/UsagePanel'
+import { useCapability } from '@/contexts/CompanyContext'
+import { isSelfHosted } from '@/lib/env/public-flags'
+import { UPGRADE_REASONS, type UpgradeReason } from '@/lib/entitlements/upgrade-reason'
 
 // What the paid tier unlocks: the external connections. One item per PAID
-// capability in lib/entitlements/keys.ts (ai, bank_sync, skatteverket,
-// email_send, and stripe_payments + woocommerce_sync + shopify_sync as one
-// "payments and webshop" item). Keep in step with PAID_CAPABILITIES when a
-// key is added.
-const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
+// capability in lib/entitlements/keys.ts (bank_sync, skatteverket,
+// email_send, and stripe_payments + woocommerce_sync + shopify_sync +
+// zettle_sync as one "payments and webshop" item). Keep in step with
+// PAID_CAPABILITIES when a key is added. Bank payments have no key of their
+// own (they ride bank_sync, lib/payments/orders/switched-on.ts) but get an
+// item of their own, under the name Kopplingar gives them: "Bankkoppling"
+// only says that transactions are fetched. collections and signing have
+// their own items (UNLOCK_COLLECTIONS_KEY, UNLOCK_SIGNING_KEY), listed only
+// where the feature is switched on for the viewing company, so merging them
+// shows nothing to anyone.
+//
+// ai is deliberately not listed (owner, 2026-10-22): the assistant is meant
+// to be sold as an add-on later, so the page does not promise it as part of
+// the subscription. The capability itself is still granted with it.
+const UNLOCK_KEYS = ['unlock_bank', 'unlock_bank_payments', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
+const UNLOCK_COLLECTIONS_KEY = 'unlock_collections'
+const UNLOCK_SIGNING_KEY = 'unlock_signing'
 
 // What stays without a subscription (the free plan card). Retention is the
 // last item and carries its own gloss.
@@ -36,7 +60,7 @@ const FREE_KEYS = ['free_bookkeeping', 'free_invoices', 'free_reports'] as const
 // but the first charge lands when the trial ends.
 const DEFER_THRESHOLD_MS = 49 * 3600 * 1000
 
-type BillingTab = 'plan' | 'receipts'
+type BillingTab = 'plan' | 'usage' | 'receipts'
 
 interface BillingView {
   isPaying: boolean
@@ -44,6 +68,15 @@ interface BillingView {
   trialEndsAt: string | null
   daysLeft: number | null
   chargeDeferred: boolean
+  /**
+   * Paying card: the first charge of a subscription started during the trial
+   * (Stripe 'trialing'). The sell view promised this date before checkout;
+   * null once the first charge is behind.
+   */
+  firstChargeAt: string | null
+  /** Paying card: the next renewal of an active subscription; null when a
+   *  cancellation is pending or Stripe could not confirm it. */
+  renewsAt: string | null
   paidJustNow: boolean
   isDemo: boolean
   /**
@@ -59,6 +92,13 @@ interface BillingView {
    * this state has paid, so the sell view is never rendered for them.
    */
   agreement: { until: string | null } | null
+  /**
+   * Paying card: what the company's own subscription costs per interval, SEK
+   * exkl. moms. A subscription started before the 2026-10-22 price change
+   * keeps its old Stripe price, so the card shows this and never the list
+   * price. null when unknown: the card then shows no amount at all.
+   */
+  subscriptionAmountExVat: number | null
 }
 
 /** Mirrors GET /api/billing/invoices. */
@@ -83,10 +123,10 @@ interface BillingReceipt {
  * (the Stripe invoices). The money terms are stated once each, in the card
  * footer where the decision is made.
  */
-export function BillingSettingsContent() {
+export function BillingSettingsContent({ reason = null }: { reason?: UpgradeReason | null }) {
   return (
     <>
-      <BillingCoreContent />
+      <BillingCoreContent reason={reason} />
       {/* Self-host only (renders null on hosted): connector status + manual
           entitlement sync. Sits below the billing states, which is why the
           core content is split out: it has an early return. */}
@@ -98,7 +138,7 @@ export function BillingSettingsContent() {
 function CheckItem({ label, gloss }: { label: string; gloss?: string }) {
   return (
     <li className="flex items-start gap-2 text-[13px]">
-      <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+      <CheckIcon aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
       <span>
         <span>{label}</span>
         {gloss && <span className="block text-xs text-muted-foreground">{gloss}</span>}
@@ -119,9 +159,10 @@ function PlanCard({
 }: {
   title: string
   headerEnd?: React.ReactNode
-  price: number
-  period: string
-  note: string
+  /** Left out when the amount is not known: no price line at all. */
+  price?: number
+  period?: string
+  note?: string
   items: React.ReactNode
   footer?: React.ReactNode
   current?: boolean
@@ -129,27 +170,47 @@ function PlanCard({
   return (
     <section
       className={cn(
-        'flex flex-col rounded-lg border p-6',
-        current ? 'border-foreground' : 'border-border',
+        'flex flex-col rounded-lg p-6 bg-control shadow-raised',
+        current && 'ring-[1.5px] ring-strong',
       )}
     >
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
         <h3 className="text-[13px] font-medium">{title}</h3>
         {headerEnd}
       </div>
-      <p className="mt-4 font-display text-3xl tabular-nums">
-        {formatCurrency(price)}
-        <span className="text-[15px] text-muted-foreground"> / {period}</span>
-      </p>
-      <p className="mt-1 text-xs tabular-nums text-muted-foreground">{note}</p>
-      <div className="my-6 border-t border-border" />
+      {price !== undefined && (
+        <>
+          <p className="mt-4 font-display text-3xl tabular-nums">
+            {formatCurrency(price)}
+            <span className="text-[15px] text-muted-foreground"> / {period}</span>
+          </p>
+          <p className="mt-1 text-xs tabular-nums text-muted-foreground">{note}</p>
+        </>
+      )}
+      <div className="my-6 border-t-hairline" />
       <ul className="space-y-3">{items}</ul>
       {footer && <div className="mt-auto pt-8">{footer}</div>}
     </section>
   )
 }
 
-function BillingCoreContent() {
+/**
+ * One calm line under the section title for someone a gated section sent
+ * here: it names what they clicked, so the page is not a surprise. Muted
+ * text, not the attn tone: it explains, it does not warn. Shown only while
+ * the company still lacks what the section needs (a link opened after
+ * upgrading says nothing), and never on a self-host, where there is no
+ * subscription to point at.
+ */
+function UpgradeReasonNote({ reason }: { reason: UpgradeReason }) {
+  const t = useTranslations('settings_billing')
+  const entry = UPGRADE_REASONS[reason]
+  const has = useCapability(entry.capability)
+  if (has || isSelfHosted()) return null
+  return <p className="mt-3 text-[13px] text-muted-foreground">{t(entry.messageKey)}</p>
+}
+
+function BillingCoreContent({ reason }: { reason: UpgradeReason | null }) {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_billing')
@@ -169,6 +230,30 @@ function BillingCoreContent() {
   // The receipts panel mounts on first open and then stays mounted, so
   // switching back and forth does not refetch.
   const [receiptsOpened, setReceiptsOpened] = useState(false)
+  const [usageOpened, setUsageOpened] = useState(false)
+  // A paying company sees its plan as one row; the two sales cards open
+  // behind "Jämför planer".
+  const [comparing, setComparing] = useState(false)
+  // Whether collections is switched on for this company (kill switch and
+  // pilot list): only then does the paid list name it. A failed read keeps it
+  // off, which is the merge-time state anyway.
+  const [collectionsOffered, setCollectionsOffered] = useState(false)
+  // Whether BankID signing is switched on for this company (its rollout and
+  // a wired provider), whatever its plan: the paid list names it only then.
+  const signingOffered = useSigningAvailability().offered
+
+  useEffect(() => {
+    let active = true
+    fetch('/api/collections/availability')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { data?: { enabled?: unknown; pilot?: unknown } } | null) => {
+        if (active) setCollectionsOffered(body?.data?.enabled === true && body.data.pilot === true)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -198,10 +283,13 @@ function BillingCoreContent() {
           isPaying?: unknown
           configured?: unknown
           trialEndsAt?: unknown
+          firstChargeAt?: unknown
+          renewsAt?: unknown
           isDemo?: unknown
           teamAgreement?: unknown
           coverage?: unknown
           subscriptionPlan?: unknown
+          subscriptionAmountExVat?: unknown
         }
         if (!active) return
         if (typeof d?.isPaying !== 'boolean' || typeof d?.configured !== 'boolean') {
@@ -214,6 +302,8 @@ function BillingCoreContent() {
         const msLeft = trialEndsAt ? new Date(trialEndsAt).getTime() - Date.now() : null
         const daysLeft = msLeft !== null ? Math.max(0, Math.ceil(msLeft / 86_400_000)) : null
         const chargeDeferred = msLeft !== null && msLeft > DEFER_THRESHOLD_MS
+        const firstChargeAt = typeof d.firstChargeAt === 'string' ? d.firstChargeAt : null
+        const renewsAt = typeof d.renewsAt === 'string' ? d.renewsAt : null
         // Set by the checkout success redirect. Provisioning happens via the
         // Stripe webhook, so isPaying can lag the redirect by a few seconds.
         const paidJustNow = new URLSearchParams(window.location.search).get('success') === '1'
@@ -239,10 +329,18 @@ function BillingCoreContent() {
           trialEndsAt,
           daysLeft,
           chargeDeferred,
+          firstChargeAt,
+          renewsAt,
           paidJustNow,
           isDemo: d.isDemo === true,
           teamAgreement,
           agreement,
+          subscriptionAmountExVat:
+            typeof d.subscriptionAmountExVat === 'number' &&
+            Number.isFinite(d.subscriptionAmountExVat) &&
+            d.subscriptionAmountExVat > 0
+              ? d.subscriptionAmountExVat
+              : null,
         })
       } catch {
         if (active) {
@@ -256,7 +354,12 @@ function BillingCoreContent() {
     return () => { active = false }
   }, [reloadKey, errorLocale])
 
-  const header = <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
+  const header = (
+    <>
+      <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
+      {reason && <UpgradeReasonNote reason={reason} />}
+    </>
+  )
 
   if (!view) {
     return (
@@ -298,32 +401,45 @@ function BillingCoreContent() {
     (view.isPaying || view.paidJustNow || view.teamAgreement !== null || view.agreement !== null)
   const selling = !view.isDemo && !covered
   const { trialEndsAt, daysLeft, chargeDeferred } = view
-  const price = PLAN_PRICES[plan]
-  const priceNote =
+  // Two prices, never mixed. A company that is not paying sees the list
+  // price, written like the website's price page: the monthly figure large
+  // and how it is billed underneath. A paying company sees what its own
+  // subscription costs, which for anyone who subscribed before 2026-10-22 is
+  // the old price. When that amount is unknown no amount is shown.
+  const listPrice = PLAN_PRICES[plan]
+  const listNote =
     plan === 'yearly'
-      ? t('price_note_yearly', { inc: formatCurrency(price.incVat), perMonth: formatCurrency(price.perMonthEquivalent) })
-      : t('price_note_monthly', { inc: formatCurrency(price.incVat) })
+      ? t('price_note_yearly_billed', { ex: formatCurrency(listPrice.exVat), inc: formatCurrency(listPrice.incVat) })
+      : t('price_note_monthly_billed', { inc: formatCurrency(listPrice.incVat) })
+  const paidPrice =
+    view.subscriptionAmountExVat !== null ? planPrice(plan, view.subscriptionAmountExVat) : null
+  const paidNote = paidPrice
+    ? plan === 'yearly'
+      ? t('price_note_yearly', { inc: formatCurrency(paidPrice.incVat), perMonth: formatCurrency(paidPrice.perMonthEquivalent) })
+      : t('price_note_monthly', { inc: formatCurrency(paidPrice.incVat) })
+    : null
+
+  // An active paid plan: one row with the plan, its price, the next charge
+  // when one is known, and the manage action. The cards are a comparison.
+  const planRow = view.isPaying && !view.isDemo
 
   let paidFooter: React.ReactNode = null
   if (view.isDemo) {
     // Demo accounts cannot check out: both cards, no CTA.
     paidFooter = null
   } else if (view.isPaying) {
-    paidFooter = (
-      <div className="flex flex-col items-center gap-3">
-        <BillingActions isPaying configured={view.configured} />
-        <p className="text-center text-xs text-muted-foreground">{t('manage_line')}</p>
-      </div>
-    )
+    // The plan row above the comparison carries the manage action, the
+    // first charge and the manage line.
+    paidFooter = null
   } else if (view.paidJustNow) {
     // Just returned from checkout but the webhook hasn't flipped isPaying
     // yet: confirm instead of re-showing the sell pitch to someone who paid.
     paidFooter = (
       <div className="space-y-1">
-        <p className="flex items-start gap-2 text-[13px]">
-          <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+        <div className="flex items-start gap-2 text-[13px]">
+          <CheckIcon aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
           <span>{t('paid_just_now')}</span>
-        </p>
+        </div>
         <p className="text-xs text-muted-foreground">{t('paid_just_now_note')}</p>
       </div>
     )
@@ -362,7 +478,7 @@ function BillingCoreContent() {
     )
   }
 
-  const planTab = (
+  const comparison = (
     <div>
       <div className="grid gap-4 sm:grid-cols-2">
         <PlanCard
@@ -400,15 +516,21 @@ function BillingCoreContent() {
               <Badge variant="outline">{t('your_plan')}</Badge>
             ) : undefined
           }
-          price={price.exVat}
-          period={t(`period_${plan}`)}
-          note={priceNote}
+          {...(covered
+            ? paidPrice && paidNote
+              ? { price: paidPrice.exVat, period: t(`period_${plan}`), note: paidNote }
+              : {}
+            : { price: listPrice.perMonthEquivalent, period: t('period_monthly'), note: listNote })}
           items={
             <>
               <CheckItem label={t('includes_free')} />
               {UNLOCK_KEYS.map((key) => (
                 <CheckItem key={key} label={t(key)} gloss={t(`${key}_gloss`)} />
               ))}
+              {collectionsOffered && (
+                <CheckItem label={t(UNLOCK_COLLECTIONS_KEY)} gloss={t(`${UNLOCK_COLLECTIONS_KEY}_gloss`)} />
+              )}
+              {signingOffered && <CheckItem label={t(UNLOCK_SIGNING_KEY)} gloss={t(`${UNLOCK_SIGNING_KEY}_gloss`)} />}
             </>
           }
           footer={paidFooter}
@@ -425,9 +547,52 @@ function BillingCoreContent() {
     </div>
   )
 
+  const planTab = planRow ? (
+    <div>
+      <SettingsRow label={t('paid_title')} help={t('manage_line')}>
+        <span className="tabular-nums">
+          {paidPrice ? `${formatCurrency(paidPrice.exVat)} / ${t(`period_${plan}`)}` : t(`interval_${plan}`)}
+        </span>
+        <SettingsRowEnd>
+          <BillingActions isPaying configured={view.configured} />
+        </SettingsRowEnd>
+        {paidNote && <SettingsRowNote className="basis-full tabular-nums">{paidNote}</SettingsRowNote>}
+        {/* Subscribed during the trial: the card is committed but not yet
+            charged, so say when, in the words the sell view used. */}
+        {view.firstChargeAt && (
+          <SettingsRowNote className="basis-full">
+            {t('first_charge_on', { date: formatDateLong(view.firstChargeAt) })}
+          </SettingsRowNote>
+        )}
+        {view.renewsAt && (
+          <SettingsRowNote className="basis-full">
+            {t('next_charge_on', { date: formatDateLong(view.renewsAt) })}
+          </SettingsRowNote>
+        )}
+      </SettingsRow>
+      <PaymentPacksRow />
+      <button
+        type="button"
+        onClick={() => setComparing((v) => !v)}
+        aria-expanded={comparing}
+        className="mt-4 inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground pointer-coarse:min-h-10"
+      >
+        {t('compare_plans')}
+        <ChevronDownIcon
+          className={cn('h-3.5 w-3.5 transition-transform duration-150', comparing && 'rotate-180')}
+          aria-hidden="true"
+        />
+      </button>
+      {comparing && <div className="mt-6 animate-fade-in">{comparison}</div>}
+    </div>
+  ) : (
+    comparison
+  )
+
   function selectTab(next: BillingTab) {
     setTab(next)
     if (next === 'receipts') setReceiptsOpened(true)
+    if (next === 'usage') setUsageOpened(true)
   }
 
   return (
@@ -437,6 +602,12 @@ function BillingCoreContent() {
       {/* An expired trial is consequential: one attn-tone sentence. The
           running countdown lives in the subscription card's footer. */}
       {selling && daysLeft === 0 && <AttnLine className="mt-3">{t('trial_ended')}</AttnLine>}
+      {/* A running trial: say plainly what happens when it ends (crm#1502).
+          The trial is a capability grant, not a Stripe subscription, so
+          nothing renews: only a checkout the owner starts creates one. */}
+      {selling && daysLeft !== null && daysLeft > 0 && (
+        <p className="mt-3 text-[13px] text-muted-foreground">{t('trial_end_free_note')}</p>
+      )}
 
       <SegmentedControl<BillingTab>
         className="mt-6"
@@ -445,6 +616,7 @@ function BillingCoreContent() {
         aria-label={t('tabs_label')}
         options={[
           { value: 'plan', label: t('tab_plan') },
+          { value: 'usage', label: t('tab_usage') },
           { value: 'receipts', label: t('tab_receipts') },
         ]}
       />
@@ -452,12 +624,58 @@ function BillingCoreContent() {
       <div role="tabpanel" className="mt-6" hidden={tab !== 'plan'}>
         {planTab}
       </div>
+      {usageOpened && (
+        <div role="tabpanel" className="mt-6" hidden={tab !== 'usage'}>
+          <UsagePanel />
+        </div>
+      )}
       {receiptsOpened && (
         <div role="tabpanel" className="mt-6" hidden={tab !== 'receipts'}>
           <ReceiptsPanel isPaying={view.isPaying} configured={view.configured} />
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The bank payments add-on under the plan (issue #132): the packs the
+ * company holds and, for the owner, Köp fler / Ändra. Rendered only where
+ * packs are sold and bank payments are open to the company; until an operator
+ * sets the pack price nothing shows.
+ */
+function PaymentPacksRow() {
+  const t = useTranslations('settings_billing')
+  const { formatDateLong } = useFormat()
+  const [buying, setBuying] = useState(false)
+  // The add-on row is extra: without the read the plan row stands alone.
+  const { view, reload } = usePaymentPacks(true)
+  const packs = view !== null && view !== 'failed' ? view : null
+
+  if (!packs?.offered) return null
+  const payments = packs.packs * packs.pack_size
+  return (
+    <SettingsRow label={t('packs_row_label')} help={t('packs_row_help', { size: packs.pack_size, base: packs.base_payments })}>
+      <span className="tabular-nums">{packs.packs > 0 ? t('packs_row_value', { packs: packs.packs, payments }) : t('packs_row_none')}</span>
+      {packs.can_buy && (
+        <SettingsRowEnd>
+          <Button variant="outline" onClick={() => setBuying(true)}>
+            {packs.packs > 0 ? t('packs_row_change') : t('packs_row_buy')}
+          </Button>
+        </SettingsRowEnd>
+      )}
+      {packs.can_buy && packs.pack_price_ex_vat !== null && (
+        <SettingsRowNote className="basis-full tabular-nums">
+          {t('packs_row_price', { price: formatCurrency(packs.pack_price_ex_vat), size: packs.pack_size })}
+        </SettingsRowNote>
+      )}
+      {packs.scheduled && (
+        <SettingsRowNote className="basis-full">
+          {t('packs_row_scheduled', { packs: packs.scheduled.packs, date: formatDateLong(packs.scheduled.at) })}
+        </SettingsRowNote>
+      )}
+      {buying && packs.can_buy && <BuyPaymentPacksDialog view={packs} onOpenChange={setBuying} onChanged={reload} />}
+    </SettingsRow>
   )
 }
 
@@ -514,7 +732,7 @@ function ReceiptsPanel({ isPaying, configured }: { isPaying: boolean; configured
     content = <p className="text-[13px] text-muted-foreground">{t('receipts_empty')}</p>
   } else {
     content = (
-      <div className="overflow-x-auto">
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -530,17 +748,17 @@ function ReceiptsPanel({ isPaying, configured }: { isPaying: boolean; configured
           <tbody className="stagger-enter">
             {receipts.map((r) => (
               <tr key={r.id} className="transition-colors duration-150 hover:bg-secondary/35">
-                <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{formatDate(r.created)}</td>
+                <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>{formatDate(r.created)}</td>
                 <td className={TD_CLASS}>{r.description ?? r.number ?? t('paid_title')}</td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-                  {formatCurrency(r.amountPaid, r.currency.toUpperCase())}
+                  {formatRowAmount(r.amountPaid, r.currency.toUpperCase())}
                 </td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                   {t(RECEIPT_STATUS_KEY[r.status] ?? 'receipt_status_open')}
                 </td>
-                <td className={cn(TD_CLASS, 'py-1 text-right')}>
+                <td className={cn(TD_CLASS, 'py-1 text-right date-figures')}>
                   {r.pdfUrl && (
-                    <Button variant="ghost" size="sm" asChild>
+                    <Button variant="ghost" asChild>
                       <a
                         href={r.pdfUrl}
                         target="_blank"
@@ -564,7 +782,7 @@ function ReceiptsPanel({ isPaying, configured }: { isPaying: boolean; configured
     <div>
       <div role="status" aria-live="polite">{content}</div>
       {isPaying && (
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-4">
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t-hairline pt-4">
           <span className="text-[13px]">{t('receipts_manage')}</span>
           <BillingActions isPaying configured={configured} />
         </div>

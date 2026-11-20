@@ -13,6 +13,9 @@
  * starts. An unattended agent loop therefore costs at most one sync per
  * connection per cooldown window, regardless of how often it asks.
  *
+ * The sync itself is runConnectionSync (run-connection-sync.ts), the same
+ * one the web routes and the cron run.
+ *
  * Failures are reported as codes, never thrown, so each surface maps them
  * to its own envelope (structured-errors.ts BANK_SYNC_*). A dead PSD2
  * session is flipped to 'expired' here exactly like the web route does:
@@ -23,20 +26,28 @@
  * lib/bank-sync/trigger-sync-contract.ts.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { syncAccountTransactions, type SyncOptions } from './sync'
+import { runConnectionSync } from './run-connection-sync'
 import {
   SessionExpiredError,
   AspspUnavailableError,
   ConnectorSyncError,
+  ProviderCredentialError,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
 } from './api-client'
+import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
 import { incrementalLookbackDays } from './cron-lookback'
 import { emitBankSyncFailed } from './sync-failure-event'
 import { applyRateLimitCooldown, claimSyncLease, rateLimitHoldUntil } from './sync-lease'
 import { retryAfterSeconds } from './rate-limit-message'
-import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
-import { isBankRoutingConflict } from '@/lib/bank-sync/ingest-route'
+import {
+  persistBankSyncFailure,
+  persistBankRouteNeedsConfiguration,
+  BankSyncResultObsoleteError,
+} from '@/lib/bank-sync/persist-sync-result'
+import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
+import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
+import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import { eventBus } from '@/lib/events/bus'
 import {
   SYNC_COOLDOWN_MS,
@@ -44,7 +55,6 @@ import {
   type TriggerSyncResult,
 } from '@/lib/bank-sync/trigger-sync-contract'
 import type { StoredAccount } from '../types'
-import type { Transaction } from '@/types'
 
 export { SYNC_COOLDOWN_MS }
 export type { TriggerSyncInput, TriggerSyncResult }
@@ -81,11 +91,25 @@ export async function triggerConnectionSync(
     )
     .eq('id', connectionId)
     .eq('company_id', companyId)
+    // An Open Payments connection is synced by lib/bank-feed/feed.ts; the v1
+    // route and the MCP tool fall through to it on NOT_FOUND.
+    .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
     .maybeSingle()
 
   if (connectionError) throw connectionError
   if (!connection) {
     return { ok: false, code: 'NOT_FOUND', connection_id: connectionId }
+  }
+
+  // The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts): the
+  // typed refusal, before any lease or bank call; the row is left as it is.
+  if (enableBankingSunset()) {
+    return {
+      ok: false,
+      code: 'ENABLE_BANKING_SUNSET',
+      connection_id: connectionId,
+      status: connection.status as string,
+    }
   }
 
   // 'error' is retryable (a transient upstream failure parks the row there
@@ -156,7 +180,8 @@ export async function triggerConnectionSync(
   const allAccounts = ((connection.accounts_data as StoredAccount[] | null) ?? []).map((a) => ({
     ...a,
   }))
-  const accounts = allAccounts.filter((a) => a.enabled !== false)
+  // Never a mirror card account, even one an old row still has switched on.
+  const accounts = allAccounts.filter(isSyncedAccount)
   if (accounts.length === 0) {
     return { ok: false, code: 'BANK_SYNC_NO_ACCOUNTS', connection_id: connectionId }
   }
@@ -181,68 +206,22 @@ export async function triggerConnectionSync(
   const syncStartedAt = new Date(now).toISOString()
 
   try {
-    // Same SIE-overlap guard as the web route and the cron: never
-    // auto-categorise into a range a completed SIE import already covers.
-    const { data: sieOverlap } = await supabase
-      .from('sie_imports')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('status', 'completed')
-      .gte('fiscal_year_end', fromDate)
-      .limit(1)
-      .maybeSingle()
-
-    const syncOptions: SyncOptions = {
-      ...(sieOverlap ? { skipAutoCategorization: true } : {}),
-      ...(isViewer ? { rawInsertOnly: true } : {}),
-      ...(lookbackDays >= 30 ? { strategy: 'longest' as const } : {}),
-    }
-
-    const results = await Promise.all(
-      accounts.map((account) =>
-        syncAccountTransactions(
-          supabase,
-          companyId,
-          userId,
-          connection.id as string,
-          account,
-          fromDate,
-          toDate,
-          undefined,
-          syncOptions,
-        ),
-      ),
-    )
-    const imported = results.reduce((sum, r) => sum + r.imported, 0)
-    const duplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
-
-    const syncedAt = new Date().toISOString()
-    await persistBankSyncResult(supabase, {
+    const { imported, duplicates, completedAt: syncedAt } = await runConnectionSync({
+      supabase,
       companyId,
-      connectionId: connection.id as string,
-      sessionId: connection.session_id as string | null,
-      startedAt: syncStartedAt,
-      completedAt: syncedAt,
+      userId,
+      connection: { id: connection.id as string, session_id: connection.session_id as string | null },
       accounts,
+      fromDate,
+      toDate,
+      lookbackDays,
+      rawInsertOnly: isViewer,
+      startedAt: syncStartedAt,
+      log,
     })
 
-    if (imported > 0) {
-      const { data: syncedTransactions } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('bank_connection_id', connection.id)
-        .gte('created_at', syncStartedAt)
-        .order('created_at', { ascending: false })
-        .limit(imported)
-      if (syncedTransactions && syncedTransactions.length > 0) {
-        await eventBus.emit({
-          type: 'transaction.synced',
-          payload: { transactions: syncedTransactions as Transaction[], userId, companyId },
-        })
-      }
-    }
-
+    // transaction.synced for the inserted rows is runConnectionSync's, as for
+    // every other door: announcing here as well would deliver them twice.
     log.info('agent-triggered bank sync completed', {
       connectionId,
       imported,
@@ -330,6 +309,18 @@ export async function triggerConnectionSync(
       }
     }
 
+    if (error instanceof ProviderCredentialError) {
+      // Enable Banking refused the application's credentials: about us, not
+      // this consent. The row is left alone and the answer is retryable.
+      log.warn('agent-triggered bank sync: application credentials refused', { connectionId, status: error.status })
+      return {
+        ok: false,
+        code: 'BANK_SYNC_FAILED',
+        connection_id: connectionId,
+        status: connection.status as string,
+      }
+    }
+
     if (error instanceof ConnectorSyncError) {
       // The connector hop failed: same treatment as the bank being
       // unavailable. The session is fine and the row is left alone.
@@ -345,6 +336,17 @@ export async function triggerConnectionSync(
         connection_id: connectionId,
         status: connection.status as string,
       }
+    }
+
+    // Retrying never fixes a stale account selection: store the picker
+    // advice on the row (status unchanged) so the settings panel shows it.
+    if (isBankRouteUnresolved(error)) {
+      await persistBankRouteNeedsConfiguration(supabase, { companyId, connectionId: connection.id as string }).catch(
+        (persistError: unknown) => log.warn('agent-triggered bank sync: could not store the account selection advice', {
+          connectionId,
+          message: persistError instanceof Error ? persistError.message : String(persistError),
+        }),
+      )
     }
 
     log.error('agent-triggered bank sync failed', {

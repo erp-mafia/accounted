@@ -35,11 +35,6 @@ export function isArkivBrainEnabled(companyId: string | null | undefined): boole
   return rollout === 'all' || rollout.includes(companyId)
 }
 
-/** The shelf: every company. Kept as a function so a caller reads as a gate; a company id is still required. */
-export function isArkivEnabled(companyId: string | null | undefined): boolean {
-  return !!companyId
-}
-
 /** The companies that see the Dokument section in the app: ARKIV_COMPANY_IDS, ids or `*`, unset = nobody. */
 export function arkivSectionRollout(): 'all' | string[] {
   const raw = process.env.ARKIV_COMPANY_IDS?.trim()

@@ -134,8 +134,11 @@ Call \`gnubok_create_company\` WITHOUT \`confirm\`. Read the preview back in
 plain Swedish (form, orgnr, fiscal period dates, VAT + period, method).
 After the user's "ja": call it again with \`confirm: true\`, and in the SAME
 turn continue with step 3 or 4. Creation sets up chart, settings, first
-fiscal period, tax deadlines, and starts the 30-day trial; the connection
-uses the new company automatically.
+fiscal period, tax deadlines, and starts the 30-day trial. For the user's
+first company the connection uses it automatically; when they already have
+one, that stays the default and the result says so: pass the new
+\`company_id\` on every later call, \`gnubok_create_sie_upload\` included
+(its card imports into the company it names).
 
 ## Step 3 (existing bookkeeping): import it FIRST
 
@@ -150,8 +153,11 @@ reaches far enough back anyway.
      card (same feel as bank/Skatteverket) whose button opens the wizard
      that logs into the old system and fetches the three latest fiscal
      years by default (older years can be ticked in the wizard; they take
-     longer) PLUS invoices, customers, suppliers and documents: recommend
-     it when they have open fakturor or want underlag along. The QUICK path is a SIE
+     longer) PLUS invoices, customers and suppliers. Fortnox underlag
+     follow in a step of their own there ("Hämta underlag", one more
+     Fortnox approval for file access; gnubok_connect_migration says if it
+     ran); the others bring none. Recommend it when they have open
+     fakturor or want underlag along. The QUICK path is a SIE
      export dropped here (Fortnox: Register → Exportera → SIE 4): ledger
      only, fastest. Either way the result lands in the same books.
    - **Visma eEkonomi / Bokio**: no API export exists; ask for the SIE
@@ -166,7 +172,8 @@ reaches far enough back anyway.
    DRAG-AND-DROP card: the user drops the file on it and the card itself
    runs the preflight and stages the import with exact bytes; you only
    narrate the verdict and handle the approval. Without the card: PUT the
-   raw bytes to \`upload_url\` (from your code sandbox), compute sha256,
+   raw bytes to \`upload_url\` with the headers in \`upload_headers\` (from
+   your code sandbox), compute sha256,
    and call \`gnubok_sie_preflight\` with \`upload_id\` + \`sha256\` +
    \`filename\`; smaller files may go inline as \`file_content_base64\` +
    \`sha256\`. NEVER reproduce a large file token by token: unhashed
@@ -186,6 +193,15 @@ reaches far enough back anyway.
    upload path works; Fortnox users can also run the full API migration
    (invoices, customers, documents) at
    \`/import?mode=migration&provider=fortnox\`.
+5. Still booking in the old system for a while: import the current year
+   now and a newer SIE export of the SAME year later. Nothing is booked
+   twice: the preflight answers \`duplicate\` with \`append\` (already
+   booked vs new verifikat, matched by the old system's series and number),
+   and the card's button or \`gnubok_import_sie\` with
+   \`on_existing_year='append'\` adds only the new ones as their own batch.
+   A verifikat changed in the old system since, or another IB, refuses the
+   whole top-up: replacing the year is then the user's call. Never undo the
+   first import to re-import the year.
 
 ## Step 4: connect bank and Skatteverket (together, no pause)
 
@@ -218,6 +234,18 @@ even connects.
   (skattefri intäktsränta) or 6992 (ej avdragsgilla avgifter), create
   them NOW so tax payments and fees book correctly from the first sync.
 - Voucher gaps: explain each with \`gnubok_explain_voucher_gap\`.
+- Open customer invoices from the old system (its kundreskontra, often a
+  PDF) when no migration wizard brings them: register each with
+  \`gnubok_register_booked_invoice\` against the verifikat the SIE import
+  brought, never \`gnubok_create_invoice\` (a new number, and the revenue
+  and moms booked a second time). Attach each invoice PDF to the same
+  verifikat, then check the kundreskontra against 1510.
+- Open supplier invoices the same way (its leverantörsreskontra): register
+  each with \`gnubok_register_booked_supplier_invoice\` against the
+  verifikat that credits 2440, never \`gnubok_create_supplier_invoice_from_inbox\`
+  (the cost and moms booked a second time). To keep the old ankomstnummer,
+  set next_arrival_number past the old series first. Then check the
+  leverantörsreskontra against 2440.
 
 ## Step 4b: after the connections: reconcile (this is where trust is won)
 
@@ -257,6 +285,8 @@ message instead of making them ask.
 - \`gnubok_create_sie_upload\`: byte-exact upload URL for the SIE file
 - \`gnubok_sie_preflight\`: scan a shared SIE file, nothing written
 - \`gnubok_import_sie\`: staged import; use the preflight's mappings
+- \`gnubok_register_booked_invoice\`: an open invoice the SIE import already booked, into the kundreskontra (staged, posts nothing)
+- \`gnubok_register_booked_supplier_invoice\`: the same for an open supplier invoice, into the leverantörsreskontra
 - \`gnubok_connect_bank\` / \`gnubok_connect_skatteverket\`: status + connect links
 - \`gnubok_connect_migration\`: connect card into the previous-system wizard
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`: state checks

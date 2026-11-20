@@ -3,10 +3,24 @@ import type {
   VatDeclaration,
   VatDeclarationRutor,
   VatPeriodType,
+  VatRevenueAccountWithoutRuta,
+  VatAccountWithoutRuta,
 } from '@/types'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
+import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
 import { rcBasisTotalsByRate } from './vat-filing-gate'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
+import { createLogger } from '@/lib/logger'
+import { calculatePeriodDates, fiscalPeriodForVatYear } from './period-dates'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+
+const log = createLogger('reports/vat-declaration')
+
+// Calendar period bounds are shared with periodisk sammanställning; re-exported
+// because callers have always imported them from here.
+export { calculatePeriodDates }
 
 /**
  * Calculate VAT declaration (Momsdeklaration) for a given period.
@@ -21,129 +35,23 @@ import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-
  */
 
 /**
- * Account-to-ruta mapping for the Swedish momsdeklaration (SKV 4700).
+ * Account-to-ruta mapping for the Swedish momsdeklaration (SKV 4700): the
+ * declared rows of VAT_ACCOUNT_TABLE (lib/vat/moms-box-mapping.ts, where the
+ * accounts and their rutor are listed and explained), keyed by ruta field.
  *
  * Pure ledger projection: every Ruta on the SKV 4700 form maps to one or more
- * BAS account balances aggregated over the period. The mapping below follows
- * the BAS 2026 chart and Skatteverket's published BAS-to-Ruta spec
- * (`.claude/skills/swedish-vat/references/vat-compliance-reference.md` §7).
- *
- * Output VAT (261x/262x/263x) → ruta 10/11/12 per rate (credit balance)
- *   Includes parent/summary accounts (2610/2620/2630) for users who post
- *   directly to the group account, and vilande accounts (2618/2628/2638)
- *   used by cash-method bookkeepers for invoices not yet paid.
- * Reverse charge output (2614/2624/2634) → ruta 30/31/32 (credit)
- * Import VAT (2615/2625/2635) → ruta 60/61/62 (credit)
- * Input VAT (2640-2649) → ruta 48 (debit), incl. parent 2640
- * Domestic taxable sales (3000-3003) → ruta 05 (credit)
- *   The company's OWN class 3 accounts marked with a moms-sats join ruta 05 on
- *   top of this fixed list: see fetchDynamicRuta05Accounts (#1261). This map
- *   only covers the accounts Accounted itself seeds.
- * Uttag (3401-3403) → ruta 06 (credit)
- * EU goods (3108) → ruta 35; EU services (3308) → ruta 39 (credit)
- * Export (3105/3305) → ruta 36/40; Exempt (3004/3100/3404/3994/3980) → ruta 42 (credit)
- * Reverse-charge purchase bases: read from the cost account the journal
- * entry posted to (debit balance), not from supplier classification:
- *   4515/4516/4517 (EU goods 25/12/6%) → ruta 20
- *   4535/4536/4537 (EU services 25/12/6%) → ruta 21
- *   4531/4532/4533 (non-EU services 25/12/6%) → ruta 22
- *   4415/4416/4417 (domestic goods reverse charge) → ruta 23
- *   4425/4426/4427 (domestic services reverse charge) → ruta 24
- *   4545/4546/4547 (import) → ruta 50
+ * BAS account balances aggregated over the period. Reverse-charge purchase
+ * bases are read from the cost account the journal entry posted to (debit
+ * balance), not from supplier classification. The company's OWN class 3
+ * accounts marked with a moms-sats join ruta 05 on top of this fixed list: see
+ * fetchDynamicRuta05Accounts (#1261).
  */
-export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side: 'credit' | 'debit' }> = {
-  // Output VAT 25% → ruta 10
-  '2610': { box: 'ruta10', side: 'credit' },  // Utgående moms 25% (summary/parent)
-  '2611': { box: 'ruta10', side: 'credit' },  // Försäljning inom Sverige
-  '2612': { box: 'ruta10', side: 'credit' },  // Egna uttag
-  '2613': { box: 'ruta10', side: 'credit' },  // Uthyrning (frivillig skattskyldighet)
-  '2616': { box: 'ruta10', side: 'credit' },  // Vinstmarginalbeskattning
-  '2618': { box: 'ruta10', side: 'credit' },  // Vilande utgående moms 25%
-  // Output VAT 12% → ruta 11
-  '2620': { box: 'ruta11', side: 'credit' },  // Utgående moms 12% (summary/parent)
-  '2621': { box: 'ruta11', side: 'credit' },
-  '2622': { box: 'ruta11', side: 'credit' },  // Egna uttag
-  '2623': { box: 'ruta11', side: 'credit' },  // Uthyrning
-  '2626': { box: 'ruta11', side: 'credit' },  // VMB
-  '2628': { box: 'ruta11', side: 'credit' },  // Vilande utgående moms 12%
-  // Output VAT 6% → ruta 12
-  '2630': { box: 'ruta12', side: 'credit' },  // Utgående moms 6% (summary/parent)
-  '2631': { box: 'ruta12', side: 'credit' },
-  '2632': { box: 'ruta12', side: 'credit' },  // Egna uttag
-  '2633': { box: 'ruta12', side: 'credit' },  // Uthyrning
-  '2636': { box: 'ruta12', side: 'credit' },  // VMB
-  '2638': { box: 'ruta12', side: 'credit' },  // Vilande utgående moms 6%
-  // Reverse charge output VAT → ruta 30/31/32
-  '2614': { box: 'ruta30', side: 'credit' },
-  '2624': { box: 'ruta31', side: 'credit' },
-  '2634': { box: 'ruta32', side: 'credit' },
-  // Input VAT → ruta 48
-  '2640': { box: 'ruta48', side: 'debit' },   // Ingående moms (summary/parent)
-  '2641': { box: 'ruta48', side: 'debit' },   // Debiterad ingående moms
-  '2642': { box: 'ruta48', side: 'debit' },   // Frivillig skattskyldighet
-  '2645': { box: 'ruta48', side: 'debit' },   // Förvärv utlandet (EU/non-EU RC)
-  '2646': { box: 'ruta48', side: 'debit' },   // Uthyrning
-  '2647': { box: 'ruta48', side: 'debit' },   // Omvänd skattskyldighet i Sverige
-  '2648': { box: 'ruta48', side: 'debit' },   // Vilande ingående moms vid bokslut
-  '2649': { box: 'ruta48', side: 'debit' },   // Blandad verksamhet
-  // Import VAT (since 2015, via momsdeklaration) → ruta 60/61/62
-  '2615': { box: 'ruta60', side: 'credit' },  // Import 25%
-  '2625': { box: 'ruta61', side: 'credit' },  // Import 12%
-  '2635': { box: 'ruta62', side: 'credit' },  // Import 6%
-  // Revenue: domestic taxable sales → ruta 05
-  '3000': { box: 'ruta05', side: 'credit' },  // Försäljning inom Sverige (summary/parent)
-  '3001': { box: 'ruta05', side: 'credit' },
-  '3002': { box: 'ruta05', side: 'credit' },
-  '3003': { box: 'ruta05', side: 'credit' },
-  // Revenue: momspliktiga uttag → ruta 06
-  '3401': { box: 'ruta06', side: 'credit' },
-  '3402': { box: 'ruta06', side: 'credit' },
-  '3403': { box: 'ruta06', side: 'credit' },
-  // Revenue: EU goods/services → ruta 35/39
-  '3108': { box: 'ruta35', side: 'credit' },  // Varuförsäljning till EU
-  // Trepartshandel. Adding these two also widens p_ruta_accounts below, which
-  // is the settlement SHAPE detector: an entry touching one of them AND
-  // 2650/1650 is now classified a momsredovisning and dropped from the totals.
-  // Accepted because the scheme carries no VAT, so such a voucher has no
-  // reason to touch the clearing account, and every other revenue account in
-  // this table already lives with the same rule.
-  '3107': { box: 'ruta38', side: 'credit' },  // Mellanmans försäljning, trepartshandel
-  '3308': { box: 'ruta39', side: 'credit' },  // Tjänsteförsäljning till EU
-  // Revenue: export/other → ruta 36/40/42
-  '3105': { box: 'ruta36', side: 'credit' },  // Varuförsäljning export
-  '3305': { box: 'ruta40', side: 'credit' },  // Tjänsteförsäljning export
-  '3004': { box: 'ruta42', side: 'credit' },  // Momsfri försäljning (AB)
-  '3100': { box: 'ruta42', side: 'credit' },  // Momsfria intäkter (EF)
-  '3404': { box: 'ruta42', side: 'credit' },  // Momsfria uttag
-  '3980': { box: 'ruta42', side: 'credit' },  // Erhållna offentliga stöd m.m.
-  '3994': { box: 'ruta42', side: 'credit' },  // Övriga rörelseintäkter momsfria
-  // Revenue: omvänd skattskyldighet inom Sverige → ruta 41. The seller books
-  // NO output VAT (the buyer accounts for it via rutor 23-24/30-32), so these
-  // deliberately stay OUT of the ruta 05-08 vs 10-12 pairing checks.
-  '3231': { box: 'ruta41', side: 'credit' },  // Försäljning byggsektorn, omvänd betalningsskyldighet
-  '3232': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga (skrot m.m.)
-  '3233': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga
-  // Reverse-charge purchase bases (debit on cost accounts) → ruta 20-24, 50
-  '4512': { box: 'ruta37', side: 'debit' },   // Mellanmans inköp, trepartshandel
-  '4515': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 25%
-  '4516': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 12%
-  '4517': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 6%
-  '4535': { box: 'ruta21', side: 'debit' },   // Inköp tjänster EU 25%
-  '4536': { box: 'ruta21', side: 'debit' },   // Inköp tjänster EU 12%
-  '4537': { box: 'ruta21', side: 'debit' },   // Inköp tjänster EU 6%
-  '4531': { box: 'ruta22', side: 'debit' },   // Inköp tjänster utanför EU 25%
-  '4532': { box: 'ruta22', side: 'debit' },   // Inköp tjänster utanför EU 12%
-  '4533': { box: 'ruta22', side: 'debit' },   // Inköp tjänster utanför EU 6%
-  '4415': { box: 'ruta23', side: 'debit' },   // Inköp varor SE reverse charge 25%
-  '4416': { box: 'ruta23', side: 'debit' },   // Inköp varor SE reverse charge 12%
-  '4417': { box: 'ruta23', side: 'debit' },   // Inköp varor SE reverse charge 6%
-  '4425': { box: 'ruta24', side: 'debit' },   // Inköp tjänster SE reverse charge 25%
-  '4426': { box: 'ruta24', side: 'debit' },   // Inköp tjänster SE reverse charge 12%
-  '4427': { box: 'ruta24', side: 'debit' },   // Inköp tjänster SE reverse charge 6%
-  '4545': { box: 'ruta50', side: 'debit' },   // Beskattningsunderlag import 25%
-  '4546': { box: 'ruta50', side: 'debit' },   // Beskattningsunderlag import 12%
-  '4547': { box: 'ruta50', side: 'debit' },   // Beskattningsunderlag import 6%
-}
+export const ACCOUNT_RUTA: Readonly<Record<string, { box: keyof VatDeclarationRutor; side: 'credit' | 'debit' }>> =
+  Object.fromEntries(
+    Object.entries(VAT_ACCOUNT_TABLE)
+      .filter(([, row]) => row.declared !== false)
+      .map(([account, row]) => [account, { box: `ruta${row.box}` as keyof VatDeclarationRutor, side: row.side }]),
+  )
 
 /**
  * The fixed BAS accounts that define a momsdeklaration line, and with it the
@@ -184,64 +92,6 @@ export const VAT_INPUT_ACCOUNTS = Object.entries(ACCOUNT_RUTA)
  * on one side without the other fails there.
  */
 export const RC_INPUT_VAT_ACCOUNTS = ['2645', '2647'] as const
-
-/**
- * Calculate period start and end dates
- */
-export function calculatePeriodDates(
-  periodType: VatPeriodType,
-  year: number,
-  period: number
-): { start: string; end: string } {
-  let startMonth: number
-  let endMonth: number
-
-  switch (periodType) {
-    case 'monthly':
-      // period is 1-12
-      startMonth = period
-      endMonth = period
-      break
-    case 'quarterly':
-      // period is 1-4
-      startMonth = (period - 1) * 3 + 1
-      endMonth = period * 3
-      break
-    case 'yearly':
-      // period is 1
-      startMonth = 1
-      endMonth = 12
-      break
-    default:
-      startMonth = 1
-      endMonth = 12
-  }
-
-  const startDate = new Date(year, startMonth - 1, 1)
-  const endDate = new Date(year, endMonth, 0) // Last day of end month
-
-  return {
-    start: formatDate(startDate),
-    end: formatDate(endDate),
-  }
-}
-
-/**
- * Format date as YYYY-MM-DD
- */
-function formatDate(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-/**
- * Round to 2 decimal places
- */
-function round(value: number): number {
-  return Math.round(value * 100) / 100
-}
 
 /**
  * Resolve the start/end dates for a VAT period.
@@ -293,15 +143,17 @@ export async function resolvePeriodDates(
       // calendar-year assumption would put both the redovisningsperiod and
       // the figures on the wrong period. For calendar-FY companies this
       // resolves to Jan-Dec of `year`, identical to the arithmetic fallback.
-      const { data: fp } = await supabase
+      // The year the picker names (fiscalPeriodForVatYear); one that has not
+      // started only when nothing else ends in `year`.
+      const { data: endingInYear } = await supabase
         .from('fiscal_periods')
         .select('period_start, period_end')
         .eq('company_id', companyId)
         .gte('period_end', `${year}-01-01`)
         .lte('period_end', `${year}-12-31`)
         .order('period_end', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      const candidates = (endingInYear ?? []) as { period_start: string; period_end: string }[]
+      const fp = fiscalPeriodForVatYear(candidates, year, todayIsoStockholm()) ?? candidates[0]
       if (fp?.period_start && fp?.period_end) {
         return { start: fp.period_start, end: fp.period_end, source: 'fiscal_period' }
       }
@@ -324,95 +176,27 @@ export async function resolvePeriodDates(
 export const VAT_SETTLEMENT_NET_ACCOUNTS = ['2650', '1650']
 
 /**
- * Accounts a VAT account can be moved against WITHOUT passing 2650/1650, for
- * the second momsredovisning shape (#2805). 1630 is the ledger mirror of the
- * skattekonto at Skatteverket: companies that never use the redovisningskonto
- * settle or receive VAT straight against it (2611 D / 1630 K, 1630 D / 2641 K),
- * and a Skatteverket omprövning credited to the skattekonto gets booked the
- * same way (1630 D / 2610 K). None of that is a sale or a purchase.
- *
- * MIRRORS the `tax_shape_constants` CTE in
- * supabase/migrations/20260920182259_vat_exclude_skattekonto_counter_entries.sql,
- * which both get_vat_declaration_totals and get_vat_ruta_source_lines carry.
- * The SQL holds its own literals on purpose: a new RPC parameter would break
- * the already-deployed app in the window between migration and deploy. Change
- * one side and you must change the other, in a NEW migration.
+ * BAS 26xx, the moms accounts: what the SQL's tax-account shape reads as VAT
+ * (vat_account_pattern '26%' in get_vat_declaration_totals). A momsredovisning
+ * clears these; 2650 among them is the net it settles to.
  */
-export const VAT_TAX_ACCOUNT_COUNTERPARTS = ['1630']
+export function isMomsAccount(account: string): boolean {
+  return account.startsWith('26')
+}
 
 /**
- * 3740 (öres- och kronutjämning): the only line besides 26xx and the
- * skattekonto that a verifikat of the second shape may carry. Same mirror rule
- * as VAT_TAX_ACCOUNT_COUNTERPARTS.
- */
-export const VAT_SHAPE_ROUNDING_ACCOUNTS = ['3740']
-
-/**
- * BAS 26xx, the moms accounts. The second shape needs a declaration account IN
- * this class (the 3xxx/4xxx beskattningsunderlag accounts of ACCOUNT_RUTA do
- * not qualify) and tolerates any other 26xx line. `'26%'` in the SQL.
- */
-export const VAT_ACCOUNT_CLASS_PREFIX = '26'
-
-/**
- * How an entry was recognised as a momsredovisning:
+ * How a verifikat kept out of the rutor was recognised as a momsredovisning,
+ * as the MCP VAT report labels it:
  *   - `tagged`: source_type 'vat_settlement';
  *   - `net_account_shape`: a declaration account AND a 2650/1650 line;
  *   - `tax_account_shape`: a pure 26xx / skattekonto (/ 3740) verifikat.
+ * The classification itself is get_vat_declaration_totals' (migration
+ * 20260920182259); no TypeScript copy decides a posted verifikat. The one
+ * restatement, momsredovisningShapeOfLines in lib/vat/voucher-vat-impact.ts, answers
+ * for a voucher not posted yet (the staged create_voucher preview, crm#1447):
+ * a change to the shapes in SQL changes it too.
  */
 export type MomsredovisningDetection = 'tagged' | 'net_account_shape' | 'tax_account_shape'
-
-const DECLARATION_ACCOUNT_SET: ReadonlySet<string> = new Set(Object.keys(ACCOUNT_RUTA))
-
-/**
- * Classify one verifikat from its source_type and the account numbers of ALL
- * its lines. Returns null when the entry is ordinary VAT-bearing activity that
- * belongs in the rutor.
- *
- * This is the TypeScript mirror of the exclusion predicate in
- * get_vat_declaration_totals / get_vat_ruta_source_lines (migration
- * 20260920182259). The web report never calls it: the SQL decides there. It
- * exists for callers that already hold every line of every entry in memory
- * (the MCP VAT report), so they apply the same rule instead of a third one.
- *
- * `lineAccounts` must be every line of the entry, not a filtered subset: the
- * second shape is a purity test, and a missing cost line would turn a business
- * verifikat (5410 D / 2641 D / 1630 K) into a false momsredovisning.
- */
-export function detectMomsredovisning(
-  sourceType: string | null | undefined,
-  lineAccounts: Iterable<string>,
-): MomsredovisningDetection | null {
-  if (sourceType === 'vat_settlement') return 'tagged'
-  // Carried-in 26xx balances are unsettled VAT that belongs in the next
-  // declaration, whatever else the opening balance touches.
-  if (sourceType === 'opening_balance') return null
-
-  let hasDeclarationAccount = false
-  let hasDeclarationVatAccount = false
-  let hasNetAccount = false
-  let hasTaxAccount = false
-  let pure = true
-  for (const account of lineAccounts) {
-    const isVatClass = account.startsWith(VAT_ACCOUNT_CLASS_PREFIX)
-    if (DECLARATION_ACCOUNT_SET.has(account)) {
-      hasDeclarationAccount = true
-      if (isVatClass) hasDeclarationVatAccount = true
-    }
-    if (VAT_SETTLEMENT_NET_ACCOUNTS.includes(account)) hasNetAccount = true
-    const isTaxAccount = VAT_TAX_ACCOUNT_COUNTERPARTS.includes(account)
-    if (isTaxAccount) hasTaxAccount = true
-    if (!isVatClass && !isTaxAccount && !VAT_SHAPE_ROUNDING_ACCOUNTS.includes(account)) {
-      pure = false
-    }
-  }
-
-  if (hasDeclarationAccount && hasNetAccount) return 'net_account_shape'
-  if (hasDeclarationVatAccount && hasTaxAccount && !hasNetAccount && pure) {
-    return 'tax_account_shape'
-  }
-  return null
-}
 
 /** A momsredovisning entry detected by shape rather than source_type. */
 export interface VatSettlementShapedEntry {
@@ -441,6 +225,20 @@ export interface VatAccountTotals {
    * longer needs its own paginated entry scan.
    */
   sourceTypeCounts: Record<string, number>
+  /**
+   * The opening balances this period's declaration counts (crm#1333): an IB
+   * dated inside the period with nothing of the period before it in the
+   * books. The SQL decides; the momsredovisning matcher reads it
+   * (carriedIntoPeriod). Empty when the deployed function predates the key.
+   */
+  countedOpeningBalances: CountedOpeningBalance[]
+}
+
+/** An opening balance a period's declaration counts. */
+export interface CountedOpeningBalance {
+  id: string
+  status: string
+  entry_date: string
 }
 
 /** Wire shape of the get_vat_declaration_totals RPC jsonb payload. */
@@ -448,13 +246,21 @@ interface VatTotalsRpcPayload {
   totals: Array<{ account_number: string; debit: number; credit: number }>
   settlement_shaped_entries: VatSettlementShapedEntry[]
   source_type_counts: Record<string, number>
+  counted_opening_balances?: CountedOpeningBalance[]
 }
 
 /**
  * Fetch and aggregate debit/credit totals per VAT-relevant account
- * (ACCOUNT_RUTA) for a period. Shared by the declaration calculation and the
- * settlement proposal (lib/reports/vat-settlement.ts) so the two can never
- * disagree on which ledger lines count.
+ * (ACCOUNT_RUTA) for a period. Shared by the declaration calculation, the
+ * settlement proposal (lib/reports/vat-settlement.ts) and the MCP VAT report
+ * and close check, so none of them can disagree on which ledger lines count.
+ * Never re-derive this from a journal scan: a second definition is how the
+ * MCP report came to count the bokslutsverifikat (crm#1139).
+ *
+ * The period's posted closing entry (fiscal_periods.closing_entry_id) is
+ * excluded: it moves the class 3-8 balances to equity (2099/2010), which is no
+ * sale or purchase, and counting it zeroes ruta 05 and rutor 20-24 once a year
+ * is closed.
  *
  * Momsredovisning entries are excluded. They are bookkeeping about the
  * declaration, not VAT-bearing business activity; including them would zero
@@ -473,21 +279,30 @@ interface VatTotalsRpcPayload {
  *     annullera). Deliberately broad: every arithmetic narrowing tried against
  *     production broke real settlements (#2805), so it stays as it is;
  *   - tax-account shape (#2805): an entry with a 26xx declaration account and
- *     a skattekonto line (VAT_TAX_ACCOUNT_COUNTERPARTS), no 2650/1650 line,
+ *     a skattekonto line (1630), no 2650/1650 line,
  *     and NOTHING else but 26xx and 3740. VAT settled, refunded or reassessed
  *     straight against 1630 is a movement between a VAT account and the
  *     skattekonto, not a sale or a purchase. Purity is what keeps business
  *     verifikat in: 1630 D / 3980 K (a bidrag) and 5410 D / 2641 D / 1630 K
  *     still count.
  *
- * Opening-balance entries are exempt from both shape rules: 26xx balances
- * carried in by a migrating company are unsettled VAT that belongs in the
- * next declaration, even when the same entry carries a 2650/1650 balance.
+ * Opening balances (crm#1333). For a company that keeps books, VAT belongs
+ * to the period in which it is booked or should have been booked under god
+ * redovisningssed (ML 2023:200 7 kap. 14 § output, 31 § input; SFL 26 kap.
+ * 5 § 2 st., 10-11 §§). An IB dated on the period's first day carries only
+ * earlier periods, so it never counts. One dated inside the period counts
+ * only when the books hold no other verifikat of the period before it (a
+ * migration mid-period: the IB is the only carrier of those days' VAT); with
+ * them in the books (the year-end roll-forward into a räkenskapsår starting
+ * mid-period, an import that brought them) it would count them twice. A
+ * storno or rättelse follows the IB at the root of its reverses_id /
+ * correction_of_id chain, and a counted chain stays out of the shapes, so a
+ * corrected IB nets to nothing instead of its storno passing for a
+ * momsredovisning.
  *
  * The shapes cannot tell a settlement from a business verifikat that happens
  * to touch 2650 (a supplier invoice with input VAT booked against 2650, say).
  * No rule separates that tail; it needs an explicit per-entry override.
- * detectMomsredovisning() above is the TypeScript mirror of the predicate.
  */
 export async function fetchVatAccountTotals(
   supabase: SupabaseClient,
@@ -536,22 +351,51 @@ export async function fetchVatAccountTotals(
     totals,
     settlementShapedEntries: payload.settlement_shaped_entries ?? [],
     sourceTypeCounts: payload.source_type_counts ?? {},
+    countedOpeningBalances: payload.counted_opening_balances ?? [],
   }
 }
 
 /**
- * Map aggregated per-account totals to the momsdeklaration boxes, including
- * the recomputed ruta 49 net (FK009). Pure projection over ACCOUNT_RUTA plus
- * the company's own ruta 05 accounts (fetchDynamicRuta05Accounts).
- *
- * `dynamicRuta05Accounts` is optional so callers that only need the 26xx boxes
- * keep working untouched: ruta 05 is a beskattningsunderlag, not moms, so it
- * never reaches ruta 49 and the settlement proposal nets the same either way.
+ * The rutor ruta 49 nets (FK009): summaMoms = (10 + 11 + 12 + 30 + 31 + 32 +
+ * 60 + 61 + 62) - 48, as box and sign. rutorFromTotals spells the same sum
+ * out; a breakdown of ruta 49 by account (the vat_payable measure,
+ * lib/measures) reads it from here, and a test there pins the two together.
  */
-export function rutorFromTotals(
+export const RUTA_49_TERMS: ReadonlyArray<{ box: keyof VatDeclarationRutor; sign: 1 | -1 }> = [
+  { box: 'ruta10', sign: 1 },
+  { box: 'ruta11', sign: 1 },
+  { box: 'ruta12', sign: 1 },
+  { box: 'ruta30', sign: 1 },
+  { box: 'ruta31', sign: 1 },
+  { box: 'ruta32', sign: 1 },
+  { box: 'ruta60', sign: 1 },
+  { box: 'ruta61', sign: 1 },
+  { box: 'ruta62', sign: 1 },
+  { box: 'ruta48', sign: -1 },
+]
+
+/** One account's balance as it lands in one ruta, unrounded. */
+export interface VatRutaContribution {
+  account_number: string
+  box: keyof VatDeclarationRutor
+  side: 'credit' | 'debit'
+  /** The account's balance on its ruta's side: credit - debit for 'credit'. */
+  amount: number
+}
+
+type DynamicRutaAccounts = Pick<DynamicVatAccounts, 'mappingByAccount' | 'explicitAccounts'> | string[]
+
+/**
+ * What each account adds to its ruta, in the order rutorFromTotals adds it:
+ * the fixed BAS map (ACCOUNT_RUTA) first, minus the accounts the company
+ * classified itself, then the company's own classification. rutorFromTotals
+ * is a fold over this list, so a breakdown read from it cannot disagree with
+ * the filed rutor.
+ */
+export function vatRutaContributions(
   totals: Map<string, { debit: number; credit: number }>,
-  dynamicVatAccounts?: Pick<DynamicVatAccounts, 'mappingByAccount' | 'explicitAccounts'> | string[],
-): VatDeclarationRutor {
+  dynamicVatAccounts?: DynamicRutaAccounts,
+): VatRutaContribution[] {
   const dynamic = Array.isArray(dynamicVatAccounts)
     ? {
         mappingByAccount: new Map(dynamicVatAccounts.map((account) => [
@@ -560,6 +404,42 @@ export function rutorFromTotals(
         explicitAccounts: new Set<string>(),
       }
     : dynamicVatAccounts
+  const contributions: VatRutaContribution[] = []
+
+  for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
+    if (dynamic?.explicitAccounts.has(account)) continue
+    const t = totals.get(account)
+    if (!t) continue
+    const balance = mapping.side === 'credit'
+      ? t.credit - t.debit
+      : t.debit - t.credit
+    contributions.push({ account_number: account, box: mapping.box, side: mapping.side, amount: balance })
+  }
+
+  for (const [account, mapping] of dynamic?.mappingByAccount ?? []) {
+    const t = totals.get(account)
+    if (!t) continue
+    const balance = mapping.side === 'credit' ? t.credit - t.debit : t.debit - t.credit
+    contributions.push({ account_number: account, box: mapping.box, side: mapping.side, amount: balance })
+  }
+
+  return contributions
+}
+
+/**
+ * Map aggregated per-account totals to the momsdeklaration boxes, including
+ * the recomputed ruta 49 net (FK009). Pure projection over ACCOUNT_RUTA plus
+ * the company's own ruta 05 accounts (fetchDynamicRuta05Accounts), folded
+ * over vatRutaContributions.
+ *
+ * `dynamicRuta05Accounts` is optional so callers that only need the 26xx boxes
+ * keep working untouched: ruta 05 is a beskattningsunderlag, not moms, so it
+ * never reaches ruta 49 and the settlement proposal nets the same either way.
+ */
+export function rutorFromTotals(
+  totals: Map<string, { debit: number; credit: number }>,
+  dynamicVatAccounts?: DynamicRutaAccounts,
+): VatDeclarationRutor {
   const rutor: VatDeclarationRutor = {
     ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0,
     ruta10: 0, ruta11: 0, ruta12: 0,
@@ -571,25 +451,12 @@ export function rutorFromTotals(
     ruta50: 0, ruta60: 0, ruta61: 0, ruta62: 0,
   }
 
-  for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
-    if (dynamic?.explicitAccounts.has(account)) continue
-    const t = totals.get(account)
-    if (!t) continue
-    const balance = mapping.side === 'credit'
-      ? t.credit - t.debit
-      : t.debit - t.credit
-    rutor[mapping.box] = round(rutor[mapping.box] + balance)
-  }
-
-  for (const [account, mapping] of dynamic?.mappingByAccount ?? []) {
-    const t = totals.get(account)
-    if (!t) continue
-    const balance = mapping.side === 'credit' ? t.credit - t.debit : t.debit - t.credit
-    rutor[mapping.box] = round(rutor[mapping.box] + balance)
+  for (const contribution of vatRutaContributions(totals, dynamicVatAccounts)) {
+    rutor[contribution.box] = roundOre(rutor[contribution.box] + contribution.amount)
   }
 
   // FK009: summaMoms = (10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - 48
-  rutor.ruta49 = round(
+  rutor.ruta49 = roundOre(
     rutor.ruta10 + rutor.ruta11 + rutor.ruta12 +
     rutor.ruta30 + rutor.ruta31 + rutor.ruta32 +
     rutor.ruta60 + rutor.ruta61 + rutor.ruta62 -
@@ -597,6 +464,68 @@ export function rutorFromTotals(
   )
 
   return rutor
+}
+
+/** The momsdeklaration of a period as the ledger gives it, before any presentation. */
+export interface VatDeclarationLedger extends VatAccountTotals {
+  dynamicVatAccounts: DynamicVatAccounts
+  rutor: VatDeclarationRutor
+}
+
+/**
+ * The one definition of a period's rutor: the company's own account
+ * classification (momskod on class 3-6 accounts, momsruta on 26xx accounts),
+ * the ledger totals measured over those accounts and the fixed BAS map, and
+ * rutorFromTotals over both. The declaration and the settlement proposal both
+ * read it, so the net the settlement books is the net the declaration files.
+ * The settlement once called rutorFromTotals without the company's accounts:
+ * a 26xx account with its own momsruta then landed in its BAS ruta (or, for a
+ * number BAS does not know, in none), and the whole-krona net moved.
+ */
+export async function loadVatDeclarationLedger(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+): Promise<VatDeclarationLedger> {
+  // Which of the company's OWN class 3 accounts count as momspliktig
+  // försäljning. Resolved from their "Standard moms" rather than a fixed BAS
+  // list, because Accounted seeds no varugrupp accounts: every 3011/3013-style
+  // konto is user-added and would otherwise never be fetched at all (#1261).
+  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
+
+  // The unconfigured class 3 accounts and moms accounts ride along so the
+  // declaration can name the ones with a balance (revenueAccountsWithoutRuta,
+  // vatAccountsWithoutRuta). They join p_accounts only, which measures:
+  // rutorFromTotals never sums them, and the settlement shapes read only the
+  // ruta and net lists (a 26xx line is never an "other" line), so no filed
+  // figure moves.
+  const ledger = await fetchVatAccountTotals(
+    supabase, companyId, start, end,
+    [
+      ...dynamicVatAccounts.accounts,
+      ...dynamicVatAccounts.unconfiguredRevenueAccounts.keys(),
+      ...dynamicVatAccounts.unconfiguredVatAccounts.keys(),
+    ],
+  )
+
+  return { ...ledger, dynamicVatAccounts, rutor: rutorFromTotals(ledger.totals, dynamicVatAccounts) }
+}
+
+/**
+ * Every VAT account (26xx) a VAT ruta of this declaration reads: the fixed BAS
+ * output accounts (rutor 10-12, 30-32, 60-62) and input accounts (ruta 48),
+ * plus any 26xx account the company routed to a ruta itself (vat_box, e.g. a
+ * Fortnox chart's 2617). These are the accounts a momsredovisning clears.
+ */
+export function vatClearingAccounts(
+  dynamicVatAccounts: Pick<DynamicVatAccounts, 'mappingByAccount'>,
+): string[] {
+  const accounts = new Set([...VAT_OUTPUT_ACCOUNTS, ...VAT_INPUT_ACCOUNTS])
+  for (const account of dynamicVatAccounts.mappingByAccount.keys()) {
+    if (account.startsWith('26')) accounts.add(account)
+  }
+  return [...accounts].sort()
 }
 
 /**
@@ -613,7 +542,7 @@ function rcInputTotals(
   const pair: Record<string, { debit: number; credit: number }> = {}
   for (const account of RC_INPUT_VAT_ACCOUNTS) {
     const t = totals.get(account)
-    pair[account] = { debit: round(t?.debit ?? 0), credit: round(t?.credit ?? 0) }
+    pair[account] = { debit: roundOre(t?.debit ?? 0), credit: roundOre(t?.credit ?? 0) }
   }
   return pair
 }
@@ -635,6 +564,257 @@ export function rcInputTotalsFromDeclaration(
 }
 
 /**
+ * Class 3 accounts that are not omsättning at all and that Accounted's own
+ * flows book without moms on ordinary sales and payments: 3740 Öres- och
+ * kronutjämning (invoice and payment rounding, the momsredovisning's own
+ * rounding line) and 3960 Valutakursvinster (exchange differences on
+ * receivables and payables). Neither belongs in any ruta and no momskod fits
+ * them, so listing them in REVENUE_ACCOUNT_WITHOUT_RUTA would fire for nearly
+ * every invoicing company every period with advice that cannot be followed.
+ * Any other account that is not a sale is silenced by setting momssats 0 %.
+ */
+const NON_TURNOVER_REVENUE_ACCOUNTS: ReadonlySet<string> = new Set([
+  ORE_ROUNDING_ACCOUNT,
+  '3960',
+])
+
+/**
+ * 3950 Återvunna, tidigare avskrivna kundfordringar. A recovery booked by
+ * lib/customer-loss reaches ruta 05 through the customer-loss rule below (its
+ * recorded base), so only that part of the account's balance is left out of
+ * the REVENUE_ACCOUNT_WITHOUT_RUTA warning; 3950 booked any other way (by
+ * hand, say) is warned about as before.
+ */
+const CUSTOMER_LOSS_RECOVERY_ACCOUNT = '3950'
+
+/**
+ * The kundförlust rule for rutorna 05 to 08 (build spec 4.2 G and H, ML 8 kap
+ * 16 § and 7 kap 43 §).
+ *
+ * A konstaterad kundförlust reduces the beskattningsunderlag as well as the
+ * output VAT, and a recovery reports both again. The voucher moves the VAT
+ * on 26xx (rutorna 10 to 12) but books the net on 6351 and 3950, which no
+ * class-3 sum sees. So the declaration reads the per-account bases the
+ * decision recorded (invoice_write_offs.vat_by_rate[].base, checked against
+ * the voucher by record_invoice_write_off), dated by the voucher: a
+ * konstaterad row lowers the base, a recovery raises it, and the annulment a
+ * storno leaves undoes either in the storno's period. Each base goes back to
+ * the ruta its sale was declared in, read off the output VAT account: hyra
+ * under frivillig skattskyldighet (2613/2623/2633) to ruta 08, vinstmarginal
+ * (2616/2626/2636) to ruta 07, uttag (2612/2622/2632) to ruta 06, every
+ * other sale to ruta 05. Rows without a VAT share (export, reverse charge,
+ * exempt, or a never-booked kontantmetod invoice) carry no base and move
+ * nothing.
+ */
+export interface CustomerLossVatAdjustment {
+  ruta05: number
+  ruta06: number
+  ruta07: number
+  ruta08: number
+  /** The ruta 05 part per rate (the declaration's base25/12/6 breakdown). */
+  base25: number
+  base12: number
+  base6: number
+  /**
+   * The net the recoveries put on 3950 in the period, less what the
+   * annulment of a recovery took back: the part of 3950 this rule declares.
+   */
+  recoveredNet: number
+}
+
+/** The ruta of the sale behind an output VAT account (ruta 05 unless listed). */
+const CUSTOMER_LOSS_BASE_RUTA: Readonly<Record<string, 'ruta06' | 'ruta07' | 'ruta08'>> = {
+  '2612': 'ruta06', '2622': 'ruta06', '2632': 'ruta06',
+  '2616': 'ruta07', '2626': 'ruta07', '2636': 'ruta07',
+  '2613': 'ruta08', '2623': 'ruta08', '2633': 'ruta08',
+}
+
+interface CustomerLossVatRow {
+  kind: string
+  vat_by_rate: Array<{ account?: string; rate: number; vat?: number; base: number }> | null
+  /** On 3950 for a recovery (and copied onto its annulment). */
+  net_amount?: number | string | null
+  /** For an annulment: the kind of the decision it annuls. */
+  reversed_kind?: string | null
+}
+
+export function customerLossVatAdjustment(rows: CustomerLossVatRow[]): CustomerLossVatAdjustment {
+  const out: CustomerLossVatAdjustment = { ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0, base25: 0, base12: 0, base6: 0, recoveredNet: 0 }
+  for (const row of rows) {
+    const effective = row.kind === 'annulled' ? row.reversed_kind : row.kind
+    const sign =
+      effective === 'confirmed' ? -1 : effective === 'recovered' ? 1 : 0
+    if (sign === 0) continue
+    const direction = row.kind === 'annulled' ? -sign : sign
+    if (effective === 'recovered') out.recoveredNet = roundOre(out.recoveredNet + direction * (Number(row.net_amount) || 0))
+    for (const share of row.vat_by_rate ?? []) {
+      const base = Number(share.base) || 0
+      if (base === 0) continue
+      const ruta = (share.account && CUSTOMER_LOSS_BASE_RUTA[share.account]) || 'ruta05'
+      out[ruta] = roundOre(out[ruta] + direction * base)
+      if (ruta !== 'ruta05') continue
+      const bucket = share.rate === 25 ? 'base25' : share.rate === 12 ? 'base12' : share.rate === 6 ? 'base6' : null
+      if (bucket) out[bucket] = roundOre(out[bucket] + direction * base)
+    }
+  }
+  return out
+}
+
+/** Adds a kundförlust adjustment to rutor projected from the ledger (05 to 08; 10 to 12 already moved with 26xx). */
+export function applyCustomerLossVatAdjustment<T extends { ruta05: number; ruta06: number; ruta07: number; ruta08: number }>(
+  rutor: T,
+  adjustment: CustomerLossVatAdjustment,
+): T {
+  rutor.ruta05 = roundOre(rutor.ruta05 + adjustment.ruta05)
+  rutor.ruta06 = roundOre(rutor.ruta06 + adjustment.ruta06)
+  rutor.ruta07 = roundOre(rutor.ruta07 + adjustment.ruta07)
+  rutor.ruta08 = roundOre(rutor.ruta08 + adjustment.ruta08)
+  return rutor
+}
+
+/**
+ * PostgREST's "table not in the schema cache" and Postgres' undefined_table:
+ * a deployment that serves before the invoice_write_offs migration applied.
+ */
+function isMissingTable(error: { code?: string } | null | undefined): boolean {
+  return error?.code === 'PGRST205' || error?.code === '42P01'
+}
+
+/**
+ * The kundförlust decisions dated in the period, with what each annulment
+ * annuls. Read on every declaration whatever CUSTOMER_LOSS_ENABLED says: a
+ * filed figure includes every decision that exists. A database without the
+ * table yet (the deployment ran ahead of its migration) holds no decisions:
+ * no rows, with a warning; any other failure throws.
+ */
+export async function fetchCustomerLossVatAdjustment(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+): Promise<CustomerLossVatAdjustment> {
+  let tableMissing = false
+  // Paged: a filed figure must never rest on PostgREST's silent row cap.
+  const rows = await fetchAllRows<CustomerLossVatRow & { id: string; reverses_id: string | null }>(async ({ from, to }) => {
+    const page = await supabase
+      .from('invoice_write_offs')
+      .select('id, kind, vat_by_rate, net_amount, reverses_id')
+      .eq('company_id', companyId)
+      .in('kind', ['confirmed', 'recovered', 'annulled'])
+      .gte('entry_date', start)
+      .lte('entry_date', end)
+      .order('id', { ascending: true })
+      .range(from, to)
+    if (isMissingTable(page.error)) {
+      tableMissing = true
+      return { data: [], error: null }
+    }
+    return page
+  })
+  if (tableMissing) {
+    log.warn('invoice_write_offs is missing: the momsdeklaration counts no kundförlust decisions until its migration is applied', { companyId })
+  }
+  const reversedIds = [...new Set(rows.filter((r) => r.kind === 'annulled' && r.reverses_id).map((r) => r.reverses_id as string))]
+  const reversedKind = new Map<string, string>()
+  for (let i = 0; i < reversedIds.length; i += 200) {
+    const { data: reversed, error: reversedError } = await supabase
+      .from('invoice_write_offs')
+      .select('id, kind')
+      .eq('company_id', companyId)
+      .in('id', reversedIds.slice(i, i + 200))
+    if (reversedError) throw new Error(`invoice_write_offs lookup failed: ${reversedError.message}`)
+    for (const r of (reversed ?? []) as Array<{ id: string; kind: string }>) reversedKind.set(r.id, r.kind)
+  }
+  return customerLossVatAdjustment(
+    rows.map((r) => ({ ...r, reversed_kind: r.reverses_id ? reversedKind.get(r.reverses_id) ?? null : null })),
+  )
+}
+
+/**
+ * The class 3 accounts with a balance in the period that this declaration puts
+ * in no ruta (#3387): no momskod, no momssats (configured or inferred) and not
+ * in ACCOUNT_RUTA. Feeds the REVENUE_ACCOUNT_WITHOUT_RUTA warning.
+ *
+ * Derived from the SAME resolution the figures use, so the warning and the
+ * declaration cannot disagree: `unconfiguredRevenueAccounts` is what
+ * fetchDynamicVatAccounts left out of `mappingByAccount` for want of any
+ * classification, and ACCOUNT_RUTA is exactly what rutorFromTotals sums by
+ * number. An account in ACCOUNT_TO_BOX (lib/vat/moms-box-mapping.ts) but not
+ * in ACCOUNT_RUTA is listed on purpose: the declaration does not sum it.
+ *
+ * Read-only: nothing here changes a filed figure. Whether such an account
+ * should be inferred into ruta 05 is an open decision; until then the user is
+ * told and sets the momskod.
+ *
+ * `amount` is the net credit balance rounded to öre; zero balances (activity
+ * that nets out) are dropped because they understate nothing. Sorted by
+ * account number so the message is stable.
+ */
+export function revenueAccountsWithoutRuta(
+  totals: VatCheckAccountTotals,
+  dynamicVatAccounts: Partial<Pick<DynamicVatAccounts, 'unconfiguredRevenueAccounts'>>,
+  /** The period's kundförlust adjustment: its recoveries on 3950 are declared through ruta 05 already. */
+  customerLoss?: Pick<CustomerLossVatAdjustment, 'recoveredNet'> | null,
+): VatRevenueAccountWithoutRuta[] {
+  const result: VatRevenueAccountWithoutRuta[] = []
+  for (const [account, name] of dynamicVatAccounts.unconfiguredRevenueAccounts ?? []) {
+    if (ACCOUNT_RUTA[account] || NON_TURNOVER_REVENUE_ACCOUNTS.has(account)) continue
+    const t = totals.get(account)
+    if (!t) continue
+    const declaredElsewhere = account === CUSTOMER_LOSS_RECOVERY_ACCOUNT ? (customerLoss?.recoveredNet ?? 0) : 0
+    const amount = roundOre(t.credit - t.debit - declaredElsewhere)
+    if (amount === 0) continue
+    result.push({ account_number: account, account_name: name, amount })
+  }
+  return result.sort((a, b) => a.account_number.localeCompare(b.account_number))
+}
+
+/**
+ * The moms accounts (BAS 2610-2649) with a balance in the period that this
+ * declaration puts in no ruta: not in ACCOUNT_RUTA and without a momsruta of
+ * the company's own (DynamicVatAccounts.unconfiguredVatAccounts). Feeds the
+ * VAT_ACCOUNT_WITHOUT_RUTA warning. Typically a chart that predates BAS 2026
+ * (2617/2627/2637 utgående moms omvänd skattskyldighet, 2643/2644 ingående
+ * moms) brought in by an import, which never sets a momsruta.
+ *
+ * Read-only: no filed figure moves. Which ruta the account belongs in is the
+ * user's to say (the account name varies between charts), so the declaration
+ * names it and the user sets the momsruta on the account.
+ *
+ * `amount` is the balance on the account's own side, rounded to öre: credit
+ * for utgående moms (2610-2639), debit for ingående moms (2640-2649). Zero
+ * balances are dropped. Sorted by account number so the message is stable.
+ */
+export function vatAccountsWithoutRuta(
+  totals: VatCheckAccountTotals,
+  dynamicVatAccounts: Partial<Pick<DynamicVatAccounts, 'unconfiguredVatAccounts'>>,
+): VatAccountWithoutRuta[] {
+  const result: VatAccountWithoutRuta[] = []
+  for (const [account, name] of dynamicVatAccounts.unconfiguredVatAccounts ?? []) {
+    if (ACCOUNT_RUTA[account]) continue
+    const t = totals.get(account)
+    if (!t) continue
+    const amount = roundOre(account < '2640' ? t.credit - t.debit : t.debit - t.credit)
+    if (amount === 0) continue
+    result.push({ account_number: account, account_name: name, amount })
+  }
+  return result.sort((a, b) => a.account_number.localeCompare(b.account_number))
+}
+
+/**
+ * The declaration plus what a reader of it needs and the declaration itself
+ * does not carry: which branch of resolvePeriodDates produced the range, and
+ * the untagged verifikat the totals left out as momsredovisning. The agent VAT
+ * report and close check (./vat-close-check.ts) read these, so they show the
+ * filed rutor instead of projecting the aggregate a second time.
+ */
+export interface ComputedVatDeclaration {
+  declaration: VatDeclaration
+  periodSource: VatPeriodSource
+  settlementShapedEntries: VatSettlementShapedEntry[]
+}
+
+/**
  * Calculate VAT declaration from the general ledger.
  *
  * Sums posted journal entry lines on the BAS accounts in ACCOUNT_RUTA per the
@@ -651,34 +831,30 @@ export function rcInputTotalsFromDeclaration(
  * parameter existed until 2026-07-23 and was silently ignored; it was removed
  * so no future code path can branch on a value that callers hard-code.
  */
-export async function calculateVatDeclaration(
+export async function computeVatDeclaration(
   supabase: SupabaseClient,
   companyId: string,
   periodType: VatPeriodType,
   year: number,
   period: number,
   options: { fiscalPeriodId?: string } = {}
-): Promise<VatDeclaration> {
+): Promise<ComputedVatDeclaration> {
   // For yearly VAT this resolves to the räkenskapsår bounds (when a fiscal
   // period is supplied), not the calendar year: see resolvePeriodDates.
-  const { start, end } = await resolvePeriodDates(
+  const { start, end, source: periodSource } = await resolvePeriodDates(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
-  // Which of the company's OWN class 3 accounts count as momspliktig
-  // försäljning. Resolved from their "Standard moms" rather than a fixed BAS
-  // list, because Accounted seeds no varugrupp accounts: every 3011/3013-style
-  // konto is user-added and would otherwise never be fetched at all (#1261).
-  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
+  // The rutor, the per-account totals behind them and the per-source_type
+  // entry counts for the metadata, from the one definition the settlement
+  // proposal reads too (loadVatDeclarationLedger).
+  const { totals, sourceTypeCounts, settlementShapedEntries, dynamicVatAccounts, rutor } =
+    await loadVatDeclarationLedger(supabase, companyId, start, end)
 
-  // Fetch and aggregate posted VAT-account activity for the period. The same
-  // RPC round trip carries the per-source_type entry counts for the metadata.
-  const { totals, sourceTypeCounts } = await fetchVatAccountTotals(
-    supabase, companyId, start, end, dynamicVatAccounts.accounts
-  )
-
-  // Map account balances to momsdeklaration boxes
-  const rutor = rutorFromTotals(totals, dynamicVatAccounts)
+  // Kundförlust: rutorna 05 to 08 follow the output VAT a write-off or a
+  // recovery moved (see customerLossVatAdjustment).
+  const customerLoss = await fetchCustomerLossVatAdjustment(supabase, companyId, start, end)
+  applyCustomerLossVatAdjustment(rutor, customerLoss)
 
   // Compute per-rate base amounts from individual revenue accounts. The
   // company's own accounts carry their rate on the konto itself, so they land
@@ -699,15 +875,18 @@ export async function calculateVatDeclaration(
   for (const [account, rate] of [['3001', 'base25'], ['3002', 'base12'], ['3003', 'base6']] as const) {
     if (dynamicVatAccounts.explicitAccounts.has(account)) continue
     const t = totals.get(account)
-    if (t) revenueByRate[rate] = round(t.credit - t.debit)
+    if (t) revenueByRate[rate] = roundOre(t.credit - t.debit)
   }
   for (const [account, rate] of dynamicVatAccounts.rateByAccount) {
     const t = totals.get(account)
     if (!t) continue
     const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
     if (!bucket) continue
-    revenueByRate[bucket] = round(revenueByRate[bucket] + (t.credit - t.debit))
+    revenueByRate[bucket] = roundOre(revenueByRate[bucket] + (t.credit - t.debit))
   }
+  revenueByRate.base25 = roundOre(revenueByRate.base25 + customerLoss.base25)
+  revenueByRate.base12 = roundOre(revenueByRate.base12 + customerLoss.base12)
+  revenueByRate.base6 = roundOre(revenueByRate.base6 + customerLoss.base6)
   // Accounts the static map ALREADY sums into ruta 05 (3000, the 30xx
   // gruppkonto) but whose rate only exists as the konto's "Standard moms".
   // Rate-only on purpose: their balance is in ruta 05 either way, so adding
@@ -717,7 +896,7 @@ export async function calculateVatDeclaration(
     if (!t) continue
     const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
     if (!bucket) continue
-    revenueByRate[bucket] = round(revenueByRate[bucket] + (t.credit - t.debit))
+    revenueByRate[bucket] = roundOre(revenueByRate[bucket] + (t.credit - t.debit))
   }
 
   // Entry counts by source type for metadata: aggregated by the RPC in the
@@ -733,7 +912,7 @@ export async function calculateVatDeclaration(
     else if (sourceType === 'bank_transaction') transactionCount += n
   }
 
-  return {
+  const declaration: VatDeclaration = {
     period: { type: periodType, year, period, start, end },
     rutor,
     // The 2645/2647 pair travels with the declaration so an HTTP caller can run
@@ -743,6 +922,12 @@ export async function calculateVatDeclaration(
     // Per-momssats RC basis balances (44xx/45xx), the downgrade evidence for
     // the per-voucher gap tiering: see VatDeclaration.rcBasisByRate.
     rcBasisByRate: rcBasisTotalsByRate(totals, dynamicVatAccounts),
+    // Class 3 balances that reach no ruta, for REVENUE_ACCOUNT_WITHOUT_RUTA:
+    // see VatDeclaration.revenueAccountsWithoutRuta.
+    revenueAccountsWithoutRuta: revenueAccountsWithoutRuta(totals, dynamicVatAccounts, customerLoss),
+    // Moms accounts whose balance reaches no ruta, for VAT_ACCOUNT_WITHOUT_RUTA:
+    // see VatDeclaration.vatAccountsWithoutRuta.
+    vatAccountsWithoutRuta: vatAccountsWithoutRuta(totals, dynamicVatAccounts),
     invoiceCount,
     transactionCount,
     breakdown: {
@@ -773,38 +958,22 @@ export async function calculateVatDeclaration(
       },
     },
   }
+  return { declaration, periodSource, settlementShapedEntries }
 }
 
 /**
- * Get a summary of the VAT declaration for display
+ * The momsdeklaration as filed (computeVatDeclaration's declaration), for callers
+ * that only need the declaration itself.
  */
-export function getVatDeclarationSummary(declaration: VatDeclaration): {
-  totalOutputVat: number
-  totalInputVat: number
-  vatToPay: number
-  isRefund: boolean
-} {
-  const totalOutputVat = round(
-    declaration.rutor.ruta10 +
-    declaration.rutor.ruta11 +
-    declaration.rutor.ruta12 +
-    declaration.rutor.ruta30 +
-    declaration.rutor.ruta31 +
-    declaration.rutor.ruta32 +
-    declaration.rutor.ruta60 +
-    declaration.rutor.ruta61 +
-    declaration.rutor.ruta62
-  )
-
-  const totalInputVat = declaration.rutor.ruta48
-  const vatToPay = declaration.rutor.ruta49
-
-  return {
-    totalOutputVat,
-    totalInputVat,
-    vatToPay,
-    isRefund: vatToPay < 0,
-  }
+export async function calculateVatDeclaration(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+  options: { fiscalPeriodId?: string } = {}
+): Promise<VatDeclaration> {
+  return (await computeVatDeclaration(supabase, companyId, periodType, year, period, options)).declaration
 }
 
 /**

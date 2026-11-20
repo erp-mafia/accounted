@@ -86,7 +86,9 @@ BEGIN
   UPDATE public.company_skills SET body = 'Unauthorized firm edit' WHERE id = firm_skill;
   GET DIAGNOSTICS affected = ROW_COUNT;
   IF affected <> 0 THEN RAISE EXCEPTION 'Company member edited firm instruction'; END IF;
-  UPDATE public.company_skills SET share_status = 'withdrawn' WHERE id = own_id;
+  -- Withdrawing returns it to private (20260926172514); the old dead-end state is gone.
+  UPDATE public.company_skills SET share_status = 'private' WHERE id = own_id;
+  IF (SELECT share_status FROM public.company_skills WHERE id = own_id) <> 'private' THEN RAISE EXCEPTION 'Withdrawal did not return the instruction to private'; END IF;
 
   RESET ROLE;
   PERFORM set_config('request.jwt.claim.sub', viewer_id::text, true);

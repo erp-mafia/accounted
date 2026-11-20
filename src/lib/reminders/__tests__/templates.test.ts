@@ -1,0 +1,171 @@
+import { describe, it, expect } from 'vitest'
+import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import { renderReminderEmail, REMINDER_EMAIL_DEFAULT_TEXTS, type ReminderEmailData } from '../templates'
+
+function data(overrides: Partial<ReminderEmailData> = {}): ReminderEmailData {
+  return {
+    level: 1,
+    invoice: makeInvoice({ invoice_number: 'F-1042', invoice_date: '2026-11-02', due_date: '2026-12-02', status: 'sent', total: 12500 }),
+    customer: makeCustomer({ name: 'Kund AB', contact_person: null }),
+    company: makeCompanySettings({ company_name: 'Säljaren AB', bankgiro: '123-4567', org_number: '5566778899' }),
+    amount: 2500,
+    remaining: 2500,
+    payBy: '2027-01-24',
+    overdueDays: 15,
+    actionUrl: 'https://app.accounted.se/invoice-action/tok123',
+    replyTo: 'faktura@saljaren.se',
+    ...overrides,
+  }
+}
+
+describe('renderReminderEmail', () => {
+  it('asks for what is left to pay, not the original total', () => {
+    const mail = renderReminderEmail(data())
+    expect(mail.subject).toBe('Vänlig påminnelse: Faktura F-1042 - 2 500,00 SEK')
+    expect(mail.text).toContain('Att betala: 2 500,00 SEK')
+    expect(mail.text).not.toContain('12 500,00')
+  })
+
+  it('shows what the invoice asked for and what came in after a part payment', () => {
+    const mail = renderReminderEmail(data({ amount: 12500, remaining: 2500 }))
+    // Currency formatting puts a no-break space in the amounts.
+    expect(mail.subject).toMatch(/- 2\s500,00\sSEK$/)
+    expect(mail.text).toMatch(/Fakturabelopp: 12\s500,00\sSEK\nBetalt: 10\s000,00\sSEK\nAtt betala: 2\s500,00\sSEK/)
+    expect(renderReminderEmail(data()).text).not.toContain('Betalt:')
+  })
+
+  it("names a ROT/RUT invoice's amount as the customer's share, not the total the PDF prints", () => {
+    const rot = makeInvoice({ invoice_number: 'F-1042', invoice_date: '2026-11-02', due_date: '2026-12-02', status: 'sent', total: 12500, deduction_total: 5000 })
+    const mail = renderReminderEmail(data({ invoice: rot, amount: 7500, remaining: 2500 }))
+    expect(mail.text).toMatch(/Ditt belopp enligt fakturan: 7\s500,00\sSEK\nBetalt: 5\s000,00\sSEK/)
+    expect(mail.text).not.toContain('Fakturabelopp:')
+    const en = renderReminderEmail(data({ invoice: rot, amount: 7500, remaining: 2500, customer: makeCustomer({ language: 'en' }) }))
+    expect(en.text).toMatch(/Your amount on the invoice: 7,500\.00\sSEK/)
+  })
+
+  it('asks for payment by a date in the final reminder', () => {
+    expect(renderReminderEmail(data({ level: 3 })).text).toContain('ber dig betala senast den 2027-01-24.')
+    expect(renderReminderEmail(data({ level: 3, customer: makeCustomer({ language: 'en' }) })).text).toContain('ask you to pay by 2027-01-24.')
+  })
+
+  it('carries the pay-by date as a row of its own in the final reminder, whatever its text says', () => {
+    const company = makeCompanySettings({ company_name: 'Säljaren AB', reminder_text_overrides: { level_3: { body: 'Betala omgående, tack.' } } })
+    const mail = renderReminderEmail(data({ level: 3, company }))
+    expect(mail.text).not.toContain('senast den')
+    expect(mail.text).toContain('Förfallodatum: 2026-12-02\nBetala senast: 2027-01-24\n')
+    expect(mail.html).toContain('Betala senast:')
+    expect(renderReminderEmail(data({ level: 3, customer: makeCustomer({ language: 'en' }) })).text).toContain('Pay by: 2027-01-24\n')
+    for (const level of [1, 2] as const) expect(renderReminderEmail(data({ level })).text).not.toContain('Betala senast:')
+  })
+
+  it("shows the invoice's payment link as the invoice email does, until a payment comes in", () => {
+    const linked = makeInvoice({ invoice_number: 'F-1042', invoice_date: '2026-11-02', due_date: '2026-12-02', status: 'sent', payment_link_url: 'https://pay.example.se/l/abc' })
+    const mail = renderReminderEmail(data({ invoice: linked }))
+    expect(mail.html).toMatch(/<a href="https:\/\/pay\.example\.se\/l\/abc"[^>]*>Betala online<\/a>/)
+    expect(mail.text).toContain('Betalningsinformation:\nBetala online: https://pay.example.se/l/abc\n')
+    expect(renderReminderEmail(data({ invoice: linked, customer: makeCustomer({ language: 'en' }) })).text).toContain('Pay online: https://pay.example.se/l/abc')
+    // A link for the full amount would ask too much after a part payment.
+    const partPaid = renderReminderEmail(data({ invoice: linked, amount: 12500, remaining: 2500 }))
+    expect(partPaid.html).not.toContain('pay.example.se')
+    expect(partPaid.text).not.toContain('pay.example.se')
+    // Bankgirot debits an Autogiro invoice: no button to pay it by hand.
+    const autogiro = makeInvoice({ ...linked, autogiro_payer_number: '1234567' })
+    expect(renderReminderEmail(data({ invoice: autogiro })).html).not.toContain('pay.example.se')
+    expect(renderReminderEmail(data()).text).not.toContain('Betala online')
+  })
+
+  it('words each level, and level 3 is a final reminder with no inkasso threat', () => {
+    expect(renderReminderEmail(data({ level: 2 })).subject).toMatch(/^Andra påminnelsen: Faktura F-1042/)
+    const final = renderReminderEmail(data({ level: 3 }))
+    expect(final.subject).toMatch(/^Slutlig påminnelse: Faktura F-1042/)
+    expect(final.text.toLowerCase()).not.toContain('inkasso')
+    expect(final.html.toLowerCase()).not.toContain('inkasso')
+  })
+
+  it('never mentions a fee or interest', () => {
+    for (const level of [1, 2, 3] as const) {
+      const mail = renderReminderEmail(data({ level }))
+      expect(mail.text).not.toMatch(/påminnelseavgift|dröjsmålsränta|ränta/i)
+    }
+  })
+
+  it('shows the invoice payment rows, the answer link and the reply line', () => {
+    const mail = renderReminderEmail(data())
+    expect(mail.text).toContain('Betalningsinformation:')
+    expect(mail.text).toContain('123-4567')
+    expect(mail.html).toContain('href="https://app.accounted.se/invoice-action/tok123"')
+    expect(mail.text).toContain('Svara direkt på det här mejlet.')
+  })
+
+  it('leaves out the answer link and the reply line when there is none', () => {
+    const mail = renderReminderEmail(data({ actionUrl: null, replyTo: null }))
+    expect(mail.html).not.toContain('invoice-action')
+    expect(mail.text).not.toContain('Svara direkt')
+  })
+
+  it('writes English to an English-speaking customer', () => {
+    const mail = renderReminderEmail(data({ customer: makeCustomer({ language: 'en' }) }))
+    expect(mail.subject).toBe('Friendly reminder: Invoice F-1042 - 2,500.00 SEK')
+    expect(mail.html).toContain('<html lang="en">')
+  })
+
+  it("uses the company's own Swedish text per level, with placeholders, escaped", () => {
+    const company = makeCompanySettings({
+      company_name: 'Säljaren AB',
+      reminder_text_overrides: { level_1: { subject: 'Påminnelse {fakturanummer}', body: 'Hej <b>{kundnamn}</b>, {dagar} dagar sedan.' } },
+    })
+    const mail = renderReminderEmail(data({ company }))
+    expect(mail.subject).toBe('Påminnelse F-1042')
+    expect(mail.html).toContain('Hej &lt;b&gt;Kund AB&lt;/b&gt;, 15 dagar sedan.')
+    // Level 2 keeps the stock text.
+    expect(renderReminderEmail(data({ company, level: 2 })).subject).toMatch(/^Andra påminnelsen/)
+    // English mail keeps the stock English text.
+    expect(renderReminderEmail(data({ company, customer: makeCustomer({ language: 'en' }) })).subject).toMatch(/^Friendly reminder/)
+  })
+
+  it('escapes a customer name and keeps the subject on one line', () => {
+    const mail = renderReminderEmail(
+      data({
+        company: makeCompanySettings({ reminder_text_overrides: { level_1: { subject: 'Rad ett\nRad två {kundnamn}' } } }),
+        customer: makeCustomer({ name: '<script>x</script>' }),
+      }),
+    )
+    expect(mail.subject).toBe('Rad ett Rad två <script>x</script>')
+    expect(mail.html).not.toContain('<script>')
+  })
+
+  // An aktiebolag's letters state its säte (ABL 28 kap. 5 §): the reminder
+  // footer prints it next to the org.nr, as the invoice e-mail does.
+  it("prints the seller's säte in the footer when set", () => {
+    const company = makeCompanySettings({
+      entity_type: 'aktiebolag',
+      org_number: '5566778899',
+      registered_office: 'Stockholm',
+      vat_number: 'SE556677889901',
+      f_skatt: true,
+    })
+    const mail = renderReminderEmail(data({ company }))
+    expect(mail.text).toContain('Org.nr: 5566778899 | Säte: Stockholm | VAT: SE556677889901 | Innehar F-skattsedel')
+    expect(mail.html).toContain('Org.nr: 5566778899 | Säte: Stockholm')
+    const en = renderReminderEmail(data({ company: { ...company, registered_office: 'Malmö <b>' }, customer: makeCustomer({ language: 'en' }) }))
+    expect(en.html).toContain('Reg. no.: 5566778899 | Registered office: Malmö &lt;b&gt;')
+    expect(en.html).not.toContain('Malmö <b>')
+  })
+
+  it('prints no säte when none is set, nor for an enskild firma', () => {
+    const none = renderReminderEmail(data({ company: makeCompanySettings({ entity_type: 'aktiebolag', org_number: '5566778899', registered_office: null, vat_number: null, f_skatt: false }) }))
+    expect(none.text).toContain('Org.nr: 5566778899\n')
+    expect(none.text).not.toContain('Säte')
+    const ef = renderReminderEmail(data({ company: makeCompanySettings({ entity_type: 'enskild_firma', org_number: '199001011234', registered_office: 'Stockholm' }) }))
+    expect(ef.text).not.toContain('Säte')
+  })
+
+  it('has a stock text for every level in both languages', () => {
+    for (const lang of ['sv', 'en'] as const) {
+      for (const level of [1, 2, 3] as const) {
+        expect(REMINDER_EMAIL_DEFAULT_TEXTS[lang][level].subject).toContain('{fakturanummer}')
+        expect(REMINDER_EMAIL_DEFAULT_TEXTS[lang][level].body).toContain('{förfallodatum}')
+      }
+    }
+  })
+})

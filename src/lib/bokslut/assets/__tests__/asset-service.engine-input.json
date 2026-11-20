@@ -1,0 +1,375 @@
+[
+  {
+    "name": "a sale with 25 % moms, depreciated to the disposal day",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-30",
+          "description": "Avyttring av tillgång: Lastbil",
+          "source_type": "system",
+          "lines": [
+            {
+              "account_number": "7832",
+              "debit_amount": 5951,
+              "credit_amount": 0,
+              "line_description": "Avskrivning till avyttringsdag: Lastbil"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 0,
+              "credit_amount": 5951,
+              "line_description": "Ackumulerad avskrivning till avyttringsdag: Lastbil"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 5951,
+              "credit_amount": 0,
+              "line_description": "Avyttring: nollställ ackumulerad avskrivning Lastbil"
+            },
+            {
+              "account_number": "1220",
+              "debit_amount": 0,
+              "credit_amount": 60000,
+              "line_description": "Avyttring: nollställ anskaffningsvärde Lastbil"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 50000,
+              "credit_amount": 0,
+              "line_description": "Avyttring: erhållet belopp Lastbil"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 10000,
+              "line_description": "Utgående moms vid avyttring av Lastbil"
+            },
+            {
+              "account_number": "7973",
+              "debit_amount": 14049,
+              "credit_amount": 0,
+              "line_description": "Förlust vid avyttring av Lastbil"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitAssetDisposal": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-0",
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "disposal_type": "sale",
+          "disposed_at": "2026-06-30",
+          "disposed_proceeds": 50000,
+          "proceeds_vat": 10000,
+          "vat_treatment": "standard_25",
+          "current_depreciation": 5951,
+          "jamkning_amount": 0,
+          "jamkning_direction": "none",
+          "jamkning_remaining_years": 5,
+          "jamkning_total_years": 5,
+          "jamkning_original_input_vat": null,
+          "jamkning_original_deduction_percent": null,
+          "jamkning_new_deduction_percent": 0
+        }
+      ]
+    ]
+  },
+  {
+    "name": "scrapped (utrangering)",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-30",
+          "description": "Avyttring av tillgång: Kopiator",
+          "source_type": "system",
+          "lines": [
+            {
+              "account_number": "7832",
+              "debit_amount": 6630,
+              "credit_amount": 0,
+              "line_description": "Avskrivning till avyttringsdag: Kopiator"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 0,
+              "credit_amount": 6630,
+              "line_description": "Ackumulerad avskrivning till avyttringsdag: Kopiator"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 6630,
+              "credit_amount": 0,
+              "line_description": "Avyttring: nollställ ackumulerad avskrivning Kopiator"
+            },
+            {
+              "account_number": "1220",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Avyttring: nollställ anskaffningsvärde Kopiator"
+            },
+            {
+              "account_number": "7973",
+              "debit_amount": 23370,
+              "credit_amount": 0,
+              "line_description": "Förlust vid avyttring av Kopiator"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitAssetDisposal": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1",
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000002",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "disposal_type": "scrap",
+          "disposed_at": "2026-09-30",
+          "disposed_proceeds": 0,
+          "proceeds_vat": 0,
+          "vat_treatment": null,
+          "current_depreciation": 6630,
+          "jamkning_amount": 0,
+          "jamkning_direction": "none",
+          "jamkning_remaining_years": 5,
+          "jamkning_total_years": 5,
+          "jamkning_original_input_vat": null,
+          "jamkning_original_deduction_percent": null,
+          "jamkning_new_deduction_percent": 0
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a sale of a K3 asset with components, to another proceeds account, at a gain",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-03-31",
+          "description": "Avyttring av tillgång: Produktionslinje",
+          "source_type": "system",
+          "lines": [
+            {
+              "account_number": "7831",
+              "debit_amount": 3288,
+              "credit_amount": 0,
+              "line_description": "Avskrivning till avyttringsdag: Produktionslinje"
+            },
+            {
+              "account_number": "1219",
+              "debit_amount": 0,
+              "credit_amount": 3288,
+              "line_description": "Ackumulerad avskrivning till avyttringsdag: Produktionslinje"
+            },
+            {
+              "account_number": "1219",
+              "debit_amount": 3288,
+              "credit_amount": 0,
+              "line_description": "Avyttring: nollställ ackumulerad avskrivning Produktionslinje"
+            },
+            {
+              "account_number": "1210",
+              "debit_amount": 0,
+              "credit_amount": 120000,
+              "line_description": "Avyttring: nollställ anskaffningsvärde Produktionslinje"
+            },
+            {
+              "account_number": "1940",
+              "debit_amount": 150000,
+              "credit_amount": 0,
+              "line_description": "Avyttring: erhållet belopp Produktionslinje"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Utgående moms vid avyttring av Produktionslinje"
+            },
+            {
+              "account_number": "3973",
+              "debit_amount": 0,
+              "credit_amount": 3288,
+              "line_description": "Vinst vid avyttring av Produktionslinje"
+            }
+          ],
+          "notes": "K3-komponenter: Stomme (80000 kr / 180 mån); Styrsystem (40000 kr / 60 mån)"
+        }
+      ]
+    ],
+    "commitAssetDisposal": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2",
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000003",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "disposal_type": "sale",
+          "disposed_at": "2026-03-31",
+          "disposed_proceeds": 150000,
+          "proceeds_vat": 30000,
+          "vat_treatment": "standard_25",
+          "current_depreciation": 3288,
+          "jamkning_amount": 0,
+          "jamkning_direction": "none",
+          "jamkning_remaining_years": 5,
+          "jamkning_total_years": 5,
+          "jamkning_original_input_vat": null,
+          "jamkning_original_deduction_percent": null,
+          "jamkning_new_deduction_percent": 0
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a moms-free sale of an investeringsvara inside its adjustment period (jämkning)",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-05-31",
+          "description": "Avyttring av tillgång: Lager-maskin",
+          "source_type": "system",
+          "lines": [
+            {
+              "account_number": "7832",
+              "debit_amount": 20685,
+              "credit_amount": 0,
+              "line_description": "Avskrivning till avyttringsdag: Lager-maskin"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 0,
+              "credit_amount": 20685,
+              "line_description": "Ackumulerad avskrivning till avyttringsdag: Lager-maskin"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 20685,
+              "credit_amount": 0,
+              "line_description": "Avyttring: nollställ ackumulerad avskrivning Lager-maskin"
+            },
+            {
+              "account_number": "1220",
+              "debit_amount": 0,
+              "credit_amount": 250000,
+              "line_description": "Avyttring: nollställ anskaffningsvärde Lager-maskin"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 180000,
+              "credit_amount": 0,
+              "line_description": "Avyttring: erhållet belopp Lager-maskin"
+            },
+            {
+              "account_number": "7973",
+              "debit_amount": 49315,
+              "credit_amount": 0,
+              "line_description": "Förlust vid avyttring av Lager-maskin"
+            },
+            {
+              "account_number": "6999",
+              "debit_amount": 50000,
+              "credit_amount": 0,
+              "line_description": "Negativ justering av ingående moms: Lager-maskin"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 0,
+              "credit_amount": 50000,
+              "line_description": "Justerad ingående moms enligt ML 15 kap: Lager-maskin"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitAssetDisposal": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-3",
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000004",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "disposal_type": "sale",
+          "disposed_at": "2026-05-31",
+          "disposed_proceeds": 180000,
+          "proceeds_vat": 0,
+          "vat_treatment": "exempt",
+          "current_depreciation": 20685,
+          "jamkning_amount": 50000,
+          "jamkning_direction": "decrease",
+          "jamkning_remaining_years": 4,
+          "jamkning_total_years": 5,
+          "jamkning_original_input_vat": 62500,
+          "jamkning_original_deduction_percent": 100,
+          "jamkning_new_deduction_percent": 0
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a fully written-off asset scrapped for nothing: no verifikat",
+    "createDraftEntry": [],
+    "commitAssetDisposal": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        null,
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000005",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "disposal_type": "scrap",
+          "disposed_at": "2026-04-30",
+          "disposed_proceeds": 0,
+          "proceeds_vat": 0,
+          "vat_treatment": null,
+          "current_depreciation": 0,
+          "jamkning_amount": 0,
+          "jamkning_direction": "none",
+          "jamkning_remaining_years": 5,
+          "jamkning_total_years": 5,
+          "jamkning_original_input_vat": null,
+          "jamkning_original_deduction_percent": null,
+          "jamkning_new_deduction_percent": 0
+        }
+      ]
+    ]
+  }
+]

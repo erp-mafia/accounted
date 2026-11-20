@@ -1,0 +1,45 @@
+[
+  {
+    "name": "a credit note with a posted verifikat: storno of it",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0001"
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "reversal_entry_id": "storno-00000000-0000-4000-8000-0000000e0001",
+      "reversed_credit_note_id": "00000000-0000-4000-8000-0000000c0001"
+    }
+  },
+  {
+    "name": "a credit note whose verifikat an earlier attempt reversed: the storno is skipped",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0002"
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "reversal_entry_id": null,
+      "reversed_credit_note_id": "00000000-0000-4000-8000-0000000c0002"
+    }
+  },
+  {
+    "name": "a credit note without a verifikat: nothing to cancel",
+    "calls": [],
+    "outcome": {
+      "ok": true,
+      "reversal_entry_id": null,
+      "reversed_credit_note_id": "00000000-0000-4000-8000-0000000c0003"
+    }
+  }
+]

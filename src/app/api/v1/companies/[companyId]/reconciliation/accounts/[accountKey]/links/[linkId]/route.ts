@@ -3,7 +3,9 @@
  *
  * Remove one link. linkId is the outside row's id (transaction id on a bank
  * account, skattekonto_transaction id on the skattekonto): one row holds at
- * most one link, so the row id is the link id. The verifikat is untouched.
+ * most one link, so the row id is the link id. On a bank account it may also
+ * be the settlement_id of verifikat settled against each other. The verifikat
+ * are untouched.
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
@@ -12,11 +14,16 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { AccountKeySchema } from '@/lib/reconciliation/schemas'
-import { unmatchLink } from '@/lib/reconciliation/actions'
+import { reconciliationRefusalCode, unmatchLink } from '@/lib/reconciliation/actions'
+import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const UnlinkResponse = z.object({
   external_id: z.string(),
   previous_journal_entry_id: z.string().nullable(),
+  /** Present when linkId was a ledger-only settlement: the verifikat that are back in unmatched_ledger. */
+  settlement_id: z.string().optional(),
+  journal_entry_ids: z.array(z.string()).optional(),
 })
 
 registerEndpoint({
@@ -31,8 +38,9 @@ registerEndpoint({
   doNotUseFor:
     'Undoing a booking: a residual or categorization booking is reversed through the journal-entry reverse endpoint, not by unlinking.',
   pitfalls: [
-    'linkId is the outside row id, not a separate link entity.',
+    'linkId is the outside row id, not a separate link entity. The one exception: verifikat settled against each other (on a bank account a pair without external_ids; on the skattekonto the rest of a 1:N link) are undone with their settlement_id, which the items endpoint reports as settlement.settlement_id; the response then carries settlement_id and journal_entry_ids, and previous_journal_entry_id is null. Unlinking a skattekonto row that a 1:N link spread over several verifikat undoes its settlement too.',
     'Unlinking a row whose verifikat was stornoed is the expected fix for a link_problem = entry_reversed item; the row then shows under unmatched_external again.',
+    'A bank row booked from itself (categorize, match-invoice, a direct booking) has no link to remove: its verifikat is its booking. Such a row lists no unmatch action, and DELETE answers 409 RECONCILIATION_UNLINK_IS_BOOKING; reverse the verifikat (POST /journal-entries/{id}/reverse) instead. A row with no link answers 409 RECONCILIATION_NOT_LINKED, an unknown id 404 NOT_FOUND.',
   ],
   example: {
     response: {
@@ -71,6 +79,17 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; accountKe
       }
       return ok(result, { requestId: ctx.requestId })
     } catch (err) {
+      // A refusal of the reconciliation surface is a typed 4xx, never 500 (PH 194).
+      if (err instanceof SkattekontoLinkError) {
+        const refusal = reconciliationRefusalCode(err)
+        if (refusal) {
+          return v1ErrorResponseFromCode(refusal, ctx.log, {
+            requestId: ctx.requestId,
+            messageSv: getErrorMessage(err),
+            details: { reason: err.code },
+          })
+        }
+      }
       return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
     }
   },

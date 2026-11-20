@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { UpdateRecurringScheduleSchema } from '@/lib/api/schemas'
 import { periodPlaceholderProblem } from '@/lib/invoices/recurring-placeholders'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
+import {
+  RECURRING_ARTICLE_INVALID_MESSAGE,
+  findForeignRecurringArticleIds,
+} from '@/lib/invoices/recurring-schedule-items'
 import {
   computeInitialRunDate,
   computeNextRunDate,
@@ -12,8 +15,6 @@ import {
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
 import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'recurring_invoice.get',
@@ -257,6 +258,18 @@ export const PATCH = withRouteContext(
         return NextResponse.json(
           { error: 'Schedule not found', type: 'not_found' },
           { status: 404 },
+        )
+      }
+
+      const articleCheck = await findForeignRecurringArticleIds(supabase, companyId, items)
+      if (articleCheck.error) {
+        log.error('failed to verify schedule articles', articleCheck.error)
+        return errorResponse(articleCheck.error, log, { requestId })
+      }
+      if (articleCheck.invalidArticleIds.length > 0) {
+        return NextResponse.json(
+          { error: RECURRING_ARTICLE_INVALID_MESSAGE, type: 'validation_error' },
+          { status: 400 },
         )
       }
     }

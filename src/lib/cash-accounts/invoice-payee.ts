@@ -6,17 +6,11 @@ import type {
   InvoicePayeeDefault,
   InvoicePaymentAccount,
 } from '@/types'
-import { createLogger } from '@/lib/logger'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
-import {
-  hasUsableInvoicePaymentAccount,
-  isInvoicePaymentAccountCurrency,
-  normalizeInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+import { isInvoicePaymentAccountCurrency } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { findFreeLedgerAccount } from '@/lib/cash-accounts/service'
-
-const log = createLogger('cash-accounts/invoice-payee')
+import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee-rules'
 
 export const PAYEE_FIELDS: readonly (keyof CashAccountPayeeFields)[] = [
   'bank_name',
@@ -30,48 +24,6 @@ export const PAYEE_FIELDS: readonly (keyof CashAccountPayeeFields)[] = [
   'bank_code',
   'foreign_account_number',
 ]
-
-/** A cash account's payee columns: the InvoicePaymentAccount keys, with the printed IBAN in payee_iban. */
-export type CashAccountPayeeSource = Omit<CashAccountPayeeFields, 'iban'> & { payee_iban: string | null }
-
-/**
- * The payee fields of a cash account in the shape the invoice renderers read.
- * The printed IBAN is payee_iban, never the bank-identity iban column.
- */
-export function cashAccountPayee(account: CashAccountPayeeSource): InvoicePaymentAccount {
-  return normalizeInvoicePaymentAccount({
-    bank_name: account.bank_name,
-    clearing_number: account.clearing_number,
-    account_number: account.account_number,
-    bankgiro: account.bankgiro,
-    plusgiro: account.plusgiro,
-    swish: account.swish,
-    iban: account.payee_iban,
-    bic: account.bic,
-    bank_code: account.bank_code,
-    foreign_account_number: account.foreign_account_number,
-  })
-}
-
-/**
- * Whether the account can be printed on an invoice in `currency`: enabled,
- * flagged as a payee, and carrying the identifiers that currency needs (an
- * IBAN for anything but SEK, or the USD/GBP routing triple).
- */
-export function isUsableInvoicePayee(account: CashAccount, currency: Currency): boolean {
-  return account.enabled
-    && account.invoice_payee
-    && hasUsableInvoicePaymentAccount(cashAccountPayee(account), currency)
-}
-
-/**
- * Bank-type rows only: Stripe (1686), Woo (1680) and Shopify (1584) also live
- * in cash_accounts, and so may a till (1910 Kassa, 1911-1919). A customer is
- * paid to a giro or bank account (BAS 1920-1999), never to a cash till.
- */
-export function isBankCashAccount(account: Pick<CashAccount, 'ledger_account'>): boolean {
-  return /^19[2-9]\d$/.test(account.ledger_account)
-}
 
 export interface InvoicePayeeState {
   accounts: CashAccount[]
@@ -108,27 +60,6 @@ export async function loadInvoicePayeeState(
     accounts: ((accountsRes.data ?? []) as CashAccount[]).filter(isBankCashAccount),
     defaults: (defaultsRes.data ?? []) as InvoicePayeeDefault[],
   }
-}
-
-/** The default payee account for `currency`, or null when none is configured. */
-export async function getDefaultInvoicePayee(
-  supabase: SupabaseClient,
-  companyId: string,
-  currency: Currency,
-): Promise<CashAccount | null> {
-  const { data, error } = await supabase
-    .from('invoice_payee_defaults')
-    .select('cash_account:cash_accounts!invoice_payee_defaults_same_company(*)')
-    .eq('company_id', companyId)
-    .eq('currency', currency)
-    .maybeSingle()
-  if (error) {
-    log.warn('getDefaultInvoicePayee failed', { companyId, currency, error: error.message })
-    return null
-  }
-  const account = (data as { cash_account: CashAccount | CashAccount[] | null } | null)?.cash_account
-  if (!account) return null
-  return Array.isArray(account) ? account[0] ?? null : account
 }
 
 export type PayeeUpdate = Partial<CashAccountPayeeFields> & {
@@ -185,6 +116,34 @@ export async function updateCashAccountPayee(
 }
 
 /**
+ * Point the bank identity (iban) of a disabled account typed in by hand at
+ * its printed IBAN, or clear it with null (lib/cash-accounts/manage.ts
+ * decides when). The UPDATE carries the conditions itself, under the same
+ * company lock every bank identity writer takes: a row a bank connection
+ * took over, or one turned back on, in the meantime keeps its identity and
+ * answers null.
+ */
+export async function setTypedAccountIdentity(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+  iban: string | null,
+): Promise<CashAccount | null> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .update({ iban })
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .eq('source', 'manual')
+    .eq('enabled', false)
+    .is('bank_connection_id', null)
+    .select('*')
+    .maybeSingle()
+  if (error) throw new Error(`cash_accounts identity update failed: ${error.message}`)
+  return (data as CashAccount | null) ?? null
+}
+
+/**
  * Make `cashAccountId` the default payee for `currency`, or clear the
  * default when null. The account must belong to the company: the composite
  * FK rejects a foreign id and the caller sees the error.
@@ -221,36 +180,75 @@ export interface CreateManualBankAccountInput {
   invoice_payee?: boolean
 }
 
+/** Why a typed-in bank account cannot be created as asked. */
+export type ManualBankAccountRefusal =
+  | { reason: 'ledger_taken'; ledger_account: string }
+  | { reason: 'no_free_ledger' }
+  | { reason: 'iban_duplicate'; iban: string; cash_account_id: string }
+
+export interface ManualBankAccountPlan {
+  ledger_account: string
+  currency: string
+  /** The IBAN as it will be stored (identity and printed), or null. */
+  iban: string | null
+}
+
 /**
- * A bank account the user types in (no PSD2 connection). Allocates the next
- * free 19xx slot for the currency unless one is given, and makes sure that
- * number exists in the chart so bookings and pickers can see it.
+ * The read-only half of creating a bank account the user types in (no PSD2
+ * connection): which 19xx slot the new account gets, and whether anything
+ * refuses it. Writes nothing, so it is also the dry run of the API door.
+ * lib/cash-accounts/manage.ts answers the refusals as codes.
+ *
+ * Refuses an IBAN another of the company's rows already carries, as its
+ * bank identity (iban) or as its printed payee IBAN: two rows for one
+ * physical account is how a company ends up with a second 19xx ledger for
+ * the same money (seen on a 1938 account).
  */
-export async function createManualBankAccount(
+export async function planManualBankAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: Pick<CreateManualBankAccountInput, 'currency' | 'ledger_account' | 'payee'>,
+): Promise<{ ok: true; plan: ManualBankAccountPlan } | ({ ok: false } & ManualBankAccountRefusal)> {
+  const currency = input.currency.toUpperCase()
+  // findFreeLedgerAccount treats a slot held by a manual row it may promote
+  // as free (the PSD2 path promotes that row in place); this path INSERTS,
+  // so every slot any row holds is taken.
+  const { data: existing, error: existingError } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account, iban, payee_iban')
+    .eq('company_id', companyId)
+  if (existingError) throw new Error(`cash_accounts lookup failed: ${existingError.message}`)
+  const rows = (existing ?? []) as { id: string; ledger_account: string; iban?: string | null; payee_iban?: string | null }[]
+
+  const iban = compact(clean(input.payee?.iban), true)
+  if (iban) {
+    // Same normalization as the stored value (no spaces, upper case), so
+    // "SE45 5000 ..." and "se4550000..." are one account.
+    const twin = rows.find((r) => compact(clean(r.iban), true) === iban || compact(clean(r.payee_iban), true) === iban)
+    if (twin) return { ok: false, reason: 'iban_duplicate', iban, cash_account_id: twin.id }
+  }
+
+  const taken = new Set(rows.map((r) => r.ledger_account))
+  const requested = input.ledger_account?.trim()
+  if (requested && taken.has(requested)) return { ok: false, reason: 'ledger_taken', ledger_account: requested }
+  const ledger = requested || (await findFreeLedgerAccount(supabase, companyId, currency, taken))
+  if (!ledger) return { ok: false, reason: 'no_free_ledger' }
+  return { ok: true, plan: { ledger_account: ledger, currency, iban } }
+}
+
+/**
+ * Make sure a cash account's ledger exists in the company's chart, named by
+ * BAS (or the fallback name for a number BAS does not name), so bookings and
+ * pickers can see it. Shared by the bank and the company-card create paths.
+ */
+export async function ensureChartAccount(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  input: CreateManualBankAccountInput,
-): Promise<CashAccount> {
-  const currency = input.currency.toUpperCase()
-  // findFreeLedgerAccount treats a slot held by a manual row as free (the
-  // PSD2 path promotes that row in place); this path INSERTS, so every slot
-  // any row holds is taken.
-  const { data: existing, error: existingError } = await supabase
-    .from('cash_accounts')
-    .select('ledger_account')
-    .eq('company_id', companyId)
-  if (existingError) throw new Error(`cash_accounts lookup failed: ${existingError.message}`)
-  const taken = new Set(((existing ?? []) as { ledger_account: string }[]).map((r) => r.ledger_account))
-  const requested = input.ledger_account?.trim()
-  if (requested && taken.has(requested)) {
-    throw new Error(`Ledger account ${requested} is already a cash account of this company`)
-  }
-  const ledger = requested || (await findFreeLedgerAccount(supabase, companyId, currency, taken))
-  if (!ledger) {
-    throw new Error('No free 19xx ledger account for a new bank account')
-  }
-  const chartName = getBASReference(ledger)?.account_name ?? `Bankkonto ${currency}`
+  ledger: string,
+  fallbackName: string,
+): Promise<void> {
+  const chartName = getBASReference(ledger)?.account_name ?? fallbackName
   const sync = await syncMappedAccounts(
     supabase,
     companyId,
@@ -269,6 +267,22 @@ export async function createManualBankAccount(
   if (sync.error) {
     throw new Error(`chart sync failed for ${ledger}: ${sync.error}`)
   }
+}
+
+/**
+ * The writing half: make sure the planned number exists in the chart so
+ * bookings and pickers can see it, then insert the manual row.
+ */
+export async function insertManualBankAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: CreateManualBankAccountInput,
+  plan: ManualBankAccountPlan,
+): Promise<CashAccount> {
+  const ledger = plan.ledger_account
+  const currency = plan.currency
+  await ensureChartAccount(supabase, companyId, userId, ledger, `Bankkonto ${currency}`)
 
   const payee = input.payee ?? {}
   const { data, error } = await supabase
@@ -290,8 +304,8 @@ export async function createManualBankAccount(
       swish: clean(payee.swish),
       // A typed account: the printed IBAN is also the account's identity, so
       // a later bank connection with the same IBAN promotes this row in place.
-      iban: compact(clean(payee.iban), true),
-      payee_iban: compact(clean(payee.iban), true),
+      iban: plan.iban,
+      payee_iban: plan.iban,
       bic: compact(clean(payee.bic), true),
       bank_code: clean(payee.bank_code),
       foreign_account_number: clean(payee.foreign_account_number),

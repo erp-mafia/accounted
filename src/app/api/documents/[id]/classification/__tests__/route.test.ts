@@ -1,18 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
+vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
-vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn(() => ({ tag: 'service' })) }))
+vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn() }))
 vi.mock('@/lib/documents/classify/classify', () => ({ recordHumanClassification: vi.fn() }))
 vi.mock('@/lib/documents/jobs/queue', () => ({ enqueueDocumentJob: vi.fn() }))
 vi.mock('@/lib/arkiv/agreements/store', () => ({ withdrawDerivedAgreement: vi.fn(async () => ({ status: 'skipped', reason: 'no_agreement' })) }))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { requireWritePermission } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { createServiceClient } from '@/lib/supabase/server'
 import { recordHumanClassification } from '@/lib/documents/classify/classify'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { withdrawDerivedAgreement } from '@/lib/arkiv/agreements/store'
@@ -29,9 +33,18 @@ beforeEach(() => {
   process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
+  vi.mocked(requireWritePermission).mockResolvedValue({ ok: true })
+  // The document lookup and the writes run on the service client (lib/documents/classify/set-type.ts).
+  vi.mocked(createServiceClient).mockReturnValue(mockSupabase as never)
 })
 
 describe('POST /api/documents/[id]/classification', () => {
+  it('returns 401 when the caller is not signed in and records nothing', async () => {
+    ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) })
+    expect((await parseJsonResponse(await call({ doc_type: 'minutes.board' }))).status).toBe(401)
+    expect(recordHumanClassification).not.toHaveBeenCalled()
+  })
+
   it('rejects a type outside the taxonomy', async () => {
     expect((await parseJsonResponse(await call({ doc_type: 'spaceship' }))).status).toBe(400)
   })
@@ -42,8 +55,8 @@ describe('POST /api/documents/[id]/classification', () => {
     const { status, body } = await parseJsonResponse(await call({ doc_type: 'agreement.loan' }))
     expect(status).toBe(200)
     expect((body as { data: Record<string, unknown> }).data).toEqual({ document_id: DOC, doc_type: 'agreement.loan' })
-    expect(recordHumanClassification).toHaveBeenCalledWith({ tag: 'service' }, DOC, 'user-1', { docType: 'agreement.loan', relevance: 'relevant' })
-    expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC, 'extract')
+    expect(recordHumanClassification).toHaveBeenCalledWith(mockSupabase, DOC, 'user-1', { docType: 'agreement.loan', relevance: 'relevant' })
+    expect(enqueueDocumentJob).toHaveBeenCalledWith(mockSupabase, 'company-1', DOC, 'extract')
   })
 
   it('keeps the type but queues no extraction for a company outside the brain rollout', async () => {
@@ -52,7 +65,7 @@ describe('POST /api/documents/[id]/classification', () => {
     ;(recordHumanClassification as ReturnType<typeof vi.fn>).mockResolvedValue({ status: 'classified', admission: 'admitted' })
     const { status } = await parseJsonResponse(await call({ doc_type: 'agreement.loan' }))
     expect(status).toBe(200)
-    expect(recordHumanClassification).toHaveBeenCalledWith({ tag: 'service' }, DOC, 'user-1', { docType: 'agreement.loan', relevance: 'relevant' })
+    expect(recordHumanClassification).toHaveBeenCalledWith(mockSupabase, DOC, 'user-1', { docType: 'agreement.loan', relevance: 'relevant' })
     expect(enqueueDocumentJob).not.toHaveBeenCalled()
   })
 
@@ -61,8 +74,8 @@ describe('POST /api/documents/[id]/classification', () => {
     ;(recordHumanClassification as ReturnType<typeof vi.fn>).mockResolvedValue({ status: 'classified', admission: 'admitted' })
     ;(withdrawDerivedAgreement as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ status: 'withdrawn', agreementId: 'agr-1', facts: 7, deadlines: 1 })
     expect((await parseJsonResponse(await call({ doc_type: 'supplier_invoice' }))).status).toBe(200)
-    expect(withdrawDerivedAgreement).toHaveBeenCalledWith({ tag: 'service' }, DOC, 'supplier_invoice', expect.stringContaining('supplier_invoice'))
-    expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC, 'extract')
+    expect(withdrawDerivedAgreement).toHaveBeenCalledWith(mockSupabase, DOC, 'supplier_invoice', expect.stringContaining('supplier_invoice'))
+    expect(enqueueDocumentJob).toHaveBeenCalledWith(mockSupabase, 'company-1', DOC, 'extract')
 
     enqueue({ data: { id: DOC }, error: null })
     ;(withdrawDerivedAgreement as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ status: 'error', reason: 'agreement delete failed: boom' })
@@ -79,5 +92,12 @@ describe('POST /api/documents/[id]/classification', () => {
     expect((await parseJsonResponse(await call({ doc_type: 'receipt' }))).status).toBe(404)
     expect(recordHumanClassification).not.toHaveBeenCalled()
     expect(enqueueDocumentJob).not.toHaveBeenCalled()
+  })
+
+  it('returns 403 for a read-only member and records nothing', async () => {
+    // A person's type reaches the open Underlag item (route-from-arkiv), so only a member who may write can give it.
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: false, response: NextResponse.json({ error: 'Du har endast läsbehörighet i detta företag.' }, { status: 403 }) })
+    expect((await parseJsonResponse(await call({ doc_type: 'receipt' }))).status).toBe(403)
+    expect(recordHumanClassification).not.toHaveBeenCalled()
   })
 })

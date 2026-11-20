@@ -42,6 +42,7 @@ import {
   type UpdateEmployeeBenefitSchema,
 } from '@/lib/api/schemas'
 import { calculateBikeBenefit } from '@/lib/salary/benefits'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 
 export type EmployeeBenefitResult<T> =
   | { ok: true; data: T }
@@ -81,12 +82,6 @@ export type UpdateEmployeeBenefitInput = z.infer<typeof UpdateEmployeeBenefitSch
 
 /** Shared 400 copy for annual_market_value on a row that is not a bike benefit. */
 export const ANNUAL_MARKET_VALUE_BIKE_ONLY_MESSAGE = 'annual_market_value gäller endast cykelförmån'
-
-// Literal projection at every call site: tests/schema/no-phantom-columns can
-// only check column names it can read statically, and the v1 rule is never
-// SELECT *. company_id and user_id are tenancy scoping, not resource data.
-const BENEFIT_COLUMNS =
-  'id, employee_id, benefit_type, description, monthly_value, valid_from, valid_to, metadata, is_active, created_at, updated_at'
 
 const NOT_FOUND_DETAILS: Record<string, unknown> = { resource: 'employee_benefit' }
 
@@ -256,6 +251,9 @@ export async function createEmployeeBenefit(
     return { ok: true, data: { committed: false, preview } }
   }
 
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
+
   // Object literal, not a spread: tests/schema/no-phantom-columns can only
   // check payload keys it can read statically.
   const { data, error } = await supabase
@@ -368,6 +366,9 @@ export async function updateEmployeeBenefit(
     return { ok: true, data: { committed: true, row: existing } }
   }
 
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
+
   const { data, error } = await supabase
     .from('employee_benefits')
     // Literal keys so the phantom-column scanner can verify every column;
@@ -430,6 +431,9 @@ export async function deleteEmployeeBenefit(
     }
     return { ok: true, data: { committed: false, preview: data as unknown as EmployeeBenefitRow } }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
 
   // Referenced: keep the row and switch it off, so the chain from a (possibly
   // booked) verifikat back to its förmån stays intact (BFL 5 kap 6-7 §,

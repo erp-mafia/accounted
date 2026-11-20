@@ -1,61 +1,48 @@
 /**
  * POST /api/v1/companies/{companyId}/transactions/{id}/categorize
  *
- * Categorize a transaction and create the corresponding journal entry. This
- * is a thin v1 surface over the same orchestration the internal dashboard
- * route uses: same mapping engine, same booking templates, same SI-match
- * suggestion intercept, same CAS race guard.
+ * Categorize a transaction and create the corresponding journal entry. A thin
+ * v1 door over categorizeTransaction (lib/transactions/categorize-core.ts),
+ * the one booking path the dashboard route, batch-categorize, the approval
+ * executor and the MCP tool share: same mapping, templates, override,
+ * double-booking guards (TRANSACTION_BOOK_POSSIBLE_DUPLICATE with the bound
+ * force override; TX_CATEGORIZE_SUGGEST_SI_MATCH / _CI_MATCH with
+ * confirm_no_match), period lock and compare-and-set write.
  *
- * Already-categorized fast path: if the transaction already has a journal
- * entry, only the is_business / category flags are updated. The JE is left
- * intact (it's immutable post-commit per BFL 5 kap 6 §).
+ * Already-categorized fast path: if a posted verifikat already books the row,
+ * only the is_business / category flags are updated. The JE is left intact
+ * (it's immutable post-commit per BFL 5 kap 6 §).
  *
- * Fail-closed (issue #1947): if the verifikat cannot be created (locked
- * period, unbalanced entry, engine error) the request is refused with 409
- * TX_CATEGORIZE_JOURNAL_ENTRY_FAILED and the transaction is left untouched,
- * so it stays in the unbooked queue. journal_entry_error in the 200 body is
- * therefore always null and kept only for response-shape compatibility.
+ * Fail-closed (issue #1947): if the verifikat cannot be created the request is
+ * refused with a typed code and the transaction is left untouched, so it stays
+ * in the unbooked queue. journal_entry_error in the 200 body is therefore
+ * always null and kept only for response-shape compatibility.
  *
- * Dry-runnable: returns the resolved mapping (debit/credit + VAT lines)
- * without inserting the journal entry or mutating the transaction.
+ * Hard blocks (accounted#130 step 2): a booking a booking review rule matches
+ * is never booked from a key. It is staged as a categorize_transaction
+ * pending operation for a person to approve in the app, answered 202 with
+ * the pending operation (staged_because BOOKING_REVIEW_REQUIRED); a booking
+ * named by a template id, which a staged operation cannot carry, is refused
+ * with 409 BOOKING_REVIEW_REQUIRED instead.
+ *
+ * Dry-runnable: the service's dry run runs every read-only check the booking
+ * runs and returns the resolved mapping without inserting the journal entry or
+ * mutating the transaction; an honoured force writes its behandlingshistorik
+ * record only on the live call.
  */
 import { z } from 'zod'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
-import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
-import {
-  getTemplateById,
-  buildMappingResultFromTemplate,
-  validateTemplateForEntity,
-} from '@/lib/bookkeeping/booking-templates'
-import {
-  upsertCounterpartyTemplate,
-  buildMappingResultFromCounterpartyTemplate,
-} from '@/lib/bookkeeping/counterparty-templates'
-import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
-import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
-import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
-import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
-import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { getStructuredError } from '@/lib/errors/get-structured-error'
-import { eventBus } from '@/lib/events'
-import type {
-  CategorizationTemplate,
-  EntityType,
-  Transaction,
-  TransactionCategory,
-} from '@/types'
+import { categorizeTransaction } from '@/lib/transactions/categorize-core'
+import { stageBlockedCategorization } from '@/lib/booking-review/stage-categorization'
+import { addHandles, STAGED_PENDING_OPERATION_HANDLES } from '@/lib/api/v1/handles'
+import { toPendingOperationView } from '@/lib/pending-operations/view'
 
 const CategorizeResponse = z.object({
   success: z.boolean(),
@@ -82,11 +69,15 @@ registerEndpoint({
   useWhen:
     'You\'re categorizing a bank transaction. Pass `is_business: true` plus either `category`, `template_id` (booking template), `counterparty_template_id`, or `account_override`. For private transactions, `is_business: false` is enough.',
   doNotUseFor:
-    'Matching a payment to an invoice: use `:match-invoice` or `:match-supplier-invoice`, which storno any conflicting JE first. Uncategorizing: `:uncategorize`.',
+    'Matching a payment to an invoice: use `:match-invoice` or `:match-supplier-invoice`, on an unbooked transaction. Uncategorizing: `:uncategorize`.',
   pitfalls: [
-    'A bank payment that looks like an invoice payment will be flagged via TX_CATEGORIZE_SUGGEST_SI_MATCH: pass `confirm_no_match: true` to override and force-categorize as direct expense (e.g. when the supplier invoice was already booked).',
+    'A bank line the ledger already books (a booked sibling transaction, or a voucher booking the same amount on the bank account such as a supplier invoice marked paid) is refused with 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE and the candidate in `details.candidate`: link the transaction to that verifikat instead. Only if it is a genuinely separate event, resend with `force: true` plus `expected_duplicate_journal_entry_id` (or `expected_duplicate_transaction_id`) echoing the candidate; a stale id returns TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH.',
+    'A plain 244x (supplier payment) or 151x (customer receipt) categorization that an open invoice covers is refused with 409 TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH: match the invoice via `:match-supplier-invoice` / `:match-invoice`, or pass `confirm_no_match: true` to keep the plain categorization.',
     'Already-categorized fast path: if the transaction already has a journal_entry_id, only flags get updated. The JE is immutable post-commit.',
-    'account_override must exist in the chart of accounts; an unknown account returns TX_CATEGORIZE_INVALID_ACCOUNT.',
+    'account_override must exist and be active in the chart of accounts (else TX_CATEGORIZE_INVALID_ACCOUNT). It books the business side gross unless you also pass vat_treatment or vat_amount: the category default VAT is never carried onto an arbitrary account.',
+    'vat_amount replaces the rate-based VAT line with the underlag\'s actual moms (e.g. dricks); it needs a rate-based treatment, else TX_CATEGORIZE_INVALID_VAT_AMOUNT.',
+    'vat_treatment reverse_charge without reverse_charge_kind takes the box (20, 21 or 22) from the seller country on the row\'s underlag and the category; when they cannot tell it, 400 TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN (details.reason): send reverse_charge_kind. Never ruta 21 by default.',
+    'A booking one of the company\'s blocks (booking review rules, Bokföringsregler > Spärrar in the app) matches is never booked from a key: it is staged for a person and answered 202 with the pending operation (staged_because BOOKING_REVIEW_REQUIRED). Approving it is web-only. With template_id or counterparty_template_id it cannot be staged and is refused with 409 BOOKING_REVIEW_REQUIRED.',
   ],
   example: {
     request: { is_business: true, category: 'expense_office' },
@@ -124,458 +115,85 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const rawBodyResult = await readV1JsonBody(request, ctx)
     if (!rawBodyResult.ok) return rawBodyResult.response
-    const rawBody = rawBodyResult.body
-    const parsed = CategorizeTransactionSchema.safeParse(rawBody)
+    const parsed = CategorizeTransactionSchema.safeParse(rawBodyResult.body)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
-    const body = parsed.data
-    const { is_business, category } = body
-
-    const { data: transaction, error: fetchErr } = await ctx.supabase
-      .from('transactions')
-      .select('*')
-      .eq('id', txId)
-      .eq('company_id', ctx.companyId!)
-      .single()
-
-    if (fetchErr || !transaction) {
-      return v1ErrorResponseFromCode('TX_CATEGORIZE_TX_NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
 
     const txLog = ctx.log.child({ transactionId: txId })
+    const outcome = await categorizeTransaction(ctx.supabase, ctx.userId, ctx.companyId!, txId, parsed.data, {
+      dryRun: ctx.dryRun,
+      onBooked: 'update_flags',
+      forceVia: 'api_force',
+      reverseChargeBoxParam: 'reverse_charge_kind',
+      log: ctx.log,
+    })
 
-    // Already-categorized fast path: just flip flags. Skip on dry-run so the
-    // caller can preview the full mapping that would be applied to a fresh tx.
-    if (transaction.journal_entry_id && !ctx.dryRun) {
-      const finalCat: TransactionCategory = is_business
-        ? category || 'uncategorized'
-        : 'private'
-      const { error: updateErr } = await ctx.supabase
-        .from('transactions')
-        .update({ is_business, category: finalCat, is_ignored: false })
-        .eq('id', txId)
-        .eq('company_id', ctx.companyId!)
-      if (updateErr) return v1ErrorResponse(updateErr, txLog, { requestId: ctx.requestId })
-      return ok(
-        {
-          success: true,
-          journal_entry_created: false,
-          journal_entry_id: transaction.journal_entry_id as string,
-          journal_entry_error: null,
-          category: finalCat,
-          already_had_journal_entry: true,
-        },
-        { requestId: ctx.requestId },
-      )
-    }
-
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('entity_type, vat_registered')
-      .eq('company_id', ctx.companyId!)
-      .single()
-    const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
-    // Icke momsregistrerad verksamhet books no moms line on a bank
-    // transaction (lib/bookkeeping/vat-registration.ts); passed as loaded.
-    const vatRegistered: boolean | null = settings?.vat_registered ?? null
-
-    // Resolve final category and mapping result. Mirrors the internal route.
-    let finalCategory: TransactionCategory
-    if (body.template_id) {
-      const template = getTemplateById(body.template_id)
-      if (!template) {
-        return v1ErrorResponseFromCode('TX_CATEGORIZE_INVALID_TEMPLATE', txLog, {
-          requestId: ctx.requestId,
-          details: { templateId: body.template_id, reason: 'unknown_template' },
+    if (!outcome.ok) {
+      if (outcome.code === 'ACCOUNTS_NOT_IN_CHART') {
+        return v1ErrorResponse(
+          new AccountsNotInChartError((outcome.details?.account_numbers as string[] | undefined) ?? []),
+          txLog,
+          { requestId: ctx.requestId },
+        )
+      }
+      // A booking review rule matches (accounted#130 step 2): a key's
+      // booking is staged for a person, never booked, and answered 202 with
+      // the pending operation as ?stage=true answers elsewhere.
+      if (outcome.code === 'BOOKING_REVIEW_REQUIRED') {
+        const staged = await stageBlockedCategorization(ctx.supabase, {
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          transactionId: txId,
+          booking: parsed.data,
+          actor: { type: ctx.actor.type, id: ctx.apiKeyId ?? null, label: ctx.actor.label ?? null },
+          log: txLog,
         })
+        if (staged) {
+          const view = addHandles(
+            {
+              ...toPendingOperationView(staged.row),
+              ...(staged.periodStatus ? { period_status: staged.periodStatus } : {}),
+              staged_because: 'BOOKING_REVIEW_REQUIRED',
+            },
+            STAGED_PENDING_OPERATION_HANDLES,
+          ).value
+          return ok(view, { requestId: ctx.requestId, status: 202 })
+        }
       }
-      const valid = validateTemplateForEntity(template, entityType)
-      if (!valid.valid) {
-        return v1ErrorResponseFromCode('TX_CATEGORIZE_INVALID_TEMPLATE', txLog, {
-          requestId: ctx.requestId,
-          details: { templateId: body.template_id, reason: valid.error },
-        })
-      }
-      finalCategory = is_business ? template.fallback_category : 'private'
-    } else {
-      finalCategory = is_business ? category || 'uncategorized' : 'private'
-    }
-
-    let mappingResult
-    if (body.counterparty_template_id && is_business) {
-      const { data: cpTemplate } = await ctx.supabase
-        .from('categorization_templates')
-        .select('*')
-        .eq('id', body.counterparty_template_id)
-        .eq('company_id', ctx.companyId!)
-        .eq('is_active', true)
-        .maybeSingle()
-      if (!cpTemplate) {
-        return v1ErrorResponseFromCode('NOT_FOUND', txLog, {
-          requestId: ctx.requestId,
-          details: { resource: 'counterparty_template' },
-        })
-      }
-      const match = {
-        template: cpTemplate as CategorizationTemplate,
-        matchMethod: 'exact_alias' as const,
-        confidence: Number(cpTemplate.confidence),
-      }
-      mappingResult = buildMappingResultFromCounterpartyTemplate(
-        match,
-        transaction as Transaction,
-        entityType,
-        vatRegistered,
-      )
-    } else if (body.template_id) {
-      const template = getTemplateById(body.template_id)!
-      mappingResult = buildMappingResultFromTemplate(
-        template,
-        transaction as Transaction,
-        entityType,
-        vatRegistered,
-      )
-    } else {
-      mappingResult = buildMappingResultFromCategory(
-        finalCategory,
-        transaction as Transaction,
-        is_business,
-        entityType,
-        body.vat_treatment,
-        null,
-        vatRegistered,
-      )
-    }
-
-    // Book the bank leg against the transaction's ACTUAL settlement account
-    // rather than the hardcoded 1930 in the templates. Without this, interest
-    // or fees that landed on a savings/EUR account mis-book to 1930 and the
-    // real bank line never reconciles. applySettlementAccount only rewrites a
-    // 1930 leg and is a no-op when the settlement account is 1930, so legacy
-    // rows with no cash_account_id behave exactly as before. Mirrors the
-    // internal dashboard route (app/api/transactions/[id]/categorize); this
-    // v1 surface previously never called applySettlementAccount at all.
-    const settlementAccount = await resolveSettlementAccount(
-      ctx.supabase,
-      ctx.companyId!,
-      transaction.cash_account_id,
-      txLog,
-      transaction.currency,
-    )
-    mappingResult = applySettlementAccount(mappingResult, settlementAccount)
-
-    if (
-      is_business &&
-      body.account_override &&
-      !body.template_id &&
-      !body.counterparty_template_id
-    ) {
-      const { data: accountExists } = await ctx.supabase
-        .from('chart_of_accounts')
-        .select('account_number, account_class')
-        .eq('company_id', ctx.companyId!)
-        .eq('account_number', body.account_override)
-        .eq('is_active', true)
-        .single()
-      if (!accountExists) {
-        return v1ErrorResponseFromCode('TX_CATEGORIZE_INVALID_ACCOUNT', txLog, {
-          requestId: ctx.requestId,
-          details: { accountNumber: body.account_override },
-        })
-      }
-      if (transaction.amount < 0) mappingResult.debit_account = body.account_override
-      else mappingResult.credit_account = body.account_override
-      // Drop auto-VAT lines when the override targets a balance-sheet
-      // (class 2) account, but NOT when it targets a moms-line account
-      // directly. BAS class 2 covers both equity/liabilities (where VAT
-      // shouldn't be auto-posted) and the specific VAT accounts themselves
-      // (2611/2621/2631 utgående moms, 2641/2645 ingående moms, etc.).
-      // Narrow the exception to the 2610-2649 range: 2650
-      // (momsredovisningskonto) and 2690 (diverse) are class-2 but NOT
-      // moms-line accounts, so writing the auto-VAT pair there would
-      // double-post on the momsredovisningskonto.
-      const overrideNum = parseInt(body.account_override, 10)
-      const isMomsLineAccount = overrideNum >= 2610 && overrideNum <= 2649
-      if (accountExists.account_class === 2 && !isMomsLineAccount) {
-        mappingResult.vat_lines = []
-      }
-    }
-
-    // Dimensions: an explicitly supplied bag tags the business lines of the
-    // generated verifikat (bank/VAT legs stay untagged). Wins over a learned
-    // counterparty-template bag; omitted = the learned bag (if any) applies.
-    if (body.dimensions && Object.keys(body.dimensions).length > 0) {
-      mappingResult.dimensions = body.dimensions
-    }
-
-    // Issue #1643 problem 4: same guard as the dashboard route. A learned
-    // counterparty template or an account_override must never book the
-    // COUNTER leg onto an orphaned cash-account ledger or a twin ledger of the
-    // transaction's own bank account; the agent doors have no human looking
-    // at a running-balance preview, so the refusal has to live here too.
-    {
-      const guarded = await guardCounterLegs(
-        ctx.supabase,
-        ctx.companyId!,
-        mappingResult,
-        settlementAccount,
-        transaction.cash_account_id,
-      )
-      if (guarded.refusedLedger) {
-        return v1ErrorResponseFromCode('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT', txLog, {
-          requestId: ctx.requestId,
-          details: { accountNumber: guarded.refusedLedger },
-        })
-      }
-      mappingResult = guarded.mappingResult
-    }
-
-    if (!mappingResult.debit_account || !mappingResult.credit_account) {
-      return v1ErrorResponseFromCode('TX_CATEGORIZE_INVALID_MAPPING', txLog, {
+      return v1ErrorResponseFromCode(outcome.code, txLog, {
         requestId: ctx.requestId,
-        details: {
-          debitAccount: mappingResult.debit_account,
-          creditAccount: mappingResult.credit_account,
-        },
+        details: outcome.details,
       })
     }
 
-    // Pre-validate every account in the mapping against the company's
-    // chart_of_accounts. Template / counterparty-template / category paths
-    // all bypass the older account_override check; without this catch they
-    // would reach the engine and throw AccountsNotInChartError mid-flight,
-    // leaving the legacy partial-success branch to silently mark the row as
-    // bokförd with no verifikation. We validate in both live AND dry-run
-    // paths so previews surface the same actionable error. Standard BAS
-    // accounts merely absent from the chart pass: the engine seeds them.
-    const missingAccounts = await findUnresolvableAccounts(
-      ctx.supabase,
-      ctx.companyId!,
-      collectMappingResultAccounts(mappingResult),
-    )
-    if (missingAccounts.length > 0) {
-      txLog.warn('mapping references inactive/unknown accounts', { missingAccounts })
-      return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    // Dry-run stops here: caller sees the resolved mapping without burning
-    // a voucher number or mutating any state.
-    if (ctx.dryRun) {
+    // Dry-run stops here: the resolved mapping, no voucher number burnt and no
+    // state mutated.
+    if (outcome.dryRun) {
+      const { preview } = outcome
       return dryRunPreview(
         {
-          category: finalCategory,
+          category: preview.category,
           mapping: {
-            debit_account: mappingResult.debit_account,
-            credit_account: mappingResult.credit_account,
-            vat_lines: mappingResult.vat_lines,
-            all_lines_complete: mappingResult.all_lines_complete ?? false,
+            debit_account: preview.mappingResult.debit_account,
+            credit_account: preview.mappingResult.credit_account,
+            vat_lines: preview.mappingResult.vat_lines,
+            all_lines_complete: preview.mappingResult.all_lines_complete ?? false,
           },
-          would_create_journal_entry: !transaction.journal_entry_id,
-          already_had_journal_entry: !!transaction.journal_entry_id,
+          would_create_journal_entry: preview.would_create_journal_entry,
+          already_had_journal_entry: preview.already_had_journal_entry,
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
 
-    // Period-lock pre-check. enforce_period_lock + enforce_company_lock_date
-    // triggers will block the JE insert anyway, but they surface as a generic
-    // 500. Catch the locked-period case here and return a structured
-    // PERIOD_LOCKED response so callers see actionable error semantics.
-    const periodLock = await checkPeriodLock(
-      ctx.supabase,
-      ctx.companyId!,
-      transaction.date,
-    )
-    if (periodLock.locked) {
-      // Issue #1661: a private marking is a real booking (eget uttag /
-      // insättning), so the lock applies, but a row that is not a business
-      // event should be ignored, not booked: answer with the code whose
-      // remediation names the ignore verb instead of unlock.
-      return v1ErrorResponseFromCode(
-        is_business ? 'PERIOD_LOCKED' : 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
-        txLog,
-        {
-          requestId: ctx.requestId,
-          details: {
-            transaction_date: transaction.date,
-            reason: periodLock.reason,
-            fiscal_period_id: periodLock.fiscal_period_id,
-            ...(is_business ? {} : { suggested_action: 'ignore' }),
-          },
-        },
-      )
-    }
-
-    // Live path: create the journal entry. The internal route runs a
-    // duplicate-payment guard (Prong B) here that surfaces SI-match
-    // suggestions; we preserve that behavior so v1 and the dashboard
-    // diverge on neither booking outcomes nor compliance.
-    let journalEntryId: string | null = null
-    try {
-      const journalEntry = await createTransactionJournalEntry(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
-        transaction as Transaction,
-        mappingResult,
-      )
-      if (journalEntry) journalEntryId = journalEntry.id
-    } catch (err) {
-      txLog.error('transactions.categorize: journal entry creation failed', err as Error)
-      // AccountsNotInChartError means an account was deactivated between our
-      // pre-validation and the engine call (race). Don't fall through to the
-      // partial-success path that would mark the row bokförd with no
-      // verifikation: return a structured 400 so the row stays in the
-      // categorization queue and the caller can retry after re-activating.
-      if (err instanceof AccountsNotInChartError) {
-        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
-      }
-      // Fail closed (issue #1947): the verifikat IS the booking. Persisting
-      // is_business/category without one dropped the row out of the worklist
-      // predicate (is_business IS NULL) while still unbooked. Nothing is
-      // written; the Swedish reason travels in details.message because the
-      // v1 envelope keeps the registry text as the top-level message.
-      return v1ErrorResponseFromCode('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED', txLog, {
-        requestId: ctx.requestId,
-        details: {
-          cause: getStructuredError(err).code,
-          message: getErrorMessage(err, { context: 'transaction' }),
-        },
-      })
-    }
-
-    // createTransactionJournalEntry returns null (no throw) when no fiscal
-    // period covers the date and the pre-FY clamp does not apply. Same
-    // fail-closed rule: refuse rather than mark the row categorized-but-unbooked.
-    if (!journalEntryId) {
-      return v1ErrorResponseFromCode('NO_OPEN_PERIOD_FOR_DATE', txLog, {
-        requestId: ctx.requestId,
-        details: { transaction_date: transaction.date },
-      })
-    }
-
-    // Best-effort: save mapping rule + upsert counterparty template. These
-    // are user-experience polish (faster future categorization) and never
-    // fail the request. They run only after a posted verifikat, so they never
-    // learn from a booking that did not happen. direction_mismatch = a
-    // mirrored refund/repayment booking; learning it as a rule would store
-    // backwards accounts.
-    if (is_business && transaction.merchant_name && !mappingResult.direction_mismatch) {
-      try {
-        await saveUserMappingRule(
-          ctx.supabase,
-          ctx.companyId!,
-          transaction.merchant_name,
-          mappingResult.debit_account,
-          mappingResult.credit_account,
-          !is_business,
-          body.user_description,
-          body.template_id,
-        )
-      } catch (err) {
-        txLog.warn('save mapping rule failed (non-critical)', err as Error)
-      }
-    }
-    try {
-      await upsertCounterpartyTemplate(
-        ctx.supabase,
-        ctx.companyId!,
-        transaction as Transaction,
-        mappingResult,
-        'user_approved',
-      )
-    } catch (err) {
-      txLog.warn('counterparty template upsert failed (non-critical)', err as Error)
-    }
-
-    // CAS guard: another request must not have categorized this transaction
-    // between fetch and write.
-    const { data: updateResult, error: updateErr } = await ctx.supabase
-      .from('transactions')
-      .update({
-        is_business,
-        category: finalCategory,
-        is_ignored: false,
-        journal_entry_id: journalEntryId,
-      })
-      .eq('id', txId)
-      .eq('company_id', ctx.companyId!)
-      .is('journal_entry_id', null)
-      .select('*')
-
-    if (updateErr) {
-      if (journalEntryId) {
-        await reverseOrphanedJournalEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          journalEntryId,
-          'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
-        )
-      }
-      return v1ErrorResponse(updateErr, txLog, { requestId: ctx.requestId })
-    }
-
-    if (!updateResult || updateResult.length === 0) {
-      if (journalEntryId) {
-        await reverseOrphanedJournalEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          journalEntryId,
-          'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
-        )
-      }
-      return v1ErrorResponseFromCode('TX_CATEGORIZE_RACE', txLog, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    const updatedTransaction = updateResult[0] as Transaction
-
-    // Propagate the underlag onto the new verifikat: anchor the transaction's
-    // pinned document and stamp matched inbox items so they leave the active
-    // inbox. Same shared step the dashboard categorize, /book and bulk-book
-    // paths run; without it a v1 booking of a tx with attached underlag reads
-    // "Underlag saknas" forever. Best-effort by contract (logged inside),
-    // never fails the booking. Runs only when THIS request won the CAS write.
-    if (journalEntryId) {
-      await propagateUnderlagForBookedTransaction(
-        ctx.supabase,
-        ctx.companyId!,
-        txId,
-        journalEntryId,
-      )
-    }
-
-    try {
-      await eventBus.emit({
-        type: 'transaction.categorized',
-        payload: {
-          transaction: updatedTransaction,
-          account: mappingResult.debit_account,
-          taxCode: mappingResult.vat_lines[0]?.account_number || '',
-          userId: ctx.userId,
-          companyId: ctx.companyId!,
-        },
-      })
-    } catch (err) {
-      txLog.warn('transaction.categorized emit failed (non-critical)', err as Error)
-    }
-
-    // journal_entry_error is always null here: a failed verifikat returns a
-    // typed 409 TX_CATEGORIZE_JOURNAL_ENTRY_FAILED above (issue #1947). The
-    // field stays for response-shape compatibility.
+    const { booked } = outcome
     return ok(
       {
         success: true,
-        journal_entry_created: !!journalEntryId,
-        journal_entry_id: journalEntryId,
+        journal_entry_created: booked.journal_entry_created,
+        journal_entry_id: booked.journal_entry_id,
         journal_entry_error: null,
-        category: finalCategory,
+        category: booked.category,
+        ...(booked.already_had_journal_entry ? { already_had_journal_entry: true } : {}),
       },
       { requestId: ctx.requestId },
     )

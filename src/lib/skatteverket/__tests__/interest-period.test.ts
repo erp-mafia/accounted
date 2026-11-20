@@ -16,7 +16,7 @@ function row(overrides: Partial<InterestPeriodRow> & { id: string }): InterestPe
 
 describe('rowsNeedingInterestDate', () => {
   it('marks every row of a retroactive omprövningsbeslut', () => {
-    // The real Center Node AB case: one beslut dated 2026-05-07 re-charging
+    // The reported case: one beslut dated 2026-05-07 re-charging
     // preliminary tax across 15 months. Same date, text and amount on all of
     // them; only ränteberäkningsdatum differs.
     const rows = [

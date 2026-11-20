@@ -4,7 +4,7 @@ export const LANDING_MD = `# accounted API
 
 > Swedish double-entry bookkeeping as a public REST API for agents and integrations. API version \`${API_V1_VERSION}\`.
 
-The accounted API covers the financial workflows an integration needs: create invoices, ingest bank transactions, file VAT declarations, run payroll, and subscribe to webhooks for state changes. Every endpoint is designed for autonomous agents first: machine-readable schemas, dry-run previews, idempotent retries, and inline audit blocks on every write. (A few dashboard-only steps remain, e.g. generating salary payment files and sending payslips, and each cookbook calls out where one applies.)
+The accounted API covers the financial workflows an integration needs: create invoices, ingest bank transactions, file VAT declarations, run payroll, and subscribe to webhooks for state changes. Every endpoint is designed for autonomous agents first: machine-readable schemas, dry-run previews, idempotent retries, and the posted verifikat named in the response. (Steps that need a person, such as BankID signing, are called out in each cookbook.)
 
 If you've used [Stripe's API](https://docs.stripe.com/api), the shape will feel familiar: bearer-token auth, dated API versions, webhook signature verification, idempotency keys. The accounting concepts are Swedish (BAS chart, BFL retention, K2/K3, momsdeklaration) but the surface is built for the same kind of integrator.
 
@@ -13,24 +13,28 @@ If you've used [Stripe's API](https://docs.stripe.com/api), the shape will feel 
 All requests authenticate with a bearer token in the \`Authorization\` header:
 
 \`\`\`bash
-curl https://app.gnubok.se/api/v1/companies \\
-  -H "Authorization: Bearer gnubok_sk_live_..."
+curl https://app.accounted.se/api/v1/companies \\
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
-Create keys in the accounted dashboard at **/settings/api**. Two key prefixes are available:
+Create keys in the accounted dashboard at **/settings/api**. Two kinds of key are available:
 
-- \`gnubok_sk_live_*\`: hits real customer data. Use in production.
-- \`gnubok_sk_test_*\`: reads real company data, but every write is forced into dry-run and nothing persists (responses carry \`X-Gnubok-Mode: test\`). Safe for evals, demos, and agent learning. Same surface, different blast radius.
+- \`gnubok_sk_<random>\` (live, no infix after \`gnubok_sk_\`): hits real customer data. Use in production.
+- \`gnubok_sk_test_*\`: reads real company data, but every write is forced into dry-run and nothing persists (responses carry \`X-Gnubok-Mode: test\`); a write to an endpoint without dry-run support, such as a document upload, is refused with \`403 TEST_KEY_WRITE_BLOCKED\`. Safe for evals, demos, and agent learning. Same surface, different blast radius.
 
 Each key carries one or more **scopes** (\`invoices:read\`, \`invoices:write\`, \`payroll:write\`, \`webhooks:manage\`, ...) that gate which endpoints it can call. Scopes are listed on every endpoint reference page.
+
+To check a key before relying on it, call \`GET /api/v1/api-key\`: any valid key may, whatever its scopes. It returns the key's mode, scopes, and every company it reaches with the role and whether writes are let through there.
 
 Rate limit: 100 requests per minute per key.
 
 ## Base URL
 
 \`\`\`
-https://app.gnubok.se/api/v1
+https://app.accounted.se/api/v1
 \`\`\`
+
+Integrations set up against the earlier host \`app.gnubok.se\` keep working there; new integrations use \`app.accounted.se\`.
 
 URLs include the company id explicitly:
 
@@ -42,21 +46,23 @@ POST /api/v1/companies/{companyId}/invoices
 A multi-company key can act on any company the underlying user is a member of: the URL is the source of truth, not a default. List the companies a key can access with:
 
 \`\`\`bash
-curl https://app.gnubok.se/api/v1/companies \\
-  -H "Authorization: Bearer gnubok_sk_live_..."
+curl https://app.accounted.se/api/v1/companies \\
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
+
+For the cross-company view (unbooked items, inbox, next deadline and last booked entry per company) call \`GET /api/v1/portfolio/overview\`: one response covering every company the key's user belongs to.
 
 ## Core principles
 
 These four invariants hold across the entire surface: once you've internalised them you can predict the shape of any endpoint without reading the reference.
 
-**Dry-run on every write.** Append \`?dry_run=true\` (or send \`X-Dry-Run: true\`) to any POST/PATCH/DELETE to preview the effect: the response shows the journal lines, voucher number, account deltas, and any validation errors that would surface, but commits nothing. Use this in agent test-loops to validate inputs before paying the side-effect cost.
+**Dry-run on most writes.** Append \`?dry_run=true\` (or send \`X-Dry-Run: true\`) to a write whose reference page says dry-run is supported (\`x-dry-run-supported: true\` in the OpenAPI spec) to preview the effect: the response shows the would-be record, the verifikat lines it would post, and any validation errors that would surface, but commits nothing. A write that cannot be simulated refuses the flag with \`400 VALIDATION_ERROR\` (field \`dry_run\`) and runs nothing: period lock, close and year-end, bank and SIE imports, match-invoice, generate-agi, document upload, the approval of a pending operation and the webhook test, verify and rotate-secret verbs are among them. Use dry-run in agent test-loops to validate inputs before paying the side-effect cost.
 
 **Idempotency-Key on every write.** Pass a UUID in the \`Idempotency-Key\` header. Replays of the same key+body return the original response with \`Idempotent-Replayed: true\` (24h cache). Replays with a different body return \`409 IDEMPOTENCY_KEY_REUSE\`.
 
-**Strict-mode write semantics.** A v1 mutation either commits fully or returns a structured error code with no side effects. The dashboard soft-fails on partial writes (a human is there to retry); the v1 surface aborts. This means you never see "the invoice was sent but the email failed": either both happened or neither did.
+**Strict-mode write semantics.** A v1 write is validated in full before anything is posted; a refusal returns a structured error code and writes nothing. Where a later step can fail after a verifikat is posted, the endpoint says what stands: \`POST /invoices/{id}/send\` answers \`502 INVOICE_SEND_ISSUED_NOT_DELIVERED\` with the invoice issued and booked (deliver it another way, do not call \`/send\` again), and a \`POST /salary-runs/{id}/book\` that stops partway keeps the vouchers already posted and adopts them on retry.
 
-**Inline audit on every write.** Every successful write response includes an \`audit\` block in \`meta\` with the voucher number, audit-trail URL, and immutability timestamp. No second round-trip needed to confirm what happened.
+**Posting reference on the response.** A write that posts a verifikat returns its reference in \`data\` (\`journal_entry_id\`, and \`voucher_number\` where the endpoint has it), so no second round-trip is needed to confirm what happened. \`POST /salary-runs/{id}/book\` and \`/correct\` also carry an \`audit\` block in \`meta\` (\`voucher_number\`, \`voucher_url\`, \`immutable_at\`).
 
 ## Response envelope
 
@@ -74,7 +80,7 @@ Every response has the same shape:
 }
 \`\`\`
 
-Errors return an \`error\` object instead of \`data\` (and carry no \`meta\` block — the \`request_id\` moves inside \`error\`):
+Errors return an \`error\` object instead of \`data\` (and carry no \`meta\` block - the \`request_id\` moves inside \`error\`):
 
 \`\`\`json
 {
@@ -84,13 +90,27 @@ Errors return an \`error\` object instead of \`data\` (and carry no \`meta\` blo
     "message_en": "The selected period is locked.",
     "details": { "fiscal_period_id": "..." },
     "recovery_hint": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.",
-    "docs_url": "https://app.gnubok.se/docs/api/errors/PERIOD_LOCKED",
+    "docs_url": "https://docs.accounted.se/errors#period_locked",
     "request_id": "req_..."
   }
 }
 \`\`\`
 
 Every error code is documented in the [error reference](/docs/api/errors).
+
+## Ids and typed handles
+
+Resource ids are UUIDs, and the resources a response returns also carry a **typed handle** next to their id: the same id spelled with its type, \`<prefix>_<the UUID as 32 lowercase hex, no dashes>\`. A journal entry \`0e9c41d2-a1b0-4c6f-9a3e-5b7d8c9f0a1b\` is \`je_0e9c41d2a1b04c6f9a3e5b7d8c9f0a1b\`, so a stored handle always says what it names:
+
+\`\`\`json
+{ "data": { "id": "0e9c41d2-a1b0-4c6f-9a3e-5b7d8c9f0a1b", "handle": "je_0e9c41d2a1b04c6f9a3e5b7d8c9f0a1b", "voucher_number": 142 } }
+\`\`\`
+
+- **Send either form.** Every path id and every body or query field named for a resource (\`journal_entry_id\`, \`credited_invoice_id\`, \`invoice_ids\`, \`period_id\`, ...) accepts the handle or the plain UUID. Plain UUIDs keep working everywhere; nothing about an existing request changes.
+- **A wrong type is refused at the door.** An \`inv_\` invoice handle where a journal entry id belongs answers \`400 HANDLE_TYPE_MISMATCH\` before anything is read. \`error.details.issues[]\` names the \`field\`, the \`expected_prefix\` it takes (null when it takes a plain UUID only) and the \`received_prefix\`.
+- **Additive output.** Id fields keep their names and values (\`journal_entry_id\` still holds the UUID); only \`handle\` is added, on the resource objects whose type is known. The OpenAPI spec shows it, with its pattern, on each endpoint that returns it.
+- **Permanent prefixes.** A prefix is never renamed or reused: \`cmp\` company, \`je\` journal entry, \`inv\` customer invoice (quotes and credit notes too), \`sinv\` supplier invoice, \`cus\` customer, \`sup\` supplier, \`txn\` bank transaction, \`doc\` document, \`pop\` pending operation, \`fp\` fiscal period, \`acs\` accrual schedule, \`emp\` employee, \`srun\` salary run, \`art\` article, \`ast\` fixed asset, \`dim\` dimension, \`dimv\` dimension value, \`inbx\` inbox item, \`exp\` expense claim, \`cash\` cash account, \`pmt\` payment order, \`spb\` supplier payment batch, \`wh\` webhook, \`whd\` webhook delivery, \`op\` async operation, \`svc\` service account, \`key\` API key, \`aud\` audit log entry, \`rso\` reconciliation sign-off, \`vgap\` voucher gap explanation, \`team\` team (byrå or personal), \`bev\` business event and \`sie\` SIE import (both reserved: no endpoint returns or takes one yet). Sub-resources without a prefix (salary lines, benefits) take the plain UUID only.
+- **MCP.** The MCP tools accept handles in their id arguments too, and their input schemas say so (a typed id field's pattern admits its handle or a UUID); their answers still carry plain UUIDs.
 
 ## Where to go next
 

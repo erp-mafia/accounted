@@ -4,12 +4,19 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
-vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
+const serviceClient = vi.hoisted(() => ({ service: 'role' }))
+vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(), createServiceClient: vi.fn(() => serviceClient) }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn().mockResolvedValue('company-a') }))
 vi.mock('@/lib/agent-skills/catalog', () => ({ loadSkillCatalog: vi.fn(), loadCatalogSkill: vi.fn() }))
 vi.mock('@/lib/agent-skills/company-skills', () => ({ loadCompanySkillRows: vi.fn() }))
+// Work scheduled with after() runs once the response is sent; here it is collected and run by hand.
+const later = vi.hoisted(() => ({ tasks: [] as Array<() => unknown> }))
+vi.mock('next/server', async (original) => ({ ...(await original<typeof import('next/server')>()), after: (task: () => unknown) => { later.tasks.push(task) } }))
+vi.mock('@/lib/agent-skills/community-notify', () => ({ notifyReviewersOfSubmission: vi.fn() }))
+vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn(() => ({ service: true })) }))
+vi.mock('@/lib/domains/trusted-app-origin', () => ({ getCanonicalAppOrigin: () => 'https://app.accounted.se' }))
 // Sharing is held back from release by COMMUNITY_OPEN; the submit tests below run with it open.
 const community = vi.hoisted(() => ({ open: true }))
 vi.mock('@/lib/agent-skills/agents', async (original) => ({ ...(await original<object>()), get COMMUNITY_OPEN() { return community.open } }))
@@ -17,6 +24,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { loadSkillCatalog, loadCatalogSkill } from '@/lib/agent-skills/catalog'
 import { loadCompanySkillRows } from '@/lib/agent-skills/company-skills'
+import { notifyReviewersOfSubmission } from '@/lib/agent-skills/community-notify'
 import { GET, POST } from '../route'
 import { PATCH, DELETE } from '../[id]/route'
 
@@ -35,6 +43,7 @@ beforeEach(() => {
   vi.mocked(loadCatalogSkill).mockResolvedValue(null)
   vi.mocked(loadCompanySkillRows).mockResolvedValue([privateSkill])
   community.open = true
+  later.tasks = []
 })
 
 describe('skills HTTP routes', () => {
@@ -54,11 +63,20 @@ describe('skills HTTP routes', () => {
     expect(result.status).toBe(200)
     expect(result.headers.get('Cache-Control')).toContain('no-store')
     expect(JSON.stringify(await result.json())).not.toContain('Private secret')
-    expect(loadSkillCatalog).toHaveBeenCalledWith(supabase, 'company-a')
+    expect(loadSkillCatalog).toHaveBeenCalledWith(supabase, 'company-a', { creators: serviceClient })
+  })
+  it('lists who saved an own item, read through the service-role client', async () => {
+    vi.mocked(loadSkillCatalog).mockResolvedValue([{ slug: `own/${id}`, body: 'B', name: 'Own', createdBy: { name: 'Anna Andersson', deleted: false } }] as never)
+    const result = await GET(request('GET'), staticParams)
+    expect(result.status).toBe(200)
+    expect((await result.json()).data[0].createdBy).toEqual({ name: 'Anna Andersson', deleted: false })
+    // The RLS client reads the rows; only the profiles read goes through the service role.
+    expect(vi.mocked(loadSkillCatalog).mock.calls[0]?.[0]).toBe(supabase)
+    expect(vi.mocked(loadSkillCatalog).mock.calls[0]?.[2]).toEqual({ creators: serviceClient })
   })
   it('returns 404 for a private slug outside the active catalog', async () => {
     expect((await GET(request('GET', undefined, '?slug=own/other'), staticParams)).status).toBe(404)
-    expect(loadCatalogSkill).toHaveBeenCalledWith(supabase, 'company-a', 'own/other', true)
+    expect(loadCatalogSkill).toHaveBeenCalledWith(supabase, 'company-a', 'own/other', true, { creators: serviceClient })
   })
   it('rejects unknown query parameters', async () => {
     expect((await GET(request('GET', undefined, '?company_id=other'), staticParams)).status).toBe(400)
@@ -99,12 +117,29 @@ describe('skills HTTP routes', () => {
   it('rejects missing sharing consent', async () => {
     expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'author' }), params)).status).toBe(400)
   })
+  it('refuses to publish under a reserved handle such as @accounted', async () => {
+    expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'accounted', confirmed_no_customer_data: true }), params)).status).toBe(400)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
   it('submits only the scoped private row with consent evidence', async () => {
     enqueue({ data: { id } })
     expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'author', confirmed_no_customer_data: true }), params)).status).toBe(200)
     expect(findCall('company_skills', 'update')?.[0]).toMatchObject({ share_status: 'submitted', author_handle: 'author', share_confirmed_at: expect.any(String) })
     expect(findCalls('company_skills', 'eq')).toContainEqual(['company_id', 'company-a'])
     expect(findCalls('company_skills', 'eq')).toContainEqual(['share_status', 'private'])
+  })
+  it('tells Accounted\'s reviewers about a share once the response is sent, linking the canonical app whatever host it came through', async () => {
+    enqueue({ data: { id } })
+    const spoofed = new Request('https://evil.example/api/skills', { method: 'PATCH', body: JSON.stringify({ action: 'submit', author_handle: 'author', confirmed_no_customer_data: true, kind: 'rules' }), headers: { 'Content-Type': 'application/json' } })
+    expect((await PATCH(spoofed, params)).status).toBe(200)
+    expect(notifyReviewersOfSubmission).not.toHaveBeenCalled()
+    await Promise.all(later.tasks.map((task) => task()))
+    expect(notifyReviewersOfSubmission).toHaveBeenCalledWith({ service: true }, { title: 'Own', handle: 'author', kind: 'rules' }, 'https://app.accounted.se/skills/granskning')
+  })
+  it('does not tell reviewers about a share that was not saved', async () => {
+    enqueue({ data: null })
+    expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'author', confirmed_no_customer_data: true }), params)).status).toBe(409)
+    expect(later.tasks).toHaveLength(0)
   })
   it('stores the kind the author gives a shared item, and keeps the saved kind when none is given', async () => {
     enqueue({ data: { id } })
@@ -123,12 +158,12 @@ describe('skills HTTP routes', () => {
       { slug: 'community/stang-dagskassan', tier: 'community', name: 'Stäng dagskassan', body: 'B', reviewedAt: '2026-09-18' },
       { slug: 'bookkeep', tier: 'workflow', name: 'Bokför', body: 'B' },
     ] as never)
-    enqueue({ data: [{ atom_id: 'community/stang-dagskassan', kind: 'workflow', author: 'kafe-norr', author_shared: 4, author_verified: false, votes: 48, used_by: 12 }] })
+    enqueue({ data: [{ atom_id: 'community/stang-dagskassan', kind: 'workflow', author: 'kafe-norr', author_shared: 4, author_verified: false, votes: 48, used_by: 12, industries: ['restaurang-cafe'] }] })
     enqueue({ data: [{ id: 'f1', atom_id: 'community/stang-dagskassan', vote: true }] })
     const data = (await (await GET(request('GET'), staticParams)).json()).data
     expect(data[0].community).toEqual({
       kind: 'workflow', author: 'kafe-norr', author_shared: 4, author_verified: false, votes: 48, voted: true,
-      reviewed_at: '2026-09-18', used_by: 12,
+      reviewed_at: '2026-09-18', used_by: 12, industries: ['restaurang-cafe'],
     })
     expect(data[1].community).toBeUndefined()
     expect(supabase.rpc).toHaveBeenCalledWith('community_item_stats')
@@ -137,6 +172,50 @@ describe('skills HTTP routes', () => {
   it('freezes submitted text', async () => {
     vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status: 'submitted' }])
     expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(409)
+  })
+  it('freezes published text too', async () => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status: 'published' }])
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(409)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
+  it('edits a private item in place, so its id (and every routine using it) stays', async () => {
+    enqueue({ data: { id } })
+    const response = await PATCH(request('PATCH', { action: 'edit', name: ' Påminn ', description: 'Efter 14 dagar', body: '# Påminn\n\n1. Hämta fakturorna\n' }), params)
+    expect(response.status).toBe(200)
+    expect((await response.json()).data).toEqual({ id })
+    expect(findCall('company_skills', 'update')?.[0]).toEqual({ name: 'Påminn', description: 'Efter 14 dagar', body: '# Påminn\n\n1. Hämta fakturorna' })
+    expect(findCalls('company_skills', 'eq')).toEqual(expect.arrayContaining([['id', id], ['company_id', 'company-a'], ['share_status', 'private']]))
+  })
+  it('edits a firm-wide item under its team', async () => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, company_id: null, team_id: 'team-1' } as never])
+    enqueue({ data: { id } })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(200)
+    expect(findCalls('company_skills', 'eq')).toContainEqual(['team_id', 'team-1'])
+    expect(findCalls('company_skills', 'eq')).not.toContainEqual(['company_id', 'company-a'])
+  })
+  it('lets a person edit an AI-saved draft before adding it', async () => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, draft: true }])
+    enqueue({ data: { id } })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(200)
+    expect(findCall('company_skills', 'update')?.[0]).not.toHaveProperty('draft')
+  })
+  it.each([
+    { name: 'N', description: 'D', body: '<script />' },
+    { name: '', description: 'D', body: 'Changed' },
+    { name: 'N', description: '', body: 'Changed' },
+    { name: 'N', description: 'D', body: 'Changed', kind: 'rules' },
+  ])('rejects an edit that would not be saved: %j', async (edit) => {
+    expect((await PATCH(request('PATCH', { action: 'edit', ...edit }), params)).status).toBe(400)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
+  it('answers 409 when the row changed under the edit', async () => {
+    enqueue({ data: null })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(409)
+  })
+  it('blocks viewer edits', async () => {
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: false, response: NextResponse.json({}, { status: 403 }) })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(403)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
   })
   it('adds an AI-saved draft so agents can load it', async () => {
     vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, draft: true }])
@@ -149,11 +228,23 @@ describe('skills HTTP routes', () => {
     expect((await PATCH(request('PATCH', { action: 'add' }), params)).status).toBe(409)
     expect(findCall('company_skills', 'update')).toBeUndefined()
   })
-  it('withdraws without deleting submission evidence', async () => {
-    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status: 'submitted' }])
+  it.each(['submitted', 'published'] as const)('withdraws a %s item back to private, where the author can edit, share or delete it', async (share_status) => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status }])
     enqueue({ data: { id } })
     expect((await PATCH(request('PATCH', { action: 'withdraw' }), params)).status).toBe(200)
-    expect(findCall('company_skills', 'update')?.[0]).toEqual({ share_status: 'withdrawn' })
+    expect(findCall('company_skills', 'update')?.[0]).toEqual({ share_status: 'private' })
+    expect(findCalls('company_skills', 'eq')).toContainEqual(['share_status', share_status])
+  })
+  it('refuses to withdraw an item that is not shared', async () => {
+    expect((await PATCH(request('PATCH', { action: 'withdraw' }), params)).status).toBe(409)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
+  it('asks for a withdrawal before a shared item is deleted', async () => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status: 'submitted' }])
+    const response = await DELETE(request('DELETE'), params)
+    expect(response.status).toBe(409)
+    expect((await response.json()).error.message).toBe('Dra tillbaka delningen först.')
+    expect(findCall('company_skills', 'delete')).toBeUndefined()
   })
   it.each([PATCH, DELETE])('returns 404 for an out-of-tenant record', async (handler) => {
     vi.mocked(loadCompanySkillRows).mockResolvedValue([])

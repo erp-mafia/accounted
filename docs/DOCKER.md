@@ -42,7 +42,7 @@ Open `.env` and fill in the **required** values:
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase dashboard → Settings → API → Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase dashboard → Settings → API → `anon` `public` key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase dashboard → Settings → API → `service_role` key |
-| `NEXT_PUBLIC_APP_URL` | The URL where you'll access Accounted (e.g. `https://gnubok.example.com`) |
+| `NEXT_PUBLIC_APP_URL` | The URL where you'll access Accounted (e.g. `https://accounted.example.com`) |
 | `CRON_SECRET` | Any random string: `openssl rand -hex 32` works |
 
 Once `.env` is filled in, **restrict its permissions** so other users on the host can't read your service-role key or cron secret:
@@ -136,13 +136,13 @@ Ship a Caddy reverse proxy alongside the app: it auto-provisions Let's Encrypt c
 
 ### 1. Point a domain at the host
 
-`gnubok.example.com → <your-public-ip>` (A record). Ports 80 and 443 must be reachable from the internet (Let's Encrypt's HTTP-01 challenge uses port 80).
+`accounted.example.com → <your-public-ip>` (A record). Ports 80 and 443 must be reachable from the internet (Let's Encrypt's HTTP-01 challenge uses port 80).
 
 ### 2. Set `DOMAIN` in `.env`
 
 ```env
-DOMAIN=gnubok.example.com
-NEXT_PUBLIC_APP_URL=https://gnubok.example.com
+DOMAIN=accounted.example.com
+NEXT_PUBLIC_APP_URL=https://accounted.example.com
 ```
 
 ### 3. Download the overlay + Caddyfile
@@ -161,7 +161,7 @@ curl -fsSL -o docker/Caddyfile \
 docker compose -f docker-compose.yml -f docker/compose.caddy.yml up -d
 ```
 
-Caddy obtains a cert on first boot (takes ~10 s). Visit `https://gnubok.example.com`.
+Caddy obtains a cert on first boot (takes ~10 s). Visit `https://accounted.example.com`.
 
 If you already have nginx / a managed load balancer / Cloudflare in front, skip Caddy and point your existing proxy at `127.0.0.1:3000`: set `NEXT_PUBLIC_APP_URL` to match the public URL.
 
@@ -169,7 +169,7 @@ If you already have nginx / a managed load balancer / Cloudflare in front, skip 
 
 ## Optional Extensions
 
-The self-hosted image ships with a curated set of general extensions, including email, invoice inbox, document extraction, push notifications, calendar, and the MCP server. Enable Banking and Skatteverket are in the preset too: they run on a connector key or on your own credentials (see [SELF-HOSTING.md](SELF-HOSTING.md), "Connector subscription"). Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
+The self-hosted image ships with a curated set of general extensions, including email, invoice inbox, document extraction, calendar, and the MCP server. Enable Banking and Skatteverket are in the preset too: they run on a connector key or on your own credentials (see [SELF-HOSTING.md](SELF-HOSTING.md), "Connector subscription"). Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
 
 ### AI Features (document-extraction, invoice-inbox, AI assistant)
 
@@ -203,16 +203,6 @@ RESEND_DELIVERY_WEBHOOK_SECRET=whsec_...
 
 Invitations do not need Resend: the accept link is returned to the inviter in the app. See [SELF-HOSTING.md](./SELF-HOSTING.md#email-invoice-sending-invitations-and-reminders).
 
-### Push Notifications
-
-```env
-NEXT_PUBLIC_VAPID_PUBLIC_KEY=...
-VAPID_PRIVATE_KEY=...
-VAPID_SUBJECT=mailto:you@example.com
-```
-
-Generate VAPID keys with: `npx web-push generate-vapid-keys`
-
 ### Calendar
 
 No env vars needed: always available.
@@ -236,9 +226,15 @@ IMAGE_TAG=3e4b5dd@sha256:abcdef...
 
 Semver tags (`1.2.3`, `1.2`, `1`) are published only when a `v*.*.*` git tag is cut. No such tag exists yet, so until the first tagged release the commit SHA is the only immutable pin.
 
-Apply updates:
+Apply updates, refreshing the compose file as well: `docker compose pull`
+updates only the image, and `docker-compose.yml` sometimes has to change with it
+(a compose file from before [#3164](https://github.com/erp-mafia/accounted/issues/3164)
+mounts `/app/.next` as a 400 MB tmpfs that newer images no longer fit in; the
+container then stops at start with an error saying so). Keep local changes in a
+`docker-compose.override.yml` so the download never overwrites them.
 
 ```bash
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
@@ -271,13 +267,13 @@ The compose setup runs two containers:
 | Container | What it does |
 |-----------|-------------|
 | `app` | Next.js application server |
-| `cron` | Lightweight Alpine sidecar that runs scheduled jobs (deadline checks, invoice reminders, tax deadline sync, document verification) via [supercronic](https://github.com/aptible/supercronic) |
+| `cron` | Lightweight Alpine sidecar that runs scheduled jobs (deadline checks, tax deadline sync, document verification) via [supercronic](https://github.com/aptible/supercronic) |
 
 The cron container waits for the app's healthcheck to pass before starting. It calls the app's cron API endpoints over the internal Docker network.
 
 ### How NEXT_PUBLIC_* injection works
 
-The image is built with placeholder values (e.g. `__NEXT_PUBLIC_SUPABASE_URL__`) baked into the JavaScript bundles. At container start, `docker-entrypoint.sh` runs as `root`, `sed`-substitutes the placeholders with your runtime env vars, then runs `chmod -R a-w /app/.next/static` and drops privileges with `su-exec nextjs:nodejs` before exec'ing Node. The served JS bundle is owned by `root` and read-only by the time the application starts: a runtime RCE in the Node process cannot rewrite what other users will receive.
+The image is built with placeholder values (e.g. `__NEXT_PUBLIC_SUPABASE_URL__`) baked into the JavaScript bundles. The container's root filesystem is read-only, so at every start `docker-entrypoint.sh`, running unprivileged as `nextjs`, empties the writable mounts, copies the bundle from the image into them (`/app/.next` is the `next_runtime` named volume, `/app/public` a small tmpfs), `sed`-substitutes the placeholders with your runtime env vars, and removes the write bits from the served files before exec'ing Node. The volume holds nothing but that copy, so it needs no backup. It is a volume rather than a tmpfs because the bundle outgrew any fixed tmpfs size, and tmpfs pages count against the container's memory limit ([#3164](https://github.com/erp-mafia/accounted/issues/3164)).
 
 ---
 
@@ -302,7 +298,7 @@ Example nginx upstream:
 
 ```nginx
 server {
-    server_name gnubok.example.com;
+    server_name accounted.example.com;
     listen 443 ssl http2;
     # ssl_certificate / ssl_certificate_key / etc.
 

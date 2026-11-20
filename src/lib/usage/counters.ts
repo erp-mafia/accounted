@@ -1,0 +1,146 @@
+/**
+ * How each priced kind is counted: from the log the feature already keeps,
+ * never from a second ledger of usage. Each source names its table, the
+ * moment that counts (the column whose month the unit falls in) and the
+ * filters that make a row a billable unit:
+ *
+ *   bank_payment  payment_orders that reached the provider, by submitted_at,
+ *                 less those that ended unpaid before anybody signed them
+ *                 (the same count as the bank payments cap, lib/payments/usage.ts)
+ *   peppol_send   Peppol deliveries handed to the access point, by submitted_at
+ *   kivra_send    invoices and payslips Kivra accepted, by created_at
+ *   billo_send    the same for Billo
+ *   signing       completed signing requests, by completed_at; an annual
+ *                 report's signing is part of the plan and not counted
+ *   bank_account  live bank accounts now, not events (bank-accounts.ts)
+ *   ai_document   inbox documents our AI read, by created_at: a document
+ *                 the customer's own agent read (bring your own extraction),
+ *                 or that was not read at all, has extraction_skipped
+ *
+ * A failed or refused send is never counted: its row carries another status,
+ * or the source's `keep` drops it.
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { countsAsUsedBankPayment } from '@/lib/payments/orders/status'
+import { usagePeriodBounds } from '@/lib/payments/usage'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { countLiveBankAccountsByCompany, readLiveBankAccounts } from './bank-accounts'
+import type { UsageKind } from './kinds'
+
+export interface UsageSource {
+  table: string
+  /** The timestamp column whose Stockholm month the unit belongs to. */
+  at: string
+  eq?: Readonly<Record<string, string>>
+  notNull?: readonly string[]
+  isNull?: readonly string[]
+  /**
+   * A rule the filters above cannot say: the extra columns it reads and the
+   * test a row must pass to count. Rows are then read and counted in code.
+   */
+  keep?: { columns: readonly string[]; test: (row: Record<string, unknown>) => boolean }
+}
+
+const BANK_PAYMENT_KEEP: UsageSource['keep'] = {
+  columns: ['status', 'signed_at'],
+  test: (row) => countsAsUsedBankPayment({ status: String(row.status), signed_at: (row.signed_at as string | null) ?? null }),
+}
+
+export const USAGE_SOURCES: Readonly<Record<UsageKind, readonly UsageSource[]>> = Object.freeze({
+  bank_payment: [{ table: 'payment_orders', at: 'submitted_at', notNull: ['provider_payment_id'], keep: BANK_PAYMENT_KEEP }],
+  peppol_send: [{ table: 'peppol_deliveries', at: 'submitted_at' }],
+  kivra_send: [
+    { table: 'digital_mailbox_dispatches', at: 'created_at', eq: { provider: 'kivra', status: 'sent' } },
+    { table: 'salary_payslip_deliveries', at: 'created_at', eq: { provider: 'kivra', status: 'sent' } },
+  ],
+  billo_send: [
+    { table: 'digital_mailbox_dispatches', at: 'created_at', eq: { provider: 'billo', status: 'sent' } },
+    { table: 'salary_payslip_deliveries', at: 'created_at', eq: { provider: 'billo', status: 'sent' } },
+  ],
+  signing: [{ table: 'signing_requests', at: 'completed_at', eq: { status: 'completed' }, isNull: ['annual_report_version_id'] }],
+  bank_account: [],
+  ai_document: [{ table: 'invoice_inbox_items', at: 'created_at', eq: { extraction_skipped: 'false' } }],
+})
+
+/**
+ * The structural subset of a PostgREST filter builder the sources need. The
+ * builder is cast to it once per read: matching the generic builder type
+ * against a filter helper sends the compiler into infinite instantiation.
+ */
+interface UsageQuery<Row> extends PromiseLike<{ data: Row[] | null; count?: number | null; error: { message: string } | null }> {
+  eq(column: string, value: string): UsageQuery<Row>
+  not(column: string, operator: string, value: null): UsageQuery<Row>
+  is(column: string, value: null): UsageQuery<Row>
+  gte(column: string, value: string): UsageQuery<Row>
+  lt(column: string, value: string): UsageQuery<Row>
+  order(column: string): UsageQuery<Row>
+  range(from: number, to: number): UsageQuery<Row>
+}
+
+/** Within `period`, or with `before` everything before it began. */
+function applySource<Row>(query: UsageQuery<Row>, source: UsageSource, period: string, before = false): UsageQuery<Row> {
+  const { start, end } = usagePeriodBounds(period)
+  let q = before ? query.lt(source.at, start) : query.gte(source.at, start).lt(source.at, end)
+  for (const [column, value] of Object.entries(source.eq ?? {})) q = q.eq(column, value)
+  for (const column of source.notNull ?? []) q = q.not(column, 'is', null)
+  for (const column of source.isNull ?? []) q = q.is(column, null)
+  return q
+}
+
+/**
+ * One company's units of a kind in a month (live bank accounts: now), or
+ * with `before` every unit before the month began: what earlier months used
+ * of an amount included once (USAGE_PRICES includedOnce). Throws on a failed
+ * read.
+ */
+export async function countCompanyUsage(
+  supabase: SupabaseClient,
+  companyId: string,
+  kind: UsageKind,
+  period: string,
+  options: { before?: boolean } = {},
+): Promise<number> {
+  if (kind === 'bank_account') return options.before ? 0 : (await readLiveBankAccounts(supabase, companyId)).size
+  let total = 0
+  for (const source of USAGE_SOURCES[kind]) {
+    if (source.keep) {
+      const keep = source.keep
+      const rows = await fetchAllRows<Record<string, unknown>>(({ from, to }) => {
+        const query = supabase.from(source.table).select(['id', ...keep.columns].join(', ')) as unknown as UsageQuery<Record<string, unknown>>
+        return applySource(query.eq('company_id', companyId), source, period, options.before).order('id').range(from, to)
+      })
+      total += rows.filter(keep.test).length
+      continue
+    }
+    const query = supabase.from(source.table).select('id', { count: 'exact', head: true }) as unknown as UsageQuery<never>
+    const { count, error } = await applySource(query.eq('company_id', companyId), source, period, options.before)
+    if (error) throw new Error(`usage count ${kind} (${source.table}) failed: ${error.message}`)
+    total += count ?? 0
+  }
+  return total
+}
+
+/**
+ * Every company's units of a kind in a month (live bank accounts: now), or
+ * with `before` every unit before the month began, for the monthly
+ * statements. Companies with none are absent.
+ */
+export async function countUsageByCompany(
+  service: SupabaseClient,
+  kind: UsageKind,
+  period: string,
+  options: { before?: boolean } = {},
+): Promise<Map<string, number>> {
+  if (kind === 'bank_account') return options.before ? new Map() : countLiveBankAccountsByCompany(service)
+  const counts = new Map<string, number>()
+  for (const source of USAGE_SOURCES[kind]) {
+    const rows = await fetchAllRows<{ id: string; company_id: string } & Record<string, unknown>>(({ from, to }) => {
+      const columns = ['id', 'company_id', ...(source.keep?.columns ?? [])].join(', ')
+      const query = service.from(source.table).select(columns) as unknown as UsageQuery<{ id: string; company_id: string } & Record<string, unknown>>
+      return applySource(query, source, period, options.before).order('id').range(from, to)
+    })
+    for (const row of source.keep ? rows.filter(source.keep.test) : rows) counts.set(row.company_id, (counts.get(row.company_id) ?? 0) + 1)
+  }
+  return counts
+}

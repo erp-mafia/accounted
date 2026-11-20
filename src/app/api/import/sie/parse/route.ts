@@ -6,8 +6,8 @@ import {
   decodeBuffer,
   calculateFileHash,
 } from '@/lib/import/sie-parser'
-import { suggestMappings, getMappingStats } from '@/lib/import/account-mapper'
-import { prepareSIEPreviewMappings } from '@/lib/import/sie-preview-mappings'
+import { getMappingStats } from '@/lib/import/account-mapper'
+import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
 import { planChartChanges } from '@/lib/import/chart-plan'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import {
@@ -15,16 +15,20 @@ import {
   checkDuplicateImport,
   checkDuplicatePeriodImport,
   precheckFiscalPeriod,
+  loadMappings,
 } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
-import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
+import { resolveSIEFiscalYear, SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
+import { checkSourceOrgNumber } from '@/lib/company/org-number'
+import { diagnoseOpeningBalanceContinuity } from '@/lib/import/sie-continuity'
+import { isVoucherOnlySIE } from '@/lib/import/sie-voucher-only'
 
 /**
  * POST /api/import/sie/parse
@@ -102,27 +106,31 @@ export const POST = withRouteContext(
       const validation = validateSIEFile(parsed)
 
       if (!validation.valid) {
+        // The answer carries the errors; the log line of the code does not,
+        // so a refused file could not be sorted by cause afterwards.
+        opLog.warn('sie parse: the file failed validation', {
+          errorCount: validation.errors.length,
+          errors: validation.errors.slice(0, 5),
+        })
         return errorResponseFromCode('SIE_PARSE_VALIDATION_FAILED', opLog, {
           requestId,
           details: { errors: validation.errors, warnings: validation.warnings },
         })
       }
 
-      const { data: storedMappings } = await supabase
-        .from('sie_account_mappings')
-        .select('*')
-        .eq('company_id', companyId)
+      const storedMappings = await loadMappings(supabase, companyId!)
 
-      const suggested = suggestMappings(
-        parsed.accounts,
+      const { mappings, archivedOnlyAccounts, excludedSystemAccounts, unusedAccounts, unusedOwnAccounts } = suggestSIEMappings(
+        parsed,
         BAS_REFERENCE,
-        (storedMappings as SIEAccountMappingRecord[]) || undefined,
+        storedMappings,
       )
-      const { mappings, archivedOnlyAccounts, excludedSystemAccounts } = prepareSIEPreviewMappings(parsed, suggested)
 
       const preview = generateImportPreview(parsed, mappings)
       preview.excludedSystemAccounts = excludedSystemAccounts
       preview.archivedOnlyAccounts = archivedOnlyAccounts
+      preview.unusedAccounts = unusedAccounts
+      preview.unusedOwnAccounts = unusedOwnAccounts
       preview.accountCount = parsed.accounts.length - excludedSystemAccounts.length
 
       // The mapping stats above score the file against the BAS reference. A
@@ -137,10 +145,23 @@ export const POST = withRouteContext(
           .order('account_number')
           .range(from, to),
       )
-      preview.chart = planChartChanges(
-        mappings,
-        new Set(chartRows.map((r) => r.account_number)),
-      )
+      const chartNumbers = new Set(chartRows.map((r) => r.account_number))
+      preview.chart = planChartChanges(mappings, chartNumbers)
+      // The same plan with the "only the accounts the file uses" switch on
+      // (#63), so the wizard can show either without parsing again.
+      if (unusedAccounts.length > 0) {
+        const unused = new Set(unusedAccounts.map((account) => account.number))
+        preview.chartUsedOnly = planChartChanges(
+          mappings.filter((mapping) => !unused.has(mapping.sourceAccount)),
+          chartNumbers,
+        )
+      }
+
+      // Another organisation's file: the review step asks for the
+      // confirmation the submit gate (submitSIEJob) requires.
+      const orgCheck = await checkSourceOrgNumber(supabase, companyId!, parsed.header.orgNumber)
+      preview.orgNumberMismatch = orgCheck.mismatch
+      preview.companyOrgNumber = orgCheck.companyOrgNumber
 
       // Same containment/overlap verdict the import runs (ensureFiscalPeriod),
       // so a fiscal-year conflict shows here instead of after the mapping step.
@@ -153,11 +174,24 @@ export const POST = withRouteContext(
         )
       }
 
+      // What the year will open on in the books against the file's #IB
+      // (crm#1099): a continuation import carries the prior year forward and
+      // never books the file's IB, so the user sees the difference here. A
+      // replacement of the year's earlier import does not count that import.
+      const continuity = await diagnoseOpeningBalanceContinuity(supabase, companyId!, parsed, mappings, {
+        replacesImportId: periodDuplicate?.id ?? null,
+      })
+      if (continuity) preview.openingBalanceContinuity = continuity
+
       const fileHash = await calculateFileHash(content)
 
       return NextResponse.json({
         success: true,
         existingImport: duplicate ?? periodDuplicate,
+        // A verifikat-only file over an imported year can only be appended:
+        // replacing the year with it would drop every verifikat it does not
+        // carry (crm#1049). The wizard offers only "Lägg till verifikationerna".
+        appendOnly: Boolean(periodDuplicate) && isVoucherOnlySIE(parsed),
         encoding,
         fileHash,
         parsed: {
@@ -176,6 +210,11 @@ export const POST = withRouteContext(
         },
       })
     } catch (err) {
+      // The file is readable and the import's own rule refused it (a file
+      // without #RAR no company year contains): its sentence says what to do.
+      // As SIE_PARSE_FAILED it read "the file may be damaged" instead, as on
+      // execute and append-plan.
+      if (err instanceof SIEJobValidationError) return sieJobValidationResponse(err, opLog, requestId)
       opLog.error('sie parse failed', err as Error)
       return errorResponseFromCode('SIE_PARSE_FAILED', opLog, {
         requestId,

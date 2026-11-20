@@ -14,10 +14,15 @@ vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
-const requireWriteMock = vi.fn()
-vi.mock('@/lib/auth/require-write', () => ({
-  requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
-}))
+const isAdminMock = vi.fn()
+vi.mock('@/lib/auth/require-write', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/require-write')>()
+  return {
+    isCompanyAdmin: (...args: unknown[]) => isAdminMock(...args),
+    getCompanyRole: async () => ({ ok: true, role: 'owner', companyId: 'company-1' }),
+    companyAdminRequiredResponse: actual.companyAdminRequiredResponse,
+  }
+})
 
 const storageBucket = {
   upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
@@ -54,7 +59,7 @@ describe('POST /api/settings/invoice-font', () => {
     vi.clearAllMocks()
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
-    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -69,15 +74,16 @@ describe('POST /api/settings/invoice-font', () => {
     expect(response.status).toBe(401)
   })
 
-  it('returns 403 for a viewer without write permission', async () => {
-    requireWriteMock.mockResolvedValue({
-      ok: false,
-      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
-    })
+  it('refuses a member with 403 before anything reaches the bucket or the row', async () => {
+    isAdminMock.mockResolvedValue(false)
 
     const response = await POST(makeFontRequest(), { params: Promise.resolve({}) })
+    const { body } = await parseJsonResponse<{ error: { code: string; details: { required_roles: string[] } } }>(response)
 
     expect(response.status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.required_roles).toEqual(['owner', 'admin'])
+    expect(storageBucket.upload).not.toHaveBeenCalled()
   })
 
   it('returns 400 for a file with an invalid font signature', async () => {
@@ -100,8 +106,8 @@ describe('POST /api/settings/invoice-font', () => {
     expect(body.error).toContain('5 MB')
   })
 
-  it('returns 404 when company settings do not exist', async () => {
-    enqueue({ error: { code: 'PGRST116', message: 'No rows returned' } })
+  it('returns 404 and takes the upload back when no settings row was written', async () => {
+    enqueue({ data: null, error: null })
 
     const response = await POST(makeFontRequest(), { params: Promise.resolve({}) })
 
@@ -110,7 +116,7 @@ describe('POST /api/settings/invoice-font', () => {
   })
 
   it('uploads a valid TTF and selects it for invoice PDFs', async () => {
-    enqueue({ error: null })
+    enqueue({ data: { company_id: 'company-1' }, error: null })
 
     const response = await POST(makeFontRequest(), { params: Promise.resolve({}) })
     const { body } = await parseJsonResponse<{
@@ -130,7 +136,7 @@ describe('POST /api/settings/invoice-font', () => {
   })
 
   it('uploads a valid WOFF with its normalized content type', async () => {
-    enqueue({ error: null })
+    enqueue({ data: { company_id: 'company-1' }, error: null })
 
     const response = await POST(
       makeFontRequest(8, [0x77, 0x4f, 0x46, 0x46], 'brand.woff'),
@@ -151,11 +157,50 @@ describe('DELETE /api/settings/invoice-font', () => {
     vi.clearAllMocks()
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
-    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await DELETE(
+      new Request('http://localhost/api/settings/invoice-font', { method: 'DELETE' }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(401)
+  })
+
+  it('refuses a member and leaves the font in place', async () => {
+    isAdminMock.mockResolvedValue(false)
+
+    const response = await DELETE(
+      new Request('http://localhost/api/settings/invoice-font', { method: 'DELETE' }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(403)
+    expect(storageBucket.remove).not.toHaveBeenCalled()
+  })
+
+  it('keeps the file when no settings row was written', async () => {
+    enqueue({ data: null, error: null })
+
+    const response = await DELETE(
+      new Request('http://localhost/api/settings/invoice-font', { method: 'DELETE' }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(404)
+    expect(storageBucket.remove).not.toHaveBeenCalled()
   })
 
   it('removes the custom font and restores Helvetica', async () => {
-    enqueue({ error: null })
+    enqueue({ data: { company_id: 'company-1' }, error: null })
 
     const response = await DELETE(
       new Request('http://localhost/api/settings/invoice-font', { method: 'DELETE' }),

@@ -1,0 +1,190 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the menu of each representative company > aktiebolag missing ai and bank_sync, bank_sync also turned off, every opt-in surface on 1`] = `
+{
+  "areas": [
+    "todo: / /?vy=behover /pending /?vy=gjort",
+    "money [+ /transactions?new]: /transactions /accounts",
+    "sales [+ /invoices/new]: /invoices /sales-orders /customers /articles /kassa /orders",
+    "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers /expenses /mileage",
+    "ledger [+ /bookkeeping?new]: /bookkeeping /chart-of-accounts /dimensions /bookkeeping/periodiseringar /assets /bookkeeping/year-end /import",
+    "tax: /reports/vat-declaration /skattekonto /deadlines",
+    "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
+    "payroll [+ /salary/employees?new]: /salary /salary/employees",
+    "company: /parties",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+  ],
+  "assistantMap": [
+    "/: /pending",
+    "/chat",
+    "/wiki",
+    "/accounts",
+    "/transactions: /parties /rules",
+    "/invoices: /invoices /sales-orders /orders /kassa /customers /articles",
+    "/supplier-invoices: /supplier-invoices /expenses /mileage /payments /suppliers",
+    "/bookkeeping: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /dimensions /import",
+    "/salary: /salary /salary/employees",
+    "/reports/vat-declaration: /reports/vat-declaration /deadlines",
+    "/reports: /reports /kpi /budget",
+    "/bookkeeping/year-end: /bookkeeping/year-end /bookkeeping/year-end/arsredovisning /reports/ink2-declaration",
+  ],
+}
+`;
+
+exports[`the menu of each representative company > aktiebolag, every plan capability, a paying subscription 1`] = `
+{
+  "areas": [
+    "todo [+ /e/general/invoice-inbox]: / /?vy=behover /pending /?vy=gjort",
+    "money [+ /transactions?new]: /transactions /accounts",
+    "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
+    "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers",
+    "documents [+ /e/general/invoice-inbox]: /e/general/invoice-inbox /arkiv /arkiv/historik",
+    "ledger [+ /bookkeeping?new]: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /bookkeeping/year-end /import",
+    "tax: /reports/vat-declaration /skattekonto /deadlines",
+    "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
+    "payroll [+ /salary/employees?new]: /salary /salary/employees",
+    "company: /parties",
+    "agents: /rules /skills /wiki /wiki?view=map /wiki?view=memory /chat",
+  ],
+  "assistantMap": [
+    "/: /pending",
+    "/chat",
+    "/wiki",
+    "/skills",
+    "/accounts",
+    "/transactions: /parties /rules",
+    "/invoices: /quotes /invoices /customers /articles",
+    "/supplier-invoices: /supplier-invoices /e/general/invoice-inbox /payments /suppliers",
+    "/arkiv: /arkiv /arkiv/historik",
+    "/bookkeeping: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /import",
+    "/salary: /salary /salary/employees",
+    "/reports/vat-declaration: /reports/vat-declaration /deadlines",
+    "/reports: /reports /kpi /budget",
+    "/bookkeeping/year-end: /bookkeeping/year-end /bookkeeping/year-end/arsredovisning /reports/ink2-declaration",
+  ],
+}
+`;
+
+exports[`the menu of each representative company > archived ekonomisk förening, every plan capability 1`] = `
+{
+  "areas": [
+    "todo [+ /e/general/invoice-inbox]: / /?vy=behover /pending /?vy=gjort",
+    "money [+ /transactions?new]: /transactions /accounts",
+    "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
+    "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers",
+    "documents [+ /e/general/invoice-inbox]: /e/general/invoice-inbox",
+    "ledger [+ /bookkeeping?new]: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /bookkeeping/year-end /import",
+    "tax: /reports/vat-declaration /skattekonto /deadlines",
+    "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
+    "payroll [+ /salary/employees?new]: /salary /salary/employees",
+    "company: /parties",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+  ],
+  "assistantMap": [
+    "/: /pending",
+    "/chat",
+    "/wiki",
+    "/accounts",
+    "/transactions: /parties /rules",
+    "/invoices: /quotes /invoices /customers /articles",
+    "/supplier-invoices: /supplier-invoices /e/general/invoice-inbox /payments /suppliers",
+    "/bookkeeping: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /import",
+    "/salary: /salary /salary/employees",
+    "/reports/vat-declaration: /reports/vat-declaration /deadlines",
+    "/reports: /reports /kpi /budget",
+    "/bookkeeping/year-end: /bookkeeping/year-end /bookkeeping/year-end/arsredovisning /reports/ink2-declaration",
+  ],
+}
+`;
+
+exports[`the menu of each representative company > enskild firma that pays salaries, every plan capability, ai turned off 1`] = `
+{
+  "areas": [
+    "todo: / /?vy=behover /pending /?vy=gjort",
+    "money [+ /transactions?new]: /transactions /accounts",
+    "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
+    "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers",
+    "ledger [+ /bookkeeping?new]: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /bookkeeping/year-end /import",
+    "tax: /reports/vat-declaration /skattekonto /deadlines",
+    "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
+    "payroll [+ /salary/employees?new]: /salary /salary/employees",
+    "company: /parties",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+  ],
+  "assistantMap": [
+    "/: /pending",
+    "/chat",
+    "/wiki",
+    "/accounts",
+    "/transactions: /parties /rules",
+    "/invoices: /quotes /invoices /customers /articles",
+    "/supplier-invoices: /supplier-invoices /payments /suppliers",
+    "/bookkeeping: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /import",
+    "/salary: /salary /salary/employees",
+    "/reports/vat-declaration: /reports/vat-declaration /deadlines",
+    "/reports: /reports /kpi /budget",
+    "/bookkeeping/year-end: /bookkeeping/year-end /reports/ne-declaration",
+  ],
+}
+`;
+
+exports[`the menu of each representative company > enskild firma without salaries, trial expired (no plan capability) 1`] = `
+{
+  "areas": [
+    "todo: / /?vy=behover /pending /?vy=gjort",
+    "money [+ /transactions?new]: /transactions /accounts",
+    "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
+    "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers /expenses /mileage",
+    "ledger [+ /bookkeeping?new]: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /bookkeeping/year-end /import",
+    "tax: /reports/vat-declaration /skattekonto /deadlines",
+    "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
+    "company: /parties",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+  ],
+  "assistantMap": [
+    "/: /pending",
+    "/chat",
+    "/wiki",
+    "/accounts",
+    "/transactions: /parties /rules",
+    "/invoices: /quotes /invoices /customers /articles",
+    "/supplier-invoices: /supplier-invoices /expenses /mileage /payments /suppliers",
+    "/bookkeeping: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /import",
+    "/reports/vat-declaration: /reports/vat-declaration /deadlines",
+    "/reports: /reports /kpi /budget",
+    "/bookkeeping/year-end: /bookkeeping/year-end /reports/ne-declaration",
+  ],
+}
+`;
+
+exports[`the menu of each representative company > ideell förening on an active trial 1`] = `
+{
+  "areas": [
+    "todo [+ /e/general/invoice-inbox]: / /?vy=behover /pending /?vy=gjort",
+    "money [+ /transactions?new]: /transactions /accounts",
+    "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
+    "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers",
+    "documents [+ /e/general/invoice-inbox]: /e/general/invoice-inbox",
+    "ledger [+ /bookkeeping?new]: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /bookkeeping/year-end /import",
+    "tax: /reports/vat-declaration /skattekonto /deadlines",
+    "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
+    "payroll [+ /salary/employees?new]: /salary /salary/employees",
+    "company: /parties",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+  ],
+  "assistantMap": [
+    "/: /pending",
+    "/chat",
+    "/wiki",
+    "/accounts",
+    "/transactions: /parties /rules",
+    "/invoices: /quotes /invoices /customers /articles",
+    "/supplier-invoices: /supplier-invoices /e/general/invoice-inbox /payments /suppliers",
+    "/bookkeeping: /bookkeeping /chart-of-accounts /bookkeeping/periodiseringar /assets /import",
+    "/salary: /salary /salary/employees",
+    "/reports/vat-declaration: /reports/vat-declaration /deadlines",
+    "/reports: /reports /kpi /budget",
+    "/bookkeeping/year-end: /bookkeeping/year-end /reports/ink3-declaration",
+  ],
+}
+`;

@@ -24,6 +24,7 @@ vi.mock('@/lib/supabase/fetch-all', () => ({ fetchAllRows: vi.fn() }))
 
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchSupplierInvoicesDirect } from '@/lib/providers/provider-data-fetcher'
+import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { refreshMigratedSupplierPaymentState } from '../refresh-migrated-payment-state'
 
 const mFetchAll = fetchAllRows as Mock
@@ -173,6 +174,28 @@ describe('refreshMigratedSupplierPaymentState', () => {
     expect(result).toMatchObject({ matched: 1, updated: 0, unchanged: 1 })
   })
 
+  it('reads the provider as the import does: a status of paid settles the row, whatever the money fields say', async () => {
+    mFetchProvider.mockResolvedValue([{ ...providerInvoice('A1', '2026-01-10', 1000, 1000), status: 'paid' }])
+    mFetchAll.mockResolvedValue([openRow('inv-1', 'A1', '2026-01-10', 1000)])
+    const { supabase, updates } = trackingSupabase()
+
+    const result = await refreshMigratedSupplierPaymentState({ supabase, companyId: 'company-1', consentId: 'consent-1' })
+
+    expect(result.updated).toBe(1)
+    expect(updates[0].values).toMatchObject({ status: 'paid', paid_amount: 1000, remaining_amount: 0 })
+  })
+
+  it('leaves an invoice the provider never issued as it is', async () => {
+    mFetchProvider.mockResolvedValue([{ ...providerInvoice('A1', '2026-01-10', 1000, 1000), status: 'draft' }])
+    mFetchAll.mockResolvedValue([openRow('inv-1', 'A1', '2026-01-10', 1000)])
+    const { supabase, updates } = trackingSupabase()
+
+    const result = await refreshMigratedSupplierPaymentState({ supabase, companyId: 'company-1', consentId: 'consent-1' })
+
+    expect(result.unchanged).toBe(1)
+    expect(updates).toHaveLength(0)
+  })
+
   it('reads only rows with no vouchers, no payment, no credit note and an open status', async () => {
     mFetchProvider.mockResolvedValue([])
     mFetchAll.mockResolvedValue([])
@@ -270,6 +293,40 @@ describe('refreshMigratedSupplierPaymentState', () => {
       is_credit_note: false, status: ['registered', 'approved', 'overdue'], total: 1250,
       supplier_invoice_number: 'L-400', invoice_date: '2020-08-03',
     })
+  })
+
+  /**
+   * crm#1157: a Fortnox record matches its row by the löpnummer (the record's
+   * id), never by the supplier's number, and a row imported before
+   * fortnox_number holds the löpnummer as its supplier number.
+   */
+  it('matches Fortnox invoices on the löpnummer and rechecks the row it matched', async () => {
+    vi.mocked(resolveConsent).mockResolvedValueOnce({
+      consent: { provider: 'fortnox' }, accessToken: 'tok', providerCompanyId: undefined,
+    } as unknown as Awaited<ReturnType<typeof resolveConsent>>)
+    mFetchProvider.mockResolvedValue([
+      { ...providerInvoice('21879926', '2026-09-25', 608, 0), id: '367' },
+      { ...providerInvoice('21879927', '2026-09-26', 214, 0), id: '368' },
+      { ...providerInvoice('', '2026-09-27', 99, 0), id: '370' },
+      { ...providerInvoice('21879928', '2026-09-28', 50, 0), id: '371' },
+    ])
+    mFetchAll.mockResolvedValue([
+      { ...openRow('si-kept', '21879926', '2026-09-25', 608), fortnox_number: '367' },
+      { ...openRow('si-earlier', '368', '2026-09-26', 214), fortnox_number: null },
+      { id: 'si-no-number', supplier_invoice_number: null, fortnox_number: '370', invoice_date: '2026-09-27', total: 99 },
+      // Another Fortnox invoice with 371's supplier number on the same date: not 371.
+      { ...openRow('si-other', '21879928', '2026-09-28', 50), fortnox_number: '12' },
+    ])
+    const { supabase, updates } = trackingSupabase()
+
+    const result = await refreshMigratedSupplierPaymentState({ supabase, companyId: 'company-1', consentId: 'consent-1' })
+
+    expect(updates.map(u => u.filters.id)).toEqual(['si-kept', 'si-earlier', 'si-no-number'])
+    expect(updates[0].filters).toMatchObject({ supplier_invoice_number: '21879926', fortnox_number: '367' })
+    expect(updates[1].filters).toMatchObject({ supplier_invoice_number: '368' })
+    expect(updates[1].filters).not.toHaveProperty('fortnox_number')
+    expect(updates[2].filters).toMatchObject({ supplier_invoice_number: null, fortnox_number: '370' })
+    expect(result).toMatchObject({ providerInvoices: 4, matched: 3, updated: 3 })
   })
 
   it('propagates an update failure so reconciliation does not link away the retry candidates', async () => {

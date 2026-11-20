@@ -1,4 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { previewPath } from '@/lib/documents/preview'
+import { DocumentAlreadyLinkedError, isDocumentImmutabilityRefusal } from '@/lib/documents/link-holder'
+import { ALLOWED_DOCUMENT_TYPES } from '@/lib/documents/upload-types'
+import {
+  DOCUMENT_DELETE_REFUSALS,
+  canDeleteDocument,
+  documentDeleteRefusal,
+  inboxItemsLeftEmpty,
+  readDocumentDeletePins,
+  type DocumentDeleteBlock,
+  type DocumentDeleteRefusalCode,
+} from '@/lib/documents/deletion'
 import { after } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { dbError } from '@/lib/errors/db-error'
@@ -6,6 +18,7 @@ import { eventBus } from '@/lib/events'
 import type { CoreEvent, DocumentExtractionOwner } from '@/lib/events/types'
 import { createLogger } from '@/lib/logger'
 import type { DocumentAttachment, DocumentUploadSource } from '@/types'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
 
 const log = createLogger('document-service')
 
@@ -21,9 +34,11 @@ const log = createLogger('document-service')
  * Sanitize a filename for use in Supabase Storage keys.
  * Replaces spaces and non-ASCII characters with underscores,
  * collapses consecutive underscores, and truncates to avoid
- * exceeding Supabase Storage path length limits.
+ * exceeding Supabase Storage path length limits. Storage refuses keys
+ * with non-ASCII ("Invalid key"), so every key built from a user's file
+ * name goes through this one.
  */
-function sanitizeFileName(name: string): string {
+export function sanitizeFileName(name: string): string {
   const dotIndex = name.lastIndexOf('.')
   const ext = dotIndex > 0 ? name.slice(dotIndex) : ''
   const base = dotIndex > 0 ? name.slice(0, dotIndex) : name
@@ -56,9 +71,9 @@ function sanitizeFileName(name: string): string {
  * Both layouts coexist until the Phase B backfill
  * (scripts/backfill-document-storage-paths.ts) has re-homed every legacy
  * object. Read paths must therefore tolerate both: use
- * documentStoragePathCandidates() (or the downloadDocumentObject /
- * createDocumentSignedUrl helpers below) rather than trusting the stored
- * pointer to be the only key that resolves.
+ * documentStoragePathCandidates() (or the downloadDocumentObject helper
+ * below) rather than trusting the stored pointer to be the only key that
+ * resolves.
  */
 export const DOCUMENTS_BUCKET = 'documents'
 const DOCUMENTS_PATH_ROOT = 'documents'
@@ -155,99 +170,31 @@ type StorageErrorLike = { message?: string } | null
  * Returns the resolved key alongside the blob so callers can log or repair
  * a stale `document_attachments.storage_path` pointer. When every candidate
  * fails, the FIRST error is returned: it refers to the stored pointer, which
- * is the actionable one.
+ * is the actionable one. `errors` holds every candidate's error, in order:
+ * a caller that concludes the object is gone (the integrity check) needs
+ * every key to have answered "not found", not only the first.
  */
 export async function downloadDocumentObject(
   supabase: SupabaseClient,
   storagePath: string,
   companyId: string | null | undefined
-): Promise<{ blob: Blob | null; error: StorageErrorLike; resolvedPath: string | null }> {
-  let firstError: StorageErrorLike = null
+): Promise<{ blob: Blob | null; error: StorageErrorLike; errors: NonNullable<StorageErrorLike>[]; resolvedPath: string | null }> {
+  const errors: NonNullable<StorageErrorLike>[] = []
   for (const candidate of documentStoragePathCandidates(storagePath, companyId)) {
     const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).download(candidate)
     if (!error && data) {
-      return { blob: data as Blob, error: null, resolvedPath: candidate }
+      return { blob: data as Blob, error: null, errors: [], resolvedPath: candidate }
     }
-    firstError ??= (error as StorageErrorLike) ?? { message: 'download returned no data' }
+    errors.push((error as StorageErrorLike) ?? { message: 'download returned no data' })
   }
-  return { blob: null, error: firstError, resolvedPath: null }
-}
-
-/**
- * Create a signed URL for a document object, tolerating both key layouts.
- * Same fallback contract as downloadDocumentObject().
- */
-export async function createDocumentSignedUrl(
-  supabase: SupabaseClient,
-  storagePath: string,
-  companyId: string | null | undefined,
-  expiresInSeconds: number
-): Promise<{ signedUrl: string | null; error: StorageErrorLike; resolvedPath: string | null }> {
-  let firstError: StorageErrorLike = null
-  for (const candidate of documentStoragePathCandidates(storagePath, companyId)) {
-    const { data, error } = await supabase.storage
-      .from(DOCUMENTS_BUCKET)
-      .createSignedUrl(candidate, expiresInSeconds)
-    if (!error && data?.signedUrl) {
-      return { signedUrl: data.signedUrl, error: null, resolvedPath: candidate }
-    }
-    firstError ??= (error as StorageErrorLike) ?? { message: 'createSignedUrl returned no data' }
-  }
-  return { signedUrl: null, error: firstError, resolvedPath: null }
+  return { blob: null, error: errors[0] ?? null, errors, resolvedPath: null }
 }
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10 MB
-/**
- * Office, OpenDocument, RTF and CSV documents (agreements, minutes, statements
- * arriving as files rather than PDFs). Read by the Arkiv reading layer
- * (lib/documents/read). Kept here, not imported from there, so this module
- * stays free of the reader's dependencies.
- */
-export const OFFICE_DOCUMENT_TYPES = [
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/msword',
-  'application/vnd.ms-excel',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.oasis.opendocument.text',
-  'application/vnd.oasis.opendocument.spreadsheet',
-  'application/vnd.oasis.opendocument.presentation',
-  'application/rtf',
-  'text/rtf',
-  'text/csv',
-]
-export const ALLOWED_DOCUMENT_TYPES = [
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  // The iPhone default. Verified by its ISO-BMFF brand like any other image,
-  // read by the vision model after a decode, served to the viewer as JPEG.
-  // Before 2026-09-24 the app's own drop zone refused it while the MCP and
-  // the channels took it.
-  'image/heic',
-  'image/heif',
-  ...OFFICE_DOCUMENT_TYPES,
-]
-
-/** What a browser leaves blank or generic: a HEIC arrives with no type or as application/octet-stream (prod, 2026-09-24). */
-const EXTENSION_TYPES: Record<string, string> = {
-  pdf: 'application/pdf',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-  heic: 'image/heic',
-  heif: 'image/heif',
-}
-
-/** The declared type, or the one the file extension implies when the browser declared none or only the generic one. */
-export function declaredDocumentType(file: { name?: string | null; type?: string | null }): string {
-  if (file.type && file.type !== 'application/octet-stream') return file.type
-  const ext = (file.name ?? '').toLowerCase().split('.').pop() ?? ''
-  return EXTENSION_TYPES[ext] ?? file.type ?? ''
-}
+// The upload allowlist and the declared-type reading live in one pure module
+// that the browser drop zones import too (crm#268); re-exported here so
+// server callers keep importing them from the document service.
+export { ALLOWED_DOCUMENT_TYPES, OFFICE_DOCUMENT_TYPES, declaredDocumentType } from '@/lib/documents/upload-types'
 
 /**
  * Validate file size and MIME type before upload.
@@ -394,7 +341,7 @@ function looksLikeXml(bytes: Uint8Array): boolean {
 /**
  * JSON has no binary magic number either. For the declared type
  * application/json (raw PSD2 responses archived as räkenskapsinformation per
- * BFL 7 kap) the content must parse as JSON with an object or array root — a
+ * BFL 7 kap) the content must parse as JSON with an object or array root - a
  * prose placeholder is not valid JSON, and a bare quoted string still fails
  * the root check, so the anti-placeholder defense stays intact. Consulted
  * ONLY for that declared type.
@@ -451,6 +398,10 @@ export function validateDocumentMagicBytes(
   }
   const detected = detectFileMagic(new Uint8Array(buffer))
   if (detected === 'application/zip') {
+    // A plain archive declared as one: the signing evidence package
+    // (lib/signing/seal.ts). User doors never declare it: application/zip is
+    // not in ALLOWED_DOCUMENT_TYPES, which validateDocumentFile checks first.
+    if (declaredMimeType === 'application/zip') return null
     if (zipMatchesDeclaredType(new Uint8Array(buffer), declaredMimeType)) return null
     return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ett ZIP-arkiv utan det formatets innehåll).`
   }
@@ -568,10 +519,17 @@ export async function cleanupExpiredPendingDocumentUploads(
   const serviceClient = createServiceClientNoCookies()
   const prefix = `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending`
   const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
+  // Sorted by name, never by created_at: storage.search answers a name sort
+  // from the (bucket_id, name) index, but any other sort column makes it
+  // match `name ILIKE prefix%` over every object in the bucket. On the
+  // documents bucket (254k objects) that was ~1.1 s per call against ~9 ms,
+  // twice per signed upload, and the largest storage cost in the database.
+  // Age is checked per object below, so the order only decides which 100
+  // are looked at when a prefix holds more (production peak: 29).
   const { data, error } = await storage.list(prefix, {
     limit: PENDING_DOCUMENT_UPLOAD_CLEANUP_LIMIT,
     offset: 0,
-    sortBy: { column: 'created_at', order: 'asc' },
+    sortBy: { column: 'name', order: 'asc' },
   })
   if (error || !data) return 0
 
@@ -668,6 +626,45 @@ async function findReservedDocument(
     .maybeSingle()
   if (error) throw new Error(`Failed to check document upload: ${error.message}`)
   return data as DocumentAttachment | null
+}
+
+/**
+ * The file name (and, once completed, the stored type) a signed upload was
+ * reserved under, for a completion that does not repeat them: the reserved
+ * document row when the upload was already completed, else the name inside
+ * the object key createPendingDocumentUpload chose (`<uploadId>_<name>`,
+ * pending first, then the permanent key a concurrent completion may have
+ * written). The key holds the sanitized name, so a name with spaces or åäö
+ * comes back as stored. Null when no reservation is found: the PUT never
+ * landed, the reservation expired, or the key's name would not rebuild the
+ * same key.
+ *
+ * Agent feedback crm#1474: complete with only upload_id crashed on the
+ * missing file name although the upload already knew it.
+ */
+export async function findPendingDocumentUploadName(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  uploadId: string
+): Promise<{ fileName: string; mimeType: string | null } | null> {
+  const reserved = await findReservedDocument(supabase, companyId, userId, uploadId)
+  if (reserved) return { fileName: reserved.file_name, mimeType: reserved.mime_type ?? null }
+
+  const storage = createServiceClientNoCookies().storage.from(DOCUMENTS_BUCKET)
+  const keyPrefix = `${uploadId}_`
+  const folders = [
+    `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending`,
+    `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}`,
+  ]
+  for (const folder of folders) {
+    const { data, error } = await storage.list(folder, { search: keyPrefix, limit: 10 })
+    if (error || !data) continue
+    const object = data.find((item) => item.id && item.name.startsWith(keyPrefix))
+    const fileName = object?.name.slice(keyPrefix.length)
+    if (fileName && sanitizeFileName(fileName) === fileName) return { fileName, mimeType: null }
+  }
+  return null
 }
 
 function validateReservedDocumentMetadata(
@@ -904,6 +901,22 @@ async function deterministicDocumentId(
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
+/**
+ * True when uploadDocument archived this row with `idempotency_key` set to the
+ * row's own journal_entry_id, which makes its id the deterministic id of
+ * (company, verifikat, content). Verifikat-scoped importers archive this way:
+ * the provider underlag import (upload_source 'api') and the underlag wizard
+ * ('file_upload'). A re-run uses it to recognise its own earlier files. Rows
+ * archived without that key have a random id and never match.
+ */
+export async function isArchivedForOwnJournalEntry(
+  companyId: string,
+  row: { id: string; journal_entry_id: string | null; sha256_hash: string },
+): Promise<boolean> {
+  if (!row.journal_entry_id) return false
+  return row.id === (await deterministicDocumentId(companyId, row.journal_entry_id, row.sha256_hash))
+}
+
 type DocumentUploadedEvent = Extract<CoreEvent, { type: 'document.uploaded' }>
 
 /**
@@ -967,6 +980,20 @@ export async function uploadDocument(
     upload_source?: DocumentUploadSource
     journal_entry_id?: string
     journal_entry_line_id?: string
+    /**
+     * Why the document is the underlag of `journal_entry_id`
+     * (document_attachments.link_basis), resolved by the caller
+     * (linkBasisColumns). Give it whenever journal_entry_id is given; ignored
+     * without one.
+     */
+    linkBasis?: LinkBasisColumns
+    /**
+     * Makes the row id deterministic for (company, key, content). Internal
+     * callers only: no public upload path accepts it. The provider underlag
+     * import recognises its own files by `upload_source: 'api'` together with
+     * this key equal to `journal_entry_id` (isArchivedForOwnJournalEntry), so
+     * no other caller may archive under that combination.
+     */
     idempotency_key?: string
     /**
      * Content dedupe for intake channels: before storing, look for a
@@ -1078,6 +1105,10 @@ export async function uploadDocument(
       digitization_date: new Date().toISOString(),
       journal_entry_id: metadata.journal_entry_id || null,
       journal_entry_line_id: metadata.journal_entry_line_id || null,
+      // Only a linked upload sets the columns: undefined keys are dropped from the
+      // payload, so an unlinked one writes exactly what it wrote before.
+      link_basis: metadata.journal_entry_id && metadata.linkBasis ? metadata.linkBasis.link_basis : undefined,
+      link_evidence: metadata.journal_entry_id && metadata.linkBasis ? metadata.linkBasis.link_evidence : undefined,
     })
     .select()
     .single()
@@ -1128,7 +1159,10 @@ export async function uploadDocument(
     await createServiceClientNoCookies()
       .storage.from(DOCUMENTS_BUCKET)
       .remove([storagePath])
-    throw new Error(`Failed to create document record: ${error.message}`)
+    // With its SQLSTATE, as in completePendingDocumentUpload. A verifikat in a
+    // locked or closed year is refused here by enforce_period_lock_documents;
+    // classifyError reads that text as DOC_UPLOAD_PERIOD_LOCKED for every door.
+    throw dbError(error, 'Failed to create document record')
   }
 
   const result = data as DocumentAttachment
@@ -1246,13 +1280,23 @@ export async function createNewVersion(
 }
 
 /**
- * Link an existing document to a journal entry
+ * Link an existing document to a journal entry.
+ *
+ * `linkBasis` is why the document is this verifikat's underlag
+ * (document_attachments.link_basis, src/lib/links/link-basis.ts): a person
+ * attaching it to an existing verifikat (user_confirmed), booking the
+ * verifikat from it (user_created), or the system attaching a record's own
+ * document (system_derived). The caller resolves it against its request
+ * (linkBasisColumns in src/lib/links/stamp.ts: the kernel cannot read the
+ * approval scope). Required, so a new door cannot anchor an underlag without
+ * saying why; the link itself is permanent (BFL 5 kap 6 §).
  */
 export async function linkToJournalEntry(
   supabase: SupabaseClient,
   companyId: string,
   documentId: string,
   journalEntryId: string,
+  linkBasis: LinkBasisColumns,
   journalEntryLineId?: string
 ): Promise<DocumentAttachment> {
   // The document is company-filtered below, but the journal entry id arrives
@@ -1271,11 +1315,29 @@ export async function linkToJournalEntry(
     throw new Error('Failed to link document: journal entry not found')
   }
 
+  // The line FK, like the entry's, only requires existence (and bypasses
+  // RLS), and the immutability trigger makes a set line pin permanent: a line
+  // of another verifikat, or of another company's, must never be pinned here.
+  // The entry is company-checked above, so a line on it is the company's.
+  if (journalEntryLineId) {
+    const { data: line, error: lineError } = await supabase
+      .from('journal_entry_lines')
+      .select('id')
+      .eq('id', journalEntryLineId)
+      .eq('journal_entry_id', journalEntryId)
+      .maybeSingle()
+    if (lineError || !line) {
+      throw new Error('Failed to link document: journal entry line not found on this journal entry')
+    }
+  }
+
   const { data, error } = await supabase
     .from('document_attachments')
     .update({
       journal_entry_id: journalEntryId,
       journal_entry_line_id: journalEntryLineId || null,
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence,
     })
     .eq('id', documentId)
     .eq('company_id', companyId)
@@ -1283,6 +1345,10 @@ export async function linkToJournalEntry(
     .single()
 
   if (error) {
+    // The immutability trigger refuses any change of a set link, whatever
+    // the holding verifikat's status. That is a conflict the caller can name,
+    // not a server failure: typed so every surface answers 409.
+    if (isDocumentImmutabilityRefusal(error.message)) throw new DocumentAlreadyLinkedError(documentId)
     throw new Error(`Failed to link document: ${error.message}`)
   }
 
@@ -1290,16 +1356,44 @@ export async function linkToJournalEntry(
 }
 
 export type DeleteDocumentResult =
-  | { ok: true; document: Pick<DocumentAttachment, 'id' | 'file_name'> }
-  | { ok: false; reason: 'not_found' | 'linked_to_entry'; status: number; message: string }
+  | {
+      ok: true
+      document: Pick<DocumentAttachment, 'id' | 'file_name'>
+      /** The inbox items that carried only this document and went with it (inboxItemsLeftEmpty). */
+      discardedInboxItemIds: string[]
+    }
+  | { ok: false; reason: 'not_found'; status: number; message: string }
+  | {
+      ok: false
+      /** 'linked_to_entry' for a verifikat link (block 'verifikat'), 'pinned' for any other record that holds it. */
+      reason: 'linked_to_entry' | 'pinned'
+      block: DocumentDeleteBlock
+      code: DocumentDeleteRefusalCode
+      status: number
+      message: string
+    }
 
 /**
- * Delete a document if and only if it is not yet linked to a journal entry.
+ * Delete a document if and only if nothing holds it: the rule is
+ * documentDeleteRefusal() in lib/documents/deletion.ts, shared with the Arkiv
+ * record's offer so the two cannot disagree.
  *
  * BFL 7 kap 2§: once a document is attached to a verifikation it becomes
  * räkenskapsinformation and may not be deleted within the 7-year retention
  * window. Linked docs must be superseded via createNewVersion() instead.
- * The block_document_deletion() trigger is the DB-level backstop.
+ * The block_document_deletion() trigger is the DB-level backstop. The
+ * underlag of a registered supplier invoice or utlägg, the file or received
+ * Peppol XML of a booked inbox item, and a bank transaction's underlag are
+ * refused the same way, each with its own Swedish sentence.
+ *
+ * A record that pins the document through a RESTRICT foreign key between the
+ * pin read and the delete (a bank transaction's underlag) is still refused by
+ * the database; the error is thrown with its SQLSTATE intact so
+ * lib/errors/foreign-key-refusal.ts answers it.
+ *
+ * An unbooked inbox item whose only file this was goes with it
+ * (inboxItemsLeftEmpty, crm#1565): the foreign key only nulls its
+ * document_id, which left a "Väntar på dig" item with no underlag behind.
  */
 export async function deleteDocument(
   supabase: SupabaseClient,
@@ -1308,7 +1402,7 @@ export async function deleteDocument(
 ): Promise<DeleteDocumentResult> {
   const { data: doc, error: fetchError } = await supabase
     .from('document_attachments')
-    .select('id, file_name, storage_path, journal_entry_id, user_id')
+    .select('id, file_name, storage_path, journal_entry_id, journal_entry_line_id, user_id')
     .eq('id', documentId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -1322,13 +1416,18 @@ export async function deleteDocument(
     }
   }
 
-  if (doc.journal_entry_id) {
+  // The verifikat link needs no further read; the other pins are read only
+  // for a document it lets go.
+  const pins = canDeleteDocument(doc) ? await readDocumentDeletePins(supabase, companyId, documentId) : null
+  const refusal = documentDeleteRefusal(doc, pins ?? { supplierInvoice: false, expenseClaim: false, bankTransaction: false, inboxItems: [] })
+  if (refusal) {
     return {
       ok: false,
-      reason: 'linked_to_entry',
+      reason: refusal.block === 'verifikat' ? 'linked_to_entry' : 'pinned',
+      block: refusal.block,
+      code: refusal.code,
       status: 409,
-      message:
-        'Underlaget är knutet till en verifikation och utgör räkenskapsinformation enligt Bokföringslagen 7 kap 2§. Räkenskapsinformation ska bevaras i minst 7 år och får inte raderas. Använd "Ersätt med ny version" om underlaget behöver korrigeras.',
+      message: refusal.message,
     }
   }
 
@@ -1339,17 +1438,47 @@ export async function deleteDocument(
     .eq('company_id', companyId)
 
   if (deleteError) {
+    // block_document_deletion() raises "Cannot delete document linked to a
+    // <status> journal entry (Bokforingslagen)" (no ö in production's text) or
+    // "... within 7-year retention period": match either spelling.
     const msg = (deleteError as { message?: string }).message ?? ''
-    if (msg.includes('Bokföringslagen') || msg.includes('retention')) {
+    if (/Bokf[öo]ringslagen|retention/.test(msg)) {
       return {
         ok: false,
         reason: 'linked_to_entry',
+        block: 'verifikat',
+        code: DOCUMENT_DELETE_REFUSALS.verifikat.code,
         status: 409,
         message:
           'Underlaget kan inte tas bort på grund av Bokföringslagens bevarandekrav (7 kap 2§).',
       }
     }
-    throw new Error(`Failed to delete document: ${msg}`)
+    // Keep the driver's code and text: a record that still pins the document
+    // (a bank transaction's underlag, ON DELETE RESTRICT) is a 23503 the
+    // shared foreign-key refusal mapping answers with a 409 and a sentence
+    // that says what to do, instead of a 500.
+    throw dbError(deleteError, null)
+  }
+
+  // Read before the delete: the foreign key has nulled their document_id
+  // now. The guards repeat the rule so an item booked, converted, matched or
+  // given another file in between stays.
+  const discardedInboxItemIds = pins ? inboxItemsLeftEmpty(documentId, pins.inboxItems) : []
+  if (discardedInboxItemIds.length > 0) {
+    const { error: inboxError } = await supabase
+      .from('invoice_inbox_items')
+      .delete()
+      .eq('company_id', companyId)
+      .in('id', discardedInboxItemIds)
+      .is('document_id', null)
+      .is('created_journal_entry_id', null)
+      .is('created_supplier_invoice_id', null)
+      .is('matched_transaction_id', null)
+    // The document is gone either way; a failure leaves the item as before
+    // (deleteInboxItem clears it) and must not answer the delete as failed.
+    if (inboxError) {
+      log.error('inbox item left by a deleted document was not removed', inboxError, { companyId, documentId, inboxItemIds: discardedInboxItemIds })
+    }
   }
 
   if (doc.storage_path) {
@@ -1365,9 +1494,10 @@ export async function deleteDocument(
     // under the company-scoped SELECT policy. Authorization already happened
     // above: the company-filtered row fetch plus the row delete that just
     // succeeded (with block_document_deletion() as the DB-level backstop).
+    // The viewer's preview (lib/documents/preview.ts) goes with the file it was made from.
     await createServiceClientNoCookies()
       .storage.from(DOCUMENTS_BUCKET)
-      .remove(documentStoragePathCandidates(doc.storage_path, companyId))
+      .remove([...documentStoragePathCandidates(doc.storage_path, companyId), previewPath(companyId, doc.id)])
   }
 
   await eventBus.emit({
@@ -1379,5 +1509,5 @@ export async function deleteDocument(
     },
   })
 
-  return { ok: true, document: { id: doc.id, file_name: doc.file_name } }
+  return { ok: true, document: { id: doc.id, file_name: doc.file_name }, discardedInboxItemIds }
 }

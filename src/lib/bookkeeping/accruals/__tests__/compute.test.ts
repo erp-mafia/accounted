@@ -4,9 +4,11 @@ import {
   computeInstallments,
   countCalendarMonths,
   dayAfter,
+  deferralReleaseDate,
   firstOfMonth,
   listCalendarMonths,
   maxIsoDate,
+  replanPendingInstallments,
 } from '@/lib/bookkeeping/accruals/compute'
 import { sumOre } from '@/lib/money'
 
@@ -111,5 +113,86 @@ describe('maxIsoDate / dayAfter', () => {
     expect(dayAfter('2026-02-28')).toBe('2026-03-01')
     expect(dayAfter('2028-02-28')).toBe('2028-02-29')
     expect(dayAfter('2026-06-14')).toBe('2026-06-15')
+  })
+})
+
+describe('deferralReleaseDate', () => {
+  it('keeps the first of the month when the schedule names no day', () => {
+    expect(deferralReleaseDate('2026-09-01', null)).toBe('2026-09-01')
+    expect(deferralReleaseDate('2026-09-01', undefined)).toBe('2026-09-01')
+  })
+
+  it('books on the named day of the month', () => {
+    expect(deferralReleaseDate('2026-09-01', 14)).toBe('2026-09-14')
+    expect(deferralReleaseDate('2026-12-01', 1)).toBe('2026-12-01')
+  })
+
+  it('clamps a day the month does not have to its last day (31 is every month end)', () => {
+    expect(deferralReleaseDate('2026-02-01', 30)).toBe('2026-02-28')
+    expect(deferralReleaseDate('2028-02-01', 31)).toBe('2028-02-29')
+    expect(deferralReleaseDate('2026-04-01', 31)).toBe('2026-04-30')
+    expect(deferralReleaseDate('2026-01-01', 31)).toBe('2026-01-31')
+  })
+
+  it('throws on a day outside 1-31', () => {
+    expect(() => deferralReleaseDate('2026-01-01', 0)).toThrow()
+    expect(() => deferralReleaseDate('2026-01-01', 32)).toThrow()
+    expect(() => deferralReleaseDate('2026-01-01', 1.5)).toThrow()
+  })
+})
+
+describe('replanPendingInstallments', () => {
+  const posted = [
+    { period_month: '2026-01-01', amount: 1000 },
+    { period_month: '2026-02-01', amount: 1000 },
+  ]
+
+  it('splits the remainder equally over the months of the new period that have no posted month', () => {
+    // 12 000 over Jan-Dec, Jan and Feb posted: 10 000 left, now over Mar-Jun.
+    const plan = replanPendingInstallments({
+      totalAmount: 12000,
+      periodStart: '2026-01-01',
+      periodEnd: '2026-06-30',
+      posted,
+    })
+    expect(plan.map((p) => p.period_month)).toEqual(['2026-03-01', '2026-04-01', '2026-05-01', '2026-06-01'])
+    expect(plan.map((p) => p.amount)).toEqual([2500, 2500, 2500, 2500])
+  })
+
+  it('extends the period, and posted plus planned add up to the total to the öre', () => {
+    const plan = replanPendingInstallments({
+      totalAmount: 1000,
+      periodStart: '2026-01-01',
+      periodEnd: '2027-01-31',
+      posted: [{ period_month: '2026-01-01', amount: 83.34 }],
+    })
+    expect(plan).toHaveLength(12)
+    expect(plan[0].period_month).toBe('2026-02-01')
+    expect(plan[11].period_month).toBe('2027-01-01')
+    expect(sumOre([83.34, ...plan.map((p) => p.amount)])).toBe(1000)
+    const amounts = plan.map((p) => Math.round(p.amount * 100))
+    expect(Math.max(...amounts) - Math.min(...amounts)).toBeLessThanOrEqual(1)
+  })
+
+  it('plans around a posted month that is not the first (a stuck earlier month)', () => {
+    const plan = replanPendingInstallments({
+      totalAmount: 3000,
+      periodStart: '2026-01-01',
+      periodEnd: '2026-03-31',
+      posted: [{ period_month: '2026-02-01', amount: 1000 }],
+    })
+    expect(plan).toEqual([
+      { period_month: '2026-01-01', amount: 1000 },
+      { period_month: '2026-03-01', amount: 1000 },
+    ])
+  })
+
+  it('throws when a posted month lies after the new end, or no month is left', () => {
+    expect(() =>
+      replanPendingInstallments({ totalAmount: 12000, periodStart: '2026-01-01', periodEnd: '2026-01-31', posted }),
+    ).toThrow(/after the new period end/)
+    expect(() =>
+      replanPendingInstallments({ totalAmount: 12000, periodStart: '2026-01-01', periodEnd: '2026-02-28', posted }),
+    ).toThrow(/No month is left/)
   })
 })

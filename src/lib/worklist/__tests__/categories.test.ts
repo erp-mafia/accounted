@@ -1,11 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+const switchStateMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bank-feed/switch-campaign', () => ({
+  switchStateFor: (...args: unknown[]) => switchStateMock(...args),
+}))
+
 import {
+  countBankSwitchDue,
+  listBankSwitchDue,
+  countCollectedPaymentsToBook,
+  countCollectionSettlementsToBook,
   countDeadlinesNeedingAction,
+  countFailedPeppolDeliveries,
   countInboxDocuments,
-  countOverdueInvoices,
+  getOverdueInvoicesDue,
+  summarizeOverdueInvoices,
   countPendingOperations,
+  countCollectionDecisionsAndBatch,
+  countReminderBatchReady,
   countReconciliationDue,
   countSuggestedMatches,
   countUnclassifiedDocuments,
@@ -22,9 +36,14 @@ import {
   listSuggestedMatches,
 } from '../categories'
 import {
+  ATTESTABLE_SUPPLIER_INVOICE_STATUSES,
+  canApproveSupplierInvoice,
+} from '@/lib/supplier-invoices/lifecycle'
+import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
-} from '@/lib/invoices/matchable-statuses'
+} from '@/lib/bookkeeping/matchable-statuses'
+import { UNANSWERED_SIGNING_MINUTES } from '@/lib/payments/orders/status'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
@@ -33,6 +52,56 @@ const COMPANY = 'company-1'
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+})
+
+describe('listBankSwitchDue', () => {
+  const NOW = new Date('2026-10-20T08:00:00Z')
+
+  it('is empty while the campaign is off or does not apply', async () => {
+    switchStateMock.mockResolvedValue(null)
+    await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([])
+    await expect(countBankSwitchDue(supabase, COMPANY, NOW)).resolves.toBe(0)
+    expect(switchStateMock).toHaveBeenCalledWith({ supabase, companyId: COMPANY }, { now: NOW })
+  })
+
+  it('answers one row per pending connection with the deadline math from the campaign state', async () => {
+    switchStateMock.mockResolvedValue({
+      state: 'pending',
+      pending: [{ connection_id: 'c1', bank_name: 'Swedbank' }, { connection_id: 'c2', bank_name: 'SEB' }],
+      uncovered: [{ connection_id: 'c3', bank_name: 'Wise' }],
+      open_payments: 0,
+      deadline: '2026-11-09',
+      days_left: 20,
+      passed: false,
+      urgent: false,
+    })
+    await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([
+      { connection_id: 'c1', bank_name: 'Swedbank', deadline: '2026-11-09', days_left: 20, passed: false, urgent: false },
+      { connection_id: 'c2', bank_name: 'SEB', deadline: '2026-11-09', days_left: 20, passed: false, urgent: false },
+    ])
+    await expect(countBankSwitchDue(supabase, COMPANY, NOW)).resolves.toBe(2)
+  })
+
+  it('keeps the row past the deadline, marked passed and urgent, so it says the connection has ended', async () => {
+    switchStateMock.mockResolvedValue({
+      state: 'pending',
+      pending: [{ connection_id: 'c1', bank_name: 'Swedbank' }],
+      uncovered: [],
+      open_payments: 0,
+      deadline: '2026-11-09',
+      days_left: -3,
+      passed: true,
+      urgent: true,
+    })
+    await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([
+      { connection_id: 'c1', bank_name: 'Swedbank', deadline: '2026-11-09', days_left: -3, passed: true, urgent: true },
+    ])
+  })
+
+  it('soft-fails to empty when the state cannot be read', async () => {
+    switchStateMock.mockRejectedValue(new Error('boom'))
+    await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([])
+  })
 })
 
 describe('countUnbookedTransactions', () => {
@@ -49,15 +118,71 @@ describe('countUnbookedTransactions', () => {
 })
 
 describe('countSupplierInvoicesAwaitingApproval', () => {
-  it('counts registered invoices but never credit notes', async () => {
+  it('counts unattested registered invoices but never credit notes', async () => {
     // A credit note is a reversal with nothing to attest; the detail page
     // offers no attest button for it, so counting one here made an item
     // nobody could clear (support case 2026-09-04).
     enqueue({ count: 1 })
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(1)
     const eqCalls = findCalls('supplier_invoices', 'eq')
-    expect(eqCalls).toContainEqual(['status', 'registered'])
     expect(eqCalls).toContainEqual(['is_credit_note', false])
+    expect(findCalls('supplier_invoices', 'is')).toContainEqual(['approved_at', null])
+  })
+
+  it('keeps an unattested invoice that fell due: the statuses attest accepts, overdue included (crm#1631)', async () => {
+    // The cron stores an unattested invoice past its due date as 'overdue';
+    // the detail page and the Registrerade tab still offer Attestera on it,
+    // so a 'registered'-only count dropped it from Att göra the day it fell
+    // due. The count reads the same statuses as canApproveSupplierInvoice.
+    enqueue({ count: 3 })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(3)
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['status', [...ATTESTABLE_SUPPLIER_INVOICE_STATUSES]])
+    expect([...ATTESTABLE_SUPPLIER_INVOICE_STATUSES]).toEqual(['registered', 'overdue'])
+    // Attested invoices age into 'overdue' too: approved_at says the attest is done.
+    expect(findCalls('supplier_invoices', 'is')).toContainEqual(['approved_at', null])
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'registered'])
+  })
+
+  it('counts exactly what the pages offer Attestera on', () => {
+    // One rule: what the count's predicate selects is what canApproveSupplierInvoice accepts.
+    for (const status of ['registered', 'overdue', 'approved', 'partially_paid', 'paid', 'credited']) {
+      const selected = (ATTESTABLE_SUPPLIER_INVOICE_STATUSES as readonly string[]).includes(status)
+      expect(canApproveSupplierInvoice({ status, approved_at: null })).toBe(selected)
+      expect(canApproveSupplierInvoice({ status, approved_at: '2026-11-01T10:00:00Z' })).toBe(false)
+    }
+  })
+
+  it('counts nothing for a company on kontantmetoden: it has no attest step (crm#1156)', async () => {
+    // The detail page and the list never offer Attestera under
+    // kontantmetoden, so a registered invoice counted here was an Att göra
+    // item nobody could clear.
+    enqueue({ count: 2 })
+    enqueue({ data: { accounting_method: 'cash' } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
+    expect(findCall('company_settings', 'select')).toEqual(['accounting_method'])
+    expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', COMPANY])
+  })
+
+  it('keeps counting under faktureringsmetoden, and for a company with no setting', async () => {
+    enqueue({ count: 2 })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(2)
+    // The credit-note exclusion is unchanged by the method gate.
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['is_credit_note', false])
+    reset()
+    enqueue({ count: 2 })
+    enqueue({ data: null })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(2)
+  })
+
+  it('soft-fails to 0 when either read fails', async () => {
+    enqueue({ error: { message: 'boom' } })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
+    reset()
+    enqueue({ count: 2 })
+    enqueue({ error: { message: 'settings boom' } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
   })
 })
 
@@ -78,42 +203,81 @@ describe('countUnbookedSkattekontoRows', () => {
     enqueue({ error: { message: 'boom' } })
     await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(0)
   })
+
+  it('reads no IB when there is no open row', async () => {
+    enqueue({ count: 0 })
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(0)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  // crm#2010: a migrated company's skattekonto rows from before its IB on
+  // 1630 are carried by that IB, so Att göra does not ask to book them.
+  it('leaves out the rows dated before the ingående balans on the skattekonto account', async () => {
+    enqueue({ count: 102 }) // every open row
+    enqueue({ data: '1630' }) // company_skattekonto_account
+    enqueue({ data: { floor_date: '2026-09-01', amount: 5000, entry_ids: ['ib-1'] } }) // account_ib_floor
+    enqueue({ count: 8 }) // the open rows from the IB on
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(8)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('account_ib_floor', expect.objectContaining({ p_account_number: '1630' }))
+    expect(findCalls('skattekonto_transactions', 'gte')).toEqual([['transaktionsdatum', '2026-09-01']])
+  })
+
+  it('counts every open row when the account has no IB', async () => {
+    enqueue({ count: 5 })
+    enqueue({ data: '1630' })
+    enqueue({ data: null })
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(5)
+    expect(findCalls('skattekonto_transactions', 'gte')).toEqual([])
+  })
+
+  it('counts every open row when the IB cannot be read: work is never hidden on a failed read', async () => {
+    enqueue({ count: 5 })
+    enqueue({ data: '1630' })
+    enqueue({ error: { message: 'boom' } })
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(5)
+  })
 })
 
 describe('countInboxDocuments', () => {
-  it('counts only items whose document is still unlinked', async () => {
+  it('counts the open items: not one a live verifikat holds the document of, but one a reversed verifikat left', async () => {
     enqueue({
       data: [
         { id: 'i1', document_id: 'd1' },
-        { id: 'i2', document_id: 'd2' },
-        { id: 'i3', document_id: 'd3' },
+        { id: 'i2', document_id: 'd2', document_hold: { journal_entry_id: 'je-1', entry: { status: 'posted' } } },
+        { id: 'i3', document_id: 'd3', document_hold: { journal_entry_id: 'je-2', entry: { status: 'reversed' } } },
       ],
     })
-    enqueue({ count: 2 }) // one of the three docs is already linked elsewhere
     await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(2)
-    expect(mockSupabase.from).toHaveBeenCalledWith('invoice_inbox_items')
-    expect(mockSupabase.from).toHaveBeenCalledWith('document_attachments')
+    expect(mockSupabase.from).toHaveBeenCalledTimes(1)
   })
 
-  it('returns 0 without a document query when no unconsumed items exist', async () => {
+  it('reads the open filter of the one reading: no link, not in Arkiv', async () => {
     enqueue({ data: [] })
-    await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(0)
-    expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
+    await countInboxDocuments(supabase, COMPANY)
+    expect(findCalls('invoice_inbox_items', 'is').map(([column]) => column)).toEqual([
+      'created_supplier_invoice_id',
+      'created_journal_entry_id',
+      'matched_transaction_id',
+      'routed_to_arkiv_at',
+    ])
   })
 
-  it('chunks the document id filter so large inboxes stay under URL limits', async () => {
-    // 200 deduped ids → two .in() chunks of 150 + 50, counts summed.
-    enqueue({
-      data: Array.from({ length: 200 }, (_, i) => ({
-        id: `item-${i}`,
-        document_id: `doc-${i}`,
-      })),
-    })
-    enqueue({ count: 140 })
-    enqueue({ count: 45 })
-    await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(185)
-    // 1 inbox query + 2 chunked document queries.
-    expect(mockSupabase.from).toHaveBeenCalledTimes(3)
+  it('counts a document once, however many items carry it', async () => {
+    enqueue({ data: [{ id: 'i1', document_id: 'd1' }, { id: 'i2', document_id: 'd1' }] })
+    await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(1)
+  })
+
+  it('leaves out a receipt riding on its invoice and an open half whose other half is booked, as Behöver dig does', async () => {
+    const companionIds = vi.fn().mockResolvedValue(new Set(['i2', 'i3']))
+    enqueue({ data: [{ id: 'i1', document_id: 'd1' }, { id: 'i2', document_id: 'd2' }, { id: 'i3', document_id: 'd3' }, { id: 'i4', document_id: 'd4' }] })
+    await expect(countInboxDocuments(supabase, COMPANY, { companionIds })).resolves.toBe(2)
+    expect(companionIds).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: 'i1' })]))
+  })
+
+  it('counts every item when the pairing cannot be read', async () => {
+    const companionIds = vi.fn().mockRejectedValue(new Error('boom'))
+    enqueue({ data: [{ id: 'i1', document_id: 'd1' }, { id: 'i2', document_id: 'd2' }] })
+    await expect(countInboxDocuments(supabase, COMPANY, { companionIds })).resolves.toBe(2)
   })
 
   it('soft-fails to 0 on query error', async () => {
@@ -148,16 +312,227 @@ describe('countVerifikatMissingDocument', () => {
   })
 })
 
+describe('Avräkningar rows', () => {
+  it('counts the payouts and collected payments of the company that the page counts as waiting for a person', async () => {
+    enqueue({ count: 2 })
+    await expect(countCollectionSettlementsToBook(supabase, COMPANY)).resolves.toBe(2)
+    expect(findCalls('collection_settlements', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY]]))
+    expect(findCalls('collection_settlements', 'in')).toEqual([['status', ['received', 'needs_mapping']]])
+    enqueue({ count: 3 })
+    await expect(countCollectedPaymentsToBook(supabase, COMPANY)).resolves.toBe(3)
+    expect(findCalls('collection_collected_payments', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY]]))
+    expect(findCalls('collection_collected_payments', 'in')).toEqual([['status', ['pending', 'needs_review']]])
+  })
+
+  it('soft-fails to 0 on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(countCollectionSettlementsToBook(supabase, COMPANY)).resolves.toBe(0)
+    enqueue({ error: { message: 'boom' } })
+    await expect(countCollectedPaymentsToBook(supabase, COMPANY)).resolves.toBe(0)
+  })
+})
+
 describe('simple head counts', () => {
   it.each([
     ['countSupplierInvoicesAwaitingApproval', countSupplierInvoicesAwaitingApproval, 'supplier_invoices'],
-    ['countOverdueInvoices', countOverdueInvoices, 'invoices'],
     ['countDeadlinesNeedingAction', countDeadlinesNeedingAction, 'deadlines'],
     ['countPendingOperations', countPendingOperations, 'pending_operations'],
   ] as const)('%s returns the count and targets the right table', async (_name, fn, table) => {
     enqueue({ count: 3 })
     await expect(fn(supabase, COMPANY)).resolves.toBe(3)
     expect(mockSupabase.from).toHaveBeenCalledWith(table)
+  })
+})
+
+function item(kind: 'open' | 'start' | 'approve_step', invoiceId: string, caseId: string | null = null) {
+  return { kind, invoice_id: invoiceId, case_id: caseId }
+}
+
+describe('getOverdueInvoicesDue: one grouped row per company (crm#1084, accounted#19)', () => {
+  const TODAY = '2026-10-13'
+  const overdueRow = (overrides: Record<string, unknown> = {}) => ({
+    id: 'inv-1',
+    invoice_number: 'F-1',
+    customer_id: 'cust-1',
+    status: 'sent',
+    due_date: '2026-09-30',
+    total: 1250,
+    total_sek: 1250,
+    remaining_amount: 1250,
+    currency: 'SEK',
+    ...overrides,
+  })
+
+  it('reads the Förfallna rows by the due date and the open remainder, never the stored status', async () => {
+    enqueue({ data: [overdueRow()] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toMatchObject({ count: 1 })
+    expect(findCalls('invoices', 'in')).toContainEqual(['status', ['sent', 'overdue', 'partially_paid']])
+    expect(findCalls('invoices', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
+    expect(findCalls('invoices', 'eq')).not.toContainEqual(['status', 'overdue'])
+    expect(findCalls('invoices', 'is')).toContainEqual(['credited_invoice_id', null])
+    expect(findCalls('invoices', 'lt')).toContainEqual(['due_date', TODAY])
+    expect(findCalls('invoices', 'gt')).toContainEqual(['remaining_amount', 0])
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('collection_open_invoice_ids', { p_company_id: COMPANY })
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('collection_attention_case_ids', { p_company_id: COMPANY })
+  })
+
+  it('groups every overdue invoice into one item: count, amount still owed, oldest due date', async () => {
+    enqueue({
+      data: [
+        overdueRow({ id: 'a', due_date: '2026-08-31', remaining_amount: 1000 }),
+        overdueRow({ id: 'b', status: 'partially_paid', due_date: '2026-09-15', total: 2000, total_sek: 2000, remaining_amount: 500.25 }),
+        overdueRow({ id: 'c', due_date: '2026-10-12', remaining_amount: 99.5 }),
+      ],
+    })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toEqual({
+      count: 3,
+      remaining_sek: 1599.75,
+      unconverted_count: 0,
+      oldest_due_date: '2026-08-31',
+      oldest_days_overdue: 43,
+    })
+  })
+
+  it('leaves out the invoices "Hos inkasso" lists: an open case past delivery, or one a person must look at', async () => {
+    enqueue({
+      data: [
+        overdueRow({ id: 'with-provider' }),
+        overdueRow({ id: 'delivered-only' }),
+        overdueRow({ id: 'refused-handover' }),
+        overdueRow({ id: 'plain' }),
+      ],
+    })
+    enqueue({
+      data: [
+        { invoice_id: 'with-provider', in_collection: true },
+        // The provider only delivered the invoice: still the user's to follow up.
+        { invoice_id: 'delivered-only', in_collection: false },
+      ],
+    })
+    enqueue({ data: [{ invoice_id: 'refused-handover', reason: 'submission_failed' }] })
+    const group = await getOverdueInvoicesDue(supabase, COMPANY, TODAY)
+    expect(group).toMatchObject({ count: 2, remaining_sek: 2500 })
+  })
+
+  it('is null when nothing is overdue, or only invoices at the collections provider', async () => {
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+
+    enqueue({ data: [overdueRow({ id: 'x' })] })
+    enqueue({ data: [{ invoice_id: 'x', in_collection: true }] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+  })
+
+  it('a failed collections read leaves nothing out: shown, never hidden', async () => {
+    enqueue({ data: [overdueRow()] })
+    enqueue({ data: null, error: { message: 'boom' } })
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toMatchObject({ count: 1 })
+  })
+
+  it('soft-fails to null when the invoice read fails', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+  })
+})
+
+describe('summarizeOverdueInvoices', () => {
+  const TODAY = '2026-10-13'
+  const row = (overrides: Record<string, unknown>) =>
+    ({ due_date: '2026-10-01', total: 100, total_sek: 100, remaining_amount: 100, currency: 'SEK', ...overrides }) as never
+
+  it('sums a foreign invoice at its own SEK amount, the remainder pro rata', () => {
+    expect(
+      summarizeOverdueInvoices(
+        [row({ currency: 'EUR', total: 200, total_sek: 2300, remaining_amount: 50 }), row({ remaining_amount: 10.1 })],
+        TODAY,
+      ),
+    ).toMatchObject({ count: 2, remaining_sek: 585.1, unconverted_count: 0 })
+  })
+
+  it('counts a foreign invoice without a SEK amount instead of mixing currencies into the sum', () => {
+    expect(
+      summarizeOverdueInvoices([row({ currency: 'USD', total_sek: null, remaining_amount: 70 }), row({})], TODAY),
+    ).toMatchObject({ count: 2, remaining_sek: 100, unconverted_count: 1 })
+  })
+
+  it('is null for no rows', () => {
+    expect(summarizeOverdueInvoices([], TODAY)).toBeNull()
+  })
+})
+
+describe('countPendingOperations and the collections batch', () => {
+  it('leaves the daily batches (collections, reminders) to their own rows', async () => {
+    enqueue({ count: 2 })
+    await expect(countPendingOperations(supabase, COMPANY)).resolves.toBe(2)
+    expect(findCall('pending_operations', 'not')).toEqual(['operation_type', 'in', '(collections_daily_batch,reminder_daily_batch)'])
+    expect(findCall('pending_operations', 'neq')).toEqual(['actor_type', 'system'])
+  })
+
+  it('counts the items of the pending batch less the removed ones', async () => {
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'op-1', params: { items: [item('open', 'i1'), item('open', 'i2'), item('start', 'i3')] } }], error: null })
+    enqueue({ data: [{ invoice_id: 'i3', kind: 'start' }], error: null })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 0, batchReady: 2 })
+    expect(findCalls('collection_batch_removals', 'eq')).toContainEqual(['pending_operation_id', 'op-1'])
+    expect(findCalls('pending_operations', 'eq')).toContainEqual(['operation_type', 'collections_daily_batch'])
+    expect(findCalls('collection_cases', 'eq')).toContainEqual(['stage', 'awaiting_decision'])
+  })
+
+  it('counts a decision the batch proposes once, in the batch row', async () => {
+    enqueue({ data: [{ id: 'case-1' }, { id: 'case-2' }], error: null })
+    enqueue({ data: [{ id: 'op-1', params: { items: [item('open', 'i1'), item('approve_step', 'i9', 'case-1')] } }], error: null })
+    enqueue({ data: [], error: null })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 1, batchReady: 2 })
+  })
+
+  it('gives a decision taken out of the batch back to the decision row', async () => {
+    enqueue({ data: [{ id: 'case-1' }], error: null })
+    enqueue({ data: [{ id: 'op-1', params: { items: [item('open', 'i1'), item('approve_step', 'i9', 'case-1')] } }], error: null })
+    enqueue({ data: [{ invoice_id: 'i9', kind: 'approve_step' }], error: null })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 1, batchReady: 1 })
+  })
+
+  it('counts decisions alone without a pending batch, and soft-fails each part', async () => {
+    enqueue({ data: [{ id: 'case-1' }], error: null })
+    enqueue({ data: [], error: null })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 1, batchReady: 0 })
+    enqueue({ data: null, error: { message: 'boom' } })
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 0, batchReady: 0 })
+  })
+})
+
+describe('countReminderBatchReady', () => {
+  const reminder = (invoiceId: string) => ({ kind: 'reminder', invoice_id: invoiceId, level: 1, bank: 'fresh' })
+
+  it('counts the reminders of the pending batch less the ones taken out', async () => {
+    enqueue({ data: [{ id: 'op-1', params: { items: [reminder('i1'), reminder('i2'), reminder('i3')] } }], error: null })
+    enqueue({ data: [{ invoice_id: 'i3' }], error: null })
+    await expect(countReminderBatchReady(supabase, COMPANY)).resolves.toBe(2)
+    expect(findCalls('pending_operations', 'eq')).toContainEqual(['operation_type', 'reminder_daily_batch'])
+    expect(findCalls('collection_batch_removals', 'eq')).toContainEqual(['kind', 'reminder'])
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('event_log')
+  })
+
+  it('counts nothing without a pending batch, and soft-fails to 0', async () => {
+    enqueue({ data: [], error: null })
+    await expect(countReminderBatchReady(supabase, COMPANY)).resolves.toBe(0)
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(countReminderBatchReady(supabase, COMPANY)).resolves.toBe(0)
+    enqueue({ data: [{ id: 'op-1', params: { items: [reminder('i1')] } }], error: null })
+    enqueue({ data: null, error: { message: 'denied' } })
+    await expect(countReminderBatchReady(supabase, COMPANY)).resolves.toBe(0)
   })
 })
 
@@ -466,14 +841,17 @@ describe('listSuggestedMatches', () => {
 
     // Both revalidation conditions, not just the id filter: findCall returns
     // only the FIRST .in() per table, which is the id one, so the status
-    // filter needs findCalls to be covered at all.
+    // filter needs findCalls to be covered at all. The third call is the
+    // open pool the several-invoice search reads, under the same statuses.
     expect(findCalls('invoices', 'in')).toEqual([
       ['id', ['inv-1']],
+      ['status', [...MATCHABLE_INVOICE_STATUSES]],
       ['status', [...MATCHABLE_INVOICE_STATUSES]],
     ])
     expect(findCall('invoices', 'gt')).toEqual(['remaining_amount', 0])
     expect(findCalls('supplier_invoices', 'in')).toEqual([
       ['id', ['sinv-1']],
+      ['status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES]],
       ['status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES]],
     ])
     expect(findCall('supplier_invoices', 'gt')).toEqual(['remaining_amount', 0])
@@ -590,12 +968,13 @@ describe('countReconciliationDue', () => {
     })
     enqueue({
       data: [
-        { id: CASH_A, iban: 'SE1', currency: 'SEK', updated_at: '2026-08-01' },
-        { id: CASH_B, iban: 'SE2', currency: 'SEK', updated_at: '2026-08-01' },
+        { id: CASH_A, iban: 'SE1', currency: 'SEK', ledger_account: '1930', is_primary: true, created_at: '2026-01-01' },
+        { id: CASH_B, iban: 'SE2', currency: 'SEK', ledger_account: '1940', is_primary: false, created_at: '2026-01-01' },
         // Reconnect duplicate of B (same IBAN + currency): counts once.
-        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', updated_at: '2026-07-01' },
+        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', ledger_account: '1941', is_primary: false, created_at: '2026-07-01' },
       ],
     })
+    enqueue({ data: [] }) // ledgersWithPostedLines: no ledger carries posted lines
     enqueue({ count: 12 })
     // Due: skattekonto + bank B (deduplicated) = 2.
     await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(2)
@@ -603,9 +982,38 @@ describe('countReconciliationDue', () => {
     expect(mockSupabase.from).toHaveBeenCalledWith('skattekonto_transactions')
   })
 
+  it('a reconnect duplicate counts as the row the reconciliation rail keeps: the one with posted lines', async () => {
+    enqueue({ data: [{ account_key: `bank:${CASH_B}`, through_date: '2026-07-31', reopened_at: null }] })
+    enqueue({
+      data: [
+        { id: CASH_B, iban: 'SE2', currency: 'SEK', ledger_account: '1940', is_primary: false, created_at: '2026-01-01' },
+        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', ledger_account: '1941', is_primary: false, created_at: '2026-07-01' },
+      ],
+    })
+    enqueue({ data: [{ id: 'entry-1' }] }) // ledgersWithPostedLines: the entries...
+    enqueue({ data: [{ id: 'line-1', journal_entry_id: 'entry-1', account_number: '1941' }] }) // ...and their lines
+    enqueue({ count: 0 })
+    // The sign-off on the row the account left covers nothing.
+    await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(1)
+  })
+
+  it('a sign-off on the row the rail keeps covers the account', async () => {
+    enqueue({ data: [{ account_key: `bank:${CASH_B_DUP}`, through_date: '2026-07-31', reopened_at: null }] })
+    enqueue({
+      data: [
+        { id: CASH_B, iban: 'SE2', currency: 'SEK', ledger_account: '1940', is_primary: false, created_at: '2026-01-01' },
+        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', ledger_account: '1941', is_primary: false, created_at: '2026-07-01' },
+      ],
+    })
+    enqueue({ data: [{ id: 'entry-1' }] }) // ledgersWithPostedLines: the entries...
+    enqueue({ data: [{ id: 'line-1', journal_entry_id: 'entry-1', account_number: '1941' }] }) // ...and their lines
+    enqueue({ count: 0 })
+    await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
+  })
+
   it('ignores the skattekonto when it has no rows', async () => {
     enqueue({ data: [{ account_key: `bank:${CASH_A}`, through_date: '2026-05-31', reopened_at: null }] })
-    enqueue({ data: [{ id: CASH_A, iban: null, currency: 'SEK', updated_at: null }] })
+    enqueue({ data: [{ id: CASH_A, iban: null, currency: 'SEK', ledger_account: '1930', is_primary: true, created_at: '2026-01-01' }] })
     enqueue({ count: 0 })
     await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(1)
   })
@@ -655,7 +1063,47 @@ describe('listExpensePayoutsDue', () => {
     ])
   })
 
+  it('a claim on a salary run is no payout to make: it leaves the person\'s total, and a person with nothing else is not listed (crm#1942)', async () => {
+    enqueue({
+      data: [
+        { id: 'c1', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 250, expense_date: '2026-09-02' },
+        { id: 'c2', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 400, expense_date: '2026-09-06' },
+        { id: 'c3', employee_id: 'emp-2', claimant_name: 'Erik Ek', liability_account: '2820', amount_sek: 150, expense_date: '2026-09-04' },
+      ],
+    })
+    // c1 and c3 sit on a draft salary run: still 'registered', repaid with that salary.
+    enqueue({
+      data: ['c1', 'c3'].map((claimId) => ({
+        id: `line-${claimId}`,
+        source_expense_claim_id: claimId,
+        salary_run_employee: { salary_run: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
+      })),
+    })
+    const people = await listExpensePayoutsDue(supabase, COMPANY)
+    expect(findCalls('salary_line_items', 'in')).toEqual([['source_expense_claim_id', ['c1', 'c2', 'c3']]])
+    expect(people).toEqual([
+      {
+        key: 'emp-1',
+        employee_id: 'emp-1',
+        claimant_name: 'Anna Berg',
+        liability_account: '2820',
+        claim_count: 1,
+        claim_ids: ['c2'],
+        total_sek: 400,
+        oldest_expense_date: '2026-09-06',
+      },
+    ])
+  })
+
   it('soft-fails to an empty list on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(listExpensePayoutsDue(supabase, COMPANY)).resolves.toEqual([])
+  })
+
+  it('soft-fails to an empty list when the payslip lines cannot be read: nobody is offered a payout on a guess', async () => {
+    enqueue({
+      data: [{ id: 'c1', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 250, expense_date: '2026-09-02' }],
+    })
     enqueue({ error: { message: 'boom' } })
     await expect(listExpensePayoutsDue(supabase, COMPANY)).resolves.toEqual([])
   })
@@ -671,6 +1119,7 @@ describe('listExpensePayoutSuggestions', () => {
         { id: 'c1', employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: 1240, expense_date: '2026-09-03' },
       ],
     })
+    enqueue({ data: [] }) // none of them is on a payslip
     // Unbooked outflows: one repays Anna exactly, one is a different amount.
     enqueue({
       data: [
@@ -706,12 +1155,18 @@ describe('listExpensePayoutSuggestions', () => {
 
 describe('listSkattekontoPaymentDue', () => {
   const TODAY = '2026-09-08'
-  const company = { org_number: '559547-0021', entity_type: 'aktiebolag' }
+  const company = { org_number: '554466-8808', entity_type: 'aktiebolag' }
   // Queue order follows the function's `from` calls: upcoming rows and the
-  // balance snapshot (one parallel wave), then the company, then the OCR
-  // resolver's own snapshot read.
+  // balance snapshot (one parallel wave), then the company's bank payments to
+  // the skattekonto, then the company, then the OCR resolver's own snapshot
+  // read.
   const snapshot = (saldoSkatteverket: number) => ({
     data: { value: { saldo: { saldoSkatteverket }, fetchedAt: 1757300000000 } },
+  })
+  /** The signing of a payment waiting for its BankID, started `minutes` ago (the cover reads the real clock). */
+  const signingStarted = (minutes: number) => ({
+    status: 'awaiting_signature',
+    signing_started_at: new Date(Date.now() - minutes * 60_000).toISOString(),
   })
 
   it('returns null when Skatteverket has no upcoming charge', async () => {
@@ -749,7 +1204,9 @@ describe('listSkattekontoPaymentDue', () => {
       ],
     })
     enqueue(snapshot(4000.25))
+    enqueue({ data: [] })
     enqueue({ data: company })
+    enqueue({ data: company }) // company_settings: the number's reader
     // OCR resolver: no reported OCR in the snapshot, so it is derived.
     enqueue({ data: null })
     await expect(listSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toEqual({
@@ -758,9 +1215,23 @@ describe('listSkattekontoPaymentDue', () => {
       balance: 4000.25,
       amount: 11000.25,
       count: 2,
-      ocr: '1655954700217',
+      ocr: '1655446688087',
       bankgiro: '5050-1055',
     })
+  })
+
+  it('derives a sole trader\'s OCR under the legal form, not as 16 + the number', async () => {
+    const soleTrader = { org_number: '800374-0118', entity_type: 'enskild_firma' }
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -2500 }],
+    })
+    enqueue(snapshot(0))
+    enqueue({ data: [] })
+    enqueue({ data: soleTrader })
+    enqueue({ data: soleTrader }) // company_settings: the number's reader
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ ocr: '1980037401181' })
   })
 
   it('shows the full charge when no balance snapshot exists', async () => {
@@ -768,6 +1239,7 @@ describe('listSkattekontoPaymentDue', () => {
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: null, belopp_skatteverket: -2500 }],
     })
     enqueue({ data: null })
+    enqueue({ data: [] })
     enqueue({ data: company })
     enqueue({ data: null })
     const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
@@ -779,6 +1251,7 @@ describe('listSkattekontoPaymentDue', () => {
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
     })
     enqueue(snapshot(-250))
+    enqueue({ data: [] })
     enqueue({ data: company })
     enqueue({ data: null })
     const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
@@ -790,6 +1263,7 @@ describe('listSkattekontoPaymentDue', () => {
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
     })
     enqueue({ data: null })
+    enqueue({ data: [] })
     enqueue({ data: { org_number: null, entity_type: 'aktiebolag' } })
     const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
     expect(due).toMatchObject({ amount: 1000, ocr: null, bankgiro: '5050-1055' })
@@ -808,12 +1282,96 @@ describe('listSkattekontoPaymentDue', () => {
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
     })
     enqueue({ data: null })
+    enqueue({ data: [] })
     enqueue({ data: company })
     enqueue({ data: null })
     await expect(countSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBe(1)
     enqueue({ data: [] })
     enqueue({ data: null })
     await expect(countSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
+  })
+
+  it('subtracts bank payments to the skattekonto on their way, and executed ones the saldo cannot show yet', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -15000 }],
+    })
+    // Fetched 2025-09-08T02:53:20Z.
+    enqueue(snapshot(4000))
+    enqueue({
+      data: [
+        // Its BankID started five minutes ago: the signing can still finish.
+        { amount: '3000.25', status: 'awaiting_signature', executed_at: null, signing: signingStarted(5) },
+        { amount: 1000, status: 'approved', executed_at: null, signing: null },
+        // Executed after the saldo was fetched: not in the saldo yet.
+        { amount: 2000, status: 'executed', executed_at: '2025-09-08T09:00:00Z', signing: null },
+        // Executed before it: the saldo already holds it.
+        { amount: 500, status: 'executed', executed_at: '2025-09-07T09:00:00Z', signing: null },
+      ],
+    })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ charge: 15000, balance: 4000, amount: 4999.75 })
+    expect(findCalls('payment_orders', 'eq')).toContainEqual(['purpose', 'skattekonto'])
+    expect(findCall('payment_orders', 'in')).toEqual([
+      'status',
+      ['approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'],
+    ])
+    expect(findCall('payment_orders', 'select')).toEqual([
+      'amount, status, executed_at, signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)',
+    ])
+  })
+
+  it('asks again for a charge whose payment waits for a BankID nobody finished once the signing is past UNANSWERED_SIGNING_MINUTES (crm#1721)', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue(snapshot(250))
+    // The bank could not be read for days, so the sync never let the signing go.
+    enqueue({ data: [{ amount: 750, status: 'awaiting_signature', executed_at: null, signing: signingStarted(UNANSWERED_SIGNING_MINUTES + 1) }] })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ charge: 1000, balance: 250, amount: 750 })
+  })
+
+  it('never asks again for a charge a bank payment on its way covers', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue(snapshot(250))
+    enqueue({ data: [{ amount: 750, status: 'submitted', executed_at: null }] })
+    await expect(listSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('companies')
+  })
+
+  it('without a snapshot counts the payments on their way but no executed one', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -2500 }],
+    })
+    enqueue({ data: null })
+    enqueue({
+      data: [
+        { amount: 1000, status: 'accepted', executed_at: null },
+        { amount: 2500, status: 'executed', executed_at: '2026-09-07T09:00:00Z' },
+      ],
+    })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ charge: 2500, balance: null, amount: 1500 })
+  })
+
+  it('keeps the whole shortfall when the payments cannot be read', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue(snapshot(0))
+    enqueue({ error: { message: 'boom' } })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ amount: 1000 })
   })
 })
 
@@ -827,6 +1385,24 @@ describe('countUnclassifiedDocuments', () => {
     expect(since?.[0]).toBe('document_attachments.created_at')
     const days = (Date.now() - new Date(since![1]).getTime()) / 86_400_000
     expect(Math.round(days)).toBe(REVIEW_RECENT_DAYS)
+    expect(findCalls('document_classifications', 'is')).toEqual(expect.arrayContaining([['document_attachments.journal_entry_id', null]]))
   })
 })
 
+
+describe('countFailedPeppolDeliveries', () => {
+  beforeEach(() => reset())
+
+  it('counts the ids the membership-checked SQL function returns on the session client', async () => {
+    enqueue({ data: ['inv-1', 'inv-2'] })
+    await expect(countFailedPeppolDeliveries(supabase, COMPANY)).resolves.toBe(2)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('peppol_failed_invoice_ids', expect.objectContaining({ p_company_id: COMPANY }))
+    // No table read: peppol_deliveries is not granted to authenticated.
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
+  it('soft-fails to 0 on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(countFailedPeppolDeliveries(supabase, COMPANY)).resolves.toBe(0)
+  })
+})

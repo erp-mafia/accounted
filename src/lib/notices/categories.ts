@@ -22,7 +22,10 @@ import {
   skattekontoUnexplainedFrom,
   type SkattekontoReconciliationLatest,
 } from '@/lib/reconciliation/skattekonto-latest'
+import { switchStateFor, type CompanySwitchState } from '@/lib/bank-feed/switch-campaign'
+import { switchDeepLink } from '@/lib/bank-feed/switch-link'
 import { expiringBankConnectionsFrom, skvStatusNeedsReconnect } from './predicates'
+import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 import type { Notice } from './types'
 
@@ -88,7 +91,7 @@ export async function detectNoFiscalYear(
       severity: 'warning',
       messageKey: 'no_fiscal_year',
       actionKey: 'no_fiscal_year_action',
-      actionHref: '/settings/bookkeeping',
+      actionHref: '/settings/fiscal-years',
     }
   } catch (err) {
     return logAndNull(
@@ -199,6 +202,122 @@ export async function detectExpiringBankConnections(
   }
 }
 
+/** The deadline as an ICU date argument: midday UTC, so the Swedish calendar day is the one shown in both time zones around it. */
+function deadlineParam(deadline: string): number {
+  return Date.parse(`${deadline}T12:00:00Z`)
+}
+
+/**
+ * bank_switch_needed: Enable Banking connections the switch campaign still
+ * waits for (lib/bank-feed/switch-campaign.ts, the same computation the Att
+ * göra row and the mails read). One notice however many connections: the
+ * single one links straight into Koppla banken in switch mode, several link
+ * to Kopplingar, where each row offers the switch. Before the deadline the
+ * line is one plain call to action, "Uppdatera din bankkoppling här" with
+ * "här" as the link; the date is the Att göra row's and the mails'. Past the
+ * deadline the wording is the broken connection's: the feed has stopped. The
+ * id carries the connection ids, the deadline and whether it has passed, so a
+ * dismissal before the deadline resurfaces when the feed stops.
+ */
+export async function detectBankSwitchNeeded(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<Notice | null> {
+  const state = await readSwitchState('bank_switch_needed', supabase, companyId, now)
+  return state ? bankSwitchNeededNotice(state) : null
+}
+
+/** One read of the campaign state, soft-failing to null like every predicate. */
+async function readSwitchState(category: string, supabase: SupabaseClient, companyId: string, now: Date): Promise<CompanySwitchState | null> {
+  try {
+    return await switchStateFor({ supabase, companyId }, { now })
+  } catch (err) {
+    return logAndNull(category, companyId, err instanceof Error ? { message: err.message } : null)
+  }
+}
+
+/**
+ * Both switch notices from ONE read of the campaign state: what the
+ * aggregate calls, so Hem pays for the door and the bank_connections read
+ * once, not once per category.
+ */
+export async function detectBankSwitchNotices(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<Notice[]> {
+  const state = await readSwitchState('bank_switch', supabase, companyId, now)
+  if (!state) return []
+  return [bankSwitchNeededNotice(state), bankSwitchUncoveredNotice(state)].filter((n): n is Notice => n !== null)
+}
+
+/** The bank_switch_needed notice for a computed state (pure; the detector and the tests share it). */
+export function bankSwitchNeededNotice(state: CompanySwitchState): Notice | null {
+  if (state.pending.length === 0) return null
+  const one = state.pending.length === 1 ? state.pending[0] : null
+  const discriminator = boundedDiscriminator(state.pending.map((p) => `${p.connection_id}=${state.deadline}`))
+  const bankName = one ? one.bank_name || null : null
+  const params: Record<string, string | number> = one
+    ? bankName
+      ? { bank: bankName, deadline: deadlineParam(state.deadline) }
+      : { deadline: deadlineParam(state.deadline) }
+    : { count: state.pending.length, deadline: deadlineParam(state.deadline) }
+  if (state.passed) {
+    return {
+      id: `bank_switch_needed:${discriminator}:stopped`,
+      category: 'bank_switch_needed',
+      severity: 'error',
+      messageKey: one ? (bankName ? 'bank_switch_stopped_one' : 'bank_switch_stopped_one_unnamed') : 'bank_switch_stopped_many',
+      messageParams: params,
+      actionKey: 'bank_switch_action',
+      actionHref: one ? switchDeepLink(one.connection_id) : '/settings/connections',
+    }
+  }
+  return {
+    id: `bank_switch_needed:${discriminator}`,
+    category: 'bank_switch_needed',
+    severity: 'warning',
+    messageKey: one ? 'bank_switch_update_one' : 'bank_switch_update_many',
+    messageParams: params,
+    actionKey: 'bank_switch_here',
+    actionHref: one ? switchDeepLink(one.connection_id) : '/settings/connections',
+  }
+}
+
+/**
+ * bank_switch_uncovered: Enable Banking connections at banks Open Payments
+ * does not reach. Their path once Enable Banking ends is the file import, so
+ * the line says so and links to /import. Stable per set of connections;
+ * past the deadline the wording says the old connection has ended, under a
+ * new id so a dismissal before the deadline resurfaces.
+ */
+export async function detectBankSwitchUncovered(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<Notice | null> {
+  const state = await readSwitchState('bank_switch_uncovered', supabase, companyId, now)
+  return state ? bankSwitchUncoveredNotice(state) : null
+}
+
+/** The bank_switch_uncovered notice for a computed state (pure). */
+export function bankSwitchUncoveredNotice(state: CompanySwitchState): Notice | null {
+  if (state.uncovered.length === 0) return null
+  const one = state.uncovered.length === 1 ? state.uncovered[0] : null
+  const bankName = one ? one.bank_name || null : null
+  const stopped = state.passed ? '_stopped' : ''
+  return {
+    id: `bank_switch_uncovered:${boundedDiscriminator(state.uncovered.map((u) => u.connection_id))}${state.passed ? ':stopped' : ''}`,
+    category: 'bank_switch_uncovered',
+    severity: 'warning',
+    messageKey: one ? (bankName ? `bank_uncovered${stopped}_one` : `bank_uncovered${stopped}_one_unnamed`) : `bank_uncovered${stopped}_many`,
+    messageParams: one ? (bankName ? { bank: bankName } : undefined) : { count: state.uncovered.length },
+    actionKey: 'bank_uncovered_action',
+    actionHref: '/import',
+  }
+}
+
 /**
  * skv_disconnected: a stored Skatteverket connection that can no longer
  * authenticate. Mirrors the skatteverket extension's /status route exactly
@@ -206,16 +325,21 @@ export async function detectExpiringBankConnections(
  * the shared skvStatusNeedsReconnect decision over the row. Connections are
  * per (user, company), so the predicate needs the caller's user id.
  * Refresh-token ciphertext is read only for a null check and never returned.
+ *
+ * `serviceClient` must be a service-role client: the token columns are
+ * withheld from end-user roles, so a session client is refused. userId and
+ * companyId come from the authenticated request, which confines the read to
+ * the caller's own row.
  */
 export async function detectSkvDisconnected(
-  supabase: SupabaseClient,
+  serviceClient: SupabaseClient,
   userId: string,
   companyId: string,
   now: Date = new Date(),
 ): Promise<Notice | null> {
   try {
     if ((process.env.SKATTEVERKET_DISABLED ?? '').toLowerCase() === 'true') return null
-    const { data, error } = await supabase
+    const { data, error } = await serviceClient
       .from('skatteverket_tokens')
       .select('status, expires_at, refresh_token, refresh_count, last_error_at')
       .eq('user_id', userId)
@@ -241,6 +365,8 @@ export async function detectSkvDisconnected(
     if (!skvStatusNeedsReconnect({ connected: true, needsReconsent, expired, canRefresh })) {
       return null
     }
+    // Last, so the ombud lookup only runs for a session that would nag.
+    if (await hasSkatteverketOmbudReadAccess(companyId)) return null
     // needs_reconsent rows discriminate on when the terminal error was
     // detected; refresh-exhausted rows on when the token expired: either way
     // a NEW failure after a successful re-consent mints a new id.
@@ -258,6 +384,46 @@ export async function detectSkvDisconnected(
   } catch (err) {
     return logAndNull(
       'skv_disconnected',
+      companyId,
+      err instanceof Error ? { message: err.message } : null,
+    )
+  }
+}
+
+/**
+ * pos_connection_action: point-of-sale connections whose fetch has stopped
+ * and waits for a person (health 'action_required'). Before, that state
+ * showed only on the Kassa page and in its settings, so a company that books
+ * its sales from the day reports learned of it by missing them. Several
+ * venues fold into one counted notice. The id carries the connection ids
+ * only: health_code can change between retries of the same incident.
+ */
+export async function detectPosConnectionAction(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Notice | null> {
+  try {
+    const { data, error } = await supabase
+      .from('pos_connections')
+      .select('id, venue_name')
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .eq('health', 'action_required')
+    if (error) return logAndNull('pos_connection_action', companyId, error)
+    const rows = data ?? []
+    if (rows.length === 0) return null
+    return {
+      id: `pos_connection_action:${boundedDiscriminator(rows.map((r) => r.id as string))}`,
+      category: 'pos_connection_action',
+      severity: 'error',
+      messageKey: rows.length === 1 ? 'pos_action_one' : 'pos_action_many',
+      messageParams: rows.length === 1 ? { venue: rows[0].venue_name as string } : { count: rows.length },
+      actionKey: 'pos_action_action',
+      actionHref: '/settings/pos',
+    }
+  } catch (err) {
+    return logAndNull(
+      'pos_connection_action',
       companyId,
       err instanceof Error ? { message: err.message } : null,
     )
@@ -366,9 +532,10 @@ export async function detectBackupFailing(
 export async function detectOtherAccountHint(
   supabase: SupabaseClient,
   companyId: string,
+  userId: string,
 ): Promise<Notice | null> {
   try {
-    const show = await shouldShowOtherAccountHint(supabase)
+    const show = await shouldShowOtherAccountHint(supabase, userId)
     if (!show) return null
     return {
       id: 'other_account_hint',

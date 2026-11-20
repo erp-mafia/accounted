@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import QRCode from 'qrcode'
 
 interface BankIdQrCodeProps {
   qrStartToken: string
@@ -48,6 +47,8 @@ export function BankIdQrCode({ qrStartToken, qrStartSecret }: BankIdQrCodeProps)
 
       const qrData = `bankid.${token}.${time}.${qrAuthCode}`
 
+      // Loaded on the first frame, not with every page that can show BankID.
+      const { default: QRCode } = await import('qrcode')
       const svg = await QRCode.toString(qrData, {
         type: 'svg',
         margin: 1,
@@ -71,7 +72,7 @@ export function BankIdQrCode({ qrStartToken, qrStartSecret }: BankIdQrCodeProps)
 
   if (!svgData) {
     return (
-      <div className="flex h-[200px] w-[200px] items-center justify-center rounded-lg border bg-white">
+      <div className="flex h-[200px] w-[200px] items-center justify-center rounded-lg bg-white shadow-raised">
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     )
@@ -79,7 +80,7 @@ export function BankIdQrCode({ qrStartToken, qrStartSecret }: BankIdQrCodeProps)
 
   return (
     <div
-      className="inline-flex rounded-lg border bg-white p-2"
+      className="inline-flex rounded-lg bg-white p-2 shadow-raised"
       dangerouslySetInnerHTML={{ __html: svgData }}
     />
   )

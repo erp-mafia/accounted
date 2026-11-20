@@ -30,7 +30,7 @@
  * whichever provider the operator picked.
  */
 
-import nodemailer, { type Transporter } from 'nodemailer'
+import type { Transporter } from 'nodemailer'
 import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
 import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/email/service'
@@ -64,7 +64,7 @@ const FROM_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9.-]{4,253}$/
  * VERIFIED brand sender domains (WL-13): "<fromName> <fromAddress>". Otherwise
  * the platform default: "<fromName> <SMTP_FROM_EMAIL>" or
  * "<App> <SMTP_FROM_EMAIL>". A fromName WITHOUT an explicit address shows the
- * name ALONE (founder call 2026-08-05: no "via <platform>" in the display
+ * name ALONE (product call 2026-08-05: no "via <platform>" in the display
  * name; the platform stays visible in the actual From address until a sender
  * domain is verified). A malformed explicit sender falls through to the
  * platform default rather than failing the send.
@@ -153,9 +153,12 @@ export function isSmtpConfigured(): boolean {
 
 let cachedTransport: { key: string; transport: Transporter } | null = null
 
-function getTransport(settings: SmtpSettings): Transporter {
+async function getTransport(settings: SmtpSettings): Promise<Transporter> {
   const key = JSON.stringify({ ...settings, pass: settings.pass ? 'set' : 'unset' })
   if (cachedTransport && cachedTransport.key === key) return cachedTransport.transport
+  // nodemailer loads on the first SMTP send, not with every route that
+  // reaches the email extension.
+  const { default: nodemailer } = await import('nodemailer')
   const transport = nodemailer.createTransport({
     host: settings.host,
     port: settings.port,
@@ -207,7 +210,7 @@ export class SmtpEmailService implements EmailService {
     }
 
     try {
-      const transport = getTransport(settings)
+      const transport = await getTransport(settings)
       let info: { messageId?: string }
       try {
         info = await transport.sendMail({ from, ...mail })

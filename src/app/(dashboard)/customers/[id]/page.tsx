@@ -10,25 +10,41 @@ import { Badge } from '@/components/ui/badge'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 import {
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
   maskCustomerPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
 import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { RecordAction, RecordHeader } from '@/components/ui/record-header'
 import CustomerForm from '@/components/customers/CustomerForm'
+import { CustomerMergeDialog } from '@/components/customers/CustomerMergeDialog'
+import type { CustomerMergeResult } from '@/lib/customers/merge-customers'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { Lock, Eye, EyeOff } from 'lucide-react'
+import { EyeIcon, EyeSlashIcon, TrashIcon } from '@/components/icons'
 import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatDate } from '@/lib/utils'
-import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getCountryName } from '@/lib/vat/country-codes'
 import type { Customer, CustomerType, CreateCustomerInput, InvoiceStatus } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
+import { CustomerCollectionsExclusion } from '@/components/collections/CustomerCollectionsExclusion'
+import { CustomerRemindersExclusion } from '@/components/reminders/CustomerRemindersExclusion'
+import { CustomerAutogiroSection } from '@/components/invoices/autogiro/CustomerAutogiroSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
+import { CounterpartyRoleLink } from '@/components/parties/CounterpartyRoleLink'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
+import { invoiceRowStatus } from '@/lib/invoices/status-display'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -46,11 +62,22 @@ const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
 interface RelatedInvoice {
   id: string
   invoice_number: string | null
+  /** A received self-billing invoice's number (its invoice_number is null by design). */
+  external_invoice_number: string | null
   invoice_date: string
   due_date: string
   status: InvoiceStatus
   total: number
   currency: string
+  /** The invoice's own öresavrundning choice; null follows the company setting. */
+  ore_rounding: boolean | null
+  remaining_amount: number | null
+  paid_at: string | null
+  document_type: string | null
+  credited_invoice_id: string | null
+  is_self_billed: boolean | null
+  quote_status: string | null
+  valid_until: string | null
 }
 
 interface CustomerWithRelations extends Customer {
@@ -67,7 +94,14 @@ export default function CustomerDetailPage({
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('customer_detail')
+  const tCustomers = useTranslations('customers')
   const tParties = useTranslations('parties')
+  const tInvoices = useTranslations('invoices')
+  const tCommon = useTranslations('common')
+  // The Swedish calendar day the invoices' overdue line reads (lib/invoices/overdue.ts).
+  const today = todayIsoStockholm()
+  // The company's öresavrundning, for an invoice without a choice of its own.
+  const { settings: companySettings } = useCompanySettings()
   const errorLocale = useLocale() as ErrorLocale
   const [customer, setCustomer] = useState<CustomerWithRelations | null>(null)
   const partyId = customer && customer.customer_type !== 'individual' ? ((customer as { party_id?: string | null }).party_id ?? null) : null
@@ -85,7 +119,13 @@ export default function CustomerDetailPage({
     <p className="pt-2 text-xs text-muted-foreground">{tParties('facts_contact_from_registry', { fields: listSv(registryFields, tParties('facts_list_and')) })}</p>
   ) : null
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no customer on screen the page says so in
+  // place of it; a customer already on screen stays, with one line above.
+  // A customer that does not exist (404) is not a failure to retry.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [notFound, setNotFound] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
+  const [isMergeOpen, setIsMergeOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   // Full personnummer, fetched on demand and held only for this view. Cleared
   // whenever the customer is refetched so it can never outlive the row it
@@ -135,18 +175,18 @@ export default function CustomerDetailPage({
     setRevealedPersonalNumber(null)
     try {
       const response = await fetch(`/api/customers/${id}`)
+      if (response.status === 404) {
+        setNotFound(true)
+        return
+      }
       if (!response.ok) {
-        throw new Error('Not found')
+        throw new Error('Load failed')
       }
       const { data } = await response.json()
       setCustomer(data)
+      setLoadFailed(false)
     } catch {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-      router.push('/customers')
+      setLoadFailed(true)
     } finally {
       setIsLoading(false)
     }
@@ -170,6 +210,8 @@ export default function CustomerDetailPage({
         description: data.name,
       })
       setIsEditOpen(false)
+      // Every customer picker reads the cached register: refresh it now.
+      void invalidateReferenceData('ref:customers')
       fetchCustomer()
     } catch {
       toast({
@@ -180,6 +222,45 @@ export default function CustomerDetailPage({
     } finally {
       setIsUpdating(false)
     }
+  }
+
+  async function undoMerge(result: CustomerMergeResult) {
+    for (const card of result.merged) {
+      if (!card.merge_id) continue
+      const response = await fetch('/api/customers/merge/undo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ merge_id: card.merge_id }),
+      })
+      if (!response.ok) {
+        toast({
+          title: t('merge_undo_failed_title'),
+          description: await getResponseErrorMessage(response, 'customer', errorLocale),
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+    void invalidateReferenceData('ref:customers')
+    if (result.survivor.customer_id !== id) router.push(`/customers/${id}`)
+    else fetchCustomer()
+  }
+
+  function handleMerged(result: CustomerMergeResult) {
+    setIsMergeOpen(false)
+    void invalidateReferenceData('ref:customers')
+    toast({
+      title: t('merged_title'),
+      description: t('merged_description', { count: result.totals.invoices, survivor: result.survivor.name }),
+      action: (
+        <ToastAction altText={tCommon('undo')} onClick={() => void undoMerge(result)}>
+          {tCommon('undo')}
+        </ToastAction>
+      ),
+    })
+    // This card was folded into the other one: show the one that stays.
+    if (result.survivor.customer_id !== id) router.push(`/customers/${result.survivor.customer_id}`)
+    else fetchCustomer()
   }
 
   async function handleDelete() {
@@ -198,13 +279,21 @@ export default function CustomerDetailPage({
       })
 
       if (!response.ok) {
-        throw new Error('Delete failed')
+        // A refusal says why and what to do first (drafts to delete, invoices
+        // that keep the customer): show it instead of a bare "try again".
+        toast({
+          title: t('delete_failed_title'),
+          description: await getResponseErrorMessage(response, 'customer', errorLocale),
+          variant: 'destructive',
+        })
+        return
       }
 
       toast({
         title: t('deleted_title'),
         description: customer.name,
       })
+      void invalidateReferenceData('ref:customers')
       router.push('/customers')
     } catch {
       toast({
@@ -215,93 +304,77 @@ export default function CustomerDetailPage({
     }
   }
 
-  const formatCurrency = (amount: number | null, currency: string | null) => {
-    if (!amount) return '-'
-    return new Intl.NumberFormat('sv-SE', {
-      style: 'currency',
-      currency: currency || 'SEK',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount)
-  }
-
   if (isLoading) {
     return <DetailPageSkeleton />
   }
 
-  if (!customer) return null
+  if (!customer) {
+    if (!loadFailed && !notFound) return null
+    return (
+      <div className="space-y-8">
+        <PageHeader title={tCustomers('title')} />
+        {notFound ? (
+          <NotFoundState title={t('not_found')} backHref="/customers" backLabel={t('back')} />
+        ) : (
+          <LoadError title={t('load_failed_title')} onRetry={() => void fetchCustomer()} />
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type kicker, quiet actions right */}
       <div>
-        <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="page-header-lead min-w-0">
-            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
-            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
-              {t(CUSTOMER_TYPE_KEY[customer.customer_type])}
-            </p>
-          </div>
-
-          <div className="page-header-action flex shrink-0 items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsEditOpen(true)}
-              className="text-muted-foreground hover:text-foreground"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
-              {t('edit')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleDelete}
-              className="text-muted-foreground hover:text-destructive"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
-              {t('delete')}
-            </Button>
-          </div>
-        </div>
+        <RecordHeader
+          parent={{ label: tCustomers('title'), href: '/customers' }}
+          title={customer.name}
+          facts={t(CUSTOMER_TYPE_KEY[customer.customer_type])}
+          actions={<>
+            <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={() => setIsEditOpen(true)}>{t('edit')}</RecordAction>
+            <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={() => setIsMergeOpen(true)} title={t('merge_tooltip')}>{t('merge')}</RecordAction>
+            <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={handleDelete} destructive icon={<TrashIcon className="h-4 w-4" />}>{t('delete')}</RecordAction>
+          </>}
+        />
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start lg:gap-x-12">
-      <div className="space-y-8">
+      {loadFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchCustomer() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
+      {/* The invoices fill the left; the facts sit in a capped column on the
+          right (V7 register detail: label-value rows do not stretch). Below
+          lg the facts come first, as in the markup. */}
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-x-12">
+      <div className="min-w-0 space-y-8 lg:order-2">
+      {/* Empty optional rows are left out rather than drawn as "–". The
+          e-mail row stays: without it an invoice cannot be e-mailed. */}
       <DetailSection kicker={t('section_contact')}>
-        <DefRow label={t('def_contact_person')}>
-          {customer.contact_person || <DefEmpty />}
-        </DefRow>
+        {customer.contact_person && (
+          <DefRow label={t('def_contact_person')}>{customer.contact_person}</DefRow>
+        )}
         <DefRow label={t('def_email')}>
           {customer.email ? (
-            <a href={`mailto:${customer.email}`} className="hover:underline">
+            <a href={`mailto:${customer.email}`} className="break-all hover:underline">
               {customer.email}
             </a>
           ) : (
             <DefEmpty />
           )}
         </DefRow>
-        <DefRow label={t('def_phone')}>
-          {customer.phone || <DefEmpty />}
-        </DefRow>
-        <DefRow label={t('def_address')}>
-          {customer.address_line1 || customer.city ? (
+        {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
+        {(customer.address_line1 || customer.city) && (
+          <DefRow label={t('def_address')}>
             <div>
               {customer.address_line1 && <p>{customer.address_line1}</p>}
               {customer.address_line2 && <p>{customer.address_line2}</p>}
-              {(customer.postal_code || customer.city) && (
-                <p>{[customer.postal_code, customer.city].filter(Boolean).join(' ')}</p>
-              )}
+              {postalPlaceLine(customer) && <p>{postalPlaceLine(customer)}</p>}
               {customer.country && <p>{getCountryName(customer.country, errorLocale)}</p>}
             </div>
-          ) : (
-            <DefEmpty />
-          )}
-        </DefRow>
+          </DefRow>
+        )}
         {registryNote}
       </DetailSection>
 
@@ -319,11 +392,12 @@ export default function CustomerDetailPage({
           }}
         />
       ) : null}
+      {partyId && party.dossier ? <CounterpartyRoleLink partyId={partyId} dossier={party.dossier} role="customer" /> : null}
 
       <DetailSection kicker={t('section_business')}>
-        <DefRow label={t('def_customer_number')}>
-          {customer.customer_number || <DefEmpty />}
-        </DefRow>
+        {customer.customer_number && (
+          <DefRow label={t('def_customer_number')}>{customer.customer_number}</DefRow>
+        )}
         {customer.customer_type !== 'individual' && (
           <DefRow label={t('def_org_number')}>
             {customer.org_number ? (
@@ -352,16 +426,16 @@ export default function CustomerDetailPage({
                 title={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
               >
                 {isRevealing ? null : revealedPersonalNumber ? (
-                  <EyeOff className="h-4 w-4" />
+                  <EyeSlashIcon className="h-4 w-4" />
                 ) : (
-                  <Eye className="h-4 w-4" />
+                  <EyeIcon className="h-4 w-4" />
                 )}
               </Button>
             )}
-            {isUnreadablePersonalNumber && (
+            {isUnreadablePersonalNumber && !loadFailed && (
               <AttnLine
                 className="mt-1"
-                action={{ label: t('personal_number_unreadable_action'), onClick: () => setIsEditOpen(true) }}
+                action={canWrite ? { label: t('personal_number_unreadable_action'), onClick: () => setIsEditOpen(true) } : undefined}
               >
                 {t('personal_number_unreadable')}
               </AttnLine>
@@ -379,9 +453,31 @@ export default function CustomerDetailPage({
           </DefRow>
         )}
         <DefRow label={t('def_payment_terms')}>
-          {t('payment_terms_value', { days: customer.default_payment_terms || 30 })}
+          {t('payment_terms_value', { days: customer.default_payment_terms ?? 30 })}
         </DefRow>
+        {customer.invoice_reference && (
+          <DefRow label={t('def_invoice_reference')}>{customer.invoice_reference}</DefRow>
+        )}
+        {customer.invoice_marking && (
+          <DefRow label={t('def_invoice_marking')}>{customer.invoice_marking}</DefRow>
+        )}
       </DetailSection>
+
+      <CustomerCollectionsExclusion
+        customerId={customer.id}
+        excluded={customer.collections_excluded === true}
+        canWrite={canWrite}
+        onSaved={(excluded) => setCustomer((current) => (current ? { ...current, collections_excluded: excluded } : current))}
+      />
+
+      <CustomerRemindersExclusion
+        customerId={customer.id}
+        excluded={customer.reminders_excluded === true}
+        canWrite={canWrite}
+        onSaved={(excluded) => setCustomer((current) => (current ? { ...current, reminders_excluded: excluded } : current))}
+      />
+
+      <CustomerAutogiroSection customerId={customer.id} canWrite={canWrite} />
 
       {customer.notes && (
         <DetailSection kicker={t('section_notes')}>
@@ -390,12 +486,12 @@ export default function CustomerDetailPage({
       )}
 
       </div>
-      <div className="space-y-8">
+      <div className="min-w-0 space-y-8 lg:order-1">
       <DetailSection
         kicker={t('section_invoices')}
         aside={
           customer.invoices?.length > 0 ? (
-            <span className="text-[11px] tabular-nums text-muted-foreground">
+            <span className="text-xs tabular-nums text-muted-foreground">
               {t('invoice_count', { count: customer.invoices.length })}
             </span>
           ) : undefined
@@ -403,39 +499,49 @@ export default function CustomerDetailPage({
       >
         {customer.invoices?.length > 0 ? (
           <div className="divide-y divide-border">
-            {customer.invoices.map((invoice) => (
-              <Link
-                key={invoice.id}
-                href={`/invoices/${invoice.id}`}
-                className="flex items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-secondary/35"
-              >
-                <span
-                  className={cn(
-                    'min-w-0 truncate',
-                    !invoice.invoice_number && 'italic text-muted-foreground',
-                  )}
+            {customer.invoices.map((invoice) => {
+              // The same status line as the invoice list (lib/invoices/status-display.ts):
+              // overdue follows the due date, a credit note and an unsent number say so.
+              const statusDisplay = invoiceRowStatus(invoice, today)
+              const statusValues =
+                statusDisplay.values && 'date' in statusDisplay.values
+                  ? { date: formatDate(statusDisplay.values.date) }
+                  : statusDisplay.values
+              const statusLabel = statusDisplay.labelKey ? tInvoices(statusDisplay.labelKey, statusValues) : invoice.status
+              // The amount the invoice list prints (lib/bookkeeping/invoice-rounding.ts): öresavrundning applied.
+              const displayedTotal = getDisplayTotal(
+                { total: Number(invoice.total), currency: invoice.currency, ore_rounding: invoice.ore_rounding },
+                companySettings,
+              ).displayed
+              return (
+                <Link
+                  key={invoice.id}
+                  href={`/invoices/${invoice.id}`}
+                  className="flex items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-secondary/35"
                 >
-                  {invoiceNumberDisplay(invoice.invoice_number)}
-                </span>
-                <span className="text-muted-foreground tabular-nums">
-                  {formatDate(invoice.invoice_date)}
-                </span>
-                <span className="ml-auto tabular-nums">
-                  {formatCurrency(invoice.total, invoice.currency)}
-                </span>
-                {/* Chips mark exceptions: an overdue invoice is the deviation
-                    worth a chip; paid and not-yet-due render as muted text. */}
-                {invoice.status === 'overdue' ? (
-                  <Badge variant="destructive">{t('invoice_status_overdue')}</Badge>
-                ) : (
-                  <span className="min-w-14 text-right text-xs text-muted-foreground">
-                    {invoice.status === 'paid'
-                      ? t('invoice_status_paid')
-                      : t('invoice_status_unpaid')}
+                  <span
+                    className={cn(
+                      'min-w-0 truncate',
+                      !invoice.invoice_number && !invoice.external_invoice_number && 'italic text-muted-foreground',
+                    )}
+                  >
+                    {invoiceDisplayNumber(invoice)}
                   </span>
-                )}
-              </Link>
-            ))}
+                  <span className="text-muted-foreground tabular-nums">
+                    {formatDate(invoice.invoice_date)}
+                  </span>
+                  <span className="ml-auto tabular-nums">
+                    {formatCurrency(displayedTotal, invoice.currency)}
+                  </span>
+                  {/* Chips mark exceptions: sent and paid render as muted text. */}
+                  {statusDisplay.chip ? (
+                    <Badge variant={statusDisplay.chip}>{statusLabel}</Badge>
+                  ) : (
+                    <span className="min-w-14 text-right text-xs text-muted-foreground">{statusLabel}</span>
+                  )}
+                </Link>
+              )
+            })}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">{t('no_invoices')}</p>
@@ -446,9 +552,18 @@ export default function CustomerDetailPage({
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
+      {isMergeOpen ? (
+        <CustomerMergeDialog
+          open
+          onOpenChange={setIsMergeOpen}
+          subject={{ id: customer.id, name: customer.name, customer_number: customer.customer_number }}
+          onMerged={handleMerged}
+        />
+      ) : null}
+
       {/* Edit dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('edit_dialog_title')}</DialogTitle>
           </DialogHeader>
@@ -473,6 +588,7 @@ export default function CustomerDetailPage({
               address_line2: customer.address_line2 || undefined,
               postal_code: customer.postal_code || undefined,
               city: customer.city || undefined,
+              address_state: customer.address_state || undefined,
               country: customer.country || undefined,
               org_number: customer.org_number || undefined,
               vat_number: customer.vat_number || undefined,
@@ -480,7 +596,9 @@ export default function CustomerDetailPage({
               // Must round-trip: the form defaults omitted values ('sv') and
               // submits every field, so leaving language out resets it on save.
               language: customer.language,
-              default_payment_terms: customer.default_payment_terms || undefined,
+              default_payment_terms: customer.default_payment_terms ?? undefined,
+              invoice_reference: customer.invoice_reference,
+              invoice_marking: customer.invoice_marking,
               notes: customer.notes || undefined,
             }}
           />

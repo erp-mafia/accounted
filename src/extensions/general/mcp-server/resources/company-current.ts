@@ -1,6 +1,13 @@
+import { filterOwedInvoices } from '@/lib/invoices/overdue'
 import type { McpResource } from './types'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { sumUsage, usageSince, USAGE_WINDOW_DAYS } from '@/lib/arkiv/usage'
+import { createLogger } from '@/lib/logger'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
+import { resolveInboxAddress } from '@/lib/documents/inbox-address'
+
+const log = createLogger('mcp-company-current')
 
 /**
  * Per-company working memory for agents. Read at session start so Claude
@@ -17,7 +24,7 @@ export const companyCurrentResource: McpResource = {
   description: 'Working memory for the API key default company: identity, active fiscal period, lock dates, entity counts, voucher series state, recent activity, and filing deadlines. For another company, call gnubok_get_agent_briefing with company_id.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayIsoStockholm()
 
     const [
       companyRes,
@@ -28,13 +35,13 @@ export const companyCurrentResource: McpResource = {
       supplierCountRes,
       openInvoiceCountRes,
       openSupplierInvoiceCountRes,
-      uncategorizedTxCountRes,
+      unbookedTx,
       voucherSequencesRes,
       lastCategorizationRes,
       lastInvoiceSentRes,
       lastBankSyncRes,
       upcomingDeadlinesRes,
-      activeInboxRes,
+      inboxAddress,
       usageRes,
     ] = await Promise.all([
       supabase
@@ -77,14 +84,11 @@ export const companyCurrentResource: McpResource = {
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId),
 
-      // Open AR: anything not paid/credited/cancelled. Proformas, delivery
-      // notes and quotes are never receivables, so only fakturor count.
-      supabase
-        .from('invoices')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('document_type', 'invoice')
-        .in('status', ['draft', 'sent', 'overdue']),
+      // Open AR: what customers still owe (filterOwedInvoices). A draft is no
+      // receivable yet; a part paid invoice still is.
+      filterOwedInvoices(
+        supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+      ),
 
       // Open AP: anything still pending payment.
       supabase
@@ -93,12 +97,18 @@ export const companyCurrentResource: McpResource = {
         .eq('company_id', companyId)
         .in('status', ['registered', 'approved', 'overdue', 'partially_paid']),
 
-      // Uncategorized bank transactions awaiting a journal entry.
-      supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null),
+      // Bank transactions with no verifikat: the shared count
+      // (lib/transactions/unbooked.ts) Accounted://attention, the period-lock
+      // guard and the report data_status use. journal_entry_id IS NULL alone
+      // also counted ignored, private and bulk-booked rows. A failed count is
+      // null, never a made-up zero.
+      countUnbookedBankTransactions(supabase, companyId).catch((err: unknown) => {
+        log.warn('unbooked transaction count unavailable', {
+          companyId,
+          reason: err instanceof Error ? err.message : String(err),
+        })
+        return null
+      }),
 
       // Voucher-series state across open fiscal periods. Scoped by company_id:
       // the table also carries user_id, but a multi-company user would otherwise
@@ -152,17 +162,20 @@ export const companyCurrentResource: McpResource = {
       // indexed. Multi-company users would otherwise see deadlines from all their
       // companies mixed into one company's context (cross-tenant leak flagged by
       // PR #505 review).
-      supabase
-        .from('deadlines')
-        .select('id, title, due_date, deadline_type, priority, status')
-        .eq('company_id', companyId)
-        .eq('is_completed', false)
+      // Open deadlines only (lib/deadlines/open.ts): completed and dismissed
+      // rows are left out, as on /deadlines.
+      filterOpenDeadlines(
+        supabase
+          .from('deadlines')
+          .select('id, title, due_date, deadline_type, priority, status')
+          .eq('company_id', companyId),
+      )
         .gte('due_date', today)
         .order('due_date', { ascending: true })
         .limit(5),
 
       // The forwarding address: a document mailed here walks the same pipe as an upload.
-      supabase.from('company_inboxes').select('local_part').eq('company_id', companyId).eq('status', 'active').maybeSingle(),
+      resolveInboxAddress(supabase, companyId),
 
       // Arkiv phase 9e: the meter, read in the same batch; shown only inside the rollout.
       supabase.from('arkiv_usage_daily').select('activity, units').eq('company_id', companyId).gte('day', usageSince(USAGE_WINDOW_DAYS)),
@@ -241,7 +254,7 @@ export const companyCurrentResource: McpResource = {
         suppliers: supplierCountRes.count ?? 0,
         open_invoices: openInvoiceCountRes.count ?? 0,
         open_supplier_invoices: openSupplierInvoiceCountRes.count ?? 0,
-        uncategorized_transactions: uncategorizedTxCountRes.count ?? 0,
+        uncategorized_transactions: unbookedTx?.total ?? null,
       },
       voucher_series: voucherSeries,
       recent: {
@@ -250,15 +263,8 @@ export const companyCurrentResource: McpResource = {
         last_bank_sync_at: lastBankSyncRes.data?.last_synced_at ?? null,
       },
       upcoming_deadlines: upcomingDeadlinesRes.data ?? [],
-      intake: {
-        email:
-          process.env.RESEND_INBOUND_DOMAIN && (activeInboxRes.data as { local_part?: string } | null)?.local_part
-            ? `${(activeInboxRes.data as { local_part: string }).local_part}@${process.env.RESEND_INBOUND_DOMAIN}`
-            : null,
-      },
-      ...(isArkivEnabled(companyId)
-        ? { arkiv_usage_365d: sumUsage((usageRes.data ?? []) as Array<{ activity: string; units: number }>, usageSince(USAGE_WINDOW_DAYS), USAGE_WINDOW_DAYS) }
-        : {}),
+      intake: { email: inboxAddress },
+      arkiv_usage_365d: sumUsage((usageRes.data ?? []) as Array<{ activity: string; units: number }>, usageSince(USAGE_WINDOW_DAYS), USAGE_WINDOW_DAYS),
     }
   },
 }

@@ -15,28 +15,40 @@ import {
   SettingsRow,
   SettingsRowEnd,
   SettingsSectionHeader,
+  SettingsViewerScope,
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
+import { useCompany } from '@/contexts/CompanyContext'
+import { useBranding } from '@/lib/branding/brand-context'
+import { plannedLegalFormOfSnapshot } from '@/lib/company-lookup/entity-type-map'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { createClient } from '@/lib/supabase/client'
+import type { KuSignalTrigger } from '@/lib/tax/ku-signal'
 import type { CompanySettings } from '@/types'
 
 export function TaxSettingsContent() {
   const { settings, isLoading, updateSettings, refetch } = useSettings()
+  const { company } = useCompany()
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const { appName } = useBranding()
   const searchParams = useSearchParams()
   const router = useRouter()
 
   const hasSkatteverketExtension = ENABLED_EXTENSION_IDS.has('skatteverket')
 
-  // Derived EU-sales signal: postings on 3108/3308/3107 imply a periodisk
-  // sammanställning obligation the opt-in flags may not reflect. Suggestion
-  // only; the user confirms via the ordinary checkboxes.
+  // Derived EU-trade signal, read from the declaration's rutor: EU sales
+  // (35/38/39) imply a periodisk sammanställning obligation, and EU sales or
+  // purchases (20/21/37) an earlier helårsmoms date, which the opt-in flags
+  // may not reflect. Suggestion only; the user confirms via the ordinary
+  // checkboxes.
   const [euSalesDetected, setEuSalesDetected] = useState(false)
-  // Same pattern for kontrolluppgifter: postings on 2898 (utdelning) or
-  // 2393/2893 (ägarlån) imply a KU obligation on 31 January that AGI never
-  // covers. Suggestion only; the user confirms via the checkbox.
-  const [kuSignalDetected, setKuSignalDetected] = useState(false)
+  const [euPurchasesDetected, setEuPurchasesDetected] = useState(false)
+  // Same pattern for kontrolluppgifter: utdelning (2898) or interest on an
+  // ägarlån (84xx beside 2393/2893) implies a KU obligation on 31 January
+  // that AGI never covers. The triggers name the postings, so the line can
+  // say what it is about. Suggestion only; the user confirms via the checkbox.
+  const [kuTriggers, setKuTriggers] = useState<KuSignalTrigger[]>([])
   // And for ROT/RUT: invoices with deductions mean a begäran om utbetalning
   // must reach Skatteverket by 31 January after the payment year.
   const [rotRutSignalDetected, setRotRutSignalDetected] = useState(false)
@@ -45,7 +57,9 @@ export function TaxSettingsContent() {
     fetch('/api/settings/eu-trade-signal')
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
-        if (!cancelled && json?.data?.has_eu_sales) setEuSalesDetected(true)
+        if (cancelled) return
+        if (json?.data?.has_eu_sales) setEuSalesDetected(true)
+        if (json?.data?.has_eu_purchases) setEuPurchasesDetected(true)
       })
       .catch(() => {
         // Best-effort signal: a failed fetch just hides the suggestion.
@@ -53,7 +67,9 @@ export function TaxSettingsContent() {
     fetch('/api/settings/ku-signal')
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
-        if (!cancelled && json?.data?.has_ku_signal) setKuSignalDetected(true)
+        if (!cancelled && json?.data?.has_ku_signal && Array.isArray(json.data.triggers)) {
+          setKuTriggers(json.data.triggers as KuSignalTrigger[])
+        }
       })
       .catch(() => {
         // Best-effort signal: a failed fetch just hides the suggestion.
@@ -70,6 +86,28 @@ export function TaxSettingsContent() {
       cancelled = true
     }
   }, [])
+
+  // The Företag page shows Bolagsverket's form (companies.tic_snapshot). A
+  // handelsbolag or kommanditbolag is set up as another form until Accounted
+  // supports it, so this page names the registry's form beside the one the
+  // books follow instead of contradicting the Företag page silently (PH 237).
+  const [registryFormLabel, setRegistryFormLabel] = useState<string | null>(null)
+  useEffect(() => {
+    if (!company?.id) return
+    const supabase = createClient()
+    let cancelled = false
+    supabase
+      .from('companies')
+      .select('tic_snapshot')
+      .eq('id', company.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) setRegistryFormLabel(plannedLegalFormOfSnapshot(data?.tic_snapshot)?.label ?? null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id])
 
   // The Skatteverket connection moved to its own page under Kopplingar
   // (2026-09-24). A connect flow started before the move still returns here
@@ -146,9 +184,9 @@ export function TaxSettingsContent() {
           here to (re)connect find the way on from this first row. */}
       {showSkatteverket && (
         <SettingsGroup label={tNav('skatteverket')}>
-          <SettingsRow label={tNav('skatteverket_row')} help={tIntro('skatteverket')}>
+          <SettingsRow label={tNav('skatteverket_row')} help={tIntro('skatteverket', { appName })}>
             <SettingsRowEnd>
-              <Button variant="outline" size="sm" asChild>
+              <Button variant="outline" asChild>
                 <Link href="/settings/skatteverket">{tNav('manage_connection')}</Link>
               </Button>
             </SettingsRowEnd>
@@ -160,12 +198,16 @@ export function TaxSettingsContent() {
         <TaxSettingsForm
           settings={settings}
           euSalesDetected={euSalesDetected}
-          kuSignalDetected={kuSignalDetected}
+          euPurchasesDetected={euPurchasesDetected}
+          kuTriggers={kuTriggers}
           rotRutSignalDetected={rotRutSignalDetected}
+          registryFormLabel={registryFormLabel}
         />
       </SettingsFormWrapper>
 
-      <TaxAssessmentNoticesPanel />
+      <SettingsViewerScope>
+        <TaxAssessmentNoticesPanel />
+      </SettingsViewerScope>
     </div>
   )
 }

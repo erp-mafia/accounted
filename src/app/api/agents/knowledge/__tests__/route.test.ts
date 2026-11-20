@@ -19,6 +19,8 @@ const OPTIONS = [
   { id: 'horizontal/swedish-vat', tier: 'horizontal', title: 'Swedish VAT', description: 'Moms.', version: 4, reviewed_at: null },
   { id: 'vertical/bygg-hantverk', tier: 'vertical', title: 'Bygg', description: 'Bygg.', version: 3, reviewed_at: null },
 ]
+/** The options read starts with the company's legal form, then the registry packs. */
+const options = (entityType = 'aktiebolag', packs: unknown[] = OPTIONS) => { enqueue({ data: { entity_type: entityType } }); enqueue({ data: packs }) }
 
 beforeEach(() => {
   vi.clearAllMocks(); reset()
@@ -41,7 +43,7 @@ describe('/api/agents/knowledge', () => {
   })
 
   it('lists the packs a company can give its agents', async () => {
-    enqueue({ data: OPTIONS })
+    options()
     const response = await GET(new Request('http://localhost/api/agents/knowledge'), ctx)
     expect(response.status).toBe(200)
     expect((await response.json()).data.map((o: { id: string }) => o.id)).toEqual(['horizontal/swedish-vat', 'vertical/bygg-hantverk'])
@@ -59,12 +61,23 @@ describe('/api/agents/knowledge', () => {
 
   it('answers 404 for an unknown agent or an unavailable pack', async () => {
     expect((await patch({ action: 'reset', agent_id: 'nope' })).status).toBe(404)
-    enqueue({ data: OPTIONS })
+    options()
     expect((await patch({ action: 'add', agent_id: 'bookkeep', atom_id: 'vertical/withdrawn' })).status).toBe(404)
   })
 
+  it('refuses an aktiebolag-only pack for an enskild firma', async () => {
+    const holding = { id: 'modifier/holding-ab', tier: 'modifier', title: 'Holding', description: 'Holding.', version: 1, reviewed_at: null }
+    options('enskild_firma', [...OPTIONS, holding])
+    const listed = await (await GET(new Request('http://localhost/api/agents/knowledge'), ctx)).json()
+    expect(listed.data.map((o: { id: string }) => o.id)).not.toContain('modifier/holding-ab')
+    reset()
+    options('enskild_firma', [...OPTIONS, holding])
+    expect((await patch({ action: 'add', agent_id: 'bookkeep', atom_id: 'modifier/holding-ab' })).status).toBe(404)
+    expect(findCalls('company_agent_knowledge', 'upsert')).toEqual([])
+  })
+
   it('adds a pack as a row and takes a default away as a row', async () => {
-    enqueue({ data: OPTIONS }); enqueue({ data: null })
+    options(); enqueue({ data: null })
     expect((await patch({ action: 'add', agent_id: 'quarterly-vat-review', atom_id: 'vertical/bygg-hantverk' })).status).toBe(200)
     enqueue({ data: null })
     expect((await patch({ action: 'remove', agent_id: 'quarterly-vat-review', atom_id: 'horizontal/swedish-vat' })).status).toBe(200)
@@ -75,9 +88,24 @@ describe('/api/agents/knowledge', () => {
   })
 
   it('adding a default back deletes the row instead of storing it', async () => {
-    enqueue({ data: OPTIONS }); enqueue({ data: null })
+    options(); enqueue({ data: null })
     expect((await patch({ action: 'add', agent_id: 'quarterly-vat-review', atom_id: 'horizontal/swedish-vat' })).status).toBe(200)
     expect(findCalls('company_agent_knowledge', 'upsert')).toEqual([])
     expect(findCalls('company_agent_knowledge', 'eq')).toEqual(expect.arrayContaining([['company_id', 'company-a'], ['agent_id', 'quarterly-vat-review'], ['atom_id', 'horizontal/swedish-vat']]))
+  })
+
+  it('lists the company\'s own knowledge and gives it to a flow as its own row', async () => {
+    const rules = { id: '00000000-0000-4000-8000-0000000000aa', company_id: 'company-a', team_id: null, atom_id: null, name: 'Våra regler', description: 'Hur vi gör.', body: '# Regler', share_status: 'private', draft: false, kind: 'rules' }
+    options(); enqueue({ data: { team_id: null } }); enqueue({ data: [rules] })
+    const listed = await (await GET(new Request('http://localhost/api/agents/knowledge'), ctx)).json()
+    expect(listed.data.at(-1)).toMatchObject({ id: `own/${rules.id}`, tier: 'own', title: 'Våra regler' })
+
+    options(); enqueue({ data: { team_id: null } }); enqueue({ data: [rules] }); enqueue({ data: null })
+    expect((await patch({ action: 'add', agent_id: 'bookkeep', atom_id: `own/${rules.id}` })).status).toBe(200)
+    expect(findCalls('company_agent_knowledge', 'upsert').map((c) => c[0])).toEqual([
+      { company_id: 'company-a', agent_id: 'bookkeep', own_skill_id: rules.id, included: true },
+    ])
+    options(); enqueue({ data: { team_id: null } }); enqueue({ data: [] })
+    expect((await patch({ action: 'add', agent_id: 'bookkeep', atom_id: 'own/00000000-0000-4000-8000-0000000000bb' })).status).toBe(404)
   })
 })

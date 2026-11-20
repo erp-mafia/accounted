@@ -70,9 +70,17 @@ describe('Turnstile integration contract', () => {
     const register = readRepoFile('src/app/(auth)/register/register-client.tsx')
     const sandbox = readRepoFile('src/app/sandbox/page.tsx')
 
+    // Password sign-in moved server-side with the server-held session
+    // (HttpOnly cookie, CASA 2.3.1/2.3.2): the page hands the captcha token
+    // to the session-client helper, which posts it to POST /api/auth/login,
+    // and that route must forward it into the GoTrue signInWithPassword call.
     expect(login).toMatch(
-      /signInWithPassword\([\s\S]*?options: captchaTokenOptions\(passwordCaptchaToken\)/,
+      /signInWithPassword\(\{[\s\S]*?captchaToken: captchaTokenOptions\(passwordCaptchaToken\)/,
     )
+    const sessionClient = readRepoFile('src/lib/auth/session-client.ts')
+    expect(sessionClient).toMatch(/call<[^>]*>\('\/api\/auth\/login', \{[\s\S]*?body: input/)
+    const loginRoute = readRepoFile('src/app/api/auth/login/route.ts')
+    expect(loginRoute).toMatch(/signInWithPassword\(\{[\s\S]*?captchaToken \? \{ options: \{ captchaToken \} \}/)
     // The reset flow moved server-side (brands-table host resolution,
     // 2026-09-07): the captcha token must travel to
     // POST /api/auth/password-reset, and that route must forward it into
@@ -96,9 +104,14 @@ describe('Turnstile integration contract', () => {
     const signupRoute = readRepoFile('src/app/api/auth/signup/route.ts')
     expect(signupRoute).toMatch(/signUp\(\{[\s\S]*?captchaToken/)
 
+    // The sandbox's anonymous sign-in moved server-side the same way:
+    // page -> POST /api/auth/anonymous -> GoTrue signInAnonymously.
     expect(sandbox).toMatch(
       /signInAnonymously\([\s\S]*?captchaTokenOptions\(captchaToken\)/,
     )
+    expect(sessionClient).toMatch(/'\/api\/auth\/anonymous'[\s\S]*?captchaToken/)
+    const anonymousRoute = readRepoFile('src/app/api/auth/anonymous/route.ts')
+    expect(anonymousRoute).toMatch(/signInAnonymously\([\s\S]*?\{ options: \{ captchaToken \} \}/)
     expect(sandbox).toContain('action="accounted_sandbox"')
   })
 
@@ -107,7 +120,9 @@ describe('Turnstile integration contract', () => {
     const dockerEnvExample = readRepoFile('docker/.env.example')
     const dockerfile = readRepoFile('docker/Dockerfile')
     const entrypoint = readRepoFile('docker/docker-entrypoint.sh')
-    const nextConfig = readRepoFile('next.config.ts')
+    // The CSP (both the proxy's nonce policy and next.config.ts's static one)
+    // is built in one place.
+    const csp = readRepoFile('src/lib/security/csp.ts')
 
     expect(envExample).toContain('NEXT_PUBLIC_TURNSTILE_SITE_KEY=')
     expect(dockerEnvExample).toContain('NEXT_PUBLIC_TURNSTILE_SITE_KEY=')
@@ -115,9 +130,9 @@ describe('Turnstile integration contract', () => {
       'NEXT_PUBLIC_TURNSTILE_SITE_KEY=__NEXT_PUBLIC_TURNSTILE_SITE_KEY__',
     )
     expect(entrypoint).toContain('__NEXT_PUBLIC_TURNSTILE_SITE_KEY__')
-    expect(nextConfig).toContain('https://challenges.cloudflare.com')
-    expect(nextConfig).toMatch(/script-src[\s\S]*?turnstileOrigin/)
-    expect(nextConfig).toMatch(/frame-src[\s\S]*?turnstileOrigin/)
+    expect(csp).toContain('https://challenges.cloudflare.com')
+    expect(csp).toMatch(/script-src[\s\S]*?turnstileOrigin/)
+    expect(csp).toMatch(/frame-src[\s\S]*?turnstileOrigin/)
     expect(envExample).not.toContain('TURNSTILE_SECRET_KEY')
     expect(dockerEnvExample).not.toContain('TURNSTILE_SECRET_KEY')
   })

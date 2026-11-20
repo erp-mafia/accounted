@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
+import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
@@ -42,10 +43,17 @@ export const GET = withRouteContext(
     }
 
     try {
-      const result = await generateIncomeStatement(supabase, companyId!, periodId, {
-        ...range,
-        dimensions: dimFilter.dimensions,
-      })
+      // data_status beside the report: how far the figures can be trusted over
+      // the same range (lib/reports/data-status.ts), the block the KPI route
+      // and the MCP income statement return. Company-wide also under a
+      // dimension filter, like there. It never throws.
+      const [result, dataStatus] = await Promise.all([
+        generateIncomeStatement(supabase, companyId!, periodId, {
+          ...range,
+          dimensions: dimFilter.dimensions,
+        }),
+        buildReportDataStatus(supabase, companyId!, { periodId, ...range }),
+      ])
 
       if (period) {
         result.period = {
@@ -54,7 +62,7 @@ export const GET = withRouteContext(
         }
       }
 
-      return NextResponse.json({ data: result })
+      return NextResponse.json({ data: result, data_status: dataStatus })
     } catch (err) {
       opLog.error('income statement generation failed', err as Error)
       return errorResponseFromCode('REPORT_GENERATION_FAILED', opLog, {

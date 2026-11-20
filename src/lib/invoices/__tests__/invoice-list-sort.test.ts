@@ -132,9 +132,9 @@ describe('sortInvoiceList', () => {
       makeInvoice({ id: 'credited', status: 'credited' }),
       makeInvoice({ id: 'credit', status: 'sent', credited_invoice_id: 'original' }),
       makeInvoice({ id: 'paid', status: 'paid' }),
-      makeInvoice({ id: 'overdue', status: 'overdue' }),
+      makeInvoice({ id: 'overdue', status: 'overdue', due_date: '2024-01-31', remaining_amount: 100 }),
       makeInvoice({ id: 'partial', status: 'partially_paid' }),
-      makeInvoice({ id: 'sent', status: 'sent' }),
+      makeInvoice({ id: 'sent', status: 'sent', due_date: '2099-12-31', remaining_amount: 100 }),
       makeInvoice({ id: 'draft', status: 'draft' }),
     ]
 
@@ -148,6 +148,18 @@ describe('sortInvoiceList', () => {
       'credited',
       'cancelled-credit',
     ])
+  })
+
+  it('sorts a sent invoice past its due date with the overdue ones, as its status line reads (crm#1084)', () => {
+    const invoices = [
+      makeInvoice({ id: 'late', status: 'sent', due_date: '2026-09-30', remaining_amount: 100 }),
+      makeInvoice({ id: 'partial', status: 'partially_paid', due_date: '2026-11-30' }),
+      makeInvoice({ id: 'on-time', status: 'sent', due_date: '2026-10-30', remaining_amount: 100 }),
+    ]
+
+    expect(
+      sortInvoiceList(invoices, { column: 'status', direction: 'asc' }, true, '2026-10-13').map((i) => i.id),
+    ).toEqual(['on-time', 'partial', 'late'])
   })
 
   it('does not mutate input and uses newest date then id as stable tie-breakers', () => {
@@ -164,5 +176,16 @@ describe('sortInvoiceList', () => {
       'b',
     ])
     expect(invoices.map((invoice) => invoice.id)).toEqual(originalOrder)
+  })
+})
+
+describe('sortInvoiceList: a credit note imported without a link', () => {
+  it('sorts with the credit notes and shows no due date', () => {
+    const imported = makeInvoice({ id: 'imported', status: 'paid', total: -500, credited_invoice_id: null, due_date: '2024-01-01' })
+    const linked = makeInvoice({ id: 'linked', status: 'sent', total: -500, credited_invoice_id: 'inv-0', due_date: '2024-02-01' })
+    const paid = makeInvoice({ id: 'paid', status: 'paid', total: 500, due_date: '2024-03-01' })
+
+    expect(sort([imported, paid, linked], { column: 'status', direction: 'asc' }).map((i) => i.id)).toEqual(['paid', 'imported', 'linked'])
+    expect(sort([imported, paid], { column: 'due', direction: 'asc' }).map((i) => i.id)).toEqual(['paid', 'imported'])
   })
 })

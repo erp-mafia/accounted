@@ -4,10 +4,10 @@ import yaml from 'js-yaml'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
-vi.mock('node:fs/promises', () => ({ readFile: vi.fn(), writeFile: vi.fn(), mkdir: vi.fn(), unlink: vi.fn() }))
+vi.mock('node:fs/promises', () => ({ writeFile: vi.fn(), mkdir: vi.fn() }))
 vi.mock('node:child_process', () => ({ execFileSync: vi.fn() }))
 import { createClient } from '@supabase/supabase-js'
-import { readFile, writeFile, unlink } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { runSkillsAdmin } from '../skills-admin'
 
@@ -25,7 +25,6 @@ beforeEach(() => {
   vi.clearAllMocks(); reset()
   vi.mocked(createClient).mockReturnValue(supabase as never)
   vi.mocked(writeFile).mockResolvedValue(undefined)
-  vi.mocked(unlink).mockResolvedValue(undefined)
   vi.spyOn(console, 'log').mockImplementation(() => {})
 })
 afterEach(() => vi.restoreAllMocks())
@@ -55,20 +54,9 @@ describe('local human-gated skill review', () => {
     await expect(run(['prepare', '--id', id, '--slug', 'review-workflow', '--reviewed-at', '2026-09-17', '--review-confirmed'])).rejects.toThrow('frozen submission')
     expect(writeFile).not.toHaveBeenCalled()
   })
-  it('kills a deployed submission even before publication status was recorded', async () => {
-    enqueue({ data: { ...submission, share_status: 'withdrawn' } }); enqueue({ data: null })
-    vi.mocked(readFile).mockResolvedValue(markdown(entry))
-    await run(['withdraw', '--id', id, '--slug', 'review-workflow'])
-    expect(findCall('agent_atom_registry', 'update')?.[0]).toEqual({ is_active: false, mcp_exposed: false })
-    expect(findCalls('agent_atom_registry', 'eq')).toContainEqual(['id', 'community/review-workflow'])
-    expect(unlink).toHaveBeenCalledTimes(2)
-  })
-  it('refuses to disable or remove somebody else\'s entry', async () => {
-    enqueue({ data: { ...submission, share_status: 'withdrawn' } })
-    vi.mocked(readFile).mockResolvedValue(markdown({ ...entry, author: 'somebody-else' }))
-    await expect(run(['withdraw', '--id', id, '--slug', 'wrong-slug'])).rejects.toThrow('not this submission')
+  it('has no withdraw command: the author\'s withdrawal hides the text in the database', async () => {
+    await expect(run(['withdraw', '--id', id, '--slug', 'review-workflow'])).rejects.toThrow('Unknown command')
     expect(findCall('agent_atom_registry', 'update')).toBeUndefined()
-    expect(unlink).not.toHaveBeenCalled()
   })
   it('does not report an open PR as published', async () => {
     enqueue({ data: submission })

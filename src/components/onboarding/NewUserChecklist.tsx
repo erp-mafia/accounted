@@ -1,18 +1,18 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check } from 'lucide-react'
-import posthog from 'posthog-js'
+import { CheckIcon } from '@/components/icons'
+import { HemPrimaryTaken } from '@/components/dashboard/need-count'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import JourneyOrb from '@/components/onboarding/journey/JourneyOrb'
 import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import { useFormat } from '@/lib/hooks/use-format'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { captureAnalyticsEvent } from '@/lib/analytics/client'
 import {
   canRecordInitialSetup,
   checklistNumbers,
@@ -21,13 +21,18 @@ import {
   SIDE_DOORS,
   sideDoorServerUrl,
   type SideDoor,
+  type SkippableSetupStep,
   type VatDeadlineLine,
 } from '@/lib/onboarding/checklist'
+import { persistUiState } from '@/lib/ui-state/client'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useAssistantAvailable, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { PROVIDER_DISPLAY_NAMES } from '@/lib/providers/unfinished-connect'
+import type { ProviderName } from '@/lib/providers/types'
 import type { InitialSetupPath, InitialSetupState } from '@/types'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
 
 interface NewUserChecklistProps {
   initialState: InitialSetupState
@@ -35,12 +40,25 @@ interface NewUserChecklistProps {
   hasBookkeepingImported?: boolean
   hasBankConnected?: boolean
   hasSkatteverketConnected?: boolean
+  /**
+   * Accounted can be the company's ombud (system auth on): the Skatteverket
+   * step appoints it instead of starting an hourly BankID session.
+   */
+  skvOmbudEnabled?: boolean
+  /**
+   * The company appointed it and Skatteverket's register does not list the
+   * grant yet: the step says it is waiting and offers the link again.
+   */
+  skvOmbudWaiting?: boolean
   hasInboxItems?: boolean
   /** The user holds a live OAuth-minted MCP key, i.e. a Claude (or other
    *  MCP client) connection completed its first sign-in. This is the only
    *  signal that means "connected to Claude"; the in-app AI-profile flag
    *  used to tick this step and never corresponded to it (issue #2133). */
   hasMcpKey?: boolean
+  /** Steps this user skipped for this company (ui_state.setup_skipped). A
+   *  skipped step counts as done for the thread and for completion. */
+  skippedSteps?: SkippableSetupStep[]
   /** Personalized VAT-deadline line for the Skatteverket step (null = say nothing). */
   vatLine?: VatDeadlineLine
   /** Latest SIE reconciliation-sweep outcome: surfaces "X matchade, Y att
@@ -49,6 +67,10 @@ interface NewUserChecklistProps {
    *  errors > 0 was incomplete (a whole account may have been skipped), so it
    *  also says nothing rather than presenting partial numbers as the result. */
   sieSweep?: { auto_linked: number; suggested: number; unmatched: number; errors: number } | null
+  /** The latest provider connect that never got a token (lib/providers/
+   *  unfinished-connect): the books step offers to retry it or upload a SIE
+   *  file instead. Null = say nothing. */
+  unfinishedConnect?: { provider: ProviderName } | null
 }
 
 /**
@@ -58,16 +80,11 @@ interface NewUserChecklistProps {
  * initial_setup is seeded completed+dismissed), so no sandbox gate needed.
  */
 function captureSetup(event: string, properties?: Record<string, unknown>) {
-  if (!isAnalyticsEnabled()) return
-  try {
-    posthog.capture(event, properties)
-  } catch {
-    // Telemetry must never affect the checklist.
-  }
+  captureAnalyticsEvent(event, properties)
 }
 
 /**
- * First-run getting-started block on Hem, in the founder-picked stepped
+ * First-run getting-started block on Hem, in the chosen stepped
  * shape: a numbered thread (get the books in, connect the bank, connect
  * Skatteverket, get receipts flowing, build the assistant) on a hairline
  * spine.
@@ -86,10 +103,14 @@ export default function NewUserChecklist({
   hasBookkeepingImported = false,
   hasBankConnected = false,
   hasSkatteverketConnected = false,
+  skvOmbudEnabled = false,
+  skvOmbudWaiting = false,
   hasInboxItems = false,
   hasMcpKey = false,
+  skippedSteps = [],
   vatLine = null,
   sieSweep = null,
+  unfinishedConnect = null,
 }: NewUserChecklistProps) {
   const t = useTranslations('initial_setup')
   const locale = useLocale()
@@ -102,8 +123,11 @@ export default function NewUserChecklist({
   // Only owner/admin can record the setup state (company_settings RLS). A
   // member still gets every step as plain navigation: see
   // canRecordInitialSetup.
-  const canRecord = canRecordInitialSetup(useCompanyOptional()?.role)
+  const companyContext = useCompanyOptional()
+  const canRecord = canRecordInitialSetup(companyContext?.role)
+  const companyId = companyContext?.company?.id ?? null
   const [state, setState] = useState(initialState)
+  const [skipped, setSkipped] = useState<SkippableSetupStep[]>(skippedSteps)
   const [saving, setSaving] = useState<InitialSetupPath | 'dismiss' | 'complete' | null>(null)
   // The completion signature: 'verdict' shows the orb check-morph and the
   // verdict line, 'closing' fades the block, 'done' keeps it retired for the
@@ -121,6 +145,9 @@ export default function NewUserChecklist({
   // so the one-click Claude path stays the visual primary; at most one open.
   const [sideDoor, setSideDoor] = useState<SideDoor | null>(null)
   const [serverUrlCopied, setServerUrlCopied] = useState(false)
+  const tOmbud = useTranslations('skatteverket_ombud')
+  // Every finished check re-renders: granted ticks the step, a wait shows it.
+  const ombud = useOmbudAppointWithToasts(() => router.refresh())
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -173,9 +200,16 @@ export default function NewUserChecklist({
   const step2Done = hasBankConnected
   // Companies built without the skatteverket/inbox extensions skip those
   // steps; so does the Claude step where it does not render.
-  const step3Done = !hasSkatteverket || hasSkatteverketConnected
-  const step4Done = !hasInbox || hasInboxItems
-  const step5Done = !hasClaudeStep || hasMcpKey
+  // A skipped step (lib/onboarding/checklist SKIPPABLE_SETUP_STEPS) counts
+  // as done; it shows as skipped only while the data does not say done.
+  const skvSkipped = skipped.includes('skatteverket') && !hasSkatteverketConnected
+  const receiptsSkipped = skipped.includes('receipts') && !hasInboxItems
+  const claudeSkipped = skipped.includes('claude') && !hasMcpKey
+  const step3Done = !hasSkatteverket || hasSkatteverketConnected || skvSkipped
+  // A done step collapses to its title, so the wait shows only before that.
+  const ombudWaiting = skvOmbudEnabled && skvOmbudWaiting && !step3Done
+  const step4Done = !hasInbox || hasInboxItems || receiptsSkipped
+  const step5Done = !hasClaudeStep || hasMcpKey || claudeSkipped
 
   useEffect(() => {
     // The block retires itself once every step is done; Dölj remains the
@@ -218,6 +252,8 @@ export default function NewUserChecklist({
   const numbers = checklistNumbers({ hasSkatteverket, hasInbox, hasAssistant: hasClaudeStep })
   const stepCount = numbers.count
 
+  // A read-only member can do none of the steps (connect, import, start): not offered.
+  if (companyContext?.role === 'viewer') return null
   if (state.dismissedAt) return null
   // After the beat, stay retired even while the completion PATCH is still in
   // flight or retrying: falling through to the full checklist here would
@@ -254,11 +290,19 @@ export default function NewUserChecklist({
 
   // Recording the chosen path is owner/admin only; the step itself is not.
   // A member skips the write and goes straight to the step.
-  const goMigration = async () => {
+  // `provider` reopens that provider's connect step (the unfinished-connect
+  // retry); without it the wizard starts at the provider list.
+  const goMigration = async (provider?: ProviderName) => {
     const updated = canRecord ? await persist({ path: 'migration' }, 'migration') : state
     if (updated) {
       captureSetup('onboarding_setup_step_started', { step: 'books', path: 'migration' })
-      router.push(hasMigration ? '/import?mode=migration' : '/import?mode=sie')
+      router.push(
+        !hasMigration
+          ? '/import?mode=sie'
+          : provider
+            ? `/import?mode=migration&provider=${provider}`
+            : '/import?mode=migration',
+      )
     }
   }
   const goFresh = () =>
@@ -276,7 +320,7 @@ export default function NewUserChecklist({
     captureSetup('onboarding_setup_step_started', { step: 'receipts' })
     router.push(hasAi ? '/e/general/invoice-inbox' : '/settings/billing')
   }
-  // Founder call 2026-08-27: the closing CTA is "Anslut till Claude", not the
+  // Product call 2026-08-27: the closing CTA is "Anslut till Claude", not the
   // in-app assistant calibration (still reachable from the assistant page).
   // A user who finishes the hosted onboarding lands in Claude with everything
   // already connected, where the MCP onboarding skill opens with findings and
@@ -312,6 +356,19 @@ export default function NewUserChecklist({
       // Clipboard access can be denied; the button simply stays on "Kopiera".
     }
   }
+  // Skipping is the user's own preference (ui_state), so any member may.
+  // Without a company id (outside a CompanyProvider) there is nothing to key
+  // it on and the step offers no skip.
+  const skipStep = companyId
+    ? (step: SkippableSetupStep) => {
+        if (skipped.includes(step)) return
+        const next = [...skipped, step]
+        setSkipped(next)
+        persistUiState({ setup_skipped: { [companyId]: next } })
+        captureSetup('onboarding_setup_step_skipped', { step })
+      }
+    : undefined
+  const skippedNote = <span>{t('step_skipped')}</span>
   const dismiss = () =>
     void persist({ dismissed: true }, 'dismiss').then((updated) => {
       if (updated) captureSetup('onboarding_setup_dismissed', {})
@@ -322,13 +379,14 @@ export default function NewUserChecklist({
   return (
     <section className={className} aria-label={t('title', { count: stepCount })}>
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm">{t('title', { count: stepCount })}</h2>
+        {/* A section of Hem like Först and Rutin: the same 15px title. */}
+        <h2 className="text-[15px] font-medium text-strong">{t('title', { count: stepCount })}</h2>
         {canRecord && (
           <button
             type="button"
             disabled={saving !== null}
             onClick={dismiss}
-            className="shrink-0 text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+            className="inline-flex min-h-7 shrink-0 items-center text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground pointer-coarse:min-h-10"
           >
             {t('dismiss')}
           </button>
@@ -343,7 +401,6 @@ export default function NewUserChecklist({
           title={t('step_books_title')}
           action={(variant) => (
             <Button
-              size="sm"
               variant={variant}
               disabled={saving !== null}
               onClick={() => void goMigration()}
@@ -354,10 +411,35 @@ export default function NewUserChecklist({
           marks={
             <>
               <LogoMark src="/logos/fortnox.svg" name="Fortnox" />
-              <LogoMark src="/logos/visma.jpeg" name="Visma" />
+              <LogoMark name="Visma" />
               <LogoMark src="/logos/bokio.png" name="Bokio" />
-              <span className="text-[11px] text-muted-foreground">{t('step_books_sie')}</span>
+              <span className="text-xs text-muted-foreground">{t('step_books_sie')}</span>
             </>
+          }
+          footnote={
+            hasMigration && unfinishedConnect ? (
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5">
+                <span>
+                  {t('step_books_unfinished', {
+                    provider: PROVIDER_DISPLAY_NAMES[unfinishedConnect.provider] ?? unfinishedConnect.provider,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  disabled={saving !== null}
+                  onClick={() => void goMigration(unfinishedConnect.provider)}
+                  className="text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  {t('step_books_unfinished_retry')}
+                </button>
+                <Link
+                  href="/import?mode=sie"
+                  className="text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  {t('step_books_unfinished_sie')}
+                </Link>
+              </div>
+            ) : undefined
           }
         >
           {canRecord ? (
@@ -367,7 +449,7 @@ export default function NewUserChecklist({
                 type="button"
                 disabled={saving !== null}
                 onClick={goFresh}
-                className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                className="underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
               >
                 {t('step_books_fresh_link')}
               </button>{' '}
@@ -388,7 +470,6 @@ export default function NewUserChecklist({
           last={lastStep === 'bank'}
           action={(variant) => (
             <Button
-              size="sm"
               variant={variant}
               disabled={saving !== null}
               onClick={() => void goBank()}
@@ -408,7 +489,7 @@ export default function NewUserChecklist({
             (sieSweep.auto_linked > 0 || sieSweep.suggested > 0) ? (
               <Link
                 href="/transactions"
-                className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                className="underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
               >
                 {t('step_bank_sweep_note', {
                   matched: sieSweep.auto_linked,
@@ -427,22 +508,42 @@ export default function NewUserChecklist({
             done={step3Done}
             active={activeStep === 3}
             title={t('step_skv_title')}
+            badge={ombudWaiting ? tOmbud('waiting') : undefined}
             last={lastStep === 'skv'}
-            action={(variant) => (
-              <Button size="sm" variant={variant} asChild>
-                {/* The authorize endpoint redirects off-site to Skatteverket. */}
-                {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-                <a
-                  href="/api/extensions/ext/skatteverket/authorize?return_to=/"
-                  onClick={() => captureSetup('onboarding_setup_step_started', { step: 'skatteverket' })}
+            onSkip={skipStep && (() => skipStep('skatteverket'))}
+            skipLabel={t('step_skip')}
+            doneNote={skvSkipped ? skippedNote : undefined}
+            action={(variant) =>
+              skvOmbudEnabled ? (
+                <Button
+                  variant={variant}
+                  loading={ombud.linking || ombud.checking}
+                  onClick={() => {
+                    captureSetup('onboarding_setup_step_started', { step: 'skatteverket' })
+                    void ombud.appoint()
+                  }}
                 >
-                  {t('step_skv_action')}
-                </a>
-              </Button>
-            )}
-            marks={<LogoMark src="/logos/skatteverket_color.svg" name="Skatteverket" />}
+                  {ombudWaiting ? tOmbud('reopen') : t('step_skv_action')}
+                </Button>
+              ) : (
+                <Button variant={variant} asChild>
+                  {/* The authorize endpoint redirects off-site to Skatteverket. */}
+                  {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                  <a
+                    href="/api/extensions/ext/skatteverket/authorize?return_to=/"
+                    onClick={() => captureSetup('onboarding_setup_step_started', { step: 'skatteverket' })}
+                  >
+                    {t('step_skv_action')}
+                  </a>
+                </Button>
+              )
+            }
           >
-            {t('step_skv_description')}
+            {ombudWaiting
+              ? tOmbud('waiting_hint', { appName })
+              : skvOmbudEnabled
+                ? t('step_skv_description_ombud', { appName })
+                : t('step_skv_description')}
             {vatLine?.kind === 'date' && (
               <>
                 {' '}
@@ -456,7 +557,7 @@ export default function NewUserChecklist({
                 {' '}
                 <Link
                   href="/settings/tax"
-                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                  className="underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                 >
                   {t('step_skv_choose_period')}
                 </Link>
@@ -472,13 +573,16 @@ export default function NewUserChecklist({
             active={activeStep === 4}
             title={t('step_receipts_title')}
             last={lastStep === 'receipts'}
+            onSkip={skipStep && (() => skipStep('receipts'))}
+            skipLabel={t('step_skip')}
+            doneNote={receiptsSkipped ? skippedNote : undefined}
             action={(variant) => (
-              <Button size="sm" variant={variant} onClick={goReceipts}>
+              <Button variant={variant} onClick={goReceipts}>
                 {t('step_receipts_action')}
               </Button>
             )}
             marks={
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {hasWhatsApp ? t('step_receipts_channels') : t('step_receipts_channels_no_wa')}
               </span>
             }
@@ -494,25 +598,29 @@ export default function NewUserChecklist({
           active={activeStep === 5}
           title={t('step_claude_title')}
           last
+          onSkip={skipStep && (() => skipStep('claude'))}
+          skipLabel={t('step_skip')}
+          doneNote={claudeSkipped ? skippedNote : undefined}
           action={(variant) => (
-            <Button size="sm" variant={variant} onClick={goClaude}>
+            <Button variant={variant} onClick={goClaude}>
               {t('step_claude_action')}
             </Button>
           )}
           footnote={
             <div className="mt-2">
-              {/* What the click leads to on Claude's side. Tools list before
-                  any sign-in (lazy auth, by design), so without this line a
-                  "connected" status with an unanswered first question reads
-                  as a broken connection (issue #2133). The guide carries the
-                  full sequence; one language per URL, see ApiKeysPanel. */}
+              {/* What the click leads to on Claude's side: the link carries
+                  auth=required, so adding the connector opens the sign-in,
+                  and the connection then waits for a first question in a new
+                  chat (the sign-in ends on Claude's settings page). The guide
+                  carries the full sequence; one language per URL, see
+                  ApiKeysPanel. */}
               <p className="mb-2 max-w-prose text-xs leading-5 text-muted-foreground">
                 {t('step_claude_expectation')}{' '}
                 <a
                   href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                  className="underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                 >
                   {t('step_claude_guide_link')}
                 </a>
@@ -524,7 +632,7 @@ export default function NewUserChecklist({
                     type="button"
                     onClick={() => toggleSideDoor(door)}
                     aria-expanded={sideDoor === door}
-                    className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                    className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                   >
                     {t(`step_claude_${door}_link`)}
                   </button>
@@ -535,7 +643,7 @@ export default function NewUserChecklist({
                   <p className="max-w-prose text-xs leading-5 text-muted-foreground">
                     {t(`step_claude_${sideDoor}_steps`, { appName })}
                   </p>
-                  <Button size="sm" variant="outline" onClick={() => void copyServerUrl(sideDoor)}>
+                  <Button variant="outline" onClick={() => void copyServerUrl(sideDoor)}>
                     {serverUrlCopied
                       ? t('step_claude_chatgpt_copied')
                       : t('step_claude_chatgpt_copy')}
@@ -573,6 +681,8 @@ function Step({
   marks,
   doneNote,
   footnote,
+  onSkip,
+  skipLabel,
   last = false,
   children,
 }: {
@@ -591,10 +701,16 @@ function Step({
    *  (which lives inside a <p>), this may hold nested block elements, e.g.
    *  the Claude step's ChatGPT and Grok side doors. */
   footnote?: React.ReactNode
+  /** Offered on the open step only: skipping counts it as done. */
+  onSkip?: () => void
+  skipLabel?: string
   last?: boolean
   children: React.ReactNode
 }) {
   const open = active && !done
+  // While Hem's top bar holds the filled button (Börja), the open step's
+  // action is outline too: one filled button in view.
+  const primaryTaken = useContext(HemPrimaryTaken)
 
   return (
     <li
@@ -617,7 +733,7 @@ function Step({
               : 'border-border text-muted-foreground',
         )}
       >
-        {done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : number}
+        {done ? <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" /> : number}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-2">
@@ -631,13 +747,22 @@ function Step({
             {badge && (
               <Badge
                 variant="secondary"
-                className={cn('shrink-0 uppercase tracking-wider', !open && 'font-normal')}
+                className={cn('shrink-0', !open && 'font-normal')}
               >
                 {badge}
               </Badge>
             )}
           </div>
-          {!done && action?.(open ? 'default' : 'outline')}
+          {!done && action?.(open && !primaryTaken ? 'default' : 'outline')}
+          {open && onSkip && skipLabel && (
+            <button
+              type="button"
+              onClick={onSkip}
+              className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
+            >
+              {skipLabel}
+            </button>
+          )}
           {done && doneNote && (
             <span className="text-xs tabular-nums text-muted-foreground">{doneNote}</span>
           )}
@@ -656,25 +781,31 @@ function Step({
 
 /** Tiny partner mark: real logo on a white chip; `mono` darkens a white
  *  source logo in light mode and lifts it in dark (Enable Banking). */
-function LogoMark({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
+function LogoMark({ src, name, mono = false }: { src?: string; name: string; mono?: boolean }) {
   return (
     <span
       className={cn(
         'flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm border border-border',
-        !mono && 'bg-white',
+        !mono && src && 'bg-white',
       )}
       title={name}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt={name}
-        className={cn(
-          'h-4 w-4 object-contain',
-          mono &&
-            'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
-        )}
-      />
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src}
+          alt={name}
+          className={cn(
+            'h-4 w-4 object-contain',
+            mono &&
+              'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
+          )}
+        />
+      ) : (
+        <span role="img" className="text-xs font-semibold text-foreground" aria-label={name}>
+          {name.charAt(0)}
+        </span>
+      )}
     </span>
   )
 }

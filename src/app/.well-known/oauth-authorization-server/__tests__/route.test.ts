@@ -1,12 +1,49 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+
 import { GET } from '../route'
 
 describe('GET /.well-known/oauth-authorization-server', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.test')
+    resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+      brand: host === 'byra.example.test' ? { domain: 'byra.example.test' } : null,
+      lookupFailed: false,
+    }))
   })
   afterEach(() => {
     vi.unstubAllEnvs()
+  })
+
+  it('names a registered byrå domain as issuer and endpoint host when fetched there', async () => {
+    // Agenter > Koppla en agent on a brand domain hands out a connector URL on
+    // that domain; a canonical issuer here made clients refuse the mismatch.
+    const res = await GET(
+      new Request('https://byra.example.test/.well-known/oauth-authorization-server', {
+        headers: { host: 'byra.example.test' },
+      }),
+    )
+    const body = await res.json()
+    expect(body.issuer).toBe('https://byra.example.test')
+    expect(body.authorization_endpoint).toBe('https://byra.example.test/api/mcp-oauth/authorize')
+    expect(body.token_endpoint).toBe('https://byra.example.test/api/mcp-oauth/token')
+    expect(body.registration_endpoint).toBe('https://byra.example.test/api/mcp-oauth/register')
+  })
+
+  it('keeps the canonical issuer for a host that is not registered', async () => {
+    const res = await GET(
+      new Request('https://evil.example/.well-known/oauth-authorization-server', {
+        headers: { host: 'evil.example' },
+      }),
+    )
+    const body = await res.json()
+    expect(body.issuer).toBe('https://app.example.test')
+    expect(body.token_endpoint).toBe('https://app.example.test/api/mcp-oauth/token')
   })
 
   it('does not advertise CIMD until redirect URIs are validated against the client document', async () => {
@@ -25,10 +62,14 @@ describe('GET /.well-known/oauth-authorization-server', () => {
     expect(body.authorization_response_iss_parameter_supported).toBe(true)
   })
 
-  it('does not enumerate write scopes in public discovery', async () => {
+  it('advertises only the mcp marker, like the protected-resource document', async () => {
+    // Clients that request whatever discovery lists (Grok, Gemini) get the
+    // same consent as a bare `mcp` request. A list of read scopes here was
+    // echoed back as an explicit request, which /authorize takes as the
+    // ceiling, so every such connection was read-only. Write scopes stay
+    // unlisted either way.
     const res = await GET(new Request('https://app.example.test/.well-known/oauth-authorization-server'))
     const body = await res.json()
-    expect(body.scopes_supported).toContain('mcp')
-    expect(body.scopes_supported.some((s: string) => s.endsWith(':write'))).toBe(false)
+    expect(body.scopes_supported).toEqual(['mcp'])
   })
 })

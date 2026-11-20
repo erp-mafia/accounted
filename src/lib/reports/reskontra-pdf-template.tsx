@@ -6,7 +6,7 @@ import {
   StyleSheet,
 } from '@react-pdf/renderer'
 import { formatDateSv, pdfAmount } from '@/lib/pdf/number-text'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import type { CompanySettings } from '@/types'
 
 const styles = StyleSheet.create({
@@ -291,7 +291,7 @@ export function ReskontraPDF({
           <View style={styles.companyInfo}>
             {company.company_name && <Text style={styles.companyName}>{company.company_name}</Text>}
             {company.org_number && (
-              <Text style={styles.companyMeta}>Org.nr: {formatOrgNumber(company.org_number)}</Text>
+              <Text style={styles.companyMeta}>Org.nr: {formatOrgNumberDisplay(company.org_number)}</Text>
             )}
             {company.vat_number && <Text style={styles.companyMeta}>VAT: {company.vat_number}</Text>}
           </View>
@@ -431,7 +431,7 @@ export function ReskontraPDF({
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
             {companyDisplayName}
-            {company.org_number ? ` · ${formatOrgNumber(company.org_number)}` : ''}
+            {company.org_number ? ` · ${formatOrgNumberDisplay(company.org_number)}` : ''}
           </Text>
           <Text
             style={styles.footerText}

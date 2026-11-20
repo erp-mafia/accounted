@@ -1,7 +1,7 @@
 'use client'
 
 import * as SelectPrimitive from '@radix-ui/react-select'
-import { Check } from 'lucide-react'
+import { CheckIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { Select, SelectContent, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
@@ -51,7 +51,7 @@ export default function VatTreatmentSelect<T extends VatSelectValue>({
           >
             <span className="absolute left-2 top-2 flex h-3.5 w-3.5 items-center justify-center">
               <SelectPrimitive.ItemIndicator>
-                <Check className="h-4 w-4 text-primary" />
+                <CheckIcon className="h-4 w-4 text-primary" />
               </SelectPrimitive.ItemIndicator>
             </span>
             <div>

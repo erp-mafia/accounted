@@ -28,6 +28,8 @@ export interface CommunityMeta {
   reviewed_at: string | null
   /** Companies that loaded it (mcp.skill_loaded) while event_log keeps skill loads. */
   used_by: number | null
+  /** Industries the author named (vertical ids without the prefix): where the catalogue files it. */
+  industries: string[]
 }
 
 export const CommunityFeedbackSchema = z.object({
@@ -71,6 +73,7 @@ interface StatsRow {
   author_verified: boolean
   votes: number
   used_by: number | null
+  industries: string[] | null
 }
 
 /**
@@ -102,6 +105,7 @@ export async function attachCommunityMeta<T extends { slug: string; tier: string
       voted: own?.vote ?? false,
       reviewed_at: skill.reviewedAt ?? null,
       used_by: row ? row.used_by : null,
+      industries: row?.industries ?? [],
     }
     return { ...skill, community }
   })

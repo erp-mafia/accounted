@@ -2,7 +2,7 @@
 /** Local reviewer CLI. Never loads .env.local or accepts a GitHub token. */
 import { createClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
-import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises'
+import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -24,10 +24,11 @@ export async function runSkillsAdmin(args: string[], env: Record<string, string 
   }
   const command = args[0]
   if (!command || command === '--help') {
-    console.log('Commands: list; show --id; prepare --id --slug --reviewed-at --review-confirmed; record-pr --id --pr; published --id --slug --pr; withdraw --id --slug; disable|enable --slug; reviewed --slug --date --review-confirmed. All commands require --project <Supabase ref>. Mutations against production also require --production-write-approved. Credentials: SKILLS_SUPABASE_URL and SKILLS_SERVICE_ROLE_KEY, explicitly supplied by the reviewer. No .env files are loaded.')
+    console.log('Commands: list; show --id; prepare --id --slug --reviewed-at --review-confirmed; record-pr --id --pr; published --id --slug --pr; disable|enable --slug; reviewed --slug --date --review-confirmed. All commands require --project <Supabase ref>. Mutations against production also require --production-write-approved. Credentials: SKILLS_SUPABASE_URL and SKILLS_SERVICE_ROLE_KEY, explicitly supplied by the reviewer. No .env files are loaded.')
     return
   }
-  if (!['list', 'show', 'prepare', 'record-pr', 'published', 'withdraw', 'disable', 'enable', 'reviewed'].includes(command)) throw new Error('Unknown command')
+  // No withdraw command: the author's "Dra tillbaka" hides a published text in the database itself (migration 20260926172514).
+  if (!['list', 'show', 'prepare', 'record-pr', 'published', 'disable', 'enable', 'reviewed'].includes(command)) throw new Error('Unknown command')
   const url = env.SKILLS_SUPABASE_URL
   const key = env.SKILLS_SERVICE_ROLE_KEY
   const project = option('project')
@@ -35,7 +36,7 @@ export async function runSkillsAdmin(args: string[], env: Record<string, string 
   if (!['list', 'show', 'prepare'].includes(command) && project === 'pwxtzglxptnnvjrpixpg' && !args.includes('--production-write-approved')) throw new Error('Specific production write approval required')
   const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
   if (command === 'list') {
-    const { data, error } = await db.from('company_skills').select('id, name, share_status, author_handle, submission_body_hash, published_atom_id, review_url, updated_at').in('share_status', ['submitted', 'withdrawn']).order('updated_at').limit(100)
+    const { data, error } = await db.from('company_skills').select('id, name, share_status, author_handle, submission_body_hash, published_atom_id, review_url, updated_at').eq('share_status', 'submitted').order('updated_at').limit(100)
     if (error) throw error
     console.log(JSON.stringify(data, null, 2))
     return
@@ -56,7 +57,7 @@ export async function runSkillsAdmin(args: string[], env: Record<string, string 
   const { data: row, error } = await db.from('company_skills').select('*').eq('id', id).is('atom_id', null).single()
   if (error) throw error
   if (command === 'show') { console.log(JSON.stringify(row, null, 2)); return }
-  if (!['submitted', 'withdrawn'].includes(row.share_status)) throw new Error('Submission is no longer pending review or withdrawal')
+  if (row.share_status !== 'submitted') throw new Error('Submission is no longer pending review')
   if (command === 'record-pr') {
     const number = z.coerce.number().int().positive().parse(option('pr'))
     gh(['pr', 'view', String(number), '--repo', REPO, '--json', 'number'])
@@ -69,27 +70,6 @@ export async function runSkillsAdmin(args: string[], env: Record<string, string 
   const atomId = `community/${slug}`
   const bodyPath = `registry/skills/${slug}/SKILL.md`
   const entryPath = `registry/entries/${slug}.mdx`
-  if (command === 'withdraw') {
-    if (row.share_status !== 'withdrawn') throw new Error('Author has not withdrawn this submission')
-    if (row.published_atom_id && row.published_atom_id !== atomId) throw new Error('Published slug mismatch')
-    const entryText = await readFile(join(root, entryPath), 'utf8').catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
-    if (entryText) {
-      const entry = yaml.load(/^---\n([\s\S]*?)\n---/.exec(entryText)?.[1] ?? '') as Record<string, unknown>
-      if (entry.author !== row.author_handle || entry.submissionHash !== row.submission_body_hash) throw new Error('Entry is not this submission; refuse removal')
-    }
-    // Publication can deploy before the reviewer records published_atom_id.
-    // Either durable publication evidence or the matching entry identifies it.
-    if (row.published_atom_id || entryText) {
-      const { error: disableError } = await db.from('agent_atom_registry').update({ is_active: false, mcp_exposed: false }).eq('id', atomId)
-      if (disableError) throw disableError
-    }
-    if (entryText) {
-      await unlink(join(root, entryPath))
-      await unlink(join(root, bodyPath))
-      console.log('Removed the local entry and skill body; recoverable in git. Run skills:generate and propose the withdrawal PR. The registry kill switch is already off.')
-    }
-    return
-  }
   if (row.share_status !== 'submitted' || !row.share_confirmed_at || !row.author_handle || hash(row.body) !== row.submission_body_hash) throw new Error('Consent or frozen submission evidence is missing')
   const body = SkillBodySchema.parse(row.body)
   if (command === 'prepare') {

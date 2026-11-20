@@ -5,15 +5,15 @@ import { Deadline } from '@/types'
 import { cn } from '@/lib/utils'
 import { isDeadlineOverdue, parseDate, startOfDay } from '@/lib/calendar/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import {
-  CalendarClock,
-  Check,
-  FileText,
-  Landmark,
-  Pencil,
-  ReceiptText,
-  Truck,
-} from 'lucide-react'
+  BuildingLibraryIcon,
+  CalendarDaysIcon,
+  CheckIcon,
+  DocumentTextIcon,
+  PencilIcon,
+  TruckIcon,
+} from '@/components/icons'
 
 interface DeadlineRowProps {
   deadline: Deadline
@@ -29,24 +29,27 @@ function daysFromToday(dateStr: string): number {
   return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-const TYPE_ICONS: Record<Deadline['deadline_type'], typeof CalendarClock> = {
-  tax: Landmark,
-  invoicing: ReceiptText,
-  delivery: Truck,
-  report: FileText,
-  other: CalendarClock,
+const TYPE_ICONS: Record<Deadline['deadline_type'], typeof CalendarDaysIcon> = {
+  tax: BuildingLibraryIcon,
+  invoicing: DocumentTextIcon,
+  delivery: TruckIcon,
+  report: DocumentTextIcon,
+  other: CalendarDaysIcon,
 }
 
-// Statutory deadlines carry the receiving authority's mark: Bolagsverket for
-// the company-law dates, Skatteverket for everything tax-shaped. Non-system
-// deadlines keep the neutral type icons.
-const BOLAGSVERKET_TYPES = new Set(['arsredovisning', 'arsstamma'])
+// Statutory company-law deadlines carry Bolagsverket's mark. Tax-shaped ones
+// keep the neutral tax icon: Skatteverket's API terms forbid using its logo
+// in information or marketing, so the app never shows it.
+const BOLAGSVERKET_TYPES = new Set([
+  'arsredovisning',
+  'arsstamma',
+  'arsredovisning_ekonomisk_forening',
+  'foreningsstamma',
+])
 
 export function deadlineAuthorityLogo(deadline: Deadline): { src: string; alt: string } | null {
-  if (deadline.tax_deadline_type) {
-    return BOLAGSVERKET_TYPES.has(deadline.tax_deadline_type)
-      ? { src: '/logos/bolagsverket.jpg', alt: 'Bolagsverket' }
-      : { src: '/logos/skatteverket_color.svg', alt: 'Skatteverket' }
+  if (deadline.tax_deadline_type && BOLAGSVERKET_TYPES.has(deadline.tax_deadline_type)) {
+    return { src: '/logos/bolagsverket.jpg', alt: 'Bolagsverket' }
   }
   // Manual deadlines (including user-created tax-category ones) keep the
   // neutral type icons: the authority crest is reserved for statutory dates
@@ -65,8 +68,8 @@ export function DeadlineMark({
   const logo = deadlineAuthorityLogo(deadline)
   if (completed) {
     return (
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground/60">
-        <Check className="h-3.5 w-3.5" aria-hidden="true" />
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground">
+        <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
       </span>
     )
   }
@@ -79,7 +82,7 @@ export function DeadlineMark({
       </span>
     )
   }
-  const Icon = TYPE_ICONS[deadline.deadline_type] ?? CalendarClock
+  const Icon = TYPE_ICONS[deadline.deadline_type] ?? CalendarDaysIcon
   return (
     <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground">
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
@@ -99,11 +102,13 @@ export function deadlineDateLabel(dateStr: string): string {
 
 /**
  * One deadline as a concept thread row (scene 17): icon circle, "12 aug ·
- * Title" line, muted status sentence below, quiet hover actions. Rows are
- * borderless; the section headers carry the structure.
+ * Title" line with the relative date, time and customer as a muted suffix on
+ * the same line (convention 4), quiet hover actions. Rows are borderless; the
+ * section headers carry the structure.
  */
 export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowProps) {
   const t = useTranslations('deadlines')
+  const { canWrite, lockedTitle } = useViewerLock()
   const overdue = isDeadlineOverdue(deadline)
   const completed = deadline.is_completed
   const diff = daysFromToday(deadline.due_date)
@@ -142,8 +147,19 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
           <span className="tabular-nums text-muted-foreground">
             {deadlineDateLabel(deadline.due_date)}
           </span>
-          <span className="text-muted-foreground/50"> · </span>
+          <span className="text-muted-foreground"> · </span>
           <span>{deadline.title}</span>
+          {subParts.length > 0 && (
+            <span
+              className={cn(
+                'text-xs',
+                overdue && !completed ? 'text-destructive' : 'text-muted-foreground',
+              )}
+            >
+              <span className="text-muted-foreground"> · </span>
+              {subParts.join(' · ')}
+            </span>
+          )}
         </p>
         {deadline.source_document_id && deadline.source_document?.file_name && (
           <a
@@ -156,16 +172,6 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
             {t('source_document', { name: deadline.source_document.file_name })}
           </a>
         )}
-        {subParts.length > 0 && (
-          <p
-            className={cn(
-              'text-xs leading-5',
-              overdue && !completed ? 'text-destructive' : 'text-muted-foreground',
-            )}
-          >
-            {subParts.join(' · ')}
-          </p>
-        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-3 pt-1">
@@ -176,6 +182,8 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
               e.stopPropagation()
               onRequestToggle(deadline)
             }}
+            disabled={!canWrite}
+            title={lockedTitle}
             className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
           >
             {t('mark_not_done')}
@@ -187,14 +195,16 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
               e.stopPropagation()
               onRequestToggle(deadline)
             }}
+            disabled={!canWrite}
+            title={lockedTitle}
             className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
           >
             {t('group_mark_done')}
           </button>
         )}
         {onEdit && (
-          <Pencil
-            className="h-3.5 w-3.5 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/50"
+          <PencilIcon
+            className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover:text-muted-foreground"
             aria-hidden="true"
           />
         )}

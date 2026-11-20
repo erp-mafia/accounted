@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
-import Link from 'next/link'
+import { closableFiscalPeriods } from '@/lib/reference-data/fiscal-scope'
+import { useTranslations } from 'next-intl'
 import { useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Lock, Plus, Trash2 } from 'lucide-react'
+import { ArrowRightIcon, LockClosedIcon } from '@/components/icons'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -12,17 +13,23 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/ui/page-header'
-import { EmptyState } from '@/components/ui/empty-state'
+import { StepBar } from '@/components/ui/step-bar'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany } from '@/contexts/CompanyContext'
 import { cn, formatCurrency } from '@/lib/utils'
 import {
-  PERIODISERING_TEMPLATES,
-  type PeriodiseringTemplate,
-} from '@/lib/bokslut/accruals/templates'
+  buildAccrualItems,
+  manualEntryToItem,
+  templateOf,
+  type AuditFeeState,
+  type ManualAccrualEntry,
+} from '@/lib/bokslut/accruals/manual-items'
+import { ManualAccrualsEditor } from '@/components/bookkeeping/year-end/ManualAccrualsEditor'
+import { parseAmountInput } from '@/lib/money'
 import type { AccrualsProposal } from '@/lib/bokslut/accruals/types'
 import type {
   PeriodiseringSuggestion,
@@ -54,29 +61,9 @@ interface PeriodOption {
 
 type ProposalResponse = AccrualsProposal & { autoDetected: PeriodiseringSuggestion[] }
 
-interface AuditState {
-  enabled: boolean
-  amount: string
-  liabilityAccount: '2991' | '2992'
-}
-
 interface AutoState {
   /** key = source_invoice_id + '|' + source_type, value = accepted */
   selections: Record<string, boolean>
-}
-
-interface ManualEntry {
-  id: string
-  templateKind: PeriodiseringTemplate['kind']
-  amount: string
-  description: string
-  /** Editable accounts (pre-filled from template). */
-  primaryAccount: string
-  secondaryAccount: string
-}
-
-function uid() {
-  return Math.random().toString(36).slice(2, 10)
 }
 
 function suggestionKey(s: PeriodiseringSuggestion): string {
@@ -106,8 +93,8 @@ export default function PeriodiseringWizardPage() {
   // K1 wording stays advisory ("behöver normalt inte").
   const isEF = company?.entity_type === 'enskild_firma'
 
+  const tNav = useTranslations('nav')
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
-  const [periodsError, setPeriodsError] = useState<string | null>(null)
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(
     searchParams.get('period') ?? null,
   )
@@ -115,10 +102,12 @@ export default function PeriodiseringWizardPage() {
   const [step, setStep] = useState<Step>('vacation')
   const [proposal, setProposal] = useState<ProposalResponse | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Bumped by "Försök igen" to fetch the same period's accruals again.
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [loading, setLoading] = useState(false)
 
   const [vacationAccepted, setVacationAccepted] = useState(true)
-  const [auditState, setAuditState] = useState<AuditState>({
+  const [auditState, setAuditState] = useState<AuditFeeState>({
     enabled: false,
     amount: '',
     liabilityAccount: '2992',
@@ -134,30 +123,28 @@ export default function PeriodiseringWizardPage() {
     )
   }, [isEF])
   const [autoState, setAutoState] = useState<AutoState>({ selections: {} })
-  const [manualEntries, setManualEntries] = useState<ManualEntry[]>([])
+  const [manualEntries, setManualEntries] = useState<ManualAccrualEntry[]>([])
 
   const [posting, setPosting] = useState(false)
   const [postError, setPostError] = useState<string | null>(null)
   const [postSummary, setPostSummary] = useState<{ created: number; skipped: number } | null>(null)
 
   // ---- Eligible periods, from the session-cached list (lib/reference-data) ----
-  const { periods: allPeriods, isLoading: periodsLoading, error: periodsFetchError } = useFiscalPeriods()
+  const {
+    periods: allPeriods,
+    isLoading: periodsLoading,
+    error: periodsFetchError,
+    refresh: refreshPeriods,
+  } = useFiscalPeriods()
+  const periodsFailed = Boolean(periodsFetchError)
   useEffect(() => {
-    if (periodsLoading) return
-    if (periodsFetchError) {
-      setPeriodsError('Kunde inte hämta perioder')
-      return
-    }
-    const today = new Date().toISOString().split('T')[0]
-    const eligible = allPeriods.filter(
-      (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
-    )
-    eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
+    if (periodsLoading || periodsFailed) return
+    const eligible = closableFiscalPeriods(allPeriods)
     setPeriods(eligible)
     if (!selectedPeriodId && eligible.length > 0) {
       setSelectedPeriodId(eligible[0].id)
     }
-  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFetchError])
+  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFailed])
 
   // ---- Fetch accruals snapshot once period chosen ----
   useEffect(() => {
@@ -192,7 +179,7 @@ export default function PeriodiseringWizardPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, loadAttempt])
 
   const vacationProposal = useMemo(
     () => proposal?.proposals.find((p) => p.kind === 'vacation_liability_change') ?? null,
@@ -205,53 +192,20 @@ export default function PeriodiseringWizardPage() {
   const progressValue = ((currentStepIndex + 1) / STEP_ORDER.length) * 100
   const showWizard = selectedPeriodId !== null && (periods?.length ?? 0) > 0 && !loading && !loadError
 
-  // ---- Manual entry editing helpers ----
-  const addManualFromTemplate = useCallback((template: PeriodiseringTemplate) => {
-    const primary =
-      template.prepaid_account ?? template.deferred_account ?? template.accrued_account ?? ''
-    const secondary =
-      template.expense_account ?? template.revenue_account ?? ''
-    setManualEntries((prev) => [
-      ...prev,
-      {
-        id: uid(),
-        templateKind: template.kind,
-        amount: '',
-        description: '',
-        primaryAccount: primary,
-        secondaryAccount: secondary,
-      },
-    ])
-  }, [])
-
-  const updateManual = useCallback((id: string, patch: Partial<ManualEntry>) => {
-    setManualEntries((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
-  }, [])
-
-  const removeManual = useCallback((id: string) => {
-    setManualEntries((prev) => prev.filter((m) => m.id !== id))
-  }, [])
-
   // ---- Final post ----
   const handlePost = useCallback(async () => {
     if (!selectedPeriodId) return
     setPosting(true)
     setPostError(null)
     try {
-      const items: unknown[] = []
-      if (vacationProposal && vacationAccepted) {
-        items.push({ kind: 'vacation_liability_change' })
-      }
-      if (auditState.enabled) {
-        const amount = parseFloat(auditState.amount)
-        if (Number.isFinite(amount) && amount > 0) {
-          items.push({
-            kind: 'audit_fee',
-            amount,
-            liability_account: auditState.liabilityAccount,
-          })
-        }
-      }
+      // The vacation change, the fee and the manual entries through the one
+      // builder the bokslut wizard uses too (lib/bokslut/accruals/manual-items).
+      const shared = buildAccrualItems({
+        vacation: !!vacationProposal && vacationAccepted,
+        auditFee: auditState,
+        manual: [],
+      })
+      const items: unknown[] = [...shared]
       for (const s of proposal?.autoDetected ?? []) {
         if (!autoState.selections[suggestionKey(s)]) continue
         if (s.source_type === 'supplier_invoice') {
@@ -273,58 +227,8 @@ export default function PeriodiseringWizardPage() {
         }
       }
       for (const m of manualEntries) {
-        const amount = parseFloat(m.amount)
-        if (!Number.isFinite(amount) || amount <= 0) continue
-        if (!m.description.trim()) continue
-        const tpl = PERIODISERING_TEMPLATES.find((t) => t.kind === m.templateKind)
-        if (!tpl) continue
-        switch (tpl.side) {
-          case 'prepaid':
-            items.push({
-              kind: 'manual_prepaid_expense',
-              amount,
-              expense_account: m.secondaryAccount,
-              prepaid_account: m.primaryAccount,
-              description: m.description,
-            })
-            break
-          case 'accrued':
-            items.push({
-              kind: 'manual_accrued_expense',
-              amount,
-              expense_account: m.secondaryAccount,
-              accrued_account: m.primaryAccount,
-              description: m.description,
-            })
-            break
-          case 'deferred_revenue':
-            items.push({
-              kind: 'deferred_revenue',
-              amount,
-              revenue_account: m.secondaryAccount,
-              deferred_account: m.primaryAccount,
-              description: m.description,
-            })
-            break
-          case 'accrued_interest':
-            items.push({
-              kind: 'accrued_interest',
-              amount,
-              expense_account: m.secondaryAccount,
-              accrued_account: m.primaryAccount,
-              description: m.description,
-            })
-            break
-          case 'accrued_utility':
-            items.push({
-              kind: 'accrued_utility',
-              amount,
-              expense_account: m.secondaryAccount,
-              accrued_account: m.primaryAccount,
-              description: m.description,
-            })
-            break
-        }
+        const item = manualEntryToItem(m)
+        if (item) items.push(item)
       }
 
       if (items.length === 0) {
@@ -377,57 +281,40 @@ export default function PeriodiseringWizardPage() {
     <div className="space-y-8">
       <PageHeader
         title={closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
-        action={
-          <Button size="sm" variant="outline" asChild>
-            <Link href="/bookkeeping/year-end">
-              <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
-            </Link>
-          </Button>
-        }
+        // The way back to the bokslut is the quiet parent before the title.
+        parent={{ label: tNav('v2_closing'), href: '/bookkeeping/year-end' }}
       />
 
-      {periods === null && !periodsError && (
-        <Card>
-          <CardContent className="p-6 space-y-2">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-4 w-full" />
-          </CardContent>
-        </Card>
+      {periods === null && !periodsFailed && (
+        <LateReveal className="space-y-2">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-4 w-full" />
+        </LateReveal>
       )}
 
-      {periodsError && (
-        <Card>
-          <CardContent className="p-6 text-destructive">{periodsError}</CardContent>
-        </Card>
-      )}
+      {periodsFailed && <LoadError title="Kunde inte hämta perioder" onRetry={() => void refreshPeriods()} />}
 
       {periods !== null && periods.length === 0 && (
         <EmptyState
-          icon={Lock}
+          icon={LockClosedIcon}
           title="Inga perioder att periodisera"
           description="Periodiseringar görs efter att räkenskapsperiodens slutdatum har passerat. Det finns ingen sådan öppen period."
         />
       )}
 
-      {loadError && (
-        <Card>
-          <CardContent className="p-6 text-destructive">{loadError}</CardContent>
-        </Card>
-      )}
+      {loadError && <LoadError title={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} />}
 
       {loading && (
-        <Card>
-          <CardContent className="p-6 space-y-2">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-20 w-full" />
-          </CardContent>
-        </Card>
+        <LateReveal className="space-y-2">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-20 w-full" />
+        </LateReveal>
       )}
 
       {showWizard && proposal && (
         <>
           <Card>
-            <CardContent className="p-4 space-y-2">
+            <CardContent className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="sm:hidden text-primary font-medium">
                   Steg {currentStepIndex + 1}/{STEP_ORDER.length}: {labels[step]}
@@ -481,9 +368,7 @@ export default function PeriodiseringWizardPage() {
           {step === 'manual' && (
             <ManualStep
               entries={manualEntries}
-              onAdd={addManualFromTemplate}
-              onUpdate={updateManual}
-              onRemove={removeManual}
+              onChange={setManualEntries}
               onBack={() => setStep('auto')}
               onNext={() => setStep('review')}
             />
@@ -539,7 +424,7 @@ function VacationStep({
         </CardHeader>
         <CardContent>
           {proposal ? (
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-4">
+            <div className="flex items-start justify-between gap-4 rounded-lg p-4 bg-control shadow-raised">
               <div className="flex-1 space-y-2">
                 <p className="text-sm font-medium">{proposal.label}</p>
                 <p className="text-xs text-muted-foreground">{proposal.description}</p>
@@ -573,11 +458,11 @@ function VacationStep({
           )}
         </CardContent>
       </Card>
-      <div className="flex justify-end">
+      <StepBar>
         <Button onClick={onNext}>
-          Nästa <ArrowRight className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="h-4 w-4" />
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -590,8 +475,8 @@ function AuditStep({
   onNext,
 }: {
   isEF: boolean
-  state: AuditState
-  onChange: (s: AuditState) => void
+  state: AuditFeeState
+  onChange: (s: AuditFeeState) => void
   onBack: () => void
   onNext: () => void
 }) {
@@ -620,7 +505,7 @@ function AuditStep({
             </Label>
           </div>
           {state.enabled && (
-            <div className="grid grid-cols-2 gap-4 rounded-lg border border-border p-4">
+            <div className="grid grid-cols-2 gap-4 rounded-lg p-4 bg-control shadow-raised">
               <div className="space-y-1">
                 <Label className="text-xs">Belopp (kr)</Label>
                 <Input
@@ -635,7 +520,7 @@ function AuditStep({
               <div className="space-y-1">
                 <Label className="text-xs">Konto</Label>
                 <select
-                  className="border border-border rounded-lg h-9 text-sm px-2 w-full bg-background"
+                  className="rounded-lg h-9 text-sm px-2 w-full bg-control shadow-raised"
                   value={state.liabilityAccount}
                   onChange={(e) =>
                     onChange({ ...state, liabilityAccount: e.target.value as '2991' | '2992' })
@@ -649,14 +534,14 @@ function AuditStep({
           )}
         </CardContent>
       </Card>
-      <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack}>
+      <StepBar>
+        <Button variant="ghost" onClick={onBack}>
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Nästa <ArrowRight className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="h-4 w-4" />
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -705,7 +590,7 @@ function AutoStep({
             return (
               <div
                 key={key}
-                className="flex items-start gap-3 rounded-lg border border-border p-3"
+                className="flex items-start gap-3 rounded-lg p-3 bg-control shadow-raised"
               >
                 <Checkbox
                   id={`auto-${key}`}
@@ -748,30 +633,26 @@ function AutoStep({
           })}
         </CardContent>
       </Card>
-      <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack}>
+      <StepBar>
+        <Button variant="ghost" onClick={onBack}>
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Nästa <ArrowRight className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="h-4 w-4" />
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
 
 function ManualStep({
   entries,
-  onAdd,
-  onUpdate,
-  onRemove,
+  onChange,
   onBack,
   onNext,
 }: {
-  entries: ManualEntry[]
-  onAdd: (t: PeriodiseringTemplate) => void
-  onUpdate: (id: string, patch: Partial<ManualEntry>) => void
-  onRemove: (id: string) => void
+  entries: ManualAccrualEntry[]
+  onChange: (entries: ManualAccrualEntry[]) => void
   onBack: () => void
   onNext: () => void
 }) {
@@ -784,117 +665,18 @@ function ManualStep({
             Använd mallarna nedan för vanliga fall, eller hoppa direkt till granskning.
           </p>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {PERIODISERING_TEMPLATES.map((t) => (
-              <Button
-                key={t.kind}
-                variant="outline"
-                size="sm"
-                onClick={() => onAdd(t)}
-                className="justify-start text-left h-auto px-3"
-              >
-                <Plus className="mr-2 h-3.5 w-3.5 shrink-0" />
-                <span className="flex-1 min-w-0 py-2">
-                  <span className="block font-medium">{t.name}</span>
-                  <span className="block text-xs text-muted-foreground truncate">{t.hint}</span>
-                </span>
-              </Button>
-            ))}
-          </div>
-
-          {entries.length > 0 && (
-            <div className="space-y-3 pt-2">
-              {entries.map((entry) => (
-                <ManualEntryEditor
-                  key={entry.id}
-                  entry={entry}
-                  onChange={(patch) => onUpdate(entry.id, patch)}
-                  onRemove={() => onRemove(entry.id)}
-                />
-              ))}
-            </div>
-          )}
+        <CardContent>
+          <ManualAccrualsEditor entries={entries} onChange={onChange} />
         </CardContent>
       </Card>
-      <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack}>
+      <StepBar>
+        <Button variant="ghost" onClick={onBack}>
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Granska <ArrowRight className="ml-1 h-4 w-4" />
+          Granska <ArrowRightIcon className="h-4 w-4" />
         </Button>
-      </div>
-    </div>
-  )
-}
-
-function ManualEntryEditor({
-  entry,
-  onChange,
-  onRemove,
-}: {
-  entry: ManualEntry
-  onChange: (patch: Partial<ManualEntry>) => void
-  onRemove: () => void
-}) {
-  const template = PERIODISERING_TEMPLATES.find((t) => t.kind === entry.templateKind)
-  if (!template) return null
-  const primaryLabel =
-    template.side === 'prepaid'
-      ? '17xx-konto'
-      : template.side === 'deferred_revenue'
-        ? '29xx-konto (deferred)'
-        : '29xx-konto'
-  const secondaryLabel =
-    template.side === 'deferred_revenue' ? 'Intäktskonto' : 'Kostnadskonto'
-
-  return (
-    <div className="rounded-lg border border-border p-3 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium">{template.name}</p>
-        <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Ta bort">
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <Label className="text-xs">Belopp (kr)</Label>
-          <Input
-            type="number"
-            step="1"
-            min="0"
-            value={entry.amount}
-            onChange={(e) => onChange({ amount: e.target.value })}
-            className="tabular-nums h-8"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">{primaryLabel}</Label>
-          <Input
-            value={entry.primaryAccount}
-            onChange={(e) => onChange({ primaryAccount: e.target.value })}
-            className="tabular-nums h-8"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">{secondaryLabel}</Label>
-          <Input
-            value={entry.secondaryAccount}
-            onChange={(e) => onChange({ secondaryAccount: e.target.value })}
-            className="tabular-nums h-8"
-          />
-        </div>
-        <div className="space-y-1 col-span-2">
-          <Label className="text-xs">Beskrivning</Label>
-          <Input
-            value={entry.description}
-            onChange={(e) => onChange({ description: e.target.value })}
-            placeholder="t.ex. Försäkring 2026"
-            className="h-8"
-          />
-        </div>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -915,10 +697,10 @@ function ReviewStep({
 }: {
   vacationProposal: AccrualsProposal['proposals'][number] | null
   vacationAccepted: boolean
-  auditState: AuditState
+  auditState: AuditFeeState
   suggestions: PeriodiseringSuggestion[]
   selections: Record<string, boolean>
-  manualEntries: ManualEntry[]
+  manualEntries: ManualAccrualEntry[]
   postError: string | null
   postSummary: { created: number; skipped: number } | null
   posting: boolean
@@ -926,12 +708,11 @@ function ReviewStep({
   onBack: () => void
   onPost: () => void
 }) {
-  const auditAmount = parseFloat(auditState.amount)
+  const auditAmount = parseAmountInput(auditState.amount) ?? NaN
   const auditValid = auditState.enabled && Number.isFinite(auditAmount) && auditAmount > 0
   const selectedSuggestions = suggestions.filter((s) => selections[suggestionKey(s)])
-  const validManual = manualEntries.filter(
-    (m) => Number.isFinite(parseFloat(m.amount)) && parseFloat(m.amount) > 0 && m.description.trim(),
-  )
+  // What the post will book: the entries the shared builder takes.
+  const validManual = manualEntries.filter((m) => manualEntryToItem(m) !== null)
 
   const totalCount =
     (vacationProposal && vacationAccepted ? 1 : 0) +
@@ -974,13 +755,19 @@ function ReviewStep({
             />
           ))}
           {validManual.map((m) => {
-            const tpl = PERIODISERING_TEMPLATES.find((t) => t.kind === m.templateKind)
+            const tpl = templateOf(m.templateKind)
+            // The tags the result leg will carry, e.g. "KS01 · P001".
+            const dims = Object.entries(m.dimensions ?? {})
+              .filter(([, v]) => v)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([, v]) => v)
+              .join(' · ')
             return (
               <ReviewLine
                 key={m.id}
                 label={`${tpl?.name ?? 'Periodisering'}: ${m.description}`}
-                amount={parseFloat(m.amount)}
-                note={tpl?.name}
+                amount={parseAmountInput(m.amount) ?? 0}
+                note={[tpl?.name, dims].filter(Boolean).join(' · ')}
               />
             )
           })}
@@ -989,13 +776,13 @@ function ReviewStep({
 
       {postError && (
         <Card>
-          <CardContent className="p-4 text-sm text-destructive">{postError}</CardContent>
+          <CardContent className="text-sm text-destructive">{postError}</CardContent>
         </Card>
       )}
 
       {postSummary && (
         <Card>
-          <CardContent className="p-4 text-sm">
+          <CardContent className="text-sm">
             {postSummary.created} verifikation{postSummary.created === 1 ? '' : 'er'} bokförd
             {postSummary.created === 1 ? '' : 'a'}.
             {postSummary.skipped > 0 && ` ${postSummary.skipped} hoppades över (redan postade).`}
@@ -1003,8 +790,8 @@ function ReviewStep({
         </Card>
       )}
 
-      <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} disabled={posting}>
+      <StepBar>
+        <Button variant="ghost" onClick={onBack} disabled={posting}>
           Tillbaka
         </Button>
         <Button
@@ -1015,7 +802,7 @@ function ReviewStep({
         >
           {!canWrite ? (
             <>
-              <Lock className="mr-2 h-4 w-4" /> Posta alla
+              <LockClosedIcon className="h-4 w-4" /> Posta alla
             </>
           ) : posting ? (
             'Bokför…'
@@ -1023,14 +810,14 @@ function ReviewStep({
             'Posta alla'
           )}
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
 
 function ReviewLine({ label, amount, note }: { label: string; amount: number; note?: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
+    <div className="flex items-center justify-between gap-4 rounded-lg px-3 py-2 bg-control shadow-raised">
       <div className="min-w-0">
         <p className="text-sm font-medium truncate">{label}</p>
         {note && <p className="text-xs text-muted-foreground">{note}</p>}

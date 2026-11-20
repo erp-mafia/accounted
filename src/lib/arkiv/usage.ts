@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Arkiv phase 9e: the meter. What the pipeline did for a company, counted
@@ -29,17 +30,19 @@ export const USAGE_WINDOW_DAYS = 365
 export async function recordArkivUsage(supabase: SupabaseClient, companyId: string, activity: UsageActivity, units = 1): Promise<void> {
   if (!Number.isFinite(units) || units <= 0) return
   try {
-    const { error } = await supabase.rpc('arkiv_usage_add', { p_company_id: companyId, p_activity: activity, p_units: Math.round(units) })
+    // The day key is the Swedish calendar day, the same one the budget read
+    // and the rolling window use. The RPC's default, CURRENT_DATE, is the UTC
+    // date in the database and lags it between midnight and 01:00/02:00.
+    const { error } = await supabase.rpc('arkiv_usage_add', { p_company_id: companyId, p_activity: activity, p_units: Math.round(units), p_day: todayIsoStockholm() })
     if (error) log.warn('usage not recorded', { companyId, activity, units, reason: error.message })
   } catch (err) {
     log.warn('usage not recorded', { companyId, activity, units, reason: err instanceof Error ? err.message : String(err) })
   }
 }
 
-export function usageSince(days: number, today = new Date()): string {
-  const from = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))
-  from.setUTCDate(from.getUTCDate() - (days - 1))
-  return from.toISOString().slice(0, 10)
+/** First day of a rolling window of `days` Swedish calendar days that ends today, inclusive. */
+export function usageSince(days: number, now = new Date()): string {
+  return addDaysIso(todayIsoStockholm(now), -(days - 1))
 }
 
 /** Rows of the daily table folded into one summary; shared with the MCP resource, which reads the rows in its own batch. */
@@ -49,12 +52,4 @@ export function sumUsage(rows: Array<{ activity: string; units: number }>, since
     if ((USAGE_ACTIVITIES as readonly string[]).includes(r.activity)) out[r.activity as UsageActivity] += Number(r.units) || 0
   }
   return out
-}
-
-export async function arkivUsageSummary(supabase: SupabaseClient, companyId: string, opts: { days?: number; today?: Date } = {}): Promise<ArkivUsage> {
-  const days = opts.days ?? USAGE_WINDOW_DAYS
-  const since = usageSince(days, opts.today)
-  const { data, error } = await supabase.from('arkiv_usage_daily').select('activity, units').eq('company_id', companyId).gte('day', since)
-  if (error) throw new Error(`usage read failed: ${error.message}`)
-  return sumUsage((data ?? []) as Array<{ activity: string; units: number }>, since, days)
 }

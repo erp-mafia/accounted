@@ -21,6 +21,18 @@ describe('summariseMissingUnderlag', () => {
     expect(summary.sampled).toBe(3)
   })
 
+  // crm#1582: SIE-imported verifikat have their underlag where the earlier
+  // books were kept; the row says so instead of reading them as mail or Kivra.
+  it('reads imported verifikat as imported, whatever their words, as the agent does', () => {
+    const summary = summariseMissingUnderlag(180, [
+      { description: 'ICA Kvantum Solna', source_type: 'import' },
+      { description: 'Hetzner Online GmbH', source_type: 'import' },
+      { description: 'Lön augusti', source_type: 'import' },
+      { description: 'Coop Stadshagen', source_type: 'bank_transaction' },
+    ])
+    expect(summary.top).toEqual({ kind: 'imported', count: 3 })
+  })
+
   it('separates paper purchases from mailbox ones', () => {
     const summary = summariseMissingUnderlag(3, [
       { description: 'EasyPark' },
@@ -39,14 +51,13 @@ describe('summariseMissingUnderlag', () => {
     expect(summary.top?.count).toBe(2)
   })
 
-  it('inherits canHaveEmailReceipt exactly, including where it is narrow', () => {
-    // NO_EMAIL_RECEIPT_EXISTS (lib/receipt-hunt/select.ts) matches on \blön\b,
-    // so the compound "Löneutbetalning" reads as mail-searchable. That is the
-    // shipped hunt predicate's behaviour, not this summary's: pinned here so a
-    // future widening is a deliberate change to one regex with one test to
-    // update, rather than a silent divergence between the row and the agent.
+  it('inherits canHaveEmailReceipt exactly, including its compound words', () => {
+    // NO_EMAIL_RECEIPT_EXISTS (lib/receipt-hunt/select.ts) was widened to the
+    // "löne-" compounds (agent feedback seq 956543), so "Löneutbetalning" now
+    // reads as not_mail here too. Pinned so the row and the agent keep the
+    // one predicate: a change to that regex updates this test, never only one side.
     const summary = summariseMissingUnderlag(1, [{ description: 'Löneutbetalning augusti' }])
-    expect(summary.top?.kind).toBe('mail')
+    expect(summary.top?.kind).toBe('not_mail')
   })
 
   it('breaks a tie towards the larger amounts, which the RPC returns first', () => {
@@ -55,6 +66,13 @@ describe('summariseMissingUnderlag', () => {
       { description: 'EasyPark' },
     ])
     expect(summary.top).toEqual({ kind: 'kivra', count: 1 })
+  })
+
+  it('reads a supplier the company pointed at its own portal as a portal errand', () => {
+    const rows = [{ description: 'ELLEVIO AB AUTOGIRO' }, { description: 'ELLEVIO AB AUTOGIRO' }, { description: 'ICA Maxi' }]
+    expect(summariseMissingUnderlag(3, rows).top?.kind).not.toBe('portal')
+    const ellevio = { id: 'p-ellevio', counterparty_key: 'ellevio', vendor_name: 'Ellevio', url: 'https://www.ellevio.se/foretag' }
+    expect(summariseMissingUnderlag(3, rows, [ellevio]).top).toEqual({ kind: 'portal', count: 2 })
   })
 
   it('has nothing to say when there is no work, and never invents a row', () => {

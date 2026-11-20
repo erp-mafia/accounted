@@ -1,20 +1,26 @@
 import { NextResponse } from 'next/server'
-import { createDraftEntry, createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
-import { ensureInitialized } from '@/lib/init'
+import { manualVoucherBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { CreateJournalEntrySchema } from '@/lib/api/schemas'
-import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
-import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
+import { applyVerifikatSearch, readVerifikatQuerySearch, verifikatSearchJoins } from '@/lib/bookkeeping/verifikat-search'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { dbError } from '@/lib/errors/db-error'
+import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
+import { linkOpenBankRowsToVoucher } from '@/lib/reconciliation/voucher-bank-link'
 import {
   MissingUnderlagQueryError,
-  resolveMissingUnderlagEntries,
-  type MissingUnderlagEntry,
+  listMissingUnderlagPage,
+  missingUnderlagOrder,
+  type MissingUnderlagPage,
 } from '@/lib/bookkeeping/missing-underlag'
-
-ensureInitialized()
+import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
+import { countUnderlagForJournalEntries } from '@/lib/core/documents/underlag-counts'
+import { gateReviewedVatSettlement, reviewedVatSettlementRaceLost } from '@/lib/reports/vat-settlement-booking'
 
 // Query params are hand-parsed with per-param clamping/regex validation (see
 // each param's comment) rather than a Zod schema; response shapes are legacy
@@ -27,13 +33,21 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   const status = searchParams.get('status')
   // Drafts get their own surface in the UI; the committed list excludes them.
   const excludeDraft = searchParams.get('exclude_draft') === 'true'
-  // Collapse a correction group to the live correction (hide the storno and the
-  // reversed original it replaced). The full chain stays reachable.
+  // Collapse a correction group to the live correction: fold the reversed
+  // original and its storno once a posted correction replaced them. A storno
+  // with no correction stays visible (#3149). The full chain stays reachable.
   const collapseCorrections = searchParams.get('collapse_corrections') === 'true'
+  // Hide every makulerad pair, not only corrected groups: each reversed
+  // original (Omförd) and each storno, with or without a correction (PH 231).
+  // Opt-in from the list's filter dialog; the default stays gapless (#3149).
+  // The correction itself is posted and stays. Subsumes collapse_corrections.
+  const hideReversed = searchParams.get('hide_reversed') === 'true'
   // Clamp pagination to bound DB work against oversized/pathological inputs
-  // (compliance A.8.28 / ASVS V1.2.5). The UI page-size selector offers
-  // 20/50/100/Alla; "Alla" sends a large limit which is capped at MAX_LIMIT.
-  const MAX_LIMIT = 100000
+  // (compliance A.8.28 / ASVS V1.2.5). The ceiling is what one PostgREST
+  // response can carry: a larger limit came back cut at 1,000 rows under a
+  // count that claimed more, so "Alla" showed 1,000 of 3,000 verifikat as all.
+  // The list UI collects "Alla" in chunks of this size (lib/lists/collect-pages).
+  const MAX_LIMIT = MAX_ROWS_PER_REQUEST
   const rawLimit = parseInt(searchParams.get('limit') || '50', 10)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT) : 50
   const rawOffset = parseInt(searchParams.get('offset') || '0', 10)
@@ -57,8 +71,10 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // tokens over date | voucher | total | description (single tokens, the old
   // format, stay valid). Unknown tokens are ignored, repeated columns are
   // deduped, and the list is capped at 3 keys to bound DB work. Amount keys
-  // order by the total_amount computed column (sum of debit lines, migration
-  // 20260811100000): PostgREST evaluates it per row, which the RPC path
+  // order by the display_amount computed column (migration 20261018135300):
+  // the amount the Belopp column shows (the single money line, else the
+  // omslutning; voucherDisplayAmount), so the sort follows the number on
+  // screen (crm#1280). PostgREST evaluates it per row, which the RPC path
   // below cannot express. sort_by overrides sort_date when present;
   // sort_date is kept for backwards compatibility with older clients.
   const SORT_TOKEN_RE = /^(date|voucher|total|description)_(asc|desc)$/
@@ -84,33 +100,50 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // dialog's "Visa saknade underlag" toggle). Committed view only: the
   // predicate is posted-only, so it is meaningless for the drafts view.
   const missingUnderlag = searchParams.get('missing_underlag') === 'true' && status !== 'draft'
+  // The verifikat list asks for its rows' underlag counts with the rows
+  // (include_counts=true) instead of a second request to
+  // /api/documents/counts per page. Best effort: when the count reads fail
+  // the counts are left out and the list asks the counts route as before.
+  const includeCounts = searchParams.get('include_counts') === 'true'
+  const listResponse = async (data: unknown[] | null, count: number | null) => {
+    if (!includeCounts || !data || data.length === 0) return NextResponse.json({ data, count })
+    try {
+      const ids = (data as { id: string }[]).map((entry) => entry.id)
+      const { counts, invoice_references } = await countUnderlagForJournalEntries(supabase, companyId, ids)
+      return NextResponse.json({ data, count, attachment_counts: counts, invoice_references })
+    } catch (err) {
+      log.warn('underlag counts for the verifikat list failed', err)
+      return NextResponse.json({ data, count })
+    }
+  }
 
   const dateAscending = sortDate === 'asc'
   const sortDateParam = soloDateKey ? (soloDateKey.ascending ? 'asc' : 'desc') : sortDate === 'asc' ? 'asc' : 'desc'
 
   if (missingUnderlag) {
-    // The missing-underlag predicate spans three tables (current-version
-    // documents, anchored supplier-invoice references per BFL 5 kap 7 §, and
-    // journal_entry_no_doc_required exemptions), which PostgREST cannot
-    // express as a row filter. So this path resolves the FULL missing set via
-    // the shared helper (the same code the bulk "Inget underlag krävs" route
-    // uses, mirroring the verifikat_without_documents RPC that feeds the
-    // dashboard badge), sorts it with the active sort stack, pages it, and
-    // fetches only the page's rows. count is the full filtered total, so
-    // pagination and the dialog badge stay honest.
+    // The missing-underlag predicate spans documents, anchored supplier-invoice
+    // references and issued customer invoices (BFL 5 kap 7 § hänvisning), and
+    // journal_entry_no_doc_required exemptions, which PostgREST cannot express
+    // as a row filter. The list_verifikat_missing_underlag RPC (the
+    // verifikat_without_documents predicate that feeds the dashboard badge,
+    // narrowed by this list's filters) resolves, sorts and pages the set in
+    // one statement and returns the page's ids with the full filtered total,
+    // so pagination and the dialog badge stay honest; this path then fetches
+    // only the page's rows. The same helper backs the bulk "Inget underlag
+    // krävs" route. Resolving the set here instead cost hundreds of
+    // sequential round trips on a long ledger (crm#1390).
     //
     // collapse_corrections is deliberately NOT applied here: the dashboard
     // badge has no collapse notion, and hiding corrected originals would make
     // the filtered list disagree with the count that led the user here.
-    let missing
+    let page: MissingUnderlagPage
     try {
-      missing = await resolveMissingUnderlagEntries(supabase, companyId, {
-        periodId,
-        series: seriesFilter,
-        dateFrom,
-        dateTo,
-        search,
-      })
+      page = await listMissingUnderlagPage(
+        supabase,
+        companyId,
+        { periodId, series: seriesFilter, dateFrom, dateTo, search },
+        { order: missingUnderlagOrder(sortKeys, sortDate), limit, offset },
+      )
     } catch (err) {
       if (err instanceof MissingUnderlagQueryError) {
         // err.message is the user-facing Swedish text; the driver error is
@@ -124,66 +157,13 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       throw err
     }
 
-    // Sort the full set with the same key semantics as the direct query
-    // below: the sort stack in priority order, a voucher tiebreak in the last
-    // key's direction unless voucher is already a key, and a final id
-    // tiebreak for a stable total order across page requests.
-    const keys =
-      sortKeys.length > 0
-        ? sortKeys
-        : sortDate === 'asc' || sortDate === 'desc'
-          ? [{ column: 'date' as const, ascending: dateAscending }]
-          : []
-    const compareVoucher = (a: MissingUnderlagEntry, b: MissingUnderlagEntry) => {
-      const seriesA = a.voucher_series ?? ''
-      const seriesB = b.voucher_series ?? ''
-      if (seriesA !== seriesB) return seriesA < seriesB ? -1 : 1
-      return (a.voucher_number ?? 0) - (b.voucher_number ?? 0)
-    }
-    const compareBy = (
-      column: 'date' | 'voucher' | 'total' | 'description',
-      a: MissingUnderlagEntry,
-      b: MissingUnderlagEntry,
-    ) => {
-      switch (column) {
-        case 'date': {
-          const dateA = a.entry_date ?? ''
-          const dateB = b.entry_date ?? ''
-          return dateA < dateB ? -1 : dateA > dateB ? 1 : 0
-        }
-        case 'voucher':
-          return compareVoucher(a, b)
-        case 'total':
-          return (a.total_amount ?? 0) - (b.total_amount ?? 0)
-        case 'description': {
-          const descA = a.description ?? ''
-          const descB = b.description ?? ''
-          return descA < descB ? -1 : descA > descB ? 1 : 0
-        }
-      }
-    }
-    const lastAscending = keys.length > 0 ? keys[keys.length - 1].ascending : true
-    const sorted = [...missing].sort((a, b) => {
-      for (const key of keys) {
-        const cmp = compareBy(key.column, a, b)
-        if (cmp !== 0) return key.ascending ? cmp : -cmp
-      }
-      if (!keys.some((k) => k.column === 'voucher')) {
-        const cmp = compareVoucher(a, b)
-        if (cmp !== 0) return lastAscending ? cmp : -cmp
-      }
-      const cmp = a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-      return lastAscending ? cmp : -cmp
-    })
-
-    const total = sorted.length
-    const pageIds = sorted.slice(offset, offset + limit).map((e) => e.id)
+    const { total, ids: pageIds } = page
     if (pageIds.length === 0) {
       return NextResponse.json({ data: [], count: total })
     }
 
-    // Fetch the page's full rows in id chunks: "Alla" as page size can put
-    // thousands of ids on this page, and a single .in() with that many ids
+    // Fetch the page's full rows in id chunks: an "Alla" chunk puts up to
+    // MAX_LIMIT ids on this page, and a single .in() with that many ids
     // would blow PostgREST's URL length limit.
     const ROW_CHUNK = 100
     const rowsById = new Map<string, unknown>()
@@ -194,13 +174,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
         .select('*, lines:journal_entry_lines(*)')
         .eq('company_id', companyId)
         .in('id', chunk)
-      if (error) {
-        log.error('failed to fetch missing-underlag page rows', error)
-        return NextResponse.json(
-          { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
-          { status: 500 }
-        )
-      }
+      if (error) return errorResponse(dbError(error, 'Missing-underlag page rows'), log, { requestId: ctx.requestId })
       for (const row of (chunkRows ?? []) as { id: string }[]) {
         rowsById.set(row.id, row)
       }
@@ -208,7 +182,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     // Reassemble in the sorted page order (the .in() fetch has no order).
     const data = pageIds.map((id) => rowsById.get(id)).filter(Boolean)
 
-    return NextResponse.json({ data, count: total })
+    return listResponse(data, total)
   }
 
   // Non-date sorts (and stacked sorts): the include_related RPC only orders
@@ -220,7 +194,9 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // belonging to a different year's series would be misleading. The trade-off
   // is that the visible row count may differ between sort modes for the same
   // period; the strict count is the BFL-compliant view of that year.
-  if (periodId && includeRelated && (sortKeys.length === 0 || soloDateKey) && !search) {
+  // hide_reversed takes the direct path too: the RPC has no such filter, and,
+  // as with search, the hidden-pairs view stays strict to the selected year.
+  if (periodId && includeRelated && (sortKeys.length === 0 || soloDateKey) && !search && !hideReversed) {
     const { data, error } = await supabase.rpc('list_fiscal_period_entries_with_related', {
       p_company_id: companyId,
       p_period_id: periodId,
@@ -238,29 +214,33 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       p_series: seriesFilter,
     })
 
-    if (error) {
-      log.error('failed to list fiscal period entries via RPC', error)
-      return NextResponse.json(
-        { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
-        { status: 500 }
-      )
-    }
+    if (error) return errorResponse(dbError(error, 'Fiscal period entries'), log, { requestId: ctx.requestId })
 
     const rows = data ?? []
     const entries = rows.map((r: { entry: unknown }) => r.entry)
     const count = rows.length > 0 ? Number((rows[0] as { total_count: number | string }).total_count) : 0
 
-    return NextResponse.json({ data: entries, count })
+    return listResponse(entries, count)
   }
+
+  // What the needle is besides text (lib/bookkeeping/verifikat-search.ts): a
+  // voucher label, an account number (crm#1847), an amount or a
+  // bokföringsdatum. The account and the amount look at the lines, through a
+  // filtered join of their own next to `lines` (verifikatSearchJoins), which
+  // applyVerifikatSearch below asks whether it found anything. The amount is
+  // read only when a fiscal period bounds the request
+  // (isBoundedVerifikatScope): with none, a number typed is searched as it
+  // was before amounts were read.
+  const needle = search ? readVerifikatQuerySearch(search, { periodId }) : null
 
   let query = supabase
     .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)', { count: 'exact' })
+    .select(`*, lines:journal_entry_lines(*)${needle ? verifikatSearchJoins(needle) : ''}`, { count: 'exact' })
     .eq('company_id', companyId)
 
   if (sortKeys.length > 0) {
-    // Apply the priority list in order. total_amount is a computed column (a
-    // function on the row type), which PostgREST accepts in order=.
+    // Apply the priority list in order. display_amount is a computed column
+    // (a function on the row type), which PostgREST accepts in order=.
     for (const key of sortKeys) {
       switch (key.column) {
         case 'voucher':
@@ -272,7 +252,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
           query = query.order('entry_date', { ascending: key.ascending })
           break
         case 'total':
-          query = query.order('total_amount', { ascending: key.ascending })
+          query = query.order('display_amount', { ascending: key.ascending })
           break
         case 'description':
           query = query.order('description', { ascending: key.ascending })
@@ -334,34 +314,21 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     query = query.eq('voucher_series', seriesFilter)
   }
 
-  if (search) {
-    // Escape LIKE wildcards (\ % _) so they match literally, and cap the needle
-    // length (≤200 chars): both handled by the shared escapeLikePattern helper.
-    // The cap bounds DB work against oversized/pathological inputs (compliance
-    // A.8.28 / ASVS V1.2.5); escaping prevents silent over-matching on values
-    // like "50%". Supabase parameterises the value, so this is not about SQLi.
-    const needle = `%${escapeLikePattern(search)}%`
-    // The first thing a user searches for is the voucher's own label ("A209").
-    // A description-only match never finds it (only OTHER vouchers that
-    // mention A209 in their text), so a label-shaped needle also matches
-    // voucher_series + voucher_number. The OR is a PostgREST filter list, so
-    // the needle is double-quoted to keep commas/parentheses literal.
-    const voucher = parseVoucher(search)
-    if (voucher) {
-      const quotedNeedle = `"${needle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
-      query = query.or(
-        `description.ilike.${quotedNeedle},and(voucher_series.eq.${voucher.series},voucher_number.eq.${voucher.number})`,
-      )
-    } else {
-      query = query.ilike('description', needle)
-    }
+  if (search && needle) {
+    query = applyVerifikatSearch(query, search, needle)
   }
 
-  // Collapse correction groups (voucher-sort / search path): hide the storno
-  // and the reversed originals a posted correction replaced, leaving the live
-  // correction. Pagination/count stay correct because these are query filters.
-  if (collapseCorrections) {
-    query = query.neq('source_type', 'storno')
+  // Collapse correction groups (voucher-sort / search path): fold the reversed
+  // originals a posted correction replaced, and their stornos, leaving the live
+  // correction. A storno with no correction stays visible: it is the only row
+  // that carries its voucher number, so hiding it showed a hole in the series
+  // (#3149). Same rule as the RPC's p_collapse_corrections. Pagination/count
+  // stay correct because these are query filters.
+  if (hideReversed) {
+    // Both halves of every makulerad pair, by their own columns: no prefetch,
+    // and count/pagination stay exact. The correction (posted) stays.
+    query = query.neq('status', 'reversed').neq('source_type', 'storno')
+  } else if (collapseCorrections) {
     const { data: corrections } = await supabase
       .from('journal_entries')
       .select('correction_of_id')
@@ -373,21 +340,23 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       new Set((corrections ?? []).map((r) => r.correction_of_id).filter(Boolean) as string[])
     )
     if (correctedOriginalIds.length > 0) {
-      query = query.not('id', 'in', `(${correctedOriginalIds.join(',')})`)
+      const idList = `(${correctedOriginalIds.join(',')})`
+      query = query.not('id', 'in', idList)
+      // PostgREST or=(...): a row survives unless it is a storno of a corrected
+      // original. `is.null` keeps an unlinked storno visible, since
+      // NULL NOT IN (...) is NULL and would otherwise drop it.
+      query = query.or(`source_type.neq.storno,reverses_id.is.null,reverses_id.not.in.${idList}`)
     }
   }
 
   const { data, error, count } = await query
 
-  if (error) {
-    log.error('failed to list journal entries', error)
-    return NextResponse.json(
-      { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
-      { status: 500 }
-    )
-  }
+  // A statement timeout answers 503 TRANSIENT_ERROR (retryable) and any
+  // other database failure 500, each with its code and the database's own
+  // message in the log line.
+  if (error) return errorResponse(dbError(error, 'Journal entries'), log, { requestId: ctx.requestId })
 
-  return NextResponse.json({ data, count })
+  return listResponse(data, count)
 })
 
 export const POST = withRouteContext(
@@ -395,19 +364,87 @@ export const POST = withRouteContext(
   async (request, ctx) => {
   const { supabase, companyId, user, log } = ctx
 
-  const validation = await validateBody(request, CreateJournalEntrySchema)
+  // source_type is limited to what the dashboard's own forms author: a
+  // caller-chosen label must not claim an engine-owned exemption
+  // (CreateDashboardJournalEntrySchema).
+  const validation = await validateBody(request, CreateDashboardJournalEntrySchema)
   if (!validation.success) return validation.response
-  const body = validation.data
+  const {
+    acknowledged_warnings: acknowledgedWarnings,
+    vat_settlement_period: vatSettlementPeriod,
+    ...validBody
+  } = validation.data
+  let body = validBody
 
   const { searchParams } = new URL(request.url)
   const asDraft = searchParams.get('as_draft') === 'true'
 
+  // A reviewed momsredovisning (the Moms page sends its period) passes the
+  // same gates as the v1 and MCP booking: a period already settled refuses,
+  // and the verifikat is keyed on the period, so a second settlement racing
+  // this one from any door fails at the draft insert (accounted#58). A VAT
+  // template applied in the plain form names no period and books as before.
+  const settlementCtx = { supabase, companyId, userId: user.id, log }
+  let settlementSourceId: string | null = null
+  if (body.source_type === 'vat_settlement' && vatSettlementPeriod) {
+    const gate = await gateReviewedVatSettlement(settlementCtx, vatSettlementPeriod)
+    if (!gate.ok) {
+      return errorResponseFromCode(gate.code, log, { details: gate.details, requestId: ctx.requestId })
+    }
+    settlementSourceId = gate.sourceId
+    body = { ...body, source_id: gate.sourceId }
+  }
+
+  // Booking-time warnings on typed lines: a draft is checked when it is
+  // committed, a posting now (lib/bookkeeping/voucher-warnings-guard.ts).
+  const guard = asDraft
+    ? null
+    : await runVoucherWarningsGuard(supabase, companyId, body, log, { acknowledged: acknowledgedWarnings })
+  if (guard && !guard.ok) {
+    return errorResponseFromCode(guard.code, log, { details: guard.details, requestId: ctx.requestId })
+  }
+
+  // Posting port (step 2i): the engine gets the body unchanged and, while
+  // POSTING_EVENTS is shadow or strict, the voucher's event (the kind its
+  // source type names, the person's own: user_created) is linked to the
+  // draft before a number is drawn. A draft records its event now, linked to
+  // the draft; its later commit records nothing (as kassa and webbshop).
+  const event = () =>
+    manualVoucherBusinessEvent({ sourceType: body.source_type, entryDate: body.entry_date, linkBasis: linkBasisColumns('user_created') })
+
   try {
     const entry = asDraft
-      ? await createDraftEntry(supabase, companyId, user.id, body)
-      : await createJournalEntry(supabase, companyId, user.id, body)
+      ? await postingPort.draftJournalEntry({ supabase, companyId, userId: user.id, event, input: body })
+      : await postingPort.postJournalEntry({ supabase, companyId, userId: user.id, event, input: body })
+    if (guard?.ok && guard.acknowledged.length > 0) {
+      await recordVoucherWarningsAcknowledged({
+        companyId,
+        userId: user.id,
+        journalEntryId: entry.id,
+        warnings: guard.acknowledged,
+        door: 'dashboard_voucher',
+        log,
+      })
+    }
+    // A posted typed verifikat meets the open bank row it books
+    // (lib/reconciliation/voucher-bank-link.ts); a draft does when it is committed.
+    if (!asDraft) {
+      await linkOpenBankRowsToVoucher(
+        supabase,
+        companyId,
+        user.id,
+        { journalEntryId: entry.id, entryDate: body.entry_date, lines: body.lines },
+        log,
+      )
+    }
     return NextResponse.json({ data: entry })
   } catch (err) {
+    if (settlementSourceId) {
+      const raceLost = await reviewedVatSettlementRaceLost(settlementCtx, err, settlementSourceId)
+      if (raceLost) {
+        return errorResponseFromCode(raceLost.code, log, { details: raceLost.details, requestId: ctx.requestId })
+      }
+    }
     const typed = bookkeepingErrorResponse(err)
     if (typed) return typed
     // Untyped errors map to Swedish via getErrorMessage: the raw message is

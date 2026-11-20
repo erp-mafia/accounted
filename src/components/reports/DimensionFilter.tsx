@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { X } from 'lucide-react'
+import { useTranslations } from 'next-intl'
+import { XMarkIcon } from '@/components/icons'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -33,7 +34,8 @@ interface Props {
 /**
  * Per-dimension value filter for the P&L-safe reports (resultatrapport,
  * resultaträkning, huvudbok, KPI). Mounted by FocusedReport next to
- * ReportDateRange, only for catalog entries flagged `dimensions: true`.
+ * ReportDateRange, only for catalog entries flagged `dimensions: true`, and
+ * by the KPI page, which has its own route.
  *
  * Renders nothing unless company_settings.dimensions_enabled: companies
  * that never activated dimensions see literally nothing changed.
@@ -41,9 +43,11 @@ interface Props {
  * When active it shows a persistent "Filtrerad …, ej fullständig rapport"
  * chip: a dimension-scoped view is a partial view and must never be read as
  * the complete report. Strings are hardcoded Swedish per the report-surface
- * convention (same as DimensionCombobox).
+ * convention (same as DimensionCombobox); the archived-value marker reuses
+ * the register's translated status label.
  */
 export function DimensionFilter({ value, onChange }: Props) {
+  const tDimensions = useTranslations('dimensions')
   const { settings } = useCompanySettings()
   // Registry from the session cache (lib/reference-data).
   const { dimensions: dims } = useDimensions()
@@ -59,7 +63,7 @@ export function DimensionFilter({ value, onChange }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      <Label className="field-label text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <Label className="field-label text-xs font-medium text-muted-foreground">
         Dimension
       </Label>
       <div className="flex flex-wrap items-center gap-2">
@@ -91,16 +95,21 @@ export function DimensionFilter({ value, onChange }: Props) {
               onChange(code ? { dimNo: activeDimNo, code } : null)
             }
             className={TOOLBAR_FIELD_CLASS}
+            // A filter reads the registry: nothing to create here, and an
+            // archived value (a finished project) must stay reportable.
+            allowCreate={false}
+            includeArchived
+            archivedLabel={tDimensions('status_archived')}
           />
         </div>
         {value && (
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="icon"
             onClick={() => onChange(null)}
             aria-label="Rensa dimensionsfilter"
           >
-            <X className="h-4 w-4" />
+            <XMarkIcon className="h-4 w-4" />
           </Button>
         )}
       </div>

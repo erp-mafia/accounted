@@ -10,43 +10,32 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 import { SupportLink } from '@/components/ui/support-link'
+import { DISCORD_INVITE_URL, DiscordLogo } from '@/components/community/discord'
+import NewClientCompanyDialog from '@/components/dashboard/NewClientCompanyDialog'
+import { useCompanyRowDetails } from '@/components/dashboard/use-company-row-details'
+import { ADD_COMPANY_HREF } from '@/components/settings/company-deletion'
 import {
-  Check,
-  ChevronsUpDown,
-  ChevronRight,
-  CreditCard,
-  HelpCircle,
-  Loader2,
-  LogOut,
-  Plus,
-  Search,
-  Settings,
-  Users,
-} from 'lucide-react'
-
-// Community invite (Accounted's Discord). Deliberately a constant, not
-// branding config: self-hosted rebrands can hide or swap it when someone
-// actually asks for that. Must be a never-expiring invite: the previous one
-// expired and left logged-in users with a dead link.
-const DISCORD_INVITE_URL = 'https://discord.gg/nfE9Uyv69a'
-
-// Lucide ships no brand marks, so the Discord logo is inlined (simple-icons
-// path, CC0). Sized and colored like the surrounding lucide icons.
-function DiscordLogo({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
-      <path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" />
-    </svg>
-  )
-}
+  ArrowRightStartOnRectangleIcon,
+  ChevronRightIcon,
+  ChevronUpDownIcon,
+  Cog6ToothIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  QuestionMarkCircleIcon,
+  SpinnerIcon,
+  UserIcon,
+  UsersIcon,
+} from '@/components/icons'
 
 interface UserMenuProps {
   userName: string | null
   userEmail: string | null
   isSandbox: boolean
-  // Byrå cockpit (lean sidebar): the cockpit is above the companies, so the
-  // widget shows no active company and no company-switcher flyout; entering
-  // a client happens through the Klienter list instead.
+  /**
+   * Byrå cockpit: above the companies, where no row heads the sidebar with a
+   * switcher, so the menu carries the company list, the byrå-scope settings
+   * and the team. Inside a company it holds only what belongs to the person.
+   */
   cockpitMode?: boolean
   onLogout: () => void
 }
@@ -68,7 +57,7 @@ function CompanyMark({ name }: { name: string }) {
   return (
     <span
       aria-hidden="true"
-      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-sm bg-secondary text-[11px] font-semibold uppercase leading-none text-foreground"
+      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-sm bg-secondary text-xs font-semibold leading-none text-foreground"
     >
       {name.trim().charAt(0) || '?'}
     </span>
@@ -76,9 +65,9 @@ function CompanyMark({ name }: { name: string }) {
 }
 
 /**
- * Sticky bottom-of-sidebar user block: avatar initials, name, active company,
- * chevron. Opens an upward popover aligned with the nav column holding
- * identity, the company-switcher flyout, account links and logout.
+ * The sidebar's foot (V7 shell): one 30px row with the initials dot and the
+ * name. Opens an upward popover aligned with the nav column holding identity,
+ * account links and logout, and in the cockpit the company list.
  */
 export default function UserMenu({
   userName,
@@ -87,14 +76,17 @@ export default function UserMenu({
   cockpitMode = false,
   onLogout,
 }: UserMenuProps) {
-  const { company, companies, isSandbox: companyCtxSandbox, foreignCompanies = [] } = useCompany()
+  const { company, companies, isSandbox: companyCtxSandbox, foreignCompanies = [], byraTeam, addCompanyHref = ADD_COMPANY_HREF } = useCompany()
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
+  const tSettingsNav = useTranslations('settings_nav')
   const tSwitcher = useTranslations('company_switcher')
+  const tClients = useTranslations('clients')
   const { toast } = useToast()
 
   const [open, setOpen] = useState(false)
   const [companiesOpen, setCompaniesOpen] = useState(false)
+  const [clientDialogOpen, setClientDialogOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [isPending, setIsPending] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -103,6 +95,10 @@ export default function UserMenu({
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 232 })
 
   const sandbox = isSandbox || companyCtxSandbox
+  // Byrå owner/admin get the client path next to "Lägg till företag", which
+  // attaches to the user's personal team (WL-08): the explicit entry is how
+  // a client lands in the byrå instead.
+  const canCreateClient = byraTeam?.role === 'owner' || byraTeam?.role === 'admin'
 
   const updatePosition = useCallback(() => {
     if (!triggerRef.current || !menuRef.current) return
@@ -183,13 +179,9 @@ export default function UserMenu({
     return () => document.removeEventListener('keydown', handleKey)
   }, [open, companiesOpen, close])
 
+  // In the cockpit nothing is "current": picking any company, including the
+  // technically-active one, enters it (full navigation to its start).
   const handleSwitch = async (companyId: string) => {
-    // In the cockpit nothing is "current": picking any company, including the
-    // technically-active one, must enter it (full navigation to its start).
-    if (!cockpitMode && company && companyId === company.id) {
-      close()
-      return
-    }
     setIsPending(true)
     const result = await performCompanySwitch(companyId)
     if (result?.error) {
@@ -206,10 +198,11 @@ export default function UserMenu({
   const filteredCompanies = companies.filter(({ company: c }) =>
     c.name.toLowerCase().includes(query.trim().toLowerCase()),
   )
+  const rowDetails = useCompanyRowDetails(companies)
 
   const menuRow =
-    'flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-left text-[13px] ' +
-    'text-muted-foreground hover:text-foreground hover:bg-secondary/60 ' +
+    'flex min-h-7.5 w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] ' +
+    'text-foreground hover:bg-secondary/60 ' +
     'transition-colors duration-150 cursor-pointer'
 
   return (
@@ -220,25 +213,17 @@ export default function UserMenu({
         onClick={() => (open ? close() : setOpen(true))}
         aria-expanded={open}
         aria-haspopup="menu"
-        className={cn(
-          'group flex w-full items-center rounded-lg text-left transition-colors duration-150 hover:bg-secondary/60',
-          'gap-2.5 px-3 py-2',
-        )}
+        className="group flex h-7.5 w-full items-center gap-2 rounded-md px-2 text-left transition-colors duration-150 hover:bg-secondary/60 pointer-coarse:min-h-10"
       >
-        <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-semibold uppercase text-foreground">
+        <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-control text-[11px] font-semibold text-foreground/80 shadow-raised">
           {accountInitial(userName, userEmail)}
         </span>
         <span className="flex-1 min-w-0">
-          <span className="block truncate text-[13px] font-medium text-foreground leading-tight">
+          <span className="block truncate text-[13px] leading-5 text-strong">
             {userName?.trim() || userEmail || tNav('mitt_konto')}
           </span>
-          {company && !cockpitMode && (
-            <span className="block truncate text-[11px] text-muted-foreground leading-tight">
-              {company.name}
-            </span>
-          )}
         </span>
-        <ChevronsUpDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground opacity-50 group-hover:opacity-100" />
+        <ChevronUpDownIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground opacity-50 group-hover:opacity-100" />
       </button>
 
       {open &&
@@ -246,25 +231,25 @@ export default function UserMenu({
           <div
             ref={menuRef}
             role="menu"
-            className={cn('fixed z-[60] py-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_UP_CLASS)}
+            className={cn('fixed z-[60] p-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_UP_CLASS)}
             style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
           >
             {/* Identity */}
             {(userName || userEmail) && (
-              <div className="border-b border-border px-3 py-2.5">
+              <div className="-mx-1 -mt-1 mb-1 border-b-hairline px-3.5 py-2.5">
                 {userName && (
                   <p className="truncate text-[13px] font-medium text-foreground">{userName}</p>
                 )}
                 {userEmail && (
-                  <p className="truncate text-[11px] text-muted-foreground">{userEmail}</p>
+                  <p className="truncate text-xs text-muted-foreground">{userEmail}</p>
                 )}
               </div>
             )}
 
-            {/* Company switcher flyout. In the cockpit no company reads as
-                active (neutral label, no check mark); picking one enters it
-                like the Klienter list does. */}
-            <div className="relative px-1 pt-1">
+            {/* Company switcher flyout, in the cockpit only: no company reads
+                as active (neutral label, no check mark); picking one enters
+                it like the Klienter list does. */}
+            {cockpitMode && <div className="relative">
               <button
                 type="button"
                 onClick={() => setCompaniesOpen((v) => !v)}
@@ -272,130 +257,138 @@ export default function UserMenu({
                 className={cn(menuRow, companiesOpen && 'bg-secondary/60 text-foreground')}
               >
                 <CompanyMark name={company?.name || tSwitcher('default_company_name')} />
-                <span className="flex-1 truncate">
-                  {cockpitMode
-                    ? tSwitcher('choose_company')
-                    : company?.name || tSwitcher('default_company_name')}
-                </span>
-                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 opacity-50" />
+                <span className="min-w-0 flex-1 truncate">{tSwitcher('choose_company')}</span>
+                <ChevronRightIcon className="h-3.5 w-3.5 flex-shrink-0 opacity-50" />
               </button>
 
               {companiesOpen && (
                 // Top-aligned with the company row, growing DOWNWARD
-                // (founder feedback 2026-07-23: never upward over the menu).
-                <div className={cn('absolute top-0 left-full z-[61] ml-1.5 w-60 py-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}>
-                  <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-1.5">
-                    <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                // (feedback 2026-07-23: never upward over the menu).
+                <div className={cn('absolute top-0 left-full z-[61] ml-1.5 w-60 p-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}>
+                  <div className="-mx-1 -mt-1 flex items-center gap-2 border-b-hairline px-3.5 pb-2 pt-2.5">
+                    <MagnifyingGlassIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                     <input
                       ref={searchRef}
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       placeholder={tSwitcher('search_placeholder')}
-                      className="w-full bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+                      className="w-full bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
                     />
                   </div>
-                  <div className="max-h-56 overflow-y-auto px-1 py-1" role="listbox">
+                  <div className="max-h-56 overflow-y-auto py-1" role="listbox">
                     {filteredCompanies.length === 0 && (
-                      <p className="px-2.5 py-2 text-[12.5px] text-muted-foreground">
+                      <p className="px-2.5 py-2 text-xs text-muted-foreground">
                         {tSwitcher('no_results')}
                       </p>
                     )}
                     {filteredCompanies.map(({ company: c, role }) => {
-                      const isCurrent = !cockpitMode && c.id === company?.id
+                      const createdLine = rowDetails.createdLine(c.id)
+                      const roleLabel = rowDetails.roleLabel(role)
                       return (
-                        <button
-                          key={c.id}
-                          onClick={() => handleSwitch(c.id)}
-                          disabled={isPending}
-                          role="option"
-                          aria-selected={isCurrent}
-                          className={cn(
-                            'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
-                            isCurrent
-                              ? 'bg-secondary/60 text-foreground'
-                              : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-                            isPending && 'opacity-50',
-                          )}
-                        >
-                          <CompanyMark name={c.name} />
+                      <button
+                        key={c.id}
+                        onClick={() => handleSwitch(c.id)}
+                        disabled={isPending}
+                        role="option"
+                        aria-selected={false}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left text-[13px] leading-snug text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground',
+                          isPending && 'opacity-50',
+                        )}
+                      >
+                        <CompanyMark name={c.name} />
+                        {createdLine ? (
+                          // Another listed company has this name: when it was created tells them apart.
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">{c.name}</span>
+                            <span className="block truncate text-xs">{createdLine}</span>
+                          </span>
+                        ) : (
                           <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                          {role !== 'owner' && (
-                            <span className="flex-shrink-0 text-[11px] text-muted-foreground/60">
-                              {role}
-                            </span>
-                          )}
-                          {isCurrent && (
-                            <Check className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
-                          )}
-                          {isPending && !isCurrent && (
-                            <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-muted-foreground" />
-                          )}
-                        </button>
+                        )}
+                        {roleLabel && <span className="flex-shrink-0 text-xs text-muted-foreground">{roleLabel}</span>}
+                        {isPending && <SpinnerIcon className="h-3 w-3 flex-shrink-0 animate-spin text-muted-foreground" />}
+                      </button>
                       )
                     })}
                   </div>
                   {/* Companies homed on another domain (home-domain rule,
                       WL-01): subtle, non-clickable signpost entries. */}
                   {foreignCompanies.length > 0 && (
-                    <div className="border-t border-border px-1 pt-1">
-                      <p className="px-2.5 pt-1 pb-0.5 text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">
+                    <div className="-mx-1 border-t-hairline px-1 pt-1">
+                      <p className="px-2.5 pb-0.5 pt-1 text-xs font-medium text-muted-foreground">
                         {tSwitcher('managed_elsewhere')}
                       </p>
                       {foreignCompanies.map((entry) => (
                         <div
                           key={entry.id}
-                          className="px-2.5 py-1.5 text-[12.5px] leading-snug text-muted-foreground/60"
+                          className="px-2.5 py-1.5 text-xs leading-snug text-muted-foreground"
                           aria-disabled="true"
                         >
                           <span className="block truncate">{entry.name}</span>
-                          <span className="block truncate text-[11px]">
+                          <span className="block truncate text-xs">
                             {tSwitcher('managed_via', { domain: entry.domain })}
                           </span>
                         </div>
                       ))}
                     </div>
                   )}
-                  {!sandbox && (
-                    <div className="border-t border-border px-1 pt-1">
-                      <Link href="/select-company?choose=1" onClick={close} className={menuRow}>
-                        <Plus className="h-4 w-4 flex-shrink-0" />
-                        {tSwitcher('add_company')}
-                      </Link>
+                  {!sandbox && canCreateClient && (
+                    <div className="-mx-1 border-t-hairline px-1 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          close()
+                          setClientDialogOpen(true)
+                        }}
+                        className={menuRow}
+                      >
+                        <PlusIcon className="h-4 w-4 flex-shrink-0" />
+                        {tClients('new_client_company')}
+                      </button>
                     </div>
                   )}
                 </div>
               )}
-            </div>
 
-            {/* Account links. From the cockpit, settings open in byrå scope
-                (?ctx=byra): account-level sections only; Abonnemang is
-                company-scoped and hidden there. */}
-            <div className="px-1 pb-1">
-              <Link
-                href={cockpitMode ? '/settings/account?ctx=byra' : '/settings'}
-                onClick={close}
-                className={menuRow}
-              >
-                <Settings className="h-4 w-4 flex-shrink-0" />
-                {tNav('settings')}
-              </Link>
-              <Link
-                href={cockpitMode ? '/settings/team?ctx=byra' : '/settings/members'}
-                onClick={close}
-                className={menuRow}
-              >
-                <Users className="h-4 w-4 flex-shrink-0" />
-                {tNav('members_roles')}
-              </Link>
-              {!cockpitMode && (
-                <Link href="/settings/billing" onClick={close} className={menuRow}>
-                  <CreditCard className="h-4 w-4 flex-shrink-0" />
-                  {tNav('subscription')}
+              {/* Adding a company sits in the menu itself, right under the
+                  company row: behind the flyout, new users never found it
+                  (PH 216, PH 202). */}
+              {!sandbox && (
+                <Link href={addCompanyHref} onClick={close} className={menuRow}>
+                  <PlusIcon className="h-4 w-4 flex-shrink-0" />
+                  {tSwitcher('add_company')}
                 </Link>
               )}
-              <div className="my-1 border-t border-border" />
+            </div>}
+
+            {/* Account links. Inside a company the row that heads the sidebar
+                switches companies and the rail's gear opens the settings, so
+                only the person's own account is here. From the cockpit,
+                settings open in byrå scope (?ctx=byra): account-level sections
+                only, so the row says Kontoinställningar (a client's own
+                settings open from its row in the client list, crm#1237). */}
+            <div className="px-1 pb-1">
+              {cockpitMode ? (
+                <>
+                  <Link href="/settings/account?ctx=byra" onClick={close} className={menuRow}>
+                    <Cog6ToothIcon className="h-4 w-4 flex-shrink-0" />
+                    {tNav('account_settings')}
+                  </Link>
+                  <Link href="/settings/team?ctx=byra" onClick={close} className={menuRow}>
+                    <UsersIcon className="h-4 w-4 flex-shrink-0" />
+                    {tNav('members_roles')}
+                  </Link>
+                </>
+              ) : (
+                <Link href="/settings/account" onClick={close} className={menuRow}>
+                  <UserIcon className="h-4 w-4 flex-shrink-0" />
+                  {tSettingsNav('account')}
+                </Link>
+              )}
+              <div className="-mx-1 my-1 border-t-hairline" />
               <Link href="/help" onClick={close} className={menuRow}>
-                <HelpCircle className="h-4 w-4 flex-shrink-0" />
+                <QuestionMarkCircleIcon className="h-4 w-4 flex-shrink-0" />
                 {tNav('help')}
               </Link>
               <a
@@ -408,8 +401,10 @@ export default function UserMenu({
                 <DiscordLogo className="h-4 w-4 flex-shrink-0" />
                 {tNav('discord_community')}
               </a>
-              <SupportLink variant="muted" className={menuRow} />
-              <div className="my-1 border-t border-border" />
+              {/* The menu stays for a dialog mounted in it, and closes when
+                  the support opened as the docked panel instead. */}
+              <SupportLink variant="muted" className={menuRow} onDocked={close} />
+              <div className="-mx-1 my-1 border-t-hairline" />
               <button
                 type="button"
                 onClick={() => {
@@ -418,13 +413,17 @@ export default function UserMenu({
                 }}
                 className={cn(menuRow, 'text-destructive hover:text-destructive')}
               >
-                <LogOut className="h-4 w-4 flex-shrink-0" />
+                <ArrowRightStartOnRectangleIcon className="h-4 w-4 flex-shrink-0" />
                 {sandbox ? tNav('logout_sandbox') : tCommon('logout')}
               </button>
             </div>
           </div>,
           document.body,
         )}
+
+      {canCreateClient && (
+        <NewClientCompanyDialog open={clientDialogOpen} onOpenChange={setClientDialogOpen} />
+      )}
     </>
   )
 }

@@ -1,9 +1,10 @@
 import { Suspense } from 'react'
+import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
-import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
-import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
+import DashboardLoading from './loading'
+import { navRollouts } from '@/lib/navigation/nav-rollouts'
 import { DashboardRouteShell } from '@/components/dashboard/DashboardRouteShell'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
@@ -11,6 +12,7 @@ import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { computeIdentityHash } from '@/lib/analytics/identity-hash'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
+import { SupportDock } from '@/components/support/SupportDock'
 import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SupportDialogHost } from '@/components/support/SupportDialogHost'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
@@ -20,56 +22,100 @@ import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { SystemNoticeBanner } from '@/components/dashboard/SystemNoticeBanner'
 import { parseSystemNoticeUntil } from '@/components/dashboard/system-notice'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
+import { shouldOfferDiscordInvite } from '@/lib/community/discord-invite'
+import { flagEnabled } from '@/lib/env/public-flags'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
 import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
+import { FiscalScopeProvider } from '@/components/providers/FiscalScopeProvider'
+import { AllMessagesProvider } from '@/components/providers/AllMessagesProvider'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
+import {
+  capabilityInputsFromEntitlements,
+  capabilitySurface,
+  capabilitySurfaceWithoutCompany,
+  readStoredProfile,
+  resolveCapabilities,
+  switchedOffPackageIds,
+} from '@/lib/modules/capabilities'
 import { getAiStatus } from '@/lib/ai'
+import { assistantChatEnabled, assistantChatEnabledFor, assistantChatUntil } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
+import { resolveRequestBrand } from '@/lib/branding/request-brand'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 import { resolveBrandDomainBounce } from '@/lib/auth/brand-signup-gate'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
+import { isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
+import { fetchCompanySettingsNames } from '@/lib/company/settings-names'
+import { mayHaveBankIdEngagements } from '@/lib/company-lookup/engagements'
+import { addCompanyHref } from '@/components/settings/company-deletion'
 import {
   partitionCompaniesByHomeDomain,
   isCompanyHomedOnHost,
   resolveCockpitHref,
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
+import { LegalAcceptanceGate } from '@/components/legal/LegalAcceptanceGate'
+import { readAcceptanceState } from '@/lib/legal/acceptance'
 import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
 import { parseEntityType } from '@/lib/company/entity-type'
+import { invoicerPageRedirect, isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { isSupportAssistantEnabled } from '@/lib/agent/support/rollout'
+import { createCompanyScopedClient } from '@/lib/auth/company-scoped-client'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
+  getDashboardCompanyMemberships,
+  getDashboardFiscalPeriods,
   getDashboardSettings,
   getDashboardTeamMemberships,
+  getDashboardUserProfile,
   getResolvedDashboardAgentProfile,
+  getDashboardOpenObligations,
 } from './request-context'
 
-/**
- * Routes inside the dashboard group that must remain reachable when the
- * user has no active company. Keep in sync with the middleware's
- * no-company allowlist.
- */
-const NO_COMPANY_ALLOWED_PATHS = ['/settings/account']
+// The segment's loading fallback (./loading.tsx) is a sibling of the pages,
+// so the top bar it draws was bundled for it and again for each page. Naming
+// it here puts it in this layout's chunk group, which the pages reuse
+// (scripts/perf/README.md, "Page budgets").
+void DashboardLoading
 
 /**
- * Frame layout: on desktop the page is a rounded panel floating on the
- * warm-toned frame (bg-frame on the wrapper div), with its own inner
- * scroll. 10px margin against the frame; height is the remaining
- * viewport. The sidebar (fixed, --nav-w wide) sits borderless on the
- * frame, so the panel starts at ml-[var(--nav-w)]. On mobile the panel dissolves: full-width
- * document flow with the bottom nav, exactly as before.
+ * Frame layout: on desktop the window is the warm frame (bg-frame), a column
+ * of the banners (sandbox, system notice) and under them the shell
+ * (DashboardNav): the icon rail on the frame and ONE rounded panel, 10px
+ * from the frame's edges, that holds the area sidebar and the page. The
+ * frame is exactly the window (h-dvh), so a banner takes its height from the
+ * panel instead of pushing it out of view. The page (<main>) is the panel's
+ * right column and its own scroll container. On mobile the panel dissolves:
+ * full-width document flow with the bottom nav.
  */
+const SHELL_FRAME_CLASS = 'min-h-dvh bg-frame md:flex md:h-dvh md:flex-col md:overflow-hidden'
 const MAIN_PANEL_CLASS =
   'safe-area-main-padding md:!pb-0 relative bg-background min-h-dvh ' +
-  'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[var(--agent-dock-w)] md:h-[calc(100vh-20px)] ' +
-  'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
-  'md:transition-[margin-left,margin-right] md:duration-300 md:ease-drawer'
+  'md:min-h-0 md:min-w-0 md:flex-1 md:overflow-y-auto'
 
+/**
+ * The browser tab names the active company (crm#1279): a byrå with several
+ * clients open in several windows tells them apart, and a report beside its
+ * huvudbok shows whose books both are. A page title of its own goes first.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const [{ data: settings }, brand] = await Promise.all([getDashboardSettings(), resolveRequestBrand()])
+  const companyName = settings?.company_name?.trim()
+  if (!companyName) return {}
+  const appName = brand?.appName ?? getBranding().appName
+  return { title: { default: `${companyName} · ${appName}`, template: `%s · ${companyName}` } }
+}
+
+// Every branch renders inside AllMessagesProvider: the root layout hands
+// client components only the public and auth namespaces
+// (src/i18n/root-client-namespaces.ts), the dashboard needs the full catalog.
 export default async function DashboardLayout({
   children,
 }: {
@@ -86,6 +132,13 @@ export default async function DashboardLayout({
   // CompanyProvider below so the entry points that open that runtime can hide
   // instead of leading the user into its 503 (#2204).
   const assistantAvailable = getAiStatus().assistantAvailable
+  // Installation-level too: is the built-in chat switched on
+  // (ASSISTANT_CHAT_ENABLED, on unless switched off)? Handed to the
+  // CompanyProviders of the shells without an active company; the company
+  // shell asks for its own company below (some companies keep the chat while
+  // it is switched off), and the menu row follows the same answer through
+  // navRollouts.
+  const assistantChatOn = assistantChatEnabled()
 
   // Resolve active company from user_preferences (authoritative). The
   // `gnubok-company-id` cookie is intentionally no longer consulted here:
@@ -105,6 +158,8 @@ export default async function DashboardLayout({
     { data: userProfile },
     { data: userPrefs },
     { data: allMemberships },
+    acceptance,
+    bankIdEnrichment,
   ] = await Promise.all([
     getDashboardCompanyId(),
     // Read the pathname forwarded by middleware so we can branch on it.
@@ -112,19 +167,43 @@ export default async function DashboardLayout({
     getDashboardTeamMemberships(),
     // The signed-in user's profile, shown in the bottom-left account
     // popover (full_name + initial) so it's clear which user is logged
-    // in, distinct from the active company shown at the top.
-    supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
+    // in, distinct from the active company shown at the top. Request-cached:
+    // Hem reads the same row for its greeting.
+    getDashboardUserProfile(),
     // Per-user UI state (assistant panel geometry, trial acknowledgement),
     // server-rendered so both are right on first paint, plus the
     // hide-assistant-FAB preference (Inställningar → Assistenten).
     supabase.from('user_preferences').select('ui_state, hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
-    supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
+    // Request-cached: a page's invoicer check reads the role from these rows.
+    getDashboardCompanyMemberships(),
+    // Which legal documents the person still has to accept, and their
+    // analytics choice: the acceptance prompt and whether PostHog may start.
+    // Its own reads, so a failure never touches the ones above.
+    readAcceptanceState(supabase, user.id),
+    // The BankID engagements behind "Lägg till företag" (addCompanyHref
+    // below). Read only for an account that has been through BankID, the
+    // only way the row gets written: nobody else pays for the request.
+    mayHaveBankIdEngagements(user.app_metadata)
+      ? supabase.from('bankid_enrichment').select('company_roles').eq('user_id', user.id).maybeSingle()
+      : null,
   ])
 
-  const pathname = headerStore.get('x-pathname') ?? ''
-  const isNoCompanyAllowed = NO_COMPANY_ALLOWED_PATHS.some((p) =>
-    pathname.startsWith(p)
+  // "Lägg till företag" (user menu, switcher, Företag settings, ⌘K): straight
+  // into the journey when the BankID picker would be empty, instead of via
+  // /select-company's redirect. A failed read keeps the picker door, which
+  // decides for itself.
+  const companyAddHref = addCompanyHref(
+    bankIdEnrichment === null ? null : bankIdEnrichment.error ? undefined : (bankIdEnrichment.data?.company_roles ?? null),
+    (allMemberships ?? []).map((m) => {
+      const c = m.companies as { org_number?: string | null; archived_at?: string | null } | null
+      return c && !c.archived_at ? c.org_number : null
+    }),
   )
+
+  const pathname = headerStore.get('x-pathname') ?? ''
+  // Dashboard pages that stay reachable without an active company (Profil
+  // and the delete-account page): the same list the middleware lets through.
+  const isNoCompanyAllowed = isNoCompanyDashboardPath(pathname)
 
   // Operator-set system notice (NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL): null when
   // unset or expired, so the banner is not even rendered outside its window.
@@ -185,7 +264,7 @@ export default async function DashboardLayout({
   // No companies: redirect to onboarding, except for allowed escape-hatch
   // routes (so the user can still reach /settings/account to delete their
   // account after archiving their last company) and byrå team members (any
-  // role, founder call 2026-08-05), whose home is the EMPTY cockpit (mirrors
+  // role, product call 2026-08-05), whose home is the EMPTY cockpit (mirrors
   // the middleware's byrå exception): they render the no-company shell on
   // cockpit routes and are steered to /byra everywhere else, never to the
   // company wizard.
@@ -203,6 +282,7 @@ export default async function DashboardLayout({
     }
 
     return (
+      <AllMessagesProvider>
       <CompanyProvider
         value={{
           company: null,
@@ -215,23 +295,24 @@ export default async function DashboardLayout({
           isSandbox: false,
           capabilities: [],
           assistantAvailable,
+          assistantChatEnabled: assistantChatOn,
           trialEndsAt: null,
           entitlementState: 'none' as const,
           trialExpiredAt: null,
+          addCompanyHref: companyAddHref,
         }}
       >
         <SessionTimeoutController />
         <BrowserSessionGuard />
+        <FiscalScopeProvider>
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-dvh bg-frame md:flex md:flex-col">
+          <div className={SHELL_FRAME_CLASS}>
             {systemNoticeBanner}
             <DashboardNav
-              companyName={getBranding().appName.toLowerCase()}
-              entityType="enskild_firma"
-              isSandbox={false}
+              navGate={{ entityType: 'enskild_firma', surface: capabilitySurfaceWithoutCompany('enskild_firma') }}
               extensionNavItems={getExtensionNavItems()}
-            />
+            >
             <main
               id="main-content"
               className={MAIN_PANEL_CLASS}
@@ -241,13 +322,17 @@ export default async function DashboardLayout({
                 {children}
               </MainContainer>
             </main>
+            </DashboardNav>
             <SettingsHotkey />
           <Suspense fallback={null}>
             <SupportDialogHost />
           </Suspense>
+          <LegalAcceptanceGate state={acceptance} pathname={pathname} company={null} role={null} isAnonymous={user.is_anonymous} />
           </div>
         </AgentSheetProvider>
+        </FiscalScopeProvider>
       </CompanyProvider>
+      </AllMessagesProvider>
     )
   }
 
@@ -257,6 +342,16 @@ export default async function DashboardLayout({
   const activeMembership = (allMemberships || []).find((m) => m.company_id === companyId) ?? null
   const companyRow = (activeMembership?.companies as unknown as import('@/types').Company | null) ?? null
   const memberRow = activeMembership ? { role: activeMembership.role } : null
+
+  // The invoicing-only role opens only the invoicing pages
+  // (lib/auth/invoicer-role.ts); every other page sends it to the invoices.
+  // Pages with server reads of their own redirect too
+  // (redirectInvoicerOffPage): this one does not stop them running.
+  const isInvoicer = isInvoicerRole(memberRow?.role)
+  const invoicerRedirect = invoicerPageRedirect(memberRow?.role, pathname)
+  if (invoicerRedirect) {
+    redirect(invoicerRedirect)
+  }
 
   // Home-domain rule (WL-01): which brand serves this host, and which brand
   // (if any) each membership company's team owns. Both resolvers are ~60s
@@ -272,12 +367,13 @@ export default async function DashboardLayout({
     { data: settings, error: settingsError },
     agentProfileIdentity,
     entitlements,
-    { data: allSettingsNames },
+    allSettingsNames,
     navFlags,
-    { data: seedFiscalPeriods },
-    { data: seedCashAccounts },
+    { data: seedFiscalPeriods, error: seedFiscalPeriodsError },
+    { data: seedCashAccounts, error: seedCashAccountsError },
     hostBrand,
     brandByTeam,
+    storedProfile,
   ] = await Promise.all([
     getDashboardSettings(),
     // Agent identity, name + avatar, surfaced on the FAB and chat
@@ -285,29 +381,36 @@ export default async function DashboardLayout({
     getResolvedDashboardAgentProfile(),
     // teamId comes from the membership join, so the entitlements read is one
     // wave (grants in parallel with config + subscription).
-    getCompanyEntitlements(supabase, companyId, { teamId: companyRow?.team_id ?? null }),
-    // Current display names for ALL the user's companies (the switcher list).
-    // RLS scopes company_settings SELECT to user_company_ids(), so this bare
-    // select returns exactly the caller's companies, letting non-active rows
-    // show company_settings.company_name instead of the frozen companies.name.
-    supabase.from('company_settings').select('company_id, company_name'),
+    // The invoicer's own session reads no plan rows, so the plan it works
+    // under is read for it through the company-scoped client.
+    getCompanyEntitlements(
+      isInvoicer && companyId && user ? createCompanyScopedClient({ companyId, userId: user.id }) : supabase,
+      companyId,
+      { teamId: companyRow?.team_id ?? null },
+    ),
+    // Current display names for ALL the user's companies (the switcher list),
+    // so non-active rows show company_settings.company_name instead of the
+    // frozen companies.name. The companies are named from the memberships read
+    // above: a bare select scoped by RLS alone returns the same rows by reading
+    // every company's settings (lib/company/settings-names.ts).
+    fetchCompanySettingsNames(
+      supabase,
+      (allMemberships ?? []).map((m) => m.company_id),
+    ),
     getDashboardNavFlags(supabase, companyId),
     // Reference-data seed (lib/reference-data/seed.ts): the two small lists
     // that gate almost every form, fetched once here so the first picker a
     // user opens renders populated with zero client round trips. Same
     // ordering as period.list and listForCompany so the seed and the client
     // refetch agree. The chart of accounts is deliberately NOT seeded: it
-    // can be hundreds of KB for large companies.
-    supabase
-      .from('fiscal_periods')
-      .select('*')
-      .eq('company_id', companyId)
-      .order('period_start', { ascending: false }),
+    // can be hundreds of KB for large companies. The periods are
+    // request-cached: the report and reconciliation pages reuse them.
+    getDashboardFiscalPeriods(),
     // The embed carries each account's bank for the Konto label; same select
     // as fetchCashAccounts (lib/cash-accounts/labels.ts CashAccountWithBank).
     supabase
       .from('cash_accounts')
-      .select('*, bank_connection:bank_connections(bank_name)')
+      .select('*, bank_connection:bank_connections(bank_name, status)')
       .eq('company_id', companyId)
       .order('is_primary', { ascending: false })
       .order('ledger_account', { ascending: true }),
@@ -323,11 +426,10 @@ export default async function DashboardLayout({
         )
         .concat(byraTeam ? [byraTeam.id] : []),
     ),
+    // The company's profile, in a read of its own that resolves to Standard
+    // when it fails, so the membership join above never carries the column.
+    readStoredProfile(supabase, companyId),
   ])
-  const hasWebshop = navFlags.hasWebshop
-  const hasMileageTrips = navFlags.hasMileageTrips
-  const hasExpenseClaims = navFlags.hasExpenseClaims
-
   const canonicalDomain = (() => {
     try {
       return new URL(getBranding().appUrl).hostname
@@ -338,7 +440,7 @@ export default async function DashboardLayout({
 
   // company_id -> current display name for every company the user belongs to.
   const nameByCompany = new Map(
-    (allSettingsNames || []).map((s) => [s.company_id, s.company_name as string | null]),
+    allSettingsNames.map((s) => [s.company_id, s.company_name]),
   )
 
   // Where "Tillbaka till klienter" points: the byrå cockpit's home domain
@@ -377,34 +479,43 @@ export default async function DashboardLayout({
       isSandbox: false,
       capabilities: [],
       assistantAvailable,
+      assistantChatEnabled: assistantChatOn,
       trialEndsAt: null,
       entitlementState: 'none' as const,
       trialExpiredAt: null,
+      addCompanyHref: companyAddHref,
     }
 
     return (
+      <AllMessagesProvider>
       <CompanyProvider value={companyContextValue}>
         <SessionTimeoutController />
         <BrowserSessionGuard />
+        <FiscalScopeProvider>
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-dvh bg-frame md:flex md:flex-col">
+          <div className={SHELL_FRAME_CLASS}>
             {systemNoticeBanner}
             <DashboardNav
-              companyName={getBranding().appName.toLowerCase()}
-              entityType="enskild_firma"
-              isSandbox={false}
+              navGate={{ entityType: 'enskild_firma', surface: capabilitySurfaceWithoutCompany('enskild_firma') }}
               extensionNavItems={getExtensionNavItems()}
-            />
+            >
             <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
               <MainContainer companyId={null}>
                 {children}
               </MainContainer>
             </main>
+            </DashboardNav>
             <SettingsHotkey />
+            <Suspense fallback={null}>
+              <SupportDialogHost />
+            </Suspense>
+            <LegalAcceptanceGate state={acceptance} pathname={pathname} company={null} role={null} isAnonymous={user.is_anonymous} />
           </div>
         </AgentSheetProvider>
+        </FiscalScopeProvider>
       </CompanyProvider>
+      </AllMessagesProvider>
     )
   }
 
@@ -431,15 +542,57 @@ export default async function DashboardLayout({
   const quotesEnabled = settings?.quotes_enabled ?? true
   // Körjournal visibility: the settings toggle is the normal way in, existing
   // trips force the row on so already-created data stays reachable.
-  const hasMileage = (settings?.mileage_enabled ?? false) || hasMileageTrips
+  const hasMileage = (settings?.mileage_enabled ?? false) || navFlags.hasMileageTrips
   const companyWithName = {
     ...companyRow,
     name: displayName,
     entity_type: entityType,
     pays_salaries: paysSalaries,
   }
+  // The resolved capabilities the menu reads (lib/modules/capabilities.ts),
+  // from the company row and the entitlements read above: no read of its own.
+  // A package switched off with obligations still open winds down and keeps
+  // its menu row: the probes run only when a package is switched off, so a
+  // company with every package on reads nothing more.
+  const navInputs = capabilityInputsFromEntitlements(
+    {
+      jurisdiction: companyRow.jurisdiction,
+      ledgerCurrency: companyRow.ledger_currency,
+      entityType,
+      paysSalaries,
+      profileId: storedProfile?.id,
+      profileVersion: storedProfile?.version,
+    },
+    entitlements,
+  )
+  let navCapabilities = resolveCapabilities(navInputs)
+  const switchedOff = switchedOffPackageIds(navCapabilities)
+  if (switchedOff.length > 0) {
+    navCapabilities = resolveCapabilities({
+      ...navInputs,
+      openObligations: await getDashboardOpenObligations(switchedOff.join(',')),
+    })
+  }
+  // The menu's gates, resolved once: the sidebar and the command palette are
+  // handed the same object, so the two list the same pages.
+  const navGate = {
+    entityType,
+    surface: capabilitySurface(navCapabilities),
+    dimensionsEnabled,
+    salesOrdersEnabled,
+    quotesEnabled,
+    hasWebshop: navFlags.hasWebshop,
+    hasMileage,
+    hasExpenseClaims: navFlags.hasExpenseClaims,
+    hasPosSales: navFlags.hasPosSales,
+    ...navRollouts(companyId),
+  }
 
   const isSandbox = settings?.is_sandbox === true
+
+  // The built-in chat for this company: on unless switched off, and then only
+  // for the companies that keep it (ASSISTANT_CHAT_COMPANY_IDS).
+  const companyChatOn = assistantChatEnabledFor(companyId, todayIsoStockholm())
 
   // Multi-user seat gate, switcher side: which of the user's OTHER companies
   // are frozen for them (non-owner membership, multi_user lapsed past grace).
@@ -462,6 +615,17 @@ export default async function DashboardLayout({
   // acknowledgement), read here so the first paint matches what the client
   // persists via /api/user/ui-state.
   const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
+
+  // One-time Discord invite above the sidebar's user menu. Who sees it
+  // (hosted app only, once per user) is decided here so a dismissed card
+  // never mounts.
+  const showDiscordInvite = shouldOfferDiscordInvite({
+    dismissedAt: uiState.discord_invite_dismissed_at,
+    isSandbox,
+    isAnonymous: user.is_anonymous,
+    onBrandHost: hostBrand != null,
+    selfHosted: flagEnabled(process.env.NEXT_PUBLIC_SELF_HOSTED),
+  })
 
   const allCompanyEntries = (allMemberships || [])
     .filter((m) => m.companies)
@@ -504,11 +668,20 @@ export default async function DashboardLayout({
     foreignCompanies,
     isSandbox,
     capabilities: entitlements.capabilities,
-    assistantAvailable,
+    // The assistant reads the whole company: never offered to the invoicer.
+    assistantAvailable: assistantAvailable && !isInvoicer,
+    assistantChatEnabled: companyChatOn,
+    assistantChatUntil: assistantChatUntil(),
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
     lockedCompanyIds: [...dormantCompanyIds],
+    addCompanyHref: companyAddHref,
+    // The AI assistant in the support dialog: for the companies it is
+    // switched on for, where an AI backend is configured. It reads the whole
+    // company, so never for the invoicing-only role, and never in the sandbox.
+    supportAssistant:
+      isSupportAssistantEnabled(companyId) && getAiStatus().configured && !isInvoicer && !isSandbox,
   }
 
   // Signpost gate (WL-01): a company is opened ONLY on its home domain. When
@@ -529,15 +702,20 @@ export default async function DashboardLayout({
     !SIGNPOST_ALLOWED_PATHS.some((p) => pathname.startsWith(p))
 
   return (
+    <AllMessagesProvider>
     <CompanyProvider value={companyContextValue}>
       <ReferenceDataSeed
         companyId={companyId}
-        fiscalPeriods={seedFiscalPeriods ?? []}
-        cashAccounts={seedCashAccounts ?? []}
+        // A read that failed is not seeded: an empty list would stand as the
+        // answer ("no fiscal years") for every consumer until a reload, where
+        // an unseeded key is read by the browser as before.
+        fiscalPeriods={seedFiscalPeriodsError ? undefined : (seedFiscalPeriods ?? [])}
+        cashAccounts={seedCashAccountsError ? undefined : (seedCashAccounts ?? [])}
         settings={settingsError ? undefined : settings}
       >
       <SessionTimeoutController />
       <BrowserSessionGuard />
+      <FiscalScopeProvider>
       <DashboardRouteShell
         onboarding={
           <div className="relative min-h-dvh bg-background">
@@ -567,7 +745,7 @@ export default async function DashboardLayout({
         <CompanyTabSync />
         <div
           id="dash-shell"
-          className="min-h-dvh bg-frame md:flex md:flex-col"
+          className={SHELL_FRAME_CLASS}
         >
           {/* Skip to content link for keyboard/screen reader users */}
           <a
@@ -580,22 +758,13 @@ export default async function DashboardLayout({
           {isSandbox && <SandboxBanner />}
           {systemNoticeBanner}
           <DashboardNav
-            companyName={settings?.company_name || 'Min verksamhet'}
-            entityType={entityType}
-            paysSalaries={paysSalaries}
-            dimensionsEnabled={dimensionsEnabled}
-            salesOrdersEnabled={salesOrdersEnabled}
-            quotesEnabled={quotesEnabled}
-            hasWebshop={hasWebshop}
-            hasMileage={hasMileage}
-            hasExpenseClaims={hasExpenseClaims}
-            arkivEnabled={isArkivSectionEnabled(companyId)}
-            agentsEnabled={isAgentsPageEnabled(companyId)}
+            navGate={navGate}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
-          />
+            showDiscordInvite={showDiscordInvite}
+          >
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <MainContainer companyId={companyId}>
               {showSignpost ? (
@@ -612,6 +781,7 @@ export default async function DashboardLayout({
               )}
             </MainContainer>
           </main>
+          </DashboardNav>
           {/* One-time post-trial invitation. Sandbox/anonymous demo users have
               no billing (their companies carry trial grants too), so the gate
               lives here where both flags are known. Acknowledgement persists
@@ -624,13 +794,35 @@ export default async function DashboardLayout({
               initialAcknowledged={!!uiState.trial_expired_ack?.[companyId]}
             />
           )}
-          <LazyCommandPalette />
+          {/* The palette lists the shell's own rows, gated as the sidebar gates them. */}
+          <LazyCommandPalette navGate={navGate} />
           <SettingsHotkey />
+          {/* ?support=1, the link in the "we have answered" mail. Every shell
+              mounts it: this one lacked it, so the link opened nothing for
+              anyone with a company (crm#1393). */}
+          <Suspense fallback={null}>
+            <SupportDialogHost />
+          </Suspense>
+          <LegalAcceptanceGate
+            state={acceptance}
+            pathname={pathname}
+            company={{ id: companyId, name: displayName }}
+            role={memberRow.role}
+            isSandbox={isSandbox}
+            isAnonymous={user.is_anonymous}
+          />
         </div>
         {/* Outside #dash-shell on purpose: non-modal dialogs (booking,
             invoice) set `inert` on the shell while open, and the assistant
-            entry point must stay clickable then, like the sheet itself. */}
-        <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
+            entry point must stay clickable then, like the sheet itself.
+            Where the company has no chat, the corner is the support's: the
+            panel every door to the AI assistant opens, and its floating
+            button. */}
+        {companyChatOn ? (
+          <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
+        ) : companyContextValue.supportAssistant ? (
+          <SupportDock pillHidden={uiState.support_fab_hidden === true} />
+        ) : null}
         {!isSandbox && (
           <AnalyticsIdentify
             user={{
@@ -640,6 +832,7 @@ export default async function DashboardLayout({
               role: memberRow.role as CompanyRole,
             }}
             identityHash={computeIdentityHash(user.id)}
+            analyticsConsent={acceptance.analyticsConsent !== false}
             company={{
               id: companyId,
               name: displayName,
@@ -653,7 +846,9 @@ export default async function DashboardLayout({
         )}
       </AgentSheetProvider>
       </DashboardRouteShell>
+      </FiscalScopeProvider>
       </ReferenceDataSeed>
     </CompanyProvider>
+    </AllMessagesProvider>
   )
 }

@@ -73,10 +73,13 @@ describe('POST /api/bookkeeping/journal-entries/[id]/no-document-required', () =
       { method: 'POST', body: { reason: 'Bankavgift' } }
     )
     const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
-    const { status, body } = await parseJsonResponse(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(404)
-    expect(body).toEqual({ error: 'Verifikationen hittades inte.' })
+    // Failures answer the structured envelope (sessionFailureResponse) since the
+    // route moved onto the shared operation service; the message is in error.message.
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
+    expect(body.error.message).toContain('hittas')
   })
 
   it('rejects a reason longer than 200 chars (Zod validation)', async () => {

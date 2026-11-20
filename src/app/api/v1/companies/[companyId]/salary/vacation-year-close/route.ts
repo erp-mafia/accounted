@@ -21,6 +21,7 @@ import {
 } from '@/lib/salary/semesterberedning'
 import { getVacationYearBasis } from '@/lib/salary/vacation-ledger'
 import { getClosableYearStart } from '@/lib/salary/vacation-year'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
 
@@ -96,7 +97,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     let yearStart = parsed.data.vacation_year_start
     if (!yearStart) {
       const basis = await getVacationYearBasis(ctx.supabase, ctx.companyId!)
-      yearStart = getClosableYearStart(new Date().toISOString().slice(0, 10), basis)
+      yearStart = getClosableYearStart(todayIsoStockholm(), basis)
     }
 
     if (ctx.dryRun) {

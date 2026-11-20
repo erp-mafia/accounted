@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Paperclip } from 'lucide-react'
+import { PaperClipIcon } from '@/components/icons'
 import { QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { exceedsHostedUploadLimit, isShrinkableImage, tooLargeMessage } from '@/lib/documents/upload-size'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
+import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import type { ReconciliationAttachment } from '@/lib/reconciliation/schemas'
 
 /**
@@ -26,7 +27,6 @@ interface ReconciliationUnderlagProps {
   canWrite?: boolean
 }
 
-const ACCEPT = 'application/pdf,image/jpeg,image/png,image/webp'
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -112,11 +112,11 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
   return (
     <section aria-label={t('heading')} className="space-y-1.5">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h3 className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+        <h3 className="text-xs font-medium text-muted-foreground">
           {t('heading_dated', { date: formatDate(throughDate) })}
         </h3>
         {attachments !== null && attachments.length === 0 && (
-          <span className="text-[12.5px] text-muted-foreground" title={t('empty')}>
+          <span className="text-xs text-muted-foreground" title={t('empty')}>
             {t('empty_short')}
           </span>
         )}
@@ -125,7 +125,7 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
             <input
               ref={inputRef}
               type="file"
-              accept={ACCEPT}
+              accept={DOCUMENT_UPLOAD_ACCEPT}
               multiple
               className="hidden"
               onChange={(e) => void upload(e.target.files)}
@@ -138,14 +138,14 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
               aria-busy={busy === 'upload'}
               className={cn(QUIET_LINK_CLASS, 'inline-flex items-center gap-1')}
             >
-              <Paperclip className="h-3 w-3" aria-hidden="true" />
+              <PaperClipIcon className="h-3 w-3" aria-hidden="true" />
               {t('attach')}
             </button>
           </>
         )}
       </div>
       {attachments === null || attachments.length === 0 ? null : (
-        <ul className="max-w-[560px] divide-y divide-border/60 text-[13px]">
+        <ul className="max-w-[560px] divide-y divide-border text-[13px]">
           {attachments.map((a) => (
             <li key={a.id} className="group flex items-center gap-3 py-1.5">
               <a
@@ -157,7 +157,7 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
               >
                 {a.file_name}
               </a>
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                 {formatSize(a.size_bytes)} · {formatDate(a.uploaded_at)}
               </span>
               {canWrite && (

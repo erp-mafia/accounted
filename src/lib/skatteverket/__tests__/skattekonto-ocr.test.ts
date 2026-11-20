@@ -5,13 +5,14 @@ import {
   SKATTEKONTO_BANKGIRO,
 } from '../skattekonto-ocr'
 import { luhnValidate } from '@/lib/bankgiro/luhn'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
 
 describe('generateSkattekontoOcr', () => {
-  // Ground truth from Skatteverket for org 559547-0021: the reference their
+  // Ground truth from Skatteverket for org 554466-8808: the reference their
   // e-service prints is the twelve-digit form plus a check digit, not the
   // ten-digit one (which is what we used to emit, and banks/SKV rejected).
   it('produces the 13-digit OCR Skatteverket prints for an AB', () => {
-    expect(generateSkattekontoOcr('559547-0021', 'aktiebolag')).toBe('1655954700217')
+    expect(generateSkattekontoOcr('554466-8808', 'aktiebolag')).toBe('1655446688087')
   })
 
   it('prefixes an organisationsnummer with 16 and appends a Luhn check digit', () => {
@@ -42,10 +43,11 @@ describe('generateSkattekontoOcr', () => {
 
   it('does not give an enskild firma the organisationsnummer prefix', () => {
     const ef = generateSkattekontoOcr('880225-1234', 'enskild_firma')
-    const ab = generateSkattekontoOcr('880225-1234', 'aktiebolag')
     expect(ef.startsWith('16')).toBe(false)
-    expect(ab.startsWith('16')).toBe(true)
-    expect(ef).not.toBe(ab)
+  })
+
+  it('refuses a personnummer on an aktiebolag: 16 in front of it is a valid reference for nobody', () => {
+    expect(() => generateSkattekontoOcr('880225-1234', 'aktiebolag')).toThrow(FilingIdentityError)
   })
 
   it('rejects malformed numbers', () => {
@@ -79,37 +81,37 @@ describe('resolveSkattekontoOcr', () => {
   })
 
   it('strips separators from the reported OCR', async () => {
-    const { client } = snapshotClient({ saldo: { ocrNummer: '16 5595470021 7' } })
+    const { client } = snapshotClient({ saldo: { ocrNummer: '16 5544668808 7' } })
     await expect(
       resolveSkattekontoOcr(client, 'company-1', '556012-3456', 'aktiebolag'),
-    ).resolves.toBe('1655954700217')
+    ).resolves.toBe('1655446688087')
   })
 
   it('falls back to the computed OCR when no snapshot is cached', async () => {
     const { client } = snapshotClient(undefined)
     await expect(
-      resolveSkattekontoOcr(client, 'company-1', '559547-0021', 'aktiebolag'),
-    ).resolves.toBe('1655954700217')
+      resolveSkattekontoOcr(client, 'company-1', '554466-8808', 'aktiebolag'),
+    ).resolves.toBe('1655446688087')
   })
 
   it('falls back when the cached OCR fails its Luhn check', async () => {
-    const { client } = snapshotClient({ saldo: { ocrNummer: '1655954700216' } })
+    const { client } = snapshotClient({ saldo: { ocrNummer: '1655446688086' } })
     await expect(
-      resolveSkattekontoOcr(client, 'company-1', '559547-0021', 'aktiebolag'),
-    ).resolves.toBe('1655954700217')
+      resolveSkattekontoOcr(client, 'company-1', '554466-8808', 'aktiebolag'),
+    ).resolves.toBe('1655446688087')
   })
 
   it('falls back when the cached OCR is longer than Bankgirot accepts', async () => {
     const { client } = snapshotClient({ saldo: { ocrNummer: '1'.repeat(26) } })
     await expect(
-      resolveSkattekontoOcr(client, 'company-1', '559547-0021', 'aktiebolag'),
-    ).resolves.toBe('1655954700217')
+      resolveSkattekontoOcr(client, 'company-1', '554466-8808', 'aktiebolag'),
+    ).resolves.toBe('1655446688087')
   })
 
   it('falls back when the snapshot read errors', async () => {
     const { client } = snapshotClient(undefined, { message: 'boom' })
     await expect(
-      resolveSkattekontoOcr(client, 'company-1', '559547-0021', 'aktiebolag'),
-    ).resolves.toBe('1655954700217')
+      resolveSkattekontoOcr(client, 'company-1', '554466-8808', 'aktiebolag'),
+    ).resolves.toBe('1655446688087')
   })
 })

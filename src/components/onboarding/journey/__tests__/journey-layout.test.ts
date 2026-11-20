@@ -81,4 +81,21 @@ describe('journey step layout', () => {
     expect(body).toContain('jny-reveal')
     expect(body).not.toContain('jny-qstep')
   })
+
+  it('keeps the first question\'s placeholder inside its 360px field', () => {
+    // The field is sized for an organisationsnummer at 26px. The placeholder
+    // is a sentence: at that size "Företagsnamn eller organisationsnummer"
+    // was cut off after "organisa" on a desktop and earlier on a phone, so it
+    // gets a size of its own and a text short enough for a 300px phone field.
+    const size = (rule: string) => Number(/font-size:\s*(\d+)px/.exec(rule)?.[1])
+    expect(ruleFor('.jny-biginput { ')).toMatch(/max-width:\s*360px/)
+    const placeholderPx = size(ruleFor('.jny-biginput input::placeholder {'))
+    expect(placeholderPx).toBeLessThan(size(ruleFor('.jny-biginput input {')))
+    for (const locale of ['sv', 'en']) {
+      const messages = JSON.parse(readFileSync(path.resolve(dir, `../../../messages/${locale}.json`), 'utf8'))
+      const placeholder: string = messages.onboarding.journey_company_placeholder
+      // Geist averages just over half an em per character, plus the 0.01em spacing.
+      expect(placeholder.length * placeholderPx * 0.58, `${locale}: ${placeholder}`).toBeLessThan(300)
+    }
+  })
 })

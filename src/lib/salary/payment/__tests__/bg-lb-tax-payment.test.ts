@@ -49,17 +49,27 @@ describe('generateBankgiroPaymentBgLb', () => {
     expect(paymentLine.slice(2, 12)).toBe('0050501055')
   })
 
-  it('encodes OCR right-justified zero-padded in pos 13-37', () => {
+  it('writes the OCR left-justified and blank-filled in pos 13-37, so the bank reads its exact digits', () => {
     const result = generateBankgiroPaymentBgLb(
       company,
       { receiverBankgiro: '5050-1055', ocr: '55601234566', amount: 1000 },
       { paymentDate: '2026-05-12', periodLabel: '2026-04' }
     )
     const paymentLine = result.content.split('\r\n')[1]
-    // OCR "55601234566" (11 digits) padded to 25 chars right-justified = 14 zeros + OCR
-    expect(paymentLine.slice(12, 37)).toBe('00000000000000055601234566'.slice(-25))
-    expect(paymentLine.slice(12, 37).length).toBe(25)
-    expect(paymentLine.slice(12, 37).endsWith('55601234566')).toBe(true)
+    // The same field style as the supplier payment file: a zero-filled OCR is
+    // read as another number and the bank refuses the file (crm#1952).
+    expect(paymentLine.slice(12, 37)).toBe('55601234566' + ' '.repeat(14))
+    expect(paymentLine.slice(12, 37).startsWith('0')).toBe(false)
+  })
+
+  it('keeps an OCR of the full 25 digits intact', () => {
+    const ocr = '1234567890123456789012345'
+    const result = generateBankgiroPaymentBgLb(
+      company,
+      { receiverBankgiro: '5050-1055', ocr, amount: 1000 },
+      { paymentDate: '2026-05-12', periodLabel: '2026-04' }
+    )
+    expect(result.content.split('\r\n')[1].slice(12, 37)).toBe(ocr)
   })
 
   it('encodes amount in öre (no decimal)', () => {
@@ -91,6 +101,45 @@ describe('generateBankgiroPaymentBgLb', () => {
         { paymentDate: '2026-05-12', periodLabel: '2026-04' }
       )
     ).toThrow(/OCR/)
+  })
+
+  it('opening record: sender bankgiro, product, payment date for the section, SEK (TK11 per the LB manual)', () => {
+    const result = generateBankgiroPaymentBgLb(
+      company,
+      { receiverBankgiro: '5050-1055', ocr: '55601234566', amount: 1000 },
+      { paymentDate: '2026-05-12', periodLabel: '2026-04' }
+    )
+    const opening = result.content.split('\r\n')[0]
+    expect(opening.slice(2, 12)).toBe('0001234567')
+    expect(opening.slice(18, 40)).toBe('LEVERANTÖRSBETALNINGAR')
+    expect(opening.slice(40, 46)).toBe('260512')
+    expect(opening.slice(46, 59)).toBe(' '.repeat(13))
+    expect(opening.slice(59, 62)).toBe('SEK')
+    expect(opening.slice(62, 80)).toBe(' '.repeat(18))
+  })
+
+  it('payment record: date in pos 50-55, pos 56-60 blank, receiver name as sender information in pos 61-80', () => {
+    const result = generateBankgiroPaymentBgLb(
+      company,
+      { receiverBankgiro: '5050-1055', ocr: '55601234566', amount: 1000, receiverName: 'Skatteverket' },
+      { paymentDate: '2026-05-12', periodLabel: '2026-04' }
+    )
+    const paymentLine = result.content.split('\r\n')[1]
+    expect(paymentLine.slice(49, 55)).toBe('260512')
+    expect(paymentLine.slice(55, 60)).toBe(' '.repeat(5))
+    expect(paymentLine.slice(60, 80)).toBe('Skatteverket'.padEnd(20, ' '))
+  })
+
+  it('closing record counts payment records only (one TK14), never the opening or closing record', () => {
+    const result = generateBankgiroPaymentBgLb(
+      company,
+      { receiverBankgiro: '5050-1055', ocr: '55601234566', amount: 100.5 },
+      { paymentDate: '2026-05-12', periodLabel: '2026-04' }
+    )
+    const closing = result.content.split('\r\n').filter((l) => l)[2]
+    expect(closing.slice(2, 12)).toBe('0001234567')
+    expect(closing.slice(12, 20)).toBe('00000001')
+    expect(closing.slice(32, 33)).toBe(' ')
   })
 
   it('closing record sums total amount in öre', () => {

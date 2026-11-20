@@ -5,7 +5,7 @@ import type { FieldReviewDocument, ReviewDocument } from '@/lib/arkiv/questions'
 import type { Payload } from '@/lib/documents/extract/fields'
 import type { CheckFailure } from '@/lib/documents/extract/merge'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -14,12 +14,17 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  * door ("rör det här bolaget?"), admitted documents whose type the model
  * could not settle, and records with fields a person must confirm (phase 3:
  * the two readings disagreed or a check failed), each with the readings to
- * choose between so a page can ask in one line. 404 outside the rollout.
+ * choose between so a page can ask in one line. The first two work wherever
+ * the Dokument section is open; field questions come from the brain. A
+ * document on a verifikat is never asked about: the booking already says what
+ * it is (2026-09-26: 1 309 of 1 435 "other" documents were booked). 404
+ * where neither is on.
  */
 export type { ReviewDocument, FieldReviewDocument, FieldQuestion, ReviewData } from '@/lib/arkiv/questions'
 
 export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
-  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const brain = isArkivBrainEnabled(ctx.companyId)
+  if (!brain && !isArkivSectionEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const { data: held, error: heldError } = await ctx.supabase
     .from('document_attachments')
@@ -54,11 +59,14 @@ export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
       .eq('company_id', ctx.companyId)
       .eq('admission_state', 'admitted')
       .in('id', unsureIds)
+      .is('journal_entry_id', null)
+      .is('journal_entry_line_id', null)
       .gte('created_at', reviewSince())
       .order('created_at', { ascending: false })
     if (docsError) return NextResponse.json({ error: getErrorMessage(docsError) }, { status: 500 })
     unclassifiedRows = ((docs ?? []) as Array<Record<string, unknown>>).map((d) => toReview(d, byDoc.get(d.id as string))).filter((r) => r.relevance === 'relevant')
   }
+  if (!brain) return NextResponse.json({ data: { held: heldRows, unclassified: unclassifiedRows, fields: [] } })
   const { data: pending, error: pendingError } = await ctx.supabase
     .from('document_extractions')
     .select('document_id, schema_type, review_fields, payload, validation')

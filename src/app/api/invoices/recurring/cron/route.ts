@@ -1,24 +1,26 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
-  executeRecurringSchedule,
   computeNextRunDate,
   rollNextRunDateForward,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
-import { advancePeriodStart } from '@/lib/invoices/recurring-placeholders'
+import { runRecurringSchedule } from '@/lib/invoices/recurring-schedule-run'
+import { isHeldForAPerson, writeUnlessRunSince } from '@/lib/invoices/recurring-schedule-claim'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type {
   RecurringInvoiceSchedule,
   RecurringInvoiceScheduleItem,
 } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
+import { addDaysIso } from '@/lib/dates/iso'
 
 type DueSchedule = RecurringInvoiceSchedule & { items: RecurringInvoiceScheduleItem[] }
+
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
 
 /**
  * GET /api/invoices/recurring/cron: hourly (top of every hour, UTC).
@@ -36,11 +38,47 @@ type DueSchedule = RecurringInvoiceSchedule & { items: RecurringInvoiceScheduleI
  *    paused on deploy so nothing resumes sending behind the user's back.
  *
  * Each schedule runs in isolated try/catch so a failure on one doesn't block
- * the rest. On a successful send: bump next_run_date one interval_months
+ * the rest. Once the invoice exists: bump next_run_date one interval_months
  * step forward (1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly), set
- * last_run_at/last_invoice_id/generated_count. On failure: leave next_run_date
+ * last_run_at/last_invoice_id/generated_count and move the period on. This is
+ * written before the auto-send, the slow part of a run, so a run killed while
+ * sending leaves a schedule that knows its invoice (with a warning to check
+ * that it went out) instead of one that reports "Ingen faktura skapades" the
+ * next day and bills the same period again. On failure: leave next_run_date
  * alone so a later run retries.
+ *
+ * Time: schedules are read in a stable order, page by page, and no schedule
+ * is claimed RUN_BUDGET_MS into the run: a claim taken just before the
+ * function limit (300 s, the platform default; this route sets none) would be
+ * killed mid-run. Schedules not reached are due at the next hourly run.
  */
+const RUN_BUDGET_MS = 200_000
+
+/** What a failed run given back leaves: the hour after retries it. */
+function retryWarning(day: string, reason: string): string {
+  return `Körningen ${day} misslyckades: ${reason}. Nytt försök görs automatiskt varje timme idag.`
+}
+
+/** How many days after its missed date a held schedule is still said as an error. */
+const HELD_REPORT_DAYS = 7
+
+/**
+ * Whether this run says a held schedule as an error: once a day for the week
+ * after its missed date, by the run in the hour (UTC) of the claim or hold its
+ * last run left. Every day has that hour, where the schedule's Stockholm send
+ * hour is missing on the spring DST day; and a run that is missed, or stops
+ * before it reaches the schedule, costs one day's line, not the only one.
+ */
+function heldReportDue(
+  schedule: Pick<RecurringInvoiceSchedule, 'last_run_at' | 'next_run_date'>,
+  now: Date,
+  today: string,
+): boolean {
+  if (today > addDaysIso(schedule.next_run_date, HELD_REPORT_DAYS)) return false
+  const hour = schedule.last_run_at ? new Date(schedule.last_run_at).getUTCHours() : 0
+  return now.getUTCHours() === hour
+}
+
 export const GET = withCronContext('cron.recurring_invoices', async (_request, ctx) => {
   const supabase = createServiceClient()
 
@@ -51,21 +89,31 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
   const { date: todayStockholm, hour: currentHour } = getStockholmDateHour(now)
   const stockholmToday = new Date(`${todayStockholm}T00:00:00Z`)
 
-  const { data: due, error } = await supabase
-    .from('recurring_invoice_schedules')
-    .select('*, items:recurring_invoice_schedule_items(*)')
-    .eq('status', 'active')
-    .lte('next_run_date', todayStockholm)
-
-  if (error) {
-    ctx.log.error('failed to load due recurring schedules', error)
+  // Oldest due date first, then id: a stable order, so a run that is cut
+  // short leaves the same tail for the next hour instead of an arbitrary one,
+  // and page by page, so no schedule is dropped past PostgREST's 1000 rows.
+  let schedules: DueSchedule[]
+  try {
+    schedules = await fetchAllRows<DueSchedule>(({ from, to }) =>
+      supabase
+        .from('recurring_invoice_schedules')
+        .select('*, items:recurring_invoice_schedule_items(*)')
+        .eq('status', 'active')
+        .lte('next_run_date', todayStockholm)
+        .order('next_run_date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (error) {
+    ctx.log.error('failed to load due recurring schedules', error as Error)
     return NextResponse.json(
       { success: false, error: getUserErrorMessage(error) },
       { status: 500 },
     )
   }
 
-  const schedules = (due ?? []) as DueSchedule[]
+  const deadline = ctx.startedAt + RUN_BUDGET_MS
+  let notReached = 0
 
   ctx.log.info('recurring invoice cron starting', {
     dueCount: schedules.length,
@@ -92,6 +140,24 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     //    reactivation path: turning a long-paused schedule back on rolls it to
     //    its next date rather than firing a stale one immediately.
     if (schedule.next_run_date < todayStockholm) {
+      // A run that did not settle (killed after its claim, or stopped with an
+      // invoice its schedule may not record) left it for a person
+      // (heldWarning): no roll and no new warning, the one on the recurring
+      // invoices page says what to do. Said as an error once a day for a week
+      // (heldReportDue); the other runs pass it by quietly. The kill itself
+      // is reported within minutes by the cron watch (lib/cron/watch.ts);
+      // this line names the schedule it left waiting.
+      if (isHeldForAPerson(schedule.last_run_warning)) {
+        if (heldReportDue(schedule, now, todayStockholm)) {
+          itemCtx.log.error(
+            'recurring schedule held for a person: its last run did not settle and may have left an invoice the schedule does not record',
+            new Error('recurring schedule held after a run that did not settle'),
+            { scheduleId: schedule.id, missedDate: schedule.next_run_date, lastInvoiceId: schedule.last_invoice_id },
+          )
+        }
+        results.push({ scheduleId: schedule.id, skipped: true, skipReason: 'held_for_a_person' })
+        return
+      }
       // Roll on the schedule's own month grid (anchored on the missed date,
       // not on today) so a quarterly/yearly schedule keeps its phase: a
       // Jan 15 quarterly run missed in an outage rolls to Apr 15, not Feb 15.
@@ -105,17 +171,22 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       // Surface the skip on the schedule: a day of failed runs (or a cron
       // outage) would otherwise roll the month forward with no user-visible
       // trace. The next successful run overwrites this, and a conscious
-      // reactivation clears it (PATCH route).
-      const { error: rollError } = await supabase
-        .from('recurring_invoice_schedules')
-        .update({
-          next_run_date: rolledNext,
-          last_run_warning: `Ingen faktura skapades den ${schedule.next_run_date}. Nästa körning: ${rolledNext}. Använd "Skapa faktura nu" om månadens faktura fortfarande behövs.`,
-        })
-        .eq('id', schedule.id)
-        .eq('company_id', schedule.company_id)
-      if (rollError) {
-        throw new Error(`failed to roll stale schedule forward: ${rollError.message}`)
+      // reactivation clears it (PATCH route). Written only while the schedule
+      // is as this run read it: a "Skapa faktura nu" that claimed or recorded
+      // it since billed the missed run, and "Ingen faktura skapades" over its
+      // record would invite a second click that bills the next period early
+      // (accounted#213). Its own record already moved the run date on.
+      const roll = await writeUnlessRunSince(supabase, schedule, {
+        next_run_date: rolledNext,
+        last_run_warning: `Ingen faktura skapades den ${schedule.next_run_date}. Nästa körning: ${rolledNext}. Använd "Skapa faktura nu" om månadens faktura fortfarande behövs.`,
+      })
+      if (roll.error) {
+        throw new Error(`failed to roll stale schedule forward: ${roll.error}`)
+      }
+      if (!roll.written) {
+        itemCtx.log.info('stale schedule not rolled: a run claimed or recorded it after this run read it')
+        results.push({ scheduleId: schedule.id, skipped: true, skipReason: 'claimed_by_concurrent_run' })
+        return
       }
       itemCtx.log.info('stale schedule rolled forward without sending', {
         from: schedule.next_run_date,
@@ -155,30 +226,60 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       }
     }
 
-    // 4. Atomic claim. Two hourly cron invocations can overlap (an hour-boundary
-    //    retry, or a manual re-trigger) and both read the same stale
-    //    last_run_at from the batch above, so the read-only check in step 3
-    //    can't by itself stop a double-send. Compare-and-set last_run_at from
-    //    the exact value we read to `now`: Postgres row-locking serialises the
-    //    two writers, so only the one whose WHERE still matches the old value
-    //    flips the row and gets it back; the loser matches zero rows and skips.
-    //    Cheaper than a Postgres advisory lock, and it closes the window for the
-    //    whole batch execution, not just a single row.
-    const claimTs = now.toISOString()
-    const claimBase = supabase
-      .from('recurring_invoice_schedules')
-      .update({ last_run_at: claimTs })
-      .eq('id', schedule.id)
-      .eq('company_id', schedule.company_id)
-    const claimGated = schedule.last_run_at
-      ? claimBase.eq('last_run_at', schedule.last_run_at)
-      : claimBase.is('last_run_at', null)
-    const { data: claimed, error: claimError } = await claimGated.select('id')
-    if (claimError) {
-      throw new Error(`failed to claim schedule for today: ${claimError.message}`)
+    // A run of "Skapa faktura nu" on an earlier day that did not settle left
+    // the schedule for a person, as a cron run's does from the day after
+    // (step 1): run now, it would bill the period beside an invoice that run
+    // may have made (accounted#213). From tomorrow step 1 says it.
+    if (isHeldForAPerson(schedule.last_run_warning)) {
+      results.push({ scheduleId: schedule.id, skipped: true, skipReason: 'held_for_a_person' })
+      return
     }
-    if (!claimed || (claimed as unknown[]).length === 0) {
-      itemCtx.log.info('schedule claimed by a concurrent cron run; skipping')
+
+    // Nothing is claimed near the limit: a run killed after its claim cannot
+    // give the claim back, and the schedule would wait for a person (its
+    // claim says the run did not finish). Not claimed, it is simply due again
+    // at the next hourly run.
+    if (Date.now() >= deadline) {
+      notReached++
+      results.push({
+        scheduleId: schedule.id,
+        skipped: true,
+        skipReason: 'time_budget_reached',
+      })
+      return
+    }
+
+    // Defence in depth (ASVS V2.3): the email chokepoint inside the schedule
+    // service enforces the sandbox rule on its own; the route additionally
+    // resolves it here and passes an explicit suppress flag, so the invariant
+    // does not hinge on a single check buried in a library function. The
+    // invoice is still generated as a draft (freeze-and-retain). Read before
+    // the claim: a failed read leaves nothing claimed, so the next hourly run
+    // retries instead of finding the schedule held.
+    const suppressAutoSend = schedule.auto_send
+      ? await isSandboxCompany(supabase, schedule.company_id)
+      : false
+
+    // 4. The run itself (lib/invoices/recurring-schedule-run.ts), the one
+    //    "Skapa faktura nu" makes too: an atomic claim on last_run_at, so two
+    //    overlapping cron invocations, or a click during this run, never both
+    //    create an invoice (the read-only check in step 3 cannot stop that on
+    //    its own); the invoice; its record on the schedule before the send,
+    //    gated on the claim; and a run that did not finish left for a person.
+    //    The record moves next_run_date one interval on. A failure that left
+    //    no invoice gives the claim back with the retry warning, so the hour
+    //    after retries today: a deterministic error (bad VAT rate, missing
+    //    items) fails every retry and the stale roll then says no invoice was
+    //    created. A later successful run overwrites the warning.
+    const outcome = await runRecurringSchedule(supabase, schedule, {
+      now,
+      suppressAutoSend,
+      nextRunDate: computeNextRunDate(stockholmToday, schedule.day_of_month, schedule.interval_months),
+      givenBackWarning: (reason) => retryWarning(todayStockholm, reason),
+      log: itemCtx.log,
+    })
+    if (!outcome.claimed) {
+      itemCtx.log.info('schedule claimed by a concurrent run; skipping')
       results.push({
         scheduleId: schedule.id,
         skipped: true,
@@ -187,76 +288,7 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       return
     }
 
-    // 5. Spawn the invoice. If it throws after we claimed, release the claim
-    //    (restore the prior last_run_at) so a later cron retries today rather
-    //    than treating the row as already run, and persist the failure as a
-    //    user-visible warning: a deterministic error (bad VAT rate, missing
-    //    items) fails every hourly retry and would otherwise skip the month
-    //    silently via the stale roll-forward above. A later successful run
-    //    overwrites the warning.
-    // Defence in depth (ASVS V2.3): the email chokepoint inside the schedule
-    // service enforces the sandbox rule on its own; the route additionally
-    // resolves it here and passes an explicit suppress flag, so the invariant
-    // does not hinge on a single check buried in a library function. The
-    // invoice is still generated as a draft (freeze-and-retain).
-    const suppressAutoSend = schedule.auto_send
-      ? await isSandboxCompany(supabase, schedule.company_id)
-      : false
-
-    let result: Awaited<ReturnType<typeof executeRecurringSchedule>>
-    try {
-      result = await executeRecurringSchedule(supabase, schedule, now, { suppressAutoSend })
-    } catch (err) {
-      const reason = (err instanceof Error ? err.message : String(err)).slice(0, 300)
-      await supabase
-        .from('recurring_invoice_schedules')
-        .update({
-          last_run_at: schedule.last_run_at,
-          last_run_warning: `Körningen ${todayStockholm} misslyckades: ${reason}. Nytt försök görs automatiskt varje timme idag.`,
-        })
-        .eq('id', schedule.id)
-        .eq('company_id', schedule.company_id)
-        .eq('last_run_at', claimTs)
-      throw err
-    }
-
-    const nextRunDate = computeNextRunDate(
-      stockholmToday,
-      schedule.day_of_month,
-      schedule.interval_months,
-    )
-    const { error: updateError } = await supabase
-      .from('recurring_invoice_schedules')
-      .update({
-        next_run_date: nextRunDate,
-        last_run_at: now.toISOString(),
-        last_invoice_id: result.invoiceId,
-        last_run_warning: result.warning,
-        generated_count: schedule.generated_count + 1,
-        // The invoice just billed this period: point the schedule at the
-        // next one. A stale roll-forward above deliberately leaves it alone
-        // (nothing was billed), so "Skapa faktura nu" still bills the missed
-        // period and advances it then.
-        ...(schedule.period_start
-          ? { period_start: advancePeriodStart(schedule.period_start, schedule.interval_months ?? 1) }
-          : {}),
-      })
-      .eq('id', schedule.id)
-      .eq('company_id', schedule.company_id)
-
-    if (updateError) {
-      // The invoice exists. If we don't mark the schedule as ran, tomorrow's
-      // cron would spawn a duplicate. Surface this loudly.
-      itemCtx.log.error(
-        'invoice created but failed to update schedule: manual cleanup may be needed',
-        updateError,
-        { scheduleId: schedule.id, invoiceId: result.invoiceId },
-      )
-      throw new Error(
-        `schedule update failed after invoice ${result.invoiceId} created: ${updateError.message}`,
-      )
-    }
-
+    const { result } = outcome
     results.push({
       scheduleId: schedule.id,
       invoiceId: result.invoiceId,
@@ -266,10 +298,19 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     })
   })
 
+  if (notReached > 0) {
+    ctx.log.error(
+      'recurring invoice run stopped at its time budget; the schedules left are due at the next hourly run',
+      new Error('recurring invoice run out of time'),
+      { notReached, dueCount: schedules.length },
+    )
+  }
+
   ctx.log.info('recurring invoice cron summary', {
     total: summary.total,
     succeeded: summary.succeeded,
     failed: summary.failed,
+    notReached,
   })
 
   return NextResponse.json({
@@ -277,6 +318,7 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     total: summary.total,
     succeeded: summary.succeeded,
     failed: summary.failed,
+    not_reached: notReached,
     failures: summary.failures,
     results,
   })

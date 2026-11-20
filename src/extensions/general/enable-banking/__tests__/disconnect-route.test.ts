@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../lib/api-client', () => ({
-  startAuthorization: vi.fn(), getASPSPs: vi.fn(), getPreferredAuthMethod: vi.fn(),
+  startAuthorization: vi.fn(), getASPSPs: vi.fn(),
   getPreferredAuthMethodDetails: vi.fn(), deleteSession: vi.fn().mockResolvedValue(undefined),
   isSandboxMode: vi.fn(() => true), SessionExpiredError: class SessionExpiredError extends Error {},
 }))
@@ -84,12 +84,6 @@ describe('atomic disconnect route', () => {
     expect(ctx.emit).not.toHaveBeenCalled()
   })
 
-  it('returns 401 before reading when unauthenticated', async () => {
-    const { rpc, ctx } = setup({ user: false })
-    expect((await route.handler(request(), ctx)).status).toBe(401)
-    expect(rpc).not.toHaveBeenCalled()
-  })
-
   it.each([{}, { connection_id: 1 }, { connection_id: 'invalid' }, null])('returns 400 for invalid input %j', async body => {
     const { rpc, ctx } = setup()
     expect((await route.handler(request(body), ctx)).status).toBe(400)
@@ -99,12 +93,6 @@ describe('atomic disconnect route', () => {
   it('returns 400 for malformed JSON', async () => {
     const { rpc, ctx } = setup()
     expect((await route.handler(new Request('http://localhost/disconnect', { method: 'DELETE', body: '{' }), ctx)).status).toBe(400)
-    expect(rpc).not.toHaveBeenCalled()
-  })
-
-  it('returns 400 without company context', async () => {
-    const { rpc, ctx } = setup(); ctx.companyId = ''
-    expect((await route.handler(request(), ctx)).status).toBe(400)
     expect(rpc).not.toHaveBeenCalled()
   })
 

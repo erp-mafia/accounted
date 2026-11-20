@@ -534,6 +534,76 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     })
   })
 
+  // crm#1339: "Skicka igen" emails the archived PDF again and records the send
+  // as a new delivery pointing at the same document, through the same
+  // server-only RPCs as the first send. No migration: this pins that the
+  // existing constraints and triggers already allow it.
+  it('records a resend as another delivery of the same archived PDF', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const original = await insertSentEmailDelivery({ userId, companyId, invoiceId, documentId })
+
+    await withServiceRoleContext(userId, async (client) => {
+      const attempt = async (status: 'sent' | 'failed') => {
+        const reserved = await client.query<{ id: string }>(
+          `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+          [companyId, invoiceId, userId],
+        )
+        const deliveryId = reserved.rows[0].id
+        await client.query(
+          `SELECT public.capture_invoice_delivery_payload(
+             $1, $2, $3, $4,
+             ARRAY['customer@example.com'], ARRAY[]::text[], ARRAY[]::text[],
+             'sender@example.com', 'Example AB', 'Kopia: Faktura F-1001',
+             'Exact plain text', '<p>Exact HTML</p>', $5,
+             'invoice.pdf', 'application/pdf', $6
+           )`,
+          [deliveryId, companyId, invoiceId, userId, documentId, 'a'.repeat(64)],
+        )
+        await client.query(
+          `SELECT public.finalize_invoice_delivery($1, $2, $3, $4, 'resend', $5, $6)`,
+          [
+            deliveryId,
+            companyId,
+            userId,
+            status,
+            status === 'sent' ? `provider-${randomUUID()}` : null,
+            status === 'failed' ? 'provider_failed' : null,
+          ],
+        )
+        return deliveryId
+      }
+
+      const failedId = await attempt('failed')
+      const resendId = await attempt('sent')
+
+      const rows = await client.query<{
+        id: string
+        status: string
+        document_attachment_id: string | null
+      }>(
+        `SELECT id::text, status, document_attachment_id::text
+           FROM public.invoice_deliveries
+          WHERE invoice_id = $1`,
+        [invoiceId],
+      )
+      const byId = Object.fromEntries(rows.rows.map((row) => [row.id, row]))
+      expect(rows.rowCount).toBe(3)
+      expect(byId[original.deliveryId]).toMatchObject({ status: 'sent', document_attachment_id: documentId })
+      expect(byId[failedId]).toMatchObject({ status: 'failed', document_attachment_id: null })
+      expect(byId[resendId]).toMatchObject({ status: 'sent', document_attachment_id: documentId })
+
+      // The failed attempt released its reference only; the archived file the
+      // first delivery points at is still there.
+      const document = await client.query(
+        `SELECT id FROM public.document_attachments WHERE id = $1`,
+        [documentId],
+      )
+      expect(document.rowCount).toBe(1)
+    })
+  })
+
   it('rejects service-role delivery writes for a non-member or mismatched tenant', async () => {
     const first = await seedCompany()
     const second = await seedCompany()

@@ -1,16 +1,17 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import SIEJobProgress from '@/components/import/SIEJobProgress'
+import { ImportWizardRail } from '@/components/import/ImportWizardRail'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
+import { parseCsvDataEntity, type CsvDataEntity } from '@/lib/import/register-import-link'
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
-import { Card, CardContent } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -27,9 +28,21 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, ShoppingBag, ShoppingCart } from 'lucide-react'
+import {
+  ArrowDownTrayIcon,
+  ArrowLeftIcon,
+  ArrowUpTrayIcon,
+  BuildingLibraryIcon,
+  ChevronRightIcon,
+  CreditCardIcon,
+  ShoppingBagIcon,
+  ShoppingCartIcon,
+} from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDate } from '@/lib/utils'
+import { LIST_BLEED_CLASS } from '@/components/ui/dry-table-classes'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -37,29 +50,19 @@ import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 
 import type { OpeningBalanceParseResult, OpeningBalanceExecuteResult, DetectedColumns } from '@/lib/import/opening-balance/types'
 
-// Register import (customers/suppliers) components
-import RegisterColumnMappingStep, { type RegisterColumnSpec } from '@/components/import/RegisterColumnMappingStep'
-import type { RegisterResult } from '@/components/import/RegisterResultStep'
-import type {
-  CustomerImportParseResult,
-  AnnotatedCustomerRow,
-  DetectedCustomerColumns,
-} from '@/lib/import/customers/types'
-import type {
-  SupplierImportParseResult,
-  AnnotatedSupplierRow,
-  DetectedSupplierColumns,
-} from '@/lib/import/suppliers/types'
-import type {
-  ArticleImportParseResult,
-  AnnotatedArticleRow,
-  DetectedArticleColumns,
-} from '@/lib/import/articles/types'
 
 import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
-import { applyMappingOverride, isValidBASRange } from '@/lib/import/account-mapper'
+import type { ExistingYearMode } from '@/components/import/SIEExistingYearChoice'
+import type { SIEAppendPlan } from '@/lib/import/sie-append'
+import { applyMappingOverride, getMappingStats, isValidBASRange } from '@/lib/import/account-mapper'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
+import type { FileAccountMatch } from '@/lib/cash-accounts/file-account'
+import { isCardCashAccount } from '@/lib/cash-accounts/card-ledger'
+import { cardStatementPrintsPurchasesAsPlus, flipCardStatementSigns } from '@/lib/import/bank-file/card-statement'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
 import type { SkattekontoFileImportResult } from '@/components/import/SkattekontoFileResultStep'
 import type { IngestResult } from '@/types'
@@ -91,18 +94,29 @@ import dynamic from 'next/dynamic'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { FullArchiveDialog } from '@/components/import/FullArchiveDialog'
 import CloudBackupCard from '@/extensions/general/cloud-backup/components/CloudBackupCard'
+import { useViewerLock, ViewerLock } from '@/components/ui/viewer-lock'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 
 const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
-  { ssr: false, loading: () => <div className="flex items-center gap-3 text-muted-foreground p-6"><Loader2 className="h-5 w-5 animate-spin" />Laddar migreringsverktyg...</div> }
+  { ssr: false, loading: () => <ImportStepLoading /> }
+)
+// Renders nothing unless the company moved invoices from Visma, so no
+// loading placeholder: it would flash on every other company's landing.
+const MigratedDeductionCard = dynamic(
+  () => import('@/components/extensions/general/MigratedDeductionCard'),
+  { ssr: false }
 )
 
+// The step's silhouette while its chunk loads: a heading, the body, the
+// action row. Hidden for the first 300ms, so a cached chunk never flashes it.
 function ImportStepLoading() {
   return (
-    <div className="flex min-h-48 items-center justify-center" role="status">
-      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-    </div>
+    <LateReveal role="status" className="space-y-4 py-2">
+      <Skeleton className="h-4 w-48" />
+      <Skeleton className="h-32 w-full rounded-lg" />
+      <Skeleton className="h-7 w-28" />
+    </LateReveal>
   )
 }
 
@@ -111,16 +125,13 @@ const BankFilePreviewStep = dynamic(() => import('@/components/import/BankFilePr
 const BankFileColumnMappingStep = dynamic(() => import('@/components/import/BankFileColumnMappingStep'), { loading: ImportStepLoading })
 const BankFileConfirmStep = dynamic(() => import('@/components/import/BankFileConfirmStep'), { loading: ImportStepLoading })
 const BankFileResultStep = dynamic(() => import('@/components/import/BankFileResultStep'), { loading: ImportStepLoading })
+const BankDepositSpecStep = dynamic(() => import('@/components/import/BankDepositSpecStep'), { loading: ImportStepLoading })
 const OpeningBalanceUploadStep = dynamic(() => import('@/components/import/OpeningBalanceUploadStep'), { loading: ImportStepLoading })
 const OpeningBalanceColumnMappingStep = dynamic(() => import('@/components/import/OpeningBalanceColumnMappingStep'), { loading: ImportStepLoading })
 const OpeningBalanceEditStep = dynamic(() => import('@/components/import/OpeningBalanceEditStep'), { loading: ImportStepLoading })
 const OpeningBalancePeriodStep = dynamic(() => import('@/components/import/OpeningBalancePeriodStep'), { loading: ImportStepLoading })
 const OpeningBalanceResultStep = dynamic(() => import('@/components/import/OpeningBalanceResultStep'), { loading: ImportStepLoading })
-const RegisterUploadStep = dynamic(() => import('@/components/import/RegisterUploadStep'), { loading: ImportStepLoading })
-const CustomersEditStep = dynamic(() => import('@/components/import/CustomersEditStep'), { loading: ImportStepLoading })
-const SuppliersEditStep = dynamic(() => import('@/components/import/SuppliersEditStep'), { loading: ImportStepLoading })
-const ArticlesEditStep = dynamic(() => import('@/components/import/ArticlesEditStep'), { loading: ImportStepLoading })
-const RegisterResultStep = dynamic(() => import('@/components/import/RegisterResultStep'), { loading: ImportStepLoading })
+const RegisterImportFlow = dynamic(() => import('@/components/import/RegisterImportFlow'), { loading: ImportStepLoading })
 const SkattekontoFileUploadStep = dynamic(() => import('@/components/import/SkattekontoFileUploadStep'), { loading: ImportStepLoading })
 const SkattekontoFilePreviewStep = dynamic(() => import('@/components/import/SkattekontoFilePreviewStep'), { loading: ImportStepLoading })
 const SkattekontoFileResultStep = dynamic(() => import('@/components/import/SkattekontoFileResultStep'), { loading: ImportStepLoading })
@@ -130,7 +141,9 @@ const AccountMappingStep = dynamic(() => import('@/components/import/AccountMapp
 const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
 const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
+const SIEExistingYearChoice = dynamic(() => import('@/components/import/SIEExistingYearChoice').then((m) => m.SIEExistingYearChoice), { loading: ImportStepLoading })
 const BankFileImportHistory = dynamic(() => import('@/components/import/BankFileImportHistory'), { loading: ImportStepLoading })
+const RegisterImportHistory = dynamic(() => import('@/components/import/RegisterImportHistory'), { loading: ImportStepLoading })
 const UnderlagImportWizard = dynamic(() => import('@/components/import/UnderlagImportWizard'), { loading: ImportStepLoading })
 
 // ============================================================
@@ -141,6 +154,9 @@ type BankFileStep = 'upload' | 'preview' | 'column_mapping' | 'confirm' | 'resul
 
 const BANK_STEPS: BankFileStep[] = ['upload', 'preview', 'confirm', 'result']
 const BANK_STEPS_WITH_MAPPING: BankFileStep[] = ['upload', 'column_mapping', 'confirm', 'result']
+// A card statement always shows the preview, after the mapping too: its sign
+// switch decides how every row lands.
+const CARD_STEPS_WITH_MAPPING: BankFileStep[] = ['upload', 'column_mapping', 'preview', 'confirm', 'result']
 
 const BANK_STEP_LABELS: Record<BankFileStep, string> = {
   upload: 'Ladda upp',
@@ -150,10 +166,24 @@ const BANK_STEP_LABELS: Record<BankFileStep, string> = {
   result: 'Resultat',
 }
 
-function BankFileImportWizard() {
+function BankFileImportWizard({ onBack }: { onBack: () => void }) {
   const { toast } = useToast()
   const tTx = useTranslations('transactions')
   const { company } = useCompany()
+  const wizardSearch = useSearchParams()
+
+  // The import's target: the bank (the file names its own account, or the
+  // confirm step picks one) or one of the company's cards, chosen up front
+  // because a card statement's sign is flipped before the preview
+  // (lib/import/bank-file/card-statement.ts). ?account=<card id> preselects
+  // it (the add-card dialog lands here).
+  const { cashAccounts } = useCashAccounts({ enabledOnly: true })
+  const cards = useMemo(() => cashAccounts.filter(isCardCashAccount), [cashAccounts])
+  const [cardTargetId, setCardTargetId] = useState<string | null>(() => wizardSearch.get('account'))
+  const cardTarget = useMemo(() => cards.find((card) => card.id === cardTargetId) ?? null, [cards, cardTargetId])
+  // Whether the file prints purchases as plus: preset by detection, the
+  // preview's switch overrides it. Only read with a card target.
+  const [flipCardSigns, setFlipCardSigns] = useState(false)
 
   const [bankStep, setBankStep] = useState<BankFileStep>('upload')
   const [bankIsLoading, setBankIsLoading] = useState(false)
@@ -162,9 +192,19 @@ function BankFileImportWizard() {
   // The uploaded file was recognized as a skattekontoutdrag: the upload step
   // renders a pointer to the dedicated importer instead of a parse error.
   const [skattekontoDetected, setSkattekontoDetected] = useState(false)
+  // The uploaded file is Bankgirot's deposit specification (BG Max,
+  // crm#1170): it creates no rows; its own step attaches its payments to the
+  // bank rows that already exist.
+  const [depositSpecFile, setDepositSpecFile] = useState<File | null>(null)
 
-  // Parse results
-  const [parseResult, setParseResult] = useState<BankFileParseResult | null>(null)
+  // Parse results: as the file reads, and as the rows will be stored (a
+  // card statement flipped to the company's side when it prints purchases
+  // as plus). Preview, duplicate check and execute all read the stored form.
+  const [parsedResult, setParsedResult] = useState<BankFileParseResult | null>(null)
+  const parseResult = useMemo(
+    () => (parsedResult && cardTarget && flipCardSigns ? flipCardStatementSigns(parsedResult) : parsedResult),
+    [parsedResult, cardTarget, flipCardSigns],
+  )
   const [detectedFormat, setDetectedFormat] = useState<string | null>(null)
   const [detectedFormatName, setDetectedFormatName] = useState<string | null>(null)
   const [fileHash, setFileHash] = useState<string>('')
@@ -180,14 +220,25 @@ function BankFileImportWizard() {
   // (execute-side dedup still skips, and the result step reports the count).
   const [duplicateInfo, setDuplicateInfo] = useState<BankFileDuplicateInfo | null>(null)
 
-  const checkDuplicates = useCallback(async (transactions: BankFileParseResult['transactions'], format: BankFileFormatId) => {
+  // The cash account the file's own bank account already is (crm#1204), from
+  // the parse route. The confirm step pre-selects it and offers no other;
+  // execute refuses any other ledger.
+  const [accountMatch, setAccountMatch] = useState<FileAccountMatch | null>(null)
+
+  const checkDuplicates = useCallback(async (
+    transactions: BankFileParseResult['transactions'],
+    format: BankFileFormatId,
+    settlementAccount?: string,
+  ) => {
     setDuplicateInfo(null)
     if (transactions.length === 0) return
     try {
       const res = await fetch('/api/import/bank-file/check-duplicates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transactions, format }),
+        // A known settlement account makes the preview guard accounts the way
+        // execute does, so rows of another bank account are not flagged.
+        body: JSON.stringify({ transactions, format, settlement_account: settlementAccount }),
       })
       if (!res.ok) return
       const data = await res.json()
@@ -227,9 +278,26 @@ function BankFileImportWizard() {
     }
   }, [company?.id])
 
-  const steps = parseResult?.format === 'generic_csv' ? BANK_STEPS_WITH_MAPPING : BANK_STEPS
-  const currentStepIndex = steps.indexOf(bankStep)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
+  const steps = parseResult?.format === 'generic_csv'
+    ? (cardTarget ? CARD_STEPS_WITH_MAPPING : BANK_STEPS_WITH_MAPPING)
+    : BANK_STEPS
+
+  // A card statement: preset the sign switch from the rows and check for
+  // duplicates on the card's own ledger with the sign they will be stored with.
+  const checkCardStatement = useCallback((result: BankFileParseResult) => {
+    if (!cardTarget) return
+    const flip = cardStatementPrintsPurchasesAsPlus(result.transactions)
+    setFlipCardSigns(flip)
+    const stored = flip ? flipCardStatementSigns(result) : result
+    void checkDuplicates(stored.transactions, stored.format, cardTarget.ledger_account)
+  }, [cardTarget, checkDuplicates])
+
+  const handleFlipCardSigns = useCallback((flip: boolean) => {
+    setFlipCardSigns(flip)
+    if (!parsedResult || !cardTarget) return
+    const stored = flip ? flipCardStatementSigns(parsedResult) : parsedResult
+    void checkDuplicates(stored.transactions, stored.format, cardTarget.ledger_account)
+  }, [parsedResult, cardTarget, checkDuplicates])
 
   const handleFileSelect = useCallback(async (file: File, formatOverride?: BankFileFormatId) => {
     setBankError(null)
@@ -268,6 +336,8 @@ function BankFileImportWizard() {
             )
           } else if (err.code === 'BANK_FILE_SKATTEKONTO_DETECTED') {
             setSkattekontoDetected(true)
+          } else if (err.code === 'BANK_FILE_DEPOSIT_SPEC_DETECTED') {
+            setDepositSpecFile(file)
           } else {
             setBankError(getErrorMessage(err) || 'Kunde inte läsa filen')
           }
@@ -277,7 +347,9 @@ function BankFileImportWizard() {
         return
       }
 
-      setParseResult(data.data.parse_result)
+      setParsedResult(data.data.parse_result)
+      const match: FileAccountMatch | null = data.data.account_match ?? null
+      setAccountMatch(match)
       setDetectedFormat(data.data.detected_format)
       setDetectedFormatName(data.data.detected_format_name)
       setFileHash(data.data.file_hash)
@@ -286,8 +358,9 @@ function BankFileImportWizard() {
       // Read raw file content for CSV preview. Decode from bytes, not
       // file.text(): that is UTF-8-only and turns Windows-1252 åäö into
       // U+FFFD (Handelsbanken exports Windows-1252), corrupting both the
-      // column-mapping preview and the re-parse on confirm.
-      const text = decodeFileContent(await file.arrayBuffer())
+      // column-mapping preview and the re-parse on confirm. An Excel file
+      // comes back from the route already read as text (file_content).
+      const text: string = data.data.file_content ?? decodeFileContent(await file.arrayBuffer())
       setRawFileContent(text)
 
       const txCount = data.data.parse_result.transactions.length
@@ -301,7 +374,15 @@ function BankFileImportWizard() {
       } else if (txCount > 0) {
         // Fire-and-forget: the warning card/badges appear when the answer
         // lands; the wizard never waits for it.
-        void checkDuplicates(data.data.parse_result.transactions, data.data.parse_result.format)
+        if (cardTarget) {
+          checkCardStatement(data.data.parse_result)
+        } else {
+          void checkDuplicates(
+            data.data.parse_result.transactions,
+            data.data.parse_result.format,
+            match?.ledger_account,
+          )
+        }
         setBankStep('preview')
         toast({
           title: 'Fil analyserad',
@@ -328,19 +409,26 @@ function BankFileImportWizard() {
     } finally {
       setBankIsLoading(false)
     }
-  }, [toast, checkDuplicates])
+  }, [toast, checkDuplicates, cardTarget, checkCardStatement])
 
   const handleColumnMappingConfirm = useCallback(async (mapping: GenericCSVColumnMapping) => {
     // Re-parse with mapping via the generic CSV parser
     const { parseGenericCSV } = await import('@/lib/import/bank-file/formats/generic-csv')
     const result = parseGenericCSV(rawFileContent, mapping)
-    setParseResult(result)
+    setParsedResult(result)
+    // A card statement goes to the preview: its sign switch decides how
+    // every row lands.
+    if (cardTarget) {
+      checkCardStatement(result)
+      setBankStep('preview')
+      return
+    }
     // The generic path never re-hits the parse route, so this is its only
     // duplicate check. Fire-and-forget: the confirm step renders immediately
     // and the warning card appears when the answer lands.
     void checkDuplicates(result.transactions, 'generic_csv')
     setBankStep('confirm')
-  }, [rawFileContent, checkDuplicates])
+  }, [rawFileContent, checkDuplicates, cardTarget, checkCardStatement])
 
   const handleExecuteImport = useCallback(async (options: { skip_duplicates: boolean; auto_categorize: boolean; settlement_account?: string }) => {
     if (!parseResult) return
@@ -357,6 +445,8 @@ function BankFileImportWizard() {
           format: parseResult.format,
           filename,
           file_hash: fileHash,
+          // The file's own account: execute refuses a ledger of another one.
+          account: parseResult.account ?? null,
           ...options,
         }),
       })
@@ -387,7 +477,8 @@ function BankFileImportWizard() {
 
   const handleNewImport = () => {
     setBankStep('upload')
-    setParseResult(null)
+    setParsedResult(null)
+    setFlipCardSigns(false)
     setDetectedFormat(null)
     setDetectedFormatName(null)
     setFileHash('')
@@ -396,12 +487,22 @@ function BankFileImportWizard() {
     setBankError(null)
     setBankErrorTitle(null)
     setSkattekontoDetected(false)
+    setDepositSpecFile(null)
     setRawFileContent('')
     setDuplicateInfo(null)
+    setAccountMatch(null)
   }
 
   return (
     <div className="space-y-6">
+      {/* A deposit specification attaches to existing rows: no steps to show. */}
+      <ImportWizardRail
+        steps={depositSpecFile ? [] : steps}
+        current={bankStep}
+        label={(s) => BANK_STEP_LABELS[s]}
+        onBack={onBack}
+      />
+
       {/* Status chip for at-a-glance "auto-sync is healthy / stale / needs attention" */}
       <BankSyncStatusChip />
 
@@ -412,33 +513,32 @@ function BankFileImportWizard() {
         <AttnLine>{tTx('import_psd2_active_warning_body', { bankName: activePsd2Banks.join(', ') })}</AttnLine>
       )}
 
-      {/* Progress */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {BANK_STEP_LABELS[bankStep]}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
-                  )}
-                >
-                  {BANK_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      {depositSpecFile && <BankDepositSpecStep file={depositSpecFile} onNewImport={handleNewImport} />}
 
       {/* Step content */}
-      {bankStep === 'upload' && (
+      {bankStep === 'upload' && !depositSpecFile && cards.length > 0 && (
+        <div className="space-y-2">
+          <Label htmlFor="bank-file-target">{tTx('import_target_label')}</Label>
+          <Select
+            value={cardTarget ? cardTarget.id : 'bank'}
+            onValueChange={(value) => setCardTargetId(value === 'bank' ? null : value)}
+          >
+            <SelectTrigger id="bank-file-target" className="w-full sm:w-80">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="bank">{tTx('import_target_bank')}</SelectItem>
+              {cards.map((card) => (
+                <SelectItem key={card.id} value={card.id}>
+                  {tTx('import_target_card', { name: card.name ?? card.ledger_account, ledger: card.ledger_account })}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {bankStep === 'upload' && !depositSpecFile && (
         <BankFileUploadStep
           onFileSelect={handleFileSelect}
           isLoading={bankIsLoading}
@@ -454,14 +554,18 @@ function BankFileImportWizard() {
         <BankFilePreviewStep
           parseResult={parseResult}
           duplicateInfo={duplicateInfo}
+          card={cardTarget ? { name: cardTarget.name ?? cardTarget.ledger_account, ledger_account: cardTarget.ledger_account } : null}
+          cardSignsFlipped={flipCardSigns}
+          onCardSignsFlippedChange={handleFlipCardSigns}
           onContinue={() => {
-            if (parseResult.format === 'generic_csv') {
+            // A card statement came through the mapping already.
+            if (parseResult.format === 'generic_csv' && !cardTarget) {
               setBankStep('column_mapping')
             } else {
               setBankStep('confirm')
             }
           }}
-          onBack={() => setBankStep('upload')}
+          onBack={() => setBankStep(parseResult.format === 'generic_csv' && cardTarget ? 'column_mapping' : 'upload')}
         />
       )}
 
@@ -477,9 +581,12 @@ function BankFileImportWizard() {
         <BankFileConfirmStep
           parseResult={parseResult}
           duplicateInfo={duplicateInfo}
+          accountMatch={accountMatch}
+          card={cardTarget ? { name: cardTarget.name ?? cardTarget.ledger_account, ledger_account: cardTarget.ledger_account } : null}
+          error={bankError}
           onExecute={handleExecuteImport}
           onBack={() => {
-            if (parseResult.format === 'generic_csv') {
+            if (parseResult.format === 'generic_csv' && !cardTarget) {
               setBankStep('column_mapping')
             } else {
               setBankStep('preview')
@@ -493,6 +600,8 @@ function BankFileImportWizard() {
         <BankFileResultStep
           result={ingestResult}
           onNewImport={handleNewImport}
+          transactionsHref={cardTarget ? `/transactions?source=acct:${cardTarget.id}` : undefined}
+          card={cardTarget ? { name: cardTarget.name ?? cardTarget.ledger_account } : null}
         />
       )}
     </div>
@@ -513,7 +622,7 @@ const SKATTEKONTO_STEP_LABELS: Record<SkattekontoFileStep, string> = {
   result: 'Resultat',
 }
 
-function SkattekontoImportWizard() {
+function SkattekontoImportWizard({ onBack }: { onBack: () => void }) {
   const { toast } = useToast()
   const t = useTranslations('import')
 
@@ -529,9 +638,6 @@ function SkattekontoImportWizard() {
   const [promotionIndexes, setPromotionIndexes] = useState<number[]>([])
   const [orgNumberMismatch, setOrgNumberMismatch] = useState(false)
   const [importResult, setImportResult] = useState<SkattekontoFileImportResult | null>(null)
-
-  const currentStepIndex = SKATTEKONTO_STEPS.indexOf(step)
-  const progress = ((currentStepIndex + 1) / SKATTEKONTO_STEPS.length) * 100
 
   const handleFileSelect = useCallback(
     async (file: File) => {
@@ -628,30 +734,12 @@ function SkattekontoImportWizard() {
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{SKATTEKONTO_STEPS.length}:{' '}
-                {SKATTEKONTO_STEP_LABELS[step]}
-              </span>
-              {SKATTEKONTO_STEPS.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
-                  )}
-                >
-                  {SKATTEKONTO_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail
+        steps={SKATTEKONTO_STEPS}
+        current={step}
+        label={(s) => SKATTEKONTO_STEP_LABELS[s]}
+        onBack={onBack}
+      />
 
       {step === 'upload' && (
         <SkattekontoFileUploadStep
@@ -689,19 +777,23 @@ function SkattekontoImportWizard() {
 // SIE Import Wizard (unchanged, extracted into component)
 // ============================================================
 
-const SIE_STEP_LABELS: Record<ImportWizardStep, string> = {
-  upload: 'Ladda upp',
-  preview: 'Förhandsgranskning',
-  mapping: 'Kontomappning',
-  review: 'Bekräfta',
-  result: 'Resultat',
-}
-
 function SIEImportWizard({
+  onBack,
   onOpenManualOpeningBalances,
+  initialFile,
+  onInitialFileTaken,
 }: {
-  /** Switch to the manual "Ingående balanser" wizard (SIE preview, issue #2082). */
-  onOpenManualOpeningBalances?: () => void
+  /** Back to the import choices: the rail's first crumb. */
+  onBack: () => void
+  /**
+   * Switch to the manual "Ingående balanser" wizard (SIE preview, issue #2082),
+   * handing over the file being previewed so the import can resume after.
+   */
+  onOpenManualOpeningBalances?: (file: File | null) => void
+  /** A file to read straight away: the one previewed before the manual IB detour. */
+  initialFile?: File | null
+  /** Called once initialFile is being read, so a remount does not read it again. */
+  onInitialFileTaken?: () => void
 }) {
   const { toast } = useToast()
 
@@ -733,15 +825,48 @@ function SIEImportWizard({
     else params.delete('job')
     jobRouter.replace(`/import?${params.toString()}`, { scroll: false })
   }, [jobRouter, jobSearch])
-  const [replaceExisting,setReplaceExisting] = useState(false)
+  // A year that already holds an import (issue #108): add only the file's
+  // new vouchers (the default), or replace the import after review.
+  const [existingYearMode,setExistingYearMode] = useState<ExistingYearMode>('append')
+  const [appendOnly,setAppendOnly] = useState(false)
+  const [includePossibleDuplicates,setIncludePossibleDuplicates] = useState(false)
+  const [seriesMap,setSeriesMap] = useState<Record<string,string>>({})
+  const [appendPlan,setAppendPlan] = useState<SIEAppendPlan | null>(null)
   const [storagePath,setStoragePath] = useState<string|null>(null)
-  const jobT = useTranslations('import.sie_job')
+  const flowT = useTranslations('import.sie_flow')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
+  const stepLabel = (s: ImportWizardStep) => flowT(`step_${s}`)
   const [, setSieAccounts] = useState<{ number: string; name: string }[]>([])
   const [isCreatingAccounts, setIsCreatingAccounts] = useState(false)
 
+  // "Only the accounts the file uses" (#63): off by default, so the file's
+  // whole chart is created as before (#2605). On, the BAS definitions the
+  // file never uses leave the mapping step and the submitted mappings (the
+  // company's own accounts stay); the job drops them again at submit, and
+  // the archived file keeps them.
+  const [onlyUsedAccounts, setOnlyUsedAccounts] = useState(false)
+  const unusedSourceAccounts = useMemo(
+    () => new Set((preview?.unusedAccounts ?? []).map((account) => account.number)),
+    [preview?.unusedAccounts],
+  )
+  const leavesOutUnused = onlyUsedAccounts && unusedSourceAccounts.size > 0
+  const effectiveMappings = useMemo(
+    () => (leavesOutUnused ? mappings.filter((m) => !unusedSourceAccounts.has(m.sourceAccount)) : mappings),
+    [leavesOutUnused, mappings, unusedSourceAccounts],
+  )
+  const effectivePreview = useMemo(() => {
+    if (!preview || !leavesOutUnused) return preview
+    const stats = getMappingStats(effectiveMappings)
+    return {
+      ...preview,
+      chart: preview.chartUsedOnly ?? preview.chart,
+      mappingStatus: { total: stats.total, mapped: stats.mapped, unmapped: stats.unmapped, lowConfidence: stats.lowConfidence },
+    }
+  }, [preview, leavesOutUnused, effectiveMappings])
+
   // Skip the mapping step when all accounts are already mapped
-  const hasUnmapped = mappings.some((m) => !m.targetAccount)
-  const needsVatReview = mappings.some((m) =>
+  const hasUnmapped = effectiveMappings.some((m) => !m.targetAccount)
+  const needsVatReview = effectiveMappings.some((m) =>
     m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
   )
   const showMappingStep = hasUnmapped || needsVatReview
@@ -749,8 +874,6 @@ function SIEImportWizard({
     ? ['upload', 'preview', 'mapping', 'review', 'result']
     : ['upload', 'preview', 'review', 'result']
 
-  const currentStepIndex = sieSteps.indexOf(step)
-  const progress = ((currentStepIndex + 1) / sieSteps.length) * 100
 
   const handleFileSelect = useCallback(async (selectedFile: File) => {
     setFile(selectedFile)
@@ -776,7 +899,7 @@ function SIEImportWizard({
 
       if (!res.ok) {
         const code = data?.error?.code as string | undefined
-        const message = getErrorMessage(data)
+        const message = getErrorMessage(data, { locale })
         const details = (data?.error?.details ?? {}) as {
           importId?: string
           errors?: string[]
@@ -790,7 +913,7 @@ function SIEImportWizard({
             setDuplicateImportId(details.importId)
           }
           toast({
-            title: isPeriod ? 'Överlappande räkenskapsår' : 'Filen har redan importerats',
+            title: isPeriod ? flowT('duplicate_period_title') : flowT('duplicate_file_title'),
             description: message,
             variant: 'destructive',
           })
@@ -800,14 +923,14 @@ function SIEImportWizard({
           setValidationErrors(details.errors || [])
           setValidationWarnings(details.warnings || [])
           toast({
-            title: 'Valideringsfel i SIE-filen',
-            description: `${(details.errors || []).length} fel hittades som måste åtgärdas.`,
+            title: flowT('validation_title'),
+            description: flowT('validation_description', { count: (details.errors || []).length }),
             variant: 'destructive',
           })
         } else {
           setErrorType('parse')
           setError(message)
-          toast({ title: 'Kunde inte läsa filen', description: message, variant: 'destructive' })
+          toast({ title: flowT('parse_failed_title'), description: message, variant: 'destructive' })
         }
         return
       }
@@ -826,12 +949,18 @@ function SIEImportWizard({
       })
       setPreview(data.preview)
       if (data.existingImport?.id) setDuplicateImportId(data.existingImport.id)
+      setAppendOnly(data.appendOnly === true)
       setIssues(data.parsed.issues)
       setSieAccounts(data.parsed.accounts)
 
-      const accounts = await fetchAccounts(false).catch(() => {
-        throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
-      })
+      const accounts = await fetchAccounts(false).catch(() => null)
+      if (!accounts) {
+        const message = flowT('chart_load_failed')
+        setErrorType('parse')
+        setError(message)
+        toast({ title: flowT('error_title'), description: message, variant: 'destructive' })
+        return
+      }
       setBasAccounts(accounts)
       setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
       // These are another file's mappings, so the chart the last one carried
@@ -844,33 +973,47 @@ function SIEImportWizard({
       setStep('preview')
 
       toast({
-        title: 'Fil analyserad',
-        description: `${data.parsed.stats.totalAccounts} konton och ${data.parsed.stats.totalVouchers} verifikationer hittades`,
+        title: flowT('parsed_title'),
+        description: flowT('parsed_description', {
+          accounts: data.parsed.stats.totalAccounts,
+          vouchers: data.parsed.stats.totalVouchers,
+        }),
       })
     } catch (err) {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const message = isNetworkError
-        ? 'Kunde inte nå servern. Kontrollera din internetanslutning och försök igen.'
-        : getErrorMessage(err)
+        ? flowT('network_error')
+        : getErrorMessage(err, { locale })
       setErrorType(isNetworkError ? 'network' : 'parse')
       setError(message)
-      toast({ title: isNetworkError ? 'Anslutningsfel' : 'Ett fel uppstod', description: message, variant: 'destructive' })
+      toast({ title: isNetworkError ? flowT('network_error_title') : flowT('error_title'), description: message, variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, flowT, locale])
+
+  // Back from the manual opening balances (crm#1374): without this the file
+  // was dropped and the year kept only its IB. Read again, the vouchers now
+  // land on top of the IB just booked.
+  const initialFileRead = useRef(false)
+  useEffect(() => {
+    if (!initialFile || jobId || initialFileRead.current) return
+    initialFileRead.current = true
+    onInitialFileTaken?.()
+    void handleFileSelect(initialFile)
+  }, [initialFile, jobId, onInitialFileTaken, handleFileSelect])
 
   const handleUndo = useCallback(async (importId:string) => {
     const response = await fetch('/api/import/sie/'+importId+'/action',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'undo'}),
     })
     const body = await response.json()
-    if (!response.ok) {setError(getErrorMessage(body));return}
+    if (!response.ok) {setError(getErrorMessage(body, { locale }));return}
     showJob(importId)
-  },[showJob])
+  },[showJob, locale])
 
   const handleReplace = useCallback(async (_importId:string) => {
-    setReplaceExisting(true)
+    setExistingYearMode('replace')
     setDuplicateImportId(null)
     setError(null)
     if (file) await handleFileSelect(file)
@@ -988,29 +1131,29 @@ function SIEImportWizard({
         notices: legacyNotices(
           [
             err instanceof Error
-              ? getErrorMessage(err)
-              : 'Kontoplanen kunde inte läsas in. Kontrollera att filen finns kvar och försök igen.',
+              ? getErrorMessage(err, { locale })
+              : flowT('source_chart_read_failed'),
           ],
           'action',
         ),
       }))
     }
-  }, [])
+  }, [flowT, locale])
 
   const confirmVatReview = useCallback(() => {
-    if (mappings.some((mapping) =>
+    if (effectiveMappings.some((mapping) =>
       mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
     )) {
-      setError('Granska momshanteringen för alla markerade konton innan du fortsätter.')
+      setError(flowT('vat_review_incomplete'))
       return
     }
     setStep('review')
     setError(null)
     setValidationErrors([])
     setValidationWarnings([])
-  }, [mappings])
+  }, [effectiveMappings, flowT])
 
-  const missingAccounts = mappings
+  const missingAccounts = effectiveMappings
     .filter((m) => !m.targetAccount && isValidBASRange(m.sourceAccount))
     .map((m) => ({ number: m.sourceAccount, name: m.sourceName }))
 
@@ -1029,19 +1172,21 @@ function SIEImportWizard({
       const data = await res.json()
 
       if (!res.ok) {
-        toast({ title: 'Kunde inte skapa konton', description: getErrorMessage(data), variant: 'destructive' })
+        toast({ title: flowT('create_accounts_failed'), description: getErrorMessage(data, { locale }), variant: 'destructive' })
         return
       }
 
-      toast({ title: 'Konton skapade', description: `${data.created} nya konton har lagts till i din kontoplan` })
+      toast({ title: flowT('accounts_created_title'), description: flowT('accounts_created_description', { count: data.created }) })
 
       const createdSet = new Set(missingAccounts.map(a => a.number))
       // New accounts exist now: refresh every cached chart (pickers app-wide)
       // and re-read the full chart for the VAT review below.
       await invalidateReferenceData('ref:accounts')
-      const accounts = await fetchAccounts(false).catch(() => {
-        throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
-      })
+      const accounts = await fetchAccounts(false).catch(() => null)
+      if (!accounts) {
+        toast({ title: flowT('create_accounts_failed'), description: flowT('chart_load_failed'), variant: 'destructive' })
+        return
+      }
       setBasAccounts(accounts)
       setMappings(prev => {
         let updated = prev.map(m =>
@@ -1071,29 +1216,45 @@ function SIEImportWizard({
           chart: prev.chart
             ? { ...prev.chart, existing: prev.chart.existing + createdSet.size }
             : prev.chart,
+          // Accounts missing a target carry amounts, so they are used ones:
+          // the plan with the switch on moves them the same way.
+          chartUsedOnly: prev.chartUsedOnly
+            ? { ...prev.chartUsedOnly, existing: prev.chartUsedOnly.existing + createdSet.size }
+            : prev.chartUsedOnly,
         }
       })
     } catch (err) {
-      toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? getErrorMessage(err) : 'Försök igen.', variant: 'destructive' })
+      toast({ title: flowT('create_accounts_failed'), description: err instanceof Error ? getErrorMessage(err, { locale }) : flowT('try_again'), variant: 'destructive' })
     } finally {
       setIsCreatingAccounts(false)
     }
-  }, [missingAccounts, toast])
+  }, [missingAccounts, toast, flowT, locale])
 
   const handleExecuteImport = useCallback(async (options: ImportExecuteOptions) => {
-    if (!file) { setError('No file selected'); return }
+    if (!file) { setError(flowT('no_file')); return }
+    if (!storagePath) {
+      const message = flowT('reupload_required')
+      setError(message)
+      toast({ title: flowT('import_aborted'), description: message, variant: 'destructive' })
+      return
+    }
 
     setIsLoading(true)
     setError(null)
 
     try {
       const formData = new FormData()
-      if (!storagePath) throw new Error('SIE-filen måste laddas upp igen.')
       formData.append('storagePath',storagePath)
       formData.append('filename',file.name)
-      formData.append('mappings', JSON.stringify(mappings))
-      formData.append('options', JSON.stringify({...options,onExistingPeriod:replaceExisting ? 'replace' : 'block',
-        supersedesImportId:replaceExisting ? duplicateImportId : undefined}))
+      formData.append('mappings', JSON.stringify(effectiveMappings))
+      const mode: ExistingYearMode = duplicateImportId ? existingYearMode : 'block'
+      formData.append('options', JSON.stringify({...options,onExistingPeriod:mode,
+        supersedesImportId:mode === 'replace' ? duplicateImportId : undefined,
+        // An append books what its plan showed: series-less vouchers under B,
+        // moved by the plan's series map, so the review step's series stays out (crm#1751).
+        ...(mode === 'append' ? { voucherSeries: undefined, includePossibleDuplicates,
+          ...(Object.keys(seriesMap).length ? { seriesMap } : {}) } : {}),
+        ...(leavesOutUnused ? { onlyUsedAccounts: true } : {})}))
 
       const res = await fetch('/api/import/sie/execute', { method: 'POST', body: formData })
       const data = await res.json()
@@ -1103,31 +1264,32 @@ function SIEImportWizard({
         // The theater's last narration line is not the failing step.
         const failure = describeImportResponseFailure({ status: res.status, body: data })
         setError(formatImportFailure(failure))
-        toast({ title: 'Import avbröts', description: failure.message, variant: 'destructive' })
+        toast({ title: flowT('import_aborted'), description: failure.message, variant: 'destructive' })
         return
       }
       showJob(data.data.importId)
     } catch (err) {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const msg = isNetworkError
-        ? 'Tappade anslutningen till servern under importen. Kontrollera din internetanslutning och se om importen genomfördes under Bokföring.'
-        : getErrorMessage(err)
+        ? flowT('connection_lost')
+        : getErrorMessage(err, { locale })
       setError(msg)
-      toast({ title: 'Import avbröts', description: msg, variant: 'destructive' })
+      toast({ title: flowT('import_aborted'), description: msg, variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [file, mappings, storagePath, replaceExisting, duplicateImportId, showJob, toast])
+  }, [file, effectiveMappings, leavesOutUnused, storagePath, existingYearMode, includePossibleDuplicates, seriesMap, duplicateImportId, showJob, toast, flowT, locale])
 
   const goToStep = (targetStep: ImportWizardStep) => { setStep(targetStep); setError(null); setValidationErrors([]); setValidationWarnings([]) }
   const goBack = () => { const i = sieSteps.indexOf(step); if (i > 0) setStep(sieSteps[i - 1]) }
 
   const handleNewImport = () => {
-    showJob(null); setReplaceExisting(false);setStoragePath(null)
+    showJob(null); setExistingYearMode('append'); setAppendOnly(false); setIncludePossibleDuplicates(false)
+    setSeriesMap({}); setAppendPlan(null); setStoragePath(null)
     setStep('upload'); setFile(null); setParsed(null); setMappings([])
     setPreview(null); setIssues([]); setImportResult(null); setError(null); setErrorType(undefined)
     setValidationErrors([]); setValidationWarnings([]); setDuplicateImportId(null)
-    setSieAccounts([]); setIsCreatingAccounts(false); setTheaterModel(null)
+    setSieAccounts([]); setIsCreatingAccounts(false); setTheaterModel(null); setOnlyUsedAccounts(false)
     sourceChartPick.current++; setSourceChart(null)
   }
 
@@ -1135,53 +1297,45 @@ function SIEImportWizard({
     setImportResult(result);setStep('result');setJobId(null)
     void invalidateReferenceData(['ref:accounts','ref:fiscal-periods'])
   },[])
-  if (jobId) return <SIEJobProgress key={jobId} importId={jobId} onCompleted={handleJobCompleted} onUndone={handleNewImport}/>
+  // A running job has no steps to show; the back crumb stays.
+  if (jobId) return (
+    <div className="space-y-6">
+      <ImportWizardRail steps={[]} current={null} label={stepLabel} onBack={onBack} />
+      <SIEJobProgress key={jobId} importId={jobId} onCompleted={handleJobCompleted} onUndone={handleNewImport}/>
+    </div>
+  )
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{sieSteps.length}: {SIE_STEP_LABELS[step]}
-              </span>
-              {sieSteps.map((s, i) => (
-                <span key={s} className={cn(
-                  'hidden sm:inline',
-                  i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
-                )}>
-                  {SIE_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail steps={sieSteps} current={step} label={stepLabel} onBack={onBack} />
 
       {step === 'upload' && <SIEUploadStep onFileSelect={handleFileSelect} isLoading={isLoading} error={error} errorType={errorType} validationErrors={validationErrors} validationWarnings={validationWarnings} duplicateImportId={duplicateImportId} onReplace={handleReplace} isReplacing={isReplacing} />}
-      {step === 'preview' && preview && (
-        <SIEPreviewStep preview={preview} issues={issues} missingAccounts={missingAccounts}
+      {step === 'preview' && effectivePreview && (
+        <SIEPreviewStep preview={effectivePreview} issues={issues} missingAccounts={missingAccounts}
+          onlyUsedAccounts={unusedSourceAccounts.size > 0 ? { on: onlyUsedAccounts, onChange: setOnlyUsedAccounts,
+            unused: unusedSourceAccounts.size, own: preview?.unusedOwnAccounts?.length ?? 0, total: mappings.length } : undefined}
           onCreateAccounts={handleCreateAccounts} isCreatingAccounts={isCreatingAccounts}
           onContinue={() => goToStep(showMappingStep ? 'mapping' : 'review')} onBack={goBack}
-          onOpenManualOpeningBalances={onOpenManualOpeningBalances} />
+          onOpenManualOpeningBalances={onOpenManualOpeningBalances ? () => onOpenManualOpeningBalances(file) : undefined} />
       )}
       {step === 'mapping' && (
-        <AccountMappingStep mappings={mappings} basAccounts={basAccounts}
+        <AccountMappingStep mappings={effectiveMappings} basAccounts={basAccounts}
           onMappingChange={handleMappingChange} onVatTreatmentChange={handleVatTreatmentChange}
           onConfirmAllVatTreatments={handleConfirmAllVatTreatments}
           onSourceChartSelected={handleSourceChartSelected} sourceChart={sourceChart}
           onContinue={confirmVatReview} onBack={goBack} />
       )}
-      {duplicateImportId && <label className="flex items-center gap-3 text-sm">
-        <input type="checkbox" checked={replaceExisting} onChange={event => setReplaceExisting(event.target.checked)}/>
-        {jobT('replace')}
-      </label>}
-      {step === 'review' && preview && (
-        <ImportReviewStep preview={preview} mappings={mappings}
+      {duplicateImportId && (step === 'mapping' || step === 'review') && (
+        <SIEExistingYearChoice mode={existingYearMode} onModeChange={setExistingYearMode} appendOnly={appendOnly}
+          storagePath={storagePath} filename={file?.name ?? null} mappings={effectiveMappings}
+          includePossibleDuplicates={includePossibleDuplicates} onIncludePossibleDuplicatesChange={setIncludePossibleDuplicates}
+          seriesMap={seriesMap} onSeriesMapChange={setSeriesMap} onPlan={setAppendPlan} />
+      )}
+      {step === 'review' && effectivePreview && (
+        <ImportReviewStep preview={effectivePreview} mappings={effectiveMappings} onlyUsedAccounts={leavesOutUnused}
           onExecute={handleExecuteImport} onBack={goBack} isLoading={isLoading}
-          theaterModel={theaterModel} error={error} />
+          theaterModel={theaterModel} error={error}
+          blocked={Boolean(duplicateImportId) && existingYearMode === 'append' && (!appendPlan || appendPlan.refusal !== null)} />
       )}
       {step === 'result' && importResult && (
         <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo}
@@ -1205,7 +1359,12 @@ const OB_STEP_LABELS: Record<OpeningBalanceStep, string> = {
   result: 'Resultat',
 }
 
-function OpeningBalanceFlow() {
+function OpeningBalanceFlow({ onBack, entityPicker, onResumeSieImport }: {
+  onBack: () => void
+  entityPicker: React.ReactNode
+  /** Set when the user came here from a SIE preview: back to that file once the IB is booked. */
+  onResumeSieImport?: () => void
+}) {
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const router = useRouter()
@@ -1227,8 +1386,6 @@ function OpeningBalanceFlow() {
   const steps: OpeningBalanceStep[] = needsMapping
     ? ['upload', 'column_mapping', 'edit', 'period', 'result']
     : ['upload', 'edit', 'period', 'result']
-  const currentStepIndex = steps.indexOf(obStep)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
 
   const handleFileSelect = useCallback(async (file: File) => {
     setObError(null)
@@ -1391,30 +1548,8 @@ function OpeningBalanceFlow() {
 
   return (
     <div className="space-y-6">
-      {/* Progress */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {OB_STEP_LABELS[obStep]}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
-                  )}
-                >
-                  {OB_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail steps={steps} current={obStep} label={(s) => OB_STEP_LABELS[s]} onBack={onBack} />
+      {entityPicker}
 
       {/* Step content */}
       {obStep === 'upload' && (
@@ -1469,6 +1604,7 @@ function OpeningBalanceFlow() {
         <OpeningBalanceResultStep
           result={executeResult}
           onNewImport={handleNewImport}
+          onResumeSieImport={onResumeSieImport}
         />
       )}
 
@@ -1478,794 +1614,32 @@ function OpeningBalanceFlow() {
 }
 
 // ============================================================
-// Customers Flow (entity = "customers" inside CSVDataImportWizard)
-// ============================================================
-
-type RegisterStep = 'upload' | 'column_mapping' | 'edit' | 'result'
-
-const REGISTER_STEP_LABELS: Record<RegisterStep, string> = {
-  upload: 'Ladda upp',
-  column_mapping: 'Kolumnmappning',
-  edit: 'Granska',
-  result: 'Resultat',
-}
-
-const CUSTOMER_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedCustomerColumns>[] = [
-  { key: 'name_col', label: 'Namn', required: true },
-  { key: 'org_number_col', label: 'Org-/personnummer', required: false },
-  { key: 'customer_type_col', label: 'Kundtyp', required: false },
-  { key: 'email_col', label: 'E-post', required: false },
-  { key: 'phone_col', label: 'Telefon', required: false },
-  { key: 'address_line1_col', label: 'Adress', required: false },
-  { key: 'address_line2_col', label: 'Adress rad 2', required: false },
-  { key: 'postal_code_col', label: 'Postnummer', required: false },
-  { key: 'city_col', label: 'Ort', required: false },
-  { key: 'country_col', label: 'Land', required: false },
-  { key: 'vat_number_col', label: 'VAT-nummer', required: false },
-  { key: 'payment_terms_col', label: 'Betalningsvillkor (dagar)', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
-]
-
-function columnsToMapping<K extends string>(
-  cols: { readonly [key: string]: unknown },
-  specs: RegisterColumnSpec<K>[],
-): Record<K, number | null> {
-  const out = {} as Record<K, number | null>
-  for (const spec of specs) {
-    const v = cols[spec.key as string]
-    out[spec.key] = typeof v === 'number' ? v : null
-  }
-  return out
-}
-
-function CustomersFlow() {
-  const { toast } = useToast()
-
-  const [step, setStep] = useState<RegisterStep>('upload')
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [file, setFile] = useState<File | null>(null)
-  const [parseResult, setParseResult] = useState<CustomerImportParseResult | null>(null)
-  const [executeResult, setExecuteResult] = useState<RegisterResult | null>(null)
-
-  const needsMapping = parseResult && parseResult.detected_columns.confidence < 0.8
-  const steps: RegisterStep[] = needsMapping
-    ? ['upload', 'column_mapping', 'edit', 'result']
-    : ['upload', 'edit', 'result']
-  const currentStepIndex = steps.indexOf(step)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
-
-  const handleFileSelect = useCallback(async (selectedFile: File) => {
-    setError(null)
-    setIsLoading(true)
-    setFile(selectedFile)
-
-    try {
-      const formData = new FormData()
-      formData.append('file', selectedFile)
-
-      const res = await fetch('/api/import/customers/parse', {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
-        return
-      }
-
-      const result = data.data as CustomerImportParseResult
-      setParseResult(result)
-
-      if (result.rows.length === 0) {
-        setError('Inga giltiga kundrader hittades. Kontrollera att filen innehåller en namnkolumn.')
-        return
-      }
-
-      toast({
-        title: 'Fil analyserad',
-        description: `${result.rows.length} kunder hittades${result.duplicate_count > 0 ? ` (${result.duplicate_count} matchar befintliga)` : ''}`,
-      })
-
-      setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast])
-
-  const handleColumnMappingConfirm = useCallback(async (
-    mapping: Record<keyof DetectedCustomerColumns, number | null>,
-  ) => {
-    if (!file) return
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      const overrides: DetectedCustomerColumns = {
-        name_col: mapping.name_col ?? 0,
-        org_number_col: mapping.org_number_col,
-        customer_type_col: mapping.customer_type_col,
-        email_col: mapping.email_col,
-        phone_col: mapping.phone_col,
-        address_line1_col: mapping.address_line1_col,
-        address_line2_col: mapping.address_line2_col,
-        postal_code_col: mapping.postal_code_col,
-        city_col: mapping.city_col,
-        country_col: mapping.country_col,
-        vat_number_col: mapping.vat_number_col,
-        payment_terms_col: mapping.payment_terms_col,
-        notes_col: mapping.notes_col,
-        confidence: 1,
-      }
-
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('column_overrides', JSON.stringify(overrides))
-
-      const res = await fetch('/api/import/customers/parse', {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen med de valda kolumnerna')
-        return
-      }
-
-      setParseResult(data.data)
-      setStep('edit')
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [file])
-
-  const handleExecute = useCallback(async (
-    rows: AnnotatedCustomerRow[],
-    updateDuplicates: boolean,
-  ) => {
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      const res = await fetch('/api/import/customers/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rows: rows.map(({ duplicate_match: _dup, is_valid: _v, validation_errors: _ve, ...rest }) => rest),
-          update_duplicates: updateDuplicates,
-        }),
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
-        return
-      }
-
-      setExecuteResult(data.data as RegisterResult)
-      setStep('result')
-
-      const r = data.data as RegisterResult
-      toast({
-        title: r.success ? 'Kunder importerade' : 'Importen slutfördes med fel',
-        description: `${r.created} skapade, ${r.updated} uppdaterade, ${r.skipped} hoppade över${r.failed > 0 ? `, ${r.failed} misslyckades` : ''}`,
-        variant: r.success ? 'default' : 'destructive',
-      })
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast])
-
-  const handleNewImport = () => {
-    setStep('upload')
-    setFile(null)
-    setParseResult(null)
-    setExecuteResult(null)
-    setError(null)
-  }
-
-  const initialMapping = parseResult
-    ? columnsToMapping<keyof DetectedCustomerColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, CUSTOMER_COLUMN_SPECS)
-    : null
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {REGISTER_STEP_LABELS[step]}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
-                  )}
-                >
-                  {REGISTER_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
-
-      {step === 'upload' && (
-        <RegisterUploadStep
-          entity="customers"
-          onFileSelect={handleFileSelect}
-          isLoading={isLoading}
-          error={error}
-        />
-      )}
-
-      {step === 'column_mapping' && parseResult && initialMapping && (
-        <RegisterColumnMappingStep<keyof DetectedCustomerColumns>
-          headers={parseResult.headers}
-          previewRows={parseResult.preview_rows}
-          specs={CUSTOMER_COLUMN_SPECS}
-          initial={initialMapping}
-          onConfirm={handleColumnMappingConfirm}
-          onBack={() => setStep('upload')}
-        />
-      )}
-
-      {step === 'edit' && parseResult && (
-        <CustomersEditStep
-          rows={parseResult.rows}
-          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
-          onExecute={handleExecute}
-          onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
-          isLoading={isLoading}
-          error={error}
-        />
-      )}
-
-      {step === 'result' && executeResult && (
-        <RegisterResultStep
-          entity="customers"
-          result={executeResult}
-          onNewImport={handleNewImport}
-        />
-      )}
-    </div>
-  )
-}
-
-// ============================================================
-// Suppliers Flow (entity = "suppliers" inside CSVDataImportWizard)
-// ============================================================
-
-const SUPPLIER_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedSupplierColumns>[] = [
-  { key: 'name_col', label: 'Namn', required: true },
-  { key: 'org_number_col', label: 'Org-/personnummer', required: false },
-  { key: 'supplier_type_col', label: 'Leverantörstyp', required: false },
-  { key: 'email_col', label: 'E-post', required: false },
-  { key: 'phone_col', label: 'Telefon', required: false },
-  { key: 'address_line1_col', label: 'Adress', required: false },
-  { key: 'address_line2_col', label: 'Adress rad 2', required: false },
-  { key: 'postal_code_col', label: 'Postnummer', required: false },
-  { key: 'city_col', label: 'Ort', required: false },
-  { key: 'country_col', label: 'Land', required: false },
-  { key: 'vat_number_col', label: 'VAT-nummer', required: false },
-  { key: 'bankgiro_col', label: 'Bankgiro', required: false },
-  { key: 'plusgiro_col', label: 'Plusgiro', required: false },
-  { key: 'bank_account_col', label: 'Bankkonto', required: false },
-  { key: 'iban_col', label: 'IBAN', required: false },
-  { key: 'bic_col', label: 'BIC/SWIFT', required: false },
-  { key: 'payment_terms_col', label: 'Betalningsvillkor (dagar)', required: false },
-  { key: 'default_currency_col', label: 'Valuta', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
-]
-
-function SuppliersFlow() {
-  const { toast } = useToast()
-
-  const [step, setStep] = useState<RegisterStep>('upload')
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [file, setFile] = useState<File | null>(null)
-  const [parseResult, setParseResult] = useState<SupplierImportParseResult | null>(null)
-  const [executeResult, setExecuteResult] = useState<RegisterResult | null>(null)
-
-  const needsMapping = parseResult && parseResult.detected_columns.confidence < 0.8
-  const steps: RegisterStep[] = needsMapping
-    ? ['upload', 'column_mapping', 'edit', 'result']
-    : ['upload', 'edit', 'result']
-  const currentStepIndex = steps.indexOf(step)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
-
-  const handleFileSelect = useCallback(async (selectedFile: File) => {
-    setError(null)
-    setIsLoading(true)
-    setFile(selectedFile)
-
-    try {
-      const formData = new FormData()
-      formData.append('file', selectedFile)
-
-      const res = await fetch('/api/import/suppliers/parse', {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
-        return
-      }
-
-      const result = data.data as SupplierImportParseResult
-      setParseResult(result)
-
-      if (result.rows.length === 0) {
-        setError('Inga giltiga leverantörsrader hittades. Kontrollera att filen innehåller en namnkolumn.')
-        return
-      }
-
-      toast({
-        title: 'Fil analyserad',
-        description: `${result.rows.length} leverantörer hittades${result.duplicate_count > 0 ? ` (${result.duplicate_count} matchar befintliga)` : ''}`,
-      })
-
-      setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast])
-
-  const handleColumnMappingConfirm = useCallback(async (
-    mapping: Record<keyof DetectedSupplierColumns, number | null>,
-  ) => {
-    if (!file) return
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      const overrides: DetectedSupplierColumns = {
-        name_col: mapping.name_col ?? 0,
-        org_number_col: mapping.org_number_col,
-        supplier_type_col: mapping.supplier_type_col,
-        email_col: mapping.email_col,
-        phone_col: mapping.phone_col,
-        address_line1_col: mapping.address_line1_col,
-        address_line2_col: mapping.address_line2_col,
-        postal_code_col: mapping.postal_code_col,
-        city_col: mapping.city_col,
-        country_col: mapping.country_col,
-        vat_number_col: mapping.vat_number_col,
-        bankgiro_col: mapping.bankgiro_col,
-        plusgiro_col: mapping.plusgiro_col,
-        bank_account_col: mapping.bank_account_col,
-        iban_col: mapping.iban_col,
-        bic_col: mapping.bic_col,
-        payment_terms_col: mapping.payment_terms_col,
-        default_currency_col: mapping.default_currency_col,
-        notes_col: mapping.notes_col,
-        confidence: 1,
-      }
-
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('column_overrides', JSON.stringify(overrides))
-
-      const res = await fetch('/api/import/suppliers/parse', {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen')
-        return
-      }
-
-      setParseResult(data.data)
-      setStep('edit')
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [file])
-
-  const handleExecute = useCallback(async (
-    rows: AnnotatedSupplierRow[],
-    updateDuplicates: boolean,
-  ) => {
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      const res = await fetch('/api/import/suppliers/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rows: rows.map(({ duplicate_match: _dup, is_valid: _v, validation_errors: _ve, ...rest }) => rest),
-          update_duplicates: updateDuplicates,
-        }),
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
-        return
-      }
-
-      setExecuteResult(data.data as RegisterResult)
-      setStep('result')
-
-      const r = data.data as RegisterResult
-      toast({
-        title: r.success ? 'Leverantörer importerade' : 'Importen slutfördes med fel',
-        description: `${r.created} skapade, ${r.updated} uppdaterade, ${r.skipped} hoppade över${r.failed > 0 ? `, ${r.failed} misslyckades` : ''}`,
-        variant: r.success ? 'default' : 'destructive',
-      })
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast])
-
-  const handleNewImport = () => {
-    setStep('upload')
-    setFile(null)
-    setParseResult(null)
-    setExecuteResult(null)
-    setError(null)
-  }
-
-  const initialMapping = parseResult
-    ? columnsToMapping<keyof DetectedSupplierColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, SUPPLIER_COLUMN_SPECS)
-    : null
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {REGISTER_STEP_LABELS[step]}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
-                  )}
-                >
-                  {REGISTER_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
-
-      {step === 'upload' && (
-        <RegisterUploadStep
-          entity="suppliers"
-          onFileSelect={handleFileSelect}
-          isLoading={isLoading}
-          error={error}
-        />
-      )}
-
-      {step === 'column_mapping' && parseResult && initialMapping && (
-        <RegisterColumnMappingStep<keyof DetectedSupplierColumns>
-          headers={parseResult.headers}
-          previewRows={parseResult.preview_rows}
-          specs={SUPPLIER_COLUMN_SPECS}
-          initial={initialMapping}
-          onConfirm={handleColumnMappingConfirm}
-          onBack={() => setStep('upload')}
-        />
-      )}
-
-      {step === 'edit' && parseResult && (
-        <SuppliersEditStep
-          rows={parseResult.rows}
-          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
-          onExecute={handleExecute}
-          onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
-          isLoading={isLoading}
-          error={error}
-        />
-      )}
-
-      {step === 'result' && executeResult && (
-        <RegisterResultStep
-          entity="suppliers"
-          result={executeResult}
-          onNewImport={handleNewImport}
-        />
-      )}
-    </div>
-  )
-}
-
-// ============================================================
-// Articles Flow (entity = "articles" inside CSVDataImportWizard)
-// ============================================================
-
-const ARTICLE_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedArticleColumns>[] = [
-  { key: 'name_col', label: 'Benämning', required: true },
-  { key: 'article_number_col', label: 'Artikelnummer', required: false },
-  { key: 'type_col', label: 'Typ (vara/tjänst)', required: false },
-  { key: 'unit_col', label: 'Enhet', required: false },
-  { key: 'price_col', label: 'Pris exkl moms', required: false },
-  { key: 'currency_col', label: 'Valuta', required: false },
-  { key: 'vat_rate_col', label: 'Moms (%)', required: false },
-  { key: 'revenue_account_col', label: 'Försäljningskonto', required: false },
-  { key: 'cost_price_col', label: 'Inköpspris', required: false },
-  { key: 'ean_col', label: 'EAN', required: false },
-  { key: 'housework_type_col', label: 'ROT/RUT-arbetstyp', required: false },
-  { key: 'name_en_col', label: 'Benämning (engelska)', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
-]
-
-function ArticlesFlow() {
-  const { toast } = useToast()
-
-  const [step, setStep] = useState<RegisterStep>('upload')
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [file, setFile] = useState<File | null>(null)
-  const [parseResult, setParseResult] = useState<ArticleImportParseResult | null>(null)
-  const [executeResult, setExecuteResult] = useState<RegisterResult | null>(null)
-
-  const needsMapping = parseResult && parseResult.detected_columns.confidence < 0.8
-  const steps: RegisterStep[] = needsMapping
-    ? ['upload', 'column_mapping', 'edit', 'result']
-    : ['upload', 'edit', 'result']
-  const currentStepIndex = steps.indexOf(step)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
-
-  const handleFileSelect = useCallback(async (selectedFile: File) => {
-    setError(null)
-    setIsLoading(true)
-    setFile(selectedFile)
-
-    try {
-      const formData = new FormData()
-      formData.append('file', selectedFile)
-
-      const res = await fetch('/api/import/articles/parse', {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
-        return
-      }
-
-      const result = data.data as ArticleImportParseResult
-      setParseResult(result)
-
-      if (result.rows.length === 0) {
-        setError('Inga giltiga artiklar hittades. Kontrollera att filen innehåller en benämningskolumn.')
-        return
-      }
-
-      toast({
-        title: 'Fil analyserad',
-        description: `${result.rows.length} artiklar hittades${result.duplicate_count > 0 ? ` (${result.duplicate_count} matchar befintliga)` : ''}`,
-      })
-
-      setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast])
-
-  const handleColumnMappingConfirm = useCallback(async (
-    mapping: Record<keyof DetectedArticleColumns, number | null>,
-  ) => {
-    if (!file) return
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      const overrides: DetectedArticleColumns = {
-        name_col: mapping.name_col ?? 0,
-        article_number_col: mapping.article_number_col,
-        name_en_col: mapping.name_en_col,
-        type_col: mapping.type_col,
-        unit_col: mapping.unit_col,
-        price_col: mapping.price_col,
-        currency_col: mapping.currency_col,
-        vat_rate_col: mapping.vat_rate_col,
-        revenue_account_col: mapping.revenue_account_col,
-        cost_price_col: mapping.cost_price_col,
-        ean_col: mapping.ean_col,
-        housework_type_col: mapping.housework_type_col,
-        notes_col: mapping.notes_col,
-        confidence: 1,
-      }
-
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('column_overrides', JSON.stringify(overrides))
-
-      const res = await fetch('/api/import/articles/parse', {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen med de valda kolumnerna')
-        return
-      }
-
-      setParseResult(data.data)
-      setStep('edit')
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [file])
-
-  const handleExecute = useCallback(async (
-    rows: AnnotatedArticleRow[],
-    updateDuplicates: boolean,
-  ) => {
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      const res = await fetch('/api/import/articles/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rows: rows.map(({ duplicate_match: _dup, is_valid: _v, validation_errors: _ve, vat_rate_adjusted: _vra, ...rest }) => rest),
-          update_duplicates: updateDuplicates,
-        }),
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
-        return
-      }
-
-      setExecuteResult(data.data as RegisterResult)
-      setStep('result')
-
-      const r = data.data as RegisterResult
-      toast({
-        title: r.success ? 'Artiklar importerade' : 'Importen slutfördes med fel',
-        description: `${r.created} skapade, ${r.updated} uppdaterade, ${r.skipped} hoppade över${r.failed > 0 ? `, ${r.failed} misslyckades` : ''}`,
-        variant: r.success ? 'default' : 'destructive',
-      })
-    } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast])
-
-  const handleNewImport = () => {
-    setStep('upload')
-    setFile(null)
-    setParseResult(null)
-    setExecuteResult(null)
-    setError(null)
-  }
-
-  const initialMapping = parseResult
-    ? columnsToMapping<keyof DetectedArticleColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, ARTICLE_COLUMN_SPECS)
-    : null
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {REGISTER_STEP_LABELS[step]}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
-                  )}
-                >
-                  {REGISTER_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
-
-      {step === 'upload' && (
-        <RegisterUploadStep
-          entity="articles"
-          onFileSelect={handleFileSelect}
-          isLoading={isLoading}
-          error={error}
-        />
-      )}
-
-      {step === 'column_mapping' && parseResult && initialMapping && (
-        <RegisterColumnMappingStep<keyof DetectedArticleColumns>
-          headers={parseResult.headers}
-          previewRows={parseResult.preview_rows}
-          specs={ARTICLE_COLUMN_SPECS}
-          initial={initialMapping}
-          onConfirm={handleColumnMappingConfirm}
-          onBack={() => setStep('upload')}
-        />
-      )}
-
-      {step === 'edit' && parseResult && (
-        <ArticlesEditStep
-          rows={parseResult.rows}
-          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
-          onExecute={handleExecute}
-          onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
-          isLoading={isLoading}
-          error={error}
-        />
-      )}
-
-      {step === 'result' && executeResult && (
-        <RegisterResultStep
-          entity="articles"
-          result={executeResult}
-          onNewImport={handleNewImport}
-        />
-      )}
-    </div>
-  )
-}
-
-// ============================================================
 // CSV/Excel Data Import Wizard, entity selector + sub-flow
 // ============================================================
 
-type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles'
-
-const ENTITY_OPTIONS: { value: CSVDataEntity; label: string }[] = [
+const ENTITY_OPTIONS: { value: CsvDataEntity; label: string }[] = [
   { value: 'opening_balance', label: 'Ingående balanser' },
   { value: 'customers', label: 'Kunder' },
   { value: 'suppliers', label: 'Leverantörer' },
   { value: 'articles', label: 'Artiklar' },
 ]
 
-function CSVDataImportWizard() {
-  const [entity, setEntity] = useState<CSVDataEntity | null>('opening_balance')
+function CSVDataImportWizard({
+  initialEntity,
+  onBack,
+  onResumeSieImport,
+}: {
+  initialEntity: CsvDataEntity | null
+  onBack: () => void
+  onResumeSieImport?: () => void
+}) {
+  // Opens on "Ingående balanser" unless a register page deep-linked a tab
+  // (/import?mode=csv_data&entity=customers, see register-import-link.ts).
+  const [entity, setEntity] = useState<CsvDataEntity>(initialEntity ?? 'opening_balance')
 
-  return (
-    <div className="space-y-6">
+  // The register picker sits under the flow's rail, so the back crumb stays
+  // the first thing on the row like in every other wizard.
+  const entityPicker = (
       <div className="flex flex-wrap gap-3">
         {ENTITY_OPTIONS.map((opt) => {
           const selected = entity === opt.value
@@ -2296,10 +1670,10 @@ function CSVDataImportWizard() {
                 onClick={() => setEntity(opt.value)}
                 aria-pressed={selected}
                 className={cn(
-                  'relative h-9 rounded-lg border px-4 text-sm font-medium transition-colors',
+                  'relative h-9 rounded-lg px-4 text-sm font-medium transition-colors bg-control shadow-raised',
                   selected
-                    ? 'border-foreground bg-foreground text-background'
-                    : 'border-border bg-card text-foreground hover:border-foreground/30 hover:bg-secondary/60',
+                    ? 'ring-[1.5px] ring-strong bg-foreground text-background'
+                    : 'bg-card text-foreground hover:ring-1 hover:ring-foreground/30 hover:bg-secondary/60',
                 )}
               >
                 {opt.label}
@@ -2308,12 +1682,12 @@ function CSVDataImportWizard() {
           )
         })}
       </div>
+  )
 
-      {entity === 'opening_balance' && <OpeningBalanceFlow key="ob-flow" />}
-      {entity === 'customers' && <CustomersFlow key="cust-flow" />}
-      {entity === 'suppliers' && <SuppliersFlow key="supp-flow" />}
-      {entity === 'articles' && <ArticlesFlow key="art-flow" />}
-    </div>
+  return entity === 'opening_balance' ? (
+    <OpeningBalanceFlow key="ob-flow" onBack={onBack} entityPicker={entityPicker} onResumeSieImport={onResumeSieImport} />
+  ) : (
+    <RegisterImportFlow key={entity} entity={entity} onBack={onBack} entityPicker={entityPicker} />
   )
 }
 
@@ -2348,31 +1722,48 @@ const ZettlePanel = getSettingsPanel('zettle')
 
 type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'zettle' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
+// Query params the URL sync effect turns into an open mode (and its
+// preselects). "Tillbaka till val" removes them.
+const DEEP_LINK_MODE_PARAMS = ['mode', 'migration', 'provider', 'entity']
+
+type ImportHistoryKind = 'sie' | 'bank' | 'register'
+
+// Modes whose wizard renders "Tillbaka till val" as the first crumb of its
+// step rail; every other mode gets the plain back button.
+const WIZARD_MODES: ReadonlySet<ImportMode> = new Set<ImportMode>(['bank', 'skattekonto', 'sie', 'underlag', 'csv_data'])
+
 export default function ImportPage() {
   const { isSandbox, role } = useCompany()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [mode, setMode] = useState<ImportMode>(null)
   const [initialProvider, setInitialProvider] = useState<string | null>(null)
+  const [initialCsvEntity, setInitialCsvEntity] = useState<CsvDataEntity | null>(null)
+  // The SIE file previewed when the user left for the manual opening balances
+  // (#2082), and the same file once they come back to finish its import.
+  const [manualIbSieFile, setManualIbSieFile] = useState<File | null>(null)
+  const [resumeSieFile, setResumeSieFile] = useState<File | null>(null)
+  const clearResumeSieFile = useCallback(() => setResumeSieFile(null), [])
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
-  const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
-  const [bankFileHistoryOpen, setBankFileHistoryOpen] = useState(false)
+  // One "Importhistorik" row; the history type is picked inside it.
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyKind, setHistoryKind] = useState<ImportHistoryKind>('sie')
   const [userId, setUserId] = useState('')
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
+  // Off by default: UTF-8 is the deliberate default (2026-08-08); CP437 is for
+  // older desktop programs that read #FORMAT PC8 literally.
+  const [exportCp437, setExportCp437] = useState(false)
   const t = useTranslations('import')
+  const tCommon = useTranslations('common')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
   const router = useRouter()
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
   const hasBankSync = useCapability(CAPABILITY.bank_sync)
 
-  // Fetch authenticated user ID (used by the migration wizard)
-  useEffect(() => {
-    const supabase = createClient()
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) setUserId(user.id)
-    })
-  }, [])
 
   // Sync mode + view from URL search params (reacts to client-side navigation changes)
   const searchParams = useSearchParams()
@@ -2383,7 +1774,10 @@ export default function ImportPage() {
     const allowedModes = isSandbox
       ? ['bank', 'skattekonto', 'sie', 'underlag', 'csv_data']
       : ['psd2', 'stripe', 'woocommerce', 'shopify', 'zettle', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
-    if (!isSandbox && searchParams.get('migration')) {
+    // A read-only member gets no import wizard from a deep link.
+    if (!canWrite) {
+      // stays on the choices
+    } else if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
       const modeParam = searchParams.get('mode')
@@ -2396,6 +1790,11 @@ export default function ImportPage() {
       setInitialProvider(
         modeParam === 'migration' && !isSandbox ? searchParams.get('provider') : null
       )
+      // Same for the register list pages' "Importera" button: open the
+      // CSV/Excel wizard on that register instead of on opening balances.
+      setInitialCsvEntity(
+        modeParam === 'csv_data' ? parseCsvDataEntity(searchParams.get('entity')) : null
+      )
     }
     const viewParam = searchParams.get('view')
     if (viewParam === 'export' || viewParam === 'import') {
@@ -2406,7 +1805,8 @@ export default function ImportPage() {
     // SIE import history so "Ångra import" is one click away.
     if (searchParams.get('history') === 'sie') {
       setView('import')
-      setSieHistoryOpen(true)
+      setHistoryOpen(true)
+      setHistoryKind('sie')
       // The history table renders below ~8 import rows: scroll it into view
       // (same pattern as the #cloud-backup hash deep link below).
       setTimeout(() => {
@@ -2415,7 +1815,7 @@ export default function ImportPage() {
           ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       }, 80)
     }
-  }, [isSandbox, searchParams])
+  }, [isSandbox, searchParams, canWrite])
 
   // Hash-based deep links: all live on the export tab; #sie-export opens
   // the SIE dialog, #full-archive opens the archive download dialog, and
@@ -2438,6 +1838,26 @@ export default function ImportPage() {
     }
   }, [])
 
+  const backToChoices = () => {
+    setMode(null)
+    // Mode is client state (not URL-synced), so the deep-linked
+    // preselect must be cleared here too or a re-entered migration
+    // mode would auto-jump again.
+    setInitialProvider(null)
+    setInitialCsvEntity(null)
+    setManualIbSieFile(null)
+    setResumeSieFile(null)
+    // A deep link also left the mode in the URL. Drop it, or the next
+    // URL change (the Exportera tab's router.replace keeps every
+    // param) re-runs the sync effect above and reopens the mode.
+    const params = new URLSearchParams(searchParams.toString())
+    if (DEEP_LINK_MODE_PARAMS.some((key) => params.has(key))) {
+      DEEP_LINK_MODE_PARAMS.forEach((key) => params.delete(key))
+      const qs = params.toString()
+      router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
+    }
+  }
+
   const handleViewChange = (next: 'import' | 'export') => {
     setView(next)
     const params = new URLSearchParams(searchParams.toString())
@@ -2446,6 +1866,25 @@ export default function ImportPage() {
     const qs = params.toString()
     router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
   }
+  // Where Open Payments reads the company's bank, connecting it is Koppla
+  // bank on the bank settings page (crm#1363): the PSD2 choice goes there
+  // rather than to the earlier provider's bank list.
+  const openPayments = useOpenPaymentsAvailability()
+  useEffect(() => {
+    if (mode === 'psd2' && openPayments.status === 'available') router.replace('/settings/banking')
+  }, [mode, openPayments.status, router])
+  // The signed-in user's id, read when the migration wizard opens: it is the
+  // only reader, and the read is an auth round trip.
+  useEffect(() => {
+    if (mode !== 'migration') return
+    let cancelled = false
+    fetchSessionUser().then((user) => {
+      if (user && !cancelled) setUserId(user.id)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [mode])
   // Extensions are active if compiled in: no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
@@ -2463,7 +1902,7 @@ export default function ImportPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title={t('title')}
+        title={tNav('v3_import')}
         help={
           <HelpPopover>
             <p>{t('help_text')}</p>
@@ -2488,130 +1927,157 @@ export default function ImportPage() {
 
           {view === 'import' ? (
             <div>
+              {hasMigrationExtension && <MigratedDeductionCard className="mb-8" />}
               <div className="stagger-enter">
                 {hasBankingExtension && (
                   <ImportRow
                     title={t('psd2_title')}
+                    action={tCommon('open')}
                     sub={t('psd2_description')}
                     chip={
                       hasBankSync ? (
                         <span className="text-xs text-muted-foreground">{t('psd2_recommended')}</span>
                       ) : (
-                        <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
+                        <span className="rounded-md bg-secondary px-2 py-0.5 text-xs font-medium leading-none text-muted-foreground">
                           {t('psd2_requires_subscription')}
                         </span>
                       )
                     }
                     chips={<LogoChip src="/logos/enable-banking-icon.png" name="Enable Banking" mono />}
-                    disabled={isSandbox}
+                    disabled={!canWrite || isSandbox}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('psd2')}
                   />
                 )}
                 {hasStripeExtension && (
                   <ImportRow
                     title={t('stripe_title')}
+                    action={tCommon('open')}
                     sub={t('stripe_description')}
                     chips={<LogoChip src="/logos/stripeicon.jpeg" name="Stripe" />}
-                    disabled={stripeDisabled}
+                    disabled={!canWrite || stripeDisabled}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('stripe')}
                   />
                 )}
                 {hasWooCommerceExtension && (
                   <ImportRow
                     title={t('woocommerce_title')}
+                    action={tCommon('open')}
                     sub={t('woocommerce_description')}
-                    chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/woocommerce.svg" name="WooCommerce" />}
-                    disabled={woocommerceDisabled}
+                    disabled={!canWrite || woocommerceDisabled}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('woocommerce')}
                   />
                 )}
                 {hasShopifyExtension && (
                   <ImportRow
                     title={t('shopify_title')}
+                    action={tCommon('open')}
                     sub={t('shopify_description')}
-                    chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/shopify.svg" name="Shopify" />}
-                    disabled={shopifyDisabled}
+                    disabled={!canWrite || shopifyDisabled}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('shopify')}
                   />
                 )}
                 {hasZettleExtension && (
                   <ImportRow
                     title={t('zettle_title')}
+                    action={tCommon('open')}
                     sub={t('zettle_description')}
-                    chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/zettle.svg" name="Zettle" />}
-                    disabled={zettleDisabled}
+                    disabled={!canWrite || zettleDisabled}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('zettle')}
                   />
                 )}
                 {hasMigrationExtension && (
                   <ImportRow
                     title={t('migration_title')}
+                    action={tCommon('open')}
                     sub={t('migration_description')}
                     chips={
                       <>
                         <LogoChip src="/logos/fortnox.svg" name="Fortnox" />
-                        <LogoChip src="/logos/visma.jpeg" name="Visma" />
+                        <LogoChip name="Visma" />
                         <LogoChip src="/logos/bokio.png" name="Bokio" />
                         <LogoChip src="/logos/bjornlunden.png" name="Björn Lundén" />
                         <LogoChip src="/logos/Briox_logo.png" name="Briox" />
                         <LogoChip src="/logos/wint.png" name="WINT" />
                       </>
                     }
-                    disabled={isSandbox}
+                    disabled={!canWrite || isSandbox}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('migration')}
                   />
                 )}
                 <ImportRow
                   title={t('bankfile_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('bankfile_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('bank')}
                 />
                 <ImportRow
                   title={t('skattekonto_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('skattekonto_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('skattekonto')}
                 />
                 <ImportRow
                   title={t('csv_data_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('csv_data_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('csv_data')}
                 />
                 <ImportRow
                   title={t('sie_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('sie_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('sie')}
                 />
                 {/* Optional follow-up to a SIE import, never a step inside it:
                     the receipts usually arrive later and from another export. */}
                 <ImportRow
                   title={t('underlag_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('underlag_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('underlag')}
                 />
                 <ImportRow
-                  title={t('sie_history_title')}
-                  sub={t('sie_history_description')}
-                  expanded={sieHistoryOpen}
-                  onClick={() => setSieHistoryOpen((v) => !v)}
-                />
-                <ImportRow
-                  title={t('bankfile_history_title')}
-                  sub={t('bankfile_history_description')}
-                  expanded={bankFileHistoryOpen}
-                  onClick={() => setBankFileHistoryOpen((v) => !v)}
+                  title={t('history_title')}
+                  action={tCommon('open')}
+                  sub={t('history_description')}
+                  expanded={historyOpen}
+                  onClick={() => setHistoryOpen((v) => !v)}
                 />
               </div>
-              {sieHistoryOpen && (
-                <div className="mt-6" id="sie-import-history">
-                  <SIEImportHistory />
-                </div>
-              )}
-              {bankFileHistoryOpen && (
-                <div className="mt-6">
-                  <BankFileImportHistory />
+              {historyOpen && (
+                <div className="mt-6 space-y-4 scroll-mt-24" id="sie-import-history">
+                  <SegmentedControl<ImportHistoryKind>
+                    value={historyKind}
+                    onChange={setHistoryKind}
+                    aria-label={t('history_title')}
+                    options={[
+                      { value: 'sie', label: t('history_kind_sie') },
+                      { value: 'bank', label: t('history_kind_bank') },
+                      { value: 'register', label: t('history_kind_register') },
+                    ]}
+                  />
+                  {historyKind === 'sie' && <SIEImportHistory />}
+                  {historyKind === 'bank' && <BankFileImportHistory />}
+                  {historyKind === 'register' && <RegisterImportHistory />}
                 </div>
               )}
             </div>
@@ -2621,6 +2087,7 @@ export default function ImportPage() {
                 <ImportRow
                   id="sie-export"
                   title={t('export_sie_title')}
+                  action={t('tab_export')} icon="download"
                   sub={t('export_sie_description')}
                   onClick={() => setSieDialogOpen(true)}
                 />
@@ -2631,6 +2098,7 @@ export default function ImportPage() {
                   <ImportRow
                     id="full-archive"
                     title={t('export_archive_title')}
+                    action={t('tab_export')} icon="download"
                     sub={t('export_archive_description')}
                     onClick={() => setArchiveDialogOpen(true)}
                   />
@@ -2638,6 +2106,7 @@ export default function ImportPage() {
                 {hasCloudBackup && (
                   <ImportRow
                     title={t('cloud_row_title')}
+                    action={tCommon('open')}
                     sub={t('cloud_row_description')}
                     expanded={cloudOpen}
                     onClick={() => setCloudOpen((v) => !v)}
@@ -2646,7 +2115,7 @@ export default function ImportPage() {
               </div>
               {hasCloudBackup && cloudOpen && (
                 <div id="cloud-backup" className="mt-6 scroll-mt-24">
-                  <CloudBackupCard />
+                  <ViewerLock><CloudBackupCard /></ViewerLock>
                 </div>
               )}
             </div>
@@ -2658,9 +2127,9 @@ export default function ImportPage() {
 
           {/* SIE export as a small centered dialog (concept overlay convention) */}
           <Dialog open={sieDialogOpen} onOpenChange={setSieDialogOpen}>
-            <DialogContent className="sm:max-w-md">
+            <DialogContent size="confirm">
               <DialogHeader>
-                <DialogTitle className="font-display text-lg tracking-tight">
+                <DialogTitle className="text-lg">
                   {t('export_sie_title')}
                 </DialogTitle>
                 <DialogDescription className="text-[13px] leading-relaxed">
@@ -2684,6 +2153,15 @@ export default function ImportPage() {
                   />
                   <span>{t('export_sie_exclude_closing_label')}</span>
                 </label>
+                <label className="flex cursor-pointer items-start gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded-sm border-border"
+                    checked={exportCp437}
+                    onChange={(e) => setExportCp437(e.target.checked)}
+                  />
+                  <span>{t('export_sie_cp437_label')}</span>
+                </label>
               </div>
               <DialogFooter>
                 <Button
@@ -2691,12 +2169,13 @@ export default function ImportPage() {
                     if (exportPeriodId) {
                       const params = new URLSearchParams({ period_id: exportPeriodId })
                       if (exportExcludeClosing) params.set('exclude_closing', 'true')
+                      if (exportCp437) params.set('encoding', 'cp437')
                       window.open(`/api/reports/sie-export?${params.toString()}`, '_blank')
                     }
                   }}
                   disabled={!exportPeriodId}
                 >
-                  <Download className="mr-2 h-4 w-4" />
+                  <ArrowDownTrayIcon className="h-4 w-4" />
                   {t('export_sie_button')}
                 </Button>
               </DialogFooter>
@@ -2705,19 +2184,10 @@ export default function ImportPage() {
         </>
       )}
 
-      {mode !== null && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setMode(null)
-            // Mode is client state (not URL-synced), so the deep-linked
-            // preselect must be cleared here too or a re-entered migration
-            // mode would auto-jump again.
-            setInitialProvider(null)
-          }}
-        >
-          <ArrowLeft className="mr-2 h-4 w-4" />
+      {/* The file wizards carry this as their rail's first crumb. */}
+      {mode !== null && !WIZARD_MODES.has(mode) && (
+        <Button variant="ghost" size="toolbar" onClick={backToChoices}>
+          <ArrowLeftIcon className="h-4 w-4" />
           {t('back_to_choices')}
         </Button>
       )}
@@ -2727,7 +2197,7 @@ export default function ImportPage() {
           <BankingPanel />
         ) : (
           <EmptyState
-            icon={Landmark}
+            icon={BuildingLibraryIcon}
             title={t('psd2_not_enabled_title')}
             description={t('psd2_not_enabled_description')}
           >
@@ -2742,7 +2212,7 @@ export default function ImportPage() {
           <StripePanel />
         ) : (
           <EmptyState
-            icon={CreditCard}
+            icon={CreditCardIcon}
             title={t('stripe_not_enabled_title')}
             description={t('stripe_not_enabled_description')}
           />
@@ -2753,7 +2223,7 @@ export default function ImportPage() {
           <WooCommercePanel />
         ) : (
           <EmptyState
-            icon={ShoppingCart}
+            icon={ShoppingCartIcon}
             title={t('woocommerce_not_enabled_title')}
             description={t('woocommerce_not_enabled_description')}
           />
@@ -2764,7 +2234,7 @@ export default function ImportPage() {
           <ShopifyPanel />
         ) : (
           <EmptyState
-            icon={ShoppingBag}
+            icon={ShoppingBagIcon}
             title={t('shopify_not_enabled_title')}
             description={t('shopify_not_enabled_description')}
           />
@@ -2775,19 +2245,24 @@ export default function ImportPage() {
           <ZettlePanel />
         ) : (
           <EmptyState
-            icon={ShoppingBag}
+            icon={ShoppingBagIcon}
             title={t('zettle_not_enabled_title')}
             description={t('zettle_not_enabled_description')}
           />
         )
       )}
-      {mode === 'bank' && <BankFileImportWizard />}
-      {mode === 'skattekonto' && <SkattekontoImportWizard />}
+      {mode === 'bank' && <BankFileImportWizard onBack={backToChoices} />}
+      {mode === 'skattekonto' && <SkattekontoImportWizard onBack={backToChoices} />}
       {/* The CSV/Excel wizard opens on "Ingående balanser" by default, which is
           exactly the manual path the SIE preview offers on an IB imbalance. */}
-      {mode === 'sie' && <SIEImportWizard key={searchParams.get('job') ?? 'new'} onOpenManualOpeningBalances={() => setMode('csv_data')} />}
-      {mode === 'underlag' && <UnderlagImportWizard />}
-      {mode === 'csv_data' && <CSVDataImportWizard />}
+      {mode === 'sie' && <SIEImportWizard key={searchParams.get('job') ?? 'new'} onBack={backToChoices}
+        onOpenManualOpeningBalances={(file) => { setManualIbSieFile(file); setMode('csv_data') }}
+        initialFile={resumeSieFile} onInitialFileTaken={clearResumeSieFile} />}
+      {mode === 'underlag' && <UnderlagImportWizard onBack={backToChoices} />}
+      {mode === 'csv_data' && <CSVDataImportWizard initialEntity={initialCsvEntity} onBack={backToChoices}
+        onResumeSieImport={manualIbSieFile
+          ? () => { setResumeSieFile(manualIbSieFile); setManualIbSieFile(null); setMode('sie') }
+          : undefined} />}
       {mode === 'migration' && (
         <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
       )}
@@ -2803,61 +2278,80 @@ function ImportRow({
   chip,
   chips,
   disabled = false,
+  lockTitle,
   expanded,
   onClick,
   id,
+  action,
+  icon,
 }: {
   title: string
   sub: string
   chip?: React.ReactNode
-  /** Logo chips under the sub line (provider marks, as on the live page). */
+  /** Provider marks at the end of the line. */
   chips?: React.ReactNode
   disabled?: boolean
-  /** For rows that fold a panel open below the grid (cloud backup). */
+  /** Hover text on a locked row (why it is locked). */
+  lockTitle?: string
+  /** For rows that fold a panel open below the list (history, cloud backup). */
   expanded?: boolean
   onClick: () => void
   id?: string
+  /** The row's button: what it does ("Importera", "Exportera", "Öppna"). */
+  action: string
+  /** The symbol on the button: the upload arrow on a file import, the download arrow on an export. */
+  icon?: 'upload' | 'download'
 }) {
+  // One line per way in (canvas "Import och flytt"): the name, what it is in
+  // the muted ink, the provider marks, and the row's own button at the right
+  // end. A click anywhere on the row opens it. The handler sits on the row and
+  // the button has none: its click (pointer, Enter, Space) bubbles up, so the
+  // button stays the one keyboard stop and the action runs once. A disabled
+  // button lets clicks through (pointer-events-none), hence the row's guard.
   return (
-    <button
-      type="button"
+    <div
       id={id}
-      onClick={onClick}
-      disabled={disabled}
-      aria-expanded={expanded}
       className={cn(
-        'group flex w-full items-center justify-between gap-4 border-b border-border px-1 py-3 text-left',
-        'transition-colors duration-150 hover:bg-secondary/35',
-        'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+        'group flex min-h-11 items-center gap-3 border-b-hairline py-1.5',
+        LIST_BLEED_CLASS,
+        'px-2 transition-colors duration-150',
+        !disabled && 'cursor-pointer hover:bg-secondary/35',
       )}
+      onClick={disabled ? undefined : onClick}
+      title={disabled ? lockTitle : undefined}
     >
-      <span className="min-w-0">
-        <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="flex items-center gap-2 text-sm font-medium text-strong">
           {title}
           {chip}
         </span>
-        <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{sub}</span>
-        {chips && <span className="mt-2 flex flex-wrap gap-2">{chips}</span>}
-      </span>
-      <ChevronRight
+        <span className="min-w-0 text-sm text-muted-foreground">{sub}</span>
+        {chips && <span className="flex flex-wrap items-center gap-2">{chips}</span>}
+      </div>
+      <Button
+        type="button"
+        variant={expanded === undefined ? 'outline' : 'ghost'}
         className={cn(
-          'h-4 w-4 shrink-0 text-muted-foreground/40 transition-transform duration-150',
-          'group-hover:translate-x-0.5 group-hover:text-muted-foreground',
-          expanded && 'rotate-90',
+          'shrink-0',
+          expanded === undefined
+            ? 'group-hover:shadow-raised-hover'
+            : 'group-hover:bg-secondary/60 group-hover:text-foreground',
         )}
-        aria-hidden="true"
-      />
-    </button>
-  )
-}
-
-// Same quiet beta-badge recipe as the sidebar nav (DashboardNav renderBadge),
-// so "Beta" reads identically wherever it appears.
-function BetaChip({ label }: { label: string }) {
-  return (
-    <span className="rounded-full bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
-      {label}
-    </span>
+        disabled={disabled}
+        aria-expanded={expanded}
+        aria-label={`${action}: ${title}`}
+      >
+        {icon === 'upload' && <ArrowUpTrayIcon className="h-4 w-4" />}
+        {icon === 'download' && <ArrowDownTrayIcon className="h-4 w-4" />}
+        {action}
+        {expanded !== undefined && (
+          <ChevronRightIcon
+            className={cn('h-3.5 w-3.5 transition-transform duration-150', expanded && 'rotate-90')}
+            aria-hidden="true"
+          />
+        )}
+      </Button>
+    </div>
   )
 }
 
@@ -2866,19 +2360,19 @@ function BetaChip({ label }: { label: string }) {
 // `mono` is for light-on-transparent marks (Enable Banking): the marketing
 // site's grayscale+brightness treatment makes them read on a light ground,
 // with the inverse lift in dark mode.
-function LogoChip({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
+function LogoChip({ src, name, mono = false }: { src?: string; name: string; mono?: boolean }) {
+  // A provider's own mark at 16px with its name as the tooltip; a provider
+  // without a mark file is named in text.
+  if (!src) return <span className="text-xs font-medium text-muted-foreground">{name}</span>
   return (
-    <span className="flex items-center gap-2 rounded-sm border border-border bg-muted/30 px-2 py-1">
-      <img
-        src={src}
-        alt=""
-        className={cn(
-          'h-4 w-4 shrink-0 rounded-sm object-contain',
-          mono &&
-            'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
-        )}
-      />
-      <span className="text-[11px] font-medium text-muted-foreground">{name}</span>
-    </span>
+    <img
+      src={src}
+      alt={name}
+      title={name}
+      className={cn(
+        'h-4 w-4 shrink-0 rounded-sm object-contain',
+        mono && 'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
+      )}
+    />
   )
 }

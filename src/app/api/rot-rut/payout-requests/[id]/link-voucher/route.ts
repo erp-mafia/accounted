@@ -13,7 +13,9 @@ import {
  *
  * Verifikat the begäran could be linked to: posted, unreversed, crediting
  * 1513, dated on or after the begäran was created, not already settling
- * another begäran.
+ * another begäran. Under kontantmetoden also a payout booked by hand the
+ * two-step way (revenue and moms instead of 1513) whose money in is exactly
+ * the begäran's expected payout.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'rot_rut.requests.link_voucher_candidates',
@@ -21,19 +23,30 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { supabase, companyId, log, requestId } = ctx
     const { id } = await params
 
-    const { data: payoutRequest, error: fetchError } = await supabase
-      .from('rot_rut_payout_requests')
-      .select('id, created_at')
-      .eq('company_id', companyId!)
-      .eq('id', id)
-      .maybeSingle()
+    const [{ data: payoutRequest, error: fetchError }, { data: settings, error: settingsError }] = await Promise.all([
+      supabase
+        .from('rot_rut_payout_requests')
+        .select('id, created_at, requested_total, decided_total')
+        .eq('company_id', companyId!)
+        .eq('id', id)
+        .maybeSingle(),
+      supabase
+        .from('company_settings')
+        .select('accounting_method')
+        .eq('company_id', companyId!)
+        .maybeSingle(),
+    ])
     if (fetchError) return errorResponse(fetchError, log, { requestId })
+    if (settingsError) return errorResponse(settingsError, log, { requestId })
     if (!payoutRequest) return errorResponseFromCode('ROT_RUT_REQUEST_NOT_FOUND', log, { requestId })
 
     const { data, error } = await listRotRutPayoutVoucherCandidates(
       supabase,
       companyId!,
       String(payoutRequest.created_at).slice(0, 10),
+      settings?.accounting_method === 'cash'
+        ? { expectedAmount: Number(payoutRequest.decided_total ?? payoutRequest.requested_total) }
+        : undefined,
     )
     if (error) return errorResponse(error, log, { requestId })
 

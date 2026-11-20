@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { sparsePatchBody } from '@/lib/api/sparse-patch'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { linesWithoutDimensions } from '@/lib/bookkeeping/template-library'
 
 const UpdateBookingTemplateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -17,6 +18,8 @@ const UpdateBookingTemplateSchema = z.object({
 /**
  * PUT /api/settings/booking-templates/[id]
  * Update a non-system template belonging to the active company (or its team).
+ * A team template's lines are stored without dimensions: the codes are one
+ * company's own, and every company of the team books the template.
  */
 export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
   'booking_template.update',
@@ -74,11 +77,19 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Mallen hittades inte' }, { status: 404 })
     }
 
+    // A team template (a team and no company: the table allows no other mix)
+    // never stores dimensions on its lines, whoever sends them.
+    const isTeamTemplate = !existing.company_id && !!existing.team_id
+    const patch =
+      isTeamTemplate && result.data.lines
+        ? { ...result.data, lines: linesWithoutDimensions(result.data.lines) }
+        : result.data
+
     // RLS prevents updating system templates; is_system is re-checked here so
     // the guard holds even on a service-role client.
     const { data, error } = await supabase
       .from('booking_template_library')
-      .update(result.data)
+      .update(patch)
       .eq('id', id)
       .eq('is_system', false)
       .select()

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Pencil, Trash2 } from 'lucide-react'
+import { PencilIcon, TrashIcon } from '@/components/icons'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,28 +13,23 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import type {
   TaxAssessmentDecisionType,
   TaxAssessmentNotice,
 } from '@/types'
-
-function todayLocalIso(): string {
-  const today = new Date()
-  const year = today.getFullYear()
-  const month = String(today.getMonth() + 1).padStart(2, '0')
-  const day = String(today.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export function TaxAssessmentNoticesPanel() {
   const t = useTranslations('tax_assessment_notices')
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const showError = useErrorToast()
   const [notices, setNotices] = useState<TaxAssessmentNotice[]>([])
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null)
   const [decisionType, setDecisionType] = useState<TaxAssessmentDecisionType>('final')
-  const [decisionDate, setDecisionDate] = useState(todayLocalIso)
+  const [decisionDate, setDecisionDate] = useState(todayIsoStockholm)
   const [paymentDueDate, setPaymentDueDate] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -68,7 +63,7 @@ export function TaxAssessmentNoticesPanel() {
   const resetForm = () => {
     setEditingId(null)
     setDecisionType('final')
-    setDecisionDate(todayLocalIso())
+    setDecisionDate(todayIsoStockholm())
     setPaymentDueDate('')
   }
 
@@ -194,11 +189,11 @@ export function TaxAssessmentNoticesPanel() {
           />
         </SettingsRow>
         <div className="flex flex-wrap gap-2 px-1 py-3">
-          <Button type="submit" size="sm" disabled={saving || !selectedPeriodId || !paymentDueDate}>
+          <Button type="submit" disabled={!canWrite || saving || !selectedPeriodId || !paymentDueDate} title={lockedTitle}>
             {saving ? t('saving') : t(editingId ? 'update_action' : 'save_action')}
           </Button>
           {editingId && (
-            <Button type="button" variant="outline" size="sm" onClick={resetForm} disabled={saving}>
+            <Button type="button" variant="outline" onClick={resetForm} disabled={saving}>
               {t('cancel')}
             </Button>
           )}
@@ -209,7 +204,7 @@ export function TaxAssessmentNoticesPanel() {
       {!loading && notices.length > 0 && notices.map((notice) => (
         <div
           key={notice.id}
-          className="flex flex-col gap-3 border-t border-border px-1 py-3 sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-3 border-t-hairline px-1 py-3 sm:flex-row sm:items-center sm:justify-between"
         >
           <div className="min-w-0">
             <p className="text-sm">
@@ -221,12 +216,12 @@ export function TaxAssessmentNoticesPanel() {
             </SettingsRowNote>
           </div>
           <div className="flex shrink-0 gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => editNotice(notice)} disabled={saving}>
-              <Pencil className="mr-2 h-4 w-4" />
+            <Button type="button" variant="outline" onClick={() => editNotice(notice)} disabled={!canWrite || saving} title={lockedTitle}>
+              <PencilIcon className="h-4 w-4" />
               {t('edit')}
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => void archiveNotice(notice)} disabled={saving}>
-              <Trash2 className="mr-2 h-4 w-4" />
+            <Button type="button" variant="outline" onClick={() => void archiveNotice(notice)} disabled={!canWrite || saving} title={lockedTitle}>
+              <TrashIcon className="h-4 w-4" />
               {t('archive')}
             </Button>
           </div>

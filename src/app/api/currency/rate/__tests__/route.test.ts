@@ -16,7 +16,8 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
-vi.mock('@/lib/currency/riksbanken', () => ({
+vi.mock('@/lib/currency/riksbanken', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/currency/riksbanken')>()),
   fetchExchangeRate: vi.fn(),
   readCachedRate: vi.fn(),
 }))
@@ -147,6 +148,18 @@ describe('GET /api/currency/rate', () => {
     expect(body).toEqual({ data: { currency: 'EUR', rate: 11.42, date: '2025-01-15' } })
     expect(readCachedRate).toHaveBeenCalledWith(serviceSentinel, 'EUR', '2025-01-15')
     expect(fetchExchangeRate).toHaveBeenCalledWith('EUR', expect.any(Date), serviceSentinel)
+  })
+
+  it("reads the Swedish day when no date is given, also on New Year's night", async () => {
+    vi.mocked(readCachedRate).mockResolvedValue({ currency: 'EUR', rate: 11.42, date: '2027-01-01' })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      await GET(makeReq('?currency=EUR'), noParams)
+      expect(readCachedRate).toHaveBeenCalledWith(serviceSentinel, 'EUR', '2027-01-01')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('returns 502 when both the cache and Riksbanken come up empty', async () => {
