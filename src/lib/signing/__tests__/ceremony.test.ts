@@ -6,9 +6,12 @@
  * declining. The database is a table mock; BankID is the registry's tic
  * services; the seal is stubbed (../seal.ts has its own tests).
  */
+import { readFileSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 import { encryptPersonalNumberForStorage, hashPersonalNumber } from '@/lib/auth/bankid'
+import { maskPersonnummer } from '@/lib/invariants/personal-number-shape'
 import { hashSigningToken } from '../tokens'
 import type { SigningRequestRow, SigningSignerRow } from '../types'
 import { buildUserNonVisibleData } from '../visible-data'
@@ -51,6 +54,18 @@ import {
   startSignature,
   type SignerScope,
 } from '../ceremony'
+
+const MIGRATIONS = path.resolve(__dirname, '../../../../supabase/migrations')
+/** The newest migration that states the check on the mask stored with a signature. */
+const newestMaskMigration = () =>
+  readdirSync(MIGRATIONS)
+    .filter((file) => file.endsWith('.sql'))
+    .sort()
+    .reverse()
+    .find((file) => {
+      const sql = readFileSync(path.join(MIGRATIONS, file), 'utf8')
+      return sql.includes('signing_signer_private') && sql.includes("personnummer_masked ~ '")
+    })!
 
 const NOW = Date.parse('2026-10-25T10:00:00.000Z')
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -495,7 +510,8 @@ describe('pollSignature', () => {
         given_name: 'Anna',
         surname: 'Andersson',
         personnummer_hash: hashPersonalNumber(PN),
-        personnummer_masked: 'XXXXXXXX-1239',
+        // The app's one display form: the birth date, never the last four (crm#1969).
+        personnummer_masked: '19900101-XXXX',
         completed_at: iso(NOW - 2000),
         user_visible_data: '# Signera dokument\n\nJag signerar *Hyresavtal* för Bolaget AB.',
         signature_xml: signature.signatureXml,
@@ -505,6 +521,50 @@ describe('pollSignature', () => {
     expect(JSON.stringify(rpcArgs())).not.toContain(PN)
     expect(loggedText()).not.toContain(PN)
     expect(seal.sealSigningRequest).not.toHaveBeenCalled()
+    expect(db.findCalls('rpc:record_signing_signature', 'rpc')).toHaveLength(1)
+  })
+
+  it('writes a mask the database accepts: the check of the newest signing migration', () => {
+    // The column's CHECK refuses a signature whose mask it does not know, so
+    // the form the code writes and the form the database accepts move together.
+    const check = readFileSync(path.join(MIGRATIONS, newestMaskMigration()), 'utf8').match(/personnummer_masked ~ '([^']+)'/)
+    expect(check).not.toBeNull()
+    const accepted = new RegExp(check![1])
+    for (const personalNumber of [PN, '9001011239', '19900101-1239', 'not a number', '']) {
+      expect(maskPersonnummer(personalNumber)).toMatch(accepted)
+    }
+    // Signatures recorded before keep theirs, and a number in clear is never a mask.
+    expect('XXXXXXXX-1239').toMatch(accepted)
+    for (const clear of [PN, '19900101-1239', '900101-1239']) expect(clear).not.toMatch(accepted)
+  })
+
+  it('never loses a signature to the mask: a database that refuses the display form gets the form it accepts', async () => {
+    // The check is widened by a migration that lands after the code, or was skipped.
+    db.setTable('rpc:record_signing_signature', [
+      {
+        error: {
+          code: '23514',
+          message: 'new row for relation "signing_signer_private" violates check constraint "signing_signer_private_personnummer_masked_check"',
+        },
+      },
+      { data: { ok: true, signing_request_id: REQ, signer_id: SIGNER, signed_at: iso(NOW - 2000), completed: false } },
+    ])
+    complete(collected(boundPayload()))
+    expect(await poll()).toEqual({ ok: true, data: { state: 'signed', signed_at: iso(NOW - 2000), completed: false } })
+    const masks = db
+      .findCalls('rpc:record_signing_signature', 'rpc')
+      .map(([args]) => (args as { p_evidence: { personnummer_masked: string } }).p_evidence.personnummer_masked)
+    expect(masks).toEqual(['19900101-XXXX', 'XXXXXXXX-1239'])
+    expect(log.warn).toHaveBeenCalledWith('signing mask refused by the database: recorded with the earlier form', { signerId: SIGNER })
+    expect(loggedText()).not.toContain(PN)
+  })
+
+  it('still fails a recording the database refuses for any other reason, without a second try', async () => {
+    db.setTable('rpc:record_signing_signature', { error: { code: '23514', message: 'violates check constraint "signing_signer_private_check1"' } })
+    complete(collected(boundPayload()))
+    await expect(poll()).rejects.toMatchObject({ code: '23514' })
+    endedWith('SIGNING_RECORD_FAILED')
+    expect(db.findCalls('rpc:record_signing_signature', 'rpc')).toHaveLength(1)
   })
 
   it('seals the request when the signature was the last one', async () => {
