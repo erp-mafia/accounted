@@ -12,6 +12,7 @@ import {
   feedSyncRoute,
   feedTransactionSyncRoute,
   currentConnections,
+  lastDisconnected,
   type FeedConnectorSpec,
 } from '@/lib/feed-sync/connector-routes'
 import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
@@ -197,9 +198,10 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
     handler: async (_request: Request, ctx: ExtensionContext) => {
       // Multi-store: per store its active connection, or else its newest
       // pending or failed attempt (so it can be retried or removed), and the
-      // most recent row when nothing is left (so the panel can show a
-      // revoked state instead of an empty list). `connection` mirrors the
-      // first entry for callers of the old single-store shape.
+      // most recent row when nothing is left and it had connected (so the
+      // panel can show a revoked state instead of an empty list).
+      // `connection` mirrors the first entry for callers of the old
+      // single-store shape.
       const { data: rows } = await ctx.supabase
         .from('woocommerce_connections')
         .select(STATUS_COLUMNS)
@@ -208,7 +210,8 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         .limit(25)
 
       const current = currentConnections(rows ?? [], (r) => r.store_url)
-      const listed = current.length > 0 ? current : rows?.[0] ? [rows[0]] : []
+      const fallback = lastDisconnected(rows ?? [])
+      const listed = current.length > 0 ? current : fallback ? [fallback] : []
       const connections = await withSkippedOrders(
         ctx.supabase,
         ctx.companyId,

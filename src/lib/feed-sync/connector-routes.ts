@@ -160,9 +160,19 @@ export function currentConnections<R extends { status: string }>(
 }
 
 /**
+ * What GET /status shows when no connection is current: the newest row when
+ * it was a connection that has since been disconnected, so the panel can say
+ * so. A removed failed attempt never connected and is not shown again.
+ */
+export function lastDisconnected<R extends { connected_at?: string | null }>(rows: readonly R[]): R | null {
+  const newest = rows[0]
+  return newest?.connected_at ? newest : null
+}
+
+/**
  * GET /status for a connector with one connection per company: the active
- * row, or else the most recent one so the panel can show its pending, error
- * or revoked state.
+ * row, or else the most recent attempt so the panel can show its pending or
+ * error state, or else a disconnected connection (lastDisconnected).
  */
 export function feedStatusRoute<C extends FeedConnectionRow, S extends FeedSyncSummary>(
   spec: FeedConnectorSpec<C, S>,
@@ -177,8 +187,8 @@ export function feedStatusRoute<C extends FeedConnectionRow, S extends FeedSyncS
         .eq('company_id', ctx.companyId)
         .order('created_at', { ascending: false })
         .limit(10)
-      const list = (rows ?? []) as unknown as Array<{ status: string }>
-      const connection = currentConnections(list)[0] ?? list[0] ?? null
+      const list = (rows ?? []) as unknown as Array<{ status: string; connected_at?: string | null }>
+      const connection = currentConnections(list)[0] ?? lastDisconnected(list)
       return NextResponse.json({ configured: spec.isConfigured(), connection })
     },
   }
