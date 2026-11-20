@@ -9048,6 +9048,10 @@
     "review_shown": "Reviewed before it was booked"
   },
   "journal_detail": {
+    "dimension_edit": "Edit dimensions",
+    "dimension_edit_hint": "Edit dimensions (affects internal accounting only)",
+    "corrected_label": "Corrected",
+    "dimension_history": "Dimension change history",
     "owned_by_field": "Belongs to",
     "owner_name_invoice": "Invoice",
     "owner_name_credit_note": "Credit note",
