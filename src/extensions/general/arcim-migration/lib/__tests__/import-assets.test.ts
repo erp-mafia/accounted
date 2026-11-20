@@ -411,6 +411,9 @@ describe('importProviderAssets', () => {
 describe('monthsBetween on the month grid', () => {
   it('counts a mid-month plan as the whole 60 months', () => {
     expect(monthsBetween('2026-05-01', '2031-04-30')).toBe(60)
+    // The case the day-counting form got wrong: a start after the 1st.
+    expect(monthsBetween('2026-05-28', '2031-04-30')).toBe(60)
+    expect(monthsBetween('2026-05-28', '2031-05-01')).toBe(60)
   })
 
   // Fortnox does not document whether DepreciationFinal is the last day of the
