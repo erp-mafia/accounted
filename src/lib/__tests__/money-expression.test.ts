@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { parseAmountExpression, formatAmountValue } from '@/lib/money-expression'
+import { parseAmountExpression } from '@/lib/money-expression'
+import { formatAmountInput, parseAmountInput } from '@/lib/money'
 
 describe('parseAmountExpression', () => {
-  describe('plain numbers (drop-in for parseFloat)', () => {
+  describe('plain numbers', () => {
     it('reads an integer', () => {
       expect(parseAmountExpression('1200')).toBe(1200)
     })
@@ -125,22 +126,22 @@ describe('parseAmountExpression', () => {
   })
 })
 
-describe('formatAmountValue', () => {
-  it('writes an integer without decimals', () => {
-    expect(formatAmountValue(1500)).toBe('1500')
+describe('a plain amount means what it means to parseAmountInput', () => {
+  it.each(['1200', '1200,50', '1200.50', '1 234,50', '1.234,50', '1,234.50', '-500', '\u2212500', '0,5'])(
+    'reads %s as parseAmountInput does',
+    (input) => {
+      expect(parseAmountExpression(input)).toBe(parseAmountInput(input))
+    },
+  )
+
+  it('reads a grouped literal inside a sum', () => {
+    expect(parseAmountExpression('1.234,50+765,50')).toBe(2000)
   })
 
-  it('writes a decimal with a point, matching what parseFloat consumers expect', () => {
-    expect(formatAmountValue(1200.5)).toBe('1200.5')
-  })
-
-  it('rounds to the öre', () => {
-    expect(formatAmountValue(3.333333)).toBe('3.33')
-  })
-
-  it('round-trips through parseAmountExpression', () => {
-    const value = parseAmountExpression('1200,50+299,50')
-    expect(value).not.toBeNull()
-    expect(parseAmountExpression(formatAmountValue(value as number))).toBe(1500)
+  it('round-trips the written-back text (formatAmountInput)', () => {
+    const value = parseAmountExpression('1200,50+299,25')
+    expect(value).toBe(1499.75)
+    expect(formatAmountInput(value as number)).toBe('1499,75')
+    expect(parseAmountExpression(formatAmountInput(value as number))).toBe(1499.75)
   })
 })

@@ -2,7 +2,8 @@
 
 import * as React from 'react'
 import { Input, type InputProps } from '@/components/ui/input'
-import { parseAmountExpression, formatAmountValue } from '@/lib/money-expression'
+import { formatAmountInput, parseAmountInput } from '@/lib/money'
+import { parseAmountExpression } from '@/lib/money-expression'
 
 export interface AmountInputProps extends Omit<InputProps, 'type' | 'onChange' | 'value'> {
   /** Current field text. Controlled, exactly like the Input it replaces. */
@@ -15,22 +16,24 @@ export interface AmountInputProps extends Omit<InputProps, 'type' | 'onChange' |
  * An amount field that accepts arithmetic: `1200+300`, `4500*0,25`, `12500/4`.
  *
  * The expression is evaluated when the field is left (blur, Enter or Tab), and
- * the result is written back into the field, so the number that will be booked
- * is on screen before anything is committed. Nothing is evaluated while typing:
- * a value that changes under the user's fingers mid-keystroke is worse than no
- * arithmetic at all.
+ * the result is written back into the field (formatAmountInput), so the number
+ * that will be booked is on screen before anything is committed. A plain
+ * amount is left as typed. Nothing is evaluated while typing: a value that
+ * changes under the user's fingers mid-keystroke is worse than no arithmetic
+ * at all.
+ *
+ * The caller reads the field with parseAmountExpression, never parseFloat or
+ * parseAmountInput: a form submitted from the keyboard can read the text
+ * before the write-back lands, and parseFloat('1200+300') is 1200.
  *
  * Deliberately `type="text"`, not `type="number"`. A native number input
  * discards anything non-numeric, so the browser would eat the `+` before this
- * component ever saw it. Going through text also fixes a separate long-standing
- * papercut: `type="number"` rejects the Swedish decimal comma on some browser
- * and locale combinations, and `parseFloat('1200,50')` silently reads 1200.
- * Here the comma is parsed and normalised on blur. `inputMode="decimal"` keeps
- * the numeric keypad on mobile.
+ * component ever saw it. `inputMode="decimal"` keeps the numeric keypad on
+ * mobile.
  *
  * Unparseable text is left exactly as typed: no write-back, no coercion to
- * zero. The user sees what they wrote, and the form's own validation (which
- * still reads the field with parseFloat) refuses to submit it.
+ * zero. The user sees what they wrote, and the caller, reading null, refuses
+ * to submit it.
  */
 const AmountInput = React.forwardRef<HTMLInputElement, AmountInputProps>(
   ({ value, onValueChange, onBlur, onKeyDown, ...props }, ref) => {
@@ -42,8 +45,9 @@ const AmountInput = React.forwardRef<HTMLInputElement, AmountInputProps>(
       // carries the sign in double-entry bookkeeping, so leave the text for the
       // user to fix rather than writing back a number the form would reject.
       if (result === null || result < 0) return
-      const canonical = formatAmountValue(result)
-      if (canonical !== value) onValueChange(canonical)
+      // A plain amount already says what will be booked: keep it as typed.
+      if (parseAmountInput(raw) !== null) return
+      onValueChange(formatAmountInput(result))
     }, [value, onValueChange])
 
     const handleBlur = React.useCallback(

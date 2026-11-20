@@ -1,4 +1,4 @@
-import { roundOre } from '@/lib/money'
+import { parseDecimalInput, roundOre } from '@/lib/money'
 
 /**
  * Arithmetic in amount fields.
@@ -6,16 +6,18 @@ import { roundOre } from '@/lib/money'
  * Paper bookkeeping is done next to a calculator, and every desktop ledger
  * program from GnuCash onwards lets you type the calculation straight into the
  * amount cell: `1200+300` for two receipts on one line, `4500*0.25` for the
- * moms, `12500/3` for a cost split three ways. Accounted parsed amount fields
- * with a bare `parseFloat`, which reads `1200+300` as 1200 and books the wrong
- * number without a word.
+ * moms, `12500/3` for a cost split three ways. An amount field that reads one
+ * amount (parseAmountInput) refuses `1200+300`, so the sum had to be worked
+ * out elsewhere first.
  *
  * This is a deliberately tiny recursive-descent parser rather than a dependency
  * (mathjs and friends are two orders of magnitude larger than the four
  * operators actually wanted here, and the repo audits its dependency surface).
- * It understands `+ - * /`, parentheses, unary sign, Swedish decimal comma, and
- * spaces as thousands separators. Nothing else: no variables, no functions, no
- * exponentiation, so there is no evaluation surface to abuse.
+ * It understands `+ - * /`, parentheses and unary sign; each number in it is
+ * read with the same grammar as a plain amount field (parseDecimalInput), so a
+ * plain amount means here exactly what it means to parseAmountInput. Nothing
+ * else: no variables, no functions, no exponentiation, and nothing is ever
+ * handed to eval or Function, so there is no evaluation surface to abuse.
  *
  * Invalid input returns null, and callers must leave the user's text alone when
  * it does. Never coerce an unparseable amount to zero: a silently zeroed line
@@ -48,8 +50,9 @@ function tokenize(input: string): Token[] | null {
   while (i < s.length) {
     const c = s[i]
 
-    if (c === '+' || c === '-' || c === '*' || c === '/') {
-      tokens.push({ kind: 'op', value: c })
+    // U+2212, the minus sign a pasted formatted amount can carry, is a minus.
+    if (c === '+' || c === '-' || c === '\u2212' || c === '*' || c === '/') {
+      tokens.push({ kind: 'op', value: c === '\u2212' ? '-' : c })
       i++
       continue
     }
@@ -64,29 +67,17 @@ function tokenize(input: string): Token[] | null {
       continue
     }
 
-    // A number: digits with at most one decimal separator, comma or point.
-    // Both are accepted because a Swedish keyboard produces the comma and the
-    // numeric keypad produces the point, and the user should not have to care.
+    // A number: the run of digits and decimal marks, read with the grammar
+    // every typed amount field uses (parseDecimalInput in lib/money.ts): a
+    // comma or a point as the decimal, the other only grouping whole
+    // thousands. A Swedish keyboard writes the comma, a numeric keypad the
+    // point, and the user should not have to care.
     const start = i
-    let seenSeparator = false
-    while (i < s.length) {
-      const d = s[i]
-      if (d >= '0' && d <= '9') {
-        i++
-        continue
-      }
-      if ((d === ',' || d === '.') && !seenSeparator) {
-        seenSeparator = true
-        i++
-        continue
-      }
-      break
-    }
+    while (i < s.length && /[0-9.,]/.test(s[i])) i++
     if (i === start) return null // unrecognised character
 
-    const literal = s.slice(start, i).replace(',', '.')
-    const value = Number(literal)
-    if (!Number.isFinite(value)) return null
+    const value = parseDecimalInput(s.slice(start, i))
+    if (value === null) return null
     tokens.push({ kind: 'num', value })
   }
 
@@ -171,8 +162,8 @@ function parse(tokens: Token[]): number | null {
  * the text is not a well-formed expression (in which case the caller keeps the
  * raw text so the user can see and fix what they typed).
  *
- * A plain number is just the degenerate case, so this is a safe drop-in for the
- * `parseFloat` it replaces: `parseAmountExpression('1200,50')` is 1200.5.
+ * A plain amount is the degenerate case: `parseAmountExpression('1200,50')` is
+ * 1200.5, as parseAmountInput reads it.
  */
 export function parseAmountExpression(raw: string): number | null {
   const tokens = tokenize(raw)
@@ -180,16 +171,4 @@ export function parseAmountExpression(raw: string): number | null {
   const value = parse(tokens)
   if (value === null || !Number.isFinite(value)) return null
   return roundOre(value)
-}
-
-/**
- * Canonical text for an evaluated amount, written back into the field so the
- * user sees the number that will actually be booked before committing.
- *
- * Uses a point as the decimal separator because that is what the form state and
- * its `parseFloat` consumers already expect (and what fill-balance writes). No
- * trailing-zero padding: the field is an input, not a report column.
- */
-export function formatAmountValue(value: number): string {
-  return String(roundOre(value))
 }
