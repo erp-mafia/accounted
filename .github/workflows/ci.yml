@@ -258,20 +258,6 @@ jobs:
     name: pg-real
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
-    services:
-      postgres:
-        # Ships the auth schema, auth.uid() and the extensions the migrations
-        # need.
-        image: supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       PGPASSWORD: postgres
@@ -282,22 +268,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Postgres downloads and starts while the toolchain installs.
+      - uses: ./.github/actions/start-postgres
       - uses: ./.github/actions/setup-core
         with:
           zero-extensions: 'false'
-      - name: Wait for Postgres
-        # The image initialises and restarts once, and the health check can
-        # pass on the first start: wait until it answers twice over TCP.
-        run: |
-          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null; }
-          for _ in $(seq 1 90); do
-            if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
-              sleep 3
-              psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
-            fi
-            sleep 2
-          done
-          psql "$DATABASE_URL" -tAc 'select version()'
+      - uses: ./.github/actions/wait-for-postgres
       - name: Bootstrap
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
@@ -307,14 +283,21 @@ jobs:
         # extensions schema: the session a fresh `supabase db push` gets. A
         # migration that names an extension's type or function without its
         # schema (vector, not extensions.vector) fails here, as it would there.
+        # One session for all of them, a fresh session per file
+        # (scripts/ci/replay-migrations.sh).
         env:
           PGOPTIONS: -c search_path="$user",public
-        run: |
-          set -euo pipefail
-          for f in supabase/migrations/*.sql; do
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null || { echo "Failed applying $f"; exit 1; }
-          done
+        run: scripts/ci/replay-migrations.sh supabase/migrations/*.sql
       - run: npm run test:pg
+      - name: Stop Postgres
+        # Started by hand (start-postgres), so nothing else removes it. When an
+        # earlier step failed, its log goes to the job log first.
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" != "success" ]; then docker logs --tail 200 ci-postgres 2>&1 || true; fi
+          docker rm -f -v ci-postgres >/dev/null 2>&1 || true
 
   # Schema at the merge base, real rows seeded, then ONLY the new migrations on
   # top: proves existing data survives them. A pull request that adds no
@@ -324,18 +307,6 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
-    services:
-      postgres:
-        image: supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       PGPASSWORD: postgres
@@ -345,7 +316,8 @@ jobs:
           # Full history, so the merge base is present.
           fetch-depth: 0
           persist-credentials: false
-      - name: Upgrade test
+      - name: New migrations
+        id: new
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -358,30 +330,48 @@ jobs:
           COUNT=$(wc -l < "$RUNNER_TEMP/new-migrations.txt" | tr -d ' ')
           echo "New migrations ($COUNT):"
           cat "$RUNNER_TEMP/new-migrations.txt"
-          if [ "$COUNT" = "0" ]; then echo "This pull request adds no migration; nothing to upgrade-test."; exit 0; fi
-          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null; }
-          # The image initialises and restarts once: wait until it answers twice.
-          for _ in $(seq 1 90); do
-            if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
-              sleep 3
-              psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
-            fi
-            sleep 2
-          done
-          psql "$DATABASE_URL" -tAc 'select version()'
+          if [ "$COUNT" = "0" ]; then echo "This pull request adds no migration; nothing to upgrade-test."; fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+      # Only a pull request that adds a migration starts a database.
+      - if: steps.new.outputs.count != '0'
+        uses: ./.github/actions/start-postgres
+      - name: Base migrations from the merge base
+        if: steps.new.outputs.count != '0'
+        # Read from the merge-base tree, not the working tree, so an edit to
+        # a shipped migration cannot hide itself here. Written out while
+        # Postgres starts.
+        env:
+          BASE: ${{ steps.new.outputs.base }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/base"
+          while read -r f; do
+            git show "$BASE:$f" > "$RUNNER_TEMP/base/$(basename "$f")"
+          done < "$RUNNER_TEMP/base-migrations.txt"
+      - if: steps.new.outputs.count != '0'
+        uses: ./.github/actions/wait-for-postgres
+      - name: Upgrade test
+        if: steps.new.outputs.count != '0'
+        run: |
+          set -euo pipefail
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
-          # Read from the merge-base tree, not the working tree, so an edit to
-          # a shipped migration cannot hide itself here.
-          while read -r f; do
-            git show "$BASE:$f" | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q >/dev/null || { echo "Failed applying (base) $f"; exit 1; }
-          done < "$RUNNER_TEMP/base-migrations.txt"
+          mapfile -t base < <(sed "s|^supabase/migrations/|$RUNNER_TEMP/base/|" "$RUNNER_TEMP/base-migrations.txt")
+          scripts/ci/replay-migrations.sh "${base[@]}"
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/upgrade/seed.sql
-          while read -r f; do
-            echo "Applying (new) $f"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
-          done < "$RUNNER_TEMP/new-migrations.txt"
+          mapfile -t new < "$RUNNER_TEMP/new-migrations.txt"
+          scripts/ci/replay-migrations.sh "${new[@]}"
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/pg/upgrade/assert.sql
+      - name: Stop Postgres
+        # Started by hand (start-postgres), so nothing else removes it. When an
+        # earlier step failed, its log goes to the job log first.
+        if: ${{ always() && steps.new.outputs.count != '0' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" != "success" ]; then docker logs --tail 200 ci-postgres 2>&1 || true; fi
+          docker rm -f -v ci-postgres >/dev/null 2>&1 || true
 
   # MCP tools driven through a real supabase-js client against a real
   # PostgREST.
@@ -389,18 +379,6 @@ jobs:
     name: tool-pg
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
-    services:
-      postgres:
-        image: supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       TOOL_PG_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -410,6 +388,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Postgres downloads and starts while the toolchain installs.
+      - uses: ./.github/actions/start-postgres
       - uses: ./.github/actions/setup-core
         with:
           zero-extensions: 'false'
@@ -421,6 +401,15 @@ jobs:
         # starts PostgREST on this runner fails.
         if: ${{ always() }}
         run: docker rm -f postgrest >/dev/null 2>&1 || true
+      - name: Stop Postgres
+        # Started by hand (start-postgres), so nothing else removes it. When an
+        # earlier step failed, its log goes to the job log first.
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" != "success" ]; then docker logs --tail 200 ci-postgres 2>&1 || true; fi
+          docker rm -f -v ci-postgres >/dev/null 2>&1 || true
 
   core-build:
     name: Core Build
