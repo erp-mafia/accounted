@@ -1,6 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { TIC_CALL_PURPOSES, TIC_PROVIDER, ticBudgetCaps, ticCycleStart, type TicBudgetCaps, type TicCallPurpose } from './budget'
+import {
+  TIC_CALL_PURPOSES,
+  TIC_PROVIDER,
+  ticBudgetCaps,
+  ticCycleStart,
+  ticTotalCapFor,
+  type TicBudgetCaps,
+  type TicCallPurpose,
+} from './budget'
 import { ticProxyHeaders } from './proxy'
+import { ticBudgetServiceClient } from './service-client'
+import { addMonthsIso } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('tic-budget.status')
@@ -80,6 +90,29 @@ export async function readTicLocalCounters(
     else if (row.purpose in byPurpose) byPurpose[row.purpose as TicCallPurpose] = row.calls
   }
   return { total, byPurpose }
+}
+
+/**
+ * Whether `purpose` has spent what this quota cycle allows it, from our own
+ * counters (no Lens call), and the day the next cycle starts (YYYY-MM-DD).
+ * Null when the counters cannot be read: the caller then claims nothing about
+ * the budget.
+ */
+export async function readTicPurposeSpent(
+  purpose: TicCallPurpose,
+  client: SupabaseClient | null = ticBudgetServiceClient(),
+  now: Date = new Date(),
+): Promise<{ spent: boolean; resumesOn: string } | null> {
+  if (!client) return null
+  const caps = ticBudgetCaps()
+  const cycleStart = ticCycleStart(now, caps.cycleResetDay)
+  const local = await readTicLocalCounters(client, cycleStart)
+  if (!local) return null
+  const purposeCap = caps.purpose[purpose]
+  const spent =
+    local.total >= ticTotalCapFor(purpose, caps) ||
+    (purposeCap !== null && local.byPurpose[purpose] >= purposeCap)
+  return { spent, resumesOn: addMonthsIso(cycleStart, 1) }
 }
 
 export async function readTicBudgetStatus(client: SupabaseClient, now: Date = new Date()): Promise<TicBudgetStatus> {

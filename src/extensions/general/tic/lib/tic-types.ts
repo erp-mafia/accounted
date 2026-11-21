@@ -425,6 +425,14 @@ export interface TICCompanyProfile {
   representatives: TICProfileRepresentative[]
   payrolls: TICProfilePayrollPeriod[]
   statuses: TICProfileStatus[]
+  /**
+   * Keys of this profile whose detail call failed (budget spent, timeout,
+   * upstream error), so their empty value means "could not ask", not "nothing
+   * registered". Empty when every call answered. The snapshot cache
+   * (lib/agent/composer/tic-fetch) keeps the last answered value for these
+   * keys and asks again sooner.
+   */
+  incompleteSections: string[]
   fetchedAt: string
 }
 

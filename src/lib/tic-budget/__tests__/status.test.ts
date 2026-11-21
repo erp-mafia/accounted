@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { readTicBudgetStatus, readTicUpstreamLimits } from '../status'
+import { readTicBudgetStatus, readTicPurposeSpent, readTicUpstreamLimits } from '../status'
 
 const PROXY_URL = 'https://proxy.example.com/api/tic/proxy'
 const NOW = new Date('2026-10-28T10:00:00Z')
@@ -84,5 +84,36 @@ describe('readTicBudgetStatus', () => {
     expect(status.local).toBeNull()
     expect(status.upstream).toBeNull()
     expect(status.unattributed).toBeNull()
+  })
+})
+
+describe('readTicPurposeSpent', () => {
+  const NOV = new Date('2026-11-19T18:00:00Z')
+  const counters = (rows: { purpose: string; calls: number }[]) =>
+    createTableMockSupabase({ external_call_budget: { data: rows } }).supabase as unknown as SupabaseClient
+
+  it('is spent once the total reaches what a non-priority purpose may use, and names the next cycle', async () => {
+    const client = counters([
+      { purpose: '_total', calls: 2661 },
+      { purpose: 'refresh', calls: 275 },
+    ])
+    await expect(readTicPurposeSpent('refresh', client, NOV)).resolves.toEqual({ spent: true, resumesOn: '2026-11-22' })
+    // The onboarding lookup may still spend the reserve.
+    await expect(readTicPurposeSpent('onboarding_lookup', client, NOV)).resolves.toEqual({ spent: false, resumesOn: '2026-11-22' })
+  })
+
+  it('is spent when the purpose cap is reached under the total', async () => {
+    const client = counters([
+      { purpose: '_total', calls: 1300 },
+      { purpose: 'composer', calls: 1200 },
+    ])
+    await expect(readTicPurposeSpent('composer', client, NOV)).resolves.toMatchObject({ spent: true })
+    await expect(readTicPurposeSpent('refresh', client, NOV)).resolves.toMatchObject({ spent: false })
+  })
+
+  it('claims nothing when the counters cannot be read or there is no client', async () => {
+    const broken = createTableMockSupabase({ external_call_budget: { error: { code: '42P01' } } })
+    await expect(readTicPurposeSpent('refresh', broken.supabase as unknown as SupabaseClient, NOV)).resolves.toBeNull()
+    await expect(readTicPurposeSpent('refresh', null, NOV)).resolves.toBeNull()
   })
 })
