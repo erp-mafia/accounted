@@ -26076,7 +26076,7 @@ export const tools: McpTool[] = [
         if (deductionLines.length > 0 && (invoice.document_type ?? 'invoice') !== 'invoice') {
           throw codedRefusal(
             'INVOICE_CREATE_ROT_RUT_VALIDATION',
-            `Skattereduktion: ${DEDUCTION_INVOICE_ONLY_ERROR} Pass these lines with deduction_type null, or convert the quote with gnubok_convert_invoice and set the deduction on the invoice draft.`,
+            `Skattereduktion: ${DEDUCTION_INVOICE_ONLY_ERROR} Pass these lines with deduction_type null and set the deduction on an invoice instead (gnubok_convert_invoice turns a quote or proforma into an invoice draft; a delivery note cannot be converted).`,
           )
         }
         if (deductionLines.length > 0) {

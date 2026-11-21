@@ -19,6 +19,16 @@ describe('describeInvoiceBuildRefusal: ROT/RUT', () => {
     expect(text).not.toMatch(/customer card/)
   })
 
+  it('does not send a delivery note to a conversion that refuses it', () => {
+    const text = describeInvoiceBuildRefusal('INVOICE_CREATE_ROT_RUT_VALIDATION', {
+      reason: 'document_type',
+      documentType: 'delivery_note',
+      errors: [DEDUCTION_INVOICE_ONLY_ERROR],
+      warnings: [],
+    })
+    expect(text).toMatch(/delivery note cannot be converted/)
+  })
+
   it('keeps the personnummer hint for a claim refused on an invoice', () => {
     const text = describeInvoiceBuildRefusal('INVOICE_CREATE_ROT_RUT_VALIDATION', {
       errors: ['Personnummer krävs för ROT-avdrag.'],
