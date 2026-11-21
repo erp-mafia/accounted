@@ -47,11 +47,6 @@ const HAND_ROLLED_GATES: Readonly<Record<string, Gate>> = {
   // The assistant: requireAuth and a membership; the handler refuses only the invoicer.
   'POST /api/agent/ask': 'reader',
   'POST /api/agent/invoke': 'reader',
-  // The assistant's onboarding pipeline writes agent_profiles: the handler refuses viewer and invoicer.
-  'POST /api/agent/onboarding/stream': 'write',
-  // withRouteContext without a role option; the handler refuses a viewer.
-  'PATCH /api/agent/profile': 'write',
-  'POST /api/agent/profile/verify': 'write',
   // The handler refuses everyone but the owner.
   'POST /api/company/:id/delete': 'owner',
   // Bank payment packs charge the company's card: the handler refuses everyone but the owner.

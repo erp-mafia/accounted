@@ -151,7 +151,7 @@ export const reportsInk2 = defineOperation({
   docs: {
     summary: 'INK2 inkomstdeklaration (aktiebolag): INK2, INK2R and INK2S fields for a räkenskapsår.',
     description:
-      'Computes the aktiebolag income tax return from the books, keyed by SRU field code: ink2 (page 1: 7104 överskott / 7114 underskott), ink2r (räkenskapsschema: balance sheet and income statement, the balance sheet from the closed books and the income statement before the resultatavslut) and ink2s (skattemässiga justeringar, including the adjustments saved in the year-end flow), with the per-code account breakdown, totals and warnings. The SRU files for upload at skatteverket.se are served by GET /reports/ink2/sru; sru_file names that path. Read-only.',
+      'Computes the aktiebolag income tax return from the books, keyed by SRU field code: ink2 (page 1: 7104 överskott / 7114 underskott, 7132/7133 underlag för särskild löneskatt på pensionskostnader from 7410-7419), ink2r (räkenskapsschema: balance sheet and income statement, the balance sheet from the closed books and the income statement before the resultatavslut) and ink2s (skattemässiga justeringar, including the adjustments saved in the year-end flow), with the per-code account breakdown, totals and warnings. The SRU files for upload at skatteverket.se are served by GET /reports/ink2/sru; sru_file names that path. Read-only.',
     useWhen:
       'Preparing or checking the aktiebolag income tax return after bokslut, or reconciling INK2R figures against the årsredovisning.',
     doNotUseFor:
@@ -160,7 +160,7 @@ export const reportsInk2 = defineOperation({
       'Only for aktiebolag: another legal form answers 400 TAX_DECL_INK2_WRONG_LEGAL_FORM.',
       'Amounts are whole kronor as Skatteverket takes them; codes with no amount are 0.',
       'Run it after the year-end closing: before bokslut the tax (8910) and bokslutsdispositioner are missing, and warnings say so.',
-      'ink2s is not the whole INK2S. Computed: 7650/7750 (4.1/4.2), 7651 (4.3a), 7653 (4.3c) and 7754 (4.5c) from the year-end adjustments, 7654 (4.6a, schablonintäkt on the opening periodiseringsfonder: statslåneräntan of 30 November the year before the calendar year the räkenskapsår ends in, at least 0.5 %, times whole months / 12, so brutet, short and long years are covered; a year that starts or ends mid-month, or whose rate is not published yet, gets 0 with a warning naming the opening fonder), 7666/7765 (4.9), 7763 (4.14a) and 7670/7770 (4.15/4.16). 7763 is the deficit saved in the year-end flow or the underskottsregister, never read from last year\'s return: 0 means none was entered, not that none exists. Every other INK2S row and the upplysningar about the årsredovisning (8040/8041 uppdragstagare, 8044/8045 revision) are neither computed nor in the SRU file; they are entered in Skatteverket\'s e-tjänst.',
+      'ink2s is not the whole INK2S. Computed: 7650/7750 (4.1/4.2), 7651 (4.3a), 7652 (4.3b, write-downs of financial assets), 7653 (4.3c), 7753 (4.5b, dividends) and 7754 (4.5c) from the year-end adjustments, 7673 (4.6d, the 6 % or 4 % uppräkning on periodiseringsfonder set aside before 2021 and återförda this year, oldest first; 0 with a warning when a fond names no year or its year cannot be told), 7654 (4.6a, schablonintäkt on the opening periodiseringsfonder: statslåneräntan of 30 November the year before the calendar year the räkenskapsår ends in, at least 0.5 %, times whole months / 12, so brutet, short and long years are covered; a year that starts or ends mid-month, or whose rate is not published yet, gets 0 with a warning naming the opening fonder), 7666/7765 (4.9), 7763 (4.14a) and 7670/7770 (4.15/4.16). 7763 is the deficit saved in the year-end flow or the underskottsregister, never read from last year\'s return: 0 means none was entered, not that none exists. Every other INK2S row and the upplysningar about the årsredovisning (8040/8041 uppdragstagare, 8044/8045 revision) are neither computed nor in the SRU file; they are entered in Skatteverket\'s e-tjänst.',
       'A period id from another company answers 404 FISCAL_PERIOD_NOT_FOUND.',
     ],
     example: {
@@ -228,12 +228,12 @@ export const reportsNeBilaga = defineOperation({
   risk: 'low',
   reversible: false,
   docs: {
-    summary: 'NE-bilaga (enskild firma): rutor R1-R11 for a räkenskapsår.',
+    summary: 'NE-bilaga (enskild firma): balansräkning B1-B16 and rutor R1-R11 for a räkenskapsår.',
     description:
-      'Computes the NE-bilaga rutor R1-R11 from the books before the resultatavslut (försäljning, momsfria intäkter, varuinköp, övriga kostnader, lönekostnader, räntor, avskrivningar, årets resultat), with the per-ruta account breakdown and warnings. The owner\'s personnummer (the enskild firma\'s org number) is masked in this JSON; the SRU files for upload at skatteverket.se, served by GET /reports/ne-bilaga/sru, carry it in full. Read-only.',
+      'Computes the NE-bilaga rutor R1-R11 from the books before the resultatavslut (försäljning, momsfria intäkter, varuinköp, övriga kostnader, lönekostnader, räntor, avskrivningar, årets resultat) and the balansräkning B1-B16 at the year\'s end (balans, per BAS kopplingstabell NE_EJ_K1; B10 eget kapital is tillgångar minus skulder), with the per-ruta account breakdown and warnings. The owner\'s personnummer (the enskild firma\'s org number) is masked in this JSON; the SRU files, served by GET /reports/ne-bilaga/sru, carry it in full and hold B1-B16, R1-R11 and sida 2 R12-R14 (R13 and R14 are the tax adjustments, as in sida2). Read-only.',
     useWhen: 'Preparing or checking the enskild firma\'s NE-bilaga after bokslut.',
     doNotUseFor:
-      'Aktiebolag (GET /reports/ink2), the egenavgifter / räntefördelning / periodiseringsfond adjustments (MCP gnubok_preview_ef_declaration), or submitting (upload the SRU files at skatteverket.se).',
+      'Aktiebolag (GET /reports/ink2), the egenavgifter / räntefördelning / periodiseringsfond adjustments (MCP gnubok_preview_ef_declaration), or submitting (the owner imports blanketter.sru in Skatteverket\'s Inkomstdeklaration 1 e-tjänst, Bilagor, Enskild näringsverksamhet (NE), and completes sida 2 there).',
     pitfalls: [
       'Only for enskild firma: another legal form answers 400 TAX_DECL_NE_WRONG_LEGAL_FORM.',
       'companyInfo.orgNumber is masked (last four digits XXXX): take the full number from the SRU file or the company settings, never from this JSON.',
@@ -245,6 +245,7 @@ export const reportsNeBilaga = defineOperation({
         data: {
           fiscalYear: { fiscal_period_id: '7c2b…', name: '2025', start: '2025-01-01', end: '2025-12-31', isClosed: true },
           rutor: { R1: 480000, R2: 0, R3: 0, R4: 0, R5: 120000, R6: 95000, R7: 0, R8: 0, R9: 0, R10: 12000, R11: 253000 },
+          balans: { B4: 36000, B7: 40000, B9: 210000, B10: 238000, B16: 48000 },
           companyInfo: { companyName: 'Anna Svensson Konsult', orgNumber: '19800101-XXXX', entityType: 'enskild_firma', addressLine1: null, postalCode: null, city: null, email: null },
           warnings: [],
           sru_file: { download: '/api/v1/companies/…/reports/ne-bilaga/sru?period_id=7c2b…', content_type: 'application/zip', files: ['INFO.SRU', 'BLANKETTER.SRU'] },
@@ -258,6 +259,7 @@ export const reportsNeBilaga = defineOperation({
     .object({
       fiscalYear: FiscalYear,
       rutor: z.record(z.string(), z.number()),
+      balans: z.record(z.string(), z.number()),
       breakdown: Breakdown,
       companyInfo: CompanyInfo,
       warnings: z.array(z.string()),
@@ -270,7 +272,7 @@ export const reportsNeBilaga = defineOperation({
     name: 'gnubok_get_ne_bilaga',
     title: 'NE-bilaga (Enskild Firma)',
     description:
-      'Enskild firma NE-bilaga rutor R1-R11 for a räkenskapsår, with account breakdown and warnings. The owner\'s personnummer is masked. The SRU files are a v1 download (sru_file.download).',
+      'Enskild firma NE-bilaga for a räkenskapsår: balansräkning B1-B16 and rutor R1-R11, with account breakdown and warnings. The owner\'s personnummer is masked. The SRU files are a v1 download (sru_file.download).',
     keywords: ['ne-bilaga', 'ne bilaga', 'enskild firma deklaration', 'näringsverksamhet', 'sru'],
   },
   run: async (ctx, { period_id }) => {

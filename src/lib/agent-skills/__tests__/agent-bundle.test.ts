@@ -78,7 +78,6 @@ describe('loadAgentBundle', () => {
     enqueue({ count: 0 })
     enqueue({ data: [] })
     enqueue({ data: null })
-    enqueue({ data: null }) // profile summary
     enqueue({ data: [] }) // memory
     const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'kvittojakten', 'chatgpt'))!
     expect(bundle.workflow.slug).toBe('kvittojakten-chatgpt')
@@ -107,14 +106,16 @@ describe('loadAgentBundle: company knowledge', () => {
     const run = async (id: 'quarterly-vat-review' | 'year-end-close') => {
       enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
       enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
-      enqueue({ data: { profile_summary: 'IT-konsult i Stockholm.' } })
       enqueue({ data: [{ content: 'Representation bokförs alltid på 6071.', created_at: '2026-08-01T10:00:00Z' }] })
       return (await loadAgentBundle(supabase as never, 'company-a', id))!
     }
     const vat = (await run('quarterly-vat-review')).company_knowledge
     expect(vat.facts.map((f) => f.label)).toEqual(['Redovisningsmetod', 'Bokföringsmetod'])
     expect(vat).not.toHaveProperty('agreements')
-    expect(vat).toMatchObject({ name: 'Arcim Technology AB', onboarding_summary: 'IT-konsult i Stockholm.', remembered: [{ text: 'Representation bokförs alltid på 6071.', saved_at: '2026-08-01T10:00:00Z' }], documents: { total: 300 } })
+    // The text the removed build wrote (agent_profiles.profile_summary) is not handed on.
+    expect(vat).not.toHaveProperty('onboarding_summary')
+    expect(findCalls('agent_profiles', 'select').flat().join(' ')).not.toContain('profile_summary')
+    expect(vat).toMatchObject({ name: 'Arcim Technology AB', remembered: [{ text: 'Representation bokförs alltid på 6071.', saved_at: '2026-08-01T10:00:00Z' }], documents: { total: 300 } })
     const yearEnd = (await run('year-end-close')).company_knowledge
     expect(yearEnd.facts.map((f) => f.label)).toEqual(['Bokföringsmetod', 'Styrelse'])
     expect(yearEnd.agreements?.map((a) => a.title)).toEqual(['Lån Almi'])
@@ -126,7 +127,6 @@ describe('loadAgentBundle: remembered facts', () => {
     vi.mocked(buildArkivMap).mockResolvedValue(null as never)
     enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
-    enqueue({ data: null })
     // Out of date order on purpose: the bundle sorts newest first itself.
     enqueue({ data: [
       { id: 'm-1', kind: 'fact', content: 'K2 vs K3-valet är ej beslutat.', relevance_score: 0.8, created_at: '2026-06-02T08:00:00Z' },
@@ -148,7 +148,6 @@ describe('loadAgentBundle: remembered facts', () => {
     vi.mocked(buildArkivMap).mockResolvedValue(null as never)
     enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
-    enqueue({ data: null })
     enqueue({ data: [
       { id: 'm-2', kind: 'fact', content: 'Bolaget tillämpar K3.', relevance_score: 0.8, created_at: '2026-09-10T08:00:00Z', created_by_user_id: 'u-anna' },
       { id: 'm-1', kind: 'fact', content: 'Hyran är 14 000 kr.', relevance_score: 0.8, created_at: '2026-06-02T08:00:00Z', created_by_user_id: 'u-gone' },
@@ -169,7 +168,6 @@ describe('loadAgentBundle: remembered facts', () => {
     vi.mocked(buildArkivMap).mockResolvedValue(null as never)
     enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
-    enqueue({ data: null })
     enqueue({ data: null, error: { message: 'rls-denied' } })
     const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'year-end-close'))!
     expect(bundle.company_knowledge.remembered).toEqual([])
@@ -196,7 +194,7 @@ describe('loadAgentBundle: the company chooses the knowledge', () => {
     enqueue({ data: bodies })
     enqueue({ data: [] }) // references + profile atoms
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null }) // connections
-    enqueue({ data: null }); enqueue({ data: [] }) // summary, memory
+    enqueue({ data: [] }) // memory
     return (await loadAgentBundle(supabase as never, 'company-a', 'quarterly-vat-review'))!
   }
 
@@ -252,7 +250,7 @@ describe('loadAgentBundle: the company chooses the knowledge', () => {
     enqueue({ data: [atom('horizontal/swedish-accounting-compliance', { body: '# BFL' }), atom('horizontal/swedish-vat', { body: '# Moms' })] })
     enqueue({ data: [] })
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
-    enqueue({ data: null }); enqueue({ data: [] })
+    enqueue({ data: [] })
     const bundle = (await loadAgentBundle(supabase as never, 'company-a', `own/${ownId}`))!
     expect(bundle.agent.name).toBe('Påminnelse')
     expect(bundle.knowledge.map((k) => [k.id, k.source])).toEqual([['horizontal/swedish-accounting-compliance', 'default'], ['horizontal/swedish-vat', 'added']])
@@ -274,7 +272,7 @@ describe('loadAgentBundle: the company chooses the knowledge', () => {
     enqueue({ data: [atom('horizontal/swedish-accounting-compliance', { body: '# BFL' })] })
     enqueue({ data: { team_id: null } }) // companies, for the own knowledge
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null }) // connections
-    enqueue({ data: null }); enqueue({ data: [] }) // summary, memory
+    enqueue({ data: [] }) // memory
     enqueue({ data: skills }) // the own knowledge
     const bundle = (await loadAgentBundle(supabase as never, 'company-a', `own/${ownId}`))!
     expect(bundle.knowledge.map((k) => [k.id, k.tier, k.source, k.title])).toEqual([
@@ -302,7 +300,7 @@ describe('industry sections by area', () => {
     enqueue({ data: knowledge })
     enqueue({ data: [pack] }) // references + profile atoms
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null }) // connections
-    enqueue({ data: null }); enqueue({ data: [] }) // summary, memory
+    enqueue({ data: [] }) // memory
     enqueue({ data: sections })
     return (await loadAgentBundle(supabase as never, 'company-a', id))!
   }
@@ -338,7 +336,7 @@ describe('industry sections by area', () => {
     enqueue({ data: [] })
     enqueue({ data: [] }) // the pack itself is not live
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
-    enqueue({ data: null }); enqueue({ data: [] })
+    enqueue({ data: [] })
     enqueue({ data: [section('invoice-templates', ['fakturering'], { body: '# Invoice' })] })
     const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'invoicing-rules'))!
     expect(bundle.industry_sections).toEqual([])
@@ -348,7 +346,7 @@ describe('industry sections by area', () => {
     vi.mocked(buildArkivMap).mockResolvedValue(null as never)
     enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
-    enqueue({ data: null }); enqueue({ data: [] })
+    enqueue({ data: [] })
     const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'invoicing-rules'))!
     expect(bundle.industry_sections).toEqual([])
     expect(findCalls('agent_atom_registry', 'in').some(([col]) => col === 'parent_atom_id')).toBe(false)
@@ -364,7 +362,7 @@ describe('industry sections by area', () => {
     enqueue({ data: [atom('horizontal/swedish-accounting-compliance', { body: '# BFL' })] })
     enqueue({ data: [pack] })
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
-    enqueue({ data: null }); enqueue({ data: [] })
+    enqueue({ data: [] })
     const bundle = (await loadAgentBundle(supabase as never, 'company-a', `own/${ownId}`))!
     expect(bundle.industry_sections).toEqual([])
     expect(bundle.company.map((c) => c.id)).toEqual(['vertical/konsult-it'])

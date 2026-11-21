@@ -142,7 +142,20 @@ export function BankPaymentAccountGate({
   }
   if (!availability.available) return <AttnLine>{t('unavailable')}</AttnLine>
   if (payableAccounts.length === 0) {
-    return <AttnLine>{unsupportedBank ? t('account_none_bank_not_supported', { bank: unsupportedBank }) : t('account_none')}</AttnLine>
+    // An account whose bank cannot be told meets the IBAN requirement already: the
+    // line says the bank is the obstacle, not the account (crm#2071).
+    // A bank that is not supported wins over one that cannot be told, named when
+    // a connection gives the name and unnamed for an account typed in by hand.
+    const bankNotSupported = availability.accounts.some((a) => a.reason === 'bank_not_supported')
+    const bankUnknown = availability.accounts.some((a) => a.reason === 'bank_unknown')
+    const line = unsupportedBank
+      ? t('account_none_bank_not_supported', { bank: unsupportedBank })
+      : bankNotSupported
+        ? t('account_none_bank_not_supported_unnamed')
+        : bankUnknown
+          ? t('account_none_bank_unknown')
+          : t('account_none')
+    return <AttnLine>{line}</AttnLine>
   }
   return <>{children}</>
 }

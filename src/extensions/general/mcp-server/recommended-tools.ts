@@ -212,6 +212,7 @@ export const WORKFLOW_SKILLS_WITHOUT_LOADOUT: Readonly<Record<string, string>> =
   'kreditfaktura-process': 'Exception path started from one invoice, not a recurring batch.',
   'customer-onboarding': 'Decision tree for one customer record; invoice_run carries the customer tools.',
   onboarding: 'One-time company setup through the connect_* tools in the default catalog.',
+  'start-company': 'One-time formation of a new aktiebolag through one tool, gnubok_formation, in the default catalog.',
   'create-skill': "Authors the user's own skill with one tool, gnubok_create_skill.",
   'company-facts-import': 'One-time onboarding import through gnubok_remember_fact, in the default catalog.',
   'kvittojakten-claude': 'Client variant of kvittojakten, which receipt_hunt names.',

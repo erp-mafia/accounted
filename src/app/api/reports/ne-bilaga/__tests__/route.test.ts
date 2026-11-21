@@ -45,6 +45,10 @@ function blockedDeclaration() {
     warnings: [BLOCKER],
     bookedResult: 479_900,
     sruBlockers: [BLOCKER],
+    balans: { B1: 0, B2: 0, B3: 0, B4: 0, B5: 0, B6: 0, B7: 0, B8: 0, B9: 0, B10: 0, B11: 0, B12: 0, B13: 0, B14: 0, B15: 0, B16: 0 },
+    balansBreakdown: Object.fromEntries(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15', 'B16'].map((b) => [b, { accounts: [], total: 0 }])) as never,
+    sida2: { R12: 0, R13: 0, R14: 0 },
+    sida2Breakdown: { R13: { items: [], total: 0 }, R14: { items: [], total: 0 } },
   }
 }
 
@@ -72,6 +76,10 @@ describe('GET /api/reports/ne-bilaga', () => {
     generateMock.mockResolvedValue({
       ...declaration,
       sruBlockers: [],
+      balans: { B1: 0, B2: 0, B3: 0, B4: 0, B5: 0, B6: 0, B7: 0, B8: 0, B9: 0, B10: 0, B11: 0, B12: 0, B13: 0, B14: 0, B15: 0, B16: 0 },
+      balansBreakdown: Object.fromEntries(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15', 'B16'].map((b) => [b, { accounts: [], total: 0 }])) as never,
+      sida2: { R12: 0, R13: 0, R14: 0 },
+      sida2Breakdown: { R13: { items: [], total: 0 }, R14: { items: [], total: 0 } },
       companyInfo: { ...declaration.companyInfo, orgNumber: '5566778899', entityType: 'enskild_firma' },
     })
     const res = await GET(

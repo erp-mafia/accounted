@@ -44,6 +44,16 @@ beforeEach(() => {
 })
 
 describe('loadTaxAdjustmentSnapshot', () => {
+  it("reads every voucher of the year but the resultatavslut, a bokslut voucher's cost included", async () => {
+    await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+
+    // A kontantmetod year-end carry or an accrual is a year_end voucher: its
+    // 6072 representation is the year's non-deductible cost like any other.
+    expect(generateTrialBalance).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1', {
+      closingEntry: 'exclude-final',
+    })
+  })
+
   it('detects Miles account balances as non-deductible expenses', async () => {
     const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
 
@@ -271,6 +281,9 @@ describe('loadTaxAdjustmentSnapshot: dividends on shares in an aktiebolag (crm#1
 
     expect(snapshot.items.find((item) => item.accountNumber === '8210')?.included).toBe(true)
     expect(snapshot.nonTaxableIncome).toBe(50_000)
+    // Filed on INK2S 4.5b (Utdelning), not the catch-all 4.5c.
+    expect(snapshot.items.find((item) => item.accountNumber === '8210')?.ink2sField).toBe('7753')
+    expect(snapshot.dividends).toBe(50_000)
   })
 
   it('does not count a dividend twice when it was already typed in as a manual figure', async () => {
@@ -299,5 +312,74 @@ describe('loadTaxAdjustmentSnapshot: dividends on shares in an aktiebolag (crm#1
     dividendBalances()
     const forening = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'ekonomisk_forening')
     expect(forening.items.find((item) => item.accountNumber === '8210')).toBeUndefined()
+  })
+})
+
+describe('loadTaxAdjustmentSnapshot: write-downs of financial assets (INK2S 4.3b)', () => {
+  it('adds a write-down back on 4.3b, ticked, and takes its reversal out as non-taxable', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        { account_number: '6992', closing_debit: 1_000, closing_credit: 0 },
+        { account_number: '8271', closing_debit: 1_250_000, closing_credit: 0 },
+        { account_number: '8370', closing_debit: 12_500, closing_credit: 0 },
+        { account_number: '8281', closing_debit: 0, closing_credit: 40_000 },
+      ],
+      totalDebit: 1_263_500,
+      totalCredit: 40_000,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+
+    expect(snapshot.items.find((item) => item.accountNumber === '8271')).toMatchObject({
+      adjustmentType: 'non_deductible_expense',
+      amount: 1_250_000,
+      included: true,
+      ink2sField: '7652',
+    })
+    expect(snapshot.items.find((item) => item.accountNumber === '8370')).toMatchObject({
+      included: true,
+      ink2sField: '7652',
+    })
+    expect(snapshot.items.find((item) => item.accountNumber === '8281')).toMatchObject({
+      adjustmentType: 'non_taxable_income',
+      amount: 40_000,
+      included: true,
+    })
+    expect(snapshot.items.find((item) => item.accountNumber === '8281')?.ink2sField).toBeUndefined()
+    // 4.3b is part of the non-deductible total, beside the 6992 on 4.3c.
+    expect(snapshot.nonDeductibleExpenses).toBe(1_263_500)
+    expect(snapshot.financialWriteDowns).toBe(1_262_500)
+    expect(snapshot.nonTaxableIncome).toBe(40_000)
+    expect(snapshot.dividends).toBe(0)
+  })
+
+  it('leaves out a write-down the user unticked', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [{ account_number: '8370', closing_debit: 12_500, closing_credit: 0 }],
+      totalDebit: 12_500,
+      totalCredit: 0,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+    const snapshot = await loadTaxAdjustmentSnapshot(
+      makeClient([
+        {
+          source_key: 'account:8370',
+          adjustment_type: 'non_deductible_expense',
+          source: 'detected',
+          description: 'Nedskrivningar av kortfristiga placeringar',
+          account_number: '8370',
+          amount: 12_500,
+          included: false,
+        },
+      ]),
+      'company-1',
+      'period-1',
+      'aktiebolag',
+    )
+
+    expect(snapshot.nonDeductibleExpenses).toBe(0)
+    expect(snapshot.financialWriteDowns).toBe(0)
   })
 })

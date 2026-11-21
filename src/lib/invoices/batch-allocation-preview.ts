@@ -5,6 +5,7 @@ import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT, bookedOreRounding, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from '@/lib/bookkeeping/payout-fee-lines'
+import { supplierDebtLines, supplierDebtTotal, type SupplierDebt } from '@/lib/bookkeeping/supplier-debt-lines'
 
 /**
  * The verifikat `match_batch_allocate` will post, computed from the same
@@ -36,6 +37,10 @@ import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from
  * Since 20261119090000 a kronor customer invoice whose issue verifikat booked
  * the öresavrundning clears what 1510 carries on a settlement in full, and
  * 3740 takes only the rest of the öre (carried_sek, bookedOreRounding).
+ * Since 20261120150000 a supplier batch's debt rows (the supplier debt from
+ * before the company kept its books here, lib/bookkeeping/supplier-debt-lines.ts)
+ * follow the fee rows as debits, the bank row carries them too, and a single
+ * invoice with a debt row keeps the "Samlingsbetalning <date>" header.
  * When the RPC changes, this file changes with it; the pg-real suites (tests/pg/match-batch-allocate.pg.test.ts,
  * tests/pg/match-batch-preview-parity.pg.test.ts,
  * tests/pg/match-batch-allocate-series-description.pg.test.ts) are the
@@ -137,6 +142,8 @@ export function buildBatchAllocationPreview(input: {
    * RPC's p_cash_lines exactly.
    */
   cashLines?: Readonly<Record<string, readonly { account_number: string; debit_amount: number; credit_amount: number }[]>>
+  /** A supplier batch: the supplier debt from before the row also pays, one debit line each, no VAT. */
+  supplierDebts?: readonly SupplierDebt[] | null
 }): BatchAllocationPreview {
   const { transaction, allocations, bankAccount } = input
   if (allocations.length === 0) throw new Error('allocations must not be empty')
@@ -150,7 +157,10 @@ export function buildBatchAllocationPreview(input: {
   const txAbs = Math.abs(transaction.amount)
   const totalAllocated = roundOre(allocations.reduce((sum, a) => sum + a.amount, 0))
   const fees = payoutFeeLines(input.fees)
-  const settled = payoutBankAmount(allocations[0].kind, totalAllocated, payoutFeeTotal(fees))
+  const debts = supplierDebtLines(input.supplierDebts)
+  // The RPC refuses BATCH_DEBT_SUPPLIER_ONLY: a customer batch has no supplier debt to clear.
+  if (isCustomer && debts.length > 0) throw new Error('supplier debt rows go with supplier invoices only')
+  const settled = payoutBankAmount(allocations[0].kind, totalAllocated, payoutFeeTotal(fees), supplierDebtTotal(debts))
   // The RPC refuses BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX outside
   // this tolerance, so there is no verifikat to preview.
   if (Math.abs(settled - txAbs) > 0.005) {
@@ -249,6 +259,10 @@ export function buildBatchAllocationPreview(input: {
   for (const fee of fees) {
     lines.push({ account_number: fee.account, description: fee.description, debit: fee.amount, credit: 0 })
   }
+  // The supplier debt from before: a debit on its 244x skuld, after the fees.
+  for (const debt of debts) {
+    lines.push({ account_number: debt.account, description: debt.description, debit: debt.amount, credit: 0 })
+  }
 
   lines.push(
     isCustomer
@@ -257,13 +271,14 @@ export function buildBatchAllocationPreview(input: {
   )
 
   // One invoice: the RPC appends "<number>, <counterparty>" to this wording;
-  // the preview leaves both out, like the neutral line descriptions.
+  // the preview leaves both out, like the neutral line descriptions. One
+  // invoice with a debt row beside it is a samlingsbetalning, as in the RPC.
   const singleInvoiceDescription = isCustomer ? 'Inbetalning kundfaktura' : 'Utbetalning leverantörsfaktura'
   const batchDescription = `${isCustomer ? 'Samlingsinbetalning' : 'Samlingsbetalning'} ${entryDate}`
 
   return {
     entry_date: entryDate,
-    description: sorted.length === 1 ? singleInvoiceDescription : batchDescription,
+    description: sorted.length === 1 && debts.length === 0 ? singleInvoiceDescription : batchDescription,
     lines,
     balanced: lineBalance(lines.map((l) => ({ debit_amount: l.debit, credit_amount: l.credit }))).difference === 0,
     fx,

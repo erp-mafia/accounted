@@ -153,10 +153,10 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       return null
     }
   }
-  // Pre-onboarding: no agent_profile.verified_at yet. The FAB would lead
-  // into a generic chat with no specialization. Better to hide it until
-  // the user has finished /onboarding/agent, which the always-visible
-  // Assistent nav entry leads to meanwhile. (A collapsed session implies the
+  // No built assistant (agent_profile.verified_at): the FAB would lead
+  // into a generic chat with no specialization, so it is not offered. The
+  // build is removed, so this now holds for every company that never built
+  // one. (A collapsed session implies the
   // agent is already in use, so this only gates fresh opens in practice.)
   if (!identity.isVerified) return null
 

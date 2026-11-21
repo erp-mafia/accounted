@@ -1263,6 +1263,40 @@ const undoneJob: Partial<SieRow> = {
 const summary = (events: RawBehandlingshistorikEvent[]) =>
   events.map((e) => ({ id: e.id, occurred_at: e.occurred_at, code: e.code, event: e.event }))
 
+/** What support_remove_undone_sie_import leaves on the undone import, as read from job_result (crm#1954). */
+function removal(overrides: Partial<NonNullable<SieRow['support_removal']>> = {}): NonNullable<SieRow['support_removal']> {
+  return {
+    removed_at: '2027-03-02T09:00:00.000Z',
+    fiscal_period_id: 'period-1',
+    imported_verifikat: 400,
+    stornos: 400,
+    reason: 'Den första importen var ofullständig.',
+    actor_label: 'Support: Anna',
+    series: [{
+      series: 'A', mode: 'renumber', removed_numbers: [{ from: 1, to: 800 }], renumbered: 558,
+      renumbered_from: { from: 801, to: 1358 }, renumbered_to: { from: 1, to: 558 }, gap_explanations: [],
+    }],
+    ...overrides,
+  }
+}
+
+/** The same receipt as the migration stores it in job_result.support_removal. */
+function storedRemoval(fiscalPeriodId: string) {
+  return {
+    ok: true, dry_run: false, import_id: 's1', filename: 'bokio.se',
+    fiscal_period: { id: fiscalPeriodId, name: 'RÅ 2026', start: '2026-01-01', end: '2026-12-31', locked_at: '2027-01-10T08:00:00+00:00' },
+    removed: { imported_verifikat: 400, stornos: 400, verifikat: 800, lines: 1600 },
+    series: [{
+      series: 'A', mode: 'renumber', not_renumbered_because: null, removed_numbers: [{ from: 1, to: 800 }],
+      replacement_import_id: 's2', replacement_filename: 'full.se', renumbered: 558,
+      renumbered_from: { from: 801, to: 1358 }, renumbered_to: { from: 1, to: 558 },
+      last_number_before: 1358, last_number_after: 558, gap_explanations: [],
+    }],
+    reason: 'Den första importen var ofullständig.', actor_label: 'Support: Anna',
+    removed_at: '2027-03-02T09:00:00.000+00:00',
+  }
+}
+
 describe('sieImportEvents', () => {
   it('reads a completed durable import as imported, at imported_at', () => {
     const events = sieImportEvents(sieRow(completedJob))
@@ -1287,6 +1321,37 @@ describe('sieImportEvents', () => {
     // The import itself stays the importer's; the undo never says "raderade".
     expect(events[0].actor).toEqual({ type: 'user', user_id: 'user-3', actor_label: null })
     expect(events.map((e) => e.event).join(' ')).not.toContain('raderade')
+  })
+
+  it('reads an import support removed from the ledger as imported, undone, then removed, with what was renumbered', () => {
+    const events = sieImportEvents(sieRow({ ...undoneJob, support_removal: removal() }))
+    expect(events.map((e) => e.code)).toEqual(['sie_import.completed', 'sie_import.undone', 'sie_import.removed'])
+    expect(events[2]).toMatchObject({
+      id: 'sie:s1:removed',
+      occurred_at: '2027-03-02T09:00:00.000Z',
+      category: 'import',
+      event: 'Ångrad SIE-import borttagen ur bokföringen av support',
+      object: 'bokio.se',
+      actor: { type: 'system', user_id: null, actor_label: 'Support: Anna' },
+    })
+    expect(events[2].details).toEqual([
+      'Raderade: 400 importerade verifikationer och 400 vändningsverifikationer (A1-A800)',
+      'Serie A: A801-A1358 omnumrerade till A1-A558, det tidigare systemets nummer',
+      'Skäl: Den första importen var ofullständig.',
+    ])
+  })
+
+  it('says a removal that renumbered nothing explained the freed numbers as a gap', () => {
+    const events = sieImportEvents(sieRow({
+      ...undoneJob,
+      support_removal: removal({
+        series: [{
+          series: 'A', mode: 'gap_explanations', removed_numbers: [{ from: 1, to: 800 }], renumbered: 0,
+          renumbered_from: null, renumbered_to: null, gap_explanations: [{ gap_start: 1, gap_end: 800 }],
+        }],
+      }),
+    }))
+    expect(events[2].details[1]).toBe('Serie A: inte omnumrerad, de borttagna numren är förklarade som lucka (A1-A800)')
   })
 
   it('names the user when the undo recorded no credential', () => {
@@ -1441,6 +1506,26 @@ describe('generateBehandlingshistorik: SIE imports', () => {
     const select = client.from.mock.results[client.from.mock.calls.findIndex(([t]: [string]) => t === 'sie_imports')].value.select
     expect(select.mock.calls[0][0]).toContain('job_result')
     expect(select.mock.calls[0][0]).not.toContain('->>')
+  })
+
+  it('shows a support removal in the import\'s own fiscal year, after the year ended, read from job_result', async () => {
+    mockResults = {
+      ...base(),
+      sie_imports: [{ data: [{ ...sieRow(undoneJob), job_result: { success: true, support_removal: storedRemoval('period-1') } }] }],
+    }
+    const report = await generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' })
+    const sie = report!.events.filter((e) => e.source === 'sie_import')
+    expect(sie.map((e) => e.code)).toEqual(['sie_import.completed', 'sie_import.undone', 'sie_import.removed'])
+    expect(sie[2].details).toContain('Serie A: A801-A1358 omnumrerade till A1-A558, det tidigare systemets nummer')
+  })
+
+  it('leaves out the removal of another year\'s import that happened outside the window', async () => {
+    mockResults = {
+      ...base(),
+      sie_imports: [{ data: [{ ...sieRow(undoneJob), job_result: { support_removal: storedRemoval('period-0') } }] }],
+    }
+    const report = await generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' })
+    expect(report!.events.filter((e) => e.source === 'sie_import').map((e) => e.code)).toEqual(['sie_import.completed', 'sie_import.undone'])
   })
 
   it('fails on any other read error', async () => {

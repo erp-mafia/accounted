@@ -16,11 +16,12 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/ui/page-header'
 import { StepBar } from '@/components/ui/step-bar'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, EmptyState, LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany } from '@/contexts/CompanyContext'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { addDaysIso, hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import {
   buildAccrualItems,
   manualEntryToItem,
@@ -94,6 +95,8 @@ export default function PeriodiseringWizardPage() {
   const isEF = company?.entity_type === 'enskild_firma'
 
   const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
+  const tAccruals = useTranslations('year_end_accruals')
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(
     searchParams.get('period') ?? null,
@@ -145,6 +148,17 @@ export default function PeriodiseringWizardPage() {
       setSelectedPeriodId(eligible[0].id)
     }
   }, [selectedPeriodId, allPeriods, periodsLoading, periodsFailed])
+
+  // When the step opens with nothing to close yet: the day after the first
+  // open year ends (closableFiscalPeriods: not closed, no closing entry, last
+  // day passed). Null when every year is already closed.
+  const opensOn = useMemo(() => {
+    const today = todayIsoStockholm()
+    const next = allPeriods
+      .filter((p) => !p.is_closed && !p.closing_entry_id && !hasEnded(p.period_end, today))
+      .sort((a, b) => a.period_end.localeCompare(b.period_end))[0]
+    return next ? addDaysIso(next.period_end, 1) : null
+  }, [allPeriods])
 
   // ---- Fetch accruals snapshot once period chosen ----
   useEffect(() => {
@@ -294,11 +308,15 @@ export default function PeriodiseringWizardPage() {
 
       {periodsFailed && <LoadError title="Kunde inte hämta perioder" onRetry={() => void refreshPeriods()} />}
 
-      {periods !== null && periods.length === 0 && (
+      {periods !== null && periods.length === 0 && allPeriods.length === 0 && <EmptyNoFiscalYear started={false} />}
+
+      {periods !== null && periods.length === 0 && allPeriods.length > 0 && (
         <EmptyState
           icon={LockClosedIcon}
-          title="Inga perioder att periodisera"
-          description="Periodiseringar görs efter att räkenskapsperiodens slutdatum har passerat. Det finns ingen sådan öppen period."
+          title={tAccruals('empty_title')}
+          description={opensOn ? tAccruals('empty_opens_on', { date: formatDate(opensOn) }) : tAccruals('empty_all_closed')}
+          secondaryActionLabel={tCommon('back_to_closing')}
+          secondaryActionHref="/bookkeeping/year-end"
         />
       )}
 

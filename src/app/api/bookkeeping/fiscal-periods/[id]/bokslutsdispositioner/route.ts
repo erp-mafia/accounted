@@ -19,6 +19,7 @@ import {
   ateforingDispositions,
   avsattningDisposition,
   bolagsskattDisposition,
+  fondUppraekning,
   buildDispositionsProposal,
   loadDispositionState,
 } from '@/lib/bokslut/dispositions-proposal-builder'
@@ -267,6 +268,7 @@ export const POST = withRouteContext(
           const bolagsskatt = bolagsskattDisposition(state, {
             pendingResultEffect: 0,
             schablonintaktAmount: ateforingDispositions(state).schablonintaktAmount,
+            uppraekningAmount: fondUppraekning(state).amount,
           })
           const entry = await postDeferredTax(supabase, companyId, user.id, period, {
             closingDeficit: closingDeficitOf(bolagsskatt),
@@ -399,6 +401,7 @@ async function computeProposal(
       const proposal = bolagsskattDisposition(state, {
         pendingResultEffect: 0,
         schablonintaktAmount: ateforingDispositions(state).schablonintaktAmount,
+        uppraekningAmount: fondUppraekning(state).amount,
       })
       if (state.bookedTax > 0 && state.bookedTax === proposal.amount) return null
       if (state.bookedTax > 0) throw new TaxProvisionConflictError(state.bookedTax, proposal.amount)
@@ -424,6 +427,7 @@ async function computeProposal(
         schablonintaktAmount: ateforingDispositions(state, {
           schablonintaktRate: item.schablonintaktRate,
         }).schablonintaktAmount,
+        uppraekningAmount: fondUppraekning(state).amount,
         desiredAmount: item.desiredAmount,
       })
     }

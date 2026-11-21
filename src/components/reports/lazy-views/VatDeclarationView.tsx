@@ -787,7 +787,12 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // type (see lib/vat/period-selection.ts). `useCompanySettings` only
   // refetches when the active company changes, so this never clobbers a
   // manual selection mid-session.
-  const { settings, isLoading: settingsLoading, refetch: refetchSettings } = useCompanySettings()
+  const {
+    settings,
+    isLoading: settingsLoading,
+    loadFailed: settingsLoadFailed,
+    refetch: refetchSettings,
+  } = useCompanySettings()
   const [appliedCompany, setAppliedCompany] = useState<string | null>(null)
   const companyKey = settingsLoading ? null : (settings?.company_id ?? 'none')
 
@@ -855,7 +860,8 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // through every gate and render a silently guessed quarterly declaration;
   // the wrong period type for an årsmoms company is a compliance hazard, so
   // it now gates like the other unknowns.
-  const settingsRowMissing = !settingsLoading && settings === null
+  // A failed read is not a missing row: it says so with a retry below.
+  const settingsRowMissing = !settingsLoading && settings === null && !settingsLoadFailed
   // Registered but never picked a redovisningsperiod (rare: onboarding
   // requires it, but companies created outside that flow can miss it).
   const momsPeriodMissing = settings?.vat_registered === true && !settings.moms_period
@@ -911,6 +917,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
     periodType === null ||
     seedPending ||
     notVatRegistered ||
+    settingsLoadFailed ||
     settingsRowMissing ||
     momsPeriodMissing ||
     awaitingFiscalPeriod
@@ -1137,6 +1144,16 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // title and skips its own), so the H1 must survive the gated/loading
   // states too: each early return carries the action-less header.
   const bareHeader = pageTitle ? <PageHeader title={pageTitle} /> : null
+
+  // A failed settings read needs no seeded period to say so.
+  if (settingsLoadFailed) {
+    return (
+      <div className="space-y-8">
+        {bareHeader}
+        <LoadError title={tReports('vat_settings_load_failed')} onRetry={() => void refetchSettings()} />
+      </div>
+    )
+  }
 
   if (settingsLoading || periodType === null) {
     return (
@@ -1412,9 +1429,11 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
             <section className="space-y-3">
               <div>
             {/* The title and the period picker already name the declaration
-                and its period; only the basis counts are new here. */}
+                and its period; only the basis counts are new here. They
+                count verifikat, not invoices: a paid invoice is two (its
+                booking and its payment), so the label says verifikat. */}
             <p className="px-1 text-xs tabular-nums text-muted-foreground">
-              {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
+              {tReports('vat_entry_counts', { invoices: data.invoiceCount, transactions: data.transactionCount })}
             </p>
             <div className="mt-4 space-y-8">
               <div>

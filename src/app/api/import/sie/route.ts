@@ -17,10 +17,12 @@ export const GET = withRouteContext(
 
     // The columns the history renders. `select('*')` sent each row's manifest
     // and job_result (about 20 KB a row) on a page the history polls.
+    // removed_at: when support removed an undone import from the ledger
+    // (support_remove_undone_sie_import, crm#1954).
     let query = supabase
       .from('sie_imports')
       .select(
-        'id, filename, fiscal_year_start, fiscal_year_end, transactions_count, status, job_state, job_kind, imported_at, created_at, repair_outcome:job_result->>repairOutcome',
+        'id, filename, fiscal_year_start, fiscal_year_end, transactions_count, status, job_state, job_kind, imported_at, created_at, repair_outcome:job_result->>repairOutcome, removed_at:job_result->support_removal->>removed_at',
         { count: 'exact' },
       )
       .eq('company_id', companyId)

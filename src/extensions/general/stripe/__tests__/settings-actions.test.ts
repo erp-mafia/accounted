@@ -81,7 +81,7 @@ describe('stripeRequest', () => {
     expect(result).toEqual({
       ok: false,
       reason: 'network',
-      message: 'Något gick fel. Försök igen.',
+      message: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
     })
   })
 
@@ -96,7 +96,7 @@ describe('stripeRequest', () => {
   })
 
   it('keeps the route own sentence on a 404 rather than the status map', async () => {
-    // getErrorMessage alone answers 'Resursen kunde inte hittas.' here, because
+    // getErrorMessage alone answers 'Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.' here, because
     // this sentence carries none of its Swedish trigger words. That is strictly
     // less useful than the route's own copy, which names what to fix.
     globalThis.fetch = vi
@@ -114,7 +114,7 @@ describe('stripeRequest', () => {
   })
 
   it('falls back to the status message when the error body carries no sentence', async () => {
-    // Previously this branch showed the hardcoded 'Något gick fel. Försök igen.'
+    // Previously this branch showed the hardcoded 'Något gick fel. Försök igen, och kontakta support om det fortsätter.'
     // for every status, so a 429 from the rate limiter and a 502 from a dead
     // upstream read identically.
     globalThis.fetch = vi.fn().mockResolvedValue(
@@ -234,7 +234,7 @@ describe('serverErrorMessage', () => {
 
   it('ignores a blank error field', () => {
     expect(serverErrorMessage({ error: '   ' }, 500, 'sv')).toBe(
-      'Ett oväntat serverfel uppstod. Försök igen senare.',
+      'Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.',
     )
   })
 })

@@ -76,6 +76,9 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   // Back from a bank that signs on its own page (?station=bank&bank_connect=<id>): reopen the flow, once.
   useBankConnectResume(bankFlow, openPayments.status === 'available')
   const [banks, setBanks] = useState<Bank[] | null>(null)
+  // The bank list could not be read: unknown, not "no bank matches". Clearing
+  // it re-runs the read.
+  const [banksFailed, setBanksFailed] = useState(false)
   const [psuType, setPsuType] = useState<'personal' | 'business' | undefined>(undefined)
   const [more, setMore] = useState(false)
   const [query, setQuery] = useState('')
@@ -113,18 +116,19 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
 
   /* ── pick: the bank list ─────────────────────────────────────────── */
   useEffect(() => {
-    if (phase !== 'pick' || banks || !flags.hasBanking) return
+    if (phase !== 'pick' || banks || banksFailed || !flags.hasBanking) return
     let cancelled = false
     fetch(`${EB}/banks`)
       .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status))
         const json = (await res.json()) as { banks?: Bank[]; psu_type?: 'personal' | 'business' }
         if (cancelled) return
         setBanks(json.banks ?? [])
         setPsuType(json.psu_type)
       })
-      .catch(() => { if (!cancelled) setBanks([]) })
+      .catch(() => { if (!cancelled) setBanksFailed(true) })
     return () => { cancelled = true }
-  }, [phase, banks, flags.hasBanking])
+  }, [phase, banks, banksFailed, flags.hasBanking])
 
   const orderedBanks = useMemo(() => {
     if (!banks) return []
@@ -445,6 +449,14 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
           </div>
         ) : !flags.hasBanking ? (
           <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_unavailable')}</p>
+        ) : banksFailed ? (
+          <div className="jny-qactions is-stack">
+            <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_list_failed')}</p>
+            <Button variant="outline" onClick={() => setBanksFailed(false)}>{t('bank_list_retry')}</Button>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+              {t('bank_manual')}
+            </Button>
+          </div>
         ) : banks === null ? (
           <Wait text={t('bank_loading')} height={96} />
         ) : (

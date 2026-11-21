@@ -17,12 +17,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { useUrlFiscalPeriod } from '@/components/providers/FiscalScopeProvider'
+import { useFiscalScope, useUrlFiscalPeriod } from '@/components/providers/FiscalScopeProvider'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -122,6 +122,8 @@ export function ForenklatArsbokslutView({ periodId }: { periodId: string | null 
   // The year is app-wide context: a visit without ?period takes the sidebar
   // year into the URL, and a pick in the sidebar moves the URL.
   useUrlFiscalPeriod(periodId, PAGE, { allowAll: false, hideFuture: true })
+  // With no year in the URL and none begun, there is nothing to pick.
+  const { periodId: scopePeriodId, ready: scopeReady } = useFiscalScope({ allowAll: false, hideFuture: true })
 
   const [data, setData] = useState<ForenklatArsbokslut | null>(null)
   const [loading, setLoading] = useState(true)
@@ -217,18 +219,17 @@ export function ForenklatArsbokslutView({ periodId }: { periodId: string | null 
     <PageHeader parent={{ label: tNav('v2_closing'), href: '/bookkeeping/year-end' }} title={title} help={<HelpPopover>{t('help')}</HelpPopover>} action={action} />
   )
 
-  if (!periodId) {
+  if (!periodId && scopeReady && !scopePeriodId) {
     return (
       <div className="space-y-8">
         {header(t('title'))}
-        <div className="max-w-xl space-y-4 px-1">
-          <p className="text-sm text-muted-foreground">{t('choose_year')}</p>
-        </div>
+        <EmptyNoFiscalYear />
       </div>
     )
   }
 
-  if (loading && !data) {
+  // No year in the URL yet: the sidebar year is on its way into it.
+  if (!periodId || (loading && !data)) {
     return (
       <div className="space-y-8">
         {header(t('title'))}

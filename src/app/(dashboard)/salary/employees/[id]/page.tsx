@@ -6,7 +6,7 @@ import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { LateReveal, Skeleton } from "@/components/ui/skeleton"
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { PageHeaderParent, PageHeaderBelow } from '@/components/ui/page-header'
 import { PageHeaderActions } from '@/components/ui/page-header-actions'
@@ -86,6 +86,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const { id } = use(params)
   const t = useTranslations('salary_employee')
   const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -406,6 +407,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   if (!employee && loadFailed) {
     return (
       <LoadError
+        title={t('detail_load_failed')}
         onRetry={() => {
           setLoading(true)
           setLoadAttempt((n) => n + 1)
@@ -415,7 +417,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   }
 
   if (!employee) {
-    return <EmptyState title={t('detail_not_found')} />
+    return <NotFoundState title={t('detail_not_found')} backHref="/salary/employees" backLabel={tCommon('back_to_list')} />
   }
 
   const bankName = lookupBankByClearing(clearing)

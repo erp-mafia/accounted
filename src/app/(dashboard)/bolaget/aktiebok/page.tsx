@@ -8,6 +8,6 @@ export default async function ShareRegisterPage() {
   const companyId = await getDashboardCompanyId()
   if (!companyId) notFound()
   const { supabase } = await getDashboardAuthContext()
-  if (await bolagetGate(supabase, companyId)) notFound()
+  if (await bolagetGate(supabase, companyId, 'registers')) notFound()
   return <ShareRegister />
 }

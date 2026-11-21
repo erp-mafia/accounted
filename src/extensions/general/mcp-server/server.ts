@@ -219,7 +219,7 @@ import {
   getArticleVatRateAdoptionSet,
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
-import { DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { DEDUCTION_INVOICE_ONLY_ERROR, DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { MAX_INVOICE_ATTACHMENTS, linkInvoiceAttachments } from '@/lib/invoices/invoice-attachments'
@@ -283,6 +283,7 @@ import {
 } from '@/lib/modules/capabilities'
 import { obligationsPhraseSv } from '@/lib/modules/obligations'
 import { listOpenSuggestions } from '@/lib/suggestions/list'
+import { listOpenQuestionsForBriefing } from '@/lib/questions/list'
 import { loadGrantReview } from '@/lib/grants/review'
 import { grantsEnabled } from '@/lib/grants/flag'
 import { applyGrantDoor } from './grant-door'
@@ -766,8 +767,10 @@ import { apiKeyArrivalActor, readInboxItemArrivals, recordDocumentArrival, type 
 import { DOCUMENT_DETAIL_PARTS, parseDocumentDetailParts, readDocumentDetail } from '@/lib/documents/read/document-detail'
 import { readTransactionWithVouchers } from '@/lib/transactions/read-with-vouchers'
 import { createArkivTools } from './arkiv-tools'
+import { createFormationTools } from './formation-tools'
 import { createPurchaseCategoryTools } from './purchase-category-tools'
 import { createFeedTools } from './feed-tools'
+import { OPEN_QUESTIONS_HOW, answerQuestionWithFact, briefingQuestion, createQuestionTools } from './question-tools'
 import { createOperationTools, toolOutputSchema } from './operation-tools'
 import { ALL_OPERATIONS, OPERATIONS } from '@/lib/operations/registry'
 import type { DoorRule } from '@/lib/permissions/doors'
@@ -4741,7 +4744,6 @@ const REMEMBER_ORIGINS = ['conversation', 'session_sync', 'onboarding_import'] a
  */
 const WHERE_TO_FIND = [
   'memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one.',
-  'profile_summary: what the company does, written at onboarding; may be outdated.',
   'ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier.',
   'Documents: gnubok_search_records and gnubok_read_document (arkiv explains, when present).',
   'Workflows: gnubok_list_skills, then gnubok_load_skill; a curated workflow arrives with the company facts inline.',
@@ -7144,6 +7146,13 @@ export const tools: McpTool[] = [
     },
   }),
 
+  ...createFormationTools({
+    annotations: annotationsForEffect('additive', { idempotentHint: true, openWorldHint: true }),
+    appOrigin: connectLinkBaseUrl,
+    defaultTeamForUser,
+    newCompanyReach,
+  }),
+
   {
     name: 'gnubok_connect_bank',
     keywords: ['bankkoppling', 'koppla bank', 'banksynk'],
@@ -7941,11 +7950,11 @@ export const tools: McpTool[] = [
         },
         source_ref: {
           type: 'string',
-          description: 'Optional pointer to where this fact came from (e.g. "conversation:<uuid>:turn-3").',
+          description: 'Where the fact came from.',
         },
         relevance_score: {
           type: 'number',
-          description: 'How important this memory is for future prompts. 0.0-1.0. Default 0.8 for agent-captured facts.',
+          description: '0.0-1.0, default 0.8.',
         },
         origin: {
           type: 'string',
@@ -7955,6 +7964,10 @@ export const tools: McpTool[] = [
         replaces: {
           type: 'string',
           description: 'fact_id of the older fact this one updates; that fact is retired.',
+        },
+        answers_question_id: {
+          type: 'string',
+          description: 'question_id from open_questions that this fact answers.',
         },
       },
       required: ['content'],
@@ -7987,6 +8000,15 @@ export const tools: McpTool[] = [
         throw badArgument('origin', `invalid origin: ${origin}`)
       }
       const replaces = typeof args.replaces === 'string' && args.replaces.trim() ? args.replaces.trim() : null
+      const answersQuestionId =
+        typeof args.answers_question_id === 'string' && args.answers_question_id.trim() ? args.answers_question_id.trim() : null
+      // The saved fact answers an open question: the question is marked
+      // answered with it. A question that cannot be (unknown, in another
+      // company, already ended) is reported beside the saved fact.
+      const answering = async (factId: string) =>
+        answersQuestionId
+          ? answerQuestionWithFact(supabase, { companyId, questionId: answersQuestionId, factId, userId, actor })
+          : {}
 
       // The fact being updated must be an active fact of this company: the
       // agent read its fact_id from the briefing. A foreign or retired id is
@@ -8045,6 +8067,7 @@ export const tools: McpTool[] = [
           kind: dupe.kind,
           content: dupe.content,
           created_at: dupe.created_at,
+          ...(await answering(dupe.id)),
         }
       }
 
@@ -8093,9 +8116,9 @@ export const tools: McpTool[] = [
           .eq('id', replaces)
           .eq('company_id', companyId)
         if (retireErr) throw new Error(`Saved fact ${data.id} but could not retire ${replaces}: ${retireErr.message}`)
-        return { ...data, fact_id: data.id, replaced_fact_id: replaces }
+        return { ...data, fact_id: data.id, replaced_fact_id: replaces, ...(await answering(data.id)) }
       }
-      return { ...data, fact_id: data.id }
+      return { ...data, fact_id: data.id, ...(await answering(data.id)) }
     },
   },
 
@@ -8136,6 +8159,12 @@ export const tools: McpTool[] = [
       return { ...data, fact_id: data.id }
     },
   },
+
+  ...createQuestionTools({
+    readOnly: ANNOTATIONS_READ_ONLY,
+    write: ANNOTATIONS_STAGED_WRITE,
+    idempotentWrite: ANNOTATIONS_IDEMPOTENT_WRITE,
+  }),
 
   {
     name: 'gnubok_feedback',
@@ -8327,10 +8356,6 @@ export const tools: McpTool[] = [
           description:
             'The assisted person\'s first name, not necessarily the company owner.',
         },
-        profile_summary: {
-          type: ['string', 'null'],
-          description: 'Company summary; null before profile creation.',
-        },
         atoms: {
           type: 'array',
           description: 'Active company skills. Fetch bodies with gnubok_load_skill(atom_id).',
@@ -8405,7 +8430,7 @@ export const tools: McpTool[] = [
             'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings > Skatteverket; warn before SKV work. filing.ready: can THIS user file.',
         },
       },
-      required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
+      required: ['company', 'user_name', 'atoms', 'memory', 'recommended_tools'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
@@ -8517,6 +8542,8 @@ export const tools: McpTool[] = [
       // none, so a company without suggestions pays no payload; undeclared
       // in outputSchema like capabilities (tools/list budget). Never throws.
       const openSuggestionsRead = listOpenSuggestions(supabase, companyId)
+      // Nothing unless the question list is switched on for the company; a failed read is no questions.
+      const openQuestionsRead = listOpenQuestionsForBriefing(supabase, companyId)
 
       // Rules for automatic booking (lib/grants) and the postings they let
       // through since the user's last review: the same records Att göra lists
@@ -8550,7 +8577,7 @@ export const tools: McpTool[] = [
       const [profileRes, remembered, userRes, companyRes, settingsRes, dimensionsRes, bankSyncRes] = await Promise.all([
         supabase
           .from('agent_profiles')
-          .select('profile_summary, horizontal_atoms, vertical_atoms, modifier_atoms')
+          .select('horizontal_atoms, vertical_atoms, modifier_atoms')
           .eq('company_id', companyId)
           .maybeSingle(),
         // Every active fact, newest first (lib/agent-context/remembered-facts):
@@ -8558,8 +8585,8 @@ export const tools: McpTool[] = [
         // when the read fails, like the profile read.
         loadRememberedFacts(supabase, companyId),
         // The user's own preferred name (profiles.full_name) so the agent can
-        // address them correctly. Distinct from owner/signatory names that may
-        // appear in profile_summary: those come from Bolagsverket via TIC and
+        // address them correctly. Distinct from owner/signatory names (bolaget):
+        // those come from the company's registers and
         // describe the company, not necessarily the person chatting. Best-effort:
         // a failed read yields a null name, never a thrown briefing.
         supabase
@@ -8599,7 +8626,6 @@ export const tools: McpTool[] = [
 
       const profile = profileRes.data as
         | {
-            profile_summary: string | null
             horizontal_atoms: string[] | null
             vertical_atoms: string[] | null
             modifier_atoms: string[] | null
@@ -8755,6 +8781,7 @@ export const tools: McpTool[] = [
       const inboxAddress = await inboxAddressRead
       const capabilities = await safeCapabilities
       const openSuggestions = await openSuggestionsRead
+      const openQuestions = await openQuestionsRead
       const unexplainedBlock = await unexplainedRead
       const bolagetBlock = await bolagetRead
       const grantReview = await grantReviewRead
@@ -8799,7 +8826,10 @@ export const tools: McpTool[] = [
       return {
         company,
         user_name: userName,
-        profile_summary: profile?.profile_summary ?? null,
+        // Always null, and not in outputSchema. A connection that holds an
+        // earlier copy of tools/list requires the key and rejects a result
+        // without it.
+        profile_summary: null,
         atoms,
         memory: remembered.facts.map((m) => ({
           id: m.fact_id,
@@ -8845,6 +8875,10 @@ export const tools: McpTool[] = [
               })),
               suggestions_how: SUGGESTIONS_HOW,
             }
+          : {}),
+        // Undeclared in outputSchema (catalog ceiling), like suggestions.
+        ...(openQuestions.length > 0
+          ? { open_questions: openQuestions.map(briefingQuestion), open_questions_how: OPEN_QUESTIONS_HOW }
           : {}),
         ...(grantReview.has_active_grants || grantReview.postings.length > 0
           ? {
@@ -17380,10 +17414,10 @@ export const tools: McpTool[] = [
     // contain "skattekonto": the name already matches it, and a bare
     // "skattekonto" query must keep ranking the reconciliation status bridge
     // first (search-tools.test.ts), which a keyword hit would outscore.
-    keywords: ['ränta', 'intäktsränta', 'kostnadsränta', 'skattetillägg', 'förseningsavgift', 'avgift', 'preliminärskatt', 'interest', 'tax account', '8314', '8423', '6992'],
+    keywords: ['ränta', 'intäktsränta', 'kostnadsränta', 'skattetillägg', 'förseningsavgift', 'avgift', 'preliminärskatt', 'slutlig skatt', 'interest', 'tax account', '8314', '8423', '6992'],
     title: 'Book Skattekonto Row',
     description:
-      'Book one settled skattekonto row: 1630 against the rule-matched account (intäktsränta 8314, kostnadsränta 8423, skattetillägg/förseningsavgift 6992, prelskatt 2518, moms 2650). Refuses rows booked/ignored/upcoming/rule-less or already in the ledger. Stages; dry_run previews.',
+      'Book one settled skattekonto row: 1630 against the rule-matched account (intäktsränta 8314, kostnadsränta 8423, skattetillägg 6992, prelskatt 2518, slutlig skatt 2512, moms 2650). Refuses rows booked/ignored/upcoming/rule-less or already in the ledger. Stages; dry_run previews.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -17562,10 +17596,10 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_book_skattekonto_rows',
-    keywords: ['ränta', 'intäktsränta', 'kostnadsränta', 'skattetillägg', 'förseningsavgift', 'avgift', 'preliminärskatt', 'interest', 'tax account', '8314', '8423', '6992'],
+    keywords: ['ränta', 'intäktsränta', 'kostnadsränta', 'skattetillägg', 'förseningsavgift', 'avgift', 'preliminärskatt', 'slutlig skatt', 'interest', 'tax account', '8314', '8423', '6992'],
     title: 'Book Skattekonto Rows (Batch)',
     description:
-      'Book up to 200 settled skattekonto rows as verifikat (1630 + rule-matched account: ränta 8314/8423, skattetillägg/förseningsavgift 6992, prelskatt 2518, moms 2650). Rows booked, ignored, upcoming, rule-less or already in the ledger are skipped, listed. Stages; dry_run previews.',
+      'Book up to 200 settled skattekonto rows as verifikat (1630 + rule-matched account: ränta 8314/8423, skattetillägg 6992, prelskatt 2518, slutlig skatt 2512, moms 2650). Booked, ignored, upcoming, rule-less or already-ledgered rows are skipped, listed. Stages; dry_run previews.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -21999,6 +22033,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_update_payslip_line',
+    catalogVisibility: 'search',
     keywords: ['lönebesked', 'lönespecifikation', 'lönerad'],
     title: 'Update Payslip Line',
     description: 'Stage an edit to one payslip line (amount, description, quantity, unit price) in a DRAFT run. Commit via gnubok_approve_pending_operation, then gnubok_calculate_salary_run (it rebuilds base lines: use gnubok_set_run_salary).',
@@ -24189,6 +24224,9 @@ export const tools: McpTool[] = [
     name: 'gnubok_import_rot_rut_beslut',
     keywords: ['rotavdrag', 'rutavdrag', 'beslutsfil', 'skatteverket'],
     title: 'Import Rot/Rut Decision File',
+    // Search-only: tools/list is frozen. The rot/rut page and a raw
+    // tools/call import a beslutsfil.
+    catalogVisibility: 'search',
     description:
       'Import Skatteverkets beslutsfil (decision JSON from the rot/rut e-tjänst) and record godkänt belopp on the matching begäran. Exact matching only; per-beslut outcomes in results. Book the payout afterwards via the settle endpoint hint in next.',
     inputSchema: {
@@ -24597,9 +24635,23 @@ export const tools: McpTool[] = [
         }
       }
 
+      // A booked bolagsskatt that is not the tax on the ledger closes into the
+      // årsredovisning and 2512 as it stands: the Dispositioner card says so in
+      // the wizard, this says it before gnubok_run_year_end. Advisory: a
+      // failed check adds nothing.
+      const warnings = [...validation.warnings]
+      try {
+        const { bookedTaxCorrection } = await import('@/lib/bokslut/dispositions-proposal-builder')
+        const correction = await bookedTaxCorrection(supabase, companyId, fiscalPeriodId)
+        if (correction) warnings.push(correction)
+      } catch {
+        // Safe to ignore: the check is advisory and the readiness answer
+        // stands without it; the Dispositioner step shows the same verdict.
+      }
+
       const summary = validation.ready
-        ? validation.warnings.length > 0
-          ? `Klart för bokslut. ${validation.warnings.length} varning(ar) att granska.`
+        ? warnings.length > 0
+          ? `Klart för bokslut. ${warnings.length} varning(ar) att granska.`
           : 'Klart för bokslut.'
         : `Inte klart: ${blockers.length} blockerare måste åtgärdas.`
 
@@ -24616,7 +24668,7 @@ export const tools: McpTool[] = [
         },
         ready: validation.ready,
         blockers,
-        warnings: validation.warnings,
+        warnings,
         draft_count: validation.draftCount,
         drafts,
         unexplained_voucher_gap_count: validation.unexplainedGaps.length,
@@ -26072,6 +26124,13 @@ export const tools: McpTool[] = [
         // VAT gate above exists for the same reason.) Each refusal carries the
         // code buildInvoiceWriteData answers with, INVOICE_CREATE_ROT_RUT_VALIDATION.
         const deductionLines = items.filter((item) => item.line_type !== 'text' && item.deduction_type)
+        // A quote (or proforma, delivery note) stores no deduction (#3030).
+        if (deductionLines.length > 0 && (invoice.document_type ?? 'invoice') !== 'invoice') {
+          throw codedRefusal(
+            'INVOICE_CREATE_ROT_RUT_VALIDATION',
+            `Skattereduktion: ${DEDUCTION_INVOICE_ONLY_ERROR} Pass these lines with deduction_type null and set the deduction on an invoice instead (gnubok_convert_invoice turns a quote or proforma into an invoice draft; a delivery note cannot be converted).`,
+          )
+        }
         if (deductionLines.length > 0) {
           const claimErrors = validateDeductionLines(
             deductionLines.map((item) => ({

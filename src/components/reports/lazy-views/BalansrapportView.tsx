@@ -44,7 +44,7 @@ export default function BalansrapportView({ periodId, dateRange, drilldown }: { 
     return (
       <ReportEmptyState
         title="Inga balansposter"
-        description="Det finns inga bokförda balansposter i den valda perioden."
+        description="Välj ett annat räkenskapsår eller datumintervall."
       />
     )
   }

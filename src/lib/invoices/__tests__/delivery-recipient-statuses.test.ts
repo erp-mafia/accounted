@@ -3,7 +3,6 @@ import {
   annotateUnmatchedReportDetail,
   isDestructiveDeliveryStatus,
   maskAddressToDomain,
-  showsRecipientBreakdown,
   unmatchedReportRecipients,
 } from '@/lib/invoices/delivery-recipient-statuses'
 
@@ -69,26 +68,5 @@ describe('isDestructiveDeliveryStatus', () => {
     expect(isDestructiveDeliveryStatus('delivered')).toBe(false)
     expect(isDestructiveDeliveryStatus('sent')).toBe(false)
     expect(isDestructiveDeliveryStatus(null)).toBe(false)
-  })
-})
-
-describe('showsRecipientBreakdown', () => {
-  const delivered = { status: 'delivered' as const, status_at: '2026-11-16T10:00:00Z' }
-
-  it('hides the breakdown for one recipient whose result is the overall status', () => {
-    expect(showsRecipientBreakdown('delivered', { 'to:1': delivered }, 1)).toBe(false)
-  })
-
-  it('shows it for one recipient whose result differs from the overall status', () => {
-    // A forward target bounced: the send reads bounced, the listed recipient delivered.
-    expect(showsRecipientBreakdown('bounced', { 'to:1': delivered }, 1)).toBe(true)
-  })
-
-  it('shows it whenever there are several recipients', () => {
-    expect(showsRecipientBreakdown('delivered', { 'to:1': delivered, 'cc:1': delivered }, 2)).toBe(true)
-  })
-
-  it('hides it when the provider reported no recipient', () => {
-    expect(showsRecipientBreakdown('delivered', {}, 2)).toBe(false)
   })
 })

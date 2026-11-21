@@ -10,6 +10,7 @@ import {
   SpinnerIcon,
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 
 type Source = 'api' | 'fallback' | 'unavailable'
 
@@ -29,17 +30,28 @@ export function TaxTableStatus({ year, compact = false }: Props) {
   const t = useTranslations('salary_tax_tables')
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
+  // The last check could not be made (a failed answer or no connection): the
+  // row says so with the recheck, instead of spinning or vanishing.
+  const [failed, setFailed] = useState(false)
 
   async function check() {
     setLoading(true)
-    const params = new URLSearchParams()
-    if (year) params.set('year', String(year))
-    const res = await fetch(`/api/salary/tax-tables/status?${params}`)
-    if (res.ok) {
+    try {
+      const params = new URLSearchParams()
+      if (year) params.set('year', String(year))
+      const res = await fetch(`/api/salary/tax-tables/status?${params}`)
+      if (!res.ok) {
+        setFailed(true)
+        return
+      }
       const { data } = await res.json()
       setStatus(data)
+      setFailed(false)
+    } catch {
+      setFailed(true)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   useEffect(() => {
@@ -56,7 +68,35 @@ export function TaxTableStatus({ year, compact = false }: Props) {
     )
   }
 
-  if (!status) return null
+  if (failed || !status) {
+    if (compact) {
+      return (
+        <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <ExclamationTriangleIcon className="h-3 w-3 text-warning" />
+          {t('check_failed')}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => void check()} disabled={loading}>
+            {t('recheck')}
+          </button>
+        </div>
+      )
+    }
+    return (
+      <div className="flex w-full min-w-0 items-center gap-2">
+        <ExclamationTriangleIcon className="h-3.5 w-3.5 shrink-0 text-warning" />
+        <span className="min-w-0 text-xs text-muted-foreground">{t('check_failed')}</span>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => void check()}
+          loading={loading}
+          aria-label={t('recheck')}
+          className="ml-auto shrink-0"
+        >
+          {!loading && <ArrowPathIcon className="h-3.5 w-3.5" />}
+        </Button>
+      </div>
+    )
+  }
 
   const Icon = status.source === 'api' ? CheckCircleIcon : ExclamationTriangleIcon
   const iconColor =
