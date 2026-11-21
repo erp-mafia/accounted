@@ -32,6 +32,27 @@ describe('priceOperation', () => {
     expect(priceOperation('mark_invoice_paid', { total: 6250 })).toBe(6250)
   })
 
+  it('prices a batch allocation on its whole verifikat, so a supplier payment counts its fee and debt rows', () => {
+    // Supplier payment: allocations + fees + supplier debts = |transaction_amount|.
+    // The debt row (244x, no invoice) is far larger than the invoice.
+    expect(
+      priceOperation('match_batch_allocate', {
+        total_allocated: 1000,
+        total_fees: 25,
+        total_debts: 50000,
+        transaction_amount: -51025,
+      }),
+    ).toBe(51025)
+    // Customer payment net of a fee: the invoices' total is the larger side.
+    expect(
+      priceOperation('match_batch_allocate', { total_allocated: 1250, total_fees: 50, transaction_amount: 1200 }),
+    ).toBe(1250)
+    // A row staged without transaction_amount is priced on total_allocated.
+    expect(priceOperation('match_batch_allocate', { total_allocated: 99000 })).toBe(99000)
+    expect(priceOperation('match_batch_allocate', { transaction_amount: '-4300' })).toBe(4300)
+    expect(priceOperation('match_batch_allocate', { total_allocated: null })).toBeNull()
+  })
+
   it('leaves genuinely unpriceable types unpriced rather than inventing a number', () => {
     // pair_count is a COUNT. Pricing reconciliation_match off it would compare
     // pairs against kronor, which is worse than not enforcing.
@@ -149,6 +170,16 @@ describe('exceedsUnattendedLimit', () => {
     })
     expect(result.exceeded).toBe(true)
     expect(result.attempted).toBe(10_000_000)
+  })
+
+  it('blocks a supplier batch whose debt row takes the verifikat over the ceiling', () => {
+    const result = exceedsUnattendedLimit({
+      ...over,
+      operationType: 'match_batch_allocate',
+      previewData: { total_allocated: 500, total_debts: 20000, transaction_amount: -20500 },
+    })
+    expect(result.exceeded).toBe(true)
+    expect(result.attempted).toBe(20500)
   })
 })
 
