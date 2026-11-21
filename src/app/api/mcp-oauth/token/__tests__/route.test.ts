@@ -216,6 +216,20 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(createKeyArgs(supabase).p_client).toBe('gemini')
     })
 
+    it("records copilot for a Copilot Studio connector on Power Platform's consent callback", async () => {
+      const redirectUri = 'https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults())
+
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase).p_client).toBe('copilot')
+    })
+
     it('stores client null for a redirect URI without a live registration', async () => {
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',
