@@ -716,9 +716,11 @@ export function runVatDeclarationChecks(
   //   - ruta 05 recognises only 3001/3002/3003, but an invoice line may carry
   //     any revenue_account override (3590, 3910, ...) while its moms still
   //     lands on 2611/2621/2631;
-  //   - periodiserade invoice lines credit the 29xx interim account with the
-  //     full moms untouched on 2611 (invoice-entries.ts), then credit 3001 with
-  //     no moms in each dissolution month, so both directions drift by design.
+  //   - an upplupen intäkt credits 17xx on the invoice with the full moms on
+  //     2611, its months having credited 3001 with no moms before it, so both
+  //     directions drift. (A förutbetald intäkt on 29xx no longer does: the
+  //     declaration reads its 29xx line as the sale in the invoice's period
+  //     and leaves the releases out, crm#1919.)
   // Any of those would turn a proportional check into a permanent filing-
   // blocking ERROR (isFilingBlocked) on a correct declaration. Making ruta 07
   // mappable and reconciling the revenue_account override is the
