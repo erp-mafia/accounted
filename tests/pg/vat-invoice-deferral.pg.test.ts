@@ -34,6 +34,7 @@ import {
 } from '@/lib/reports/vat-declaration'
 import type { Invoice, InvoiceItem } from '@/types'
 import { insertAuthUser, insertCompany, insertCompanyMember, insertFiscalPeriod } from './fixtures'
+import { markReversed, nextSeq, postStorno, stornoEntry } from './kontantmetod-carry-fixtures'
 import { getPool } from './setup'
 import type { PgRest } from './postgrest-over-pg'
 
@@ -90,6 +91,7 @@ interface Seed {
   userId: string
   companyId: string
   customerId: string
+  fiscalPeriodId: string
 }
 
 async function seedCompany(): Promise<Seed> {
@@ -101,13 +103,13 @@ async function seedCompany(): Promise<Seed> {
      VALUES ($1, $2, 'aktiebolag', 'accrual', true, 'quarterly')`,
     [userId, companyId],
   )
-  await insertFiscalPeriod({ userId, companyId, name: '2026', periodStart: '2026-01-01', periodEnd: '2026-12-31' })
+  const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId, name: '2026', periodStart: '2026-01-01', periodEnd: '2026-12-31' })
   const customerId = randomUUID()
   await getPool().query(
     `INSERT INTO public.customers (id, user_id, company_id, name, customer_type) VALUES ($1, $2, $3, 'Kund AB', 'swedish_business')`,
     [customerId, userId, companyId],
   )
-  return { userId, companyId, customerId }
+  return { userId, companyId, customerId, fiscalPeriodId }
 }
 
 async function readInvoice(invoiceId: string): Promise<Invoice & { items: InvoiceItem[] }> {
@@ -262,6 +264,43 @@ describe('a periodiserad invoice line in the momsdeklaration (crm#1919)', { time
     // The kreditfaktura: the whole sale and its moms back, the six release stornos read as nothing.
     expect(await rutorOf(seed.companyId, Q3)).toEqual({ ruta05: -16000, ruta10: -4000 })
     expect(await drillDownRuta05(seed.companyId, Q3)).toBe(-16000)
+  })
+
+  it('leaves a corrected release out too: its storno, its rättelse and the storno of that', async () => {
+    const seed = await seedCompany()
+    await bookDeferredInvoice(seed)
+    const company = { userId: seed.userId, companyId: seed.companyId, fiscalPeriodId: seed.fiscalPeriodId, nextPeriodId: seed.fiscalPeriodId }
+    const { rows: [april] } = await getPool().query<{ id: string }>(
+      `SELECT id FROM public.journal_entries WHERE company_id = $1 AND source_type = 'accrual' AND entry_date = '2026-04-01'`,
+      [seed.companyId],
+    )
+
+    // correctEntry's writes: the storno, then the rättelse (source_type
+    // correction, correction_of_id), then the original marked reversed.
+    const stornoId = await postStorno(company, april.id, { date: '2026-05-10' })
+    const correctionId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, correction_of_id, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-10', 'Rättelse: Periodisering 2026-04', 'correction', $6, 'draft')`,
+      [correctionId, seed.userId, seed.companyId, seed.fiscalPeriodId, nextSeq() % 1_000_000_000, april.id],
+    )
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount, currency, sort_order)
+       VALUES ($1, '2970', 2000, 0, 'SEK', 0), ($1, '3001', 0, 2000, 'SEK', 1)`,
+      [correctionId],
+    )
+    await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [correctionId])
+    await markReversed(april.id, stornoId)
+    expect(await rutorOf(seed.companyId, Q2)).toEqual({ ruta05: 0, ruta10: 0 })
+    expect(await drillDownRuta05(seed.companyId, Q2)).toBe(0)
+
+    // The rättelse annulled in the next quarter: that quarter reads nothing either.
+    await stornoEntry(company, correctionId, { date: '2026-07-10' })
+    expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 16000, ruta10: 4000 })
+    expect(await rutorOf(seed.companyId, Q2)).toEqual({ ruta05: 0, ruta10: 0 })
+    expect(await rutorOf(seed.companyId, Q3)).toEqual({ ruta05: 0, ruta10: 0 })
   })
 
   it('keeps ruta 10 a quarter of ruta 05 in every period, and the year whole', async () => {

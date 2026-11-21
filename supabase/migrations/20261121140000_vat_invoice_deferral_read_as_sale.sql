@@ -31,8 +31,8 @@
 --      schedule's amount; a part without moms stays unread, as before.
 --   3. vat_declaration_special_entries(): a new reason,
 --      invoice_deferral_release, for the releases of a deferral with moms and
---      their stornos. The rutor leave them out like a kontantmetod cut-off
---      reversal.
+--      every storno and rättelse down from them. The rutor leave them out like
+--      a kontantmetod cut-off reversal.
 --   4. get_vat_declaration_totals() adds the deferred sale to its revenue
 --      account's totals, and get_vat_ruta_source_lines() lists the 29xx line
 --      in that ruta, so the drill-down still lists what the figure sums.
@@ -285,23 +285,29 @@ BEGIN
       AND k.journal_entry_id IS NOT NULL
   ),
   -- The releases of a förutbetald intäkt a customer invoice booked with moms
-  -- (crm#1919), and the stornos of them: the invoice's own period reads the
-  -- deferred sale (vat_invoice_deferral_shares), so a release, Dr 29xx /
-  -- Cr the revenue account with no moms, is no sale of its own month.
-  deferral_releases AS (
-    SELECT i.journal_entry_id AS id
-    FROM public.vat_invoice_deferral_schedules(p_company_id) s
-    JOIN public.accrual_schedule_installments i ON i.schedule_id = s.schedule_id
-    WHERE s.with_moms
-      AND i.journal_entry_id IS NOT NULL
-  ),
+  -- (crm#1919), with every storno and rättelse down from them: the invoice's
+  -- own period reads the deferred sale (vat_invoice_deferral_shares), so a
+  -- release, Dr 29xx / Cr the revenue account with no moms, is no sale of
+  -- its own month, and neither is a correction of one.
   deferral_release_members AS (
-    SELECT r.id FROM deferral_releases r
-    UNION
-    SELECT x.id
-    FROM public.journal_entries x
-    JOIN deferral_releases r ON r.id = x.reverses_id
-    WHERE x.company_id = p_company_id
+    WITH RECURSIVE chain AS (
+      SELECT i.journal_entry_id AS id
+      FROM public.vat_invoice_deferral_schedules(p_company_id) s
+      JOIN public.accrual_schedule_installments i ON i.schedule_id = s.schedule_id
+      WHERE s.with_moms
+        AND i.journal_entry_id IS NOT NULL
+      UNION
+      SELECT n.id
+      FROM chain c
+      CROSS JOIN LATERAL (
+        SELECT x.id FROM public.journal_entries x
+        WHERE x.reverses_id = c.id AND x.company_id = p_company_id
+        UNION ALL
+        SELECT y.id FROM public.journal_entries y
+        WHERE y.correction_of_id = c.id AND y.company_id = p_company_id
+      ) n
+    )
+    SELECT chain.id FROM chain
   ),
   -- The verifikat a person marked as no momsredovisning (crm#1849): the
   -- latest mark on a verifikat decides, a withdrawn one restores the shapes.
