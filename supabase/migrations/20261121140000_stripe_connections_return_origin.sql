@@ -5,9 +5,10 @@
 -- white-label domain therefore reaches the callback signed out. The callback
 -- reads this column to send the browser back to the initiating host (where
 -- the session lives) for the login bounce, the success redirect and the
--- denial message. Null means "canonical", which is what every pre-existing
--- row and every direct-domain flow gets. Same as bank_connections.oauth_origin
--- and zettle_connections.return_origin.
+-- denial message. /connect records the canonical origin for a direct-domain
+-- flow; null, the value of every row created before this column, is read as
+-- canonical too. Same as bank_connections.oauth_origin and
+-- zettle_connections.return_origin.
 ALTER TABLE public.stripe_connections
   ADD COLUMN IF NOT EXISTS return_origin text;
 

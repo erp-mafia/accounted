@@ -370,5 +370,32 @@ describe('GET /api/extensions/stripe/callback', () => {
       expect(location.origin).toBe('http://localhost:3000')
       expect(location.pathname).toBe('/login')
     })
+
+    // The login bounce re-checks the origin on its own; the success, denial
+    // and error redirects rely on the route's check alone.
+    it('never sends a completed connection to a tampered return_origin', async () => {
+      mockFrom
+        .mockReturnValueOnce(
+          mockChain({ data: { ...BRAND_ROW, return_origin: 'https://evil.example' } }),
+        )
+        .mockReturnValueOnce(mockChain({ error: null }))
+        .mockReturnValueOnce(
+          mockChain({
+            data: {
+              id: CONNECTION_ID,
+              company_id: 'company-1',
+              user_id: 'user-1',
+              stripe_account_id: 'acct_123',
+              livemode: false,
+            },
+          }),
+        )
+
+      const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+      expect(response.headers.get('location')).toBe(
+        'http://localhost:3000/import?mode=stripe&stripe_connected=true',
+      )
+    })
   })
 })
