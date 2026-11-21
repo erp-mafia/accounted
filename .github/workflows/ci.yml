@@ -1,8 +1,8 @@
 name: CI
 
-# The merge gates: checks, pr-privacy,
-# build, unit-tests (four shards), pg-coverage-gate, pg-real, pg-upgrade and
-# tool-pg. Production migrations are in migrations-production.yml; the nightly
+# The merge gates: checks, pr-privacy, build, unit-tests (four shards),
+# pg-coverage-gate, pg-real (three shards), pg-upgrade and tool-pg.
+# Production migrations are in migrations-production.yml; the nightly
 # simulated company and the report benchmark are in nightly.yml.
 #
 # Two aggregate jobs, Core Build and pg-real gate, are the check names branch
@@ -253,11 +253,17 @@ jobs:
           PG_GATE_BASE: ${{ github.event.pull_request.base.sha }}
         run: node scripts/check-pg-test-coverage.mjs
 
-  # Every migration replayed on an empty database, then the pg-real suite.
+  # Every migration replayed on an empty database, then a third of the
+  # pg-real suite: each shard replays the migrations itself.
   pg-real:
-    name: pg-real
+    name: pg-real (${{ matrix.shard }}/3)
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
+    strategy:
+      # One failing shard does not hide the other two's failures.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       PGPASSWORD: postgres
@@ -288,7 +294,10 @@ jobs:
         env:
           PGOPTIONS: -c search_path="$user",public
         run: scripts/ci/replay-migrations.sh supabase/migrations/*.sql
-      - run: npm run test:pg
+      - name: pg-real
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npm run test:pg -- --shard="$SHARD/3"
       - name: Stop Postgres
         # Started by hand (start-postgres), so nothing else removes it. When an
         # earlier step failed, its log goes to the job log first.
