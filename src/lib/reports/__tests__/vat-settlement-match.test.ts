@@ -556,6 +556,49 @@ describe('a momsredovisning inside the period that cleared only part of it (crm#
   })
 })
 
+describe('a supplier invoice dated in the period after the app booked its momsredovisning (#3570)', () => {
+  // Q3 2026: a sale with 250 of output VAT, settled by the app on 30 September
+  // (2611 against 2650), then a purchase dated 20 September with 250 of input
+  // VAT. Ruta 49 is now 0 and 2641 is not cleared: the Moms page reads
+  // partly_settled and these lines to say so instead of "already booked".
+  const years: FakeLedgerData['fiscalPeriods'] = [
+    { id: 'fp', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null, opening_balance_entry_id: null },
+  ]
+  const sale = entry('2026-07-15', [{ account_number: '1510', debit: 1_250 }, { account_number: '3001', credit: 1_000 }, { account_number: '2611', credit: 250 }])
+  const settled = entry('2026-09-30', [{ account_number: '2611', debit: 250 }, { account_number: '2650', credit: 250 }], {
+    description: 'Momsredovisning Kvartal 3 2026',
+    source_type: 'vat_settlement',
+  })
+  const invoice = entry('2026-09-20', [{ account_number: '5010', debit: 1_000 }, { account_number: '2641', debit: 250 }, { account_number: '2440', credit: 1_250 }])
+
+  it('is fully booked before the invoice', async () => {
+    const supabase = ledger({ fiscalPeriods: years, entries: [sale, settled], shaped: [] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.partly_settled).toBe(false)
+    expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+  })
+
+  it('is partly settled after it, with the input VAT left as the lines to book', async () => {
+    const supabase = ledger({ fiscalPeriods: years, entries: [sale, settled, invoice], shaped: [] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.filed_net).toBe(0)
+    expect(proposal.partly_settled).toBe(true)
+    expect(proposal.lines).toEqual([
+      { account_number: '2641', debit_amount: 0, credit_amount: 250 },
+      { account_number: '1650', debit_amount: 250, credit_amount: 0, line_description: 'Moms att återfå' },
+    ])
+    expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+  })
+
+  it('is fully booked again once those lines are posted as a verifikat of their own', async () => {
+    const rest = entry('2026-09-30', [{ account_number: '2641', credit: 250 }, { account_number: '1650', debit: 250 }], { description: 'Moms kvar Q3' })
+    const supabase = ledger({ fiscalPeriods: years, entries: [sale, settled, invoice, rest], shaped: [rest] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.partly_settled).toBe(false)
+    expect(proposal.existing_entries.map((e) => e.id).sort()).toEqual([settled.id, rest.id].sort())
+  })
+})
+
 describe('balanceLeftToClear', () => {
   it('takes what the settlements cleared off the period balance', () => {
     expect(balanceLeftToClear(1_650, 1_250)).toBe(400)

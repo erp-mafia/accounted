@@ -343,7 +343,45 @@ function VatBookingCard({
           förslaget och kan ändra raderna innan verifikatet bokförs.
         </p>
 
-        {booked && (
+        {booked && proposal?.partly_settled && (
+          // The posted momsredovisning cleared only part of the period (a
+          // verifikat added to it afterwards, or a settlement that came with
+          // an import): the proposal's lines are what is left. "Already
+          // booked" alone hid that the momskonton are not at zero and that
+          // 2650/1650 no longer matches ruta 49 (#3570).
+          <div className="flex items-start gap-2 text-[13px] leading-6 text-attn">
+            <ExclamationCircleIcon className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="space-y-1">
+              <p>
+                {t.rich('vat_partly_settled_intro', {
+                  voucher: formatVoucher(booked),
+                  date: formatDate(booked.entry_date),
+                  link: (chunks) => (
+                    <Link
+                      href={`/bookkeeping/${booked.id}`}
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      {chunks}
+                    </Link>
+                  ),
+                })}
+              </p>
+              <ul className="tabular-nums">
+                {proposal.lines.map((line, i) => (
+                  <li key={i}>
+                    {t('vat_partly_settled_line', {
+                      account: line.account_number,
+                      side: line.debit_amount > 0 ? 'debit' : 'credit',
+                      amount: formatAmount(line.debit_amount > 0 ? line.debit_amount : line.credit_amount),
+                    })}
+                  </li>
+                ))}
+              </ul>
+              <p>{t('vat_partly_settled_ways', { voucher: formatVoucher(booked) })}</p>
+            </div>
+          </div>
+        )}
+        {booked && !proposal?.partly_settled && (
           <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
             <ExclamationCircleIcon className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>
@@ -513,6 +551,7 @@ function VatStepper({
   ruta49,
   bookingStatus,
   bookedVoucher,
+  partlySettled,
   filed,
 }: {
   active: number
@@ -527,6 +566,11 @@ function VatStepper({
    * to it lives in step 3 itself (a link cannot sit inside the tab button).
    */
   bookedVoucher?: string | null
+  /**
+   * The posted momsredovisning cleared only part of the period (the
+   * proposal's partly_settled): step 3 is not done while VAT is left (#3570).
+   */
+  partlySettled: boolean
   /** The period has a filing record (Skatteverket kvittens or marked by hand). */
   filed: boolean
 }) {
@@ -559,15 +603,17 @@ function VatStepper({
       n: 3,
       label: 'Bokför',
       sub:
-        bookingStatus === 'booked'
-          ? bookedVoucher
-            ? `bokförd ${bookedVoucher}`
-            : 'bokförd'
-          : bookingStatus === 'draft'
-            ? 'utkast finns'
-            : 'mot 2650',
-      done: bookingStatus === 'booked',
-      warn: false,
+        bookingStatus === 'booked' && partlySettled
+          ? 'moms kvar att bokföra'
+          : bookingStatus === 'booked'
+            ? bookedVoucher
+              ? `bokförd ${bookedVoucher}`
+              : 'bokförd'
+            : bookingStatus === 'draft'
+              ? 'utkast finns'
+              : 'mot 2650',
+      done: bookingStatus === 'booked' && !partlySettled,
+      warn: bookingStatus === 'booked' && partlySettled,
     },
     {
       n: 4,
@@ -1389,6 +1435,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
             ruta49={buildFiledAmounts(data.rutor).net}
             bookingStatus={bookingStatus}
             bookedVoucher={settlement.booked ? formatVoucher(settlement.booked) : null}
+            partlySettled={settlement.proposal?.partly_settled === true}
             filed={filingRecord !== null}
           />
 
