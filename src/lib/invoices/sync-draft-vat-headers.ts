@@ -83,7 +83,9 @@ export async function syncDraftVatHeadersForCustomer(
       .maybeSingle()
     const vatRegistered = settings?.vat_registered !== false
 
-    const current = customer as {
+    // The select is built from DRAFT_VAT_CUSTOMER_FIELDS, so its row type is
+    // not inferred from a literal: the fields are named here instead.
+    const current = customer as unknown as {
       id: string
       customer_type: CustomerType
       vat_number: string | null
