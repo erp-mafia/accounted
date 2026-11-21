@@ -55,10 +55,13 @@ function sentInvoice(overrides: Record<string, unknown> = {}) {
     vat_treatment: 'standard_25',
     paid_amount: 0,
     remaining_amount: 12500,
-    customer: { name: 'Testkund AB', email: 'ekonomi@example.com' },
+    customer: { name: 'Testkund AB', email: 'ekonomi@example.com', address_line1: 'Storgatan 1', postal_code: '111 22', city: 'Stockholm', country: 'SE' },
     ...overrides,
   }
 }
+
+// A faktura names its seller (ML 17 kap 24 § p.5, crm#2080).
+const SELLER = { company_name: 'Test AB', address_line1: 'Testgatan 1', postal_code: '111 22', city: 'Stockholm' }
 
 const ITEM = {
   id: 'item-1',
@@ -80,7 +83,7 @@ function setup(settings: Record<string, unknown>, invoice: Record<string, unknow
     invoices: { data: invoice },
     invoice_items: { data: [ITEM] },
     company_settings: {
-      data: { entity_type: 'enskild_firma', bookkeeping_locked_through: null, ...settings },
+      data: { entity_type: 'enskild_firma', bookkeeping_locked_through: null, ...SELLER, ...settings },
     },
     fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null } },
     pending_operations: { data: { id: 'op-1' } },
@@ -425,6 +428,41 @@ describe('gnubok_mark_invoice_as_sent with paid_at_issue_account (crm#1281)', ()
     expect(error?.message).toContain(reason)
     expect(error?.remediation?.tool).toBe('gnubok_mark_invoice_as_sent')
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
+// crm#2080: the seller's and the buyer's name and address (ML 17 kap 24 §
+// p.5-6), refused at staging by the verdict the approval's issuable gives.
+describe('gnubok_mark_invoice_as_sent / gnubok_send_invoice: names and addresses (crm#2080)', () => {
+  const nameOnly = { name: 'Testkund AB', email: 'ekonomi@example.com', address_line1: null, postal_code: null, city: null, country: 'SE' }
+  const run = (tool: typeof markSent, supabase: unknown) =>
+    tool.execute({ invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never)
+
+  it('refuses a company without an address and stages nothing', async () => {
+    for (const tool of [markSent, sendInvoice]) {
+      const { supabase, findCall } = setup({ accounting_method: 'accrual', address_line1: null, postal_code: null, city: null }, sentInvoice({ status: 'draft', invoice_number: null }))
+      await expect(run(tool, supabase)).rejects.toMatchObject({ code: 'INVOICE_SEND_SELLER_ADDRESS_MISSING' })
+      expect(findCall('pending_operations', 'insert')).toBeUndefined()
+    }
+  })
+
+  it('refuses a buyer without an address over 4 000 kr and stages nothing', async () => {
+    for (const tool of [markSent, sendInvoice]) {
+      const { supabase, findCall } = setup({ accounting_method: 'accrual' }, sentInvoice({ status: 'draft', invoice_number: null, customer: nameOnly }))
+      await expect(run(tool, supabase)).rejects.toMatchObject({ code: 'INVOICE_SEND_BUYER_ADDRESS_MISSING' })
+      expect(findCall('pending_operations', 'insert')).toBeUndefined()
+    }
+  })
+
+  it('stages a förenklad faktura without the buyer address with the note', async () => {
+    for (const tool of [markSent, sendInvoice]) {
+      const { supabase, findCall } = setup(
+        { accounting_method: 'accrual' },
+        sentInvoice({ status: 'draft', invoice_number: null, total: 1250, total_sek: 1250, customer: nameOnly }),
+      )
+      await run(tool, supabase)
+      expect(String(stagedInsert(findCall).preview_data.compliance_warning)).toContain('BUYER_ADDRESS_MISSING')
+    }
   })
 })
 

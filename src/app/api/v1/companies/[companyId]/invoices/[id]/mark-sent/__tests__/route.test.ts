@@ -101,6 +101,9 @@ function detailParams(companyId: string, id: string) {
   return { params: Promise.resolve({ companyId, id }) }
 }
 
+// A faktura names its seller (ML 17 kap 24 § p.5, crm#2080).
+const SELLER = { company_name: 'Test AB', address_line1: 'Testgatan 1', postal_code: '111 22', city: 'Stockholm' }
+
 const DRAFT_INVOICE = {
   id: INVOICE_ID,
   invoice_number: null,
@@ -116,7 +119,14 @@ const DRAFT_INVOICE = {
   vat_treatment: 'standard_25',
   moms_ruta: '05',
   credited_invoice_id: null,
-  customer: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Acme AB', country: 'Sweden' },
+  customer: {
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    name: 'Acme AB',
+    address_line1: 'Storgatan 1',
+    postal_code: '111 22',
+    city: 'Stockholm',
+    country: 'Sweden',
+  },
   items: [{ id: 'iiiiiiii-iiii-4iii-8iii-iiiiiiiiiiii', sort_order: 0, description: 'x', quantity: 1, unit: 'st', unit_price: 10000, line_total: 10000, vat_rate: 25, vat_amount: 2500 }],
 }
 
@@ -149,7 +159,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: SENT_INVOICE, error: null },
         ],
         company_settings: {
-          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
           error: null,
         },
       }).supabase,
@@ -265,7 +275,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           data: {
             accounting_method: 'accrual',
             entity_type: 'enskild_firma',
-            bankgiro: '123-4567',
+            bankgiro: '123-4567', ...SELLER,
             vat_registered: true,
             vat_number: null,
           },
@@ -288,6 +298,68 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
+  // crm#2080: ML 17 kap 24 § p.5-6, the seller's and the buyer's name and address.
+  describe('names and addresses (crm#2080)', () => {
+    const nameOnly = { ...DRAFT_INVOICE.customer, address_line1: null, postal_code: null, city: null }
+    const settings = { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER }
+    const url = `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`
+
+    it('rejects a company without an address before a number is allocated', async () => {
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: DRAFT_INVOICE, error: null },
+          company_settings: { data: { ...settings, address_line1: null, postal_code: null, city: null }, error: null },
+        }).supabase,
+      )
+
+      const res = await markSent(makeMarkSentRequest(url), detailParams(COMPANY_ID, INVOICE_ID))
+
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('INVOICE_SEND_SELLER_ADDRESS_MISSING')
+      expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+      expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('dry-run refuses a buyer without an address over 4 000 kr, as the commit does', async () => {
+      const mock = createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, customer: nameOnly }, error: null },
+        company_settings: { data: settings, error: null },
+      })
+      mockServiceClient.mockReturnValue(mock.supabase)
+
+      const res = await markSent(makeMarkSentRequest(`${url}?dry_run=true`), detailParams(COMPANY_ID, INVOICE_ID))
+
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+      // The dry run reads the address it judges: without these columns every
+      // buyer would read as missing.
+      const projection = String(mock.payloads('invoices', 'select').find((c) => typeof c === 'string') ?? '')
+      for (const column of ['address_line1', 'postal_code', 'city']) {
+        expect(projection).toMatch(new RegExp(`customer:customers\\([^)]*\\b${column}\\b`))
+      }
+    })
+
+    it('issues a förenklad faktura without the buyer address, with a warning', async () => {
+      const small = { ...DRAFT_INVOICE, subtotal: 1000, vat_amount: 250, total: 1250, customer: nameOnly }
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: small, error: null },
+          company_settings: { data: settings, error: null },
+        }).supabase,
+      )
+
+      const res = await markSent(makeMarkSentRequest(url), detailParams(COMPANY_ID, INVOICE_ID))
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data.warnings).toEqual([expect.objectContaining({ code: 'BUYER_ADDRESS_MISSING' })])
+      expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    })
+  })
+
   // A följesedel is never emailed, only marked sent (lib/invoices/editor/channel.ts):
   // a door that can create one issues one, as the dashboard's own button does.
   it('marks a delivery note sent: no verifikat, no F-number taken', async () => {
@@ -301,7 +373,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: { ...note, status: 'sent' }, error: null },
         ],
         company_settings: {
-          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
           error: null,
         },
       }).supabase,
@@ -348,7 +420,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...DRAFT_INVOICE, moms_ruta: null }, error: null },
-        company_settings: { data: { vat_registered: true, bankgiro: '123-4567' }, error: null },
+        company_settings: { data: { vat_registered: true, bankgiro: '123-4567', ...SELLER }, error: null },
       }).supabase,
     )
 
@@ -379,7 +451,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: { ...momsfri, status: 'sent', invoice_number: '2026-0042' }, error: null },
         ],
         company_settings: {
-          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', vat_registered: false },
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER, vat_registered: false },
           error: null,
         },
       }).supabase,
@@ -408,7 +480,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: invoice, error: null },
-        company_settings: { data: { vat_registered, bankgiro: '123-4567' }, error: null },
+        company_settings: { data: { vat_registered, bankgiro: '123-4567', ...SELLER }, error: null },
       }).supabase,
     )
 
@@ -457,7 +529,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
         { data: [{ id: INVOICE_ID }], error: null }, // restore to draft
       ],
       company_settings: {
-        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
         error: null,
       },
     })
@@ -491,7 +563,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
         { data: [{ id: INVOICE_ID }], error: null },
       ],
       company_settings: {
-        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
         error: null,
       },
     })
@@ -522,7 +594,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: [{ id: INVOICE_ID }], error: null },
         ],
         company_settings: {
-          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
           error: null,
         },
       }).supabase,
@@ -572,7 +644,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
         { data: SENT_INVOICE, error: null }, // response re-read
       ],
       company_settings: {
-        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
         error: null,
       },
     })
@@ -621,7 +693,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: SENT_INVOICE, error: null },
         ],
         company_settings: {
-          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
           error: null,
         },
       }).supabase,
@@ -687,7 +759,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: {
-          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
           error: null,
         },
       }).supabase,
@@ -720,7 +792,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: SENT_INVOICE, error: null },
         ],
         company_settings: {
-          data: { accounting_method: 'cash', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          data: { accounting_method: 'cash', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
           error: null,
         },
       }).supabase,
@@ -797,7 +869,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent honours defer
             accounting_method: 'accrual',
             defer_invoice_booking: true,
             entity_type: 'enskild_firma',
-            bankgiro: '123-4567',
+            bankgiro: '123-4567', ...SELLER,
           },
           error: null,
         },
@@ -827,7 +899,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent honours defer
             accounting_method: 'accrual',
             defer_invoice_booking: true,
             entity_type: 'enskild_firma',
-            bankgiro: '123-4567',
+            bankgiro: '123-4567', ...SELLER,
           },
           error: null,
         },
@@ -852,7 +924,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent honours defer
 // and refusal, through the same issueAndBookInvoice.
 describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent with paid_at_issue (crm#1281)', () => {
   const URL = `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`
-  const SETTINGS = { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' }
+  const SETTINGS = { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER }
   const PAID_BODY = { paid_at_issue: { account_number: '1930' } }
 
   function postWithBody(body: unknown, url = URL, headers: Record<string, string> = {}): Request {

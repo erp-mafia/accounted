@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
+import { InvoicePartiesNotice } from '@/components/invoices/InvoicePartiesNotice'
 import { cn } from '@/lib/utils'
 import type { EditorStatusLine as StatusLine } from '@/lib/invoices/editor/status-line'
 
@@ -15,7 +16,10 @@ interface EditorStatusLineProps<TStep> {
   onAddPayee: () => void
   /** Jump to the invoice date (it is in a locked or closed period). */
   onFixDate?: () => void
-  /** Owner/admin may open the tax settings to add the VAT number; others are asked to get one. */
+  /**
+   * Owner/admin may open the tax settings to add the VAT number, and the
+   * company details to add its name and address; others are asked to.
+   */
   canEditTaxSettings?: boolean
   className?: string
 }
@@ -59,6 +63,10 @@ export function EditorStatusLine<TStep>({
       <AttnLine>
         {t('status_seller_vat_missing')} {t('status_seller_vat_ask_admin')}
       </AttnLine>
+    )
+  } else if (status.kind === 'parties_missing') {
+    content = (
+      <InvoicePartiesNotice verdict={status.verdict} customerId={status.customerId} canEditCompany={canEditTaxSettings} />
     )
   } else if (status.kind === 'payee_missing') {
     content = canAddPayee ? (

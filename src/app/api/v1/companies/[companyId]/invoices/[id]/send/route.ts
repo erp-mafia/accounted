@@ -58,6 +58,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
+import { BUYER_ADDRESS_MISSING_WARNING, invoicePartiesVerdict } from '@/lib/invoices/invoice-parties'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
@@ -164,6 +165,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL (or an SMTP relay via EMAIL_PROVIDER=smtp) the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
     'Customer must have an email address. 400 INVOICE_SEND_NO_CUSTOMER_EMAIL otherwise.',
+    'A faktura states the seller\'s and the buyer\'s name and address (ML 17 kap 24 §): 400 INVOICE_SEND_SELLER_ADDRESS_MISSING or INVOICE_SEND_BUYER_ADDRESS_MISSING before a number is allocated, as on :mark-sent. A förenklad faktura (at most 4 000 kr including VAT, not an EU or reverse-charge sale) may leave the buyer\'s address out and is sent with warning BUYER_ADDRESS_MISSING.',
     'An invoice without a customer (customer_id null, e.g. its customer was deleted) is refused with 409 INVOICE_CUSTOMER_MISSING before anything changes. Set customer_id on the draft or delete it.',
     'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.',
     'The journal entry is posted before the email leaves: a refusal (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) returns the engine\'s error, the invoice stays in `draft` and no email is sent. Fix the tag or the period and send again.',
@@ -669,6 +671,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             : failure.step.toUpperCase(),
       message: failure.reason,
     }))
+    // A förenklad faktura issued without the buyer's address (crm#2080).
+    if (invoicePartiesVerdict(typed, typed.customer, settings) === 'buyer_missing_simplified') {
+      warnings.push({ code: BUYER_ADDRESS_MISSING_WARNING.code, message: BUYER_ADDRESS_MISSING_WARNING.message_sv })
+    }
 
     // The email did not go out after the invoice was issued. With nothing
     // booked, nothing irreversible happened: the draft is restored and the

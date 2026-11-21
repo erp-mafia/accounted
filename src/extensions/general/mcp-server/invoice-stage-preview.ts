@@ -20,6 +20,10 @@
  *     rule issueAndBookInvoice applies (paidAtIssueBlockReason), else one cash
  *     verifikat on the invoice date, the buildInvoiceCashLines lines the
  *     payment at issue books, in either accounting method.
+ *   - mark sent / send, the parties (crm#2080): a missing seller or buyer
+ *     name or address is refused by the verdict issuable gives the approval
+ *     (invoicePartiesVerdict); a förenklad faktura without the buyer's
+ *     address is staged with a note.
  */
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -30,6 +34,13 @@ import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payme
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { dbError } from '@/lib/errors/db-error'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
+import {
+  BUYER_ADDRESS_MISSING_WARNING,
+  invoicePartiesVerdict,
+  type InvoicePartiesCustomer,
+  type InvoicePartiesSeller,
+  type InvoicePartiesVerdict,
+} from '@/lib/invoices/invoice-parties'
 import { paidAtIssueBlockReason, type PaidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
@@ -351,6 +362,42 @@ export async function buildIssuePreview(
       'Expected, not reserved: the number is assigned at approval and moves on if another invoice is issued first.',
   }
 }
+
+/**
+ * The seller's and the buyer's name and address as the approval's issuable
+ * will read them (crm#2080). A failed read of the settings claims nothing:
+ * the approval decides.
+ */
+export async function stagedInvoiceParties(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: StagedInvoiceRow,
+): Promise<InvoicePartiesVerdict> {
+  if ((invoice.status ?? 'draft') !== 'draft') return 'ok'
+  const { data: seller, error } = await supabase
+    .from('company_settings')
+    .select('company_name, address_line1, address_line2, postal_code, city, country, vat_registered')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error || !seller) return 'ok'
+  return invoicePartiesVerdict(
+    {
+      credited_invoice_id: invoice.credited_invoice_id ?? null,
+      document_type: (invoice.document_type ?? 'invoice') as Invoice['document_type'],
+      total: invoice.total,
+      total_sek: invoice.total_sek ?? null,
+      currency: (invoice.currency ?? 'SEK') as Invoice['currency'],
+      exchange_rate: invoice.exchange_rate ?? null,
+      vat_treatment: invoice.vat_treatment,
+    },
+    invoice.customer as InvoicePartiesCustomer | null | undefined,
+    seller as InvoicePartiesSeller,
+  )
+}
+
+/** The staged note for a förenklad faktura without the buyer's address, in the agent's language. */
+export const BUYER_ADDRESS_SIMPLIFIED_NOTE =
+  `${BUYER_ADDRESS_MISSING_WARNING.code}: ${BUYER_ADDRESS_MISSING_WARNING.message_en} Before approval, gnubok_update_customer adds it.`
 
 /** " (förväntat nr F-103)" for a title, or "" when the number is unknown or already set. */
 export function expectedNumberSuffix(invoice: StagedInvoiceRow, issue: IssuePreview): string {

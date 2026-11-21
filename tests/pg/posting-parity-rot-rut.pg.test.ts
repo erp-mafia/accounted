@@ -694,13 +694,13 @@ async function seedAll(): Promise<Seed> {
   const { userId, companyId, fiscalPeriodId } = await seedCompany()
   await getPool().query(
     `INSERT INTO public.company_settings
-       (user_id, company_id, entity_type, accounting_method, vat_registered, vat_number, company_name, org_number, bankgiro, f_skatt)
-     VALUES ($1, $2, 'aktiebolag', 'accrual', true, 'SE556677889901', 'Städbolaget AB', '556677-8899', '5050-1055', true)`,
+       (user_id, company_id, entity_type, accounting_method, vat_registered, vat_number, company_name, org_number, bankgiro, f_skatt, address_line1, postal_code, city)
+     VALUES ($1, $2, 'aktiebolag', 'accrual', true, 'SE556677889901', 'Städbolaget AB', '556677-8899', '5050-1055', true, 'Testgatan 1', '111 22', 'Stockholm')`,
     [userId, companyId],
   )
   const { rows } = await getPool().query<{ id: string }>(
-    `INSERT INTO public.customers (user_id, company_id, name, customer_type, country, personal_number)
-     VALUES ($1, $2, 'Privatkund', 'individual', 'SE', $3) RETURNING id::text AS id`,
+    `INSERT INTO public.customers (user_id, company_id, name, customer_type, country, personal_number, address_line1, postal_code, city)
+     VALUES ($1, $2, 'Privatkund', 'individual', 'SE', $3, 'Storgatan 1', '111 22', 'Stockholm') RETURNING id::text AS id`,
     [userId, companyId, encryptPersonnummer('198001011231')],
   )
   session.userId = userId
