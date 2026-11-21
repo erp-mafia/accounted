@@ -85,6 +85,7 @@ function ledger(opts: {
   rattelser?: unknown[]
   lines?: ReturnType<typeof line>[]
   special?: Array<{ journal_entry_id: string; reason: string }>
+  deferrals?: Array<{ journal_entry_id: string; balance_account: string; target_account: string; share: number }>
   submissions?: Array<{ id: string; key: string; value: unknown }>
   closing?: string[]
 }) {
@@ -106,6 +107,7 @@ function ledger(opts: {
       return { data: lines.filter((l) => ids.includes(l.journal_entry_id)) }
     },
     'rpc:vat_declaration_special_entries': { data: opts.special ?? [] },
+    'rpc:vat_invoice_deferral_shares': { data: opts.deferrals ?? [] },
     'rpc:skattekonto_shape_accounts': { data: ['1630'] },
   })
 }
@@ -192,6 +194,64 @@ describe('withChangesAfterFiling', () => {
       p_start: '2026-07-01',
       p_end: '2026-07-31',
     }))
+  })
+
+  it('counts the periodiserad part of an invoice posted afterwards as sale, with its moms (crm#1919)', async () => {
+    const sale = entry({ id: 'e5', voucher_number: 12, entry_date: '2026-07-29', source_type: 'invoice_created', committed_at: '2026-10-24T18:29:38Z' })
+    const mock = ledger({
+      late: [sale],
+      // 4 000 on 3001 and 12 000 periodiserad on 2970, 25 % moms on both.
+      lines: [line('e5', '1510', 20000, 0), line('e5', '2970', 0, 12000), line('e5', '3001', 0, 4000), line('e5', '2611', 0, 4000)],
+      deferrals: [{ journal_entry_id: 'e5', balance_account: '2970', target_account: '3001', share: 1 }],
+    })
+
+    const [record] = await withChangesAfterFiling(mock.supabase as never, COMPANY, [JULY])
+
+    expect(record.changed_after_filing?.rutor_change).toEqual({ ruta05: 16000, ruta10: 4000, ruta49: 4000 })
+  })
+
+  it('leaves a release of a periodiserad invoice line out, also when it is moved out of the period (crm#1919)', async () => {
+    const release = entry({ id: 'e6', voucher_number: 13, entry_date: '2026-07-01', source_type: 'accrual', committed_at: '2026-10-24T18:29:38Z' })
+    const movedOut = entry({ id: 'e7', voucher_number: 14, entry_date: '2026-08-01', source_type: 'accrual', committed_at: '2026-07-01T08:00:00Z' })
+    const mock = ledger({
+      late: [release],
+      rattelseEntries: [movedOut],
+      rattelser: [{
+        id: 'r7', journal_entry_id: 'e7', rattelse_type: 'metadata',
+        old_entry_date: '2026-07-01', new_entry_date: '2026-08-01',
+        struck_lines: null, added_lines: null, created_at: '2026-10-24T19:00:00Z',
+      }],
+      lines: [line('e6', '2970', 2000, 0), line('e6', '3001', 0, 2000), line('e7', '2970', 2000, 0), line('e7', '3001', 0, 2000)],
+      special: [
+        { journal_entry_id: 'e6', reason: 'invoice_deferral_release' },
+        { journal_entry_id: 'e7', reason: 'invoice_deferral_release' },
+      ],
+    })
+
+    const [record] = await withChangesAfterFiling(mock.supabase as never, COMPANY, [JULY])
+
+    expect(record.changed_after_filing).toBeNull()
+  })
+
+  it('reads the special verifikat past the first 1000 rows (crm#1919)', async () => {
+    const release = entry({ id: 'e6', voucher_number: 13, entry_date: '2026-07-01', source_type: 'accrual', committed_at: '2026-10-24T18:29:38Z' })
+    const mock = ledger({
+      late: [release],
+      lines: [line('e6', '2970', 2000, 0), line('e6', '3001', 0, 2000)],
+    })
+    // Releases of earlier years fill the first page; this one is on the second.
+    const special = [
+      ...Array.from({ length: 1000 }, (_, i) => ({ journal_entry_id: `old-${i}`, reason: 'invoice_deferral_release' })),
+      { journal_entry_id: 'e6', reason: 'invoice_deferral_release' },
+    ]
+    mock.setTable('rpc:vat_declaration_special_entries', (chain): TableMockResult => {
+      const [from, to] = chain.find((c) => c.method === 'range')!.args as [number, number]
+      return { data: special.slice(from, to + 1) }
+    })
+
+    const [record] = await withChangesAfterFiling(mock.supabase as never, COMPANY, [JULY])
+
+    expect(record.changed_after_filing).toBeNull()
   })
 
   it('leaves the posted bokslut out', async () => {

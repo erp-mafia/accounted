@@ -303,6 +303,10 @@ interface VatTotalsRpcPayload {
  * The shapes cannot tell a settlement from a business verifikat that happens
  * to touch 2650 (a supplier invoice with input VAT booked against 2650, say).
  * No rule separates that tail; it needs an explicit per-entry override.
+ *
+ * Förutbetalda intäkter on customer invoices (crm#1919): the totals of a
+ * revenue account hold the sale an invoice deferred to 29xx on the invoice's
+ * date, and not its releases. See fetchInvoiceDeferralShares.
  */
 export async function fetchVatAccountTotals(
   supabase: SupabaseClient,
@@ -353,6 +357,95 @@ export async function fetchVatAccountTotals(
     sourceTypeCounts: payload.source_type_counts ?? {},
     countedOpeningBalances: payload.counted_opening_balances ?? [],
   }
+}
+
+/** Per verifikat, the revenue accounts its 29xx lines read as, and at which part. */
+export type InvoiceDeferralShares = ReadonlyMap<
+  string,
+  ReadonlyArray<{ balance_account: string; target_account: string; share: number }>
+>
+
+/**
+ * Which verifikat's 29xx lines the momsdeklaration reads as a sale, and on
+ * which revenue account (crm#1919). A periodiserad invoice line credits 29xx
+ * instead of its revenue account, with its whole moms on 26xx the same day,
+ * and the schedule releases it to the revenue account later with no moms.
+ * The beskattningsunderlag is the ersättning (ML 2023:200 8 kap. 2 §) and
+ * ruta 05 is the underlag of the moms in rutorna 10 to 12, so the sale is
+ * reported in the period that carries its moms: the invoice's.
+ *
+ * The SQL decides (vat_invoice_deferral_shares, migration 20261121140000):
+ * the invoice's verifikat, its kreditfaktura and every storno and rättelse
+ * down from either, for a deferral whose line carries Swedish moms. The
+ * releases of such a deferral are left out of the rutor as
+ * invoice_deferral_release (vat_declaration_special_entries). The figure and
+ * the drill-down apply it in SQL; a fold over one verifikat's own lines (the
+ * changes to a filed period) reads it here and applies it with
+ * readDeferredSaleLines.
+ *
+ * A database that has not run the migration yet (the deploy window) has no
+ * such function: no verifikat reads that way there, so the answer is empty.
+ */
+export async function fetchInvoiceDeferralShares(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<InvoiceDeferralShares> {
+  type ShareRow = { journal_entry_id: string; balance_account: string; target_account: string; share: number | string }
+  let rows: ShareRow[]
+  try {
+    // Paged in a total order: the answer covers the company's whole history,
+    // and PostgREST cuts an unpaged one at 1000 rows.
+    rows = await fetchAllRows<ShareRow>(({ from, to }) =>
+      supabase
+        .rpc('vat_invoice_deferral_shares', { p_company_id: companyId })
+        .order('journal_entry_id')
+        .order('balance_account')
+        .order('target_account')
+        .order('share')
+        .range(from, to),
+    )
+  } catch (err) {
+    const code = (err as { code?: unknown }).code
+    if (code === 'PGRST202' || code === '42883') {
+      log.warn('vat_invoice_deferral_shares is not deployed yet: no deferred sale is read', { companyId })
+      return new Map()
+    }
+    throw new Error(`vat_invoice_deferral_shares failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  const shares = new Map<string, Array<{ balance_account: string; target_account: string; share: number }>>()
+  for (const row of rows) {
+    const ofEntry = shares.get(row.journal_entry_id) ?? []
+    ofEntry.push({ balance_account: row.balance_account, target_account: row.target_account, share: Number(row.share) })
+    shares.set(row.journal_entry_id, ofEntry)
+  }
+  return shares
+}
+
+/**
+ * One verifikat's lines as the momsdeklaration reads them: each 29xx line the
+ * SQL reads as a deferred sale (fetchInvoiceDeferralShares) adds that sale on
+ * its revenue account, at its part. The 29xx line itself stays; it reaches no
+ * ruta.
+ */
+export function readDeferredSaleLines(
+  entryId: string,
+  lines: ReadonlyArray<{ account_number: string; debit_amount: number; credit_amount: number }>,
+  shares: InvoiceDeferralShares,
+): Array<{ account_number: string; debit_amount: number; credit_amount: number }> {
+  const read = [...lines]
+  const ofEntry = shares.get(entryId)
+  if (!ofEntry) return read
+  for (const line of lines) {
+    for (const part of ofEntry) {
+      if (part.balance_account !== line.account_number) continue
+      read.push({
+        account_number: part.target_account,
+        debit_amount: roundOre((Number(line.debit_amount) || 0) * part.share),
+        credit_amount: roundOre((Number(line.credit_amount) || 0) * part.share),
+      })
+    }
+  }
+  return read
 }
 
 /**
