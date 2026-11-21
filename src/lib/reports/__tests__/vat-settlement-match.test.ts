@@ -596,7 +596,7 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     expect(partlySettledRestBooksAlone(proposal)).toBe(true)
     expect(momsredovisningShapeOfLines(proposal.lines.map((l) => l.account_number), ['1630'])).toBe('net_account_shape')
     // Past a lock date they cannot be dated inside the period: only reversing is offered.
-    expect(partlySettledRestBooksAlone({ ...proposal, entry_date: '2026-10-01', entry_date_reason: 'company_lock_date' })).toBe(false)
+    expect(partlySettledRestBooksAlone({ ...proposal, entry_date_reason: 'company_lock_date' })).toBe(false)
   })
 
   it('offers only reversing when the rest nets to zero, as an EU service purchase does', async () => {
