@@ -27,13 +27,17 @@ export function buildDetailVatRows(input: {
   headerVatRate: number | null | undefined
   vatRegistered: boolean
 }): DetailVatRow[] {
+  // An invoice whose header holds no VAT states none: a row that carries no
+  // VAT of its own is then zero, not recomputed into moms the total lacks.
+  const recomputeLegacyRows = input.headerVatAmount !== 0
   const vatByRate = new Map<number, number>()
   for (const item of input.items) {
     const rate = item.vat_rate ?? 0
     // The stored line VAT is what the invoice states and booked (the PDF
     // prints the same); a legacy row that carries none is recomputed with
     // the rule the builder stores (crm#1343).
-    const lineVat = item.vat_amount || computeLineVat(item.line_total, rate)
+    const lineVat =
+      item.vat_amount || (recomputeLegacyRows ? computeLineVat(item.line_total, rate) : 0)
     vatByRate.set(rate, roundOre((vatByRate.get(rate) || 0) + lineVat))
   }
   const entries = Array.from(vatByRate.entries())

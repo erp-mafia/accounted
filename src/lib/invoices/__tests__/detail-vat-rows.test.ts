@@ -73,6 +73,31 @@ describe('buildDetailVatRows', () => {
     expect(rows).toEqual([{ key: '25', rate: 25, amount: 250 }])
   })
 
+  it('does not recompute a row without stored VAT when the header holds no VAT', () => {
+    const rows = buildDetailVatRows({
+      ...base,
+      items: [item({ unit_price: -1000, line_total: -1000, vat_amount: 0 })],
+      headerVatAmount: 0,
+    })
+
+    expect(rows).toEqual([{ key: 'zero', rate: null, amount: 0 }])
+  })
+
+  it('drops a rate whose moms sums to a float residue of zero', () => {
+    const rows = buildDetailVatRows({
+      ...base,
+      items: [
+        item({ id: 'a', vat_amount: 0.1 }),
+        item({ id: 'b', vat_amount: 0.2 }),
+        item({ id: 'c', vat_amount: -0.3 }),
+        item({ id: 'd', line_total: 2000, vat_rate: 12, vat_amount: 240 }),
+      ],
+      headerVatAmount: 240,
+    })
+
+    expect(rows).toEqual([{ key: '12', rate: 12, amount: 240 }])
+  })
+
   it('shows an invoice registered from the books the moms its header holds', () => {
     const rows = buildDetailVatRows({ ...base, items: [], headerVatAmount: 250, headerVatRate: 25 })
 
