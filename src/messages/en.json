@@ -3952,7 +3952,11 @@
     "op_group": "New bank connection",
     "op_connect_label": "Connect the bank with BankID",
     "op_connect_help": "Bank data is fetched through Open Payments Europe AB, a payment institution supervised by Finansinspektionen. The connection can only read, never move money.",
-    "op_connect_button": "Connect bank"
+    "op_connect_button": "Connect bank",
+    "eb_connect_open": "Connect a bank through the earlier connection",
+    "eb_only_uncovered": "Only the banks that {button} under {group} does not reach yet are listed here. SEB, Swedbank, Handelsbanken, Nordea and most other banks are connected there.",
+    "eb_bank_elsewhere_one": "{bank} is connected with {button} under {group} above.",
+    "eb_bank_elsewhere_many": "More matching banks are connected with {button} under {group} above."
   },
   "settings_skattekonto_account": {
     "group_label": "The tax account in the books",

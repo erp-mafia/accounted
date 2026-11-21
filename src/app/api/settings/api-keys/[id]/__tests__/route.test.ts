@@ -63,17 +63,22 @@ const OWN_KEY = { id: 'key-1', user_id: 'user-1', company_id: ACTIVE }
  * rather than trusting it. Every read resolves to the same result, and a
  * chain that is awaited directly (the revoke) does too.
  */
-function setupFrom(result: { data?: unknown; error?: unknown }) {
+function setupFrom(
+  result: { data?: unknown; error?: unknown },
+  updateResult: { data?: unknown; error?: unknown } = result,
+) {
   const updateSpy = vi.fn()
   const filters: Array<[string, unknown]> = []
 
   mockSupabase.from.mockImplementation(() => {
     const chain: Record<string, unknown> = {}
+    let updating = false
     const handler: ProxyHandler<object> = {
       get(_t, prop) {
         if (prop === 'update') {
           return (payload: unknown) => {
             updateSpy(payload)
+            updating = true
             return new Proxy(chain, handler)
           }
         }
@@ -84,12 +89,14 @@ function setupFrom(result: { data?: unknown; error?: unknown }) {
           }
         }
         if (prop === 'maybeSingle' || prop === 'single') {
+          const r = updating ? updateResult : result
           return () =>
-            Promise.resolve({ data: result.data ?? null, error: result.error ?? null })
+            Promise.resolve({ data: r.data ?? null, error: r.error ?? null })
         }
         if (prop === 'then') {
+          const r = updating ? updateResult : result
           return (resolve: (value: unknown) => void) =>
-            resolve({ data: result.data ?? null, error: result.error ?? null })
+            resolve({ data: r.data ?? null, error: r.error ?? null })
         }
         return () => new Proxy(chain, handler)
       },
@@ -640,5 +647,22 @@ describe('DELETE /api/settings/api-keys/[id]', () => {
     const res = await revoke()
     expect(res.status).toBe(500)
     expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('answers 403, not success, when the key company\'s policy changes no row', async () => {
+    // The caller's own key homed in a company where they are not owner or
+    // admin: the api_keys update policy refuses by updating nothing.
+    const { updateSpy } = setupFrom({ data: { id: 'key-1', user_id: 'user-1', company_id: OTHER } }, { data: null })
+    const res = await revoke()
+    const { status, body } = await parseJsonResponse<{ success?: boolean }>(res)
+    expect(updateSpy).toHaveBeenCalledWith({ revoked_at: expect.any(String) })
+    expect(status).toBe(403)
+    expect(body.success).toBeUndefined()
+  })
+
+  it('returns 500 when the revoke fails', async () => {
+    setupFrom({ data: { id: 'key-1', user_id: 'user-1', company_id: 'company-1' } }, { error: { message: 'boom' } })
+    const res = await revoke()
+    expect(res.status).toBe(500)
   })
 })

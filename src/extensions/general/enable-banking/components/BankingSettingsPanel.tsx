@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useToast } from '@/components/ui/use-toast'
@@ -152,6 +153,7 @@ export default function BankingSettingsPanel() {
   // and has to be switched again.
   const openPayments = useOpenPaymentsAvailability()
   const offeredBank = enableBankingOffers(openPayments.status === 'available')
+  const t = useTranslations('settings_banking')
 
   useEffect(() => {
     fetchConnections()
@@ -1016,7 +1018,10 @@ export default function BankingSettingsPanel() {
       {!connectNewExpanded ? (
         <div className="px-1 pt-8">
           <Button variant="outline" onClick={() => setConnectNewOpen(true)} disabled={!canWrite} title={lockedTitle}>
-            Anslut en bank till
+            {/* While the BankID connection is open to the company this list
+                holds only the banks it does not reach: the label says so,
+                so it never reads as the way to add any other bank. */}
+            {offeredBank ? t('eb_connect_open') : 'Anslut en bank till'}
           </Button>
         </div>
       ) : (
@@ -1066,6 +1071,11 @@ export default function BankingSettingsPanel() {
               />
             </SettingsRow>
             <div className="px-1 pt-4">
+              {offeredBank && (
+                <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                  {t('eb_only_uncovered', { button: t('op_connect_button'), group: t('op_group') })}
+                </p>
+              )}
               {/* Name the company on the surface itself, not only in the help
                   popover: the bank login that follows says nothing about which
                   set of books the accounts will land in. */}
