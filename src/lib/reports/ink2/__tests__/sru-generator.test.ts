@@ -41,6 +41,8 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       '7012': '20251231',
       '7104': 302000,
       '7114': 0,
+      '7132': 0,
+      '7133': 0,
     },
     ink2r: defaultInk2r,
     ink2s: {
@@ -49,9 +51,12 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       '7650': 302000,
       '7750': 0,
       '7651': 0,
+      '7652': 0,
       '7653': 0,
+      '7753': 0,
       '7754': 0,
       '7654': 0,
+      '7673': 0,
       '7763': 0,
       '7666': 0,
       '7765': 0,
@@ -75,6 +80,7 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       email: 'test@example.com',
     },
     warnings: [],
+    sruBlockers: [],
     ...overrides,
   }
 }
@@ -278,6 +284,7 @@ describe('INK2 SRU Generator', () => {
         ink2s: {
           ...base.ink2s,
           '7653': 5_244,
+          '7753': 0,
           '7754': 1_000,
         },
       })

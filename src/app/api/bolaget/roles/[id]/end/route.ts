@@ -13,7 +13,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bolaget.role_end',
   async (request, ctx, { params }) => {
     const { id } = await params
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, EndSchema)
     if (!validation.success) return validation.response

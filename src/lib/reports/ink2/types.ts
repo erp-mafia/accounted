@@ -106,6 +106,8 @@ export interface INK2Rutor {
   '7012': string  // Räkenskapsår t.o.m. (YYYYMMDD)
   '7104': number  // 1.1 Överskott av näringsverksamhet
   '7114': number  // 1.2 Underskott av näringsverksamhet
+  '7132': number  // 1.4 Underlag för särskild löneskatt på pensionskostnader
+  '7133': number  // 1.5 Negativt underlag för särskild löneskatt på pensionskostnader
 }
 
 /**
@@ -118,9 +120,12 @@ export interface INK2SRutor {
   '7650': number  // 4.1  Årets resultat, vinst
   '7750': number  // 4.2  Årets resultat, förlust
   '7651': number  // 4.3a Skatt på årets resultat (ej avdragsgill)
+  '7652': number  // 4.3b Nedskrivning av finansiella tillgångar
   '7653': number  // 4.3c Andra ej avdragsgilla kostnader
+  '7753': number  // 4.5b Utdelning
   '7754': number  // 4.5c Andra ej skattepliktiga intäkter
   '7654': number  // 4.6a Schablonintäkt på periodiseringsfonder vid beskattningsårets ingång
+  '7673': number  // 4.6d Uppräknat belopp vid återföring av periodiseringsfond
   '7763': number  // 4.14a Outnyttjat underskott från föregående beskattningsår
   '7666': number  // 4.9 (+) Skattemässig justering för avskrivning på byggnader och annan fast egendom
   '7765': number  // 4.9 (-) Skattemässig justering för avskrivning på byggnader och annan fast egendom
@@ -157,6 +162,38 @@ export function ink2sSchablonintaktRows(
     label: 'Beräknad schablonintäkt på periodiseringsfonder vid beskattningsårets ingång',
     amount: ink2s['7654'],
   }]
+}
+
+/**
+ * The INK2S rows filed beside the catch-alls 4.3c and 4.5c, and the 4.6d
+ * uppräkning, as the form names them (Skatteverket's labels, Swedish in every
+ * locale); only the rows with an amount.
+ */
+export function ink2sSplitAdjustmentRows(
+  ink2s: Pick<INK2SRutor, '7652' | '7753' | '7673'>,
+): { field: '7652' | '7753' | '7673'; code: string; label: string; amount: number }[] {
+  return ([
+    ['7652', '4.3b', 'Nedskrivning av finansiella tillgångar'],
+    ['7753', '4.5b', 'Utdelning'],
+    ['7673', '4.6d', 'Uppräknat belopp vid återföring av periodiseringsfond'],
+  ] as const)
+    .filter(([field]) => ink2s[field] > 0)
+    .map(([field, code, label]) => ({ field, code, label, amount: ink2s[field] }))
+}
+
+/**
+ * INK2 page 1, points 1.4 and 1.5, as the form names them; only the rows with
+ * an amount.
+ */
+export function ink2PensionTaxRows(
+  ink2: Pick<INK2Rutor, '7132' | '7133'>,
+): { field: '7132' | '7133'; code: string; label: string; amount: number }[] {
+  return ([
+    ['7132', '1.4', 'Underlag för särskild löneskatt på pensionskostnader'],
+    ['7133', '1.5', 'Negativt underlag för särskild löneskatt på pensionskostnader'],
+  ] as const)
+    .filter(([field]) => ink2[field] > 0)
+    .map(([field, code, label]) => ({ field, code, label, amount: ink2[field] }))
 }
 
 // Account mapping configuration for INK2R
@@ -216,6 +253,13 @@ export interface INK2Declaration {
   }
   companyInfo: INK2CompanyInfo
   warnings: string[]
+  /**
+   * Why the SRU file is refused: the form does not tie to the books (an
+   * account without an SRU field, a balance sheet off by more than the
+   * truncation, a closed year whose declared result is not 2099). Empty when
+   * it can be filed; each text is also in warnings.
+   */
+  sruBlockers: string[]
 }
 
 // SRU file types: no longer shared with NE-bilaga since the structure

@@ -14,6 +14,8 @@ export interface UnderlagCounts {
   counts: Record<string, number>
   /** Customer invoices referencing each journal entry id; entries with none are absent. */
   invoice_references: Record<string, number>
+  /** Entries marked "Inget underlag krävs", with the reason given; entries not marked are absent. */
+  no_doc_required: Record<string, string | null>
 }
 
 /**
@@ -40,6 +42,12 @@ export interface UnderlagCounts {
  * paperclip with nothing behind it, but it must stop warning "Underlag
  * saknas" for an entry the verifikat page already lists an invoice on.
  *
+ * `no_doc_required` holds the entries the user marked "Inget underlag
+ * krävs" (journal_entry_no_doc_required), with their reason: the third input
+ * of the missing-underlag warning. The list used to read every exemption of
+ * the company on each mount to mark the rows on screen, which past a bulk
+ * exemption after a migration was up to 25 sequential pages (24 000 rows).
+ *
  * Throws the first read error.
  */
 export async function countUnderlagForJournalEntries(
@@ -47,19 +55,21 @@ export async function countUnderlagForJournalEntries(
   companyId: string,
   journalEntryIds: readonly string[],
 ): Promise<UnderlagCounts> {
-  const out: UnderlagCounts = { counts: {}, invoice_references: {} }
+  const out: UnderlagCounts = { counts: {}, invoice_references: {}, no_doc_required: {} }
   const chunks = chunk(journalEntryIds, UNDERLAG_COUNTS_CHUNK)
   const results = await Promise.all(chunks.map((ids) => countChunk(supabase, companyId, ids)))
   for (const r of results) {
     Object.assign(out.counts, r.counts)
     Object.assign(out.invoice_references, r.invoice_references)
+    Object.assign(out.no_doc_required, r.no_doc_required)
   }
   return out
 }
 
 async function countChunk(supabase: SupabaseClient, companyId: string, ids: string[]): Promise<UnderlagCounts> {
   const inList = `(${ids.join(',')})`
-  const [directRes, siRes, sipRes] = await Promise.all([
+  // Every read is independent of the others: one round trip, not two.
+  const [directRes, siRes, sipRes, exemptRes, invoiceRefs] = await Promise.all([
     supabase
       .from('document_attachments')
       .select('id, journal_entry_id')
@@ -83,11 +93,18 @@ async function countChunk(supabase: SupabaseClient, companyId: string, ids: stri
       )
       .eq('company_id', companyId)
       .in('journal_entry_id', ids),
+    supabase
+      .from('journal_entry_no_doc_required')
+      .select('journal_entry_id, reason')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', ids),
+    getInvoiceReferencesForJournalEntries(supabase, companyId, ids),
   ])
 
   if (directRes.error) throw directRes.error
   if (siRes.error) throw siRes.error
   if (sipRes.error) throw sipRes.error
+  if (exemptRes.error) throw exemptRes.error
 
   // Distinct doc ids per entry: a supplier invoice's document referenced from
   // both FK paths, or already directly linked, must not double count.
@@ -126,8 +143,6 @@ async function countChunk(supabase: SupabaseClient, companyId: string, ids: stri
     add(row.journal_entry_id, row.supplier_invoice.document_id)
   }
 
-  const invoiceRefs = await getInvoiceReferencesForJournalEntries(supabase, companyId, ids)
-
   // Referenced entries outside the requested set (an SI FK can point at an
   // entry the caller didn't ask about) must not leak into the response.
   const requested = new Set(ids)
@@ -139,5 +154,9 @@ async function countChunk(supabase: SupabaseClient, companyId: string, ids: stri
   for (const [journalEntryId, invoiceIds] of invoiceRefs) {
     if (requested.has(journalEntryId)) invoice_references[journalEntryId] = invoiceIds.length
   }
-  return { counts, invoice_references }
+  const no_doc_required: Record<string, string | null> = {}
+  for (const row of (exemptRes.data ?? []) as { journal_entry_id: string; reason: string | null }[]) {
+    if (requested.has(row.journal_entry_id)) no_doc_required[row.journal_entry_id] = row.reason
+  }
+  return { counts, invoice_references, no_doc_required }
 }

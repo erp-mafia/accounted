@@ -7,10 +7,15 @@ import {
   supplierInvoiceRegistrationLines,
   type SupplierInvoiceBookingItem,
 } from '@/lib/bookkeeping/supplier-invoice-registration-lines'
+import { BOOKING_TEMPLATES } from '@/lib/bookkeeping/booking-templates'
 import {
+  PERSONBIL_LEASE_HIRE_ACCOUNTS,
   bookLimitedDeduction,
   deductStagedLines,
+  deductibleRowVat,
+  deductionForStatedVat,
   invoicedRowVat,
+  isPersonbilLeaseOrHireAccount,
   limitedDeductionApplies,
   type LimitedDeductionRow,
 } from '../limited-deduction'
@@ -204,5 +209,125 @@ describe('deductStagedLines', () => {
     const result = deductStagedLines(lines, new Map([[1, 1]]))
     expect(result.lines).toEqual(lines)
     expect(result.deducted).toEqual([])
+  })
+})
+
+describe('isPersonbilLeaseOrHireAccount', () => {
+  it('is personbil leasing and car hire, from the booking templates', () => {
+    // Billeasing (5615 Leasing av personbilar) and Hyrbil (5820 Hyrbilskostnader).
+    expect([...PERSONBIL_LEASE_HIRE_ACCOUNTS].sort()).toEqual(['5615', '5820'])
+    expect(isPersonbilLeaseOrHireAccount('5615')).toBe(true)
+    expect(isPersonbilLeaseOrHireAccount('5820')).toBe(true)
+    const leasing = BOOKING_TEMPLATES.find((template) => template.id === 'vehicle_leasing')
+    expect(leasing).toMatchObject({ debit_account: '5615', deductibility: 'conditional' })
+  })
+
+  it('is not a lastbil, a fuel or a repair account', () => {
+    for (const account of ['5625', '5611', '5613', '5690', '6072', '']) {
+      expect(isPersonbilLeaseOrHireAccount(account)).toBe(false)
+    }
+    expect(isPersonbilLeaseOrHireAccount(undefined)).toBe(false)
+  })
+})
+
+describe('deductionForStatedVat', () => {
+  // crm#1954: a personbil leasing invoice, leasing fee 3 995 + 25 % and
+  // invoicing fee 50 + 25 %, with 511,88 typed into the Moms field: half the
+  // moms on the leasing fee, all of it on the invoicing fee.
+  const leasing = row({ description: 'Leasingavgift', amount: 3995 })
+  const fee = row({ description: 'Faktureringsavgift', amount: 50, account_number: '6570' })
+
+  it('puts the whole difference on the personbil row, to the öre', () => {
+    const result = deductionForStatedVat([leasing, fee], 511.88, true)
+    expect(result).toEqual({ nonDeductibleVat: 499.37, rows: [{ index: 0, share: expect.any(Number), deductibleVat: 499.38 }] })
+    const applied = [{ ...leasing, vat_deduction_share: result!.rows[0].share }, fee]
+    expect(deductibleRowVat(leasing, result!.rows[0].share)).toBe(499.38)
+    const booked = bookLimitedDeduction(applied, true)
+    expect(booked.nonDeductibleVat).toEqual([499.37, 0])
+    expect(booked.items[0]).toMatchObject({ amount: 4494.37, vat_amount: 499.38 })
+    // The registration deducts exactly the typed moms, and the payable stays the invoice total.
+    expect(registrationOf(payloadOf(applied, 511.88))).toEqual([
+      ['5615', 4494.37, 0],
+      ['6570', 50, 0],
+      ['2641', 511.88, 0],
+      ['2440', 0, 5056.25],
+    ])
+  })
+
+  it('prefers the personbil row even when another row carries more moms', () => {
+    const service = row({ description: 'Service', amount: 6000, account_number: '5613' })
+    const result = deductionForStatedVat([service, row({ amount: 2000 })], 1750, true)
+    expect(result?.rows).toEqual([{ index: 1, share: 0.5, deductibleVat: 250 }])
+  })
+
+  it('without a personbil row takes the row with the most moms', () => {
+    const small = row({ amount: 100, account_number: '6072' })
+    const large = row({ amount: 800, account_number: '6071' })
+    const result = deductionForStatedVat([small, large], 125, true)
+    expect(result).toEqual({ nonDeductibleVat: 100, rows: [{ index: 1, share: 0.5, deductibleVat: 100 }] })
+  })
+
+  it('fills the next row when the difference is more than one row carries', () => {
+    // 1 011,25 kr of moms, 10 kr typed: the leasing row deducts nothing, the fee 10 kr.
+    const result = deductionForStatedVat([leasing, fee], 10, true)
+    expect(result?.nonDeductibleVat).toBe(1001.25)
+    expect(result?.rows).toEqual([
+      { index: 0, share: 0, deductibleVat: 0 },
+      { index: 1, share: 0.8, deductibleVat: 10 },
+    ])
+    const booked = bookLimitedDeduction([
+      { ...leasing, vat_deduction_share: result!.rows[0].share },
+      { ...fee, vat_deduction_share: result!.rows[1].share },
+    ], true)
+    expect(booked.nonDeductibleVat).toEqual([998.75, 2.5])
+  })
+
+  it('counts a deduction the rows already carry and moves only the rest', () => {
+    const halved = { ...leasing, vat_deduction_share: 0.5 }
+    // The leasing row already deducts 499,38: 511,88 typed leaves nothing to do.
+    expect(deductionForStatedVat([halved, fee], 511.88, true)).toBeNull()
+    const result = deductionForStatedVat([halved, fee], 500, true)
+    expect(result).toEqual({ nonDeductibleVat: 11.88, rows: [{ index: 0, share: expect.any(Number), deductibleVat: 487.5 }] })
+    expect(deductibleRowVat(leasing, result!.rows[0].share)).toBe(487.5)
+  })
+
+  it('does nothing when the typed moms is not lower than the rows deduct', () => {
+    expect(deductionForStatedVat([leasing, fee], 1011.25, true)).toBeNull()
+    expect(deductionForStatedVat([leasing, fee], 1200, true)).toBeNull()
+  })
+
+  it('never goes negative: no negative moms, a credit row is left alone, nothing when it does not apply', () => {
+    expect(deductionForStatedVat([leasing, fee], -1, true)).toBeNull()
+    // A credit row carries no moms to move: 1 011,25 less 250 is all the moms there is.
+    const credit = row({ amount: -1000, account_number: '5615' })
+    expect(deductionForStatedVat([leasing, fee, credit], 0, true)).toEqual({
+      nonDeductibleVat: 761.25,
+      rows: [
+        { index: 0, share: expect.any(Number), deductibleVat: 237.5 },
+      ],
+    })
+    expect(deductionForStatedVat([row({ amount: -1000 })], 0, true)).toBeNull()
+    expect(deductionForStatedVat([leasing, fee], 511.88, false)).toBeNull()
+    const all = deductionForStatedVat([leasing, fee], 0, true)
+    expect(all?.rows.every((r) => r.share >= 0 && r.deductibleVat >= 0)).toBe(true)
+    expect(all?.nonDeductibleVat).toBe(1011.25)
+  })
+
+  it('gives every deductible figure back to the öre through deductibleRowVat', () => {
+    for (const amount of [1, 3.33, 99.99, 1234.57, 3995, 14055, 87654.31]) {
+      for (const rate of [0.25, 0.12, 0.06]) {
+        const item = row({ amount, vat_rate: rate })
+        const full = invoicedRowVat(item)
+        for (const deductibleOre of [0, 1, Math.floor(full * 50), Math.round(full * 100) - 1]) {
+          const stated = deductibleOre / 100
+          if (stated >= full) continue
+          const result = deductionForStatedVat([item], stated, true)
+          expect(result?.rows).toHaveLength(1)
+          expect(deductibleRowVat(item, result!.rows[0].share)).toBe(stated)
+          expect(bookLimitedDeduction([{ ...item, vat_deduction_share: result!.rows[0].share }], true).nonDeductibleVat[0])
+            .toBe(roundOre(full - stated))
+        }
+      }
+    }
   })
 })

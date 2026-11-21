@@ -112,7 +112,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     // `error` now names the offending field so a UI reading only `error` is
     // actionable.
     expect(body.error).toMatch(/^Valideringsfel: /)
-    expect(body.error).toContain('lines')
+    expect(body.error).toContain('Rader: Obligatoriskt fält saknas')
   })
 
   it('returns 400 when lines array is empty', async () => {
@@ -125,7 +125,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
 
     expect(status).toBe(400)
     expect(body.error).toMatch(/^Valideringsfel: /)
-    expect(body.error).toContain('At least two lines are required for double-entry')
+    expect(body.error).toContain('Rader: Minst 2 rader')
   })
 
   it('asks for confirmation when the corrected lines debit a revenue account in a purchase, before any storno', async () => {
@@ -328,7 +328,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
 
     expect(status).toBe(400)
     expect(body.error).toMatch(/^Valideringsfel: /)
-    expect(body.error).toContain('description')
+    expect(body.error).toContain('Beskrivning: Får inte vara tomt')
     expect(mockCorrectEntry).not.toHaveBeenCalled()
   })
 
@@ -444,7 +444,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
       const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
       expect(status).toBe(400)
-      expect(body.error).toContain('entry_date')
+      expect(body.error).toContain('Datum: Ogiltigt datumformat')
       expect(mockCorrectEntry).not.toHaveBeenCalled()
     })
   })

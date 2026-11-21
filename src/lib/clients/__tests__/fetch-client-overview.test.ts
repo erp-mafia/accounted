@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { fetchOverviewRowsForCompanies } from '../fetch-client-overview'
+import { fetchOverviewRowsForCompanies, getByraMembership } from '../fetch-client-overview'
 
 const db = createTableMockSupabase()
 const supabase = db.supabase as unknown as SupabaseClient
@@ -108,5 +108,24 @@ describe('fetchOverviewRowsForCompanies: the attest queues', () => {
     const failed = await fetchOverviewRowsForCompanies(supabase, companies, { includeAttest: true })
     expect(failed).toHaveLength(2)
     expect(failed.every((r) => !('attest' in r))).toBe(true)
+  })
+})
+
+describe('getByraMembership', () => {
+  it('returns the earliest byrå team, with a plain member role for anything but owner and admin', async () => {
+    db.setTable('team_members', {
+      data: [{ team_id: 't-1', role: 'accountant', teams: { id: 't-1', name: 'Siffra', kind: 'byra' } }],
+    })
+    await expect(getByraMembership(supabase, 'u-1')).resolves.toEqual({ teamId: 't-1', teamName: 'Siffra', role: 'member' })
+  })
+
+  it('returns null for a user on no byrå team', async () => {
+    db.setTable('team_members', { data: [] })
+    await expect(getByraMembership(supabase, 'u-1')).resolves.toBeNull()
+  })
+
+  it('throws when the read fails, so a byrå member is not taken for someone without a byrå', async () => {
+    db.setTable('team_members', { error: { message: 'connection reset' } })
+    await expect(getByraMembership(supabase, 'u-1')).rejects.toThrow('connection reset')
   })
 })

@@ -51,7 +51,6 @@ import {
   getContext,
   getOrCreateConversation,
   greetingThrottled,
-  hasLivePin,
   loadConversation,
   markRecentQuestion,
   questionsAskedToday,
@@ -70,8 +69,15 @@ import {
   type CompanyChoiceVia,
 } from './company-question'
 import { evaluateQuestion, QUESTION_PRIORITY } from './questions'
+import { resolveRoutedCompany } from './routing'
 import { interpretChatAnswer } from './interpret-answer'
 import { appendQuestionHistory, updateItemContext } from './item-context'
+import {
+  applyListQuestionText,
+  offerListQuestionAfterBurst,
+  offerListQuestionWhenDone,
+  parseListQuestionReplyMarker,
+} from './list-question'
 
 const log = createLogger('whatsapp-inbox/process-inbound')
 
@@ -141,26 +147,6 @@ async function loadLink(
     .eq('id', phoneLinkId)
     .maybeSingle()
   return (data as WhatsAppPhoneLink | null) ?? null
-}
-
-/** Live membership: a pin or default pointing at an ARCHIVED company must not
- *  receive receipts (same filter shape as lib/supabase/middleware.ts). */
-async function isMember(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-): Promise<boolean> {
-  const { data } = await supabase
-    .from('company_members')
-    .select('company_id, companies!inner(archived_at)')
-    .eq('user_id', userId)
-    .eq('company_id', companyId)
-    // An invoicing-only membership (lib/auth/invoicer-role.ts) takes no receipts.
-    .neq('role', 'invoicer')
-    .is('companies.archived_at', null)
-    .limit(1)
-    .maybeSingle()
-  return data != null
 }
 
 /** True when an M17 notice already went to this sender inside the window. */
@@ -302,7 +288,8 @@ function hasDeadCompanyQuestion(conversation: WhatsAppConversation): boolean {
 
 /**
  * Conversation pin (live + still a member, sliding 8h) -> default company
- * (still a member) -> sole membership -> null (ask).
+ * (still a member) -> sole membership -> null (ask). The ladder itself is
+ * resolveRoutedCompany (routing.ts); this adds the pin's sliding TTL.
  *
  * Every membership here means a NON-ARCHIVED company: an archived one is not
  * a place receipts can go, and counting it made a sender with one live
@@ -321,47 +308,25 @@ async function resolveCompanyTarget(
   selectedViaOverride: CompanyChoiceVia | undefined,
 ): Promise<ResolvedCompany | null | 'transient_error'> {
   const now = new Date()
+  const routed = await resolveRoutedCompany(supabase, link, conversation, now)
+  if (routed === 'transient_error' || routed === null) return routed
+  if (routed.via !== 'pin' || !conversation) return routed
 
-  if (conversation && hasLivePin(conversation, now) && conversation.company_id) {
-    if (await isMember(supabase, link.user_id, conversation.company_id)) {
-      // Sliding TTL, refreshed at most once a minute. The write is guarded
-      // (updateConversation): a blind whole-context replacement here would
-      // wipe a pending_question the ack winner wrote in between, and the
-      // sweep would then reset the state a minute later.
-      const context = getContext(conversation)
-      const expiresAt = context.pin_expires_at ? new Date(context.pin_expires_at).getTime() : 0
-      if (expiresAt - now.getTime() < COMPANY_PIN_TTL_MS - 60 * 1000) {
-        await updateConversation(supabase, conversation, (_current, currentContext) => ({
-          context: {
-            ...currentContext,
-            pin_expires_at: new Date(now.getTime() + COMPANY_PIN_TTL_MS).toISOString(),
-          },
-        }))
-      }
-      return { companyId: conversation.company_id, via: selectedViaOverride ?? 'pin' }
-    }
+  // Sliding TTL, refreshed at most once a minute. The write is guarded
+  // (updateConversation): a blind whole-context replacement here would
+  // wipe a pending_question the ack winner wrote in between, and the
+  // sweep would then reset the state a minute later.
+  const context = getContext(conversation)
+  const expiresAt = context.pin_expires_at ? new Date(context.pin_expires_at).getTime() : 0
+  if (expiresAt - now.getTime() < COMPANY_PIN_TTL_MS - 60 * 1000) {
+    await updateConversation(supabase, conversation, (_current, currentContext) => ({
+      context: {
+        ...currentContext,
+        pin_expires_at: new Date(now.getTime() + COMPANY_PIN_TTL_MS).toISOString(),
+      },
+    }))
   }
-
-  if (link.default_company_id && (await isMember(supabase, link.user_id, link.default_company_id))) {
-    return { companyId: link.default_company_id, via: 'default' }
-  }
-
-  const { data: memberships, error: membershipsError } = await supabase
-    .from('company_members')
-    .select('company_id, companies!inner(archived_at)')
-    .eq('user_id', link.user_id)
-    // An invoicing-only membership (lib/auth/invoicer-role.ts) takes no receipts.
-    .neq('role', 'invoicer')
-    .is('companies.archived_at', null)
-  if (membershipsError) {
-    log.warn('membership query failed during company resolution; will retry', {
-      error: membershipsError.message,
-    })
-    return 'transient_error'
-  }
-  const companyIds = [...new Set((memberships ?? []).map((m) => m.company_id as string))]
-  if (companyIds.length === 1) return { companyId: companyIds[0], via: 'single' }
-  return null
+  return { companyId: routed.companyId, via: selectedViaOverride ?? 'pin' }
 }
 
 // ── Outcomes ─────────────────────────────────────────────────
@@ -1081,6 +1046,13 @@ export async function finalizeBurst(
     }
 
     await supabase.from('whatsapp_messages').update({ acked_at: nowIso }).in('id', rowIds)
+
+    // The burst has its ack: an open question from the company's question
+    // list comes after the burst's own questions (list-question.ts).
+    await offerListQuestionAfterBurst(supabase, conversationId, {
+      admitted: burstAdmitted,
+      companyIds: entries.map((entry) => entry.companyId),
+    })
   } catch (err) {
     log.error('burst finalize failed', err, { conversationId })
   }
@@ -1094,6 +1066,19 @@ function renderParticipants(
   return participants
     .map((p) => (p.company ? `${p.name} (${p.company})` : p.name))
     .join(', ')
+}
+
+/** True when the quoted message (context.id) belongs to a receipt: an ack, a receipt question or the receipt itself. */
+async function quotesReceipt(supabase: SupabaseClient, quotedWamid: string | null): Promise<boolean> {
+  if (!quotedWamid) return false
+  const { data } = await supabase
+    .from('whatsapp_messages')
+    .select('inbox_item_id')
+    .eq('wamid', quotedWamid)
+    .not('inbox_item_id', 'is', null)
+    .limit(1)
+    .maybeSingle()
+  return (data as { inbox_item_id: string | null } | null)?.inbox_item_id != null
 }
 
 /** Append a chat line to the item's note, keeping whatever is already there. */
@@ -1146,6 +1131,24 @@ async function processAnswerMessage(
 
     const raw = row.raw_payload as { context?: { id?: unknown } } | null
     const quotedWamid = typeof raw?.context?.id === 'string' ? raw.context.id : null
+
+    // A row the webhook marked as the reply to a list question is that
+    // question's answer, as written. A reply that quotes a receipt's message
+    // is about that receipt and goes on below.
+    const listQuestion = parseListQuestionReplyMarker(row.error_message)
+    if (listQuestion && !(await quotesReceipt(supabase, quotedWamid))) {
+      await applyListQuestionText(supabase, {
+        link,
+        conversation,
+        question: listQuestion,
+        text,
+        to,
+        replyBase,
+        announceEnded: row.attempts === 0,
+      })
+      await markStatus(supabase, row.id, 'done')
+      return { kind: 'answer', conversationId: conversation.id }
+    }
 
     // Words cannot answer the re-send question (it needs a sharper file), but
     // they ARE about that receipt. Keep them there and leave the question
@@ -1383,6 +1386,9 @@ async function processAnswerMessage(
     }
 
     await markStatus(supabase, row.id, 'done', { inboxItemId: target.inboxItemId })
+    // The receipt questions are done when none was asked next: an open
+    // question from the company's question list comes last.
+    if (nextState === 'idle') await offerListQuestionWhenDone(supabase, conversation.id)
     return { kind: 'answer', conversationId: conversation.id }
   } catch (err) {
     // No M18 here: that copy is about files. This catch is a programming

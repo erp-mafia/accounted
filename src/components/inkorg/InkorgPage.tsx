@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { INKORG_FOCUS_FIRST, INKORG_FOCUS_QUERY, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { ALL_STARTABLE, offersRemoval, type InkorgStartable } from '@/lib/inkorg/decision'
 import { focusAfterChange, focusKeyAction, neighbour } from '@/lib/inkorg/focus'
-import { companionOf, doorOf, doorsInUse, needCount, parseViewKey, queueFor, recentlyRoutedAway, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
+import { companionOf, doorsInUse, mailProviderOf, needCount, parseViewKey, queueFor, recentlyRoutedAway, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
 import {
   dragCarriesFiles,
   keepAttachedInPlace,
@@ -137,7 +137,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   // A viewer reads the portals but adds and changes none: useCanWrite's rule, which the
   // routes and RLS enforce. Outside a provider (the sandbox) the server still decides.
   const canWrite = !companyContext || (companyContext.role !== null && companyContext.role !== 'viewer')
-  const { items, itemsState, purchases, purchasesState, refresh } = useInkorgData(companyId)
+  const { items, doorsUsed, mailProvider: listedMailProvider, itemsState, purchases, purchasesState, refresh } = useInkorgData(companyId)
 
   const [view, setView] = useState<InkorgView>(() => parseViewKey(searchParams.get('view')))
   const [focusId, setFocusId] = useState<string | null>(null)
@@ -234,12 +234,13 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     [view.kind, missing, queue],
   )
   const missingContext = useMissingContext(view.kind === 'missing')
-  const doors = useMemo(() => doorsInUse(items), [items])
-  // The connected mailbox's provider, read off its items (Gmail unless they say Microsoft).
-  const mailProvider = useMemo(
-    () => items.find((item) => doorOf(item) === 'mailbox' && item.channel_context?.mail_provider)?.channel_context?.mail_provider ?? null,
-    [items],
-  )
+  // The list carries what is still in the inbox; the doors whose items are
+  // all handled come from the server beside it.
+  const doors = useMemo(() => doorsInUse(items, doorsUsed), [items, doorsUsed])
+  // The connected mailbox's provider, read off its items (Gmail unless they
+  // say Microsoft): the server reads it off the whole list, the rows on
+  // screen stand in when it says nothing.
+  const mailProvider = useMemo(() => listedMailProvider ?? mailProviderOf(items), [listedMailProvider, items])
   const doorName = useDoorName(mailProvider)
   // A one-click booking on its way needs nobody any more.
   const need = itemsState === 'ready' ? needCount(booking.size ? items.filter((item) => !booking.has(item.id)) : items) : null

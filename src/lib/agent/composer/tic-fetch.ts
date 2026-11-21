@@ -4,11 +4,11 @@ import type { TicCallPurpose } from '@/lib/tic-budget/budget'
 
 const log = createLogger('agent.composer.tic-fetch')
 
-// Live-fetch the TIC company profile and cache it on `companies.tic_snapshot`.
-// Used by the agent onboarding stream (Phase A step 1) and the
-// /onboarding/agent server component so the review card has SNI,
-// verksamhetsbeskrivning, address, and recent financials without requiring
-// the user to have visited the TIC workspace beforehand.
+// Live-fetch the TIC company profile and cache it on `companies.tic_snapshot`,
+// so its readers (the company's own refresh in lib/company/tic-refresh.ts, the
+// closed-year reopen) have SNI, verksamhetsbeskrivning, address, and recent
+// financials without requiring the user to have visited the TIC workspace
+// beforehand.
 //
 // Core never imports @/extensions/, so the profile comes from the TIC
 // extension's `fetchCompanyProfile` service, resolved through the extension
@@ -25,15 +25,15 @@ const log = createLogger('agent.composer.tic-fetch')
 // the account has a ~3000/mo ceiling. So we DON'T eagerly re-fetch every
 // pre-v2 (v1) snapshot: that would blow the budget across the customer
 // base. Instead, v1 snapshots upgrade to v2 lazily: only when a caller
-// that actually consumes the v2 sections passes `upgradeV1: true` (today
-// just the agent-onboarding paths, a deliberate once-per-company action).
+// that actually consumes the v2 sections passes `upgradeV1: true` (no caller
+// does today: the assistant's build did, and it is removed).
 
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 /** The TIC extension's profile service (services.fetchCompanyProfile). */
 export const FETCH_COMPANY_PROFILE_SERVICE = 'fetchCompanyProfile'
-// Default fetch timeout. The agent-onboarding callers override with a longer
-// budget (10s) since the user is on a wait-screen with visible progress and
+// Default fetch timeout. Callers with a person waiting override with a longer
+// budget (10s) since the user is watching visible progress and
 // the prior 5s default killed every signup-time fetch in May (~530 wasted
 // upstream Lens calls: the abort fired client-side but the upstream calls
 // kept running and counted against quota). Other callers (background jobs,
@@ -57,11 +57,11 @@ export async function ensureTicSnapshot(opts: {
   companyId: string
   // When true, a cached snapshot still inside the 7-day window is
   // re-fetched if it's a pre-v2 (v1) shape. Gated to deliberate, bounded
-  // callers (agent onboarding) so the v1→v2 upgrade doesn't fan out across
+  // callers so the v1→v2 upgrade doesn't fan out across
   // every company and exhaust the monthly TIC budget.
   upgradeV1?: boolean
   // Override the default 5s fetch timeout. Use when the caller has a UI
-  // affordance for waiting (agent onboarding wait-screen) so legitimate
+  // affordance for waiting (a spinner the user is watching) so legitimate
   // fetches don't get aborted before the ~13-call Lens fan-out completes:
   // which was the root cause of the May 2026 quota-burn incident.
   timeoutMs?: number

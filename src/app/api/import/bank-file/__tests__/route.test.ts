@@ -166,6 +166,6 @@ describe('GET /api/import/bank-file', () => {
     expect(typeof body.error).toBe('string')
     // The raw driver message must not leak; the mapped message is Swedish.
     expect(body.error).not.toContain('connection reset')
-    expect(body.error).toBe('Något gick fel. Försök igen.')
+    expect(body.error).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 })

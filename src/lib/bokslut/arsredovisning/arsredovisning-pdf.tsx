@@ -5,11 +5,12 @@ import { pdfTextDeep } from '@/lib/pdf/number-text'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { EquitySpecificationTable } from './equity-specification-pdf'
 import {
+  type ArsredovisningPdfMode,
   CERTIFICATE_SIGNER,
   CERTIFICATE_SIGNER_LINE,
   draftCertificateNote,
   eSigningCertificateNote,
-  type ArsredovisningPdfMode,
+  PAPER_COPY_CERTIFICATION,
 } from './signature-pages'
 import { SignaturesPdf } from './signatures-pdf'
 
@@ -456,6 +457,7 @@ export function ArsredovisningPDF({
               att {meeting} beslutade om disposition av {entityNoun} resultat i enlighet
               med vad som anges nedan.
             </Text>
+            {mode === 'signing' && <Text style={styles.paragraph}>{PAPER_COPY_CERTIFICATION}</Text>}
             <Text style={styles.paragraph}>
               Jag intygar också att årsredovisningen ger en rättvisande bild av
               företagets ställning och resultat samt att förvaltningsberättelsen ger

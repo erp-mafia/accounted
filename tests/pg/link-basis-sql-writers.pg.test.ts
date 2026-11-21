@@ -619,7 +619,7 @@ describe('match_batch_allocate records the link basis', () => {
 
   it('keeps its signature, SECURITY DEFINER, search_path, grants and comment', async () => {
     await expectFunctionUnchanged('match_batch_allocate', {
-      sig: 'match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,jsonb,uuid[],text)',
+      sig: 'match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,jsonb,jsonb,uuid[],text)',
       definer: true,
       config: ['search_path=public'],
       grantees: ['authenticated', 'postgres', 'service_role'],

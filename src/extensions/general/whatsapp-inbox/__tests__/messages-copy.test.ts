@@ -63,3 +63,38 @@ describe('m4AckUnread, a file nothing read (crm#1779)', () => {
     })
   }
 })
+
+describe('list question wording', () => {
+  for (const locale of ['sv', 'en'] as const) {
+    const copy = botCopy(locale)
+
+    it(`${locale}: sends the question as filed, then the why on a line of its own`, () => {
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' })).toBe('Gäller hyran kontoret?\nDet avgör kontot.')
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: null })).toBe('Gäller hyran kontoret?')
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' })).toBe('Gäller hyran kontoret?')
+    })
+
+    it(`${locale}: fits the "Vet inte" button in a reply button title`, () => {
+      expect(copy.m23ListDontKnow().length).toBeLessThanOrEqual(20)
+    })
+
+    it(`${locale}: answers in one short line without a dash`, () => {
+      const lines = [copy.m24ListAnswered(), copy.m24ListClosed(), copy.m25ListEnded(), copy.m26ListAnswerTooLong({ max: 1000 })]
+      for (const line of lines) {
+        expect(line).not.toMatch(/\n/)
+        expect(line).not.toMatch(/[–—]/)
+        expect(line.length).toBeLessThanOrEqual(120)
+      }
+    })
+
+    it(`${locale}: names the limit when an answer is too long`, () => {
+      expect(copy.m26ListAnswerTooLong({ max: 1000 })).toContain('1000')
+    })
+  }
+
+  it('sv: says "Vet inte" on the button, and that nothing new is saved for an ended question', () => {
+    expect(botCopy('sv').m23ListDontKnow()).toBe('Vet inte')
+    expect(botCopy('sv').m25ListEnded()).toMatch(/redan/)
+    expect(botCopy('sv').m25ListEnded()).toMatch(/inget nytt svar/)
+  })
+})

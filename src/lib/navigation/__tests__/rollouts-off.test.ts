@@ -1,6 +1,7 @@
 /**
  * A company outside every page rollout (nav-rollouts.ts: Arkiv, Arkiv brain,
- * the Agenter page, the new Inkorg, Autogiro, signing, Bolaget, commitments),
+ * the Agenter page, the new Inkorg, Autogiro, signing, Bolaget, commitments,
+ * the question list),
  * which is what most production companies are. The shell must not name a
  * page that 404s for them: no row, no create entry, no palette entry; and
  * what is left of each area must still be an area (a first row to land on,
@@ -16,7 +17,7 @@ import { passesNavGates, type NavGateContext } from '../nav-gates'
 const nav = sv.nav as Record<string, string>
 
 /** Pages that 404 (or are not offered) outside their rollout. */
-const ROLLOUT_PAGES = /^\/(arkiv|inkorg|skills|bolaget|commitments|invoices\/autogiro)(\/|\?|$)|^\/wiki\?view=facts$/
+const ROLLOUT_PAGES = /^\/(arkiv|inkorg|skills|bolaget|commitments|questions|invoices\/autogiro)(\/|\?|$)|^\/wiki\?view=facts$/
 
 function rolloutsOff(overrides: Partial<NavGateContext> = {}): NavGateContext {
   return {
@@ -37,6 +38,7 @@ function rolloutsOff(overrides: Partial<NavGateContext> = {}): NavGateContext {
     inkorgV2Enabled: false,
     autogiroEnabled: false,
     bolagetEnabled: false,
+    companyQuestionsEnabled: false,
     mcpExtensionEnabled: true,
     capabilities: ['ai'],
     hiddenNavHrefs: new Set(),

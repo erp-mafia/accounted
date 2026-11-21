@@ -964,6 +964,26 @@ describe('tools/list payload size guard', () => {
     // tools (shorter upload_document description, base64 and mime_type
     // notes). Measured 63 098 (full catalog 67 549; main 63 088 and
     // 67 539). Ceiling unchanged.
+    // 2026-11-19: answers_question_id on gnubok_remember_fact (the saved fact
+    // answers an open question), paid for on the same tool (shorter
+    // source_ref and relevance_score notes). Measured 63 093 (full catalog
+    // 67 543; main 63 098 and 67 549). Ceiling unchanged.
+    // 2026-11-20 (crm#1954): supplier_debts on gnubok_match_batch_allocate
+    // (the rest of a supplier payment booked against a 244x debt from before
+    // the company kept its books here), bare; paid for on the same tool (the
+    // fee rows bare too, their rules kept as refinements the refusals name,
+    // and a shorter description). Measured 63 092 (full catalog 67 542; main
+    // 63 061 and 67 512). Ceiling unchanged.
+    // 2026-11-20: gnubok_ask_question joins the listed tools (it saves at
+    // once, so no bridge carries it), paid for on the tool itself and by one
+    // tool leaving the list. Its outputSchema declares question_id and status
+    // only (the result still carries the whole question) and its notes are
+    // shorter: 672 to 405 here, 693 to 427 on the full catalog.
+    // gnubok_update_payslip_line left the list (catalogVisibility 'search'):
+    // a staging write, reached through gnubok_stage_tool, which frees 509
+    // here and 529 on the full catalog. Measured 62 989 (full catalog
+    // 67 439; main 63 092 and 67 542). 140 listed tools before and after.
+    // Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

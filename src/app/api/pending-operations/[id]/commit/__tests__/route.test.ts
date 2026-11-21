@@ -400,7 +400,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
       expect(status).toBe(404)
       // English executor message → Swedish HTTP-404 fallback (issue #337).
-      expect(body.error).toBe('Resursen kunde inte hittas.')
+      expect(body.error).toBe('Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.')
     })
   })
 })

@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
+import { EmptyByraClients } from '@/components/ui/empty-state'
 import { cn, formatDate } from '@/lib/utils'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table-classes'
 import { fetchClientOverview } from '@/lib/clients/fetch-client-overview'
@@ -30,6 +31,18 @@ export default async function ByraHomePage() {
   const tClients = await getTranslations('clients')
 
   const clients = overview.clients
+  if (clients.length === 0) {
+    // No clients yet: the way to the first one, not a line of zeros.
+    return (
+      <div className="space-y-8">
+        <PageHeader title={overview.team.name || t('home_title')} />
+        <EmptyByraClients
+          canCreate={overview.role === 'owner' || overview.role === 'admin'}
+          description={t('home_empty_description')}
+        />
+      </div>
+    )
+  }
   const needsAction = clients.filter((c) => c.unbookedCount > 0 || c.inboxCount > 0).length
   const urgentDeadlines = clients.filter(
     (c) => c.nextDeadline && c.nextDeadline.urgency !== 'upcoming',

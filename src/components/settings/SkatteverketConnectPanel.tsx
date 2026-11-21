@@ -98,7 +98,14 @@ function NoteLine({ children }: { children: React.ReactNode }) {
  * With system auth off (or self-hosted without a certificate) the ombud step
  * is not there at all and the BankID connection is the page, as before.
  */
-export function SkatteverketConnectPanel({ title }: { title: string }) {
+export function SkatteverketConnectPanel({
+  title,
+  notice,
+}: {
+  title: string
+  /** One line under the header, above the connection (the OAuth bounce-back's failure). */
+  notice?: React.ReactNode
+}) {
   const t = useTranslations('settings_skatteverket_connect')
   const { appName } = useBranding()
   const [system, setSystem] = useState<SystemConnectionState | null>(null)
@@ -137,6 +144,7 @@ export function SkatteverketConnectPanel({ title }: { title: string }) {
   return (
     <>
       <SettingsSectionHeader title={title} intro={intro} />
+      {notice}
       {system === null ? (
         <SettingsGroup>
           <SettingsRow label={t('title')} borderless>

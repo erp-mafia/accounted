@@ -24,6 +24,9 @@
  *                  what the bokslut books is in that result like any other line
  *   representation meals give no income tax deduction; moms is deductible up to
  *                  300 kr per person, which these lunches stay under
+ *   särskild löneskatt 24,26 % of the year's tjänstepension premiums, whole
+ *                  kronor, booked at year end and paid with the slutlig skatt;
+ *                  the premiums are the underlag on INK2 1.4
  */
 import { roundOre } from '@/lib/money'
 import taxTables from './fixtures/tax-tables.json'
@@ -32,6 +35,7 @@ import type { SimEmployee, SimEvent, SimPlan, VatRate } from './generate'
 const AVGIFTER_RATE = 0.3142
 const VACATION_RATE = 0.12
 const CORPORATE_TAX_RATE = 0.206
+const PENSION_TAX_RATE = 0.2426
 /** Moms the buyer accounts for itself on services from another EU country. */
 const REVERSE_CHARGE_RATE = 25
 
@@ -55,6 +59,7 @@ export const LINES = [
   'shareCapital',
   'supplierPayables',
   'corporateTaxLiability',
+  'pensionTaxLiability',
   'vatLiability',
   'payrollLiabilities',
   'accruedVacation',
@@ -113,6 +118,10 @@ export interface YearFigures {
   result: number
   nonDeductibleCosts: number
   taxBase: number
+  /** Tjänstepension premiums of the year: the underlag för särskild löneskatt (INK2 1.4). */
+  pensionCosts: number
+  /** Särskild löneskatt booked on them. */
+  pensionTax: number
   /** Balance sheet at the last day of the year. */
   tangibleAssets: number
   stock: number
@@ -123,6 +132,7 @@ export interface YearFigures {
   retainedEarnings: number
   supplierPayables: number
   corporateTaxLiability: number
+  pensionTaxLiability: number
   vatLiability: number
   payrollLiabilities: number
   accruedVacation: number
@@ -138,6 +148,8 @@ export interface AnswerKey {
   years: Record<number, YearFigures>
   /** Bolagsskatt by income year. */
   corporateTax: Record<number, number>
+  /** Särskild löneskatt på pensionskostnader by income year. */
+  pensionTax: Record<number, number>
 }
 
 const emptyBoxes = (): VatBoxes => ({
@@ -220,6 +232,8 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
   const payroll: Record<string, PayrollMonth> = {}
   const years: Record<number, YearFigures> = {}
   const corporateTax: Record<number, number> = {}
+  const pensionTax: Record<number, number> = {}
+  const pensionPremiums = new Map<number, number>()
   const nonDeductible = new Map<number, number>()
   const sales = new Map<string, Extract<SimEvent, { type: 'sale' }>>()
   const purchases = new Map<string, Extract<SimEvent, { type: 'purchase' }>>()
@@ -346,6 +360,16 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
       case 'bank_fee':
         post(date, event.type, [['externalCosts', event.amount], ['cash', -event.amount]])
         break
+      case 'pension_premium':
+        post(date, event.type, [['personnelCosts', event.amount], ['cash', -event.amount]])
+        pensionPremiums.set(year, roundOre((pensionPremiums.get(year) ?? 0) + event.amount))
+        break
+      case 'pension_tax': {
+        const tax = Math.round((pensionPremiums.get(event.year) ?? 0) * PENSION_TAX_RATE)
+        pensionTax[event.year] = tax
+        post(date, event.type, [['personnelCosts', tax], ['pensionTaxLiability', -tax]])
+        break
+      }
       case 'payroll': {
         const month = payrollFor(plan, event.year, event.month)
         payroll[monthKey(event.year, event.month)] = month
@@ -396,8 +420,10 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
         break
       }
       case 'corporate_tax_paid': {
+        // The slutskattebesked charges the särskild löneskatt with the bolagsskatt.
         const tax = corporateTax[event.year]
-        post(date, event.type, [['corporateTaxLiability', tax], ['cash', -tax]])
+        const pension = pensionTax[event.year] ?? 0
+        post(date, event.type, [['corporateTaxLiability', tax], ['pensionTaxLiability', pension], ['cash', -(tax + pension)]])
         break
       }
       case 'open_fiscal_year':
@@ -408,10 +434,13 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
     }
     const next = plan.events[index + 1]
     if (!next || next.date.slice(0, 4) !== date.slice(0, 4)) {
-      years[year] = yearFigures(year, ledger, yearLedgers, years, nonDeductible.get(year) ?? 0, corporateTax[year] ?? 0)
+      years[year] = yearFigures(year, ledger, yearLedgers, years, nonDeductible.get(year) ?? 0, corporateTax[year] ?? 0, {
+        pensionCosts: pensionPremiums.get(year) ?? 0,
+        pensionTax: pensionTax[year] ?? 0,
+      })
     }
   }
-  return { vat, payroll, years, corporateTax }
+  return { vat, payroll, years, corporateTax, pensionTax }
 }
 
 function yearFigures(
@@ -421,6 +450,7 @@ function yearFigures(
   years: Record<number, YearFigures>,
   nonDeductibleCosts: number,
   corporateTax: number,
+  pension: { pensionCosts: number; pensionTax: number },
 ): YearFigures {
   const of = (line: Line) => ledger.get(line) ?? 0
   const income = (line: Line) => yearLedgers.get(year)?.get(line) ?? 0
@@ -439,6 +469,7 @@ function yearFigures(
   const shareCapital = -of('shareCapital')
   const supplierPayables = -of('supplierPayables')
   const corporateTaxLiability = -of('corporateTaxLiability')
+  const pensionTaxLiability = -of('pensionTaxLiability')
   const vatLiability = -of('vatLiability')
   const payrollLiabilities = -of('payrollLiabilities')
   const accruedVacation = -of('accruedVacation')
@@ -454,6 +485,8 @@ function yearFigures(
     result,
     nonDeductibleCosts,
     taxBase: Math.floor(Math.max(0, resultBeforeTax + nonDeductibleCosts) / 10) * 10,
+    pensionCosts: pension.pensionCosts,
+    pensionTax: pension.pensionTax,
     tangibleAssets,
     stock,
     receivables,
@@ -463,6 +496,7 @@ function yearFigures(
     retainedEarnings,
     supplierPayables,
     corporateTaxLiability,
+    pensionTaxLiability,
     vatLiability,
     payrollLiabilities,
     accruedVacation,
@@ -472,6 +506,7 @@ function yearFigures(
       result,
       supplierPayables,
       corporateTaxLiability,
+      pensionTaxLiability,
       vatLiability,
       payrollLiabilities,
       accruedVacation,

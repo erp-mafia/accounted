@@ -592,6 +592,9 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     'POST /api/verifiera': OUTSIDE.public,
     '/api/community': OUTSIDE.platform,
     'POST /api/company/check-org-number': OUTSIDE.newCompany,
+    // Starting an aktiebolag (lib/formation): the founder's own draft before
+    // the company exists, and the setup that creates it.
+    '/api/formation': OUTSIDE.newCompany,
     'POST /api/pending-operations/:id/commit': OUTSIDE.approval,
     'POST /api/pending-operations/:id/reject': OUTSIDE.approval,
     'POST /api/pending-operations/bulk-commit': OUTSIDE.approval,
@@ -600,11 +603,11 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
 
     // ── The assistant and the agents' own surfaces ────────────────────
     '/api/agent': BOOK_HOUSE,
+    // The question list (lib/questions): answering, closing and reopening a question, as the saved facts beside it.
+    '/api/questions': BOOK_HOUSE,
     'POST /api/agent/ask': READER_HOUSE,
     'POST /api/agent/invoke': READER_HOUSE,
     'POST /api/agent/categorize': READ,
-    '/api/agent/onboarding': BOOK_RECORD,
-    '/api/agent/profile': BOOK_RECORD,
     '/api/agents/knowledge': BOOK_HOUSE,
     '/api/skills': BOOK_HOUSE,
     '/api/grants': BOOK_HOUSE,

@@ -1,14 +1,15 @@
 import { buildInfoSru, sruBlankettType, sruFile, sruIncomeYear, sruText } from '@/lib/reports/sru/envelope'
 import { sruAmount as formatAmount, sruDate as formatDate, sruTime as formatTime } from '@/lib/reports/sru/format'
 import { FilingIdentityError, swedishNumberKind, toRedovisare12 } from '@/lib/invariants/org-number'
-import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/reports/ne-bilaga/types'
+import type { NEBalansRutor, NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/reports/ne-bilaga/types'
 
 /**
  * SRU File Generator for NE-bilaga (enskild näringsidkare)
  *
  * Generates a Skatteverket-compliant SRU submission consisting of two files:
  *   - INFO.SRU:       submitter metadata (who is filing)
- *   - BLANKETTER.SRU: a single NE blankett block with the räkenskapsschema rutor
+ *   - BLANKETTER.SRU: a single NE blankett block with the balansräkning
+ *                     (B1-B16), the räkenskapsschema (R1-R11) and R12
  *
  * The NE-bilaga is an appendix to Inkomstdeklaration 1 (INK1) filed by a physical
  * person, so the identifier is the owner's PERSONNUMMER (12-digit YYYYMMDDNNNN,
@@ -32,7 +33,36 @@ const FISCAL_START_CODE = '7011'
 const FISCAL_END_CODE = '7012'
 
 /** Authoritative NE-bilaga räkenskapsschema field codes (BAS kopplingstabell NE_EJ_K1). */
-const NE_SRU_FIELD_CODES: Record<keyof NEDeclarationRutor, string> = {
+/**
+ * NE-bilaga balansräkning field codes, Skatteverket's field-name table
+ * (official-ne-fields.json, 2025P4 and 2026P4 alike).
+ */
+export const NE_BALANS_FIELD_CODES: Record<keyof NEBalansRutor, string> = {
+  B1: '7200',
+  B2: '7210',
+  B3: '7211',
+  B4: '7212',
+  B5: '7213',
+  B6: '7240',
+  B7: '7250',
+  B8: '7260',
+  B9: '7280',
+  B10: '7300',
+  B11: '7320',
+  B12: '7330',
+  B13: '7380',
+  B14: '7381',
+  B15: '7382',
+  B16: '7383',
+}
+
+/** R12, sida 2: the booked result carried over from R11. */
+export const R12_FIELD_CODE = '7600'
+/** R13 and R14, sida 2: both filed as positive amounts; the form adds R13 and subtracts R14. */
+export const R13_FIELD_CODE = '7601'
+export const R14_FIELD_CODE = '7700'
+
+export const NE_SRU_FIELD_CODES: Record<keyof NEDeclarationRutor, string> = {
   R1: '7400', // Försäljning och utfört arbete samt övriga momspliktiga intäkter
   R2: '7401', // Momsfria intäkter
   R3: '7402', // Bil- och bostadsförmån m.m.
@@ -64,7 +94,16 @@ function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12
   lines.push(`#UPPGIFT ${FISCAL_START_CODE} ${dateStringToSRU(declaration.fiscalYear.start)}`)
   lines.push(`#UPPGIFT ${FISCAL_END_CODE} ${dateStringToSRU(declaration.fiscalYear.end)}`)
 
-  // NE rutor R1-R11: emit non-zero values only (zero/empty fields must be omitted)
+  // Balansräkning B1-B16, then rutor R1-R11 and R12 (the result carried to
+  // sida 2), in the field table's order: non-zero values only (zero/empty
+  // fields must be omitted). Sida 2 from R13 on is completed in Skatteverket's
+  // e-tjänst after the import.
+  for (const [ruta, code] of Object.entries(NE_BALANS_FIELD_CODES) as Array<[keyof NEBalansRutor, string]>) {
+    const value = declaration.balans[ruta]
+    if (value !== 0) {
+      lines.push(`#UPPGIFT ${code} ${formatAmount(value)}`)
+    }
+  }
   const rutaOrder: (keyof NEDeclarationRutor)[] = [
     'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11',
   ]
@@ -73,6 +112,15 @@ function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12
     if (value !== 0) {
       lines.push(`#UPPGIFT ${NE_SRU_FIELD_CODES[ruta]} ${formatAmount(value)}`)
     }
+  }
+  if (declaration.rutor.R11 !== 0) {
+    lines.push(`#UPPGIFT ${R12_FIELD_CODE} ${formatAmount(declaration.rutor.R11)}`)
+  }
+  if (declaration.sida2.R13 > 0) {
+    lines.push(`#UPPGIFT ${R13_FIELD_CODE} ${formatAmount(declaration.sida2.R13)}`)
+  }
+  if (declaration.sida2.R14 > 0) {
+    lines.push(`#UPPGIFT ${R14_FIELD_CODE} ${formatAmount(declaration.sida2.R14)}`)
   }
 
   lines.push('#BLANKETTSLUT')

@@ -61,9 +61,10 @@ const agiTotals = {
 function ink2Declaration(orgNumber: string) {
   return {
     fiscalYear: { id: 'fp', name: '2025', start: '2025-01-01', end: '2025-12-31', isClosed: true },
-    ink2: { '7011': '20250101', '7012': '20251231', '7104': 0, '7114': 0 },
+    ink2: { '7011': '20250101', '7012': '20251231', '7104': 0, '7114': 0, '7132': 0, '7133': 0 },
     ink2r: {},
     ink2s: {},
+    sruBlockers: [],
     companyInfo: {
       companyName: 'Testbolaget AB',
       orgNumber,
@@ -92,6 +93,10 @@ function neDeclaration(orgNumber: string) {
     warnings: [],
     bookedResult: 1000,
     sruBlockers: [],
+    balans: { B1: 0, B2: 0, B3: 0, B4: 0, B5: 0, B6: 0, B7: 0, B8: 0, B9: 0, B10: 0, B11: 0, B12: 0, B13: 0, B14: 0, B15: 0, B16: 0 },
+    balansBreakdown: Object.fromEntries(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15', 'B16'].map((b) => [b, { accounts: [], total: 0 }])) as never,
+    sida2: { R12: 0, R13: 0, R14: 0 },
+    sida2Breakdown: { R13: { items: [], total: 0 }, R14: { items: [], total: 0 } },
   } as unknown as NEDeclaration
 }
 

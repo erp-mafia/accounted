@@ -85,6 +85,20 @@ export async function performCompanySwitch(
   window.location.assign(options.destination ?? '/')
 }
 
+/**
+ * The company_switcher message key for a switch that failed (the error code
+ * performCompanySwitch returns): a lost membership and a company paused for
+ * this account each say so; anything else is "could not be saved, try
+ * again". For every entry point that enters a company (the byrå client list,
+ * Nyckeltal), so a failed entry names its cause instead of a bare "could not
+ * open".
+ */
+export function companySwitchErrorKey(error: string): 'error_no_access' | 'error_locked' | 'error_switch_failed' {
+  if (error === 'not_member') return 'error_no_access'
+  if (error === 'company_locked') return 'error_locked'
+  return 'error_switch_failed'
+}
+
 const STALE_DEPLOY_RELOAD_KEY = 'accounted:stale-deploy-reload-at'
 const STALE_DEPLOY_RELOAD_WINDOW_MS = 60_000
 

@@ -68,7 +68,9 @@ import { reverseChargeRateDefault, reverseChargeRateOf } from '@/lib/supplier-in
 import {
   bookLimitedDeduction,
   deductibleRowVat,
+  deductionForStatedVat,
   invoicedRowVat,
+  isPersonbilLeaseOrHireAccount,
   limitedDeductionApplies,
 } from '@/lib/supplier-invoices/limited-deduction'
 import { rememberedReverseChargeKind } from '@/lib/supplier-invoices/remembered-kind'
@@ -1407,7 +1409,36 @@ export default function NewSupplierInvoiceForm({
     invoiceVat: enteredFakturaVat,
     toPay: figures.toPay,
     totalVat,
+    deductibleVat,
   })
+
+  // A Moms lower than the rows deduct is usually the deductible moms typed in
+  // (crm#1954): offer to book the rest as cost on the rows, a personbil row
+  // first, so the booked ingående moms is the typed one. Only while the
+  // Fakturabelopp agrees with the rows: a limited deduction never changes the
+  // payable, so a total that is off is a different mistake. The Moms field
+  // only exists for a momsregistrerad company outside reverse charge.
+  const statedVatDeduction = enteredFakturaVat != null && (crosscheckDiff == null || crosscheckMatches)
+    ? deductionForStatedVat(
+        watchedItems || [],
+        enteredFakturaVat,
+        limitedDeductionApplies({ reverse_charge: watchedReverseCharge, is_self_billed: watchedSelfBilled }),
+      )
+    : null
+  const statedVatBelowRows = enteredFakturaVat != null && roundOre(deductibleVat - enteredFakturaVat) > 0
+
+  function bookStatedVatDeduction() {
+    if (!statedVatDeduction) return
+    for (const row of statedVatDeduction.rows) {
+      setValue(`items.${row.index}.vat_deduction_share`, row.share, { shouldDirty: true })
+    }
+  }
+
+  // The row's %-button shows at rest on a personbil leasing or hire row, and
+  // on every row while the Moms is below the rows' moms; otherwise on hover.
+  function limitedDeductionPinned(index: number): boolean {
+    return statedVatBelowRows || isPersonbilLeaseOrHireAccount(watchedItems?.[index]?.account_number)
+  }
   const signedAmount = (amount: number) =>
     (amount > 0 ? '+' : '') + formatCurrency(amount, watchedCurrency)
 
@@ -2378,11 +2409,17 @@ export default function NewSupplierInvoiceForm({
                     {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
                   </p>
                 )}
-                {/* Less moms than the rows carry is often a limited deduction
-                    typed into the invoice's Moms field (crm#1617): point at
-                    the row control that books it. */}
-                {vatCrosscheckDiff != null && !vatCrosscheckMatches && vatCrosscheckDiff < 0 && totalNonDeductibleVat === 0 && (
-                  <p className="text-muted-foreground">{t('crosscheck_vat_limited_hint')}</p>
+                {/* Less moms than the rows deduct is often the deductible
+                    moms typed into the invoice's Moms field (crm#1617,
+                    crm#1954): one click books the rest as cost on the rows. */}
+                {statedVatDeduction && (
+                  <div className="flex justify-end pt-1 text-sm">
+                    <Button type="button" variant="outline" onClick={bookStatedVatDeduction}>
+                      {t('crosscheck_vat_book_non_deductible', {
+                        amount: formatCurrency(statedVatDeduction.nonDeductibleVat, watchedCurrency),
+                      })}
+                    </Button>
+                  </div>
                 )}
               </div>
             )}
@@ -2603,70 +2640,78 @@ export default function NewSupplierInvoiceForm({
                           </>
                         )}
                         <td className="py-1 text-right whitespace-nowrap">
-                          <span className={cn('inline-flex items-center justify-end gap-1', HOVER_REVEAL_CLASS)}>
+                          {/* The controls reveal on hover in groups, so the
+                              %-button can stay visible where it is needed. */}
+                          <span className="inline-flex items-center justify-end gap-1">
                             {dimensionsEnabled && (
-                              <button
-                                type="button"
-                                onClick={() => toggleDimensions(index)}
-                                aria-label={t('row_dimensions_aria', { index: index + 1 })}
-                                aria-pressed={isDimOpen(index)}
-                                title={t('row_dimensions_title')}
-                                className={ROW_ICON_BTN_CLASS}
-                              >
-                                <HashtagIcon
-                                  className={cn(
-                                    'h-3.5 w-3.5',
-                                    isDimOpen(index) ? 'text-foreground' : undefined,
-                                  )}
-                                />
-                              </button>
+                              <span className={cn('inline-flex', HOVER_REVEAL_CLASS)}>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleDimensions(index)}
+                                  aria-label={t('row_dimensions_aria', { index: index + 1 })}
+                                  aria-pressed={isDimOpen(index)}
+                                  title={t('row_dimensions_title')}
+                                  className={ROW_ICON_BTN_CLASS}
+                                >
+                                  <HashtagIcon
+                                    className={cn(
+                                      'h-3.5 w-3.5',
+                                      isDimOpen(index) ? 'text-foreground' : undefined,
+                                    )}
+                                  />
+                                </button>
+                              </span>
                             )}
                             {limitedDeductionAvailable(index) && (
+                              <span className={cn('inline-flex', !limitedDeductionPinned(index) && HOVER_REVEAL_CLASS)}>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleLimitedDeduction(index)}
+                                  aria-label={t('row_deductible_vat_aria', { index: index + 1 })}
+                                  aria-pressed={isLimitedDeductionOpen(index)}
+                                  title={t('row_deductible_vat_title')}
+                                  className={ROW_ICON_BTN_CLASS}
+                                >
+                                  <PercentBadgeIcon
+                                    className={cn(
+                                      'h-4 w-4',
+                                      isLimitedDeductionOpen(index) ? 'text-foreground' : undefined,
+                                    )}
+                                  />
+                                </button>
+                              </span>
+                            )}
+                            <span className={cn('inline-flex items-center gap-1', HOVER_REVEAL_CLASS)}>
+                              {canUseAccrual && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleAccrual(index)}
+                                  aria-label={ta('row_toggle_aria', { index: index + 1 })}
+                                  aria-pressed={isAccrualOpen(index)}
+                                  title={ta('row_toggle')}
+                                  className={ROW_ICON_BTN_CLASS}
+                                >
+                                  <CalendarDaysIcon
+                                    className={cn(
+                                      'h-3.5 w-3.5',
+                                      isAccrualOpen(index) ? 'text-foreground' : undefined,
+                                    )}
+                                  />
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={() => toggleLimitedDeduction(index)}
-                                aria-label={t('row_deductible_vat_aria', { index: index + 1 })}
-                                aria-pressed={isLimitedDeductionOpen(index)}
-                                title={t('row_deductible_vat_title')}
-                                className={ROW_ICON_BTN_CLASS}
+                                onClick={() => remove(index)}
+                                aria-label={t('remove_row_named_aria', {
+                                  index: index + 1,
+                                  description:
+                                    watchedItems?.[index]?.description || t('row_no_description'),
+                                })}
+                                className={cn(ROW_ICON_BTN_CLASS, 'hover:text-destructive')}
                               >
-                                <PercentBadgeIcon
-                                  className={cn(
-                                    'h-4 w-4',
-                                    isLimitedDeductionOpen(index) ? 'text-foreground' : undefined,
-                                  )}
-                                />
+                                <TrashIcon className="h-3.5 w-3.5" />
                               </button>
-                            )}
-                            {canUseAccrual && (
-                              <button
-                                type="button"
-                                onClick={() => toggleAccrual(index)}
-                                aria-label={ta('row_toggle_aria', { index: index + 1 })}
-                                aria-pressed={isAccrualOpen(index)}
-                                title={ta('row_toggle')}
-                                className={ROW_ICON_BTN_CLASS}
-                              >
-                                <CalendarDaysIcon
-                                  className={cn(
-                                    'h-3.5 w-3.5',
-                                    isAccrualOpen(index) ? 'text-foreground' : undefined,
-                                  )}
-                                />
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => remove(index)}
-                              aria-label={t('remove_row_named_aria', {
-                                index: index + 1,
-                                description:
-                                  watchedItems?.[index]?.description || t('row_no_description'),
-                              })}
-                              className={cn(ROW_ICON_BTN_CLASS, 'hover:text-destructive')}
-                            >
-                              <TrashIcon className="h-3.5 w-3.5" />
-                            </button>
+                            </span>
                           </span>
                         </td>
                       </tr>
