@@ -11249,6 +11249,7 @@
     "created_description": "Self-billing invoice {number} has been booked as a sale",
     "create_failed_title": "Could not register the self-billing invoice",
     "validation_external_number_required": "Invoice number is required",
+    "validation_quantity_positive": "The quantity must be above 0",
     "validation_received_date_required": "Date received is required"
   },
   "invoices": {

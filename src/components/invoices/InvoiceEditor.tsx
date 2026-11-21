@@ -149,6 +149,7 @@ import {
   buildSelfBilledPayload,
   domesticReverseChargeStatement,
   hasDimensionValues,
+  selfBilledQuantityRefusals,
 } from '@/lib/invoices/editor-payload'
 import { InvoiceEditorShell, type EditorPane } from '@/components/invoices/editor/InvoiceEditorShell'
 import { EditorTopBar, type TopBarMenuEntry } from '@/components/invoices/editor/EditorTopBar'
@@ -2383,6 +2384,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
     if (!data.received_date) {
       setError('received_date', { message: ts('validation_received_date_required') })
+      valid = false
+    }
+    for (const index of selfBilledQuantityRefusals(data.items)) {
+      setError(`items.${index}.quantity`, { message: ts('validation_quantity_positive') })
       valid = false
     }
     if (!valid) return
