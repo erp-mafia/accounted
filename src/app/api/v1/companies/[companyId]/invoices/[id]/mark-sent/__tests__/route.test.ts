@@ -309,7 +309,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
         createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           invoices: { data: DRAFT_INVOICE, error: null },
-          company_settings: { data: { ...settings, address_line1: null }, error: null },
+          company_settings: { data: { ...settings, address_line1: null, postal_code: null, city: null }, error: null },
         }).supabase,
       )
 

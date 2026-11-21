@@ -11,9 +11,20 @@ describe('hasPostalAddress', () => {
   it('needs a street line and a postal code or a town', () => {
     expect(hasPostalAddress({ address_line1: 'Storgatan 1', postal_code: '111 22', city: 'Stockholm' })).toBe(true)
     expect(hasPostalAddress({ address_line1: 'Main Street 5', city: 'Dublin' })).toBe(true)
+    expect(hasPostalAddress({ address_line1: 'Storgatan 1', postal_code: '111 22' })).toBe(true)
     expect(hasPostalAddress({ address_line1: 'Storgatan 1' })).toBe(false)
-    expect(hasPostalAddress({ address_line1: '  ', postal_code: '111 22', city: 'Stockholm' })).toBe(false)
-    expect(hasPostalAddress({ postal_code: '111 22', city: 'Stockholm' })).toBe(false)
+  })
+
+  it('takes a postal code and a town without a street', () => {
+    expect(hasPostalAddress({ postal_code: '111 22', city: 'Stockholm' })).toBe(true)
+    expect(hasPostalAddress({ address_line1: '  ', postal_code: '111 22', city: 'Stockholm' })).toBe(true)
+  })
+
+  it('refuses a postal code or a town alone', () => {
+    expect(hasPostalAddress({ postal_code: '111 22' })).toBe(false)
+    expect(hasPostalAddress({ city: 'Stockholm' })).toBe(false)
+    expect(hasPostalAddress({ postal_code: ' ', city: 'Stockholm' })).toBe(false)
+    expect(hasPostalAddress({})).toBe(false)
   })
 })
 

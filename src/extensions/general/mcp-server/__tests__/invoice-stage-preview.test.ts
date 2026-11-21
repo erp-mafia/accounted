@@ -440,7 +440,7 @@ describe('gnubok_mark_invoice_as_sent / gnubok_send_invoice: names and addresses
 
   it('refuses a company without an address and stages nothing', async () => {
     for (const tool of [markSent, sendInvoice]) {
-      const { supabase, findCall } = setup({ accounting_method: 'accrual', address_line1: null }, sentInvoice({ status: 'draft', invoice_number: null }))
+      const { supabase, findCall } = setup({ accounting_method: 'accrual', address_line1: null, postal_code: null, city: null }, sentInvoice({ status: 'draft', invoice_number: null }))
       await expect(run(tool, supabase)).rejects.toMatchObject({ code: 'INVOICE_SEND_SELLER_ADDRESS_MISSING' })
       expect(findCall('pending_operations', 'insert')).toBeUndefined()
     }

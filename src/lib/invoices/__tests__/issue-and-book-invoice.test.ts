@@ -173,6 +173,11 @@ describe('issuable: seller and buyer name and address (crm#2080)', () => {
     expect(issuable(draft({ customer: streetOnly }), settings)?.code).toBe('INVOICE_SEND_BUYER_ADDRESS_MISSING')
   })
 
+  it('passes a buyer and a seller with a postal code and a town but no street', () => {
+    const placeOnly = { ...noAddress, postal_code: '111 22', city: 'Stockholm' }
+    expect(issuable(draft({ customer: makeCustomer(placeOnly) }), makeCompanySettings({ ...settings, ...placeOnly }))).toBeNull()
+  })
+
   it('passes a buyer without an address at 4 000 kr: a förenklad faktura', () => {
     expect(issuable(draft({ total: 4000, customer: makeCustomer(noAddress) }), settings)).toBeNull()
   })

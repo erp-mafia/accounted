@@ -33,9 +33,14 @@ export const BUYER_ADDRESS_MISSING_WARNING = {
 /** The most a förenklad faktura may total, in kronor including moms (SKVFS 2024:16). */
 export const SIMPLIFIED_INVOICE_MAX_SEK = 4000
 
-/** An address a letter reaches: a street line and a line with the postal code or the town. */
+/**
+ * Whether the party has an address: a street line with the postal code or the
+ * town, or the postal code and the town without a street (decided on
+ * crm#2080).
+ */
 export function hasPostalAddress(address: PostalAddress): boolean {
-  return !!address.address_line1?.trim() && postalPlaceLine(address) !== null
+  if (!!address.address_line1?.trim() && postalPlaceLine(address) !== null) return true
+  return !!address.postal_code?.trim() && !!address.city?.trim()
 }
 
 export type InvoicePartiesVerdict =
