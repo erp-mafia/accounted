@@ -117,6 +117,16 @@ describe('resolveDebtor', () => {
     expect(resolveDebtor({ ...svea, enabled: false }, { bank_name: 'Svea Bank', bic: 'SVEASESS' })).toEqual({ ok: false, reason: 'account_disabled' })
   })
 
+  it('refuses a Svea Bank account by its IBAN when the connection stores no BIC (crm#2071)', () => {
+    // Enable Banking connections store no BIC, and no Svea BIC is derived from the tables.
+    const svea = { ...account, iban: 'SE4496600000000012345678' }
+    expect(resolveDebtor(svea, { bank_name: 'Svea Bank', bic: null })).toEqual({ ok: false, reason: 'bank_not_supported' })
+    // An account typed in by hand, with no connection behind it.
+    expect(resolveDebtor(svea, null)).toEqual({ ok: false, reason: 'bank_not_supported' })
+    // A bank the tables do not know stays unknown.
+    expect(resolveDebtor({ ...account, iban: 'SE5497100000012345678901' }, { bank_name: 'Lunar', bic: null })).toEqual({ ok: false, reason: 'bank_unknown' })
+  })
+
   it('refuses a disabled account, another currency and a missing or invalid IBAN', () => {
     expect(resolveDebtor({ ...account, enabled: false }, null)).toEqual({ ok: false, reason: 'account_disabled' })
     expect(resolveDebtor({ ...account, currency: 'EUR' }, null)).toEqual({ ok: false, reason: 'not_sek' })
