@@ -40,6 +40,8 @@ export interface NavGateFlags {
   requiresBolagetHub?: boolean
   /** A Bolaget register page (aktiebok, styrelse): the rollout and a form that keeps an aktiebok (lib/bolaget/hub.ts `registers`). */
   requiresBolagetRegisters?: boolean
+  /** A Bolaget page for meetings, capital or owner tax: the rollout alone (lib/bolaget/hub.ts `money`). */
+  requiresBolagetMoney?: boolean
   /** Avtal och åtaganden (/bolaget/avtal): the commitments rollout, any form (lib/bolaget/hub.ts `agreements`). */
   requiresCommitments?: boolean
   /** A page of the MCP server extension (/settings/api): shown only where that extension is built in. */
