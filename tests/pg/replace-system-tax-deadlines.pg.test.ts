@@ -103,17 +103,18 @@ async function insertExisting(
   return rows[0].id
 }
 
-/** A slutskattebesked whose kvarskatt falls due on `paymentDueDate`. */
+/** A slutskattebesked (or an omprövningsbeslut) whose kvarskatt falls due on `paymentDueDate`. */
 async function insertNotice(
   company: { companyId: string; userId: string; fiscalPeriodId: string },
   paymentDueDate: string,
+  decisionType: 'final' | 'reassessment' = 'final',
 ): Promise<string> {
   const { rows } = await getPool().query<{ id: string }>(
     `INSERT INTO public.tax_assessment_notices
        (company_id, user_id, fiscal_period_id, decision_type, decision_date, payment_due_date)
-     VALUES ($1, $2, $3, 'final', '2026-07-01', $4)
+     VALUES ($1, $2, $3, $5, '2026-07-01', $4)
      RETURNING id`,
-    [company.companyId, company.userId, company.fiscalPeriodId, paymentDueDate],
+    [company.companyId, company.userId, company.fiscalPeriodId, paymentDueDate, decisionType],
   )
   return rows[0].id
 }
@@ -295,11 +296,12 @@ describe('replace_system_tax_deadlines: a notice already past its due date (crm#
     expect(await deadlineKeys(companyId)).toEqual([`kvarskatt:notice:${noticeId}:2026-11-05`])
   })
 
-  it('keeps the notice\'s completed and dismissed rows, and the notices of other companies', async () => {
+  it('keeps the notice\'s completed and dismissed rows, another notice the set leaves out, and the notices of other companies', async () => {
     const company = await seedCompany()
     const other = await seedCompany()
     const { companyId } = company
     const noticeId = await insertNotice(company, '2026-11-02')
+    const unlistedNoticeId = await insertNotice(company, '2026-10-02', 'reassessment')
     const otherNoticeId = await insertNotice(other, '2026-11-02')
     const kept = [
       await insertExisting(companyId, {
@@ -307,6 +309,10 @@ describe('replace_system_tax_deadlines: a notice already past its due date (crm#
       }),
       await insertExisting(companyId, {
         type: 'kvarskatt', period: `notice:${noticeId}`, dueDate: '2026-11-02', noticeId, dismissed: true,
+      }),
+      // Same company, overdue and pending, but its notice is not in the set.
+      await insertExisting(companyId, {
+        type: 'kvarskatt', period: `notice:${unlistedNoticeId}`, dueDate: '2026-10-02', noticeId: unlistedNoticeId,
       }),
       await insertExisting(other.companyId, {
         type: 'kvarskatt', period: `notice:${otherNoticeId}`, dueDate: '2026-11-02', noticeId: otherNoticeId,

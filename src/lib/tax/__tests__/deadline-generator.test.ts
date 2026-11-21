@@ -435,9 +435,12 @@ describe('generateTaxDeadlinesForUser', () => {
         due_date: paymentDueDate,
       }))
       const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
-      expect(deleteOrFilters).toHaveLength(1)
-      expect(deleteOrFilters[0]).toContain(`and(due_date.gte.${today},`)
-      expect(deleteOrFilters[0]).toContain('tax_assessment_notice_id.in.(notice-1)')
+      // The whole filter: the notice condition stands beside the window, not
+      // inside it. With no years given the window ends two years ahead.
+      const windowEnd = `${Number(today.slice(0, 4)) + 2}-12-31`
+      expect(deleteOrFilters).toEqual([
+        `and(due_date.gte.${today},due_date.lte.${windowEnd}),tax_assessment_notice_id.in.(notice-1)`,
+      ])
     })
 
     it('does not delete existing deadlines when the insert fails', async () => {
