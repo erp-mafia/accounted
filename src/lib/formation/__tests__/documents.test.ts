@@ -6,7 +6,7 @@ import type { DocumentContext } from '../documents/context'
 import { buildAktiebok } from '../documents/aktiebok'
 import { VERKSAMT_STEPS, buildAnswerSheet } from '../documents/answer-sheet'
 import { BANK_NOTES, buildBankChecklist } from '../documents/bank'
-import { buildBolagetMarkdown } from '../documents/bolaget-md'
+import { buildBolagetMarkdown, cell } from '../documents/bolaget-md'
 import { buildBolagsordning } from '../documents/bolagsordning'
 import { firstFiscalYear, fiscalYearText, shareRanges } from '../documents/facts'
 import { kr } from '../documents/format'
@@ -380,6 +380,14 @@ describe('buildBankChecklist', () => {
 })
 
 describe('buildBolagetMarkdown', () => {
+  it('keeps a name with a backslash or a pipe inside its table cell', () => {
+    expect(cell('A|B')).toBe('A\\|B')
+    // A trailing backslash must not escape the pipe that ends the cell.
+    expect(cell('Anna\\')).toBe('Anna\\\\')
+    expect(cell('a\\|b')).toBe('a\\\\\\|b')
+    expect(cell('rad ett\nrad två')).toBe('rad ett rad två')
+  })
+
   it('masks every personnummer the repository way: birth date shown, last four hidden', () => {
     for (const a of [solo(), duo(), withCompany()]) {
       const md = buildBolagetMarkdown(a, ctx)

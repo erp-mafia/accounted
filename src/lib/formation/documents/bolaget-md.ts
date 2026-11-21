@@ -44,9 +44,9 @@ import {
 import { signatoryRuleText } from './signatory'
 import { vatAnswer } from './skatteverket'
 
-/** Keeps a value from breaking a markdown table row or starting markup. */
-function cell(text: string): string {
-  return text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
+/** Keeps a value from breaking a markdown table row: backslashes first, then pipes, then line breaks. */
+export function cell(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
 }
 
 function idOf(p: FormationParty): string {
