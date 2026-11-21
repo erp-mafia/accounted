@@ -57,6 +57,8 @@ export interface SyncOptions {
    * hosted connector, whose sync contract has no field for it.
    */
   signer?: BankFeedSignerInput
+  /** The bank (bank_connections.bank_name): Nordea's card holds are not booked (isNordeaCardHold). */
+  bankName?: string | null
 }
 
 /**
@@ -267,6 +269,22 @@ const NOT_BOOKED_STATUSES = new Set(['PDNG', 'HOLD', 'SCHD', 'CNCL', 'RJCT'])
 
 function isNotBookedStatus(status: string | undefined): boolean {
   return typeof status === 'string' && NOT_BOOKED_STATUSES.has(status.trim().toUpperCase())
+}
+
+/**
+ * A card hold in Nordea's booked list (crm#2076). Since 2026-11-20 Nordea
+ * lists a card purchase that has not settled among its booked entries, as
+ * status BOOK dated on the day it was made, its text starting "Reservation "
+ * ("Reservation Kortköp FACEBK *7K4XZ2PQ9M"). The purchase itself arrives
+ * later as its own entry ("Kortköp 261119 KAFFEROSTERIET"), so the hold taken as
+ * booked is the same purchase twice. Not booked whatever status it carries.
+ * Nordea only, and only at the start of the text: a settled purchase can
+ * carry the word ("Kortköp 260824 Hotel Reservation"), and no other bank's
+ * row in production has ever started with it. Connect skips the same rows on
+ * the Open Payments path, where its booked filter lives.
+ */
+export function isNordeaCardHold(bankName: string | null | undefined, description: string): boolean {
+  return /^nordea\b/i.test(bankName?.trim() ?? '') && description.trimStart().startsWith('Reservation ')
 }
 
 /** The rows ingest set aside as another currency than the account's (IngestResult.other_currency). */
@@ -492,6 +510,12 @@ export async function syncAccountTransactions(
     if (skippedRaw.length > 0) skippedReasons = notBookedReasons(skippedRaw)
   }
 
+  // Nordea's card holds come dated and marked BOOK, on either path: not
+  // booked, so they count with the entries skipped above (isNordeaCardHold).
+  const datedEntries = bookedEntries.length
+  bookedEntries = bookedEntries.filter(({ tx }) => !isNordeaCardHold(syncOptions?.bankName, tx.description))
+  const cardHolds = datedEntries - bookedEntries.length
+
   // Log the actual date range returned so we can compare against the requested
   // window. Helps diagnose when an ASPSP truncates history below what we asked for.
   let minBookingDate: string | undefined
@@ -524,6 +548,7 @@ export async function syncAccountTransactions(
       skippedPending,
       total: totalFetched,
       ...(skippedReasons ? { reasons: skippedReasons } : {}),
+      ...(cardHolds > 0 ? { cardHolds } : {}),
     })
   }
 
