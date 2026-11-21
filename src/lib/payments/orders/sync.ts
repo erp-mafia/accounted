@@ -439,13 +439,18 @@ async function settleAbandonedSignings(
         : statuses.every((s) => s === 'cancelled')
           ? 'cancelled'
           : 'failed'
-      await writer
+      const { error: closeError } = await writer
         .from('payment_order_batches')
         .update({ status: to })
         .eq('id', batch.id)
         .eq('company_id', batch.company_id)
         .eq('status', 'awaiting_signature')
         .eq('provider_authorisation_id', attempt)
+      // Still waiting, so the next run closes it; reported so a write that keeps failing is seen.
+      if (closeError) {
+        result.errors += 1
+        log.error('a signing the bank closed could not be closed', closeError, { batchId: batch.id, status: to })
+      }
       continue
     }
 
@@ -526,12 +531,33 @@ async function settleAbandonedSignings(
       .eq('provider_authorisation_id', attempt)
       .select('id')
     if ((reset ?? []).length !== 1) continue
-    await writer
+    const { error: ordersBackError } = await writer
       .from('payment_orders')
       .update({ status: 'submitted' })
       .eq('company_id', batch.company_id)
       .eq('batch_id', batch.id)
       .eq('status', 'awaiting_signature')
+    if (ordersBackError) {
+      // Orders left awaiting_signature under a reset signing are lost: this
+      // pass reads only signings still waiting, and Signera igen needs them
+      // submitted (crm#2085). The signing goes back to waiting for the same
+      // attempt, so the next run does this again; one restarted or stopped
+      // meanwhile is not touched.
+      const { data: back, error: backError } = await writer
+        .from('payment_order_batches')
+        .update({ status: 'awaiting_signature' })
+        .eq('id', batch.id)
+        .eq('company_id', batch.company_id)
+        .eq('status', 'created')
+        .eq('provider_authorisation_id', attempt)
+        .select('id')
+      result.errors += 1
+      log.error('orders of an abandoned signing could not go back to submitted', ordersBackError, {
+        batchId: batch.id,
+        retried: !backError && (back ?? []).length === 1,
+      })
+      continue
+    }
     result.abandoned += 1
     await logPaymentOrderEvents(writer, [
       {

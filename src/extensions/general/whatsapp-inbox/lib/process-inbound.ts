@@ -223,7 +223,12 @@ async function existingInboxItemId(
   return (data as { id: string } | null)?.id ?? null
 }
 
-/** True when an M18 failure notice already went out for this message. */
+/**
+ * True when an M18 failure notice already went out for this message. A send
+ * Meta refused (persisted as 'failed' with no wamid) did not go out: counting
+ * it blocked every later M18, so nothing could ever reach the sender (the
+ * sweep resends it, pass 7).
+ */
 async function errorNoticeAlreadySent(
   supabase: SupabaseClient,
   correlationId: string | null,
@@ -235,6 +240,7 @@ async function errorNoticeAlreadySent(
     .eq('direction', 'outbound')
     .eq('correlation_id', correlationId)
     .eq('raw_payload->>template', TEMPLATE.m18Error)
+    .or('wamid.not.is.null,delivery_status.neq.failed')
     .limit(1)
     .maybeSingle()
   return data != null
@@ -246,6 +252,7 @@ async function errorNoticeAlreadySent(
  * for: a first attempt that dies with the instance already counted its
  * attempt, so every re-claim suppressed the notice and the row ended in
  * 'error' with the sender never hearing about that receipt at all.
+ * Returns whether a send was attempted (false: one already went out).
  */
 export async function sendErrorNoticeOnce(
   supabase: SupabaseClient,
@@ -256,8 +263,8 @@ export async function sendErrorNoticeOnce(
     conversationId: string | null
     correlationId: string | null
   },
-): Promise<void> {
-  if (await errorNoticeAlreadySent(supabase, args.correlationId)) return
+): Promise<boolean> {
+  if (await errorNoticeAlreadySent(supabase, args.correlationId)) return false
   await sendText(supabase, {
     to: args.to,
     body: botCopy('sv').m18Error(),
@@ -267,6 +274,7 @@ export async function sendErrorNoticeOnce(
     conversationId: args.conversationId,
     correlationId: args.correlationId,
   })
+  return true
 }
 
 // ── Company resolution (PR4 ladder) ──────────────────────────
