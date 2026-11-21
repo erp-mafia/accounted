@@ -57,7 +57,11 @@ export interface PartnerOAuthCallback {
   table: string
   /** Columns the pending lookup selects; must include id, user_id and company_id. */
   pendingColumns: string
-  /** Where the browser goes; `row` is the pending row when one was found. */
+  /**
+   * Where the browser goes; `row` is the pending row when one was found. Its
+   * origin is also where a callback reached without a session is sent to
+   * sign in, so it must be an allowlisted one (the app or a brand domain).
+   */
   returnUrl: (row: Record<string, unknown> | null) => Promise<string>
   /**
    * Redeem the code with the partner and return the columns to write on
@@ -160,8 +164,14 @@ export async function completePartnerOAuthCallback(
     // else's flow would attach their partner account to that someone's
     // company. The partner's redirect is a top-level navigation, so the
     // initiator's cookies are present on the legitimate path.
+    //
+    // The partner redirects to the one canonical callback while sessions are
+    // per host, so someone who started on a white-label domain arrives signed
+    // out. The login bounce goes to the host the browser returns to anyway:
+    // the origin of the route's own validated returnUrl for this row.
     const initiator = await requireFlowInitiator(request, pending.user_id, {
       flow: `${flow.provider}.callback`,
+      returnOrigin: new URL(returnUrl).origin,
     })
     if (!initiator.ok) {
       if (initiator.reason === 'no_session') {
