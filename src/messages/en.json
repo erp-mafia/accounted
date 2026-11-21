@@ -17376,6 +17376,7 @@
     "account_label": "Pay from",
     "account_none": "No account can be used for bank payments. A Swedish krona account with an IBAN is required.",
     "account_none_bank_not_supported": "Payments from {bank} cannot be made through Accounted yet. Pay in the bank's internet bank.",
+    "account_none_bank_unknown": "Accounted cannot tell which bank the account is at, so payments from it cannot be made through Accounted. Pay in the bank's internet bank.",
     "date_label": "Payment date",
     "prepare": "Prepare payments",
     "th_supplier": "Supplier",
