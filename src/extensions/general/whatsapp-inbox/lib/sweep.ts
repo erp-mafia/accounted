@@ -43,6 +43,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { WhatsAppConversation, WhatsAppMessage } from '@/types'
 import {
   COMPANY_CHOICE_EXPIRED,
@@ -159,6 +160,7 @@ async function markMaxAttempts(
 
 /** An M18 send Meta refused, as pass 7 reads it. */
 interface FailedNotice {
+  id: string
   correlation_id: string
   phone_link_id: string
   conversation_id: string | null
@@ -560,26 +562,35 @@ export async function runSweep(
   // and its inbound row is already terminal 'error', so no other pass sends
   // it again. Without this the sender never heard about that receipt.
   try {
-    const { data, error } = await supabase
-      .from('whatsapp_messages')
-      .select('correlation_id, phone_link_id, conversation_id, sender_phone_hash, created_at')
-      .eq('direction', 'outbound')
-      .eq('raw_payload->>template', TEMPLATE.m18Error)
-      .eq('delivery_status', 'failed')
-      .is('wamid', null)
-      .not('correlation_id', 'is', null)
-      .not('phone_link_id', 'is', null)
-      .gte('created_at', new Date(now - ERROR_NOTICE_RESEND_WINDOW_MS).toISOString())
-      .order('created_at', { ascending: false })
-      .limit(BATCH * 8)
-    if (error) throw readFailed('failed error notices', error)
+    // Every row of the window, not the newest N: the rows of exhausted and
+    // finished messages stay in it, and a fixed limit let them crowd an older
+    // notice out until its last attempt left the window.
+    const rows = await fetchAllRows<FailedNotice>(
+      ({ from, to }) =>
+        supabase
+          .from('whatsapp_messages')
+          .select('id, correlation_id, phone_link_id, conversation_id, sender_phone_hash, created_at')
+          .eq('direction', 'outbound')
+          .eq('raw_payload->>template', TEMPLATE.m18Error)
+          .eq('delivery_status', 'failed')
+          .is('wamid', null)
+          .not('correlation_id', 'is', null)
+          .not('phone_link_id', 'is', null)
+          .gte('created_at', new Date(now - ERROR_NOTICE_RESEND_WINDOW_MS).toISOString())
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { dedupeBy: (row) => row.id },
+    )
     const byMessage = new Map<string, { notice: FailedNotice; sends: number }>()
-    for (const notice of ((data ?? []) as FailedNotice[])) {
+    for (const notice of rows) {
       const seen = byMessage.get(notice.correlation_id)
       // Newest first, so the first row seen is the last attempt.
       if (seen) seen.sends++
       else byMessage.set(notice.correlation_id, { notice, sends: 1 })
     }
+    // The window's count is only a lower bound (an attempt older than the
+    // hour is not in it), so it can skip a message but never clear one.
     const due = [...byMessage.values()].filter(
       ({ notice, sends }) =>
         sends < MAX_ERROR_NOTICE_SENDS &&
@@ -590,6 +601,17 @@ export async function runSweep(
         summary.deferred += due.length - index
         break
       }
+      // The cap counts every M18 this message ever got. Counting only the
+      // window let attempts age out of it, so a message Meta kept refusing
+      // got three sends an hour without end.
+      const { count, error: countError } = await supabase
+        .from('whatsapp_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('direction', 'outbound')
+        .eq('correlation_id', notice.correlation_id)
+        .eq('raw_payload->>template', TEMPLATE.m18Error)
+      if (countError) throw readFailed('error notice attempts', countError)
+      if (count == null || count >= MAX_ERROR_NOTICE_SENDS) continue
       const link = await loadPhoneLink(supabase, notice.phone_link_id)
       if (!link || link.revoked_at) continue
       const to = resolveRecipient(notice as unknown as WhatsAppMessage, link)

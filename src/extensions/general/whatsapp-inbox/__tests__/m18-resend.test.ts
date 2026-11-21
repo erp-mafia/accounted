@@ -32,8 +32,11 @@ import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 const sendTextMock = vi.mocked(sendText)
 const MINUTES = 60 * 1000
 
+let nextId = 0
+
 function failedNotice(overrides: Record<string, unknown> = {}) {
   return {
+    id: `row-${++nextId}`,
     correlation_id: 'corr-1',
     phone_link_id: 'link-1',
     conversation_id: 'conv-1',
@@ -66,6 +69,7 @@ describe('sweep: M18 notices Meta never accepted', () => {
     const mock = createQueuedMockSupabase()
     emptyEarlierPasses(mock)
     mock.enqueue({ data: [failedNotice()] }) // 7 failed M18 sends
+    mock.enqueue({ count: 1 }) // every M18 attempt of the message
     mock.enqueue({ data: { phone_enc: encryptPhone('46701234567'), revoked_at: null } }) // link
     mock.enqueue({ data: null }) // errorNoticeAlreadySent: no accepted notice
 
@@ -120,6 +124,7 @@ describe('sweep: M18 notices Meta never accepted', () => {
     const mock = createQueuedMockSupabase()
     emptyEarlierPasses(mock)
     mock.enqueue({ data: [failedNotice()] })
+    mock.enqueue({ count: 1 })
     mock.enqueue({
       data: { phone_enc: encryptPhone('46701234567'), revoked_at: '2026-11-21T08:00:00Z' },
     })
@@ -127,5 +132,50 @@ describe('sweep: M18 notices Meta never accepted', () => {
     await runSweep(mock.supabase as unknown as SupabaseClient)
 
     expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
+  it('counts attempts older than the hour against the cap, so it never sends a fourth', async () => {
+    const mock = createQueuedMockSupabase()
+    emptyEarlierPasses(mock)
+    // Only the last attempt is still inside the window: two older ones aged out.
+    mock.enqueue({ data: [failedNotice()] })
+    mock.enqueue({ count: 3 })
+
+    const summary = await runSweep(mock.supabase as unknown as SupabaseClient)
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(summary.resentErrorNotices).toBe(0)
+    expect(mock.findCalls('whatsapp_messages', 'eq')).toContainEqual(['correlation_id', 'corr-1'])
+  })
+
+  it('reaches an older notice behind a full page of exhausted ones', async () => {
+    const mock = createQueuedMockSupabase()
+    emptyEarlierPasses(mock)
+    // A full page: 250 newer messages, four failed sends each, all exhausted.
+    mock.enqueue({
+      data: Array.from({ length: 1000 }, (_, i) =>
+        failedNotice({
+          correlation_id: `corr-exhausted-${Math.floor(i / 4)}`,
+          created_at: new Date(Date.now() - 5 * MINUTES).toISOString(),
+        }),
+      ),
+    })
+    mock.enqueue({
+      data: [
+        failedNotice({
+          correlation_id: 'corr-old',
+          created_at: new Date(Date.now() - 50 * MINUTES).toISOString(),
+        }),
+      ],
+    })
+    mock.enqueue({ count: 1 })
+    mock.enqueue({ data: { phone_enc: encryptPhone('46701234567'), revoked_at: null } })
+    mock.enqueue({ data: null })
+
+    const summary = await runSweep(mock.supabase as unknown as SupabaseClient)
+
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].correlationId).toBe('corr-old')
+    expect(summary.resentErrorNotices).toBe(1)
   })
 })
