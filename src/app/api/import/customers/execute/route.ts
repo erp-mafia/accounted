@@ -5,7 +5,8 @@ import { CustomerImportExecuteSchema } from '@/lib/api/schemas'
 import { createRegisterMatcher, customerMatchRow } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
+import { diffUpdatedRows, recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
+import { syncDraftVatHeadersForChangedCustomers } from '@/lib/invoices/sync-draft-vat-headers'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
@@ -225,6 +226,16 @@ export const POST = withRouteContext(
           beforeImport.set(c.id, { ...prev, org_number: c.org_number, personal_number: c.personal_number })
         }
       }
+
+      // A merge that changed a field the VAT header is derived from moves the
+      // header of that customer's open drafts, as the customer form does
+      // (updateCustomer). Before the run is recorded: the undo reads a draft
+      // written after the run as the customer used since the import.
+      await syncDraftVatHeadersForChangedCustomers(
+        supabase,
+        companyId,
+        diffUpdatedRows(beforeImport, new Set(created.map((c) => c.id)), updated),
+      )
 
       await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
 

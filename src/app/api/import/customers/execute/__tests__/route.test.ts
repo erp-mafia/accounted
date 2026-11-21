@@ -6,7 +6,7 @@ import {
 } from '@/tests/helpers'
 import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
 
-const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, calls, findCall, findCalls } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -277,5 +277,100 @@ describe('POST /api/import/customers/execute', () => {
     const inserted = findCall('customers', 'insert')![0] as CustomerWrite
     expect(inserted.org_number).toBeNull()
     expect(decryptPersonnummer(inserted.personal_number!)).toBe(PERSONAL_NUMBER)
+  })
+
+  // The draft follows the customer (sync-draft-vat-headers): an import that
+  // makes a reverse-charge customer Swedish must not leave its open draft
+  // on reverse charge, ruta 39 and the reverse-charge notice (#3481).
+  it('re-derives the VAT header of open drafts when the import changes the customer type', async () => {
+    const existingCard = {
+      id: 'old',
+      name: 'Acme GmbH',
+      customer_type: 'eu_business',
+      customer_number: '1001',
+      org_number: null,
+      email: 'acme@example.test',
+      phone: null,
+      country: 'DE',
+      vat_number: 'DE123456789',
+      personal_number: null,
+    }
+    mockFetchAllRows.mockResolvedValue([existingCard])
+    enqueue({ data: { ...existingCard, name: 'Acme AB', customer_type: 'swedish_business', country: 'SE', org_number: '5566778899' } })
+    // syncDraftVatHeadersForCustomer: the customer as it is now, its drafts, the seller's VAT registration, the write.
+    enqueue({ data: { id: 'old', customer_type: 'swedish_business', vat_number: 'DE123456789', vat_number_validated: true, country: 'SE' } })
+    enqueue({
+      data: [{
+        id: 'draft-1',
+        vat_treatment: 'reverse_charge',
+        moms_ruta: '39',
+        reverse_charge_text: 'Omvänd skattskyldighet',
+        vat_treatment_override: null,
+        delivery_country: null,
+        items: [{ vat_rate: 0, line_type: 'service' }],
+      }],
+    })
+    enqueue({ data: { vat_registered: true } })
+    enqueue({ data: null })
+    enqueue({ data: { id: 'run-1' } })
+
+    const res = await POST(makeRequest({
+      rows: [row({
+        name: 'Acme AB',
+        customer_type: 'swedish_business',
+        org_number: '5566778899',
+        email: 'acme@example.test',
+        country: 'SE',
+      })],
+      update_duplicates: true,
+    }), ROUTE_CTX)
+    const { status, body } = await parseJsonResponse<{ data: { updated: number } }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.updated).toBe(1)
+    expect(findCall('invoices', 'update')![0]).toEqual({
+      vat_treatment: 'standard_25',
+      moms_ruta: '05',
+      reverse_charge_text: null,
+    })
+    // Before the run is recorded: the undo reads a draft written after the
+    // run as the customer used since the import, and would keep it.
+    const draftWrite = calls.findIndex((c) => c.table === 'invoices' && c.method === 'update')
+    const runInsert = calls.findIndex((c) => c.table === 'register_import_runs' && c.method === 'insert')
+    expect(draftWrite).toBeGreaterThan(-1)
+    expect(draftWrite).toBeLessThan(runInsert)
+  })
+
+  it('reads no drafts when the import changes no field the VAT header is derived from', async () => {
+    const existingCard = {
+      id: 'old',
+      name: 'Acme AB',
+      customer_type: 'swedish_business',
+      org_number: '5566778899',
+      email: 'acme@example.test',
+      phone: null,
+      country: 'SE',
+      vat_number: null,
+      personal_number: null,
+    }
+    mockFetchAllRows.mockResolvedValue([existingCard])
+    enqueue({ data: { ...existingCard, phone: '08-123456' } })
+    enqueue({ data: { id: 'run-1' } })
+
+    const res = await POST(makeRequest({
+      rows: [row({
+        name: 'Acme AB',
+        customer_type: 'swedish_business',
+        org_number: '5566778899',
+        email: 'acme@example.test',
+        phone: '08-123456',
+      })],
+      update_duplicates: true,
+    }), ROUTE_CTX)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(findCall('invoices', 'select')).toBeUndefined()
+    expect(findCall('register_import_runs', 'insert')).toBeDefined()
   })
 })

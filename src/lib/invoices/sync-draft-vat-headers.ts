@@ -17,6 +17,13 @@ interface DraftRow {
 }
 
 /**
+ * The customer fields an invoice's VAT header is derived from
+ * (resolveInvoiceVatRules). A write that changes one of them moves the
+ * header of that customer's open drafts.
+ */
+export const DRAFT_VAT_CUSTOMER_FIELDS = ['customer_type', 'vat_number', 'vat_number_validated', 'country'] as const
+
+/**
  * Re-derive the VAT header (treatment, ruta, statutory notice) of a
  * customer's open drafts from the customer as it is now.
  *
@@ -53,7 +60,7 @@ export async function syncDraftVatHeadersForCustomer(
   try {
     const { data: customer } = await supabase
       .from('customers')
-      .select('id, customer_type, vat_number, vat_number_validated, country')
+      .select(`id, ${DRAFT_VAT_CUSTOMER_FIELDS.join(', ')}`)
       .eq('id', customerId)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -76,7 +83,9 @@ export async function syncDraftVatHeadersForCustomer(
       .maybeSingle()
     const vatRegistered = settings?.vat_registered !== false
 
-    const current = customer as {
+    // The select is built from DRAFT_VAT_CUSTOMER_FIELDS, so its row type is
+    // not inferred from a literal: the fields are named here instead.
+    const current = customer as unknown as {
       id: string
       customer_type: CustomerType
       vat_number: string | null
@@ -128,4 +137,25 @@ export async function syncDraftVatHeadersForCustomer(
   } catch {
     return 0
   }
+}
+
+/**
+ * syncDraftVatHeadersForCustomer for every customer a bulk write changed,
+ * given the fields it changed on each (`before`: the register import's
+ * record of a merge-update, or the same record read back by its undo).
+ * Customers whose change touched none of DRAFT_VAT_CUSTOMER_FIELDS are
+ * skipped without a read. For the writers that do not pass through
+ * updateCustomer, which syncs on its own. Best effort, like the single sync.
+ */
+export async function syncDraftVatHeadersForChangedCustomers(
+  supabase: SupabaseClient,
+  companyId: string,
+  changes: ReadonlyArray<{ id: string; before: Record<string, unknown> }>,
+): Promise<number> {
+  let updated = 0
+  for (const change of changes) {
+    if (!DRAFT_VAT_CUSTOMER_FIELDS.some((field) => field in change.before)) continue
+    updated += await syncDraftVatHeadersForCustomer(supabase, companyId, change.id)
+  }
+  return updated
 }
