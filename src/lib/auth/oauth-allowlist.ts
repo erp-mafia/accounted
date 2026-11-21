@@ -3,6 +3,7 @@ import { createServiceClientNoCookies } from './api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { scopeKind, type ApiKeyScope } from './scope-catalog'
 import { INVOICER_API_SCOPES, isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { findPartnerClient } from './oauth-partner-clients'
 
 /**
  * What an OAuth consent may grant: which redirect URIs a code may be sent
@@ -31,7 +32,9 @@ export type BuiltInProvider =
   | 'local'
 
 /**
- * Built-in redirect URI patterns. These bypass the DB lookup entirely so
+ * Built-in redirect URI patterns. A new partner platform is not added here:
+ * it is a row in oauth_partner_clients (src/lib/auth/oauth-partner-clients.ts),
+ * which needs no deploy. These bypass the DB lookup entirely so
  * the Claude, ChatGPT, Grok, Gemini, Cursor, Squidler and Celemine connectors keep working without seeded rows, and so
  * local development never depends on having a registration.
  *
@@ -157,6 +160,16 @@ export type RedirectUriResolution =
   | { allowed: true; kind: 'built_in'; provider: BuiltInProvider }
   | {
       allowed: true
+      kind: 'partner'
+      /** The oauth_partner_clients row the URI matched. */
+      partnerId: string
+      /** The partner's slug: keys minted through it carry the client `partner:<slug>`. */
+      slug: string
+      /** The partner's name, shown on the consent page as a verified client. */
+      name: string
+    }
+  | {
+      allowed: true
       kind: 'registered'
       /** The registration the URI resolved to (the token route records it as the client). */
       registrationId: string
@@ -197,7 +210,9 @@ function registered(row: RegistrationRow, byConsentingUser: boolean): RedirectUr
 
 /**
  * Resolve a redirect URI to the client behind it. Built-in patterns
- * short-circuit; otherwise we look for a non-revoked registration in
+ * short-circuit; then an active partner row in oauth_partner_clients
+ * (src/lib/auth/oauth-partner-clients.ts), which serves every user like a
+ * built-in; otherwise we look for a non-revoked registration in
  * oauth_client_registrations and, when a consenting user is given, take
  * the one they made themselves, else one a colleague made. Several users may
  * each register the same URI (crm#1654): a tool with one fixed callback for
@@ -231,6 +246,14 @@ export async function resolveRedirectUri(
     client = supabase ?? createServiceClientNoCookies()
   } catch {
     return { allowed: false }
+  }
+
+  try {
+    const partner = await findPartnerClient(uri, client)
+    if (partner) return { allowed: true, kind: 'partner', partnerId: partner.id, slug: partner.slug, name: partner.name }
+  } catch {
+    // An unreadable partner list denies every partner URI (fail closed) and
+    // leaves the member registrations below to answer for theirs.
   }
 
   let registrations: RegistrationRow[]

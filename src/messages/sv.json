@@ -4952,6 +4952,7 @@
     "kind_cursor": "Cursor",
     "kind_squidler": "Squidler",
     "kind_celemine": "Celemine",
+    "kind_partner": "Partner",
     "kind_mcp": "MCP-klient",
     "disconnect": "Koppla från",
     "disconnect_aria": "Koppla från {name}",

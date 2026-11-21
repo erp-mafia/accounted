@@ -245,8 +245,9 @@ describe('POST /api/mcp-oauth/token', () => {
       const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       const results = exchangeResults()
-      // The user's own registration of the URI: several users may each hold one (crm#1654).
-      results.splice(3, 0, { data: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', user_id: 'user-1', client_name: 'Agent' }], error: null })
+      // No partner row for the host, then the user's own registration of the
+      // URI: several users may each hold one (crm#1654).
+      results.splice(3, 0, { data: [], error: null }, { data: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', user_id: 'user-1', client_name: 'Agent' }], error: null })
       enqueueMany(results)
       const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
       expect(res.status).toBe(200)
@@ -258,6 +259,25 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(findCall('api_keys', 'insert')).toBeUndefined()
       expect(findCall('oauth_client_registrations', 'eq')).toEqual(['redirect_uri', redirectUri])
       expect(findCall('oauth_client_registrations', 'is')).toEqual(['revoked_at', null])
+    })
+
+    it('stores a partner client as partner:<slug> and never reads the member registrations', async () => {
+      const redirectUri = 'https://partner.example.com/oauth/callback'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      results.splice(3, 0, {
+        data: [{ id: 'p-1', slug: 'acme', name: 'Acme', host: 'partner.example.com', path: '/oauth/callback', match: 'exact', created_at: '2026-11-19T12:00:00Z' }],
+        error: null,
+      })
+      enqueueMany(results)
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase)).toMatchObject({ p_client: 'partner:acme', p_name: 'MCP-klient (OAuth)' })
+      expect(findCall('oauth_partner_clients', 'eq')).toEqual(['host', 'partner.example.com'])
+      expect(findCall('oauth_client_registrations', 'eq')).toBeUndefined()
     })
 
     it('rejects an already-used auth code (replay)', async () => {
@@ -809,8 +829,8 @@ describe('POST /api/mcp-oauth/token', () => {
       const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       const results = exchangeResults()
-      results.splice(3, 0, { data: null, error: null }) // no live registration
-      results[4] = { data: [{ id: 'identity-1' }], error: null } // paused
+      results.splice(3, 0, { data: [], error: null }, { data: null, error: null }) // no partner row, no live registration
+      results[5] = { data: [{ id: 'identity-1' }], error: null } // paused
       enqueueMany(results)
 
       const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
