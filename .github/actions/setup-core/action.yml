@@ -1,8 +1,9 @@
 name: Set up core toolchain
 description: >-
-  Node 20, npm dependencies through the shared npm cache and, by default, a
-  zero-extension registry: the prologue the CI jobs share. Check the repository
-  out first: a local action resolves from the workspace.
+  Node 24 (the version production runs), npm dependencies through the shared
+  npm cache and, by default, a zero-extension registry: the prologue the CI
+  jobs share. Check the repository out first: a local action resolves from the
+  workspace.
 
 inputs:
   zero-extensions:
@@ -22,7 +23,7 @@ runs:
   steps:
     - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
       with:
-        node-version: 20
+        node-version: 24
         # The cache is handled below, restore-only outside main.
         package-manager-cache: false
 
@@ -35,9 +36,9 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.npm
-        key: npm-${{ runner.os }}-node20-${{ hashFiles('package-lock.json') }}
+        key: npm-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
         restore-keys: |
-          npm-${{ runner.os }}-node20-
+          npm-${{ runner.os }}-node24-
 
     - name: Install dependencies
       shell: bash
