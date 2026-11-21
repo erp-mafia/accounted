@@ -8063,6 +8063,14 @@
     "file_too_large": "{name} is too large. At most {limit} per file: compress or split the file and try again.",
     "open_blocked": "The document could not be opened. Allow pop-ups for this site and try again."
   },
+  "invoice_parties": {
+    "seller_missing": "The company name or address is missing and must be on the invoice.",
+    "seller_fix": "Fill in company details",
+    "seller_ask_admin": "Ask an administrator to fill them in under Company details.",
+    "buyer_missing": "The customer has no name or address. Both must be on an invoice over 4,000 kr including VAT and on a sale to another EU country or under reverse charge.",
+    "buyer_simplified": "The customer has no address, so the invoice becomes a simplified invoice without the buyer's address. Add the address to the customer to send a full invoice.",
+    "open_customer": "Open the customer"
+  },
   "invoice_send_dialog": {
     "description_due": "due {date}",
     "journal_label": "What gets booked",

@@ -205,7 +205,7 @@ export const invoicesBulkBook = defineOperation({
     pitfalls: [
       'Check data.summary.failed and each data.results[].error_code: a 200 does not mean every invoice was booked.',
       'Under kontantmetoden the whole request answers 400 INVOICE_BOOK_CASH_METHOD.',
-      'Per-item codes mirror POST /invoices/{id}/book (INVOICE_NOT_FOUND, INVOICE_BOOK_ALREADY_BOOKED, INVOICE_BOOK_INVALID_STATUS, INVOICE_BOOK_NOT_BOOKABLE, INVOICE_BOOK_DEFERRED_DRAFT, PERIOD_LOCKED, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_CONFLICT) plus the issuance codes for drafts (INVOICE_SEND_PAYMENT_ACCOUNT_MISSING, INVOICE_SEND_VAT_NUMBER_MISSING, INVOICE_MARK_SENT_*).',
+      'Per-item codes mirror POST /invoices/{id}/book (INVOICE_NOT_FOUND, INVOICE_BOOK_ALREADY_BOOKED, INVOICE_BOOK_INVALID_STATUS, INVOICE_BOOK_NOT_BOOKABLE, INVOICE_BOOK_DEFERRED_DRAFT, PERIOD_LOCKED, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_CONFLICT) plus the issuance codes for drafts (INVOICE_SEND_PAYMENT_ACCOUNT_MISSING, INVOICE_SEND_VAT_NUMBER_MISSING, INVOICE_SEND_SELLER_ADDRESS_MISSING, INVOICE_SEND_BUYER_ADDRESS_MISSING, INVOICE_MARK_SENT_*).',
       'A draft that is issued consumes its F-number even if a later step fails; a locked period is checked first, so a lock never costs a number.',
       'A retried call with a new Idempotency-Key is safe: booked invoices answer INVOICE_BOOK_ALREADY_BOOKED per item.',
     ],

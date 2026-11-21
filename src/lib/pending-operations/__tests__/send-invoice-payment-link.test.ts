@@ -116,6 +116,10 @@ function draftInvoice(overrides: Partial<Invoice> = {}) {
 
 const SETTINGS = {
   company_name: 'Test AB',
+  // A faktura names its seller (ML 17 kap 24 § p.5, crm#2080).
+  address_line1: 'Testgatan 1',
+  postal_code: '111 22',
+  city: 'Stockholm',
   accounting_method: 'accrual',
   entity_type: 'enskild_firma',
   bankgiro: '123-4567',

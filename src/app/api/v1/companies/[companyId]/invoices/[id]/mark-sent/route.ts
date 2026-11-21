@@ -57,6 +57,7 @@ import {
   type IssuePartialFailure,
 } from '@/lib/invoices/issue-and-book-invoice'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
+import { BUYER_ADDRESS_MISSING_WARNING, invoicePartiesVerdict } from '@/lib/invoices/invoice-parties'
 import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import type { CompanySettings, Invoice } from '@/types'
 
@@ -76,7 +77,9 @@ const InvoiceMarkSentResponse = z.object({
   // Present only when the invoice was issued (and, when it books at issue,
   // its verifikat posted) but a follow-up step failed: the PDF archive
   // (PDF_ARCHIVE_FAILED), an accrual schedule (ACCRUAL_SCHEDULES_NOT_CREATED)
-  // or the delivery history (DELIVERY_HISTORY_NOT_RECORDED).
+  // or the delivery history (DELIVERY_HISTORY_NOT_RECORDED); or when it went
+  // out as a förenklad faktura without the buyer's address
+  // (BUYER_ADDRESS_MISSING).
   warnings: z
     .array(z.object({ code: z.string(), message: z.string() }))
     .optional(),
@@ -105,6 +108,7 @@ registerEndpoint({
     'Allocation is atomic. If a concurrent transition beats the agent\'s request to the same draft, the runner-up gets 409 INVOICE_UPDATE_NOT_DRAFT and no number is consumed.',
     'A delivery note (document_type=delivery_note) keeps its own D-series number: mark-sent books nothing and takes no F-number. It is never emailed, so this is its only way to sent.',
     'A momsfri sale (a company outside the VAT register, vat_treatment=exempt, vat_amount=0) states no moms_ruta. Any other invoice without one, an imported draft, returns 400 VALIDATION_ERROR (details.field moms_ruta): send its items again with PATCH /invoices/{id}, or re-create it.',
+    'A faktura states the seller\'s and the buyer\'s name and address (ML 17 kap 24 §). Without the company\'s name or address (company settings) it returns 400 INVOICE_SEND_SELLER_ADDRESS_MISSING; without the customer\'s name or address (street plus postal code or town) 400 INVOICE_SEND_BUYER_ADDRESS_MISSING, unless it may be a förenklad faktura: at most 4 000 kr including VAT, not an EU or reverse-charge sale, or any amount from a seller outside the VAT register. That one is issued with warning BUYER_ADDRESS_MISSING. Both refusals come before a number is allocated.',
     'Idempotency-Key is mandatory. A retried mark-sent with the same key replays the cached response.',
     'Fails closed: when the invoice\'s verifikat cannot be posted (no open or a locked period, a required dimension, an account outside the chart) the invoice stays a draft, keeps any number already allocated, and the request fails with the engine\'s code or 500 INVOICE_MARK_SENT_BOOK_FAILED (details.reason in Swedish). Fix the cause and retry.',
     'paid_at_issue is only for a plain faktura: a proforma or quote (details.reason not_invoice), a självfaktura (self_billed) or an invoice with periodised lines (periodisering) returns 400 INVOICE_PAID_AT_ISSUE_NOT_ALLOWED before anything changes; issue it without paid_at_issue and record the payment with :mark-paid. account_number must be a 19xx account (400 VALIDATION_ERROR otherwise) that exists in the chart. It always settles the full amount on the invoice date: for a partial or later payment, issue without it and use :mark-paid.',
@@ -170,11 +174,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Pre-flight: fetch the invoice (with items + customer for the journal-
     // entry generator) and verify it's a draft. is_self_billed and the items'
-    // accrual period are what the dry run checks a paid_at_issue against.
+    // accrual period are what the dry run checks a paid_at_issue against; the
+    // customer's address is what issuable reads for the buyer (crm#2080).
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_MARK_SENT_RESPONSE_COLUMNS}, is_self_billed, customer:customers(id, name, customer_type, country), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, revenue_account, dimensions, accrual_period_start, accrual_period_end)`,
+        `${INVOICE_MARK_SENT_RESPONSE_COLUMNS}, is_self_billed, customer:customers(id, name, customer_type, country, address_line1, address_line2, postal_code, city, address_state), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, revenue_account, dimensions, accrual_period_start, accrual_period_end)`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -392,6 +397,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       code: PARTIAL_FAILURE_WARNING_CODES[failure.step] ?? 'ISSUE_FOLLOW_UP_FAILED',
       message: failure.reason,
     }))
+    // A förenklad faktura issued without the buyer's address (crm#2080).
+    if (invoicePartiesVerdict(bookingRow as Invoice, (bookingRow as IssuableInvoice).customer, companySettings) === 'buyer_missing_simplified') {
+      warnings.push({ code: BUYER_ADDRESS_MISSING_WARNING.code, message: BUYER_ADDRESS_MISSING_WARNING.message_sv })
+    }
 
     ctx.log.info('invoices.mark-sent success', {
       invoiceId,
