@@ -554,6 +554,7 @@ describe('runSweep: list questions past their 48 hours', () => {
     for (let i = 0; i < 6; i++) enqueue({ data: [] }) // received, processing, pending_ack, unacked, question TTL, pins
     enqueue({ count: 0 }) // outbound failures
     enqueue({ data: [] }) // orphaned parked rows
+    enqueue({ data: [] }) // M18 notices Meta never accepted
   }
 
   it('expires one on an idle conversation, where the question TTL pass does not look, and sends nothing', async () => {
