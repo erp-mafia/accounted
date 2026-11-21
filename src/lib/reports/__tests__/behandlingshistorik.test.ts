@@ -2413,6 +2413,83 @@ describe('auditRowToEvent: employee pay basis (accounted#30)', () => {
   })
 })
 
+describe('auditRowToEvent: bank-anchor moves (#2407)', () => {
+  // What write_audit_log stores: the whole bank row, and the whole link row.
+  const tx = {
+    id: 'tx-1',
+    company_id: 'company-1',
+    date: '2026-03-10',
+    description: 'Kortköp Kontorsvaror',
+    amount: -700,
+    currency: 'SEK',
+    journal_entry_id: 'entry-1',
+    is_business: true,
+  }
+  const link = {
+    id: 'link-1',
+    company_id: 'company-1',
+    transaction_id: 'tx-1',
+    journal_entry_id: 'entry-1',
+    allocated_amount: -700,
+    role: 'bank_line',
+  }
+  const entries = new Map([
+    ['entry-1', { id: 'entry-1', voucher_series: 'A', voucher_number: 12, source_type: 'bank_transaction', source_id: 'tx-1' }],
+    ['entry-2', { id: 'entry-2', voucher_series: 'A', voucher_number: 14, source_type: 'manual', source_id: null }],
+  ])
+  const ctx = { rattelseMetadataAt: new Map(), entryById: new Map(), linkedEntryById: entries }
+  const audit = (
+    table_name: 'transactions' | 'transaction_voucher_links',
+    old_state: Record<string, unknown> | null,
+    new_state: Record<string, unknown> | null,
+    action: AuditLogEntry['action'] = 'UPDATE',
+  ) => auditRow({ table_name, record_id: String((old_state ?? new_state)?.id), action, old_state, new_state })
+
+  it('both anchors are audited tables', () => {
+    expect(AUDITED_TABLES).toContain('transactions')
+    expect(AUDITED_TABLES).toContain('transaction_voucher_links')
+  })
+
+  it('a correction moving the bank row names the row and both verifikat', () => {
+    expect(auditRowToEvent(audit('transactions', tx, { ...tx, journal_entry_id: 'entry-2' }), ctx)).toMatchObject({
+      category: 'verifikation',
+      code: 'bank_transaction.moved',
+      event: 'Bankhändelse flyttad till annat verifikat',
+      object: '2026-03-10 Kortköp Kontorsvaror',
+      details: ['Verifikat: A12 → A14', 'Belopp: −700,00 SEK'],
+      actor: { type: 'user', user_id: 'user-1' },
+    })
+  })
+
+  it('a storno releasing the bank row names the verifikat it left', () => {
+    expect(auditRowToEvent(audit('transactions', tx, { ...tx, journal_entry_id: null, is_business: null }), ctx)).toMatchObject({
+      code: 'bank_transaction.released',
+      event: 'Bankhändelsens koppling till verifikat borttagen',
+      details: ['Verifikat: A12', 'Belopp: −700,00 SEK'],
+    })
+  })
+
+  it('a moved link and a removed link carry the bank row, the role and the allocated amount', () => {
+    expect(auditRowToEvent(audit('transaction_voucher_links', link, { ...link, journal_entry_id: 'entry-2' }), ctx)).toMatchObject({
+      category: 'verifikation',
+      code: 'bank_link.moved',
+      event: 'Bankkoppling flyttad till annat verifikat',
+      details: ['Verifikat: A12 → A14', 'Bankhändelse: tx-1', 'Roll: bankrad', 'Belopp: −700,00'],
+    })
+    expect(auditRowToEvent(audit('transaction_voucher_links', { ...link, role: 'clearing' }, null, 'DELETE'), ctx)).toMatchObject({
+      code: 'bank_link.released',
+      event: 'Bankkoppling borttagen',
+      details: ['Verifikat: A12', 'Bankhändelse: tx-1', 'Roll: clearing', 'Belopp: −700,00'],
+    })
+  })
+
+  it('renders nothing for a first booking, an insert, or a bank-row delete', () => {
+    expect(auditRowToEvent(audit('transactions', { ...tx, journal_entry_id: null }, tx), ctx)).toBeNull()
+    expect(auditRowToEvent(audit('transaction_voucher_links', null, link, 'INSERT'), ctx)).toBeNull()
+    expect(auditRowToEvent(audit('transactions', tx, null, 'DELETE'), ctx)).toBeNull()
+  })
+})
+
 describe('auditRowToEvent: skattekonto links and ignores (accounted#50)', () => {
   // What write_audit_log stores for a skattekonto row (the whole row).
   const row = {
