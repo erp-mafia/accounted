@@ -179,13 +179,16 @@ export async function clearedByAccount(
 /**
  * What each verifikat moves on each moms account and on 2650/1650: debit
  * minus credit per account, by verifikat id. clearedByAccount without the
- * net accounts left out, for a reader that needs both from one read. An
- * account a verifikat nets to nothing on is left out.
+ * net accounts left out, for a reader that needs both from one read. Also
+ * reads `alsoAccounts` (the rounding account, for a reader that needs what a
+ * momsredovisning put on 3740). An account a verifikat nets to nothing on is
+ * left out.
  */
 export async function movedByAccount(
   supabase: SupabaseClient,
   companyId: string,
   ids: readonly string[],
+  alsoAccounts: readonly string[] = [],
 ): Promise<Map<string, Map<string, number>>> {
   const out = new Map<string, Map<string, number>>()
   if (ids.length === 0) return out
@@ -195,7 +198,7 @@ export async function movedByAccount(
     filterEntries: (q: EntryLinesQuery) => q.eq('company_id', companyId).in('id', [...ids]),
     attachEntriesAs: null,
   })
-  const net = new Set(VAT_SETTLEMENT_NET_ACCOUNTS)
+  const net = new Set([...VAT_SETTLEMENT_NET_ACCOUNTS, ...alsoAccounts])
   for (const line of lines) {
     if (!isMomsAccount(line.account_number) && !net.has(line.account_number)) continue
     const accounts = out.get(line.journal_entry_id) ?? new Map<string, number>()

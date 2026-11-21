@@ -98,6 +98,11 @@ function netAccountsAfter(posted: FakeEntry['lines'], rest: readonly VatSettleme
   return out
 }
 
+/** What the lines leave on 3740, credit minus debit. */
+function roundingAfter(lines: FakeEntry['lines']): number {
+  return lines.reduce((sum, l) => (l.account_number === '3740' ? roundOre(sum + (l.credit ?? 0) - (l.debit ?? 0)) : sum), 0)
+}
+
 /** The 2650/1650 lines of a verifikat dated the quarter's last day, as the drift check reads them. */
 function driftRows(id: string, lines: FakeEntry['lines']): SettlementEntryRow[] {
   return lines
@@ -717,6 +722,54 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     const once = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [sale, bigger], shaped: [] }), CO, 'quarterly', 2026, 3)
     expect(netAccountsAfter(settled.lines, proposal.lines)).toEqual(netAccountsAfter([], once.lines))
     expect(netAccountsAfter(settled.lines, proposal.lines)).toEqual({ '2650': 0, '1650': 150 })
+  })
+
+  it.each([
+    { output: 250.4, input: 250, after: { '2650': 0, '1650': 0 } },
+    { output: 250.4, input: 400, after: { '2650': 0, '1650': 150 } },
+    { output: 250.7, input: 100.2, after: { '2650': 150, '1650': 0 } },
+  ])('carries no öre to 2650/1650 that the posted momsredovisning put on 3740 ($output out, then $input in)', async ({ output, input, after }) => {
+    const oreSale = entry('2026-07-15', [
+      { account_number: '1510', debit: roundOre(output * 5) },
+      { account_number: '3001', credit: roundOre(output * 4) },
+      { account_number: '2611', credit: output },
+    ])
+    const purchase = entry('2026-09-20', [
+      { account_number: '5010', debit: roundOre(input * 4) },
+      { account_number: '2641', debit: input },
+      { account_number: '2440', credit: roundOre(input * 5) },
+    ])
+    // The app's own momsredovisning of the sale: whole kronor on 2650, the öre on 3740.
+    const first = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [oreSale], shaped: [] }), CO, 'quarterly', 2026, 3)
+    expect(roundingAfter(asLines(first.lines))).not.toBe(0)
+    const oreSettled = entry('2026-09-30', asLines(first.lines), { description: 'Momsredovisning Kvartal 3 2026', source_type: 'vat_settlement' })
+    const proposal = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [oreSale, oreSettled, purchase], shaped: [] }), CO, 'quarterly', 2026, 3)
+    expect(proposal.partly_settled).toBe(true)
+    const once = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [oreSale, purchase], shaped: [] }), CO, 'quarterly', 2026, 3)
+    expect(netAccountsAfter(oreSettled.lines, proposal.lines)).toEqual(netAccountsAfter([], once.lines))
+    expect(netAccountsAfter(oreSettled.lines, proposal.lines)).toEqual(after)
+    expect(roundingAfter([...oreSettled.lines, ...asLines(proposal.lines)])).toBe(roundingAfter(asLines(once.lines)))
+  })
+
+  it('moves a refund the posted momsredovisning booked on 2650 to 1650 with the rest (#3646)', async () => {
+    // 250 to get back, settled against 2650's debit, then 100 more input VAT: ruta 49 is -350.
+    const purchase = entry('2026-07-15', [{ account_number: '5010', debit: 1_000 }, { account_number: '2641', debit: 250 }, { account_number: '2440', credit: 1_250 }])
+    const refundOn2650 = entry('2026-09-30', [{ account_number: '2641', credit: 250 }, { account_number: '2650', debit: 250 }], {
+      description: 'Momsredovisning Kvartal 3 2026',
+      source_type: 'vat_settlement',
+    })
+    const more = entry('2026-09-20', [{ account_number: '5010', debit: 400 }, { account_number: '2641', debit: 100 }, { account_number: '2440', credit: 500 }])
+    const proposal = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [purchase, refundOn2650, more], shaped: [] }), CO, 'quarterly', 2026, 3)
+    expect(proposal.filed_net).toBe(-350)
+    // 2650 D 250 beside 1650 D 100 would split the 350 Skatteverket pays back, and neither would clear.
+    expect(proposal.lines).toEqual([
+      { account_number: '2641', debit_amount: 0, credit_amount: 100 },
+      { account_number: '2650', debit_amount: 0, credit_amount: 250, line_description: 'Moms att betala' },
+      { account_number: '1650', debit_amount: 350, credit_amount: 0, line_description: 'Moms att återfå' },
+    ])
+    const once = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [purchase, more], shaped: [] }), CO, 'quarterly', 2026, 3)
+    expect(netAccountsAfter(refundOn2650.lines, proposal.lines)).toEqual(netAccountsAfter([], once.lines))
+    expect(netAccountsAfter(refundOn2650.lines, proposal.lines)).toEqual({ '2650': 0, '1650': 350 })
   })
 
   it('names every posted momsredovisning: reversing only the first leaves the period booked (#3646)', async () => {

@@ -267,8 +267,9 @@ function clearingBalances(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamic
 
 /**
  * What the period's posted momsredovisningar left on the two net accounts:
- * moms att betala on 2650 (its credit balance) and moms att återfå on 1650
- * (its debit balance), each zero or more.
+ * moms att betala on 2650 (credit minus debit) and moms att återfå on 1650
+ * (debit minus credit). Either is below zero when a settlement booked a
+ * refund on 2650 or a debt on 1650.
  */
 interface PostedNet {
   payable: number
@@ -280,13 +281,14 @@ const NOTHING_POSTED: PostedNet = { payable: 0, receivable: 0 }
 /**
  * The 2650/1650 lines that move `net` (positive, more att betala; negative,
  * more att återfå). With nothing posted it is one line, 2650 credit or 1650
- * debit. On top of a posted momsredovisning, a net the other way first takes
- * back what that one put on its account, and only what goes past it lands on
- * the other one (#3646). Each line on the account of its side would leave a
- * debt on 2650 beside a claim on 1650 for the same period: Skatteverket nets
- * them on the skattekonto, so neither would ever clear, and 2650 would not
- * show ruta 49. This way the two end where one momsredovisning for the whole
- * period puts them. Pure.
+ * debit. On top of the period's posted momsredovisningar, the lines move the
+ * two to where one momsredovisning for the whole period puts them: what the
+ * posted ones left plus `net` on 2650 when it is to pay, on 1650 when it is
+ * to get back, and nothing on the other (#3646). A net the other way thus
+ * first takes back what a posted one put on its account. Each line on the
+ * account of its side would leave a debt on 2650 beside a claim on 1650 for
+ * the same period: Skatteverket nets them on the skattekonto, so neither
+ * would ever clear, and 2650 would not show ruta 49. Pure.
  */
 function netLines(net: number, posted: PostedNet): VatSettlementProposalLine[] {
   const payable = (debit: number, credit: number): VatSettlementProposalLine => ({
@@ -301,19 +303,15 @@ function netLines(net: number, posted: PostedNet): VatSettlementProposalLine[] {
     credit_amount: credit,
     line_description: 'Moms att återfå',
   })
-  const lines: VatSettlementProposalLine[] = []
-  if (net > 0) {
-    const back = roundOre(Math.min(net, posted.receivable))
-    const past = roundOre(net - back)
-    if (back > 0) lines.push(receivable(0, back))
-    if (past > 0) lines.push(payable(0, past))
-  } else if (net < 0) {
-    const back = roundOre(Math.min(-net, posted.payable))
-    const past = roundOre(-net - back)
-    if (back > 0) lines.push(payable(back, 0))
-    if (past > 0) lines.push(receivable(past, 0))
-  }
-  return lines
+  const total = roundOre(posted.payable - posted.receivable + net)
+  // Credit on 2650 and debit on 1650 to add; below zero, the other side.
+  const toPayable = roundOre(Math.max(total, 0) - posted.payable)
+  const toReceivable = roundOre(Math.max(-total, 0) - posted.receivable)
+  const onPayable = toPayable > 0 ? payable(0, toPayable) : toPayable < 0 ? payable(-toPayable, 0) : null
+  const onReceivable = toReceivable > 0 ? receivable(toReceivable, 0) : toReceivable < 0 ? receivable(0, -toReceivable) : null
+  // The account that ends on nothing first: what is taken back, then where the period lands.
+  const ordered = total >= 0 ? [onReceivable, onPayable] : [onPayable, onReceivable]
+  return ordered.filter((line): line is VatSettlementProposalLine => line !== null)
 }
 
 /**
@@ -401,8 +399,9 @@ export function balanceLeftToClear(balance: number, cleared: number): number {
  * was settled, a quarter settled month by month and not finished. The full
  * period's lines would clear a second time what those verifikat already
  * moved. Each account keeps what the settlements left on it
- * (balanceLeftToClear), and the net is the filed net less what they covered,
- * placed beside what they put on 2650/1650 (netLines).
+ * (balanceLeftToClear), and the net is the filed net less the net they
+ * placed: what they covered, less the öre they put on 3740. It goes beside
+ * what they put on 2650/1650 (netLines).
  *
  * Null, and the full-period lines stand, when the period has no posted
  * momsredovisning of its own (nothing is read then), when those cleared the
@@ -417,15 +416,17 @@ async function remainingSettlementLines(
   settlementIds: string[],
 ): Promise<{ lines: VatSettlementProposalLine[]; rounding_amount: number } | null> {
   if (settlementIds.length === 0) return null
-  const moved = await movedByAccount(supabase, companyId, settlementIds)
+  const moved = await movedByAccount(supabase, companyId, settlementIds, [VAT_ROUNDING_ACCOUNT])
   const cleared = new Map<string, number>()
   let onPayable = 0
   let onReceivable = 0
+  let onRounding = 0
   for (const accounts of moved.values()) {
     for (const [account, amount] of accounts) {
       // Debit minus credit: 2650's credit is what it owes, 1650's debit what it gets back.
       if (account === VAT_SETTLEMENT_ACCOUNT) onPayable -= amount
       else if (account === VAT_REFUND_ACCOUNT) onReceivable += amount
+      else if (account === VAT_ROUNDING_ACCOUNT) onRounding += amount
       else cleared.set(account, roundOre((cleared.get(account) ?? 0) + amount))
     }
   }
@@ -434,9 +435,13 @@ async function remainingSettlementLines(
   if (left.every(([, rest]) => Math.abs(rest) < FILED_ROUNDING)) return null
   if (left.every(([, rest], i) => rest === balances[i][1])) return null
   const covered = roundOre(balances.reduce((sum, [, balance], i) => sum + balance - left[i][1], 0))
-  return clearingLines(left, roundOre(filedNet - covered), {
-    payable: Math.max(0, roundOre(onPayable)),
-    receivable: Math.max(0, roundOre(onReceivable)),
+  // A settlement in whole kronor put the öre of what it covered on 3740 (a
+  // credit there is öre it did not place as net). Left in, the rest would
+  // carry them to 2650/1650 a second time, beside the 3740 line it gets.
+  const placed = roundOre(covered + onRounding)
+  return clearingLines(left, roundOre(filedNet - placed), {
+    payable: roundOre(onPayable),
+    receivable: roundOre(onReceivable),
   })
 }
 
