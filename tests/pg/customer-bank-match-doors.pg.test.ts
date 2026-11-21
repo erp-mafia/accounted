@@ -117,13 +117,13 @@ async function seed(): Promise<Seed> {
   const { userId, companyId, fiscalPeriodId } = await seedCompany()
   await getPool().query(
     `INSERT INTO public.company_settings
-       (user_id, company_id, entity_type, accounting_method, vat_registered, vat_number, company_name, org_number, bankgiro)
-     VALUES ($1, $2, 'aktiebolag', 'accrual', true, 'SE556677889901', 'Konsultbolaget AB', '556677-8899', '5050-1055')`,
+       (user_id, company_id, entity_type, accounting_method, vat_registered, vat_number, company_name, org_number, bankgiro, address_line1, postal_code, city)
+     VALUES ($1, $2, 'aktiebolag', 'accrual', true, 'SE556677889901', 'Konsultbolaget AB', '556677-8899', '5050-1055', 'Testgatan 1', '111 22', 'Stockholm')`,
     [userId, companyId],
   )
   const { rows } = await getPool().query<{ id: string }>(
-    `INSERT INTO public.customers (user_id, company_id, name, customer_type, country, vat_number, org_number)
-     VALUES ($1, $2, 'Kund AB', 'swedish_business', 'SE', 'SE559900123401', '559900-1234') RETURNING id::text AS id`,
+    `INSERT INTO public.customers (user_id, company_id, name, customer_type, country, vat_number, org_number, address_line1, postal_code, city)
+     VALUES ($1, $2, 'Kund AB', 'swedish_business', 'SE', 'SE559900123401', '559900-1234', 'Storgatan 1', '111 22', 'Stockholm') RETURNING id::text AS id`,
     [userId, companyId],
   )
   const cash = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK', isPrimary: true })
