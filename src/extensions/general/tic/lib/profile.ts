@@ -262,6 +262,19 @@ export async function buildCompanyProfile(
           })
       : []
 
+  // The profile keys each failed detail call left empty (see
+  // TICCompanyProfile.incompleteSections).
+  const incompleteSections = (
+    [
+      [documentsResult, ['financialReports', 'financialReportsComplete']],
+      [fiscalYearResult, ['fiscalYear', 'fiscalYearHistory']],
+      [payrollsResult, ['payrolls']],
+      [representativesResult, ['board', 'representatives']],
+      [statusResult, ['statuses']],
+      [beneficialOwnersResult, ['beneficialOwners']],
+    ] as const
+  ).flatMap(([result, keys]) => (result.status === 'rejected' ? [...keys] : []))
+
   // Log Phase 2 failures
   if (documentsResult.status === 'rejected') {
     log.warn('[tic] profile: documents fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(documentsResult.reason) })
@@ -382,6 +395,7 @@ export async function buildCompanyProfile(
     representatives,
     payrolls,
     statuses,
+    incompleteSections,
     fetchedAt: new Date().toISOString(),
   }
 
