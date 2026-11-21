@@ -621,6 +621,27 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     expect(partlySettledRestBooksAlone(proposal)).toBe(false)
   })
 
+  it('offers only reversing when the rest is only on a company-mapped 26xx account', () => {
+    // A company's own 26xx account routed to a ruta (vat_box, e.g. a Fortnox
+    // chart's 2617) is cleared by the momsredovisning, but it is not one of
+    // the fixed declaration accounts the shape reads. 2617 and 2650 alone are
+    // no momsredovisning shape, so posted they would count as business.
+    const lines = [
+      { account_number: '2617', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2650', debit_amount: 0, credit_amount: 250 },
+    ]
+    expect(momsredovisningShapeOfLines(lines.map((l) => l.account_number), ['1630'])).toBeNull()
+    expect(partlySettledRestBooksAlone({ lines, entry_date_reason: null })).toBe(false)
+    // With a line on a fixed declaration account as well, it has the shape.
+    const withFixed = [
+      { account_number: '2611', debit_amount: 100, credit_amount: 0 },
+      { account_number: '2617', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2650', debit_amount: 0, credit_amount: 350 },
+    ]
+    expect(momsredovisningShapeOfLines(withFixed.map((l) => l.account_number), ['1630'])).toBe('net_account_shape')
+    expect(partlySettledRestBooksAlone({ lines: withFixed, entry_date_reason: null })).toBe(true)
+  })
+
   it('is fully booked again once those lines are posted as a verifikat of their own', async () => {
     const rest = entry('2026-09-30', [{ account_number: '2641', credit: 250 }, { account_number: '1650', debit: 250 }], { description: 'Moms kvar Q3' })
     const supabase = ledger({ fiscalPeriods: years, entries: [sale, settled, invoice, rest], shaped: [rest] })
