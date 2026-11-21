@@ -30,7 +30,7 @@ import { SCHEDULED_PAYMENT_READ_EVERY_MS } from '../status'
 import { runBudget } from '@/lib/api/run-budget'
 import { skattekontoPaymentsCovering } from '../skattekonto-underway'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
-import { ARCIM, arcimDebit, arcimInvoice, arcimOrder, fakeProvider, holdSigning, RCVD_TAX, rcvdTaxBatch, rcvdTaxDebit, rcvdTaxOrder } from './fixtures'
+import { ARCIM, arcimDebit, arcimInvoice, arcimOrder, fakeProvider, holdSigning, RCVD_TAX, rcvdTaxBatch, rcvdTaxDebit, rcvdTaxOrder, rowsTable } from './fixtures'
 
 const COMPANY = 'company-1'
 
@@ -308,6 +308,113 @@ describe('syncPaymentOrderStatuses', () => {
       expect(events()).toContainEqual(
         expect.objectContaining({ batch_id: 'batch-1', event_type: 'error', detail: { code: 'SIGNING_ABANDONED', bank_id: bankIdState } }),
       )
+    })
+
+    describe('whose orders cannot follow the signing back to submitted (crm#2085)', () => {
+      // The signing is reset first, then its orders: a failed second write
+      // left them awaiting_signature under a 'created' signing, which this
+      // pass never reads again and Signera igen refuses (nothing submitted).
+      const lost = { message: 'connection reset', code: '08006' }
+
+      /** The signing's orders as rows, with the move back to 'submitted' failing `times` times; `meanwhile` runs before each failure. */
+      function failingBack(orders: PaymentOrderRow[], times: number, meanwhile: () => void = () => {}) {
+        const rows = rowsTable(orders)
+        let left = times
+        db.setTable('payment_orders', (chain) => {
+          const update = chain.find((c) => c.method === 'update')
+          if (left > 0 && (update?.args[0] as { status?: string } | undefined)?.status === 'submitted') {
+            left -= 1
+            meanwhile()
+            return { data: null, error: lost }
+          }
+          return rows(chain)
+        })
+      }
+
+      it('is never counted as abandoned: the error reaches error tracking and the signing waits for the next run, which ends it', async () => {
+        const provider = fakeProvider({ pollSigning: bankId('pending') })
+        registerPaymentInitiationProvider(provider)
+        const orders = [order('o1'), order('o2')]
+        const signing = held(orders, minutesAgo(UNANSWERED_SIGNING_MINUTES + 5))
+        failingBack(orders, 1)
+
+        const result = await run()
+
+        expect(result).toMatchObject({ abandoned: 0, signedLate: 0 })
+        expect(result.errors).toBeGreaterThan(0)
+        expect(log.error).toHaveBeenCalledWith(
+          'orders of an abandoned signing could not go back to submitted',
+          lost,
+          expect.objectContaining({ batchId: 'batch-1', retried: true }),
+        )
+        // Back where the run found it, for this attempt only: the next run reads it again.
+        expect(signing).toMatchObject({ status: 'awaiting_signature', provider_authorisation_id: 'auth-1' })
+        expect(orders.map((o) => o.status)).toEqual(['awaiting_signature', 'awaiting_signature'])
+        expect(events()).toEqual([])
+        expect(provider.cancelPayment).not.toHaveBeenCalled()
+
+        const next = await run()
+
+        expect(next).toMatchObject({ abandoned: 1 })
+        expect(signing.status).toBe('created')
+        expect(orders.map((o) => [o.status, o.provider_payment_id])).toEqual([
+          ['submitted', 'pay-o1'],
+          ['submitted', 'pay-o2'],
+        ])
+        expect(provider.cancelPayment).not.toHaveBeenCalled()
+      })
+
+      it.each([
+        ['restarted with a new attempt', { status: 'awaiting_signature', provider_authorisation_id: 'auth-2' }],
+        ['stopped', { status: 'failed' }],
+      ])('never puts back a signing %s meanwhile', async (_, meanwhile) => {
+        registerPaymentInitiationProvider(fakeProvider({ pollSigning: bankId('pending') }))
+        const orders = [order('o1')]
+        const signing = held(orders, minutesAgo(UNANSWERED_SIGNING_MINUTES + 5))
+        failingBack(orders, 1, () => Object.assign(signing, meanwhile))
+
+        const result = await run()
+
+        expect(result).toMatchObject({ abandoned: 0 })
+        expect(signing).toMatchObject({ provider_authorisation_id: 'auth-1', ...meanwhile })
+        expect(log.error).toHaveBeenCalledWith(
+          'orders of an abandoned signing could not go back to submitted',
+          lost,
+          expect.objectContaining({ batchId: 'batch-1', retried: false }),
+        )
+      })
+    })
+
+    it('reports a signing the bank closed whose own status could not be written, and closes it on the next run', async () => {
+      const provider = fakeProvider({ getPaymentState: vi.fn().mockResolvedValue({ providerStatus: 'RJCT', status: 'rejected', messages: [], refusalCode: null }) })
+      registerPaymentInitiationProvider(provider)
+      const orders = [order('o1')]
+      const signing = held(orders)
+      const rows = rowsTable([signing])
+      let failures = 1
+      db.setTable('payment_order_batches', (chain) => {
+        const update = chain.find((c) => c.method === 'update')
+        if (failures > 0 && (update?.args[0] as { status?: string } | undefined)?.status === 'rejected') {
+          failures -= 1
+          return { data: null, error: { message: 'connection reset', code: '08006' } }
+        }
+        return rows(chain)
+      })
+
+      const result = await run()
+
+      expect(orders[0]!.status).toBe('rejected')
+      expect(signing.status).toBe('awaiting_signature')
+      expect(result.errors).toBeGreaterThan(0)
+      expect(log.error).toHaveBeenCalledWith(
+        'a signing the bank closed could not be closed',
+        expect.objectContaining({ code: '08006' }),
+        expect.objectContaining({ batchId: 'batch-1', status: 'rejected' }),
+      )
+
+      await run()
+
+      expect(signing.status).toBe('rejected')
     })
 
     describe('whose payment status the bank refuses to give', () => {
