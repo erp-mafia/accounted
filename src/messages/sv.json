@@ -17376,6 +17376,7 @@
     "account_label": "Betala från",
     "account_none": "Inget konto kan användas för betalningar via banken. Det krävs ett svenskt kronkonto med IBAN.",
     "account_none_bank_not_supported": "Betalningar från {bank} går inte att göra via Accounted än. Betala i bankens internetbank.",
+    "account_none_bank_not_supported_unnamed": "Betalningar från kontots bank går inte att göra via Accounted än. Betala i bankens internetbank.",
     "account_none_bank_unknown": "Accounted kan inte avgöra vilken bank kontot ligger i, så det går inte att betala från det via Accounted. Betala i bankens internetbank.",
     "date_label": "Betalningsdag",
     "prepare": "Förbered betalningar",
