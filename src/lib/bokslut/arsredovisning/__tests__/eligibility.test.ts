@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyAnnualReportProfile } from '../compliance-types'
 import { evaluateAnnualReportEligibility } from '../eligibility'
+import en from '@/messages/en.json'
+import sv from '@/messages/sv.json'
 
 const metrics = {
   current: { employees: 2, balance_sheet_total: 1_000_000, net_revenue: 2_000_000 },
@@ -44,6 +46,24 @@ describe('evaluateAnnualReportEligibility', () => {
       )
     },
   )
+
+  // ÅRL 1 kap. 3 § 4: "företag vars överlåtbara värdepapper är upptagna till
+  // handel på en reglerad marknad". A company that only holds listed shares is
+  // not listed, so every wording of the question names what the company issued.
+  it('asks about securities the company itself issued, not listed shares it holds', () => {
+    expect(sv.annualReportStudio.listed_securities).toContain('bolaget självt har gett ut')
+    expect(en.annualReportStudio.listed_securities).toContain('the company itself has issued')
+    const result = evaluateAnnualReportEligibility({
+      entityType: 'aktiebolag',
+      framework: 'k2',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile: { ...completeProfile(), securities_traded_on_regulated_market: null },
+      metrics,
+    })
+    const unanswered = result.issues.find((issue) => issue.code === 'AR-K2-LISTED-UNKNOWN')
+    expect(unanswered?.message).toContain('bolaget självt har gett ut')
+  })
 
   it('accepts a confirmed smaller private K2 company without auditor report', () => {
     const result = evaluateAnnualReportEligibility({
