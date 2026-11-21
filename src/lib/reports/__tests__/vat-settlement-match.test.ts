@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createFakeLedger, type FakeEntry, type FakeLedgerData } from '@/lib/measures/__tests__/fake-ledger'
 import { balanceLeftToClear, buildVatSettlementProposal, vatSettlementBookingStatus } from '../vat-settlement'
 import { bookVatSettlement } from '../vat-settlement-booking'
+import { partlySettledRestBooksAlone } from '@/lib/vat/partly-settled-rest'
+import { momsredovisningShapeOfLines } from '@/lib/vat/voucher-vat-impact'
 
 vi.mock('@/lib/api/v1/check-period-lock', () => ({ checkPeriodLock: vi.fn(async () => ({ locked: false })) }))
 
@@ -588,6 +590,35 @@ describe('a supplier invoice dated in the period after the app booked its momsre
       { account_number: '1650', debit_amount: 250, credit_amount: 0, line_description: 'Moms att återfå' },
     ])
     expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+    // The page offers booking them alone, dated the period's last day: with
+    // their 1650 line they have the momsredovisning shape the rutor skip.
+    expect(proposal.entry_date).toBe('2026-09-30')
+    expect(partlySettledRestBooksAlone(proposal)).toBe(true)
+    expect(momsredovisningShapeOfLines(proposal.lines.map((l) => l.account_number), ['1630'])).toBe('net_account_shape')
+    // Past a lock date they cannot be dated inside the period: only reversing is offered.
+    expect(partlySettledRestBooksAlone({ ...proposal, entry_date: '2026-10-01', entry_date_reason: 'company_lock_date' })).toBe(false)
+  })
+
+  it('offers only reversing when the rest nets to zero, as an EU service purchase does', async () => {
+    // Reverse charge on an EU service (2614 credit, 2645 debit) leaves no net
+    // for 2650/1650. Posted alone, 26xx lines with no 2650/1650 or skattekonto
+    // line are no momsredovisning shape, so the rutor would read them as
+    // business: ruta 30 and ruta 48 would each drop by 250.
+    const euService = entry('2026-09-20', [
+      { account_number: '4535', debit: 1_000 },
+      { account_number: '2614', credit: 250 },
+      { account_number: '2645', debit: 250 },
+      { account_number: '2440', credit: 1_000 },
+    ])
+    const supabase = ledger({ fiscalPeriods: years, entries: [sale, settled, euService], shaped: [] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.partly_settled).toBe(true)
+    expect(proposal.lines).toEqual([
+      { account_number: '2614', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2645', debit_amount: 0, credit_amount: 250 },
+    ])
+    expect(momsredovisningShapeOfLines(proposal.lines.map((l) => l.account_number), ['1630'])).toBeNull()
+    expect(partlySettledRestBooksAlone(proposal)).toBe(false)
   })
 
   it('is fully booked again once those lines are posted as a verifikat of their own', async () => {

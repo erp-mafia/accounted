@@ -45,6 +45,7 @@ import { useCompanySettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
 import { vatLandingStep } from '@/lib/vat/landing-step'
+import { partlySettledRestBooksAlone } from '@/lib/vat/partly-settled-rest'
 import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
 import { fiscalPeriodForVatYear } from '@/lib/reports/period-dates'
 import { fiscalYearEndMonthIn, fiscalYearEndMonthOn } from '@/lib/tax/deadline-config'
@@ -377,7 +378,14 @@ function VatBookingCard({
                   </li>
                 ))}
               </ul>
-              <p>{t('vat_partly_settled_ways', { voucher: formatVoucher(booked) })}</p>
+              <p>
+                {partlySettledRestBooksAlone(proposal)
+                  ? t('vat_partly_settled_ways', {
+                      voucher: formatVoucher(booked),
+                      date: formatDate(proposal.entry_date),
+                    })
+                  : t('vat_partly_settled_rebook', { voucher: formatVoucher(booked) })}
+              </p>
             </div>
           </div>
         )}
