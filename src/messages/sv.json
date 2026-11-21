@@ -672,6 +672,7 @@
     "bankid_cancelling": "Avbryter...",
     "bankid_completing": "Slutför BankID-identifieringen...",
     "bankid_finish_in_app": "Slutför identifieringen i BankID-appen",
+    "bankid_open_app": "Öppna BankID-appen",
     "bankid_resume_title": "BankID-identifiering pågår",
     "bankid_resume_description": "Den här webbläsaren har en påbörjad BankID-identifiering. Fortsätt bara om det är du som startade den.",
     "bankid_resume_continue": "Fortsätt",
