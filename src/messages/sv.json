@@ -11899,6 +11899,7 @@
     "vat_filing_failed": "Kunde inte markera perioden som inlämnad.",
     "vat_filing_unmark_failed": "Kunde inte ångra markeringen.",
     "vat_filing_period_yearly": "Räkenskapsår {label}",
+    "vat_entry_counts": "{invoices} verifikat från kundfakturor · {transactions} från banktransaktioner",
     "vat_basis_fix_all_title": "{fixed} av {total} verifikationer korrigerade",
     "vat_basis_fix_all_created": "Storno + nya verifikationer skapade.",
     "vat_basis_fix_all_failed": "{count} kunde inte korrigeras och ligger kvar i listan.",

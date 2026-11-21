@@ -3904,7 +3904,12 @@ export interface VatDeclaration {
    */
   kontantmetodCutoff?: KontantmetodCutoffVatFacts
   // Supporting data
+  /**
+   * Verifikat in the period from customer invoices (booking, payment, cash
+   * payment, credit note), not invoices: a paid invoice counts twice.
+   */
   invoiceCount: number
+  /** Verifikat in the period booked from bank transactions. */
   transactionCount: number
   // Breakdown by source
   breakdown: {

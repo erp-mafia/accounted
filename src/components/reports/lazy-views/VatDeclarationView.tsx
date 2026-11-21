@@ -1412,9 +1412,11 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
             <section className="space-y-3">
               <div>
             {/* The title and the period picker already name the declaration
-                and its period; only the basis counts are new here. */}
+                and its period; only the basis counts are new here. They
+                count verifikat, not invoices: a paid invoice is two (its
+                booking and its payment), so the label says verifikat. */}
             <p className="px-1 text-xs tabular-nums text-muted-foreground">
-              {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
+              {tReports('vat_entry_counts', { invoices: data.invoiceCount, transactions: data.transactionCount })}
             </p>
             <div className="mt-4 space-y-8">
               <div>
