@@ -8067,7 +8067,7 @@
     "seller_missing": "Företagets namn eller adress saknas och måste stå på fakturan.",
     "seller_fix": "Fyll i företagsuppgifter",
     "seller_ask_admin": "Be en administratör fylla i dem under Företagsuppgifter.",
-    "buyer_missing": "Kunden saknar namn eller adress. Båda måste stå på en faktura över 4 000 kr inklusive moms och på en försäljning till ett annat EU-land eller med omvänd betalningsskyldighet.",
+    "buyer_missing": "Kundens namn eller adress saknas. Båda måste stå på en faktura över 4 000 kr inklusive moms och på en försäljning till ett annat EU-land eller med omvänd betalningsskyldighet.",
     "buyer_simplified": "Kunden saknar adress, så fakturan blir en förenklad faktura utan köparens adress. Lägg till adressen på kunden om du vill skicka en fullständig faktura.",
     "open_customer": "Öppna kunden"
   },
