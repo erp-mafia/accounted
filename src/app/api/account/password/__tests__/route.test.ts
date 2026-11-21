@@ -266,7 +266,7 @@ describe('POST /api/account/password', () => {
       )
 
       expect(status).toBe(400)
-      expect(body.error).toBe('Något gick fel. Försök igen.')
+      expect(body.error).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
       expect(updateUser).not.toHaveBeenCalled()
       expect(flagFlipCall(updateUserById)).toBeUndefined()
     })
@@ -365,7 +365,7 @@ describe('POST /api/account/password', () => {
       )
 
       expect(status).toBe(400)
-      expect(body.error).toBe('Något gick fel. Försök igen.')
+      expect(body.error).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
       expect(updateUser).toHaveBeenCalledWith({ password: STRONG_PASSWORD })
       expect(flagFlipCall(updateUserById)).toBeUndefined()
     })

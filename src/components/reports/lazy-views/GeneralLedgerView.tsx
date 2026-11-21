@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { AccountNumber } from '@/components/ui/account-number'
-import { SortableTh } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS, SortableTh } from '@/components/ui/dry-table'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { MagnifyingGlassIcon } from '@/components/icons'
@@ -162,13 +162,23 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
     return <ReportErrorCard message={error} onRetry={refetch} />
   }
 
-  if (!data || data.accounts.length === 0) {
+  // An applied account range that holds nothing keeps the range fields on
+  // screen, so it can be changed or cleared; only an unfiltered empty
+  // ledger is the period's empty state.
+  const rangeApplied = applied.from !== '' || applied.to !== ''
+  if (!data || (data.accounts.length === 0 && !rangeApplied)) {
     return (
       <ReportEmptyState
         title="Inga verifikationer i perioden"
         description="Det finns inga bokförda verifikationer i den valda perioden."
       />
     )
+  }
+
+  const clearAccountRange = () => {
+    setAccountFrom('')
+    setAccountTo('')
+    setApplied({ from: '', to: '' })
   }
 
   return (
@@ -206,12 +216,20 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
         </Button>
       </div>
 
-      {data.period.start && (
+      {data.accounts.length === 0 && (
+        <p className="px-1 py-3 text-[13px] text-muted-foreground">
+          {t('no_accounts_in_range', { range: `${applied.from}-${applied.to}` })}{' '}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={clearAccountRange}>
+            {t('clear_account_range')}
+          </button>
+        </p>
+      )}
+      {data.accounts.length > 0 && data.period.start && (
         <p className="text-sm text-muted-foreground tabular-nums">
           Period {data.period.start} till {data.period.end} · {data.accounts.length} konton
         </p>
       )}
-      {!data.lines_included && (
+      {data.accounts.length > 0 && !data.lines_included && (
         <p className="text-sm text-muted-foreground">
           {t('paged_hint', { count: data.accounts.reduce((sum, a) => sum + a.line_count, 0) })}
         </p>

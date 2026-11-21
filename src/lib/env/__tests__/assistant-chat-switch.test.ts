@@ -108,10 +108,9 @@ describe('ASSISTANT_CHAT_UNTIL', () => {
   })
 })
 
-describe('the onboarding interview under the switch', () => {
-  // The interview goes with the rest. Every answer the module gives is for
-  // the installation or for a company, never for an intent, so no door can
-  // ask it per intent.
+describe('no intent is exempt from the switch', () => {
+  // Every answer the module gives is for the installation or for a company,
+  // never for an intent, so no door can ask it per intent.
   it('has no exemption: nothing the module exports takes an intent', () => {
     expect(Object.keys(chatSwitch).sort()).toEqual([
       'assistantChatEnabled',

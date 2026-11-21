@@ -30,6 +30,8 @@ import { validateInk2BlanketterSru } from '@/tests/sru-validators'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { loadBuildingTaxAdjustment, loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import type { TrialBalanceRow } from '@/types'
+import type { INK2Declaration } from '../types'
+import { Ink2SruBlockedError } from '../sru-generator'
 
 const COMPANY_ID = 'company-1'
 const PERIOD_ID = 'period-1'
@@ -100,6 +102,7 @@ function makeSupabase(options?: {
   isClosed?: boolean
   periodStart?: string
   periodEnd?: string
+  accountSruCodes?: Record<string, string | null>
 }): SupabaseStub {
   const closingEntryId =
     options?.closingEntryId === undefined ? CLOSING_ENTRY_ID : options.closingEntryId
@@ -147,6 +150,20 @@ function makeSupabase(options?: {
           }),
         }
       }
+      if (table === 'chart_of_accounts') {
+        const data = Object.entries(options?.accountSruCodes ?? {}).map(
+          ([account_number, sru_code]) => ({ account_number, sru_code }),
+        )
+        return {
+          select: () => ({
+            eq: () => ({
+              order: () => ({
+                range: async () => ({ data, error: null }),
+              }),
+            }),
+          }),
+        }
+      }
       if (table === 'journal_entries') {
         return {
           select: () => ({
@@ -171,6 +188,16 @@ function makeSupabase(options?: {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const anySupabase = (stub: SupabaseStub) => stub as any
 
+/**
+ * The SRU file of a declaration whose fields a test pins. The fixtures here
+ * change one figure at a time without rebalancing the books, so the file's
+ * gate (sruBlockers: an untied balance sheet, a result not on 2099) would
+ * refuse most of them; the gate itself is pinned in its own describe below.
+ */
+function sruOf(declaration: INK2Declaration) {
+  return generateSRUSubmission({ ...declaration, sruBlockers: [] })
+}
+
 function stubTrialBalances(closed: TrialBalanceRow[], preClosing: TrialBalanceRow[]) {
   vi.mocked(generateTrialBalance).mockImplementation(
     async (_supabase, _companyId, _periodId, opts) => ({
@@ -190,6 +217,52 @@ beforeEach(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any)
   stubTrialBalances(CLOSED_ROWS, PRE_CLOSING_ROWS)
+})
+
+describe('generateINK2Declaration: saved account SRU codes', () => {
+  it('maps custom accounts 1398 and 1399 to their saved SRU 7235', async () => {
+    const extraRows = [
+      row('1398', 'Kapitalförsäkring 1', 250_000),
+      row('1399', 'Kapitalförsäkring 2', 150_000),
+      row('2899', 'Övriga skulder', -400_000),
+    ]
+    stubTrialBalances(
+      [...CLOSED_ROWS, ...extraRows],
+      [...PRE_CLOSING_ROWS, ...extraRows],
+    )
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ accountSruCodes: { '1398': '7235', '1399': '7235' } })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.ink2r['7235']).toBe(400_000)
+    expect(result.breakdown['7235'].accounts).toEqual([
+      { accountNumber: '1398', accountName: 'Kapitalförsäkring 1', amount: 250_000 },
+      { accountNumber: '1399', accountName: 'Kapitalförsäkring 2', amount: 150_000 },
+    ])
+    expect(result.warnings.some((w) => w.includes('1398') || w.includes('1399'))).toBe(false)
+    expect(result.totals.totalAssets).toBe(1_012_000)
+    expect(result.totals.totalEquityLiabilities).toBe(1_012_000)
+  })
+
+  it('still warns when a custom account has an unknown SRU code', async () => {
+    const extraRows = [row('1398', 'Kapitalförsäkring', 250_000)]
+    stubTrialBalances(
+      [...CLOSED_ROWS, ...extraRows],
+      [...PRE_CLOSING_ROWS, ...extraRows],
+    )
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ accountSruCodes: { '1398': '9999' } })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.ink2r['7235']).toBe(0)
+    expect(result.warnings.some((w) => w.includes('1398') && w.includes('kunde inte mappas'))).toBe(true)
+  })
 })
 
 describe('generateINK2Declaration: the number it files under', () => {
@@ -319,7 +392,7 @@ describe('generateINK2Declaration: schablonintäkt on periodiseringsfonder (INK2
     expect(result.ink2s['7654']).toBe(3_920)
     expect(result.ink2s['7670']).toBe(509_920)
     expect(result.ink2['7104']).toBe(509_920)
-    const sru = generateSRUSubmission(result).blanketterSru
+    const sru = sruOf(result).blanketterSru
     expect(sru).toContain('#UPPGIFT 7654 3920')
     expect(validateInk2BlanketterSru(sru).errors).toEqual([])
     expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
@@ -331,7 +404,7 @@ describe('generateINK2Declaration: schablonintäkt on periodiseringsfonder (INK2
 
     expect(result.ink2s['7654']).toBe(0)
     expect(result.ink2s['7670']).toBe(506_000)
-    expect(generateSRUSubmission(result).blanketterSru).not.toContain('#UPPGIFT 7654')
+    expect(sruOf(result).blanketterSru).not.toContain('#UPPGIFT 7654')
     expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
   })
 
@@ -347,7 +420,7 @@ describe('generateINK2Declaration: schablonintäkt on periodiseringsfonder (INK2
     // Ends 2026: 200 000 x 2,55 % (statslåneräntan 30 nov 2025) = 5 100.
     expect(result.ink2s['7654']).toBe(5_100)
     expect(result.ink2s['7670']).toBe(511_100)
-    expect(generateSRUSubmission(result).blanketterSru).toContain('#UPPGIFT 7654 5100')
+    expect(sruOf(result).blanketterSru).toContain('#UPPGIFT 7654 5100')
     expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
   })
 
@@ -362,7 +435,7 @@ describe('generateINK2Declaration: schablonintäkt on periodiseringsfonder (INK2
 
     expect(result.ink2s['7654']).toBe(0)
     expect(result.ink2s['7670']).toBe(506_000)
-    expect(generateSRUSubmission(result).blanketterSru).not.toContain('#UPPGIFT 7654')
+    expect(sruOf(result).blanketterSru).not.toContain('#UPPGIFT 7654')
     expect(result.warnings).toContainEqual(expect.stringMatching(/200000 kr vid beskattningsårets ingång.*punkt 4\.6a/))
   })
 })
@@ -487,16 +560,24 @@ describe('generateINK2Declaration: buildings on their tax plan (INK2S 4.9)', () 
 })
 
 describe('generateINK2Declaration: sign-based reclassification', () => {
-  it('presents a skattekonto credit as a skatteskuld, not a negative fordran', async () => {
-    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+  it('presents a skattekonto credit as a skatteskuld even with a non-default saved SRU code', async () => {
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ accountSruCodes: { '1630': '7369', '2641': '7270' } })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
 
     // 2512 − 2518 = 10 000, plus the reclassified 1630 credit of 20 000.
     expect(result.ink2r['7368']).toBe(30_000)
     expect(result.ink2r['7261']).toBeGreaterThanOrEqual(0)
   })
 
-  it('presents an input-VAT debit as a fordran, not a negative skuld', async () => {
-    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+  it('presents an input-VAT debit as a fordran even with a non-default saved SRU code', async () => {
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ accountSruCodes: { '1630': '7369', '2641': '7270' } })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
 
     expect(result.ink2r['7261']).toBe(2_000)
     expect(result.ink2r['7369']).toBe(0)
@@ -884,9 +965,178 @@ describe('generateINK2Declaration: whole-krona drift (#2597)', () => {
     expect(result.ink2r['7410']).toBe(expected)
     expect(result.breakdown['7410'].total).toBe(expected)
 
-    const { blanketterSru } = generateSRUSubmission(result)
+    const { blanketterSru } = sruOf(result)
     expect(validateInk2BlanketterSru(blanketterSru)).toEqual({ isValid: true, errors: [] })
     const revenueFields = blanketterSru.split('\r\n').filter((line) => line.startsWith('#UPPGIFT 7410 '))
     expect(revenueFields).toEqual(expected === 0 ? [] : [`#UPPGIFT 7410 ${expected}`])
+  })
+})
+
+describe('generateINK2Declaration: rows filed beside 4.3c and 4.5c (4.3b, 4.5b)', () => {
+  it('files write-downs of financial assets on 4.3b and dividends on 4.5b, the totals unchanged', async () => {
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      items: [],
+      nonDeductibleExpenses: 34_000,
+      nonTaxableIncome: 12_000,
+      deficitCarryforward: 0,
+      financialWriteDowns: 30_000,
+      dividends: 10_000,
+    })
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2s['7652']).toBe(30_000)
+    expect(result.ink2s['7653']).toBe(4_000)
+    expect(result.ink2s['7753']).toBe(10_000)
+    expect(result.ink2s['7754']).toBe(2_000)
+    // 442 000 + 60 000 tax + 34 000 - 12 000.
+    expect(result.ink2s['7670']).toBe(524_000)
+    const sru = sruOf(result).blanketterSru
+    expect(sru).toContain('#UPPGIFT 7652 30000')
+    expect(sru).toContain('#UPPGIFT 7653 4000')
+    expect(sru).toContain('#UPPGIFT 7753 10000')
+    expect(sru).toContain('#UPPGIFT 7754 2000')
+    expect(validateInk2BlanketterSru(sru).errors).toEqual([])
+  })
+})
+
+describe('generateINK2Declaration: uppräkning on återförda periodiseringsfonder (INK2S 4.6d)', () => {
+  /** A 2019 fond of 60 000 held at the year's start and återförd in this bokslut (8819). */
+  function withReturnedFond(rows: TrialBalanceRow[], preClosing: boolean): TrialBalanceRow[] {
+    return [
+      ...rows,
+      { ...row('2129', 'Periodiseringsfond 2019', 0), opening_credit: 60_000, period_debit: 60_000 },
+      row('8819', 'Återföring från periodiseringsfonder', preClosing ? -60_000 : 0),
+      // The återföring sits in the result, so the closed books carry it on 2099.
+    ].map((r) => (!preClosing && r.account_number === '2099' ? row('2099', 'Årets resultat', -502_000) : r))
+  }
+
+  it('adds 4 % of a fond set aside for 2019 to the taxable result and files it on 7673', async () => {
+    stubTrialBalances(withReturnedFond(CLOSED_ROWS, false), withReturnedFond(PRE_CLOSING_ROWS, true))
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    // The återföring is in the result (7420); 4.6d adds only the 4 %: 2 400.
+    expect(result.ink2r['7420']).toBe(60_000)
+    expect(result.ink2s['7673']).toBe(2_400)
+    // 502 000 + 60 000 tax + 4 000 non-deductible + 60 000 x 1,96 % schablonintäkt (1 176) + 2 400.
+    expect(result.ink2s['7654']).toBe(1_176)
+    expect(result.ink2s['7670']).toBe(569_576)
+    const sru = sruOf(result).blanketterSru
+    expect(sru).toContain('#UPPGIFT 7673 2400')
+    expect(result.warnings.join(' ')).not.toMatch(/4\.6d/)
+  })
+
+  it('leaves 4.6d to the user when the fond year cannot be told, and says so', async () => {
+    stubTrialBalances(withReturnedFond(CLOSED_ROWS, false), withReturnedFond(PRE_CLOSING_ROWS, true))
+
+    // A brutet år with no 2018/19 year in the books: 2129 may be a 2018/19
+    // fond (106 %) or a calendar 2019 one (104 %).
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ periodStart: '2024-07-01', periodEnd: '2025-06-30' })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.ink2s['7673']).toBe(0)
+    expect(result.warnings).toContainEqual(expect.stringMatching(/2018-07-01 eller 2019-01-01.*punkt 4\.6d/))
+  })
+})
+
+describe('generateINK2Declaration: särskild löneskatt (INK2 1.4)', () => {
+  it('files the pension premiums as the underlag on page 1', async () => {
+    const pension = [row('7411', 'Premier för kollektiva pensionsförsäkringar', 50_000), row('7533', 'Särskild löneskatt för pensionskostnader', 12_130)]
+    stubTrialBalances([...CLOSED_ROWS, ...pension.map((r) => row(r.account_number, r.account_name, 0))], [...PRE_CLOSING_ROWS, ...pension])
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2['7132']).toBe(50_000)
+    expect(result.ink2['7133']).toBe(0)
+    const sru = sruOf(result).blanketterSru
+    const page1 = sru.split('#BLANKETT INK2R-')[0]
+    expect(page1).toContain('#UPPGIFT 7132 50000')
+    expect(result.warnings.join(' ')).not.toMatch(/punkt 1\.4/)
+  })
+
+  it('files no underlag without pension costs', async () => {
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(result.ink2['7132']).toBe(0)
+    expect(sruOf(result).blanketterSru).not.toContain('#UPPGIFT 7132')
+  })
+})
+
+describe('generateINK2Declaration: the booked tax against the declared överskott', () => {
+  const TAX_WARNING = 'Skatten är bokförd på ett annat underlag än deklarationen'
+
+  it('warns when 8910 is not 20,6 % of the declared överskott', async () => {
+    // The fixture books 60 000 kr on an överskott of 506 000 kr (tax 104 236 kr).
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(result.warnings).toContainEqual(expect.stringContaining(TAX_WARNING))
+    expect(result.warnings).toContainEqual(expect.stringContaining('(konto 8910) är 60000 kr'))
+    expect(result.warnings).toContainEqual(expect.stringContaining('är 104236 kr'))
+  })
+
+  it('stays silent when the booked tax is the tax on the declared överskott', async () => {
+    // Tax T on a result R before tax of 502 000 + 4 000 non-deductible:
+    // T = 20,6 % of 506 000 = 104 236, so the result after tax is 401 764.
+    const consistent = (rows: TrialBalanceRow[]) =>
+      rows.map((r) => {
+        if (r.account_number === '8910' && r.closing_debit > 0) return row('8910', r.account_name, 104_236)
+        if (r.account_number === '2512') return row('2512', r.account_name, -104_236)
+        if (r.account_number === '2099' && r.closing_credit > 0) return row('2099', r.account_name, -397_764)
+        if (r.account_number === '1930') return row('1930', r.account_name, 610_000 + 44_236 - 44_236)
+        return r
+      })
+    stubTrialBalances(consistent(CLOSED_ROWS), consistent(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2r['7528']).toBe(104_236)
+    expect(result.warnings.some((w) => w.includes(TAX_WARNING))).toBe(false)
+  })
+
+  it('stays silent in an open year whose tax is not booked yet', async () => {
+    const untaxed = (rows: TrialBalanceRow[]) => rows.filter((r) => r.account_number !== '8910' && r.account_number !== '2512')
+    stubTrialBalances(untaxed(PRE_CLOSING_ROWS), untaxed(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ closingEntryId: null, isClosed: false })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.warnings.some((w) => w.includes(TAX_WARNING))).toBe(false)
+  })
+})
+
+describe('generateINK2Declaration: the SRU file is refused when the form does not tie', () => {
+  it('refuses a closed year whose declared result is not the booked 2099', async () => {
+    stubTrialBalances(CLOSED_ROWS, CLOSED_ROWS)
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.sruBlockers).toEqual([expect.stringContaining('stämmer inte med det bokförda resultatet på konto 2099')])
+    expect(() => generateSRUSubmission(result)).toThrow(Ink2SruBlockedError)
+  })
+
+  it('refuses an account no SRU field takes', async () => {
+    // 1 000 kr moved from the bank to 1395, which no INK2R field takes.
+    const withUnmapped = (rows: TrialBalanceRow[]) => [
+      ...rows.map((r) => (r.account_number === '1930' ? row('1930', r.account_name, 609_000) : r)),
+      row('1395', 'Övriga långfristiga fordringar', 1_000),
+    ]
+    stubTrialBalances(withUnmapped(CLOSED_ROWS), withUnmapped(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.sruBlockers).toContainEqual(expect.stringContaining('Konto 1395'))
+    expect(() => generateSRUSubmission(result)).toThrow(Ink2SruBlockedError)
+  })
+
+  it('files the books that tie', async () => {
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.sruBlockers).toEqual([])
+    expect(generateSRUSubmission(result).blanketterSru).toContain('#UPPGIFT 7104')
   })
 })

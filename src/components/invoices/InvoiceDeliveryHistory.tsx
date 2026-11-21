@@ -7,10 +7,7 @@ import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
-import {
-  isDestructiveDeliveryStatus,
-  showsRecipientBreakdown,
-} from '@/lib/invoices/delivery-recipient-statuses'
+import { isDestructiveDeliveryStatus } from '@/lib/invoices/delivery-recipient-statuses'
 import { mergeDeliveryHistory, type MailboxDispatchView } from '@/lib/invoices/digital-mailbox-view'
 import { invoiceArchivedPdfUrl } from '@/lib/invoices/invoice-pdf-source'
 import { PROVIDER_DISPLAY_NAMES } from '@/lib/providers/unfinished-connect'
@@ -152,7 +149,6 @@ export function InvoiceDeliveryHistory({
               delivery.to_addresses.length + delivery.cc_addresses.length
             const recipientStatuses = delivery.provider_recipient_statuses ?? {}
             const hasRecipientStatuses = Object.keys(recipientStatuses).length > 0
-            const showRecipientRows = showsRecipientBreakdown(outcome, recipientStatuses, recipientCount)
             const recipientRows = [
               ...delivery.to_addresses.map((address, index) => ({
                 address,
@@ -242,7 +238,7 @@ export function InvoiceDeliveryHistory({
                               )}
                             </span>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {showRecipientRows
+                              {hasRecipientStatuses
                                 ? t('delivery_recipient_statuses_summary')
                                 : t(`delivery_status_explanation_${outcome}`)}
                             </p>
@@ -261,7 +257,7 @@ export function InvoiceDeliveryHistory({
                           </dd>
                         </>
                       )}
-                      {isEmailSend && showRecipientRows && (
+                      {isEmailSend && hasRecipientStatuses && (
                         <>
                           <dt className="text-muted-foreground">{t('delivery_recipient_statuses_label')}</dt>
                           <dd>
@@ -322,6 +318,12 @@ export function InvoiceDeliveryHistory({
                               <ArrowTopRightOnSquareIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
                             </a>
                           </dd>
+                        </>
+                      )}
+                      {delivery.provider && (
+                        <>
+                          <dt className="text-muted-foreground">{t('delivery_provider_label')}</dt>
+                          <dd className="text-muted-foreground">{delivery.provider}</dd>
                         </>
                       )}
                       {delivery.error_code && (

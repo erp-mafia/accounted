@@ -387,6 +387,77 @@ describe('buildBatchAllocationPreview', () => {
       expect(build(6100)).toThrow(/must equal the transaction amount/)
     })
   })
+
+  // crm#1954 (migration 20261120150000): a supplier payment's rest pays
+  // invoices registered in the bookkeeping kept before, a debit on 2440
+  // after the fee rows, before the bank leg.
+  describe('supplier debt rows', () => {
+    const invoices = {
+      [INV_A]: { currency: 'SEK', remaining_amount: 6000, total: 6000 },
+      [INV_B]: { currency: 'SEK', remaining_amount: 4000, total: 4000 },
+    }
+    const supplierAllocations = [
+      { kind: 'supplier_invoice' as const, supplier_invoice_id: INV_A, amount: 6000 },
+      { kind: 'supplier_invoice' as const, supplier_invoice_id: INV_B, amount: 4000 },
+    ]
+
+    it('Dr 2440 per invoice, the fee, then the old debt; Cr the bank for all of it', () => {
+      const preview = buildBatchAllocationPreview({
+        transaction: { amount: -28546.5, date: '2026-11-18' },
+        bankAccount: '1930',
+        allocations: supplierAllocations,
+        invoices,
+        fees: [{ account: '6570', amount: 25 }],
+        supplierDebts: [{ account: '2440', amount: 18521.5, description: ' Fakturor från tidigare system ' }],
+      })
+      expect(preview.lines).toEqual([
+        { account_number: '2440', description: 'Leverantörsfaktura 1 av 2', debit: 6000, credit: 0 },
+        { account_number: '2440', description: 'Leverantörsfaktura 2 av 2', debit: 4000, credit: 0 },
+        { account_number: '6570', description: 'Avgift betaltjänst', debit: 25, credit: 0 },
+        { account_number: '2440', description: 'Fakturor från tidigare system', debit: 18521.5, credit: 0 },
+        { account_number: '1930', description: 'Utbetalning 2026-11-18', debit: 0, credit: 28546.5 },
+      ])
+      expect(preview.balanced).toBe(true)
+    })
+
+    it('one invoice with a debt row is a samlingsbetalning, with the default text', () => {
+      const preview = buildBatchAllocationPreview({
+        transaction: { amount: -10000, date: '2026-11-18' },
+        bankAccount: '1930',
+        allocations: [supplierAllocations[1]!],
+        invoices,
+        supplierDebts: [{ account: '2440', amount: 6000 }],
+      })
+      expect(preview.description).toBe('Samlingsbetalning 2026-11-18')
+      expect(preview.lines[1]).toEqual({
+        account_number: '2440',
+        description: 'Leverantörsskuld från tidigare bokföring',
+        debit: 6000,
+        credit: 0,
+      })
+    })
+
+    it('refuses a row the debt rows do not meet, and debt rows on a customer batch', () => {
+      expect(() =>
+        buildBatchAllocationPreview({
+          transaction: { amount: -10000, date: '2026-11-18' },
+          bankAccount: '1930',
+          allocations: supplierAllocations,
+          invoices,
+          supplierDebts: [{ account: '2440', amount: 1 }],
+        }),
+      ).toThrow(/must equal the transaction amount/)
+      expect(() =>
+        buildBatchAllocationPreview({
+          transaction: { amount: 10000, date: '2026-11-18' },
+          bankAccount: '1930',
+          allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount: 6000 }],
+          invoices,
+          supplierDebts: [{ account: '2440', amount: 4000 }],
+        }),
+      ).toThrow(/supplier invoices only/)
+    })
+  })
 })
 
 describe('buildBatchAllocationPreview: kontantmetoden cash lines (crm#1539, migration 20261031100700)', () => {

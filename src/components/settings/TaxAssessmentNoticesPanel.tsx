@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { PencilIcon, TrashIcon } from '@/components/icons'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { Button } from '@/components/ui/button'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   SettingsGroup,
   SettingsInput,
@@ -26,6 +28,7 @@ export function TaxAssessmentNoticesPanel() {
   const { toast } = useToast()
   const { canWrite, lockedTitle } = useViewerLock()
   const showError = useErrorToast()
+  const locale = useLocale() as ErrorLocale
   const [notices, setNotices] = useState<TaxAssessmentNotice[]>([])
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null)
   const [decisionType, setDecisionType] = useState<TaxAssessmentDecisionType>('final')
@@ -34,6 +37,12 @@ export function TaxAssessmentNoticesPanel() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  // The list could not be read. The form hides with it: an empty form over a
+  // list that failed to load invites a second notice for the same year.
+  // message: the server's sentence for a 4xx about the company (no retry
+  // helps); null: a failed read, with a retry.
+  const [loadError, setLoadError] = useState<{ message: string | null } | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -41,13 +50,24 @@ export function TaxAssessmentNoticesPanel() {
       try {
         const response = await fetch('/api/tax-assessment-notices')
         if (!response.ok) {
-          if (!cancelled) await showError(response, { context: 'settings' })
+          const body = await response.json().catch(() => null)
+          const aboutCompany = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+          if (!cancelled) {
+            setLoadError({
+              message: aboutCompany
+                ? getErrorMessage(body, { context: 'settings', statusCode: response.status, locale })
+                : null,
+            })
+          }
           return
         }
         const payload = await response.json() as { data: TaxAssessmentNotice[] }
-        if (!cancelled) setNotices(payload.data)
-      } catch (error) {
-        if (!cancelled) await showError(error, { context: 'settings' })
+        if (!cancelled) {
+          setNotices(payload.data)
+          setLoadError(null)
+        }
+      } catch {
+        if (!cancelled) setLoadError({ message: null })
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -55,10 +75,7 @@ export function TaxAssessmentNoticesPanel() {
     return () => {
       cancelled = true
     }
-  // The error helper is recreated with the toast hook. This load should run
-  // once per panel mount, not after every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [reloadKey, locale])
 
   const resetForm = () => {
     setEditingId(null)
@@ -138,95 +155,113 @@ export function TaxAssessmentNoticesPanel() {
     // What this panel is for ("enter the exact payment date from the
     // slutskattebesked") is static guidance: it lives behind the group "?".
     <SettingsGroup label={t('title')} help={t('description')}>
-      <form onSubmit={saveNotice}>
-        <SettingsRow label={t('fiscal_period')}>
-          <FiscalYearSelector
-            value={selectedPeriodId}
-            onChange={(periodId) => setSelectedPeriodId(periodId)}
-            includeAllOption={false}
-            label={null}
-            className="w-full max-w-72"
+      {loadError ? (
+        loadError.message ? (
+          <EmptyState title={loadError.message} className="pt-4" />
+        ) : (
+          <LoadError
+            title={t('load_failed')}
+            onRetry={() => {
+              setLoadError(null)
+              setLoading(true)
+              setReloadKey((key) => key + 1)
+            }}
+            className="pt-4"
           />
-        </SettingsRow>
-        <SettingsRow label={t('decision_type')} htmlFor="tax-assessment-decision-type">
-          <SettingsSelect
-            id="tax-assessment-decision-type"
-            value={decisionType}
-            onChange={(event) => setDecisionType(event.target.value as TaxAssessmentDecisionType)}
-          >
-            <option value="final">{t('decision_final')}</option>
-            <option value="reassessment">{t('decision_reassessment')}</option>
-          </SettingsSelect>
-        </SettingsRow>
-        <SettingsRow
-          label={t('decision_date')}
-          htmlFor="tax-assessment-decision-date"
-          align="baseline"
-        >
-          <SettingsInput
-            id="tax-assessment-decision-date"
-            type="date"
-            required
-            value={decisionDate}
-            onChange={(event) => setDecisionDate(event.target.value)}
-            className="max-w-40 flex-none tabular-nums"
-          />
-        </SettingsRow>
-        <SettingsRow
-          label={t('payment_due_date')}
-          htmlFor="tax-assessment-payment-due-date"
-          help={t('payment_due_date_help')}
-          align="baseline"
-        >
-          <SettingsInput
-            id="tax-assessment-payment-due-date"
-            type="date"
-            required
-            min={decisionDate}
-            value={paymentDueDate}
-            onChange={(event) => setPaymentDueDate(event.target.value)}
-            className="max-w-40 flex-none tabular-nums"
-          />
-        </SettingsRow>
-        <div className="flex flex-wrap gap-2 px-1 py-3">
-          <Button type="submit" disabled={!canWrite || saving || !selectedPeriodId || !paymentDueDate} title={lockedTitle}>
-            {saving ? t('saving') : t(editingId ? 'update_action' : 'save_action')}
-          </Button>
-          {editingId && (
-            <Button type="button" variant="outline" onClick={resetForm} disabled={saving}>
-              {t('cancel')}
-            </Button>
-          )}
-        </div>
-      </form>
+        )
+      ) : (
+        <>
+          <form onSubmit={saveNotice}>
+            <SettingsRow label={t('fiscal_period')}>
+              <FiscalYearSelector
+                value={selectedPeriodId}
+                onChange={(periodId) => setSelectedPeriodId(periodId)}
+                includeAllOption={false}
+                label={null}
+                className="w-full max-w-72"
+              />
+            </SettingsRow>
+            <SettingsRow label={t('decision_type')} htmlFor="tax-assessment-decision-type">
+              <SettingsSelect
+                id="tax-assessment-decision-type"
+                value={decisionType}
+                onChange={(event) => setDecisionType(event.target.value as TaxAssessmentDecisionType)}
+              >
+                <option value="final">{t('decision_final')}</option>
+                <option value="reassessment">{t('decision_reassessment')}</option>
+              </SettingsSelect>
+            </SettingsRow>
+            <SettingsRow
+              label={t('decision_date')}
+              htmlFor="tax-assessment-decision-date"
+              align="baseline"
+            >
+              <SettingsInput
+                id="tax-assessment-decision-date"
+                type="date"
+                required
+                value={decisionDate}
+                onChange={(event) => setDecisionDate(event.target.value)}
+                className="max-w-40 flex-none tabular-nums"
+              />
+            </SettingsRow>
+            <SettingsRow
+              label={t('payment_due_date')}
+              htmlFor="tax-assessment-payment-due-date"
+              help={t('payment_due_date_help')}
+              align="baseline"
+            >
+              <SettingsInput
+                id="tax-assessment-payment-due-date"
+                type="date"
+                required
+                min={decisionDate}
+                value={paymentDueDate}
+                onChange={(event) => setPaymentDueDate(event.target.value)}
+                className="max-w-40 flex-none tabular-nums"
+              />
+            </SettingsRow>
+            <div className="flex flex-wrap gap-2 px-1 py-3">
+              <Button type="submit" disabled={!canWrite || saving || !selectedPeriodId || !paymentDueDate} title={lockedTitle}>
+                {saving ? t('saving') : t(editingId ? 'update_action' : 'save_action')}
+              </Button>
+              {editingId && (
+                <Button type="button" variant="outline" onClick={resetForm} disabled={saving}>
+                  {t('cancel')}
+                </Button>
+              )}
+            </div>
+          </form>
 
-      {/* Registered notices continue as flat hairline rows under the form. */}
-      {!loading && notices.length > 0 && notices.map((notice) => (
-        <div
-          key={notice.id}
-          className="flex flex-col gap-3 border-t-hairline px-1 py-3 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div className="min-w-0">
-            <p className="text-sm">
-              {notice.decision_type === 'final' ? t('decision_final') : t('decision_reassessment')}
-              {notice.fiscal_period?.name ? `: ${notice.fiscal_period.name}` : ''}
-            </p>
-            <SettingsRowNote className="tabular-nums">
-              {t('due_summary', { date: notice.payment_due_date })}
-            </SettingsRowNote>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <Button type="button" variant="outline" onClick={() => editNotice(notice)} disabled={!canWrite || saving} title={lockedTitle}>
-              <PencilIcon className="h-4 w-4" />
-              {t('edit')}
-            </Button>
-            <Button type="button" variant="outline" onClick={() => void archiveNotice(notice)} disabled={!canWrite || saving} title={lockedTitle}>
-              <TrashIcon className="h-4 w-4" />
-              {t('archive')}
-            </Button>
-          </div>
-        </div>
-      ))}
+          {/* Registered notices continue as flat hairline rows under the form. */}
+          {!loading && notices.length > 0 && notices.map((notice) => (
+            <div
+              key={notice.id}
+              className="flex flex-col gap-3 border-t-hairline px-1 py-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <p className="text-sm">
+                  {notice.decision_type === 'final' ? t('decision_final') : t('decision_reassessment')}
+                  {notice.fiscal_period?.name ? `: ${notice.fiscal_period.name}` : ''}
+                </p>
+                <SettingsRowNote className="tabular-nums">
+                  {t('due_summary', { date: notice.payment_due_date })}
+                </SettingsRowNote>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button type="button" variant="outline" onClick={() => editNotice(notice)} disabled={!canWrite || saving} title={lockedTitle}>
+                  <PencilIcon className="h-4 w-4" />
+                  {t('edit')}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => void archiveNotice(notice)} disabled={!canWrite || saving} title={lockedTitle}>
+                  <TrashIcon className="h-4 w-4" />
+                  {t('archive')}
+                </Button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
     </SettingsGroup>
   )
 }

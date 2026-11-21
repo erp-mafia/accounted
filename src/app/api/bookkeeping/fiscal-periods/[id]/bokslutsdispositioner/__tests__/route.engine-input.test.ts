@@ -43,6 +43,7 @@ vi.mock('@/lib/bokslut/dispositions-proposal-builder', async (importOriginal) =>
   ateforingDispositions: vi.fn(),
   avsattningDisposition: vi.fn(),
   bolagsskattDisposition: vi.fn(),
+  fondUppraekning: vi.fn(() => ({ amount: 0, reversed: 0, rows: [], warnings: [] })),
 }))
 vi.mock('@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator', () => ({ calculateSarskildLoneskatt: vi.fn() }))
 vi.mock('@/lib/bokslut/reserves/overavskrivningar-calculator', () => ({ calculateOveravskrivningar: vi.fn() }))

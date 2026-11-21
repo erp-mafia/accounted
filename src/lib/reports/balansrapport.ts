@@ -100,14 +100,33 @@ export async function generateBalansrapport(
   const effectiveFromDate = options?.fromDate ?? period.period_start
   const effectiveToDate = options?.toDate ?? period.period_end
 
-  const entityType = await resolveCompanyEntityType(supabase, companyId)
+  // Reconciliation aid for the header: which vouchers are actually in here.
+  // The balansrapport accumulates from the fiscal year start, so the window has
+  // no lower bound beyond fiscal_period_id even when the user narrows fromDate.
+  // Best-effort: a header nicety never breaks the report.
+  const readLatestVouchers = async (): Promise<LatestVoucherPerSeries[]> => {
+    try {
+      return await getLatestPostedVouchers(supabase, companyId, fiscalPeriodId, {
+        toDate: effectiveToDate,
+      })
+    } catch {
+      // Best-effort header line only.
+      return []
+    }
+  }
 
-  const trialBalance = await generateTrialBalanceWithYearOpening(supabase, companyId, fiscalPeriodId, {
-    // Class 1-2 only, and 2099 must carry årets resultat.
-    closingEntry: 'include',
-    fromDate: options?.fromDate,
-    toDate: options?.toDate,
-  })
+  // Independent reads, one round instead of three in a row (the report page
+  // waits on all of them).
+  const [entityType, trialBalance, latestVouchers] = await Promise.all([
+    resolveCompanyEntityType(supabase, companyId),
+    generateTrialBalanceWithYearOpening(supabase, companyId, fiscalPeriodId, {
+      // Class 1-2 only, and 2099 must carry årets resultat.
+      closingEntry: 'include',
+      fromDate: options?.fromDate,
+      toDate: options?.toDate,
+    }),
+    readLatestVouchers(),
+  ])
   const balanceRows = trialBalance.rows.filter((r) => r.account_class === 1 || r.account_class === 2)
 
   // Forms that prepare an årsredovisning split equity into bundet and fritt
@@ -167,19 +186,6 @@ export async function generateBalansrapport(
   const imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined = trialBalance.isBalanced
     ? undefined
     : buildImbalanceDiagnosis(roundOre(trialBalance.totalDebit - trialBalance.totalCredit)) ?? undefined
-
-  // Reconciliation aid for the header: which vouchers are actually in here.
-  // The balansrapport accumulates from the fiscal year start, so the window has
-  // no lower bound beyond fiscal_period_id even when the user narrows fromDate.
-  // Best-effort: a header nicety never breaks the report.
-  let latestVouchers: LatestVoucherPerSeries[] = []
-  try {
-    latestVouchers = await getLatestPostedVouchers(supabase, companyId, fiscalPeriodId, {
-      toDate: effectiveToDate,
-    })
-  } catch {
-    // Best-effort header line only.
-  }
 
   return {
     groups,

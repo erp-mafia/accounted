@@ -5,7 +5,7 @@ import {
   getDashboardCompanyId,
   getResolvedDashboardAgentProfile,
 } from '../request-context'
-import { chatSwitchedOnFor } from './chat-switch'
+import { CONNECT_AGENT_HREF, chatSwitchedOnFor } from './chat-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,15 +23,16 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
 
   // The built-in assistant switched off for the company
   // (ASSISTANT_CHAT_ENABLED): /chat shows what took its place and every other
-  // chat page leads there, built agent or not, so nobody is sent into the
-  // build from here and the conversation list is never read.
+  // chat page leads there, built agent or not, and the conversation list is
+  // never read.
   if (!chatSwitchedOnFor(companyId)) return <>{children}</>
 
-  // Until the agent is built, the Assistent entry leads to building it
-  // (crm#1135): the build ends in /chat/intake, and the build page itself
-  // sends a company without the ai capability to billing. Forwarding to Hem
-  // instead left a new account with no visible way to the assistant at all.
-  if (!agent?.verified_at) redirect('/onboarding/agent')
+  // The chat is for a company whose assistant was built (agent_profiles
+  // .verified_at). The build is removed, so a company without one has no chat
+  // to open: it is led to Koppla en agent, where its own assistant connects.
+  // Forwarding to Hem instead left a new account with no visible way to an
+  // assistant at all (crm#1135).
+  if (!agent?.verified_at) redirect(CONNECT_AGENT_HREF)
 
   const { data: conversations } = await supabase
     .from('agent_conversations')

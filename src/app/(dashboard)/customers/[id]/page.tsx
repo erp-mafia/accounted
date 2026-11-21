@@ -202,7 +202,14 @@ export default function CustomerDetailPage({
       })
 
       if (!response.ok) {
-        throw new Error('Update failed')
+        // The server's sentence says why (a duplicate org number, a field it
+        // refused), not only that it failed.
+        toast({
+          title: t('update_failed_title'),
+          description: await getResponseErrorMessage(response, 'customer', errorLocale),
+          variant: 'destructive',
+        })
+        return
       }
 
       toast({
@@ -213,10 +220,10 @@ export default function CustomerDetailPage({
       // Every customer picker reads the cached register: refresh it now.
       void invalidateReferenceData('ref:customers')
       fetchCustomer()
-    } catch {
+    } catch (error) {
       toast({
         title: t('update_failed_title'),
-        description: t('retry'),
+        description: getErrorMessage(error, { context: 'customer', locale: errorLocale, fallback: t('retry') }),
         variant: 'destructive',
       })
     } finally {

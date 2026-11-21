@@ -45,6 +45,10 @@ const DIRECT_WRITES_WITHOUT_KEY: Record<string, string> = {
   gnubok_remember_fact:
     'Content dedupe: a fact within Jaccard 0.82 of a stored one returns the stored fact instead of writing a second row.',
   gnubok_forget_fact: 'Sets is_active=false on one fact: a repeat leaves it inactive.',
+  gnubok_ask_question:
+    'One question per company and set of evidence records (unique fingerprint): a repeat answers COMPANY_QUESTION_ALREADY_ASKED and writes nothing.',
+  gnubok_close_question:
+    'Closes an open question only (the write filters on status open): a repeat answers COMPANY_QUESTION_ALREADY_ENDED and writes nothing.',
   gnubok_feedback:
     'Telemetry to event_log, rate-limited 1 per 60 s per actor: a duplicate report reaches the product team twice and nothing reaches the books.',
   gnubok_create_document_upload:
@@ -59,6 +63,8 @@ const DIRECT_WRITES_WITHOUT_KEY: Record<string, string> = {
     'Sets the decision with a compare-and-set on the current quote_status: a repeat writes the same status and keeps quote_decided_at.',
   gnubok_set_inbox_extracted_data: 'Overwrites the inbox item\'s extracted fields: a repeat writes the same values.',
   gnubok_resolve_missing: 'Closes one open finding: a repeat finds it closed and changes nothing.',
+  gnubok_formation:
+    'save merges the same answers into the one open formation, submitted writes the same deed date, and setup records each finished step in setup_state and answers the company already set up: a repeat writes nothing twice.',
   gnubok_withdraw_pending_operation:
     'A compare-and-set on status pending: a repeat finds the operation withdrawn, answers already_withdrawn and writes nothing.',
 }

@@ -161,7 +161,7 @@ describe('downloadFile', () => {
     expect(result).toEqual({
       ok: false,
       reason: 'network',
-      message: 'Något gick fel. Försök igen.',
+      message: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
     })
   })
 

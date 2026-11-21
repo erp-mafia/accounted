@@ -27,7 +27,8 @@ import { defineOperation, type OperationContext, type OperationOutcome } from '.
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
 
 async function gated<T>(ctx: OperationContext, run: () => Promise<OperationOutcome<T>>): Promise<OperationOutcome<T>> {
-  const code = await bolagetGate(ctx.supabase, ctx.companyId)
+  // The register operations (aktiebok, roles, signatory rules, beneficial owners).
+  const code = await bolagetGate(ctx.supabase, ctx.companyId, 'registers')
   if (code) return { ok: false, code }
   return run()
 }

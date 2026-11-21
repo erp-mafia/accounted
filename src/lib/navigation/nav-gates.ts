@@ -47,8 +47,15 @@ export interface NavGateContext {
   inkorgV2Enabled: boolean
   /** The company is in the Autogiro rollout (lib/invoices/autogiro/flag.ts). */
   autogiroEnabled: boolean
-  /** The company is in the Bolaget rollout (lib/env/bolaget-switch.ts). Absent reads as off. */
+  /**
+   * The Bolaget registers are open: the rollout (lib/env/bolaget-switch.ts) or
+   * a company set up from a formation. Absent reads as off.
+   */
   bolagetEnabled?: boolean
+  /** The rest of Bolaget (meetings, capital, owner tax): the rollout alone. Absent reads as off. */
+  bolagetMoneyEnabled?: boolean
+  /** The question list is switched on for the company (lib/env/company-questions-switch.ts). Absent reads as off. */
+  companyQuestionsEnabled?: boolean
   /** The MCP server extension is built in (ENABLED_EXTENSION_IDS): the Koppla en agent row. Absent reads as off. */
   mcpExtensionEnabled?: boolean
   /**
@@ -127,7 +134,10 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   // The two halves of Bolaget, for a row that opens one of them (the new
   // shell's Företaget area): the same rule as the tab bar (lib/bolaget/hub.ts).
   if (item.requiresBolagetRegisters && !(ctx.bolagetEnabled && keepsShareRegister(ctx.entityType))) return false
+  if (item.requiresBolagetMoney && !(ctx.bolagetMoneyEnabled && keepsShareRegister(ctx.entityType))) return false
   if (item.requiresCommitments && !ctx.commitmentsEnabled) return false
+  // The question list rolls out per company; outside the rollout its page 404s.
+  if (item.requiresCompanyQuestions && !ctx.companyQuestionsEnabled) return false
   if (item.requiresMcpExtension && !ctx.mcpExtensionEnabled) return false
   // The Agenter page is hidden in production while it is finished.
   if (item.requiresAgents && !ctx.agentsEnabled) return false
@@ -154,8 +164,8 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   if (item.byraOnly) return false
   // The Chatt (/chat) entry has one gate, the installation's chat switch
   // (ASSISTANT_CHAT_ENABLED): switched off, the chat is not offered. While it
-  // is on, a new account always sees the entry: before the agent is built it
-  // leads to building it (chat/layout).
+  // is on, every account sees the entry: for a company without a built
+  // assistant it leads to Koppla en agent (chat/layout).
   if (item.requiresAssistantChat && ctx.assistantChatEnabled === false) return false
   return true
 }

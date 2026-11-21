@@ -4,6 +4,8 @@ import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { LoadError } from '@/components/ui/empty-state'
+import { SupportLink } from '@/components/ui/support-link'
 import { useToast } from '@/components/ui/use-toast'
 import {
   SettingsGroup,
@@ -15,6 +17,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { peppolReceivingOn } from '@/lib/invoices/peppol-access'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { useLocale } from 'next-intl'
 
 interface PeppolRegistrationView {
@@ -192,16 +195,35 @@ export function PeppolReceiveSettings() {
       ? t('status_pending_stale')
       : t(`status_${registration.status}`)
 
+  // A read that failed says so with a retry: what the company has is not
+  // known, so no row below may be offered from a stale or empty state.
+  if (loadFailed) {
+    return (
+      <SettingsGroup label={t('heading')}>
+        <LoadError title={t('load_failed')} onRetry={() => void load()} className="pt-4" />
+      </SettingsGroup>
+    )
+  }
+
   return (
     <SettingsGroup label={t('heading')}>
       <SettingsRow label={t('access_label')} align="baseline">
         <div className="min-w-0 flex-1 space-y-2 text-sm">
-          {loadFailed ? (
-            <SettingsRowNote>{t('load_failed')}</SettingsRowNote>
-          ) : state === null ? (
+          {state === null ? (
             <SettingsRowNote>{t('loading')}</SettingsRowNote>
           ) : !transportAvailable ? (
-            <SettingsRowNote>{t('provider_required')}</SettingsRowNote>
+            // Why, and the way on: on a self-hosted installation the one who
+            // runs it connects an access point; on the hosted one, support.
+            <SettingsRowNote>
+              {t('provider_required')}{' '}
+              {isSelfHosted() ? (
+                t('provider_required_self_hosted')
+              ) : (
+                <SupportLink variant="inline" className="text-xs" subject={t('provider_required_support_subject')}>
+                  {t('provider_required_support')}
+                </SupportLink>
+              )}
+            </SettingsRowNote>
           ) : (
             <div className="space-y-1">
               <span className="block">{accessLine}</span>

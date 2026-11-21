@@ -155,6 +155,10 @@ interface Props {
   /** Fired on mount and whenever the form gains or loses unsaved input, so a
    *  host dialog can let Escape close it only while nothing would be lost. */
   onHasContentChange?: (hasContent: boolean) => void
+  /** Fired on mount and whenever the attached files change (a drop, a
+   *  finished upload, a removal, the reset after a save), so a host dialog
+   *  can show the underlag beside the rows. The form keeps the list. */
+  onUploadedFilesChange?: (files: UploadedFile[]) => void
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
@@ -183,6 +187,7 @@ export default function JournalEntryForm({
   cashAccountId,
   onDuplicateMatched,
   onHasContentChange,
+  onUploadedFilesChange,
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -335,6 +340,9 @@ export default function JournalEntryForm({
   useEffect(() => {
     onHasContentChange?.(hasContent)
   }, [hasContent, onHasContentChange])
+  useEffect(() => {
+    onUploadedFilesChange?.(uploadedFiles)
+  }, [uploadedFiles, onUploadedFilesChange])
 
   // Resolve + set the default voucher series for a source type from the cached
   // company config: prefer the per-source-type mapping, fall back to the legacy

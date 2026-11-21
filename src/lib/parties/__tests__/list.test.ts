@@ -10,7 +10,6 @@ function party(over: Partial<RegisterRow> & { id: string; displayName: string })
     status: 'confirmed',
     roles: { customerId: null, supplierId: null },
     stats: null,
-    invoiceCount: 0,
     reason: null,
     similar: [],
     defaultRoles: ['supplier'],

@@ -41,7 +41,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { AttnLine } from '@/components/ui/attn-line'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { EmptyState, LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
@@ -136,6 +136,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [chain, setChain] = useState<JournalEntry[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // A verifikat that does not exist (404) is not a failed read to retry.
+  const [notFound, setNotFound] = useState(false)
   const [showCorrection, setShowCorrection] = useState(false)
   const [showCorrectIB, setShowCorrectIB] = useState(false)
   const [showSplitIB, setShowSplitIB] = useState(false)
@@ -215,6 +217,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const fetchData = useCallback(async () => {
     setIsLoading(true)
     setError(null)
+    setNotFound(false)
     try {
       const [chainRes, refsRes, retagRes, rattelseRes] = await Promise.all([
         fetch(`/api/bookkeeping/journal-entries/${id}/chain`),
@@ -229,6 +232,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       if (rattelseRes.ok) {
         const rattelsePayload = await rattelseRes.json()
         setRattelseLog(Array.isArray(rattelsePayload.data) ? rattelsePayload.data : [])
+      }
+      if (chainRes.status === 404) {
+        setEntry(null)
+        setNotFound(true)
+        return
       }
       if (!chainRes.ok) {
         const failure = await chainRes.json().catch(() => null)
@@ -421,15 +429,25 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   if (error || !entry) {
     return (
       <div className="space-y-8">
-        <Link
-          href={listHref}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeftIcon className="h-4 w-4" />
-          {t('back')}
-        </Link>
+        {/* NotFoundState carries the way back itself. */}
+        {!notFound && (
+          <Link
+            href={listHref}
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowLeftIcon className="h-4 w-4" />
+            {t('back')}
+          </Link>
+        )}
         {error ? (
           <LoadError title={error} onRetry={() => void fetchData()} />
+        ) : notFound ? (
+          <NotFoundState
+            title={t('error_not_found')}
+            description={t('not_found_hint')}
+            backHref={listHref}
+            backLabel={t('back')}
+          />
         ) : (
           <EmptyState title={t('error_not_found')} />
         )}

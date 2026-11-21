@@ -53,8 +53,6 @@ export interface RegisterRow {
   status: 'confirmed' | 'suggested'
   roles: PartyRoleLink
   stats: LedgerStats | null
-  /** Sales invoices for a customer role; supplier invoices for a supplier role. */
-  invoiceCount: number
   reason: SuggestionReason | null
   /** Live parties sharing this party's core name: a merge question, never a merge. */
   similar: Array<{ id: string; displayName: string }>
@@ -259,7 +257,7 @@ export async function getRegister(
       .order('id', { ascending: true })
       .range(from, to),
   )
-  const [parties, customers, suppliers, observed, customerCounts, supplierCounts, countryFacts] = await Promise.all([
+  const [parties, customers, suppliers, observed, countryFacts] = await Promise.all([
     partiesRead,
     // Every paged read below orders on its unique id: paging without a total
     // order duplicates or skips rows on a page boundary, and the counts drift.
@@ -280,12 +278,6 @@ export async function getRegister(
         limit: OBSERVED_PARTIES_MAX,
         keys: ps.filter((p) => !p.archived_at).flatMap((p) => p.alias_keys),
       }),
-    ),
-    fetchAllRows<{ customer_id: string }>(({ from, to }) =>
-      supabase.from('invoices').select('customer_id').eq('company_id', companyId).not('customer_id', 'is', null).order('id').range(from, to),
-    ),
-    fetchAllRows<{ supplier_id: string }>(({ from, to }) =>
-      supabase.from('supplier_invoices').select('supplier_id').eq('company_id', companyId).not('supplier_id', 'is', null).order('id').range(from, to),
     ),
     fetchAllRows<{ party_id: string; value: unknown; recorded_at: string }>(({ from, to }) =>
       supabase
@@ -310,10 +302,6 @@ export async function getRegister(
   for (const c of customers) if (c.party_id && !customerByParty.has(c.party_id)) customerByParty.set(c.party_id, c.id)
   const supplierByParty = new Map<string, string>()
   for (const s of suppliers) if (s.party_id && !supplierByParty.has(s.party_id)) supplierByParty.set(s.party_id, s.id)
-  const invoicesByCustomer = new Map<string, number>()
-  for (const r of customerCounts) invoicesByCustomer.set(r.customer_id, (invoicesByCustomer.get(r.customer_id) ?? 0) + 1)
-  const invoicesBySupplier = new Map<string, number>()
-  for (const r of supplierCounts) invoicesBySupplier.set(r.supplier_id, (invoicesBySupplier.get(r.supplier_id) ?? 0) + 1)
 
   const observedByKey = new Map(observed.map((o) => [o.key, o]))
   const claimedKeys = new Set<string>()
@@ -344,7 +332,6 @@ export async function getRegister(
       status: p.status,
       roles: { customerId, supplierId },
       stats,
-      invoiceCount: (customerId ? (invoicesByCustomer.get(customerId) ?? 0) : 0) + (supplierId ? (invoicesBySupplier.get(supplierId) ?? 0) : 0),
       reason: p.status === 'suggested' ? p.suggested_reason : null,
       similar: similarById.get(p.id) ?? [],
       defaultRoles: p.kind === 'person' ? ['customer'] : defaultRoles(stats),
@@ -446,8 +433,20 @@ export interface Dossier {
  * The dossier for one party. A dismissed (archived) party is hidden here as
  * it is in the register; a merged party resolves to its survivor, so a
  * stale link lands on the right dossier instead of a dead one.
+ *
+ * `period` is the window of the ledger stats, the one the register list is
+ * looking at: Parter opens a party from its 12-month view and labels the
+ * money "senaste 12 mån", which the numbers now are. 'all' (the default, for
+ * the other callers) is the whole history, which for a company with years of
+ * vouchers is the slowest read the page makes.
  */
-export async function getDossier(supabase: SupabaseClient, companyId: string, partyId: string, hops = 0): Promise<Dossier | null> {
+export async function getDossier(
+  supabase: SupabaseClient,
+  companyId: string,
+  partyId: string,
+  hops = 0,
+  period: RegisterPeriod = 'all',
+): Promise<Dossier | null> {
   const { data: party, error } = await supabase
     .from('parties')
     .select('id, display_name, legal_name, org_number, vat_number, kind, status, alias_keys, suggested_reason, created_at, merged_into, archived_at')
@@ -462,7 +461,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
     const { data: survivor, error: chainError } = await supabase.rpc('canonical_party_id', { p_party_id: p.id })
     if (chainError) throw new Error(`canonical_party_id failed: ${chainError.message}`)
     if (!survivor || survivor === p.id) return null
-    return getDossier(supabase, companyId, survivor as string, hops + 1)
+    return getDossier(supabase, companyId, survivor as string, hops + 1, period)
   }
   if (p.archived_at) return null
 
@@ -491,7 +490,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
     supabase.from('suppliers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
     // This party's keys by name, whatever their rank; the one ranked key the
     // RPC always returns is filtered out below.
-    getObservedParties(supabase, companyId, { limit: 1, keys: p.alias_keys }),
+    getObservedParties(supabase, companyId, { fromDate: periodStart(period), limit: 1, keys: p.alias_keys }),
   ])
   for (const r of [facts, identities, decisions]) if (r.error) throw new Error(`dossier read failed: ${r.error.message}`)
 
@@ -560,7 +559,6 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       aliasKeys: p.alias_keys,
       roles: { customerId: (customer.data as { id: string } | null)?.id ?? null, supplierId: (supplier.data as { id: string } | null)?.id ?? null },
       stats,
-      invoiceCount: 0,
       reason,
       similar: similar.map((s) => ({ id: s.id, displayName: s.displayName })),
       defaultRoles: p.kind === 'person' ? ['customer'] : defaultRoles(stats),

@@ -108,19 +108,26 @@ export function rowsAgainstInvoiceTotals(input: {
  * The editor's cross-check: how far the invoice's Fakturabelopp and Moms sit
  * from the rows' payable and moms. A figure the invoice does not state has no
  * difference; the Fakturabelopp matches only when there is one.
+ *
+ * With begränsat momsavdrag the Moms field may hold either the moms the
+ * invoice charges (`totalVat`) or the moms the rows deduct
+ * (`deductibleVat`, crm#1954): both match.
  */
 export function invoiceTotalsCrosscheck(input: {
   invoiceTotal: number | null
   invoiceVat: number | null
   toPay: number
   totalVat: number
+  deductibleVat?: number
 }) {
   const totalDiff = input.invoiceTotal == null ? null : roundOre(input.invoiceTotal - input.toPay)
   const vatDiff = input.invoiceVat == null ? null : roundOre(input.invoiceVat - input.totalVat)
+  const deductibleMatches = input.invoiceVat != null && input.deductibleVat != null &&
+    isZeroOre(roundOre(input.invoiceVat - input.deductibleVat))
   return {
     totalDiff,
     totalMatches: totalDiff != null && isZeroOre(totalDiff),
     vatDiff,
-    vatMatches: vatDiff == null || isZeroOre(vatDiff),
+    vatMatches: vatDiff == null || isZeroOre(vatDiff) || deductibleMatches,
   }
 }

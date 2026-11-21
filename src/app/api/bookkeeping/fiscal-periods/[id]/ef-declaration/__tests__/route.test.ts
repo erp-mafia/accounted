@@ -37,6 +37,9 @@ const PREVIEW: EfDeclarationPreview = {
   ],
   pfondFonder: [],
   rutor: {
+    R12: 130_000,
+    R13: 0,
+    R14: 0,
     R29: 130_000,
     R30: 0,
     R31: 0,

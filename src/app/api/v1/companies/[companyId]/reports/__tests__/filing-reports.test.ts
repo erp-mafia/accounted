@@ -153,13 +153,14 @@ function useClient(tables: Record<string, TableResp | TableResp[]>) {
 function ink2Declaration() {
   return {
     fiscalYear: { id: PERIOD_ID, name: '2025', start: '2025-01-01', end: '2025-12-31', isClosed: true },
-    ink2: { '7011': '20250101', '7012': '20251231', '7104': 1000, '7114': 0 },
+    ink2: { '7011': '20250101', '7012': '20251231', '7104': 1000, '7114': 0, '7132': 0, '7133': 0 },
     ink2r: { '7410': 5000 },
     ink2s: { '7650': 1000 },
     breakdown: {},
     totals: { totalAssets: 1, totalEquityLiabilities: 1, operatingResult: 1, aretsResultat: 1 },
     companyInfo: { companyName: 'Testbolaget AB', orgNumber: '556677-8899', entityType: 'aktiebolag', addressLine1: 'Gatan 1', postalCode: '11122', city: 'Stockholm', email: null },
     warnings: [],
+    sruBlockers: [],
   }
 }
 
@@ -172,6 +173,10 @@ function neDeclaration() {
     warnings: [`Kontrollera ${PNR} mot Skatteverket`],
     bookedResult: 480000,
     sruBlockers: [],
+    balans: { B1: 0, B2: 0, B3: 0, B4: 0, B5: 0, B6: 0, B7: 0, B8: 0, B9: 0, B10: 0, B11: 0, B12: 0, B13: 0, B14: 0, B15: 0, B16: 0 },
+    balansBreakdown: Object.fromEntries(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15', 'B16'].map((b) => [b, { accounts: [], total: 0 }])) as never,
+    sida2: { R12: 480000, R13: 0, R14: 0 },
+    sida2Breakdown: { R13: { items: [], total: 0 }, R14: { items: [], total: 0 } },
   }
 }
 
@@ -255,6 +260,17 @@ describe('GET /reports/ink2 and /reports/ink2/sru', () => {
     expect(body.data.fiscalYear.id).toBeUndefined()
     expect(body.data.companyInfo.orgNumber).toBe('556677-8899')
     expect(body.data.sru_file.download).toBe(`/api/v1/companies/${COMPANY_ID}/reports/ink2/sru?period_id=${PERIOD_ID}`)
+  })
+
+  it('422 TAX_DECL_INK2_SRU_BLOCKED when the form does not tie to the books, with the reason', async () => {
+    useClient({ fiscal_periods: PERIOD, company_settings: AB })
+    const blocker = 'Konto 1395 (Övriga långfristiga fordringar) kunde inte mappas till ett SRU-fält.'
+    m.ink2.mockResolvedValue({ ...ink2Declaration(), sruBlockers: [blocker] })
+    const res = await get(getInk2Sru, `/reports/ink2/sru?period_id=${PERIOD_ID}`)
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.error.code).toBe('TAX_DECL_INK2_SRU_BLOCKED')
+    expect(JSON.stringify(body.error)).toContain('Konto 1395')
   })
 
   it('500 TAX_DECL_GENERATION_FAILED when the generator throws', async () => {

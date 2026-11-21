@@ -636,6 +636,14 @@ export const DEDUCTION_LINE_ERRORS = {
     'Grön teknik kan inte kombineras med ROT- eller RUT-rader på samma faktura: Skatteverket prövar dem i olika e-tjänster och ger inte båda för samma arbete. Dela upp i separata fakturor.',
 } as const
 
+/**
+ * A skattereduktion is claimed on a faktura only: a quote, a proforma and a
+ * delivery note store none, so a line that claims one there is refused
+ * (buildInvoiceWriteData) instead of being saved without the claim.
+ */
+export const DEDUCTION_INVOICE_ONLY_ERROR =
+  'Skattereduktion (ROT, RUT, grön teknik) kan bara anges på en faktura, inte på en offert, proforma eller följesedel. Ta bort avdraget från raderna och lägg det på fakturan.'
+
 /** Invoice-level grön teknik prerequisites (validateInvoice). */
 export const GRON_TEKNIK_INVOICE_ERRORS = {
   personnummerMissing: 'Personnummer krävs för skattereduktion för grön teknik.',

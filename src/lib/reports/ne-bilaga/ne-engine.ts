@@ -1,19 +1,24 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { loadBookedTaxAdjustments } from '@/lib/reports/tax-adjustments'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre, truncateToWholeKronor } from '@/lib/money'
 import { companyIdentityFrom } from '@/lib/company/org-number'
 import type { FiscalPeriod } from '@/types'
 import type {
+  NEBalansRuta,
+  NEBalansRutor,
   NEDeclaration,
   NEDeclarationRutor,
   NEAccountRange,
   NERuta,
 } from './types'
+import { NE_ASSET_RUTOR, NE_LIABILITY_RUTOR } from './types'
 
 /**
- * NE-bilaga (enskild näringsidkare): BAS account balances to rutor R1-R11.
+ * NE-bilaga (enskild näringsidkare): BAS account balances to rutor R1-R11
+ * and the balansräkning B1-B16 (NE_BALANCE_RANGES below).
  *
  * Source: BAS kopplingstabell "NE - Inkomst av näringsverksamhet, Enskilda
  * näringsidkare - övriga" (NE_EJ_K1-Intervall-231002.xlsx, konton i BAS 2023,
@@ -121,6 +126,101 @@ export const NE_ACCOUNT_RANGES: readonly NEAccountRange[] = [
 ]
 
 const REVENUE_RUTOR: ReadonlySet<NERuta> = new Set<NERuta>(['R1', 'R2', 'R3', 'R4'])
+
+/**
+ * Balansräkning B1-B16 from the same BAS kopplingstabell (NE_EJ_K1, konton i
+ * BAS 2023). Disjoint and sorted. B10 Eget kapital lists 201x and 205x, but
+ * the form defines it as tillgångar - skulder, so it is computed, not summed.
+ * B14 Skatteskulder lists no account ("Inget redovisas här"): an enskild
+ * firma's tax is the owner's own. A balance account no range covers (25xx,
+ * 240x, 202x-204x, 206x-209x) is named in a warning and stays out of B11-B16,
+ * which leaves it inside B10.
+ */
+export const NE_BALANCE_RANGES: ReadonlyArray<{ start: string; end: string; ruta: NEBalansRuta }> = [
+  { start: '1000', end: '1099', ruta: 'B1' },
+  { start: '1100', end: '1129', ruta: 'B2' },
+  { start: '1130', end: '1149', ruta: 'B3' },
+  { start: '1150', end: '1179', ruta: 'B2' },
+  { start: '1180', end: '1189', ruta: 'B3' },
+  { start: '1190', end: '1199', ruta: 'B2' },
+  { start: '1200', end: '1290', ruta: 'B4' },
+  { start: '1291', end: '1291', ruta: 'B3' },
+  { start: '1292', end: '1299', ruta: 'B4' },
+  { start: '1300', end: '1399', ruta: 'B5' },
+  { start: '1400', end: '1499', ruta: 'B6' },
+  { start: '1500', end: '1599', ruta: 'B7' },
+  { start: '1600', end: '1899', ruta: 'B8' },
+  { start: '1900', end: '1999', ruta: 'B9' },
+  { start: '2010', end: '2019', ruta: 'B10' },
+  { start: '2050', end: '2059', ruta: 'B10' },
+  { start: '2100', end: '2199', ruta: 'B11' },
+  { start: '2200', end: '2299', ruta: 'B12' },
+  { start: '2300', end: '2399', ruta: 'B13' },
+  { start: '2410', end: '2419', ruta: 'B13' },
+  { start: '2420', end: '2439', ruta: 'B16' },
+  { start: '2440', end: '2449', ruta: 'B15' },
+  { start: '2450', end: '2459', ruta: 'B16' },
+  { start: '2460', end: '2479', ruta: 'B15' },
+  { start: '2480', end: '2489', ruta: 'B13' },
+  { start: '2490', end: '2499', ruta: 'B16' },
+  { start: '2600', end: '2999', ruta: 'B16' },
+]
+
+/** The balansräkning row a balance account goes to, or null when no range covers it. */
+export function neBalansRutaForAccount(accountNumber: string): NEBalansRuta | null {
+  if (!isAccountNumber(accountNumber)) return null
+  return NE_BALANCE_RANGES.find((r) => accountNumber >= r.start && accountNumber <= r.end)?.ruta ?? null
+}
+
+const BALANS_RUTOR: readonly NEBalansRuta[] = [...NE_ASSET_RUTOR, 'B10', ...NE_LIABILITY_RUTOR]
+
+/**
+ * B1-B16 from balance accounts' closing balances (debit-positive). Assets
+ * are filed debit-positive, B11-B16 credit-positive, each row in whole
+ * kronor with the öre dropped; B10 is the difference of those rows, so the
+ * balansräkning the form shows always ties. Year-end's result transfer only
+ * moves the result between 2010 and the result accounts, so the pre-closing
+ * books give the same assets and liabilities as the closed ones.
+ */
+export function neBalansFromBalances(
+  balances: ReadonlyMap<string, number>,
+  accountNames: ReadonlyMap<string, string>,
+): {
+  balans: NEBalansRutor
+  breakdown: NEDeclaration['balansBreakdown']
+  unmapped: Array<{ accountNumber: string; accountName: string; balance: number }>
+} {
+  const raw = Object.fromEntries(BALANS_RUTOR.map((ruta) => [ruta, 0])) as Record<NEBalansRuta, number>
+  const breakdown = Object.fromEntries(
+    BALANS_RUTOR.map((ruta) => [ruta, { accounts: [] as NEDeclaration['balansBreakdown']['B1']['accounts'], total: 0 }]),
+  ) as NEDeclaration['balansBreakdown']
+  const unmapped: Array<{ accountNumber: string; accountName: string; balance: number }> = []
+  for (const [accountNumber, balance] of balances) {
+    if (Math.abs(balance) < 0.01 || !/^[12]/.test(accountNumber)) continue
+    const accountName = accountNames.get(accountNumber) || `Konto ${accountNumber}`
+    const ruta = neBalansRutaForAccount(accountNumber)
+    // B10 is computed below as tillgångar minus skulder, so an equity account
+    // needs no row. Every BAS class 20 account is eget kapital, including the
+    // aktiebolag ones (2091, 2099) that books imported from another system
+    // carry; the table names only 2010-2019 and 2050-2059.
+    if (ruta === 'B10' || accountNumber.startsWith('20')) continue
+    if (!ruta) {
+      unmapped.push({ accountNumber, accountName, balance })
+      continue
+    }
+    const amount = NE_ASSET_RUTOR.includes(ruta) ? balance : -balance
+    raw[ruta] += amount
+    breakdown[ruta].accounts.push({ accountNumber, accountName, amount: truncateToWholeKronor(amount) })
+  }
+  const balans = Object.fromEntries(
+    BALANS_RUTOR.map((ruta) => [ruta, truncateToWholeKronor(raw[ruta])]),
+  ) as unknown as NEBalansRutor
+  balans.B10 =
+    NE_ASSET_RUTOR.reduce((sum, ruta) => sum + balans[ruta], 0)
+    - NE_LIABILITY_RUTOR.reduce((sum, ruta) => sum + balans[ruta], 0)
+  for (const ruta of BALANS_RUTOR) breakdown[ruta].total = balans[ruta]
+  return { balans, breakdown, unmapped }
+}
 
 /**
  * The ruta an account balance goes to, or null when no range covers the
@@ -360,6 +460,17 @@ export async function generateNEDeclaration(
   })
   warnings.unshift(...sruBlockers)
 
+  // Balansräkning B1-B16 from the same rows.
+  const balansResult = neBalansFromBalances(accountBalances, accountNameMap)
+  if (balansResult.unmapped.length > 0) {
+    const named = nameAccounts(balansResult.unmapped)
+    warnings.push(
+      `${balansResult.unmapped.length === 1 ? 'Konto' : 'Kontona'} ${named} hör inte till någon rad i NE-bilagans balansräkning ` +
+        `(B14 Skatteskulder ska vara tom för en enskild firma: ägarens skatt bokförs som eget uttag, 2013). ` +
+        `Beloppet ingår därför i B10 Eget kapital; kontrollera bokföringen.`,
+    )
+  }
+
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
     warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
@@ -367,6 +478,21 @@ export async function generateNEDeclaration(
 
   if (rutor.R11 === 0 && totalRevenue === 0) {
     warnings.push('Inga bokförda intäkter eller kostnader hittades för perioden.')
+  }
+
+  // Sida 2 R13 and R14: representation, föreningsavgifter, böter and the
+  // skattekonto's kostnadsränta added back, its inkomstränta taken out
+  // (Skatteverket, "Skattemässiga justeringar" for the NE-bilaga), read the
+  // way INK2S reads them, from the same trial balance as R1-R11.
+  const adjustments = await loadBookedTaxAdjustments(supabase, companyId, fiscalPeriodId, entityType, trialBalance.rows)
+  const sida2Items = (type: 'non_deductible_expense' | 'non_taxable_income') =>
+    adjustments.items
+      .filter((item) => item.included && item.amount > 0 && item.adjustmentType === type)
+      .map((item) => ({ accountNumber: item.accountNumber, description: item.description, amount: item.amount }))
+  const sida2 = {
+    R12: rutor.R11,
+    R13: truncateToWholeKronor(adjustments.nonDeductibleExpenses),
+    R14: truncateToWholeKronor(adjustments.nonTaxableIncome),
   }
 
   return {
@@ -379,6 +505,13 @@ export async function generateNEDeclaration(
     },
     rutor,
     breakdown,
+    balans: balansResult.balans,
+    balansBreakdown: balansResult.breakdown,
+    sida2,
+    sida2Breakdown: {
+      R13: { items: sida2Items('non_deductible_expense'), total: sida2.R13 },
+      R14: { items: sida2Items('non_taxable_income'), total: sida2.R14 },
+    },
     companyInfo: {
       companyName: settings?.company_name || 'Okänt företag',
       orgNumber,

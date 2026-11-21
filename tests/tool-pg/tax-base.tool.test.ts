@@ -185,10 +185,10 @@ describe('resultat före skatt, the proposal against the declaration', () => {
     )
   })
 
-  // loadTaxAdjustmentSnapshot still reads the year without year_end vouchers:
-  // moving it moves INK2S 7653 on a declaration, so that is an operator's call.
-  // Goes red the day that path moves: drop `.fails` then.
-  it.fails('adds back a non-deductible cost carried on a year_end voucher', async () => {
+  // loadTaxAdjustmentSnapshot reads every voucher but the resultatavslut, as
+  // the tax base does, so a year_end voucher's non-deductible cost is added
+  // back (INK2S 7653 moves with it).
+  it('adds back a non-deductible cost carried on a year_end voucher', async () => {
     const seed = await companyWithYear()
     await book(seed, [['6992', 10_000, 0], ['2440', 0, 10_000]])
 

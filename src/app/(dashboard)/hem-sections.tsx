@@ -35,6 +35,7 @@ import {
 import { listResumeItems } from '@/lib/worklist/resume'
 import { listMissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { listOpenSuggestions } from '@/lib/suggestions/list'
+import { countOpenQuestions } from '@/lib/questions/app-answer'
 import { loadGrantReview } from '@/lib/grants/review'
 import { getCompanyNotices } from '@/lib/notices'
 import type { Notice } from '@/lib/notices/types'
@@ -278,7 +279,7 @@ export async function HemPanesSection({
   view?: HemView
   /** Börja: the step to open on. */
   initialStep?: string | null
-  /** Hem: Kom igång and the assistant prompt, drawn under the headline. */
+  /** Hem: Kom igång, drawn under the headline. */
   afterHeadline?: ReactNode
   companyId: string
   now: Date
@@ -362,6 +363,7 @@ export async function HemPanesSection({
     attestedToPay,
     paymentsToSign,
     nextDeadlineRes,
+    openQuestions,
   ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
@@ -413,6 +415,8 @@ export async function HemPanesSection({
             .limit(1)
             .maybeSingle()
         : null,
+      // The open questions put to the company: none where the list is not switched on.
+      countOpenQuestions(supabase, companyId),
     ])
 
   // "Empty ledger" only matters while the setup checklist is still open; once
@@ -505,6 +509,7 @@ export async function HemPanesSection({
       paymentsFailed={paymentsFailed}
       invoiceSets={suggestedMatches.filter((m) => (m.allocations?.length ?? 0) > 0)}
       suggestions={openSuggestions}
+      openQuestions={openQuestions}
       grantReview={grantReview}
       expiringBankConnections={expiringBankConnections}
       emptyLedger={emptyLedger}

@@ -8,6 +8,11 @@ import { filesIncomeReturn, fiscalYearLockedToCalendar, isEntityType, preparesFo
 import { nextFiscalYearRange } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getNextBankingDay, isBankingDay } from './swedish-holidays'
 import { helarsmomsHasEuTrade } from '@/lib/reports/eu-trade'
+import {
+  ANNUAL_MEETING_MONTHS,
+  BOLAGSVERKET_FILING_MONTHS,
+  lastDayMonthsAfterYearEnd,
+} from './annual-report-deadlines'
 
 // Condition function type for determining if a deadline applies
 export type DeadlineCondition = (settings: CompanySettingsForDeadlines) => boolean
@@ -624,7 +629,7 @@ const ink3FilingDates = ink2DigitalFilingDates
  * (ÅRL 8 kap. 3 §, årsredovisning together with revisionsberättelse).
  */
 function bolagsverketFilingDates(year: number, settings: CompanySettingsForDeadlines): DeadlineInstance[] {
-  return monthsAfterFiscalYearEnd(7, year, fiscalYearsEndingIn([year - 1, year], settings))
+  return monthsAfterFiscalYearEnd(BOLAGSVERKET_FILING_MONTHS, year, fiscalYearsEndingIn([year - 1, year], settings))
 }
 
 /**
@@ -639,14 +644,13 @@ function monthsAfterFiscalYearEnd(
 ): DeadlineInstance[] {
   const results: DeadlineInstance[] = []
   for (const fy of fiscalYears) {
-    const dlMonth0 = (fy.endMonth - 1 + months) % 12
-    const dlYear = fy.endYear + Math.floor((fy.endMonth - 1 + months) / 12)
-    if (dlYear !== year) continue
+    const deadline = lastDayMonthsAfterYearEnd(fy.endYear, fy.endMonth, months)
+    if (deadline.year !== year) continue
     const label = getFiscalYearLabel(fy.endMonth, fy.endYear)
     results.push({
-      day: new Date(dlYear, dlMonth0 + 1, 0).getDate(),
-      month: dlMonth0,
-      year: dlYear,
+      day: deadline.day,
+      month: deadline.month0,
+      year: deadline.year,
       period: label,
       periodLabel: label,
     })
@@ -661,7 +665,7 @@ function monthsAfterFiscalYearEnd(
  * (BFL 3 kap.), so the last day of month + 6 is the statutory limit.
  */
 function annualMeetingDates(year: number, settings: CompanySettingsForDeadlines): DeadlineInstance[] {
-  return monthsAfterFiscalYearEnd(6, year, fiscalYearsEndingIn([year - 1, year], settings))
+  return monthsAfterFiscalYearEnd(ANNUAL_MEETING_MONTHS, year, fiscalYearsEndingIn([year - 1, year], settings))
 }
 
 /**

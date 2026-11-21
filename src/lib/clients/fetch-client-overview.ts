@@ -92,6 +92,10 @@ interface ByraMembershipRow {
  * The caller's byrå team membership, or null for non-byrå users. When a user
  * somehow belongs to several byrå teams the earliest-created team wins
  * (deterministic, mirrors ensure_user_team's tie-break).
+ *
+ * A failed read throws: it is not an answer that the caller has no byrå, so
+ * a cockpit page shows the error boundary's Försök igen instead of
+ * redirecting a byrå member to the start page.
  */
 export async function getByraMembership(
   supabase: SupabaseClient,
@@ -104,7 +108,11 @@ export async function getByraMembership(
     .eq('teams.kind', 'byra')
     .order('created_at', { ascending: true })
 
-  if (error || !data || data.length === 0) return null
+  if (error) {
+    log.error('byrå membership read failed', { error: error.message })
+    throw new Error(`byrå membership read failed: ${error.message}`)
+  }
+  if (!data || data.length === 0) return null
 
   const row = data[0] as unknown as ByraMembershipRow
   const role = row.role === 'owner' || row.role === 'admin' ? row.role : 'member'

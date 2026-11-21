@@ -10,7 +10,7 @@ import { createShareClass } from '@/lib/bolaget/share-register'
 export const POST = withRouteContext(
   'bolaget.share_class_create',
   async (request, ctx) => {
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, shareClassesCreate.input)
     if (!validation.success) return validation.response
