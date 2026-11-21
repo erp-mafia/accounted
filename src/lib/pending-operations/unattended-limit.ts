@@ -64,7 +64,7 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   link_transaction_journal_entry: ['transaction_amount'],
   bulk_book_transactions: ['tx_sum'],
   link_supplier_invoice_voucher: ['payment_amount'],
-  match_batch_allocate: ['total_allocated'],
+  // match_batch_allocate: PRICED_ON_LARGEST below.
   mark_invoice_paid: ['total'],
   // Operation registry, wave 2. Dotted paths read a nested preview field.
   book_invoice: ['journal_entry.total_debit'],
@@ -97,6 +97,38 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
 }
 
 /**
+ * Operation types priced on the LARGEST of several preview fields, where no
+ * single field carries the whole posting.
+ *
+ * match_batch_allocate posts one samlingsverifikation. On a supplier payment
+ * its debit side is the whole bank amount: allocations + fee rows + supplier
+ * debt rows (244x, no invoice) = |transaction_amount|, and a debt row may be
+ * larger than the invoices. On a customer payment it is the invoices' total:
+ * allocations = |transaction_amount| + fee rows. total_allocated alone leaves
+ * a supplier payment's fee and debt rows out, so the price is the larger of
+ * the two. A row without transaction_amount is priced on total_allocated.
+ */
+const PRICED_ON_LARGEST: Readonly<Record<string, readonly string[]>> = {
+  match_batch_allocate: ['total_allocated', 'transaction_amount'],
+}
+
+/**
+ * The magnitude of one preview field, or null when it is missing or not a
+ * number. A dotted path reads a nested field.
+ */
+function readAmount(record: Record<string, unknown>, field: string): number | null {
+  let raw: unknown = record
+  for (const key of field.split('.')) {
+    raw = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>)[key] : undefined
+  }
+  if (raw === null || raw === undefined) return null
+  // jsonb numerics can arrive as strings; parse rather than trusting
+  // comparison coercion.
+  const parsed = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isFinite(parsed) ? Math.abs(parsed) : null
+}
+
+/**
  * The SEK amount this operation would post, or null when it cannot be priced
  * before dispatch.
  *
@@ -107,21 +139,22 @@ export function priceOperation(
   operationType: string,
   previewData: unknown,
 ): number | null {
+  const largest = PRICED_ON_LARGEST[operationType]
   const fields = PRICEABLE_OPERATIONS[operationType]
-  if (!fields) return null
+  if (!largest && !fields) return null
   if (previewData === null || typeof previewData !== 'object') return null
 
   const record = previewData as Record<string, unknown>
+  if (largest) {
+    const amounts = largest
+      .map((field) => readAmount(record, field))
+      .filter((amount): amount is number => amount !== null)
+    return amounts.length > 0 ? Math.max(...amounts) : null
+  }
+  if (!fields) return null
   for (const field of fields) {
-    let raw: unknown = record
-    for (const key of field.split('.')) {
-      raw = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>)[key] : undefined
-    }
-    if (raw === null || raw === undefined) continue
-    // jsonb numerics can arrive as strings; parse rather than trusting
-    // comparison coercion.
-    const parsed = typeof raw === 'number' ? raw : Number(raw)
-    if (Number.isFinite(parsed)) return Math.abs(parsed)
+    const amount = readAmount(record, field)
+    if (amount !== null) return amount
   }
   return null
 }
