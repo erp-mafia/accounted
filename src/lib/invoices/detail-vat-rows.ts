@@ -23,8 +23,6 @@ export interface DetailVatRow {
  */
 export function buildDetailVatRows(input: {
   items: ReadonlyArray<{ vat_rate?: number | null; vat_amount?: number | null; line_total: number }>
-  /** The invoice was registered from the books: its header holds the VAT, its lines none. */
-  registeredFromBooks: boolean
   headerVatAmount: number
   headerVatRate: number | null | undefined
   vatRegistered: boolean
@@ -44,10 +42,11 @@ export function buildDetailVatRows(input: {
   if (entries.length > 0) {
     return entries.map(([rate, vat]) => ({ key: String(rate), rate, amount: vat }))
   }
-  // crm#1131: a registration from the books has no lines to sum; its header
-  // holds the VAT its verifikat booked, at one rate. Summing nothing printed
-  // "Moms 0" under a total that includes it.
-  if (input.registeredFromBooks && input.headerVatAmount !== 0) {
+  // An invoice without lines has nothing to sum: a registration from the
+  // books (crm#1131) and a kreditfaktura of one, issued without lines. Its
+  // header holds the VAT its verifikat booked, at one rate, as the PDF prints
+  // it. Summing nothing printed "Moms 0" under a total that includes it.
+  if (input.items.length === 0 && input.headerVatAmount !== 0) {
     return [{ key: 'header', rate: input.headerVatRate || null, amount: input.headerVatAmount }]
   }
   if (!input.vatRegistered && input.headerVatAmount === 0) return []

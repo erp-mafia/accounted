@@ -2218,7 +2218,6 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // rate applies; a VAT-exempt company with a zero-VAT invoice shows no row.
   const vatRows = buildDetailVatRows({
     items: invoice.items,
-    registeredFromBooks,
     headerVatAmount: invoice.vat_amount,
     headerVatRate: invoice.vat_rate,
     vatRegistered: vatRegistered !== false,

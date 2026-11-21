@@ -26,7 +26,7 @@ const original = [
   item({ id: 'b', sort_order: 1, unit_price: 2000, line_total: 2000, vat_rate: 12, vat_amount: 240 }),
 ]
 
-const base = { registeredFromBooks: false, headerVatRate: null, vatRegistered: true }
+const base = { headerVatRate: null, vatRegistered: true }
 
 describe('buildDetailVatRows', () => {
   it('shows a kreditfaktura its negative moms per rate, not "Moms 0"', () => {
@@ -73,14 +73,14 @@ describe('buildDetailVatRows', () => {
     expect(rows).toEqual([{ key: '25', rate: 25, amount: 250 }])
   })
 
-  it('shows a kreditfaktura registered from the books the negative moms its header holds', () => {
-    const rows = buildDetailVatRows({
-      ...base,
-      items: [],
-      registeredFromBooks: true,
-      headerVatAmount: -250,
-      headerVatRate: 25,
-    })
+  it('shows an invoice registered from the books the moms its header holds', () => {
+    const rows = buildDetailVatRows({ ...base, items: [], headerVatAmount: 250, headerVatRate: 25 })
+
+    expect(rows).toEqual([{ key: 'header', rate: 25, amount: 250 }])
+  })
+
+  it('shows the kreditfaktura of a registration, issued without lines, the negative moms its header holds', () => {
+    const rows = buildDetailVatRows({ ...base, items: [], headerVatAmount: -250, headerVatRate: 25 })
 
     expect(rows).toEqual([{ key: 'header', rate: 25, amount: -250 }])
   })
