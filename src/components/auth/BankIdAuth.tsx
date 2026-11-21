@@ -5,6 +5,7 @@ import Image from 'next/image'
 import { useTranslations } from 'next-intl'
 import { BankIdQrCode } from './BankIdQrCode'
 import { Button } from '@/components/ui/button'
+import { bankIdAutostartHref } from '@/components/bankid/autostart'
 import {
   ComputerDesktopIcon,
   DevicePhoneMobileIcon,
@@ -85,31 +86,6 @@ function isMobile(): boolean {
 }
 
 /**
- * Launch the BankID app on the same (mobile) device.
- *
- * Uses the universal link https://app.bankid.com/: NOT the bankid:/// custom
- * scheme. A custom-scheme launch has no association with the originating Safari
- * tab, so on iOS the post-auth redirect opens in a NEW tab (git history: commit
- * 3bc652cc reverted a redirect for exactly that reason).
- *
- * redirect:
- *   • iOS     → current URL, so the app navigates back here on success. In
- *               Safari that is this very tab; in a third-party browser or an
- *               in-app web view the OS hands the URL to the default browser
- *               and it lands in a NEW tab. Both work: the flow lives in a
- *               cookie, which every tab of the origin shares, so whichever tab
- *               the user ends up in simply polls and carries on.
- *   • Android → "null": the BankID app returns via the task stack, and a real
- *               redirect URL would spawn a new tab / Chrome instance instead.
- */
-function launchBankIdApp(autoStartToken: string): void {
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-  const isIOS = /iPad|iPhone|iPod/.test(ua)
-  const redirect = isIOS ? encodeURIComponent(window.location.href) : 'null'
-  window.location.href = `https://app.bankid.com/?autostarttoken=${autoStartToken}&redirect=${redirect}`
-}
-
-/**
  * BankID authentication flow component.
  * Handles QR code display (desktop) or app deep link (mobile),
  * polling, and result handling.
@@ -121,7 +97,6 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
   const [hintMessage, setHintMessage] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
-  const [launchedApp, setLaunchedApp] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const lastStartRef = useRef<number>(0)
@@ -391,8 +366,11 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
     cleanup()
     resumedRef.current = false
+    // Drop the previous order before the cooldown and /start: its autostart
+    // token (and QR) belong to a finished or failed order, so a link built
+    // from it would open BankID on an order that no longer exists.
+    setSession(null)
     setActiveFlowId(null)
-    setLaunchedApp(false)
     setStatus('scanning')
     setHintMessage('Starta BankID-appen')
     setErrorMessage('')
@@ -445,14 +423,13 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
       setSession(newSession)
       setActiveFlowId(newSession.flowId)
 
-      // On mobile, open the BankID app on this device. Nothing needs saving
-      // first: /start already set the flow cookie, and a cookie is shared by
-      // every tab of the origin, so whichever tab BankID returns the user to
-      // (this one reloaded, or a brand new one) can resume from it.
-      if (isMobile()) {
-        setLaunchedApp(true)
-        launchBankIdApp(newSession.autoStartToken)
-      }
+      // On mobile the BankID app is opened by the person's own tap on the
+      // link rendered below, never from here: this runs after the awaited
+      // /start (and the cooldown wait), outside the tap that started it, and
+      // mobile browsers drop a universal-link navigation that no tap started.
+      // Safari then loads app.bankid.com in this tab instead, and the flow is
+      // lost. The flow cookie /start set is shared by every tab of the origin,
+      // so whichever tab BankID returns the person to can resume from it.
 
       beginPolling(newSession.flowId)
     } catch (error) {
@@ -713,13 +690,18 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
       {isMobile() && (
         <div className="flex flex-col items-center gap-2">
           <DevicePhoneMobileIcon className="h-8 w-8 text-muted-foreground" />
-          {/* A resumed tab never launched anything, so saying "opening the
-              BankID app" would be a lie followed by silence. */}
-          <p className="text-sm text-muted-foreground">
-            {launchedApp
-              ? 'Öppnar BankID-appen...'
-              : t('bankid_finish_in_app')}
-          </p>
+          <p className="text-sm text-muted-foreground">{t('bankid_finish_in_app')}</p>
+          {/* A plain link the person taps carries its own activation, so the
+              app opens (as in BankIdChallengeView). A resumed tab never called
+              /start and has no autostart token: the app is already open. */}
+          {session?.autoStartToken && (
+            <Button asChild className="gap-2">
+              <a href={bankIdAutostartHref(session.autoStartToken)}>
+                <BankIdIcon className="invert dark:invert-0" />
+                {t('bankid_open_app')}
+              </a>
+            </Button>
+          )}
         </div>
       )}
 
