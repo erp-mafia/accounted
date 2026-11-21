@@ -672,6 +672,7 @@
     "bankid_cancelling": "Cancelling...",
     "bankid_completing": "Completing the BankID identification...",
     "bankid_finish_in_app": "Complete the identification in the BankID app",
+    "bankid_open_app": "Open the BankID app",
     "bankid_resume_title": "BankID identification in progress",
     "bankid_resume_description": "This browser has an ongoing BankID identification. Continue only if you started it.",
     "bankid_resume_continue": "Continue",
