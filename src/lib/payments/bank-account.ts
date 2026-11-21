@@ -327,6 +327,15 @@ const BANK_NAME_BIC: ReadonlyArray<{ match: string; bic: string }> = [
  */
 export const SVEA_BANK_BICS: ReadonlySet<string> = new Set(['SVEASES1', 'SVEASESS'])
 
+/**
+ * Whether a normalized Swedish IBAN is a Svea Bank account, by its bank code
+ * 966 (clearing 9660-9669). For the connections that store no BIC (Enable
+ * Banking) and the accounts typed in by hand, where no Svea BIC is derived.
+ */
+export function isSveaBankIban(normalizedIban: string): boolean {
+  return normalizedIban.startsWith('SE') && normalizedIban.length === 24 && normalizedIban.slice(4, 7) === '966'
+}
+
 export function lookupBicByBankName(nameRaw: string | null | undefined): string | null {
   const name = (nameRaw ?? '').trim().toLowerCase()
   if (!name) return null

@@ -17,7 +17,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 import { isValidIban } from '@/lib/payments/payment-details'
-import { lookupBicByBankName, lookupBicByClearing, SVEA_BANK_BICS } from '@/lib/payments/bank-account'
+import { isSveaBankIban, lookupBicByBankName, lookupBicByClearing, SVEA_BANK_BICS } from '@/lib/payments/bank-account'
 
 export interface DebtorAccountSource {
   iban: string | null
@@ -97,7 +97,8 @@ export function resolveDebtor(account: DebtorAccountSource, connection: DebtorCo
   const iban = normalizeIban(account.iban) as string
   const bankName = connection?.bank_name ?? null
   const bic = connectionBic(connection) ?? bicFromSwedishIban(iban) ?? lookupBicByBankName(bankName)
-  if (!bic) return { ok: false, reason: 'bank_unknown' }
+  // A Svea account with no BIC to go by is still Svea (crm#2071): named, not unknown.
+  if (!bic) return { ok: false, reason: isSveaBankIban(iban) ? 'bank_not_supported' : 'bank_unknown' }
   if (PAYMENT_PROVIDER_UNREACHED_BICS.has(bic.slice(0, 8))) return { ok: false, reason: 'bank_not_supported' }
   return {
     ok: true,
