@@ -1,7 +1,10 @@
 /**
  * The link that opens the BankID app on this device with an autostart token,
- * shared by the payment signing (BankIdSigningFlow) and the bank reading
- * consent (BankIdChallengeView).
+ * shared by the payment signing (BankIdSigningFlow), the bank reading
+ * consent (BankIdChallengeView) and the BankID sign-in (auth/BankIdAuth).
+ * On a phone it is always a link the person taps: a navigation started after
+ * an await has no tap behind it, and mobile browsers then load the link as a
+ * web page instead of opening the app.
  *
  * Open Payments gives the form
  * https://app.bankid.com/?autostarttoken={token}&redirect={uri} and says to
