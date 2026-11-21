@@ -521,3 +521,81 @@ describe('runSweep: a pass that cannot read its work', () => {
     expect(summary.deferred).toBe(0)
   })
 })
+
+describe('runSweep: list questions past their 48 hours', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    processMock.mockResolvedValue({ kind: 'media_processed', conversationId: 'conv-1' })
+    finalizeMock.mockResolvedValue(undefined)
+  })
+
+  /** An idle conversation holding a list question sent `hoursAgo` hours ago. */
+  const idleWithListQuestion = (hoursAgo: number) => ({
+    id: 'conv-1',
+    phone_link_id: 'link-1',
+    state: 'idle',
+    context: {
+      pending_question: {
+        type: 'list_question',
+        inbox_item_id: null,
+        asked_at: new Date(Date.now() - hoursAgo * HOURS).toISOString(),
+        question_id: 'e0000000-0000-4000-8000-000000000001',
+        company_id: 'c0000000-0000-4000-8000-000000000001',
+      },
+    },
+    company_id: null,
+    service_window_expires_at: new Date(Date.now() - 25 * HOURS).toISOString(),
+    debounce_until: null,
+    pending_ack: false,
+    updated_at: '2026-11-18T09:00:00.000Z',
+  })
+
+  function enqueueQuietPasses(enqueue: ReturnType<typeof createQueuedMockSupabase>['enqueue']) {
+    for (let i = 0; i < 6; i++) enqueue({ data: [] }) // received, processing, pending_ack, unacked, question TTL, pins
+    enqueue({ count: 0 }) // outbound failures
+    enqueue({ data: [] }) // orphaned parked rows
+  }
+
+  it('expires one on an idle conversation, where the question TTL pass does not look, and sends nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueQuietPasses(enqueue)
+    enqueue({ data: [idleWithListQuestion(49)] }) // list question scan
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+
+    expect(summary.expiredQuestions).toBe(1)
+    expect(summary.failedPasses).toEqual([])
+    const patch = findCalls('whatsapp_conversations', 'update')[0][0] as {
+      state?: string
+      context: { pending_question?: unknown; list_questions_expired?: string[] }
+    }
+    expect(patch.context.pending_question).toBeUndefined()
+    expect(patch.context.list_questions_expired).toEqual(['e0000000-0000-4000-8000-000000000001'])
+    expect(patch.state).toBeUndefined()
+    // No message of any kind, and the question on the list is not written.
+    expect(findCalls('whatsapp_messages', 'insert')).toEqual([])
+    expect(findCalls('company_questions', 'update')).toEqual([])
+  })
+
+  it('leaves one inside its 48 hours in flight', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueQuietPasses(enqueue)
+    enqueue({ data: [idleWithListQuestion(47)] })
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+
+    expect(summary.expiredQuestions).toBe(0)
+    expect(findCalls('whatsapp_conversations', 'update')).toEqual([])
+  })
+
+  it('names the pass when its scan cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueQuietPasses(enqueue)
+    enqueue({ error: { message: 'statement timeout' } })
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+
+    expect(summary.failedPasses).toEqual(['list_question_ttl'])
+    expect(summary.expiredQuestions).toBe(0)
+  })
+})

@@ -81,64 +81,34 @@ export async function isEmailOnBrandAllowlist(
   return data !== null
 }
 
-interface InviteRow {
-  email: string
-  status: string
-  expires_at: string
-}
-
-function isLiveInviteFor(row: InviteRow, email: string): boolean {
-  return (
-    row.status === 'pending' &&
-    new Date(row.expires_at) > new Date() &&
-    row.email.toLowerCase() === email.trim().toLowerCase()
-  )
-}
-
 /**
- * Whether `inviteToken` is a live invite for `email`: pending, unexpired,
- * and addressed to the same email (case-insensitive). Either kind counts: a
- * company invite or a byrå-team invite, the two tables /api/team/accept
- * redeems from. The invite itself is the authorization, so it bypasses the
- * allowlist. Mirrors the acceptance checks in /api/team/accept and
- * /auth/callback, including the byrå-only kind gate on team invites;
- * acceptance re-validates everything, so this gate can stay a read.
- * Fail-closed: a query error on either table reads as invalid.
+ * Whether `inviteToken` is a live company invite for `email`: pending,
+ * unexpired, and addressed to the same email (case-insensitive). The invite
+ * itself is the authorization, so it bypasses the allowlist. Mirrors the
+ * acceptance checks in /api/team/accept and /auth/callback; acceptance
+ * re-validates everything, so this gate can stay a read.
  */
 async function isValidInviteForEmail(
   inviteToken: string,
   email: string,
 ): Promise<boolean> {
   const supabase = createServiceClientNoCookies()
-  const tokenHash = hashInviteToken(inviteToken)
-
-  const { data: companyInvite, error: companyError } = await supabase
+  const { data, error } = await supabase
     .from('company_invitations')
     .select('email, status, expires_at')
-    .eq('token_hash', tokenHash)
+    .eq('token_hash', hashInviteToken(inviteToken))
     .maybeSingle()
 
-  if (companyError) {
-    log.error('invite lookup failed; treating as invalid', { message: companyError.message })
+  if (error) {
+    log.error('invite lookup failed; treating as invalid', { message: error.message })
     return false
   }
-  if (companyInvite) return isLiveInviteFor(companyInvite, email)
-
-  const { data: teamInviteRaw, error: teamError } = await supabase
-    .from('team_invitations')
-    .select('email, status, expires_at, teams:team_id(kind)')
-    .eq('token_hash', tokenHash)
-    .maybeSingle()
-
-  if (teamError) {
-    log.error('team invite lookup failed; treating as invalid', { message: teamError.message })
-    return false
-  }
-  const teamInvite = teamInviteRaw as unknown as
-    | (InviteRow & { teams: { kind: string } | null })
-    | null
-  if (!teamInvite || teamInvite.teams?.kind !== 'byra') return false
-  return isLiveInviteFor(teamInvite, email)
+  if (!data) return false
+  return (
+    data.status === 'pending' &&
+    new Date(data.expires_at) > new Date() &&
+    data.email.toLowerCase() === email.trim().toLowerCase()
+  )
 }
 
 /**

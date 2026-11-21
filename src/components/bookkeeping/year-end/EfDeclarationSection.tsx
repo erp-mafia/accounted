@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -18,7 +19,8 @@ import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { isFiscalYear } from '@/lib/invariants/fiscal-year'
 import type { EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
-import type { EfDeclarationItem, EfNeRutor, EfOvrigUppgift } from '@/lib/bokslut/enskild-firma/types'
+import type { NeDeclarationInputs } from '@/lib/bokslut/enskild-firma/declaration-inputs'
+import { EF_NE_BOOKED_ROWS, type EfDeclarationItem, type EfNeRutor, type EfOvrigUppgift } from '@/lib/bokslut/enskild-firma/types'
 import type { EfFondState } from '@/lib/bokslut/enskild-firma/periodiseringsfond-ef'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -84,48 +86,91 @@ const DEFAULT_OVERRIDES: EfOverrideInputs = {
  * EF tax mechanisms are declaration-only: they NEVER produce journal
  * entries. The banner makes that BFL distinction visible.
  *
- * Override inputs persist to localStorage scoped by fiscal period id, so
- * re-entering the wizard recalls them without round-tripping a write.
+ * The inputs are saved per räkenskapsår on the server (ne_declaration_inputs,
+ * /ef-declaration/inputs), so they follow the owner to any device and next
+ * year's step starts from what this year hands on (R40 from this year's R43,
+ * the funds that stay, the expansionsfond). A value an earlier version left
+ * in this browser's localStorage is taken over once when nothing is saved.
  */
 export function EfDeclarationSection({
   fiscalPeriodId,
   bookedSurplus,
   fiscalYear,
 }: EfDeclarationSectionProps) {
-  const storageKey = `ef-declaration-overrides:${fiscalPeriodId}`
+  const t = useTranslations('efDeclaration')
+  const legacyStorageKey = `ef-declaration-overrides:${fiscalPeriodId}`
+  const inputsUrl = `/api/bookkeeping/fiscal-periods/${fiscalPeriodId}/ef-declaration/inputs`
 
   const [overrides, setOverrides] = useState<EfOverrideInputs>(DEFAULT_OVERRIDES)
   const [preview, setPreview] = useState<EfPreviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Saving starts once the stored inputs are in; `savedJson` is what the
+  // server holds, so loading (or a carried proposal) never writes by itself.
+  const [inputsLoaded, setInputsLoaded] = useState(false)
+  const [carriedFrom, setCarriedFrom] = useState<string | null>(null)
+  const [saveFailed, setSaveFailed] = useState(false)
+  const savedJson = useRef<string | null>(null)
 
-  // Restore overrides from localStorage on mount.
+  // Load the stored inputs for the year.
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const raw = window.localStorage.getItem(storageKey)
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<EfOverrideInputs>
-        setOverrides({
-          ...DEFAULT_OVERRIDES,
-          ...parsed,
-          pfondFonder: Array.isArray(parsed.pfondFonder) ? parsed.pfondFonder : [],
-        })
+    let cancelled = false
+    setInputsLoaded(false)
+    setCarriedFrom(null)
+    void (async () => {
+      let next = DEFAULT_OVERRIDES
+      let baseline: EfOverrideInputs | null = null
+      try {
+        const res = await fetch(inputsUrl)
+        const body = await res.json()
+        if (res.ok) {
+          const loaded = body.data as { inputs: NeDeclarationInputs; source: string; carriedFrom?: { name: string } }
+          if (loaded.source !== 'none') {
+            next = fromInputs(loaded.inputs)
+            baseline = loaded.source === 'saved' ? next : DEFAULT_OVERRIDES
+            if (loaded.source === 'carried' && !cancelled) setCarriedFrom(loaded.carriedFrom?.name ?? null)
+          } else {
+            next = legacyOverrides(legacyStorageKey) ?? DEFAULT_OVERRIDES
+            baseline = DEFAULT_OVERRIDES
+          }
+        }
+      } catch {
+        // Offline or refused: start from defaults, nothing is overwritten.
       }
-    } catch {
-      // Ignore: start with defaults.
+      if (cancelled) return
+      setOverrides(next)
+      savedJson.current = baseline ? JSON.stringify(toInputs(baseline)) : null
+      setInputsLoaded(baseline !== null)
+    })()
+    return () => {
+      cancelled = true
     }
-  }, [storageKey])
+  }, [inputsUrl, legacyStorageKey])
 
-  // Persist overrides on change.
+  // Save what the owner changed, debounced.
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem(storageKey, JSON.stringify(overrides))
-    } catch {
-      // Quota exceeded or disabled, non-fatal.
-    }
-  }, [storageKey, overrides])
+    if (!inputsLoaded) return
+    const body = JSON.stringify(toInputs(overrides))
+    if (body === savedJson.current) return
+    const handle = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch(inputsUrl, { method: 'PUT', headers: { 'content-type': 'application/json' }, body })
+          if (!res.ok) throw new Error(String(res.status))
+          savedJson.current = body
+          setSaveFailed(false)
+          try {
+            window.localStorage.removeItem(legacyStorageKey)
+          } catch {
+            // Storage disabled: nothing to clean up.
+          }
+        } catch {
+          setSaveFailed(true)
+        }
+      })()
+    }, 800)
+    return () => clearTimeout(handle)
+  }, [overrides, inputsLoaded, inputsUrl, legacyStorageKey])
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams()
@@ -255,6 +300,8 @@ export function EfDeclarationSection({
               {formatCurrency(preview?.bookedSurplus ?? bookedSurplus)}
             </span>
           </p>
+          {carriedFrom && <p className="text-xs text-muted-foreground">{t('carried_from', { year: carriedFrom })}</p>}
+          {saveFailed && <p className="text-xs text-destructive">{t('save_failed')}</p>}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -511,11 +558,11 @@ export function EfDeclarationSection({
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <InformationCircleIcon className="h-4 w-4 text-muted-foreground" />
-            NE-bilaga räkenskapsschema (R1-R11)
+            NE-bilaga: balansräkning och räkenskapsschema
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Räkenskapsschema-delen genereras automatiskt från bokföringen för räkenskapsåret {fiscalYear}.
-            Ladda ner SRU-filen och ladda upp den i Skatteverkets e-tjänst för Inkomstdeklaration 1.
+            Balansräkningen (B1-B16), räkenskapsschemat (R1-R11) och det bokförda resultatet (R12) kommer från bokföringen för räkenskapsåret {fiscalYear}.
+            Importera filen blanketter.sru i Skatteverkets e-tjänst Inkomstdeklaration 1 under Bilagor, Enskild näringsverksamhet (NE), och fyll där i resten av sidan 2 med beloppen ovan.
           </p>
         </CardHeader>
         <CardContent>
@@ -536,6 +583,7 @@ export function EfDeclarationSection({
 
 /** NE-bilaga sida 2 rutor (SKV 2161), with the form's wording. */
 const NE_RUTA_ROWS: Array<{ ruta: keyof EfNeRutor; label: string; sum?: boolean }> = [
+  ...EF_NE_BOOKED_ROWS,
   { ruta: 'R29', label: 'Överskott/underskott före räntefördelning', sum: true },
   { ruta: 'R30', label: 'Positiv räntefördelning' },
   { ruta: 'R31', label: 'Negativ räntefördelning' },
@@ -550,6 +598,75 @@ const NE_RUTA_ROWS: Array<{ ruta: keyof EfNeRutor; label: string; sum?: boolean 
   { ruta: 'R42', label: 'Överskott/underskott före årets avdrag för egenavgifter', sum: true },
   { ruta: 'R43', label: 'Årets beräknade avdrag för egenavgifter' },
 ]
+
+/** A figure as typed, or undefined when it is not a number. */
+function typedNumber(value: string): number | undefined {
+  const n = parseFloat(value)
+  return Number.isFinite(n) ? n : undefined
+}
+
+/**
+ * The form as the stored inputs (NeDeclarationInputs): the same figures the
+ * preview query carries, with what is not a number left out.
+ */
+function toInputs(o: EfOverrideInputs): NeDeclarationInputs {
+  const fonder = enteredFonder(o.pfondFonder).map((f) => ({ cohort_year: Number(f.year), balance: Number(f.balance) }))
+  const entries: Array<[keyof NeDeclarationInputs, number | undefined]> = [
+    ['kapitalunderlag', typedNumber(o.kapitalunderlag)],
+    ['sparatFordelningsbelopp', typedNumber(o.sparatFordelningsbelopp)],
+    ['expansionsfondKapitalunderlag', typedNumber(o.expansionsfondKapitalunderlag)],
+    ['priorYearSchablonavdrag', typedNumber(o.priorSchablon)],
+    ['priorYearActualCharged', typedNumber(o.priorActual)],
+    ['pfondDesiredAmount', typedNumber(o.pfondDesired)],
+    ['expansionsfondExistingBalance', typedNumber(o.expansionsfondBalance)],
+    ['expansionsfondDesiredChange', typedNumber(o.expansionsfondChange)],
+  ]
+  const inputs: NeDeclarationInputs = { category: o.category }
+  for (const [key, value] of entries) {
+    // The server refuses a negative figure where none can be negative; the
+    // field keeps what was typed, and the preview says what is wrong.
+    if (value === undefined) continue
+    if (key !== 'kapitalunderlag' && key !== 'expansionsfondKapitalunderlag' && key !== 'expansionsfondDesiredChange' && value < 0) continue
+    ;(inputs as Record<string, number>)[key] = value
+  }
+  if (fonder.length > 0) inputs.pfondExistingFonder = fonder.slice(0, 10)
+  return inputs
+}
+
+/** The stored inputs as the form's text fields. */
+function fromInputs(i: NeDeclarationInputs): EfOverrideInputs {
+  const text = (n: number | undefined) => (n === undefined ? '' : String(n))
+  return {
+    category: i.category ?? 'full',
+    kapitalunderlag: text(i.kapitalunderlag),
+    sparatFordelningsbelopp: text(i.sparatFordelningsbelopp),
+    expansionsfondKapitalunderlag: text(i.expansionsfondKapitalunderlag),
+    priorSchablon: text(i.priorYearSchablonavdrag),
+    priorActual: text(i.priorYearActualCharged),
+    pfondDesired: text(i.pfondDesiredAmount),
+    pfondFonder: (i.pfondExistingFonder ?? []).map((f) => ({ year: String(f.cohort_year), balance: String(f.balance) })),
+    expansionsfondBalance: text(i.expansionsfondExistingBalance),
+    expansionsfondChange: text(i.expansionsfondDesiredChange),
+  }
+}
+
+/** What an earlier version kept in this browser for the year, if anything. */
+function legacyOverrides(storageKey: string): EfOverrideInputs | null {
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<EfOverrideInputs>
+    return {
+      ...DEFAULT_OVERRIDES,
+      ...parsed,
+      pfondFonder: Array.isArray(parsed.pfondFonder) ? parsed.pfondFonder : [],
+    }
+  } catch {
+    // Safe to ignore: storage disabled or an unreadable old value means there
+    // is nothing to take over, and the form starts from its defaults.
+    return null
+  }
+}
 
 /** Rows with a valid year and a positive balance; a repeated year counts once. */
 function enteredFonder(rows: Array<{ year: string; balance: string }>): Array<{ year: string; balance: string }> {

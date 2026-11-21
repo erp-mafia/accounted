@@ -7,7 +7,7 @@ import { useTranslations } from 'next-intl'
 import { ArrowLeftIcon, CalculatorIcon, SpinnerIcon, XMarkIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
-import { LoadError } from '@/components/ui/empty-state'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { PageHeaderParent, PageHeaderBelow } from '@/components/ui/page-header'
@@ -114,11 +114,14 @@ export default function SalaryRunEmployeeDetailPage({
   const t = useTranslations('salary_run_employee')
   const tSalary = useTranslations('salary')
   const tRun = useTranslations('salary_run')
+  const tCommon = useTranslations('common')
   const { id: runId, employeeId } = use(params)
   const { canWrite, lockedTitle } = useViewerLock()
   const [data, setData] = useState<DetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // A 404 is not a failed read: the run, or this employee in it, is gone.
+  const [notFound, setNotFound] = useState<'run' | 'employee' | null>(null)
   const [calculating, setCalculating] = useState(false)
   const [removingLineId, setRemovingLineId] = useState<string | null>(null)
   const [addingLine, setAddingLine] = useState(false)
@@ -138,6 +141,7 @@ export default function SalaryRunEmployeeDetailPage({
     const seq = ++loadSeq.current
     setLoading(true)
     setError(null)
+    setNotFound(null)
     try {
       const [runRes, sreRes] = await Promise.all([
         fetch(`/api/salary/runs/${runId}`),
@@ -151,8 +155,16 @@ export default function SalaryRunEmployeeDetailPage({
       // `{ error: { code, message } }`, and the Error constructor stringifies
       // that object to "[object Object]", which falls through to the generic
       // "Något gick fel" and discards the route's own Swedish reason.
+      if (runRes.status === 404) {
+        setNotFound('run')
+        return
+      }
       if (!runRes.ok) {
         setError(getUserErrorMessage(runJson, { statusCode: runRes.status }))
+        return
+      }
+      if (sreRes.status === 404) {
+        setNotFound('employee')
         return
       }
       if (!sreRes.ok) {
@@ -244,6 +256,14 @@ export default function SalaryRunEmployeeDetailPage({
         </div>
         <Skeleton className="h-64 w-full rounded-lg" />
       </LateReveal>
+    )
+  }
+
+  if (!current && notFound) {
+    return notFound === 'run' ? (
+      <NotFoundState title={tRun('not_found')} backHref="/salary" backLabel={tCommon('back_to_list')} />
+    ) : (
+      <NotFoundState title={t('employee_not_in_run')} backHref={`/salary/runs/${runId}`} backLabel={t('back_to_run')} />
     )
   }
 

@@ -53,5 +53,9 @@ export const GET = withRouteContext('document.counts', async (request, ctx) => {
     return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
   }
 
-  return NextResponse.json({ data: counted.counts, invoice_references: counted.invoice_references })
+  return NextResponse.json({
+    data: counted.counts,
+    invoice_references: counted.invoice_references,
+    no_doc_required: counted.no_doc_required,
+  })
 })

@@ -126,6 +126,8 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   onboarding: null,
   parties: null,
   'pending-operations': null,
+  // The question list (lib/questions): answering, closing and reopening a question.
+  questions: null,
   reconciliation: null,
   reports: null,
   rules: null,

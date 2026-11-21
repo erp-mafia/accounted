@@ -246,14 +246,65 @@ export interface DoorRow {
  * ones included (a door in use stays listed when everything from it is
  * handled), in the vocabulary's order. Items Arkiv took are not the inbox's.
  */
-export function doorsInUse(items: readonly InkorgItem[]): DoorRow[] {
+export function doorsInUse(items: readonly InkorgItem[], alsoUsed: readonly IntakeSourceId[] = []): DoorRow[] {
   const waiting = new Map<IntakeSourceId, number>()
+  // Doors whose items are all handled, named by the server when the list
+  // only carries what is still in the inbox (inboxScope).
+  for (const door of alsoUsed) waiting.set(door, 0)
   for (const item of items) {
     if (routedAway(item)) continue
     const door = doorOf(item)
     waiting.set(door, (waiting.get(door) ?? 0) + (stillInInbox(item) ? 1 : 0))
   }
   return INTAKE_SOURCE_IDS.filter((door) => waiting.has(door)).map((door) => ({ door, waiting: waiting.get(door) ?? 0 }))
+}
+
+/** A mailbox provider as an item's channel context names it. */
+export type InboxMailProvider = NonNullable<InboxChannelContext['mail_provider']>
+
+/** The connected mailbox's provider, read off its newest item that says (Gmail unless one says Microsoft). */
+export function mailProviderOf(items: readonly InkorgItem[]): InboxMailProvider | null {
+  return items.find((item) => doorOf(item) === 'mailbox' && item.channel_context?.mail_provider)?.channel_context?.mail_provider ?? null
+}
+
+/**
+ * The part of a company's whole inbox list the Inkorg shows
+ * (GET /items?scope=inbox). A company with years of underlag has thousands
+ * of booked items, each with its reading, and the page used to receive all
+ * of them on every load and every change. What it reads off them:
+ *   - the items still in the inbox (the queues and counts), companion
+ *     receipts included (they ride on their invoice's row);
+ *   - the items Arkiv took within the notice window (recentlyRoutedAway);
+ *   - the other half of every pair among those, booked or not (companionOf);
+ *   - which doors were ever used (doorsInUse lists a door whose items are all
+ *     handled) and the mailbox provider, which the answer carries apart.
+ * The pairing and the other readings are worked out on the whole list before
+ * this cut, so every kept row reads as it did.
+ */
+export function inboxScope<T extends InkorgItem>(
+  items: readonly T[],
+  now: number = Date.now(),
+): { items: T[]; doors: IntakeSourceId[]; mailProvider: InboxMailProvider | null } {
+  const keep = new Set<string>()
+  for (const item of items) {
+    const left = item.routed_to_arkiv_at ? Date.parse(item.routed_to_arkiv_at) : NaN
+    const routedRecently = Number.isFinite(left) && now - left <= ROUTED_AWAY_NOTICE_MS
+    if (isInboxItemUnbooked(item) || routedRecently) keep.add(item.id)
+  }
+  for (const item of items) {
+    if (!keep.has(item.id) || !item.pairing) continue
+    const pairing = item.pairing
+    const partner =
+      pairing.role === 'invoice' ? pairing.receipt_item_id : pairing.role === 'receipt' ? pairing.invoice_item_id : pairing.booked_item_id
+    if (partner) keep.add(partner)
+  }
+  const used = new Set<IntakeSourceId>()
+  for (const item of items) if (!routedAway(item)) used.add(doorOf(item))
+  return {
+    items: items.filter((item) => keep.has(item.id)),
+    doors: INTAKE_SOURCE_IDS.filter((door) => used.has(door)),
+    mailProvider: mailProviderOf(items),
+  }
 }
 
 /** How many decisions wait: the count beside Behöver dig. */

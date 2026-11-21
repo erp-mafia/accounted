@@ -105,6 +105,7 @@ describe('GET /api/import/sie', () => {
     expect(columns.split(',').map((column) => column.trim())).toEqual([
       'id', 'filename', 'fiscal_year_start', 'fiscal_year_end', 'transactions_count', 'status',
       'job_state', 'job_kind', 'imported_at', 'created_at', 'repair_outcome:job_result->>repairOutcome',
+      'removed_at:job_result->support_removal->>removed_at',
     ])
     expect(options).toEqual({ count: 'exact' })
   })
@@ -137,6 +138,6 @@ describe('GET /api/import/sie', () => {
     expect(typeof body.error).toBe('string')
     // The raw driver message must not leak; the mapped message is Swedish.
     expect(body.error).not.toContain('connection reset')
-    expect(body.error).toBe('Något gick fel. Försök igen.')
+    expect(body.error).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 })

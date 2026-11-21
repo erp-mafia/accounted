@@ -58,6 +58,8 @@ export interface NavGateFlags {
   hiddenWithInkorgV2?: boolean
   /** The Autogiro page (/invoices/autogiro): shown only for companies in the AUTOGIRO_COMPANY_IDS rollout (lib/invoices/autogiro/flag.ts). */
   requiresAutogiro?: boolean
+  /** The question list (/questions): shown only for companies in the COMPANY_QUESTIONS_COMPANY_IDS rollout (lib/env/company-questions-switch.ts). */
+  requiresCompanyQuestions?: boolean
   requiredCapability?: CapabilityKey
   /** Show only for these legal forms (one or several). */
   entityOnly?: EntityType | readonly EntityType[]

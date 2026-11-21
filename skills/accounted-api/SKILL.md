@@ -754,7 +754,7 @@ GET /companies/{companyId}/reports/journal-register : Journal register (verifika
 GET /companies/{companyId}/reports/kassaflodesanalys : Kassaflödesanalys (cash flow statement, indirect method) for a räkenskapsår [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/kpi : Business KPIs (nyckeltal) for a fiscal period, as the dashboard shows them [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/monthly-breakdown : Income statement broken down by month for a fiscal period [scope:reports:read risk:low idempotent]
-GET /companies/{companyId}/reports/ne-bilaga : NE-bilaga (enskild firma): rutor R1-R11 for a räkenskapsår [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/ne-bilaga : NE-bilaga (enskild firma): balansräkning B1-B16 and rutor R1-R11 for a räkenskapsår [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/ne-bilaga/sru : NE-bilaga SRU files (INFO.SRU + BLANKETTER.SRU) as a zip, for upload at skatteverket.se [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/periodisk-sammanstallning : Periodisk sammanställning (EU sales list): per-customer EU sales of goods, services and triangulation [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/periodisk-sammanstallning/csv : Periodisk sammanställning as the SKV 574008 CSV file, for upload at skatteverket.se [scope:reports:read risk:low idempotent]

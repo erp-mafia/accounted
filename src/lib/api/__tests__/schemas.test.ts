@@ -2922,6 +2922,54 @@ describe('MatchBatchSchema', () => {
       expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee('6570', 199.99)] }).success).toBe(true)
     })
   })
+
+  // crm#1954: the rest of a supplier payment pays invoices registered in the
+  // bookkeeping kept before, so it is booked against the 2440 balance.
+  describe('supplier_debts', () => {
+    const supplierAllocations = (n: number) =>
+      Array.from({ length: n }, () => ({ kind: 'supplier_invoice' as const, supplier_invoice_id: crypto.randomUUID(), amount: 100 }))
+    const debt = (account: string, amount: number, description?: string) => ({ account, amount, ...(description ? { description } : {}) })
+
+    it('takes 244x rows on a supplier batch, larger than the invoices, with an optional text', () => {
+      const result = MatchBatchSchema.safeParse({
+        allocations: supplierAllocations(2),
+        supplier_debts: [debt('2440', 12546.5, 'Faktura 4411'), debt('2448', 1)],
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('refuses debt rows on a customer batch', () => {
+      const result = MatchBatchSchema.safeParse({ allocations: allocations(2), supplier_debts: [debt('2440', 50)] })
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].path).toEqual(['supplier_debts'])
+    })
+
+    it('refuses an account outside 244x, a number account, a zero or negative amount and a long text', () => {
+      for (const account of ['2450', '2640', '6570', '244']) {
+        expect(MatchBatchSchema.safeParse({ allocations: supplierAllocations(1), supplier_debts: [debt(account, 1)] }).success).toBe(false)
+      }
+      const refused = [
+        [{ account: 2440, amount: 1 }],
+        [debt('2440', 0)],
+        [debt('2440', -5)],
+        [{ account: '2440', amount: 1, description: 'x'.repeat(101) }],
+      ]
+      for (const supplier_debts of refused) {
+        expect(MatchBatchSchema.safeParse({ allocations: supplierAllocations(1), supplier_debts }).success).toBe(false)
+      }
+    })
+
+    it('refuses a sixth extra row, fee and debt rows together', () => {
+      const fees = Array.from({ length: 3 }, () => ({ account: '6570', amount: 1 }))
+      const threeDebts = Array.from({ length: 3 }, () => debt('2440', 1))
+      const result = MatchBatchSchema.safeParse({ allocations: supplierAllocations(2), fees, supplier_debts: threeDebts })
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].path).toEqual(['supplier_debts'])
+      expect(
+        MatchBatchSchema.safeParse({ allocations: supplierAllocations(2), fees, supplier_debts: threeDebts.slice(1) }).success,
+      ).toBe(true)
+    })
+  })
 })
 
 // ============================================================

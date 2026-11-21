@@ -279,8 +279,6 @@ export async function loadAgentsOverview(supabase: SupabaseClient, companyId: st
 export interface CompanyKnowledge {
   name: string | null
   org_number: string | null
-  /** The onboarding text (agent_profiles.profile_summary): written once, addressed to the owner, may be outdated. */
-  onboarding_summary: string | null
   facts: Array<{ label: string; value: string; valid_from: string | null }>
   agreements?: ArkivMap['agreements']
   /** What agents were told (remember_fact), all of it, newest first, so a later fact can settle an earlier one. fact_id goes into remember_fact's replaces. created_by names who saved it (never an e-mail); created_by_deleted says that person's account is gone. */
@@ -306,10 +304,9 @@ export interface AgentBundle {
 
 /** Own agents declare no facts: they get every company fact the map holds. */
 async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string, def: { facts: readonly string[] | null; agreements: boolean }): Promise<CompanyKnowledge> {
-  const [map, profile, memory] = await Promise.all([
+  const [map, memory] = await Promise.all([
     // The map is best-effort: an archive that cannot be read never blocks the agent.
     buildArkivMap(supabase, companyId).catch(() => null),
-    supabase.from('agent_profiles').select('profile_summary').eq('company_id', companyId).maybeSingle(),
     // Every remembered fact, not a ranked few (lib/agent-context/remembered-facts);
     // a memory that a newer one replaced never reaches the agent. Best-effort:
     // the workflow starts without them, and the log says why.
@@ -326,7 +323,6 @@ async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string,
   return {
     name: map?.company.name ?? null,
     org_number: map?.company.org_number ?? null,
-    onboarding_summary: profile.error ? null : profile.data?.profile_summary ?? null,
     facts,
     ...(def.agreements ? { agreements: map?.agreements ?? [] } : {}),
     remembered: newestFirst(memory?.facts ?? []),

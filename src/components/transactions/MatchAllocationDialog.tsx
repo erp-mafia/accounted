@@ -78,6 +78,11 @@ import {
   payoutBankAmount,
   payoutFeesWithinInvoices,
 } from '@/lib/bookkeeping/payout-fee-lines'
+import {
+  SUPPLIER_DEBT_DEFAULT_ACCOUNT,
+  SUPPLIER_DEBT_DESCRIPTION_MAX,
+  isSupplierDebtAccount,
+} from '@/lib/bookkeeping/supplier-debt-lines'
 
 /** Pause after the last keystroke before the search goes to the database. */
 const SEARCH_DEBOUNCE_MS = 250
@@ -200,7 +205,14 @@ type FeeDraft = {
   description: string
 }
 
-/** The voucher preview of a split with fee rows: the route's dry run of `body`, or why it refused. */
+/**
+ * A supplier debt row as typed (crm#1954): the part of a supplier payment
+ * that pays invoices registered in the bookkeeping kept before, booked on a
+ * 244x account (lib/bookkeeping/supplier-debt-lines.ts).
+ */
+type DebtDraft = FeeDraft
+
+/** The voucher preview of a split with fee or debt rows: the route's dry run of `body`, or why it refused. */
 type VoucherPreview = { body: string } & (
   | { state: 'ready'; lines: PostingLineLike[] }
   | { state: 'failed'; message: string }
@@ -307,6 +319,10 @@ export default function MatchAllocationDialog({
   // the bank charged a fee on top of. Class 6 accounts of the active chart.
   const [fees, setFees] = useState<FeeDraft[]>([])
   const feeKey = useRef(0)
+  // Supplier debt rows (crm#1954): a supplier payment that also pays invoices
+  // registered before the company kept its books here. 244x accounts.
+  const [debts, setDebts] = useState<DebtDraft[]>([])
+  const debtKey = useRef(0)
   const [voucherPreview, setVoucherPreview] = useState<VoucherPreview | null>(null)
   // A failed confirm, link or paste says so where the action is (Stil v3):
   // the footer, under the link buttons, in the paste area.
@@ -324,6 +340,7 @@ export default function MatchAllocationDialog({
   const pickerListId = useId()
   const { accounts, isLoading: accountsLoading } = useAccounts()
   const feeAccounts = useMemo(() => accounts.filter((a) => isPayoutFeeAccount(a.account_number)), [accounts])
+  const debtAccounts = useMemo(() => accounts.filter((a) => isSupplierDebtAccount(a.account_number)), [accounts])
 
   useEffect(() => {
     const handle = setTimeout(() => setAppliedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
@@ -485,6 +502,7 @@ export default function MatchAllocationDialog({
       setPasteResult(null)
       setPickedExpanded(false)
       setFees([])
+      setDebts([])
       setVoucherPreview(null)
       setSubmitError(null)
       setLinkError(null)
@@ -498,7 +516,7 @@ export default function MatchAllocationDialog({
   // A refusal belongs to the split it was given for: any edit clears it.
   useEffect(() => {
     setSubmitError(null)
-  }, [drafts, fees, explainingAcknowledged])
+  }, [drafts, fees, debts, explainingAcknowledged])
 
   const txAmountAbs = transaction ? Math.abs(transaction.amount) : 0
   const txCurrency = transaction?.currency ?? 'SEK'
@@ -520,20 +538,26 @@ export default function MatchAllocationDialog({
   }, [drafts])
 
   // The fee rows: a customer's payout is the invoices less the fees, a
-  // supplier payment the invoices plus the fees. The tally below compares
-  // that net with the row.
+  // supplier payment the invoices plus the fees, plus the supplier debt from
+  // before it also pays. The tally below compares that net with the row.
   const feeTotal = useMemo(() => sumOre(fees.map((f) => parseAmount(f.amount))), [fees])
-  const settled = payoutBankAmount(kind, allocated, feeTotal)
+  const debtTotal = useMemo(() => sumOre(debts.map((d) => parseAmount(d.amount))), [debts])
+  const settled = payoutBankAmount(kind, allocated, feeTotal, debtTotal)
   const feeAccountOk = (account: string) =>
     isPayoutFeeAccount(account) && (accountsLoading || feeAccounts.some((a) => a.account_number === account))
   const feesValid =
     fees.every((f) => feeAccountOk(f.account) && parseAmount(f.amount) > 0) &&
     (fees.length === 0 || payoutFeesWithinInvoices(allocated, feeTotal))
+  const debtAccountOk = (account: string) =>
+    isSupplierDebtAccount(account) && (accountsLoading || debtAccounts.some((a) => a.account_number === account))
+  const debtsValid = debts.every((d) => debtAccountOk(d.account) && parseAmount(d.amount) > 0)
+  const extraRowsValid = feesValid && debtsValid
+  const hasExtraRows = fees.length + debts.length > 0
 
   // "Lägg till avgiftsrad": the gap a fee would close, a krona or more (under
   // that it is öresavrundning). Customer: every picked invoice paid in full,
   // less the row and the fees already there. Supplier: the row less the
-  // invoices and the fees.
+  // invoices, the fees and the debt rows.
   const owedTotal = useMemo(
     () =>
       sumOre(
@@ -544,12 +568,17 @@ export default function MatchAllocationDialog({
   const feeGap =
     kind === 'customer_invoice'
       ? roundOre(owedTotal - feeTotal - txAmountAbs)
-      : roundOre(txAmountAbs - allocated - feeTotal)
+      : roundOre(txAmountAbs - allocated - feeTotal - debtTotal)
+  // At most MAX_PAYOUT_FEES extra rows, fees and debts together (the schema and the RPC).
+  const roomForExtraRow = Object.keys(drafts).length > 0 && fees.length + debts.length < MAX_PAYOUT_FEES
   const offerFee =
-    Object.keys(drafts).length > 0 &&
-    fees.length < MAX_PAYOUT_FEES &&
+    roomForExtraRow &&
     feeGap >= ORE_ROUNDING_SETTLEMENT_MAX &&
     feeGap < (kind === 'customer_invoice' ? owedTotal : allocated)
+  // A supplier payment's rest may instead pay invoices registered before the
+  // company kept its books here (crm#1954): the choice is offered side by side
+  // with the fee, and alone when the rest is too large to be a fee.
+  const offerDebt = kind === 'supplier_invoice' && roomForExtraRow && feeGap >= ORE_ROUNDING_SETTLEMENT_MAX
 
   function addFeeRow() {
     if (!offerFee) return
@@ -568,6 +597,22 @@ export default function MatchAllocationDialog({
       ...prev,
       { key: feeKey.current++, account: PAYMENT_FEE_ACCOUNT, amount: formatAmountInput(feeGap), description: '' },
     ])
+  }
+
+  function addDebtRow() {
+    if (!offerDebt) return
+    setDebts((prev) => [
+      ...prev,
+      { key: debtKey.current++, account: SUPPLIER_DEBT_DEFAULT_ACCOUNT, amount: formatAmountInput(feeGap), description: '' },
+    ])
+  }
+
+  function updateDebt(key: number, patch: Partial<Omit<DebtDraft, 'key'>>) {
+    setDebts((prev) => prev.map((d) => (d.key === key ? { ...d, ...patch } : d)))
+  }
+
+  function removeDebt(key: number) {
+    setDebts((prev) => prev.filter((d) => d.key !== key))
   }
 
   function updateFee(key: number, patch: Partial<Omit<FeeDraft, 'key'>>) {
@@ -821,6 +866,15 @@ export default function MatchAllocationDialog({
             })),
           }
         : {}),
+      ...(debts.length > 0
+        ? {
+            supplier_debts: debts.map((d) => ({
+              account: d.account,
+              amount: parseAmount(d.amount),
+              ...(d.description.trim() ? { description: d.description.trim() } : {}),
+            })),
+          }
+        : {}),
       // Acknowledged set: echo its ids so the route can verify that what
       // the user overrode is what it still detects.
       ...(explaining && explainingAcknowledged
@@ -830,12 +884,12 @@ export default function MatchAllocationDialog({
           }
         : {}),
     }
-  }, [drafts, fees, explaining, explainingAcknowledged])
+  }, [drafts, fees, debts, explaining, explainingAcknowledged])
 
-  // Fee rows: the verifikat the confirm would post, from the route's dry run
-  // (the bank leg on the row's own account), once the row balances.
+  // Fee or debt rows: the verifikat the confirm would post, from the route's
+  // dry run (the bank leg on the row's own account), once the row balances.
   const previewBody =
-    transaction && requestBody && fees.length > 0 && balanced && feesValid && !overLimit && !explainingBlocks
+    transaction && requestBody && hasExtraRows && balanced && extraRowsValid && !overLimit && !explainingBlocks
       ? JSON.stringify(requestBody)
       : null
   const transactionId = transaction?.id
@@ -875,9 +929,9 @@ export default function MatchAllocationDialog({
     // allowed because it leaves the bank line short of tx_abs and breaks
     // reconciliation.
     if (!balanced || overshoot || overLimit) return
-    // A fee row the route would refuse (account, amount, fees as large as
-    // the invoices) holds the confirm too, as its disabled state says.
-    if (!feesValid) return
+    // A fee or debt row the route would refuse (account, amount, fees as
+    // large as the invoices) holds the confirm too, as its disabled state says.
+    if (!extraRowsValid) return
 
     setSubmitting(true)
     setSubmitError(null)
@@ -999,7 +1053,7 @@ export default function MatchAllocationDialog({
   // What the confirm does, on the footer's left (Stil v3): the
   // samlingsverifikation and what becomes of the invoices; until the split
   // balances, why the confirm waits. A refused confirm says so in this spot.
-  const canConfirm = balanced && !overshoot && !overLimit && feesValid && !explainingBlocks
+  const canConfirm = balanced && !overshoot && !overLimit && extraRowsValid && !explainingBlocks
   const partialLabels = canConfirm
     ? pickedRows
         .filter(
@@ -1553,31 +1607,101 @@ export default function MatchAllocationDialog({
               </div>
             )}
 
-            {/* The tally against the bank row: with fee rows, the invoices
-                and the fees first, then the net. */}
+            {/* Supplier debt rows (crm#1954): the part of the payment that
+                pays invoices registered in the bookkeeping kept before,
+                debited to a 244x account without VAT, in the fee rows'
+                columns. */}
+            {debts.length > 0 && (
+              <div data-testid="debt-rows">
+                <ul>
+                  {debts.map((debt, index) => {
+                    const n = index + 1
+                    const accountId = `match-allocation-debt-account-${debt.key}`
+                    const accountInvalid = debt.account.length >= 4 && !debtAccountOk(debt.account)
+                    return (
+                      <li key={debt.key} className="border-b-hairline py-1.5">
+                        <div className={FEE_GRID_CLASS}>
+                          <div className="min-w-0">
+                            <label htmlFor={accountId} className="sr-only">
+                              {t('debt_account_aria', { n })}
+                            </label>
+                            <AccountCombobox
+                              id={accountId}
+                              value={debt.account}
+                              accounts={debtAccounts}
+                              onChange={(value) => updateDebt(debt.key, { account: value.trim() })}
+                              placeholder={SUPPLIER_DEBT_DEFAULT_ACCOUNT}
+                            />
+                          </div>
+                          <Input
+                            value={debt.description}
+                            onChange={(e) => updateDebt(debt.key, { description: e.target.value })}
+                            placeholder={t('debt_description_placeholder')}
+                            maxLength={SUPPLIER_DEBT_DESCRIPTION_MAX}
+                            aria-label={t('debt_description_aria', { n })}
+                          />
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            value={debt.amount}
+                            onChange={(e) => updateDebt(debt.key, { amount: e.target.value })}
+                            aria-label={t('debt_amount_aria', { n })}
+                            className="text-right tabular-nums"
+                          />
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => removeDebt(debt.key)}
+                            aria-label={t('debt_remove_aria', { n })}
+                            className="text-muted-foreground"
+                          >
+                            <XMarkIcon className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        {accountInvalid && (
+                          <p className="mt-1 text-[12px] leading-4 text-destructive">{t('debt_account_invalid')}</p>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+                <p className="mt-1 text-[12px] leading-4 text-muted-foreground">{t('debt_note')}</p>
+              </div>
+            )}
+
+            {/* The tally against the bank row: with fee or debt rows, the
+                invoices, the fees and the debt rows first, then the net. */}
             {pickedCount > 0 && (
               <div className="text-[13px] tabular-nums">
-                {fees.length > 0 && (
-                  <>
-                    <div className={cn(TOTAL_GRID_CLASS, 'min-h-9')}>
-                      <span className="text-muted-foreground">{t('invoices_label')}</span>
-                      <span className="text-right">{formatCurrency(allocated, transaction.currency)}</span>
-                      <span />
-                    </div>
-                    <div className={cn(TOTAL_GRID_CLASS, 'min-h-9')}>
-                      <span className="text-muted-foreground">{t('fees_label')}</span>
-                      <span className="text-right">
-                        {kind === 'customer_invoice' ? '' : '+'}
-                        {formatCurrency(kind === 'customer_invoice' ? -feeTotal : feeTotal, transaction.currency)}
-                      </span>
-                      <span />
-                    </div>
-                  </>
+                {hasExtraRows && (
+                  <div className={cn(TOTAL_GRID_CLASS, 'min-h-9')}>
+                    <span className="text-muted-foreground">{t('invoices_label')}</span>
+                    <span className="text-right">{formatCurrency(allocated, transaction.currency)}</span>
+                    <span />
+                  </div>
                 )}
-                <div className={cn(TOTAL_GRID_CLASS, 'min-h-11', fees.length > 0 && 'border-t-total')}>
+                {fees.length > 0 && (
+                  <div className={cn(TOTAL_GRID_CLASS, 'min-h-9')}>
+                    <span className="text-muted-foreground">{t('fees_label')}</span>
+                    <span className="text-right">
+                      {kind === 'customer_invoice' ? '' : '+'}
+                      {formatCurrency(kind === 'customer_invoice' ? -feeTotal : feeTotal, transaction.currency)}
+                    </span>
+                    <span />
+                  </div>
+                )}
+                {debts.length > 0 && (
+                  <div className={cn(TOTAL_GRID_CLASS, 'min-h-9')}>
+                    <span className="text-muted-foreground">{t('debts_label')}</span>
+                    <span className="text-right">+{formatCurrency(debtTotal, transaction.currency)}</span>
+                    <span />
+                  </div>
+                )}
+                <div className={cn(TOTAL_GRID_CLASS, 'min-h-11', hasExtraRows && 'border-t-total')}>
                   <span className="text-muted-foreground">{t('net_label')}</span>
                   <span className={cn('text-right font-medium text-strong', overshoot && 'text-destructive')}>
-                    {formatCurrency(fees.length > 0 ? settled : allocated, transaction.currency)}
+                    {formatCurrency(hasExtraRows ? settled : allocated, transaction.currency)}
                   </span>
                   <span />
                 </div>
@@ -1588,7 +1712,7 @@ export default function MatchAllocationDialog({
           {/* Where the split stands, as one line. Undershoot blocks too: the
               verifikat's bank line must equal the bank's actual receipt or
               reconciliation breaks (PR #607 round-1 review). */}
-          {(overLimit || overshoot || balanced || (undershoot && pickedCount > 0) || offerFee) && (
+          {(overLimit || overshoot || balanced || (undershoot && pickedCount > 0) || offerFee || offerDebt) && (
             <div className="space-y-2">
               {overLimit && (
                 <div className="flex items-start gap-2 text-[13px] leading-5 text-destructive">
@@ -1614,20 +1738,37 @@ export default function MatchAllocationDialog({
                 <AttnLine>{t('undershoot_warning', { amount: formatCurrency(leftover, transaction.currency) })}</AttnLine>
               ) : null}
               {/* Offered once the invoices and the row are a krona or more
-                  apart in the fee's direction, prefilled with that gap. */}
-              {offerFee && (
-                <AttnLine tone="info" action={{ label: t('fee_add'), onClick: addFeeRow }}>
-                  {t(kind === 'customer_invoice' ? 'fee_offer_customer' : 'fee_offer_supplier', {
-                    amount: formatCurrency(feeGap, txCurrency),
-                  })}
+                  apart in the fee's direction, prefilled with that gap. A
+                  supplier payment's rest is a choice (crm#1954): a bank fee
+                  (while it is smaller than the invoices) or a supplier debt
+                  from the bookkeeping kept before. */}
+              {offerDebt ? (
+                <AttnLine tone="info">
+                  {t('remainder_offer_supplier', { amount: formatCurrency(feeGap, txCurrency) })}
+                  <div className="mt-1.5 flex flex-wrap gap-2 print:hidden">
+                    {offerFee && (
+                      <Button type="button" variant="outline" onClick={addFeeRow}>
+                        {t('remainder_as_fee', { account: PAYMENT_FEE_ACCOUNT })}
+                      </Button>
+                    )}
+                    <Button type="button" variant="outline" onClick={addDebtRow}>
+                      {t('remainder_as_supplier_debt', { account: SUPPLIER_DEBT_DEFAULT_ACCOUNT })}
+                    </Button>
+                  </div>
                 </AttnLine>
+              ) : (
+                offerFee && (
+                  <AttnLine tone="info" action={{ label: t('fee_add'), onClick: addFeeRow }}>
+                    {t('fee_offer_customer', { amount: formatCurrency(feeGap, txCurrency) })}
+                  </AttnLine>
+                )
               )}
             </div>
           )}
 
-          {/* Fee rows: the verifikat the confirm would post, from the
-              route's dry run (the bank leg on the row's own account), once
-              the row balances. */}
+          {/* Fee or debt rows: the verifikat the confirm would post, from
+              the route's dry run (the bank leg on the row's own account),
+              once the row balances. */}
           {previewBody && (
             <div className="space-y-1.5" data-testid="fee-voucher-preview">
               <div className={headLabelClass}>{t('preview_title')}</div>
@@ -1672,7 +1813,7 @@ export default function MatchAllocationDialog({
             // Confirm requires sum == tx_abs exactly (within rounding).
             // Anything else lets the JE diverge from the bank line and
             // breaks reconciliation. PR #607 round-1 review fix.
-            disabled={linking || !balanced || overshoot || overLimit || explainingBlocks || !feesValid}
+            disabled={linking || !balanced || overshoot || overLimit || explainingBlocks || !extraRowsValid}
             loading={submitting}
           >
             {t('confirm')}

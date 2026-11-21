@@ -202,6 +202,8 @@ export function MeetingsRegister() {
   // place of what did not load (or as one line above a list on screen).
   const [listFailed, setListFailed] = useState(false)
   const [meetingFailed, setMeetingFailed] = useState(false)
+  // A link (?id=) to a meeting that no longer exists: one line over the list.
+  const [meetingGone, setMeetingGone] = useState(false)
   const [busy, setBusy] = useState(false)
   const [people, setPeople] = useState<Person[]>([])
   const { periods: periodRows } = useFiscalPeriods()
@@ -225,6 +227,7 @@ export function MeetingsRegister() {
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
     setMeeting(null)
+    setMeetingGone(false)
     try {
       const url = new URL(window.location.href)
       if (id) url.searchParams.set('id', id)
@@ -250,8 +253,12 @@ export function MeetingsRegister() {
     async (id: string) => {
       setMeetingFailed(false)
       const res = await fetch(`/api/bolaget/meetings/${id}`).catch(() => null) // unreachable: meetingFailed
-      // A meeting that no longer exists: back to the list.
-      if (res?.status === 404) return select(null)
+      // A meeting that no longer exists: back to the list, which says so.
+      if (res?.status === 404) {
+        select(null)
+        setMeetingGone(true)
+        return
+      }
       if (!res?.ok) {
         setMeetingFailed(true)
         return
@@ -505,6 +512,8 @@ export function MeetingsRegister() {
         />
         {listFailed && meetings ? (
           <AttnLine action={{ label: tCommon('retry'), onClick: () => void loadList() }}>{tCommon('refresh_failed')}</AttnLine>
+        ) : meetingGone ? (
+          <AttnLine>{t('meeting_gone')}</AttnLine>
         ) : null}
         {loading && !meetings ? (
           <LateReveal className="space-y-2">
@@ -623,6 +632,8 @@ export function MeetingsRegister() {
 
   // ── One meeting ───────────────────────────────────────────────────
   const m = meeting
+  // A meeting is marked as held from its day on, never ahead of it.
+  const holdNotYet = m ? m.meeting_date > todayIsoStockholm() : false
   const fields = decisionForm ? PAYLOAD_FIELDS[decisionForm.kind] ?? [] : []
   const setPayload = (key: string, value: unknown) => decisionForm && setDecisionForm({ ...decisionForm, payload: { ...decisionForm.payload, [key]: value } })
   const listKey = decisionForm?.kind === 'val_styrelse' ? 'members' : decisionForm?.kind === 'val_revisor' ? 'auditors' : decisionForm?.kind === 'ansvarsfrihet' ? 'persons' : null
@@ -658,7 +669,12 @@ export function MeetingsRegister() {
                 </a>
               </Button>
               {canWrite && m.status === 'draft' && (
-                <Button size="toolbar" onClick={() => setConfirmHold(true)} disabled={m.meeting_date > todayIsoStockholm()}>
+                <Button
+                  size="toolbar"
+                  onClick={() => setConfirmHold(true)}
+                  disabled={holdNotYet}
+                  title={holdNotYet ? t('hold_from_date', { date: formatDate(m.meeting_date) }) : undefined}
+                >
                   {t('hold')}
                 </Button>
               )}
@@ -695,7 +711,13 @@ export function MeetingsRegister() {
             </div>
             <dl className="grid grid-cols-[120px_minmax(0,1fr)] gap-x-6 gap-y-2 text-[13px]">
               <dt className="text-muted-foreground">{t('field_status')}</dt>
-              <dd>{statusChip(m)}</dd>
+              <dd>
+                {statusChip(m)}
+                {/* Why Markera som hållet is grey: the meeting day has not come. */}
+                {canWrite && m.status === 'draft' && holdNotYet && (
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('hold_from_date', { date: formatDate(m.meeting_date) })}</p>
+                )}
+              </dd>
               <dt className="text-muted-foreground">{t('field_date')}</dt>
               <dd className="date-figures">{formatDate(m.meeting_date)}{m.meeting_time ? ` ${m.meeting_time}` : ''}</dd>
               {m.kind !== 'per_capsulam' && (

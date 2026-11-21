@@ -125,7 +125,7 @@ export interface AgentChatProps {
   initialConversationId?: string | null
   onConversationIdChange?: (id: string) => void
   // Fires after the first turn_complete in a fresh-start session: used by
-  // bootstrap starters (ChatNewStarter, ChatIntakeStarter) to defer the URL
+  // bootstrap starter (ChatNewStarter) to defer the URL
   // swap until streaming is done. Swapping on the early `conversation`
   // event unmounts the component mid-stream and the assistant reply is
   // never persisted before /chat/[id] hydrates.
@@ -262,7 +262,7 @@ export default function AgentChat({
     // conversation id. A present id means the conversation already exists
     // (or is mid-creation elsewhere), so we must not fire an invoke.
     //
-    // Why id-alone, not id+messages: the intake flow fires an invoke with
+    // Why id-alone, not id+messages: a bootstrap starter fires an invoke with
     // no conversation_id, then swaps the URL to /chat/[id] the moment the
     // `conversation` event lands: which can beat the greeting being
     // persisted. /chat/[id] then hydrates with 0 messages. If we keyed the

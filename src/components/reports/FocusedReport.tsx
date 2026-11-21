@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, EmptyState } from '@/components/ui/empty-state'
 import { ReportBodyLoading, ReportPageLoading } from '@/components/reports/ReportLoading'
 import { REPORT_TOOLBAR_SLOT_ID } from '@/components/reports/ReportExportMenu'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -16,6 +16,7 @@ import { DimensionFilter, type DimensionFilterValue } from '@/components/reports
 import { BudgetPicker } from '@/components/reports/BudgetPicker'
 import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { Ink2FilingHelp } from '@/components/reports/Ink2FilingHelp'
+import { NeFilingHelp } from '@/components/reports/NeFilingHelp'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import {
   huvudbokDrilldownHref,
@@ -266,6 +267,10 @@ function FocusedReportInner({
               <HelpPopover>
                 <Ink2FilingHelp />
               </HelpPopover>
+            ) : slug === 'ne-declaration' && isEnskildFirma ? (
+              <HelpPopover>
+                <NeFilingHelp />
+              </HelpPopover>
             ) : undefined
           }
           // The report's Exportera is a page-level action: ReportExportMenu
@@ -315,12 +320,7 @@ function FocusedReportInner({
           drilldown={accountDrilldown}
         />
       ) : (
-        <EmptyState
-          title="Inget räkenskapsår valt"
-          description="Skapa ett räkenskapsår för att kunna se rapporter."
-          actionLabel="Gå till inställningar"
-          actionHref="/settings"
-        />
+        <EmptyNoFiscalYear />
       )}
     </div>
   )

@@ -99,6 +99,8 @@ export type SimEvent = Dated &
     | { type: 'asset'; id: string; purchaseId: string; name: string; cost: number; usefulLifeMonths: number }
     | { type: 'card_cost'; category: string; account?: string; net: number; vatRate: VatRate; text: string }
     | { type: 'bank_fee'; amount: number }
+    | { type: 'pension_premium'; amount: number }
+    | { type: 'pension_tax'; year: number }
     | { type: 'salary_change'; employee: string; monthlySalary: number }
     | { type: 'payroll'; year: number; month: number }
     | { type: 'payroll_taxes_paid'; year: number; month: number }
@@ -314,6 +316,9 @@ function monthlyPurchases(random: Random, year: number, month: number, index: { 
   return events
 }
 
+/** The monthly tjänstepension premium for the owner, whole kronor. */
+const PENSION_PREMIUM = 2_500
+
 /** The handelsvaror the signed list counts on each balansdag: a stock count books the change, as year_end. */
 const STOCK_VALUE: Record<number, number> = { 2024: 40_000, 2025: 25_000 }
 
@@ -409,6 +414,8 @@ export function generateCompany(seed: number, scaleName: SimScaleName): SimPlan 
         })
       }
       events.push({ type: 'bank_fee', date: weekday(iso(year, month, lastDayOfMonth(year, month))), amount: 245 })
+      // The owner's tjänstepension: a premium to the insurer, no moms, särskild löneskatt at year end.
+      events.push({ type: 'pension_premium', date: weekday(iso(year, month, 20)), amount: PENSION_PREMIUM })
 
       const payday = weekday(iso(year, month, 25))
       events.push({ type: 'payroll', date: payday, year, month })
@@ -430,6 +437,7 @@ export function generateCompany(seed: number, scaleName: SimScaleName): SimPlan 
     if (year !== 2026) {
       events.push({ type: 'stock_count', date: iso(year, 12, 31), year, value: STOCK_VALUE[year] })
       events.push({ type: 'depreciation', date: iso(year, 12, 31), year })
+      events.push({ type: 'pension_tax', date: iso(year, 12, 31), year })
       events.push({ type: 'corporate_tax', date: iso(year, 12, 31), year })
       events.push({ type: 'year_end', date: iso(year + 1, 3, 20), year })
       events.push({ type: 'annual_report', date: iso(year + 1, 5, 20), year })

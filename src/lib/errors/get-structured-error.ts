@@ -362,7 +362,7 @@ export function classifyError(error: unknown): ErrorClassification {
   if (isNoRowFromSingle(error)) {
     return {
       code: 'NOT_FOUND',
-      message_sv: getErrorEntry('NOT_FOUND')?.message_sv ?? 'Resursen kunde inte hittas.',
+      message_sv: getErrorEntry('NOT_FOUND')?.message_sv ?? 'Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.',
       message_en: NO_ROW_MESSAGE_EN,
       transient: false,
     }

@@ -209,6 +209,32 @@ interface SieImportRow {
   /** From job_result.repairOutcome and .stoppedAt (read in code): set on a stopped duplicate repair. */
   repair_outcome?: string | null
   repair_stopped_at?: string | null
+  /** From job_result.support_removal (read in code): support removed this undone import from the ledger. */
+  support_removal?: SieImportRemoval | null
+}
+
+/**
+ * The receipt support_remove_undone_sie_import (migration 20261120140000,
+ * crm#1954) leaves on the undone import: its verifikat and their stornos
+ * deleted, and per series either the replacement renumbered to the previous
+ * system's numbers or the freed numbers explained as a gap.
+ */
+interface SieImportRemoval {
+  removed_at: string
+  fiscal_period_id: string | null
+  imported_verifikat: number | null
+  stornos: number | null
+  reason: string | null
+  actor_label: string | null
+  series: Array<{
+    series: string
+    mode: string | null
+    removed_numbers: Array<{ from: number; to: number }>
+    renumbered: number
+    renumbered_from: { from: number; to: number } | null
+    renumbered_to: { from: number; to: number } | null
+    gap_explanations: Array<{ gap_start: number; gap_end: number }>
+  }>
 }
 
 interface BankFileImportRow {
@@ -2505,7 +2531,56 @@ function sieImportJobEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
       count: 1,
     })
   }
+  if (undone && row.support_removal) events.push(sieRemovalEvent(row, row.support_removal))
   return events
+}
+
+/** "A1-A400", or "A7" for one number. */
+function voucherRange(series: string, from: number, to: number): string {
+  return from === to ? `${series}${from}` : `${series}${from}-${series}${to}`
+}
+
+/**
+ * Support removed the undone import from the ledger
+ * (support_remove_undone_sie_import, crm#1954): its verifikat and their
+ * stornos were deleted, and per series the replacement import was renumbered
+ * to the previous system's numbers or the freed numbers were explained as a
+ * gap. Dated when it happened; the import's own fiscal year also shows it.
+ */
+function sieRemovalEvent(row: SieImportRow, removal: SieImportRemoval): RawBehandlingshistorikEvent {
+  const removedRanges = removal.series
+    .flatMap((plan) => plan.removed_numbers.map((r) => voucherRange(plan.series, r.from, r.to)))
+    .join(', ')
+  const details = [
+    `Raderade: ${removal.imported_verifikat ?? 0} importerade verifikationer och ${removal.stornos ?? 0} vändningsverifikationer` +
+      (removedRanges ? ` (${removedRanges})` : ''),
+  ]
+  for (const plan of removal.series) {
+    if (plan.mode === 'renumber' && plan.renumbered > 0 && plan.renumbered_from && plan.renumbered_to) {
+      details.push(
+        `Serie ${plan.series}: ${voucherRange(plan.series, plan.renumbered_from.from, plan.renumbered_from.to)} omnumrerade till ` +
+          `${voucherRange(plan.series, plan.renumbered_to.from, plan.renumbered_to.to)}, det tidigare systemets nummer`,
+      )
+    } else if (plan.mode === 'gap_explanations' && plan.gap_explanations.length > 0) {
+      details.push(
+        `Serie ${plan.series}: inte omnumrerad, de borttagna numren är förklarade som lucka (` +
+          plan.gap_explanations.map((g) => voucherRange(plan.series, g.gap_start, g.gap_end)).join(', ') + ')',
+      )
+    }
+  }
+  if (removal.reason) details.push(`Skäl: ${removal.reason}`)
+  return {
+    id: `sie:${row.id}:removed`,
+    occurred_at: toIso(removal.removed_at)!,
+    category: 'import',
+    code: 'sie_import.removed',
+    event: 'Ångrad SIE-import borttagen ur bokföringen av support',
+    object: row.filename,
+    actor: { type: 'system', user_id: null, actor_label: removal.actor_label },
+    details,
+    source: 'sie_import',
+    count: 1,
+  }
 }
 
 /**
@@ -3409,12 +3484,65 @@ const SIE_IMPORT_COLUMNS =
   'id, user_id, filename, sie_type, fiscal_year_start, fiscal_year_end, accounts_count, transactions_count, status, error_message, imported_at, created_at, replaced_at, ' +
   'job_state, job_kind, job_phase, execution_actor_id, undo_actor_type, undo_actor_label, job_result'
 
-/** A stopped duplicate repair's outcome and stop time, read from job_result in code (not a JSON-path select). */
+/**
+ * A stopped duplicate repair's outcome and stop time, and a support removal's
+ * receipt, read from job_result in code (not a JSON-path select).
+ */
 function withRepairOutcome(row: SieImportRow & { job_result?: unknown }): SieImportRow {
   const { job_result: jobResult, ...rest } = row
   const result = jobResult && typeof jobResult === 'object' ? (jobResult as Record<string, unknown>) : null
   const text = (value: unknown) => (typeof value === 'string' ? value : null)
-  return { ...rest, repair_outcome: text(result?.repairOutcome), repair_stopped_at: text(result?.stoppedAt) }
+  return {
+    ...rest,
+    repair_outcome: text(result?.repairOutcome),
+    repair_stopped_at: text(result?.stoppedAt),
+    support_removal: readSieImportRemoval(result?.support_removal),
+  }
+}
+
+/** The removal receipt as stored, or null when the import was never removed or the receipt is unreadable. */
+function readSieImportRemoval(value: unknown): SieImportRemoval | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  if (typeof raw.removed_at !== 'string' || raw.removed_at.length === 0) return null
+  const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null)
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  const text = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v : null)
+  const range = (v: unknown) => {
+    const r = obj(v)
+    const from = num(r?.from)
+    const to = num(r?.to)
+    return from !== null && to !== null ? { from, to } : null
+  }
+  const list = (v: unknown) => (Array.isArray(v) ? v : [])
+  const removed = obj(raw.removed)
+  return {
+    removed_at: raw.removed_at,
+    fiscal_period_id: text(obj(raw.fiscal_period)?.id),
+    imported_verifikat: num(removed?.imported_verifikat),
+    stornos: num(removed?.stornos),
+    reason: text(raw.reason),
+    actor_label: text(raw.actor_label),
+    series: list(raw.series).flatMap((entry) => {
+      const plan = obj(entry)
+      const series = text(plan?.series)
+      if (!plan || series === null) return []
+      return [{
+        series,
+        mode: text(plan.mode),
+        removed_numbers: list(plan.removed_numbers).map(range).filter((r): r is { from: number; to: number } => r !== null),
+        renumbered: num(plan.renumbered) ?? 0,
+        renumbered_from: range(plan.renumbered_from),
+        renumbered_to: range(plan.renumbered_to),
+        gap_explanations: list(plan.gap_explanations).flatMap((gap) => {
+          const g = obj(gap)
+          const start = num(g?.gap_start)
+          const end = num(g?.gap_end)
+          return start !== null && end !== null ? [{ gap_start: start, gap_end: end }] : []
+        }),
+      }]
+    }),
+  }
 }
 
 async function fetchSieImports(supabase: SupabaseClient, companyId: string): Promise<SieImportRow[]> {
@@ -3728,7 +3856,11 @@ export async function generateBehandlingshistorik(
   }
   for (const row of sieImports) {
     for (const ev of sieImportEvents(row)) {
-      if (isWithin(ev.occurred_at, fromMs, toMsBound)) raw.push(ev)
+      // A support removal changed this year's verifikat, so the year's own
+      // report shows it whenever it happened, as it shows a later storno.
+      const removalOfThisYear =
+        fiscalYear && ev.code === 'sie_import.removed' && row.support_removal?.fiscal_period_id === period.id
+      if (removalOfThisYear || isWithin(ev.occurred_at, fromMs, toMsBound)) raw.push(ev)
     }
   }
   for (const row of bankImports) {

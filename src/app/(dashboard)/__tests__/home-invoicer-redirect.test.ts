@@ -96,7 +96,6 @@ vi.mock('../hem-sections', () => ({
   HemPanesSection: () => null,
 }))
 vi.mock('@/components/dashboard/DashboardContent', () => ({ default: () => null }))
-vi.mock('@/components/dashboard/AgentPromo', () => ({ AgentPromo: () => null }))
 vi.mock('@/components/dashboard/HemDone', () => ({ HemDone: () => null }))
 vi.mock('@/components/dashboard/HemSkeletons', () => ({ ChecklistSkeleton: () => null, PanesSkeleton: () => null }))
 vi.mock('@/components/system/RefreshWhenRestored', () => ({ RefreshWhenRestored: () => null }))

@@ -73,37 +73,44 @@ export default function SuppliersPage() {
   const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const { toast } = useToast()
   const router = useRouter()
 
+  // A network error or a non-JSON 502 used to throw out of the handler and
+  // leave the drawer spinning: every failure now ends in a sentence in the
+  // drawer's footer, and the spinner always stops.
   async function handleCreateSupplier(data: CreateSupplierInput) {
     setIsCreating(true)
-
-    const response = await fetch('/api/suppliers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-
-    const result = await response.json()
-
-    if (!response.ok) {
-      const fieldErrors = result.errors?.map((e: { field: string; message: string }) => `${e.field}: ${e.message}`).join(', ')
-      toast({
-        title: t('create_failed_title'),
-        description: fieldErrors || getErrorMessage(result, { locale: errorLocale, fallback: t('create_failed_retry') }),
-        variant: 'destructive',
+    setCreateError(null)
+    try {
+      const response = await fetch('/api/suppliers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
       })
-    } else {
+
+      const result = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        const fieldErrors = result?.errors?.map((e: { field: string; message: string }) => `${e.field}: ${e.message}`).join(', ')
+        setCreateError(
+          fieldErrors ||
+            getErrorMessage(result, { context: 'supplier', statusCode: response.status, locale: errorLocale }),
+        )
+        return
+      }
       toast({
         title: t('created_title'),
         description: t('created_description', { name: data.name }),
       })
       await invalidateReferenceData('ref:suppliers')
       setIsDialogOpen(false)
+    } catch (err) {
+      setCreateError(getErrorMessage(err, { context: 'supplier', locale: errorLocale }))
+    } finally {
+      setIsCreating(false)
     }
-
-    setIsCreating(false)
   }
 
   // org_number is stored as 10 digits and shown as XXXXXX-XXXX, so the search
@@ -149,11 +156,15 @@ export default function SuppliersPage() {
               forms): the list stays in place behind it. */}
           <CreateDrawer
             open={isDialogOpen}
-            onOpenChange={setIsDialogOpen}
+            onOpenChange={(open) => {
+              setIsDialogOpen(open)
+              if (!open) setCreateError(null)
+            }}
             title={t('new_supplier')}
             formId="create-supplier-form"
             submitLabel={t('create_submit')}
             submitting={isCreating}
+            error={createError}
           >
             <SupplierForm
               onSubmit={handleCreateSupplier}

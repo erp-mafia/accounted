@@ -882,3 +882,166 @@ describe('POST /api/transactions/[id]/match-batch with fee rows', () => {
     expect(mockSupabase.rpc.mock.calls[0][1]).not.toHaveProperty('p_fee_lines')
   })
 })
+
+// crm#1954: one outgoing row pays supplier invoices registered here and
+// invoices registered in the bookkeeping kept before (only in the 2440
+// balance an SIE import brought). The rest is a debit on 2440, not a fee.
+describe('POST /api/transactions/[id]/match-batch with supplier debt rows', () => {
+  const allocations = [
+    { kind: 'supplier_invoice', supplier_invoice_id: SI_UUID, amount: 6000 },
+    { kind: 'supplier_invoice', supplier_invoice_id: SI_PARTIAL_UUID, amount: 4000 },
+  ]
+  const supplier_debts = [{ account: '2440', amount: 18546.5, description: 'Fakturor före flytten' }]
+  const post = (body: unknown, query = '') =>
+    POST(
+      createMockRequest(`/api/transactions/${TX_UUID}/match-batch${query}`, { method: 'POST', body }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+  const supplierRow = (cashAccountId: string | null) => ({
+    data: { id: TX_UUID, description: 'INTERNET BET 1', merchant_name: null, amount: -28546.5, currency: 'SEK', date: '2026-11-18', journal_entry_id: null, cash_account_id: cashAccountId },
+    error: null,
+  })
+  const supplierInvoices = {
+    data: [
+      { id: SI_UUID, currency: 'SEK', exchange_rate: null, remaining_amount: 6000, total: 6000 },
+      { id: SI_PARTIAL_UUID, currency: 'SEK', exchange_rate: null, remaining_amount: 4000, total: 4000 },
+    ],
+    error: null,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
+    mockDetectExplaining.mockResolvedValue(null)
+  })
+
+  it('401 without a session', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    expect((await post({ allocations, supplier_debts })).status).toBe(401)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('400 for debt rows on a customer batch, an account outside 244x, or a sixth extra row with the fees', async () => {
+    const customer = [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }]
+    expect((await post({ allocations: customer, supplier_debts: [{ account: '2440', amount: 50 }] })).status).toBe(400)
+    expect((await post({ allocations, supplier_debts: [{ account: '2650', amount: 50 }] })).status).toBe(400)
+    expect((await post({ allocations, supplier_debts: [{ account: '2440', amount: 0 }] })).status).toBe(400)
+    const fees = Array.from({ length: 3 }, () => ({ account: '6570', amount: 1 }))
+    const threeDebts = Array.from({ length: 3 }, () => ({ account: '2440', amount: 1 }))
+    expect((await post({ allocations, fees, supplier_debts: threeDebts })).status).toBe(400)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('404 BATCH_TX_NOT_FOUND on a dry run for a row outside the company', async () => {
+    enqueue({ data: null, error: null }) // transactions
+    const response = await post({ allocations, supplier_debts }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('BATCH_TX_NOT_FOUND')
+  })
+
+  it('dry run: both invoices and the old debt debited, the bank credited for all of it, nothing written', async () => {
+    enqueue(supplierRow('ca-1'))
+    enqueue(supplierInvoices)
+    enqueue({ data: [{ account_number: '2440' }], error: null }) // chart_of_accounts: 2440 is active
+    enqueue({ data: { ledger_account: '1931', currency: 'SEK' }, error: null }) // cash_accounts
+    const response = await post({ allocations, supplier_debts }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{
+      data: {
+        total_allocated: number
+        total_debts: number
+        expected_description: string
+        expected_lines: Array<{ account_number: string; debit: number; credit: number }>
+        expected_lines_balanced: boolean
+      }
+    }>(response)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({
+      total_allocated: 10000,
+      total_debts: 18546.5,
+      expected_description: 'Samlingsbetalning 2026-11-18',
+      expected_lines_balanced: true,
+    })
+    expect(body.data).not.toHaveProperty('total_fees')
+    expect(body.data.expected_lines.map((l) => `${l.account_number} D${l.debit} K${l.credit}`)).toEqual([
+      '2440 D6000 K0',
+      '2440 D4000 K0',
+      '2440 D18546.5 K0',
+      '1931 D0 K28546.5',
+    ])
+    expect(findCalls('chart_of_accounts', 'in')).toEqual([['account_number', ['2440']]])
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
+  it('dry run refuses a debt account the chart does not have active: BATCH_DEBT_ACCOUNT_INVALID', async () => {
+    enqueue(supplierRow(null))
+    enqueue(supplierInvoices)
+    enqueue({ data: [], error: null }) // chart_of_accounts: 2448 is not active
+    const response = await post({ allocations, supplier_debts: [{ account: '2448', amount: 18546.5 }] }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { account: string } } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_DEBT_ACCOUNT_INVALID')
+    expect(body.error.details).toEqual({ account: '2448' })
+  })
+
+  it('dry run: a row the invoices and the debt rows do not meet is BATCH_AMOUNT_BELOW_TX, naming the debt rows', async () => {
+    enqueue(supplierRow(null))
+    enqueue(supplierInvoices)
+    const response = await post({ allocations, supplier_debts: [{ account: '2440', amount: 500 }] }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, number> } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_AMOUNT_BELOW_TX')
+    expect(body.error.details).toEqual({ total_allocated: 10000, total_debts: 500, transaction_amount: 28546.5 })
+  })
+
+  it('200 books through the RPC with p_debt_lines as the builder makes them, and answers total_debts', async () => {
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-debt-1',
+        voucher_series: 'A',
+        voucher_number: 31,
+        tx_id: TX_UUID,
+        allocations: [],
+        total_allocated: 10000,
+        total_fees: 0,
+        total_debts: 18546.5,
+        leftover: 0,
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'je-debt-1', company_id: 'company-1', status: 'posted', lines: [] }, error: null }) // engine door reload
+    const response = await post({
+      allocations,
+      supplier_debts: [{ account: '2440', amount: 18546.5, description: '  Fakturor före flytten ' }],
+    })
+    const { status, body } = await parseJsonResponse<{ data: { journal_entry_id: string; total_debts: number } }>(response)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ journal_entry_id: 'je-debt-1', total_debts: 18546.5 })
+    expect(body.data).not.toHaveProperty('total_fees')
+    expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'match_batch_allocate',
+      expect.objectContaining({
+        p_tx_id: TX_UUID,
+        p_allocations: allocations,
+        p_debt_lines: [{ account: '2440', amount: 18546.5, description: 'Fakturor före flytten' }],
+      }),
+    )
+    expect(mockSupabase.rpc.mock.calls[0][1]).not.toHaveProperty('p_fee_lines')
+  })
+
+  it('without debt rows the RPC gets no p_debt_lines: a database before the migration answers as before', async () => {
+    enqueue({
+      data: { ok: true, journal_entry_id: 'je-debt-2', voucher_series: 'A', voucher_number: 32, tx_id: TX_UUID, allocations: [], total_allocated: 10000, leftover: 0 },
+      error: null,
+    })
+    enqueue({ data: { id: 'je-debt-2', company_id: 'company-1', status: 'posted', lines: [] }, error: null })
+    const response = await post({ allocations })
+    expect(response.status).toBe(200)
+    expect((await parseJsonResponse<{ data: Record<string, unknown> }>(response)).body.data).not.toHaveProperty('total_debts')
+    expect(mockSupabase.rpc.mock.calls[0][1]).not.toHaveProperty('p_debt_lines')
+  })
+})

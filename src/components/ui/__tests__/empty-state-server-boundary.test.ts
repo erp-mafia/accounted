@@ -58,13 +58,15 @@ describe('byrå KPI empty state', () => {
   it('renders the preset from the server page instead of passing an icon', () => {
     const source = fs.readFileSync(pagePath, 'utf8')
     expect(isClientComponent(source)).toBe(false)
-    expect(source).toMatch(/<EmptyByraClients\s*\/>/)
+    // Plain props (who may create, a sentence) serialize; an icon does not.
+    expect(source).toMatch(/<EmptyByraClients\b[^>]*\/>/)
+    expect(source).not.toMatch(/<EmptyByraClients\b[^>]*\bicon=/)
     expect(source).not.toMatch(/from '@\/components\/icons'/)
   })
 
   it('keeps the icon and the copy in the preset', () => {
     const source = fs.readFileSync(path.join(repoRoot, 'components', 'ui', 'empty-state.tsx'), 'utf8')
-    expect(source).toMatch(/export function EmptyByraClients\(\)/)
+    expect(source).toMatch(/export function EmptyByraClients\(/)
     expect(source).toMatch(/icon=\{ArrowTrendingUpIcon\}/)
     // Variable-agnostic: the preset reads from the `byra` namespace under its
     // own translator name, so assert the keys, not the caller's identifier.

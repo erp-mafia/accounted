@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import type { Logger } from '@/lib/logger'
+import { swedishIssueReason } from '@/lib/errors/refusal'
+import { looksLikeUserFacingSwedish } from '@/lib/errors/get-error-message'
 
 export interface ValidationSuccess<T> {
   success: true
@@ -42,14 +44,93 @@ const SUMMARY_ISSUE_LIMIT = 3
 function summarizeIssues(errors: Array<{ field: string; message: string }>): string {
   const shown = errors
     .slice(0, SUMMARY_ISSUE_LIMIT)
-    .map((issue) => (issue.field ? `${issue.field}: ${issue.message}` : issue.message))
+    .map((issue) => {
+      // One sentence per issue: the Swedish reasons end with a period, a
+      // schema's own message may not.
+      const message = issue.message.trim().replace(/[.:;,]+$/, '')
+      return issue.field ? `${issue.field}: ${message}` : message
+    })
     .filter((text) => text.trim() !== '')
 
   if (shown.length === 0) return 'Valideringsfel: kontrollera fälten och försök igen.'
 
   const hidden = errors.length - SUMMARY_ISSUE_LIMIT
   const more = hidden > 0 ? ` (+${hidden} till)` : ''
-  return `Valideringsfel: ${shown.join('. ')}${more}`
+  return `Valideringsfel: ${shown.join('. ')}.${more}`
+}
+
+/**
+ * The words a person knows for the fields the dashboard's forms send. A field
+ * not named here keeps its key, as before; the reason after it is Swedish
+ * either way.
+ */
+const FIELD_LABELS: Record<string, string> = {
+  name: 'Namn',
+  email: 'E-postadress',
+  phone: 'Telefonnummer',
+  org_number: 'Organisationsnummer',
+  personal_number: 'Personnummer',
+  vat_number: 'Momsregistreringsnummer',
+  bankgiro: 'Bankgiro',
+  plusgiro: 'Plusgiro',
+  iban: 'IBAN',
+  bic: 'BIC/SWIFT',
+  clearing_number: 'Clearingnummer',
+  bank_account: 'Bankkonto',
+  address_line1: 'Adress',
+  address_line2: 'Adress',
+  postal_code: 'Postnummer',
+  city: 'Ort',
+  country: 'Land',
+  description: 'Beskrivning',
+  title: 'Titel',
+  notes: 'Anteckning',
+  amount: 'Belopp',
+  quantity: 'Antal',
+  unit: 'Enhet',
+  unit_price: 'À-pris',
+  vat_rate: 'Momssats',
+  currency: 'Valuta',
+  exchange_rate: 'Växelkurs',
+  account_number: 'Kontonummer',
+  entry_date: 'Datum',
+  invoice_date: 'Fakturadatum',
+  due_date: 'Förfallodatum',
+  invoice_number: 'Fakturanummer',
+  supplier_invoice_number: 'Fakturanummer',
+  your_reference: 'Er referens',
+  our_reference: 'Vår referens',
+  customer_number: 'Kundnummer',
+  start_date: 'Startdatum',
+  end_date: 'Slutdatum',
+  period_start: 'Startdatum',
+  period_end: 'Slutdatum',
+  items: 'Rader',
+  lines: 'Rader',
+}
+
+/** "Antal (rad 2)" for items.1.quantity; the dotted key when the field has no label. */
+function fieldLabel(path: readonly PropertyKey[]): string {
+  const keys = path.map(String)
+  const isIndex = (key: string) => /^\d+$/.test(key)
+  let namedAt = keys.length - 1
+  while (namedAt >= 0 && isIndex(keys[namedAt])) namedAt -= 1
+  const label = namedAt >= 0 ? FIELD_LABELS[keys[namedAt]] : undefined
+  if (!label) return keys.join('.')
+  const row = namedAt > 0 && isIndex(keys[namedAt - 1]) ? Number(keys[namedAt - 1]) + 1 : null
+  return row === null ? label : `${label} (rad ${row})`
+}
+
+/**
+ * The issues as a person reads them: a field label and a Swedish reason. A
+ * schema's own Swedish message ("Ange periodens startdatum") is the reason;
+ * Zod's English defaults get the shared Swedish sentence.
+ */
+function shownIssues(issues: readonly z.core.$ZodIssue[], input: unknown): Array<{ field: string; message: string }> {
+  return issues.map((issue) => ({
+    field: fieldLabel(issue.path),
+    message: looksLikeUserFacingSwedish(issue.message) ? issue.message : swedishIssueReason(issue, input),
+  }))
 }
 
 function logIssues(
@@ -117,7 +198,7 @@ export async function validateBody<T>(
       success: false,
       response: NextResponse.json(
         {
-          error: summarizeIssues(errors),
+          error: summarizeIssues(shownIssues(result.error.issues, body)),
           type: 'validation_error',
           errors,
         },
@@ -162,7 +243,9 @@ export function validateQuery<T>(
       success: false,
       response: NextResponse.json(
         {
-          error: 'Invalid query parameters',
+          // The same Swedish summary as a body: 'Invalid query parameters'
+          // reached a Swedish user verbatim, or as the generic line.
+          error: summarizeIssues(shownIssues(result.error.issues, raw)),
           type: 'validation_error',
           errors,
         },

@@ -16,6 +16,7 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -170,6 +171,11 @@ export function InvoicePaymentAccountsSettings({
   const [accounts, setAccounts] = useState<CashAccount[]>([])
   const [defaults, setDefaults] = useState<InvoicePayeeDefault[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The accounts could not be read: the list is unknown, not empty, so it
+  // says so instead of inviting a second payee account. Bumping the attempt
+  // re-runs the load.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<PayeeForm>(EMPTY_FORM)
   const [isSaving, setIsSaving] = useState(false)
@@ -202,8 +208,11 @@ export function InvoicePaymentAccountsSettings({
     let cancelled = false
     setIsLoading(true)
     load()
+      .then(() => {
+        if (!cancelled) setLoadError(null)
+      })
       .catch((err) => {
-        if (!cancelled) toast({ title: t('load_failed'), description: getUserErrorMessage(err), variant: 'destructive' })
+        if (!cancelled) setLoadError(getUserErrorMessage(err))
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false)
@@ -211,7 +220,7 @@ export function InvoicePaymentAccountsSettings({
     return () => {
       cancelled = true
     }
-  }, [load, t, toast])
+  }, [load, loadAttempt])
 
   // Bolagsverket knows most companies' bankgiro (companies.tic_snapshot).
   // Offer it as a one-click prefill on a SEK account with no bankgiro; the
@@ -767,6 +776,8 @@ export function InvoicePaymentAccountsSettings({
           <SpinnerIcon className="h-4 w-4 animate-spin" aria-hidden="true" />
           {t('loading')}
         </div>
+      ) : loadError !== null ? (
+        <LoadError title={t('load_failed')} description={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} />
       ) : (
         <>
           {printedFix && (

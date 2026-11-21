@@ -33,11 +33,14 @@ describe('loadMappings', () => {
 
     expect(stored).toHaveLength(2500)
     expect(stored.map((m) => m.source_account)).toEqual(rows.map((r) => r.source_account))
-    // Three windows of one page each, never one unpaged read.
+    // Windows of one page each, never one unpaged read: two one by one,
+    // then three at once (the two past the short page come back empty).
     expect(findCalls('sie_account_mappings', 'range')).toEqual([
       [0, POSTGREST_MAX_ROWS - 1],
       [POSTGREST_MAX_ROWS, 2 * POSTGREST_MAX_ROWS - 1],
       [2 * POSTGREST_MAX_ROWS, 3 * POSTGREST_MAX_ROWS - 1],
+      [3 * POSTGREST_MAX_ROWS, 4 * POSTGREST_MAX_ROWS - 1],
+      [4 * POSTGREST_MAX_ROWS, 5 * POSTGREST_MAX_ROWS - 1],
     ])
   })
 

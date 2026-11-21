@@ -16,7 +16,7 @@ import type { TicCallContext } from '@/lib/tic-budget/budget'
  * The company profile behind the extension's `fetchCompanyProfile` service:
  * the Lens search document plus six detail calls (documents, fiscal years,
  * payrolls, representatives, status, beneficial owners), folded into the
- * shape the agent onboarding snapshot reads.
+ * shape the company snapshot (lib/agent/composer/tic-fetch) reads.
  *
  * Null when TIC has no company under the org number. Throws what the TIC
  * client throws (not configured, quota, timeout, upstream errors); the

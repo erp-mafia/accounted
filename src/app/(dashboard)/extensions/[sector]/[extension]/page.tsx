@@ -46,6 +46,23 @@ export default async function ExtensionDetailPage({
     both: t('data_pattern_both'),
   }
 
+  // What the extension reads, in the words the app uses for it, never the
+  // database table names. A table without a word here is left out, and with
+  // none the line is dropped.
+  const coreTableLabels: Record<string, string> = {
+    invoices: t('core_table_invoices'),
+    deadlines: t('core_table_deadlines'),
+    customers: t('core_table_customers'),
+    company_settings: t('core_table_company_settings'),
+    document_attachments: t('core_table_document_attachments'),
+    suppliers: t('core_table_suppliers'),
+    invoice_inbox_items: t('core_table_invoice_inbox_items'),
+    company_members: t('core_table_company_members'),
+  }
+  const readsFrom = (definition.readsCoreTables ?? [])
+    .map((table) => coreTableLabels[table])
+    .filter((label): label is string => !!label)
+
   return (
     <div>
       <PageHeader
@@ -89,9 +106,9 @@ export default async function ExtensionDetailPage({
           <p className="text-sm text-muted-foreground">
             {dataPatternLabels[definition.dataPattern]}
           </p>
-          {definition.readsCoreTables && definition.readsCoreTables.length > 0 && (
+          {readsFrom.length > 0 && (
             <p className="text-xs text-muted-foreground mt-1">
-              {t('reads_from', { tables: definition.readsCoreTables.join(', ') })}
+              {t('reads_from', { tables: readsFrom.join(', ') })}
             </p>
           )}
         </div>

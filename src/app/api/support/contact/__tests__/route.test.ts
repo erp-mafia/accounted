@@ -98,7 +98,7 @@ describe('POST /api/support/contact', () => {
       })
     )
     expect(response.status).toBe(400)
-    expect((await response.json()).error).toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect((await response.json()).error).toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
   })
 
   it('still accepts the JSON body with no attachments', async () => {

@@ -38,6 +38,9 @@ vi.mock('../categories', () => ({
   countPaymentsFailedDue: vi.fn().mockResolvedValue(0),
   countAttestedToPayDue: vi.fn().mockResolvedValue(0),
   countPaymentsToSignDue: vi.fn().mockResolvedValue(0),
+  // The real watcher's contract: run the reads, report the categories whose
+  // read failed (lib/worklist/__tests__/categories.test.ts covers it).
+  watchCountFailures: vi.fn(async (_companyId: string, run: () => Promise<unknown>) => ({ result: await run(), failed: [] })),
 }))
 
 vi.mock('@/lib/suggestions/list', () => ({
@@ -45,6 +48,7 @@ vi.mock('@/lib/suggestions/list', () => ({
 }))
 
 import { getWorklistCounts } from '../aggregate'
+import { watchCountFailures } from '../categories'
 
 const supabase = {} as SupabaseClient
 
@@ -64,6 +68,20 @@ afterEach(() => {
 })
 
 describe('getWorklistCounts', () => {
+  it('says the counts are incomplete when a read failed, so a zero total is not "Allt är klart"', async () => {
+    vi.mocked(watchCountFailures).mockImplementationOnce(async (_companyId, run) => ({
+      result: await run(),
+      failed: ['book_transaction'],
+    }))
+    const failed = await getWorklistCounts(supabase, 'company-1')
+    expect(failed.incomplete).toBe(true)
+    expect(watchCountFailures).toHaveBeenCalledWith('company-1', expect.any(Function))
+
+    // A complete read keeps the payload's shape: no flag at all.
+    const complete = await getWorklistCounts(supabase, 'company-1')
+    expect(complete).not.toHaveProperty('incomplete')
+  })
+
   it('aggregates every category', async () => {
     const { counts } = await getWorklistCounts(supabase, 'company-1')
     expect(counts).toEqual({

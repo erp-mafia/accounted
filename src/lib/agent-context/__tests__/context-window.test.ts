@@ -4,7 +4,6 @@ import { briefingText, clientDisplayName, describeContextWindow, type ContextFac
 const BRIEFING = {
   company: { id: 'c1', company_id: 'c1', name: 'Exempelbolaget AB', org_number: '559999-0000', entity_type: 'aktiebolag', accounting_method: 'accrual' },
   user_name: 'Anna',
-  profile_summary: 'Konsultbolag inom IT.',
   atoms: [{ id: 'horizontal/swedish-vat', atom_id: 'horizontal/swedish-vat', tier: 'horizontal', title: 'Swedish VAT', description: 'Moms.' }],
   memory: [
     { id: 'f1', fact_id: 'f1', kind: 'fact', content: 'Hyran betalas kvartalsvis.', relevance_score: 1, saved_at: '2026-11-01T10:00:00Z', origin: 'conversation', client: 'claude-code' },
@@ -101,7 +100,6 @@ describe('describeContextWindow', () => {
   it('reads the company block as labelled values from the settings', () => {
     const company = window.sections.find((s) => s.id === 'company')!
     expect(company.items).toContainEqual({ type: 'value', label: 'org_number', value: '559999-0000', source: 'settings', date: null })
-    expect(company.items).toContainEqual({ type: 'text', text: 'Konsultbolag inom IT.', detail: null, source: 'profile', date: null })
   })
 
   it('reads the checks with their date', () => {
@@ -128,6 +126,27 @@ describe('describeContextWindow', () => {
   it('reads the saver once the briefing carries it', () => {
     const w = describeContextWindow({ ...BRIEFING, memory: [{ fact_id: 'f9', kind: 'fact', content: 'x y', created_by_deleted: true }] }, 60_000)
     expect(w.sections[0].items[0]).toMatchObject({ created_by: null, created_by_deleted: true })
+  })
+
+  it('reads the open questions as lines among the books, and keeps their directions out of the lines', () => {
+    const w = describeContextWindow(
+      {
+        ...BRIEFING,
+        open_questions: [{ question_id: 'q1', question: 'Vad gäller köpet?', why: 'Det avgör hur raden bokförs.', asked_at: '2026-11-19T08:00:00Z' }, { question_id: 'q2' }],
+        open_questions_how: 'Ask them in passing.',
+      },
+      60_000,
+    )
+    const books = w.sections.find((s) => s.id === 'books')!
+    expect(books.keys).toEqual(expect.arrayContaining(['open_questions', 'open_questions_how']))
+    expect(books.items).toContainEqual({
+      type: 'text',
+      text: 'Vad gäller köpet?',
+      detail: 'Det avgör hur raden bokförs.',
+      source: 'accounted',
+      date: '2026-11-19T08:00:00Z',
+    })
+    expect(w.sections.find((s) => s.id === 'other')?.keys ?? []).not.toContain('open_questions')
   })
 
   it('says when the memory was cut at its budget', () => {

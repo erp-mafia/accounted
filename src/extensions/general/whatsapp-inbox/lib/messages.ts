@@ -61,6 +61,11 @@ export const TEMPLATE = {
   m20ReceiptsExpired: 'm20_receipts_expired',
   m21CodeRetry: 'm21_code_retry',
   m22LookupRetry: 'm22_lookup_retry',
+  m23ListQuestion: 'm23_list_question',
+  m24ListAnswered: 'm24_list_answered',
+  m24ListClosed: 'm24_list_closed',
+  m25ListEnded: 'm25_list_ended',
+  m26ListAnswerTooLong: 'm26_list_answer_too_long',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
@@ -235,6 +240,26 @@ const SV = {
   // nothing about linking, and asks for the same message again.
   m22LookupRetry: () =>
     'Jag kunde inte ta emot ditt meddelande just nu. Skicka det igen om en liten stund.',
+
+  // A question from the company's question list (lib/list-question.ts): the
+  // question as it was filed, then why it is asked on a line of its own. Its
+  // options go out as reply buttons beside it.
+  m23ListQuestion: ({ question, why }: { question: string; why?: string | null }) =>
+    why ? `${question}\n${why}` : question,
+
+  // The reply button that closes a list question without an answer. A button
+  // title holds at most 20 characters.
+  m23ListDontKnow: () => 'Vet inte',
+
+  m24ListAnswered: () => 'Tack! Svaret är sparat.',
+
+  m24ListClosed: () => 'Okej, då släpper jag den frågan.',
+
+  // A reply to a list question that was answered or closed somewhere else.
+  m25ListEnded: () => 'Den frågan är redan avklarad, så jag sparar inget nytt svar.',
+
+  m26ListAnswerTooLong: ({ max }: { max: number }) =>
+    `Svaret blev för långt. Skriv det gärna kortare, högst ${max} tecken.`,
 }
 
 const EN: typeof SV = {
@@ -376,6 +401,20 @@ const EN: typeof SV = {
 
   m22LookupRetry: () =>
     'I could not receive your message just now. Please send it again in a moment.',
+
+  m23ListQuestion: ({ question, why }: { question: string; why?: string | null }) =>
+    why ? `${question}\n${why}` : question,
+
+  m23ListDontKnow: () => 'Do not know',
+
+  m24ListAnswered: () => 'Thanks! Your answer is saved.',
+
+  m24ListClosed: () => 'Okay, I will let that question go.',
+
+  m25ListEnded: () => 'That question is already settled, so I am not saving a new answer.',
+
+  m26ListAnswerTooLong: ({ max }: { max: number }) =>
+    `That answer is too long. Please write it shorter, at most ${max} characters.`,
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }

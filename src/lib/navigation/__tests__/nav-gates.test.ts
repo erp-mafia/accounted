@@ -62,7 +62,7 @@ describe('passesNavGates', () => {
     expect(passesNavGates(flags, ctx({ entityType: 'ekonomisk_forening' }))).toBe(true)
   })
 
-  it('always shows the Assistent entry: before the agent is built it leads to building it (crm#1135)', () => {
+  it('always shows the Assistent entry: without a built agent it leads to Koppla en agent (crm#1135)', () => {
     expect(passesNavGates(item({ href: '/chat' }), ctx())).toBe(true)
   })
 
@@ -125,6 +125,20 @@ describe('the invoicer role', () => {
       expect(hrefs(role), String(role)).toEqual(hrefs('owner'))
     }
     expect(hrefs('owner')).toEqual(expect.arrayContaining(['/salary', '/bookkeeping', '/transactions']))
+  })
+})
+
+describe('the Frågor row', () => {
+  const questions = item({ href: '/questions', module: 'platform', requiresCompanyQuestions: true })
+
+  it('shows only where the question list is switched on for the company', () => {
+    expect(passesNavGates(questions, ctx())).toBe(false)
+    expect(passesNavGates(questions, ctx({ companyQuestionsEnabled: false }))).toBe(false)
+    expect(passesNavGates(questions, ctx({ companyQuestionsEnabled: true }))).toBe(true)
+  })
+
+  it('is not offered to the invoicing-only role', () => {
+    expect(passesNavGates(questions, ctx({ companyQuestionsEnabled: true, role: 'invoicer' }))).toBe(false)
   })
 })
 

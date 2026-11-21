@@ -117,7 +117,7 @@ Say "this needs a human: here is what I found", list the figures you gathered, a
 
 - A rate, threshold or rule you need is not in the table above or a tool result.
 - The owner asks for their final personal tax, K10, whether shares are kvalificerade, or anything about närstående, holding structures, koncernbidrag, kapitalförsäkring, ränteavdragsbegränsningar or company sale.
-- A periodiseringsfond from before 2019 is being reversed (it needs an uppräkning the tool does not show).
+- A periodiseringsfond set aside before 2021 is being reversed and the INK2 declaration warns that it could not work out the uppräkning on punkt 4.6d.
 - The fiscal year is already closed, or the legal form is not AB or EF.
 - The owner describes a plan whose main purpose is avoiding tax (e.g. a large December bonus only to hit a threshold): the rule pack flags these as audit triggers and skatteflyktslagen risk.
 
