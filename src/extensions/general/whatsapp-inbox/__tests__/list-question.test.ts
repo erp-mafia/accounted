@@ -31,7 +31,7 @@ vi.mock('@/lib/questions/rows', async () => {
   return { ...actual, readQuestionRow: vi.fn() }
 })
 
-import { sendReplyButtons, sendText } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
+import { INTERACTIVE_BODY_MAX, sendReplyButtons, sendText } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { resolveRoutedCompany } from '@/extensions/general/whatsapp-inbox/lib/routing'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { answerAsPerson, closeAsPerson } from '@/lib/questions/app-answer'
@@ -52,6 +52,7 @@ import {
   clearEndedListQuestion,
   conversationTakesListQuestion,
   expireListQuestions,
+  listQuestionBody,
   listQuestionReplyMarker,
   offerFiledListQuestion,
   offerListQuestionAfterBurst,
@@ -300,6 +301,68 @@ describe('the marker on a written reply', () => {
   })
 })
 
+describe('the body of the question message', () => {
+  const CLOSING = { sv: 'Du kan också svara med egna ord.', en: 'You can also answer in your own words.' } as const
+
+  it('is 1024 characters at most, the length an interactive body holds', () => {
+    expect(INTERACTIVE_BODY_MAX).toBe(1024)
+  })
+
+  for (const locale of ['sv', 'en'] as const) {
+    const closing = CLOSING[locale]
+    /** The longest why that still fits beside this question and the closing line. */
+    const whyRoom = (question: string) => INTERACTIVE_BODY_MAX - question.length - '\n'.length - '\n\n'.length - closing.length
+
+    it(`${locale}: carries the question, the why on its own line and the closing line`, () => {
+      expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' }, locale)).toBe(
+        `Gäller hyran kontoret?\nDet avgör kontot.\n\n${closing}`,
+      )
+      expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: null }, locale)).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+    })
+
+    it(`${locale}: keeps the why when the whole is exactly at the limit`, () => {
+      const question = 'q'.repeat(500)
+      const why = 'w'.repeat(whyRoom(question))
+      const body = listQuestionBody({ question, why }, locale)
+      expect(body).toBe(`${question}\n${why}\n\n${closing}`)
+      expect(body.length).toBe(INTERACTIVE_BODY_MAX)
+    })
+
+    it(`${locale}: leaves the why out first, one character over the limit`, () => {
+      const question = 'q'.repeat(500)
+      const why = 'w'.repeat(whyRoom(question) + 1)
+      const body = listQuestionBody({ question, why }, locale)
+      expect(body).toBe(`${question}\n\n${closing}`)
+      expect(body.length).toBeLessThanOrEqual(INTERACTIVE_BODY_MAX)
+    })
+
+    it(`${locale}: leaves the closing line out next, and never cuts the question`, () => {
+      const tight = 'q'.repeat(INTERACTIVE_BODY_MAX - closing.length - 1)
+      expect(listQuestionBody({ question: tight, why: 'Det avgör kontot.' }, locale)).toBe(tight)
+      const over = 'q'.repeat(INTERACTIVE_BODY_MAX + 100)
+      expect(listQuestionBody({ question: over, why: null }, locale)).toBe(over)
+    })
+
+    it(`${locale}: keeps the closing line when the question alone leaves room for it`, () => {
+      const question = 'q'.repeat(INTERACTIVE_BODY_MAX - closing.length - 2)
+      const body = listQuestionBody({ question, why: 'Det avgör kontot.' }, locale)
+      expect(body).toBe(`${question}\n\n${closing}`)
+      expect(body.length).toBe(INTERACTIVE_BODY_MAX)
+    })
+
+    it(`${locale}: stays within the limit for the longest question and why the list holds`, () => {
+      const body = listQuestionBody({ question: 'q'.repeat(500), why: 'w'.repeat(500) }, locale)
+      expect(body.length).toBeLessThanOrEqual(INTERACTIVE_BODY_MAX)
+      expect(body.startsWith('q'.repeat(500))).toBe(true)
+      expect(body.endsWith(closing)).toBe(true)
+    })
+  }
+
+  it('writes in Swedish unless told otherwise', () => {
+    expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: null })).toBe(`Gäller hyran kontoret?\n\n${CLOSING.sv}`)
+  })
+})
+
 describe('sendListQuestion: when a question is sent', () => {
   it('sends the question, then the why on its own line, with the options in order and "Vet inte"', async () => {
     const { supabase, writes } = db()
@@ -310,7 +373,9 @@ describe('sendListQuestion: when a question is sent', () => {
     const message = sendButtonsMock.mock.calls[0][1]
     expect(message.to).toBe(PHONE)
     expect(message.template).toBe(TEMPLATE.m23ListQuestion)
-    expect(message.body).toBe('Gäller hyran på 12 000 kr kontoret eller lagret?\nSvaret avgör vilket konto hyran bokförs på.')
+    expect(message.body).toBe(
+      'Gäller hyran på 12 000 kr kontoret eller lagret?\nSvaret avgör vilket konto hyran bokförs på.\n\nDu kan också svara med egna ord.',
+    )
     expect(message.buttons).toEqual([
       { id: `cq:${COMPANY}:${QUESTION_ID}:o:office`, title: 'Kontoret' },
       { id: `cq:${COMPANY}:${QUESTION_ID}:o:storage`, title: 'Lagret' },
@@ -363,7 +428,7 @@ describe('sendListQuestion: when a question is sent', () => {
     })
   })
 
-  it('sends the question alone when it has no why, and leaves "Vet inte" out when it has three options', async () => {
+  it('sends the question and the closing line when it has no why, and leaves "Vet inte" out when it has three options', async () => {
     const { supabase } = db()
     const question = makeQuestion({
       why: null,
@@ -377,8 +442,19 @@ describe('sendListQuestion: when a question is sent', () => {
     await sendListQuestion(supabase, offer({ question }))
 
     const message = sendButtonsMock.mock.calls[0][1]
-    expect(message.body).toBe('Gäller hyran på 12 000 kr kontoret eller lagret?')
+    expect(message.body).toBe('Gäller hyran på 12 000 kr kontoret eller lagret?\n\nDu kan också svara med egna ord.')
     expect(message.buttons.map((button) => button.title)).toEqual(['Ett', 'Två', 'Tre'])
+  })
+
+  it('sends the longest question the list holds without its why, within the interactive body limit', async () => {
+    const { supabase } = db()
+    const question = makeQuestion({ question: 'q'.repeat(500), why: 'w'.repeat(500) })
+
+    expect(await sendListQuestion(supabase, offer({ question }))).toBe('sent')
+
+    const message = sendButtonsMock.mock.calls[0][1]
+    expect(message.body).toBe(`${'q'.repeat(500)}\n\nDu kan också svara med egna ord.`)
+    expect(message.body.length).toBeLessThanOrEqual(INTERACTIVE_BODY_MAX)
   })
 
   it('sends a question without options with "Vet inte" alone', async () => {
@@ -1035,6 +1111,40 @@ describe('when a question is filed', () => {
   })
 })
 
+/**
+ * The conversation as the database holds it once a list question was
+ * answered in the chat (nothing in the slot), in the shapes where no other
+ * question may follow. `open` is what the company's list holds besides.
+ */
+const nothingFollows: Array<[string, () => { conversation?: WhatsAppConversation; link?: WhatsAppPhoneLink; open?: CompanyQuestion[] }]> = [
+  ['no other question is open', () => ({ open: [] })],
+  ['the only other open question expired in this conversation', () => ({
+    conversation: makeConversation({ context: { list_questions_expired: [OTHER_QUESTION_ID] } }),
+  })],
+  ['the day has no question left', () => ({
+    conversation: makeConversation({
+      context: {
+        budget: { day_key: todayIsoStockholm(NOW), count: MAX_QUESTIONS_PER_DAY - 2 },
+        list_question_budget: { day_key: todayIsoStockholm(NOW), count: 2 },
+      },
+    }),
+  })],
+  ['a receipt question waits in the queue', () => ({
+    conversation: makeConversation({ context: { question_queue: [{ type: 'context', inbox_item_id: 'item-2' }] } }),
+  })],
+  ['a receipt question is in flight', () => ({
+    conversation: makeConversation({
+      state: 'awaiting_representation',
+      context: { pending_question: { type: 'representation', inbox_item_id: 'item-1', asked_at: NOW.toISOString() } },
+    }),
+  })],
+  ['a burst waits for its ack', () => ({ conversation: makeConversation({ pending_ack: true }) })],
+  ['the link is paused', () => ({ link: makeLink({ muted_at: '2026-11-19T00:00:00.000Z' }) })],
+  ['the service window is closed', () => ({
+    conversation: makeConversation({ service_window_expires_at: new Date(NOW.getTime() - 1000).toISOString() }),
+  })],
+]
+
 describe('a tap on a button', () => {
   const optionTap = { companyId: COMPANY, questionId: QUESTION_ID, kind: 'option', optionId: 'office' } satisfies QuestionTap
   const dontKnowTap = { companyId: COMPANY, questionId: QUESTION_ID, kind: 'dont_know' } satisfies QuestionTap
@@ -1186,15 +1296,77 @@ describe('a tap on a button', () => {
     expect(conversationWrites(writes)[0].context?.pending_question).toBeUndefined()
   })
 
-  it('sends the next open question after the answer when the burst has a slot left', async () => {
-    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
-    const { supabase } = db({ questions: [openRow], conversation: makeConversation({ context: { list_question_slots: 1 } }) })
+  it('sends the next open question after the acknowledgement, with no burst slot', async () => {
+    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID }), makeQuestion({ question_id: QUESTION_ID })])
+    const { supabase, writes } = db({ questions: [openRow] })
 
-    await applyListQuestionTap(supabase, tapArgs(optionTap, makeConversation({ context: { ...pendingContext(), list_question_slots: 1 } })))
+    await applyListQuestionTap(supabase, tapArgs(optionTap))
 
     expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m24ListAnswered)
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendButtonsMock.mock.calls[0][1].template).toBe(TEMPLATE.m23ListQuestion)
+    expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${OTHER_QUESTION_ID}:o:office`)
+    expect(sendButtonsMock.mock.invocationCallOrder[0]).toBeGreaterThan(sendTextMock.mock.invocationCallOrder[0])
+    // The conversation holds the next question, on the day's counter and on no burst slot.
+    const held = conversationWrites(writes).at(-1)
+    expect(held?.context?.pending_question).toMatchObject({ type: 'list_question', question_id: OTHER_QUESTION_ID })
+    expect(held?.context?.list_question_budget).toEqual({ day_key: todayIsoStockholm(NOW), count: 1 })
+    expect(held?.context?.list_question_slots).toBeUndefined()
+  })
+
+  it('sends the next open question with the burst slots used up, and leaves them as they are', async () => {
+    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    const { supabase, writes } = db({ questions: [openRow], conversation: makeConversation({ context: { list_question_slots: 0 } }) })
+
+    await applyListQuestionTap(supabase, tapArgs(optionTap))
+
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(conversationWrites(writes).at(-1)?.context?.list_question_slots).toBe(0)
+  })
+
+  it('sends the next open question after "Vet inte" too', async () => {
+    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    const { supabase } = db({ questions: [openRow] })
+
+    await applyListQuestionTap(supabase, tapArgs(dontKnowTap))
+
+    expect(closeMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListClosed])
     expect(sendButtonsMock).toHaveBeenCalledTimes(1)
     expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${OTHER_QUESTION_ID}:o:office`)
+  })
+
+  it.each(nothingFollows)('sends the acknowledgement and nothing after it when %s', async (_name, build) => {
+    const { conversation, link, open } = build()
+    listMock.mockResolvedValue(open ?? [makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    const { supabase } = db({ questions: [openRow], conversation, link })
+
+    await applyListQuestionTap(supabase, { ...tapArgs(optionTap), link: link ?? makeLink() })
+
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  })
+
+  it('sends nothing after a tap on a question that had already ended', async () => {
+    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    const { supabase } = db({ questions: [{ ...openRow, status: 'answered', answer_option: 'storage', answered_by: OTHER_USER, answered_via: 'app' }] })
+
+    await applyListQuestionTap(supabase, tapArgs(optionTap, makeConversation()))
+
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m25ListEnded])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  })
+
+  it('never fails the answer when the next question cannot be read', async () => {
+    listMock.mockRejectedValue(new Error('statement timeout'))
+    const { supabase } = db({ questions: [openRow] })
+
+    await expect(applyListQuestionTap(supabase, tapArgs(optionTap))).resolves.toBeUndefined()
+
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 })
 
@@ -1292,6 +1464,56 @@ describe('a written reply to a list question', () => {
     expect(answerMock).not.toHaveBeenCalled()
     expect(mock.payloads('whatsapp_conversations', 'update')).toEqual([])
     expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
+  it('sends the next open question after the acknowledgement of a written answer, with no burst slot', async () => {
+    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    const { supabase, writes } = db()
+
+    await applyListQuestionText(supabase, textArgs('Kontoret på Storgatan'))
+
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${OTHER_QUESTION_ID}:o:office`)
+    expect(sendButtonsMock.mock.invocationCallOrder[0]).toBeGreaterThan(sendTextMock.mock.invocationCallOrder[0])
+    const held = conversationWrites(writes).at(-1)
+    expect(held?.context?.pending_question).toMatchObject({ type: 'list_question', question_id: OTHER_QUESTION_ID })
+    expect(held?.context?.list_question_slots).toBeUndefined()
+  })
+
+  it('sends the next open question after a written "vet inte" too', async () => {
+    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('Vet inte'))
+
+    expect(closeMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListClosed])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${OTHER_QUESTION_ID}:o:office`)
+  })
+
+  it.each(nothingFollows)('sends the acknowledgement and nothing after it when %s', async (_name, build) => {
+    const { conversation, link, open } = build()
+    listMock.mockResolvedValue(open ?? [makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    const { supabase } = db({ conversation, link })
+
+    await applyListQuestionText(supabase, { ...textArgs('Kontoret på Storgatan'), link: link ?? makeLink() })
+
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  })
+
+  it('sends nothing after a reply that was too long to save', async () => {
+    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('x'.repeat(1001)))
+
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m26ListAnswerTooLong])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 })
 
