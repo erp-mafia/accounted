@@ -1,27 +1,16 @@
 name: Postgres and PostgREST with every migration
 description: >-
-  Waits for the job's Postgres service on localhost:5432, replays the bootstrap
-  and every migration, then starts PostgREST on the host network. The job
-  declares the Postgres service and the DATABASE_URL, TOOL_PG_REST_URL and
-  PGPASSWORD variables, and ends with a step that removes the postgrest
-  container (if: always()): a composite action has no step that runs after
-  the job's own steps.
+  Waits for the Postgres that start-postgres began on localhost:5432, replays
+  the bootstrap and every migration, then starts PostgREST on the host
+  network. The job runs start-postgres first, declares the DATABASE_URL,
+  TOOL_PG_REST_URL and PGPASSWORD variables, and ends with steps that remove
+  the postgrest and ci-postgres containers (if: always()): a composite action
+  has no step that runs after the job's own steps.
 
 runs:
   using: composite
   steps:
-    - name: Wait for Postgres
-      shell: bash
-      run: |
-        command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null; }
-        for _ in $(seq 1 90); do
-          if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
-            sleep 3
-            psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
-          fi
-          sleep 2
-        done
-        psql "$DATABASE_URL" -tAc 'select version()'
+    - uses: ./.github/actions/wait-for-postgres
     - name: Bootstrap
       # Same replay as pg-real, and no bulk GRANT after it: the database then
       # carries the grants production has, so a tool that needs a grant
@@ -31,12 +20,10 @@ runs:
         psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
         psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
     - name: Apply every migration
+      # One session for all of them, a fresh session per file
+      # (scripts/ci/replay-migrations.sh).
       shell: bash
-      run: |
-        set -euo pipefail
-        for f in supabase/migrations/*.sql; do
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null || { echo "Failed applying $f"; exit 1; }
-        done
+      run: scripts/ci/replay-migrations.sh supabase/migrations/*.sql
     - name: Start PostgREST
       # On the host network rather than as a service: the job runs on the
       # runner host and reaches Postgres through its mapped port, and
