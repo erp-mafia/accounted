@@ -61,6 +61,7 @@ export const MODULE_IDS = [
   'parties',
   'corporate',
   'capital',
+  'formation',
   'agent',
   'byra',
 ] as const
@@ -642,6 +643,21 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     libFolders: ['bolaget/capital', 'bolaget/owner-tax'],
     operationPrefixes: ['capital-events', 'ku31', 'dividends', 'shareholder-contributions', 'capital-changes', 'k10', 'k10-inputs', 'owner-loans', 'ku20'],
     v1Segments: ['capital-events', 'ku31', 'dividends', 'shareholder-contributions', 'capital-changes', 'k10', 'owner-loans', 'ku20'],
+    jurisdictions: SE,
+  },
+  {
+    id: 'formation',
+    kind: 'block',
+    name: 'Company formation',
+    nameSv: 'Starta aktiebolag',
+    summary:
+      'Starting an aktiebolag before it exists: the interview checked against the registration rules, the founding documents and the answers for the e-service, and the setup that turns the registered company into one in Accounted with its aktiebok, roles, beneficial owners and share capital booked.',
+    dependsOn: ['corporate', 'capital'],
+    layer: 'composite',
+    uses: ['parties'],
+    libFolders: ['formation'],
+    operationPrefixes: [],
+    v1Segments: [],
     jurisdictions: SE,
   },
   {

@@ -20,6 +20,8 @@ import { insertAuthUser, insertCompany, insertCompanyMember, insertFiscalPeriod 
 
 /** Removed, or revoked and shredded, by public.erase_user_personal_data. */
 const ERASED = new Set([
+  // Company formation drafts (personnummer sealed), before the company exists
+  'company_formations.user_id',
   // Access and credentials
   'api_keys.user_id',
   'calendar_feeds.user_id',
