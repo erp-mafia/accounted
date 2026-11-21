@@ -32,7 +32,7 @@ import {
 } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { isCreditableSupplierInvoiceStatus } from '@/lib/bookkeeping/creditable-statuses'
-import { supplierCreditBooksOriginalFirst } from '@/lib/bookkeeping/booking-mode'
+import { supplierCreditBooksOriginalFirst, supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import { formatDate, cn, formatRowAmount } from '@/lib/utils'
 import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -397,7 +397,20 @@ export default function SupplierInvoiceDetailPage() {
   }
 
   // #967: deferred booking: create the registration verifikat afterwards.
+  // A posting action confirms up front with the outcome (as Bokför on a
+  // customer invoice does), naming the date the server books it on.
   async function handleBook() {
+    if (!invoice) return
+    const ok = await confirmAction({
+      title: t('book_confirm_title'),
+      description: t('book_confirm_description', {
+        date: formatDate(supplierInvoiceRegistrationDate(invoice, invoice.supplier?.supplier_type)),
+      }),
+      confirmLabel: t('book_action'),
+      cancelLabel: tCommon('cancel'),
+      variant: 'warning',
+    })
+    if (!ok) return
     setProcessingAction('book')
     try {
       const res = await fetch(`/api/supplier-invoices/${params.id}/book`, { method: 'POST' })
