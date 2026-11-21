@@ -366,6 +366,10 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
     cleanup()
     resumedRef.current = false
+    // Drop the previous order before the cooldown and /start: its autostart
+    // token (and QR) belong to a finished or failed order, so a link built
+    // from it would open BankID on an order that no longer exists.
+    setSession(null)
     setActiveFlowId(null)
     setStatus('scanning')
     setHintMessage('Starta BankID-appen')
