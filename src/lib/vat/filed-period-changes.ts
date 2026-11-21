@@ -37,6 +37,7 @@ import type { VatDeclarationRutor } from '@/types'
 import { roundOre } from '@/lib/money'
 import { endOfDayIsoStockholm, todayIsoStockholm } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { mapWithConcurrency } from '@/lib/concurrency'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
@@ -228,6 +229,9 @@ export function baselineAfterImports(entries: readonly EntryRow[], after: string
   return batch.map(postedAt).reduce((latest, at) => (instant(at) > instant(latest) ? at : latest))
 }
 
+/** Filing periods read at the same time: bounded, so a long history never fans out unbounded. */
+const FILING_READ_CONCURRENCY = 6
+
 async function chunked<T>(ids: readonly string[], read: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
   const rows: T[] = []
   for (let i = 0; i < ids.length; i += IN_CHUNK) rows.push(...(await read(ids.slice(i, i + IN_CHUNK))))
@@ -247,8 +251,29 @@ export async function withChangesAfterFiling(
   const signings = await connectionSignings(supabase, companyId)
   const baselineOf = (filing: VatFilingRecord) => filingBaseline(filing, signings.get(submissionKey(filing)))
   const earliest = filings.map(baselineOf).reduce((min, at) => (instant(at) < instant(min) ? at : min))
+  // The verifikat posted into each filed period after its baseline, read for
+  // every filing at once (a few at a time): the VAT page waits on this, and a
+  // monthly filer has 60 filings after five years, which read one after
+  // another took over a second. Most periods have none, so the reads below
+  // run only for the few that changed.
+  const lateEntriesRead = mapWithConcurrency(filings, FILING_READ_CONCURRENCY, (filing) =>
+    fetchAllRows<EntryRow>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id, voucher_series, voucher_number, entry_date, source_type, status, committed_at, created_at, import_batch_id')
+        .eq('company_id', companyId)
+        .in('status', ['posted', 'reversed'])
+        .gte('entry_date', filing.period_start)
+        .lte('entry_date', filing.period_end)
+        // Every posted verifikat carries committed_at (set_committed_at
+        // stamps the commit; none is null on seen 2026-10-28).
+        .gt('committed_at', baselineOf(filing))
+        .order('id')
+        .range(from, to),
+    ),
+  )
 
-  const [rattelser, closing] = await Promise.all([
+  const [rattelser, closing, lateEntries] = await Promise.all([
     fetchAllRows<RattelseRow>(({ from, to }) =>
       supabase
         .from('journal_entry_rattelse_log')
@@ -267,6 +292,7 @@ export async function withChangesAfterFiling(
         .order('id')
         .range(from, to),
     ),
+    lateEntriesRead,
   ])
   const closingIds = new Set(closing.map((row) => row.closing_entry_id))
   const rattelseEntries = new Map(
@@ -292,22 +318,9 @@ export async function withChangesAfterFiling(
   let taxAccounts: string[] | null = null
   const result: VatFilingRecordWithChange[] = []
 
-  for (const filing of filings) {
+  for (const [index, filing] of filings.entries()) {
     const after = baselineOf(filing)
-    const entries = await fetchAllRows<EntryRow>(({ from, to }) =>
-      supabase
-        .from('journal_entries')
-        .select('id, voucher_series, voucher_number, entry_date, source_type, status, committed_at, created_at, import_batch_id')
-        .eq('company_id', companyId)
-        .in('status', ['posted', 'reversed'])
-        .gte('entry_date', filing.period_start)
-        .lte('entry_date', filing.period_end)
-        // Every posted verifikat carries committed_at (set_committed_at
-        // stamps the commit; none is null on seen 2026-10-28).
-        .gt('committed_at', after)
-        .order('id')
-        .range(from, to),
-    )
+    const entries = lateEntries[index]
     const baseline = baselineAfterImports(entries, after)
     const late = entries.filter((entry) => instant(postedAt(entry)) > instant(baseline))
     const rattelseRows = rattelser.filter((row) => {

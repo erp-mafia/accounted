@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
+import { resolveCompanyEntityType, supportsCorporateTaxDispositions, usesInk2 } from '@/lib/company/entity-type'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { calculateBolagsskatt, getBookedBolagsskatt } from './tax-provision/bolagsskatt-calculator'
 import { readYearResult, type YearResult } from './tax-provision/result-before-tax'
@@ -26,6 +26,16 @@ import type {
 } from './types'
 import { formatCurrency } from '@/lib/utils'
 import type { EntityType } from '@/types'
+import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
+import { priorYearDeficit, priorYearDeficitWarning } from '@/lib/reports/ink2/prior-year-deficit'
+import {
+  computePeriodiseringsfondUppraekning,
+  hasFondReversal,
+  loadTaxYearSpans,
+  NO_UPPRAEKNING,
+  type PeriodiseringsfondUppraekning,
+  type TaxYearSpan,
+} from '@/lib/reports/ink2/periodiseringsfond-uppraekning'
 
 /**
  * What every disposition's amount is computed from, read from the ledger.
@@ -43,6 +53,10 @@ export interface DispositionState {
   existingFonder: ExistingFond[]
   /** INK2S 4.9: book depreciation on fast egendom against its tax plan. */
   buildingTaxAdjustment: number
+  /** First day of the fiscal year: the 4.6d uppräkning rule reads it. */
+  periodStart: string
+  /** The company's räkenskapsår, read only when fonder were held at the year's start (4.6d). */
+  taxYears: TaxYearSpan[]
 }
 
 export async function loadDispositionState(
@@ -64,6 +78,7 @@ export async function loadDispositionState(
     ),
     loadBuildingTaxAdjustment(supabase, companyId, period),
   ])
+  const heldFonder = existingFonder.some((fond) => fond.opening_balance > 0)
   return {
     fiscalPeriodId: period.id,
     fiscalYear: parseInt(period.period_end.slice(0, 4), 10),
@@ -72,7 +87,32 @@ export async function loadDispositionState(
     bookedTax,
     existingFonder,
     buildingTaxAdjustment: Math.trunc(buildingTax.net),
+    periodStart: period.period_start,
+    taxYears: heldFonder ? await loadTaxYearSpans(supabase, companyId) : [],
   }
+}
+
+/**
+ * INK2S 4.6d on the fonder as booked plus the återföringar proposed and not
+ * posted yet, the same rule the declaration files (lib/reports/ink2/
+ * periodiseringsfond-uppraekning). In the tax and in the 25 % cap base, like
+ * the schablonintäkt.
+ */
+export function fondUppraekning(
+  state: DispositionState,
+  pendingReturns: ReadonlyMap<string, number> = new Map(),
+): PeriodiseringsfondUppraekning {
+  const funds = state.existingFonder.map((fond) => ({
+    accountNumber: fond.account_number,
+    opening: fond.opening_balance,
+    closing: fond.balance - (pendingReturns.get(fond.account_number) ?? 0),
+  }))
+  if (!hasFondReversal(funds)) return NO_UPPRAEKNING
+  return computePeriodiseringsfondUppraekning({
+    funds,
+    periodStart: state.periodStart,
+    fiscalYears: state.taxYears,
+  })
 }
 
 /** The återföringar (and the schablonintäkt on the fonder's opening balance). */
@@ -80,10 +120,16 @@ export function ateforingDispositions(
   state: DispositionState,
   options: { returns?: Record<string, number>; schablonintaktRate?: number } = {},
 ) {
-  return proposeAteforing(state.existingFonder, {
+  const ateforing = proposeAteforing(state.existingFonder, {
     returns: options.returns,
     schablonintaktRate: resolveSchablonintaktRate(state.fiscalYear, state.existingFonder, options.schablonintaktRate),
   })
+  const pendingReturns = new Map<string, number>()
+  for (const proposal of ateforing.proposals) {
+    const fondLine = proposal.lines.find((line) => line.debit_amount > 0)
+    if (fondLine) pendingReturns.set(fondLine.account_number, proposal.amount)
+  }
+  return { ...ateforing, uppraekning: fondUppraekning(state, pendingReturns) }
 }
 
 /** This year's avsättning already booked on its cohort account (it consumes the 25 % cap). */
@@ -106,7 +152,13 @@ export function alreadyProvisionedAvsattning(state: DispositionState): number {
  */
 export function avsattningDisposition(
   state: DispositionState,
-  options: { pendingResultEffect: number; schablonintaktAmount: number; desiredAmount?: number },
+  options: {
+    pendingResultEffect: number
+    schablonintaktAmount: number
+    /** INK2S 4.6d, from ateforingDispositions: part of the överskott the cap is 25 % of. */
+    uppraekningAmount?: number
+    desiredAmount?: number
+  },
 ): ProposedDisposition | null {
   const alreadyProvisioned = alreadyProvisionedAvsattning(state)
   if (alreadyProvisioned > 0) return null
@@ -114,6 +166,7 @@ export function avsattningDisposition(
   const base =
     state.result.beforeTax + alreadyProvisioned + options.pendingResultEffect
     + options.schablonintaktAmount
+    + (options.uppraekningAmount ?? 0)
     + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
     + state.buildingTaxAdjustment
     - (taxAdjustments.deficitCarryforward ?? 0)
@@ -132,7 +185,12 @@ export function avsattningDisposition(
  */
 export function bolagsskattDisposition(
   state: DispositionState,
-  options: { pendingResultEffect: number; schablonintaktAmount: number },
+  options: {
+    pendingResultEffect: number
+    schablonintaktAmount: number
+    /** INK2S 4.6d, from ateforingDispositions. */
+    uppraekningAmount?: number
+  },
 ): ProposedDisposition {
   return calculateBolagsskatt({
     resultBeforeTax: state.result.beforeTax + options.pendingResultEffect,
@@ -141,6 +199,7 @@ export function bolagsskattDisposition(
       nonTaxableIncome: state.taxAdjustments.nonTaxableIncome,
       deficitCarryforward: state.taxAdjustments.deficitCarryforward ?? 0,
       schablonintaktPeriodiseringsfond: options.schablonintaktAmount,
+      uppraekningPeriodiseringsfond: options.uppraekningAmount ?? 0,
       // INK2S 4.9, the same figure the declaration files.
       other: state.buildingTaxAdjustment,
     },
@@ -170,7 +229,27 @@ export async function bolagsskattOnLedger(
   return bolagsskattDisposition(state, {
     pendingResultEffect: 0,
     schablonintaktAmount: ateforingDispositions(state).schablonintaktAmount,
+    uppraekningAmount: fondUppraekning(state).amount,
   }).amount
+}
+
+/**
+ * The year's booked bolagsskatt when it is not the tax this step computes on
+ * the ledger and the proposals: the same `needs_correction` verdict and words
+ * as the Dispositioner card, for a caller that closes the year without the
+ * wizard (the MCP year-end readiness). Null when the tax matches, none is
+ * booked, or the form books no corporate tax.
+ */
+export async function bookedTaxCorrection(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<string | null> {
+  const proposal = await buildDispositionsProposal(supabase, companyId, fiscalPeriodId)
+  const tax = proposal.completedDispositions?.find(
+    (disposition) => disposition.kind === 'bolagsskatt' && disposition.status === 'needs_correction',
+  )
+  return tax?.warnings[0] ?? null
 }
 
 /**
@@ -186,7 +265,7 @@ export async function buildDispositionsProposal(
 ): Promise<DispositionsProposal> {
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
-    .select('id, name, period_start, period_end, opening_balance_entry_id')
+    .select('id, name, period_start, period_end, opening_balance_entry_id, previous_period_id')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .single()
@@ -232,6 +311,14 @@ export async function buildDispositionsProposal(
   const { taxAdjustments, bookedTax } = state
   const dividendQuestion = dividendConfirmationWarning(taxAdjustments)
   if (dividendQuestion) warnings.push(dividendQuestion)
+  // The tax this step books rests on 4.14 a too: the same reminder as the
+  // declaration's when it is empty and last year ended in an underskott.
+  if (!(taxAdjustments.deficitCarryforward > 0) && !taxAdjustments.lossRegister && usesInk2(form)) {
+    const hint = await priorYearDeficit(supabase, companyId, period, (id) =>
+      generateINK2Declaration(supabase, companyId, id, { priorYearCheck: false }),
+    )
+    if (hint) warnings.push(priorYearDeficitWarning(hint))
+  }
 
   // Rate resolves lazily: a company without opening fonder never touches
   // the SLR table, so an unmapped year cannot break its bokslut.
@@ -248,6 +335,7 @@ export async function buildDispositionsProposal(
     )
   }
   const ateforingTotal = ateforing.proposals.reduce((sum, p) => sum + p.amount, 0)
+  warnings.push(...ateforing.uppraekning.warnings)
 
   const overavskrivningar = await calculateOveravskrivningar({
     supabase,
@@ -284,6 +372,7 @@ export async function buildDispositionsProposal(
   const avsattning = avsattningDisposition(state, {
     pendingResultEffect: ateforingTotal + overavskrivningarResultEffect - (slp?.amount ?? 0),
     schablonintaktAmount: ateforing.schablonintaktAmount,
+    uppraekningAmount: ateforing.uppraekning.amount,
   })
   if (avsattning) proposals.push(avsattning)
   if (alreadyProvisioned > 0) {
@@ -310,6 +399,7 @@ export async function buildDispositionsProposal(
     pendingResultEffect:
       ateforingTotal + overavskrivningarResultEffect - (avsattning?.amount ?? 0) - (slp?.amount ?? 0),
     schablonintaktAmount: ateforing.schablonintaktAmount,
+    uppraekningAmount: ateforing.uppraekning.amount,
   })
   // The same computation on the ledger as it stands (nothing pending): what
   // the POST books for bolagsskatt when the user skips every proposal above.
@@ -323,6 +413,7 @@ export async function buildDispositionsProposal(
   const taxAsBooked = bolagsskattDisposition(state, {
     pendingResultEffect: 0,
     schablonintaktAmount: ateforing.schablonintaktAmount,
+    uppraekningAmount: fondUppraekning(state).amount,
   }).amount
   const taxBasis: BolagsskattBasis = {
     bookedResultBeforeTax: state.result.beforeTax,

@@ -23,7 +23,7 @@ export function ApiSettingsContent() {
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_api_keys')
   const byraScope = useByraSettingsScope()
-  const { keys, companies, isLoading, refetch, revoke } = useApiKeys({ mine: byraScope })
+  const { keys, companies, isLoading, loadFailed, refetch, revoke } = useApiKeys({ mine: byraScope })
   const [showOAuthClients, setShowOAuthClients] = useState(false)
 
   return (
@@ -33,6 +33,8 @@ export function ApiSettingsContent() {
         keys={keys}
         companies={companies}
         isLoading={isLoading}
+        loadFailed={loadFailed}
+        onRetry={refetch}
         onRevoke={revoke}
         onKeysChanged={refetch}
       />

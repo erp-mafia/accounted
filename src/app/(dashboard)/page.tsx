@@ -4,7 +4,6 @@ import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
-import { AgentPromo } from '@/components/dashboard/AgentPromo'
 import { HemDone } from '@/components/dashboard/HemDone'
 import { HEM_ACTION_SLOT_ID } from '@/components/dashboard/hem-slot'
 import { parseHemView } from '@/components/dashboard/need-model'
@@ -13,9 +12,6 @@ import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { decideHemGate } from '@/lib/onboarding/hem-gate'
-import { agentPromoOffered } from '@/lib/onboarding/agent-promo-gate'
-import { assistantChatEnabledFor } from '@/lib/env/assistant-chat-switch'
-import { todayIsoStockholm } from '@/lib/dates/iso'
 import { readAiConnection, readFirstTaskClient } from '@/lib/onboarding/ai-clients.server'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
@@ -23,7 +19,6 @@ import {
   getDashboardCompanyId,
   getDashboardSettings,
   getDashboardTeamMemberships,
-  getResolvedDashboardAgentProfile,
   redirectInvoicerOffPage,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
@@ -40,7 +35,7 @@ export const dynamic = 'force-dynamic'
 // queries are gone and the page got faster.
 //
 // Streaming: the page itself awaits only what the greeting shell and the
-// redirects need (settings, profile, agent profile, the Skatteverket flag).
+// redirects need (settings, profile, the Skatteverket flag).
 // The notice line, the setup checklist and the Att göra + Fortsätt panes are
 // async server components behind their own <Suspense> (hem-sections.tsx),
 // so ~30 queries fill three blocks in as they land instead of holding the
@@ -111,14 +106,12 @@ export default async function DashboardPage({
 
   const [
     settingsRes,
-    agentProfile,
     { count: skatteverketTokenCount },
     aiConnection,
     skvOmbudReadAccess,
   ] =
     await Promise.all([
       getDashboardSettings(),
-      getResolvedDashboardAgentProfile(),
       // The Skatteverket promo below the panes needs this flag in the shell;
       // the checklist section reads it again for its own step (cheap head count).
       // 'id', never '*': the token columns are withheld from end-user roles.
@@ -164,7 +157,6 @@ export default async function DashboardPage({
   // reads as not onboarded); it is here to narrow the type for the code below.
   if (hemGate === 'onboarding' || !settings) redirect('/onboarding')
 
-  const agentBuilt = Boolean(agentProfile?.verified_at)
   const initialSetup = {
     path: settings.initial_setup_path ?? null,
     completedAt: settings.initial_setup_completed_at ?? null,
@@ -198,24 +190,9 @@ export default async function DashboardPage({
   ) : null
 
   // Hem (Att göra V8): the notice line, then the streamed pane, which opens
-  // with the date and the headline and carries Kom igång and the assistant
-  // prompt right under it. Behöver dig, Börja and Gjort are views of the same
+  // with the date and the headline and carries Kom igång right under it.
+  // Behöver dig, Börja and Gjort are views of the same
   // page (?vy=), so every count comes from one read.
-  //
-  // Build-assistant nudge: shown only until the company has a verified
-  // agent_profile, after the checklist is dismissed or completed, and once a
-  // connected agent has worked (until then the Kopplingar agent chip is the
-  // page's agent prompt). Never while the built-in assistant is switched off
-  // (ASSISTANT_CHAT_ENABLED): there is nothing to build then.
-  const agentConnected = aiConnection.connected && !firstTask
-  const promo = agentPromoOffered({
-    assistantChatEnabled: assistantChatEnabledFor(companyId, todayIsoStockholm()),
-    agentBuilt,
-    agentConnected,
-    setupClosed: Boolean(initialSetup.dismissedAt || initialSetup.completedAt),
-  }) ? (
-    <AgentPromo companyId={companyId} />
-  ) : null
   const tHem = await getTranslations('hem')
   const hem = (
     <DashboardContent
@@ -228,14 +205,7 @@ export default async function DashboardPage({
             <HemPanesSection
               view={vy}
               initialStep={initialStep}
-              afterHeadline={
-                vy === 'hem' && (checklist || promo) ? (
-                  <>
-                    {checklist}
-                    {promo}
-                  </>
-                ) : null
-              }
+              afterHeadline={vy === 'hem' ? checklist : null}
               companyId={companyId}
               now={now}
               setupOpen={setupOpen}

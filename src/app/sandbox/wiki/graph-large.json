@@ -8,7 +8,6 @@
     "accounting_method": "accrual"
   },
   "user_name": "Demo",
-  "profile_summary": "Snickeri med fyra anställda. Bygger kök och inredning åt privatpersoner och byggföretag, köper material från byggvaruhus.",
   "bolaget": {
     "owners": [
       {
@@ -251,7 +250,6 @@
   },
   "where_to_find": [
     "memory: every fact agents were told about this company, newest first; a later fact settles an earlier one.",
-    "profile_summary: what the company does, written at onboarding; may be outdated.",
     "ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier."
   ],
   "data_status": {

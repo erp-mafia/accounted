@@ -369,6 +369,27 @@ describe('computeEfDeclarationPreview: återföring (R32) of earlier periodiseri
   })
 })
 
+describe('computeEfDeclarationPreview: R13 and R14 from the tax adjustments', () => {
+  it('adds non-deductible representation back and takes tax-free income out before every later ruta', async () => {
+    // R11 = 203 850 + 150 - 4 000 = 200 000 (each ruta öre-truncated).
+    useRows(() => [
+      row('3001', 'credit', 203_850.6),
+      row('6072', 'debit', 4_000.6),
+      row('8314', 'credit', 150),
+    ])
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {})
+
+    // R13 and R14 are the NE-bilaga's own sida 2, the figures its SRU file carries.
+    expect(preview.rutor).toMatchObject({ R12: 200_000, R13: 4_000, R14: 150, R29: 203_850 })
+    // Every base after R29 moves with them: the periodiseringsfond cap is 30 %
+    // of R33 (no räntefördelning or återföring here), 61 155 kr, not 60 000.
+    expect(preview.rutor.R33).toBe(203_850)
+    expect(preview.rutor.R34).toBe(61_155)
+  })
+})
+
 describe('computeEfDeclarationPreview: NE sida 2 from R29 to R43 (SKV 2161)', () => {
   // The form's sums: R33 = R29 - R30 + R31 + R32, R35 = R33 - R34,
   // R42 = R35 - R36 + R37 - R38 - R39 + R40 - R41, and R43 at most 25 % of
@@ -389,6 +410,9 @@ describe('computeEfDeclarationPreview: NE sida 2 from R29 to R43 (SKV 2161)', ()
     })
 
     expect(preview.rutor).toEqual({
+      R12: 500_000,
+      R13: 0,
+      R14: 0,
       R29: 500_000,
       R30: 79_600, // 7,96 % of 1 000 000
       R31: 0,

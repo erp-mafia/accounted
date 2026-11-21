@@ -12,7 +12,7 @@ vi.mock('@/lib/operations/inbox-bank-match', () => ({
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
-import { inboxSawABill, requeueHiddenRoutedItems, routeClassifiedDocument, routeStaleQueueItems } from '../route-from-arkiv'
+import { inboxSawABill, putInUnderlagByAPerson, requeueHiddenRoutedItems, routeClassifiedDocument, routeStaleQueueItems } from '../route-from-arkiv'
 
 const mock = createQueuedMockSupabase()
 const { enqueue, reset, findCall, findCalls } = mock
@@ -593,3 +593,87 @@ describe('routing a bill the inbox saw', () => {
   })
 })
 
+
+// crm#1954: a payroll list a person uploaded in Underlag to match against the salary payout. The model typed it
+// "other" and the inbox reader found no total, so the routing took it out of Underlag into Arkiv.
+describe('a document a person uploaded into Underlag', () => {
+  const uploaded = { ...doc, upload_source: 'file_upload', created_at: new Date().toISOString() }
+  const payrollList = { documentKind: 'other', totals: { total: null }, prominentAmounts: [38300, 26885, 11415] }
+  const personsItem = (over: Record<string, unknown> = {}) => item({ source: 'upload', channel_context: null, extracted_data: payrollList, ...over })
+
+  it('is told apart from every other door that files source upload, by the missing door stamp', () => {
+    expect(putInUnderlagByAPerson({ source: 'upload', channel_context: null }, 'file_upload')).toBe(true)
+    expect(putInUnderlagByAPerson({ source: 'upload' }, 'camera')).toBe(true)
+    expect(putInUnderlagByAPerson({ source: 'upload', channel_context: {} }, 'scan')).toBe(true)
+    // The person's door filing an item for bytes the company already had from another door is still their upload.
+    expect(putInUnderlagByAPerson({ source: 'upload', channel_context: null }, 'email')).toBe(true)
+    // Arkiv's queueing, MCP (stamped, and from before the stamp), a partner delivery, a digital mailbox.
+    expect(putInUnderlagByAPerson({ source: 'upload', channel_context: { intake_source: 'upload' } }, 'file_upload')).toBe(false)
+    expect(putInUnderlagByAPerson({ source: 'upload', channel_context: { intake_source: 'mcp' } }, 'api')).toBe(false)
+    expect(putInUnderlagByAPerson({ source: 'upload', channel_context: null }, 'api')).toBe(false)
+    expect(putInUnderlagByAPerson({ source: 'upload', channel_context: { channel: 'partner_api', intake_source: 'partner_api' } }, 'file_upload')).toBe(false)
+    expect(putInUnderlagByAPerson({ source: 'upload', channel_context: { intake_source: 'kivra' } }, 'file_upload')).toBe(false)
+    // E-mail, WhatsApp, the receipt hunt, Peppol.
+    for (const source of ['email', 'whatsapp', 'mail_hunt', 'peppol']) {
+      expect(putInUnderlagByAPerson({ source, channel_context: null }, 'file_upload')).toBe(false)
+    }
+  })
+
+  it.each([['other'], ['agreement.loan'], ['minutes.board']])('stays in Underlag when the model types it %s (reported case)', async (docType) => {
+    enqueue({ data: uploaded })
+    enqueue({ data: [personsItem()] })
+    expect(await classified(docType, 'admitted', 'model')).toBe('left')
+    expect(findCall('invoice_inbox_items', 'update')).toBeUndefined()
+    expect(findCall('invoice_inbox_items', 'select')?.[0]).toContain('channel_context')
+  })
+
+  it('stays when the type is replayed without saying who decided it (a re-upload of a typed document)', async () => {
+    enqueue({ data: uploaded })
+    enqueue({ data: [personsItem()] })
+    expect(await classified('other')).toBe('left')
+    expect(findCall('invoice_inbox_items', 'update')).toBeUndefined()
+  })
+
+  it('still leaves Underlag when a person retypes it in Dokument', async () => {
+    enqueue({ data: uploaded })
+    enqueue({ data: [personsItem()] })
+    enqueue({})
+    expect(await retypedByPerson('agreement.loan')).toBe('routed_to_arkiv')
+    expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ routed_to_arkiv_at: expect.any(String), routed_doc_type: 'agreement.loan' })
+    expect(findCall('invoice_inbox_items', 'in')).toEqual(['id', ['item-1']])
+  })
+
+  it.each([
+    ['an e-mailed agreement', 'agreement.loan', 'email', { source: 'email', channel_context: null }],
+    ['an e-mailed document Arkiv could only call other', 'other', 'email', { source: 'email', channel_context: null }],
+    ['a WhatsApp photo of minutes', 'minutes.board', 'whatsapp', { source: 'whatsapp', channel_context: { channel: 'whatsapp' } }],
+    ['an MCP upload', 'other', 'api', { source: 'upload', channel_context: { intake_source: 'mcp' } }],
+    ['an MCP upload from before the stamp', 'other', 'api', { source: 'upload', channel_context: null }],
+    ['a partner delivery', 'agreement.lease', 'file_upload', { source: 'upload', channel_context: { channel: 'partner_api', intake_source: 'partner_api' } }],
+    ['a Peppol delivery', 'other', 'e_invoice', { source: 'peppol', channel_context: { channel: 'peppol' } }],
+  ])('still routes %s with no bill in it out of Underlag', async (_door, docType, uploadSource, columns) => {
+    enqueue({ data: { ...doc, upload_source: uploadSource } })
+    enqueue({ data: [item({ ...columns, extracted_data: payrollList })] })
+    enqueue({})
+    expect(await classified(docType, 'admitted', 'model')).toBe('routed_to_arkiv')
+    expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ routed_to_arkiv_at: expect.any(String), routed_doc_type: docType })
+  })
+
+  it('is skipped by the catch-up, which still routes what came through another door', async () => {
+    enqueue({
+      data: [
+        { id: 'mine', document_id: 'd1', source: 'upload', channel_context: null, extracted_data: payrollList, document_attachments: { doc_type: 'other', admission_state: 'admitted', upload_source: 'file_upload' } },
+        { id: 'mail', document_id: 'd2', source: 'email', channel_context: null, extracted_data: payrollList, document_attachments: { doc_type: 'agreement.loan', admission_state: 'admitted', upload_source: 'email' } },
+        { id: 'mcp', document_id: 'd3', source: 'upload', channel_context: { intake_source: 'mcp' }, extracted_data: payrollList, document_attachments: [{ doc_type: 'other', admission_state: 'admitted', upload_source: 'api' }] },
+      ],
+    })
+    enqueue({})
+    enqueue({})
+    expect(await routeStaleQueueItems(supabase)).toBe(2)
+    const columns = String(findCall('invoice_inbox_items', 'select')?.[0])
+    expect(columns).toContain('channel_context')
+    expect(columns).toContain('upload_source')
+    const routedIds = findCalls('invoice_inbox_items', 'in').slice(1).flatMap((args) => args[1] as string[])
+    expect(routedIds.sort()).toEqual(['mail', 'mcp'])
+  })
+})

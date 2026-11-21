@@ -99,6 +99,8 @@ export function CompanyMembersSection() {
   const topBar = useSettingsTopBarSlots()
   const [inviteRole, setInviteRole] = useState<string>('viewer')
   const [isSending, setIsSending] = useState(false)
+  // Why the last invite was refused, in the drawer's footer beside the primary.
+  const [inviteError, setInviteError] = useState<string | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
   const [resendingId, setResendingId] = useState<string | null>(null)
@@ -171,6 +173,7 @@ export function CompanyMembersSection() {
     if (!email) return
 
     setIsSending(true)
+    setInviteError(null)
     try {
       const res = await fetch('/api/company/members/invite', {
         method: 'POST',
@@ -181,10 +184,12 @@ export function CompanyMembersSection() {
           ...(profileChoice && inviteProfile ? { profile_id: inviteProfile } : {}),
         }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => null)
 
       if (!res.ok) {
-        toast({ title: data.error, variant: 'destructive' })
+        setInviteError(
+          getErrorMessage(data, { statusCode: res.status, locale: errorLocale, fallback: t('members_invite_failed') }),
+        )
         return
       }
 
@@ -214,8 +219,8 @@ export function CompanyMembersSection() {
       setInviteRole('viewer')
       setInviteOpen(false)
       fetchMembers()
-    } catch {
-      toast({ title: t('members_invite_failed'), variant: 'destructive' })
+    } catch (err) {
+      setInviteError(getErrorMessage(err, { locale: errorLocale, fallback: t('members_invite_failed') }))
     } finally {
       setIsSending(false)
     }
@@ -234,10 +239,14 @@ export function CompanyMembersSection() {
     setRemovingId(memberId)
     try {
       const res = await fetch(`/api/company/members/${memberId}`, { method: 'DELETE' })
-      const data = await res.json()
+      const data = await res.json().catch(() => null)
 
       if (!res.ok) {
-        toast({ title: data.error, variant: 'destructive' })
+        toast({
+          title: t('members_remove_failed'),
+          description: getErrorMessage(data, { statusCode: res.status, locale: errorLocale, fallback: t('members_remove_failed') }),
+          variant: 'destructive',
+        })
         return
       }
 
@@ -254,10 +263,18 @@ export function CompanyMembersSection() {
     setRevokingId(invite.id)
     try {
       const res = await fetch(`/api/company/members/invite/${invite.id}`, { method: 'DELETE' })
-      const data = await res.json()
+      const data = await res.json().catch(() => null)
 
       if (!res.ok) {
-        toast({ title: data.error, variant: 'destructive' })
+        toast({
+          title: t('members_invite_revoke_failed'),
+          description: getErrorMessage(data, {
+            statusCode: res.status,
+            locale: errorLocale,
+            fallback: t('members_invite_revoke_failed'),
+          }),
+          variant: 'destructive',
+        })
         return
       }
 
@@ -281,12 +298,13 @@ export function CompanyMembersSection() {
       const data = await res.json().catch(() => null)
 
       if (!res.ok) {
-        const message = (data as { error?: unknown } | null)?.error
         toast({
-          title:
-            typeof message === 'string' && message.length > 0
-              ? message
-              : t('members_invite_resend_failed'),
+          title: t('members_invite_resend_failed'),
+          description: getErrorMessage(data, {
+            statusCode: res.status,
+            locale: errorLocale,
+            fallback: t('members_invite_resend_failed'),
+          }),
           variant: 'destructive',
         })
         return
@@ -344,6 +362,8 @@ export function CompanyMembersSection() {
       </div>
     )
   }
+
+  const ownerEmail = members.find((m) => m.role === 'owner' && !m.is_current_user)?.email ?? null
 
   const inviteButton = (
     <Button size={topBar ? 'toolbar' : 'default'} onClick={() => setInviteOpen(true)}>
@@ -507,11 +527,15 @@ export function CompanyMembersSection() {
           )}
           <CreateDrawer
             open={inviteOpen}
-            onOpenChange={setInviteOpen}
+            onOpenChange={(open) => {
+              setInviteOpen(open)
+              if (!open) setInviteError(null)
+            }}
             title={t('members_invite_drawer_title')}
             formId="company-invite-form"
             submitLabel={t('members_invite_button')}
             submitting={isSending}
+            error={inviteError}
           >
             <form id="company-invite-form" onSubmit={handleInvite} className="space-y-4">
               <div className="space-y-1.5">
@@ -570,6 +594,16 @@ export function CompanyMembersSection() {
             </form>
           </CreateDrawer>
         </>
+      )}
+
+      {/* A member who is not owner or admin sees no invite, remove or resend:
+          one muted line says why, and who to ask when the owner is listed. */}
+      {!canInvite && (
+        <p className="px-1 pt-3 text-xs leading-5 text-muted-foreground">
+          {ownerEmail
+            ? t('members_manage_admins_only_owner', { owner: ownerEmail })
+            : t('members_manage_admins_only')}
+        </p>
       )}
 
       <p className="px-1 pt-3">

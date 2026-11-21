@@ -88,6 +88,12 @@ export function PaymentOrdersPage() {
   const { dialogProps: releaseDialogProps, confirm: confirmRelease } = useDestructiveConfirm()
 
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
+  /**
+   * The last availability read failed. Kept apart from a real "not
+   * available": a failed read must not tell a company with bank payments on
+   * that they are off. The availability already on screen stays.
+   */
+  const [availabilityFailed, setAvailabilityFailed] = useState(false)
   /** Where the company's verification at the provider stands; null until read, or when payments are not available. */
   const [verification, setVerification] = useState<CompanyVerification | null>(null)
   /** The form link opened from this page in this sitting, so it can be opened again. */
@@ -127,8 +133,10 @@ export function PaymentOrdersPage() {
 
   const load = useCallback(async () => {
     const [avail, list, links] = await Promise.allSettled([fetchPaymentsAvailability(), listPaymentOrders(), listOpenSigningLinks()])
-    const availabilityValue = avail.status === 'fulfilled' ? avail.value : { available: false, reason: null, provider: null, accounts: [], signer_known: false }
-    setAvailability(availabilityValue)
+    const availabilityValue = avail.status === 'fulfilled' ? avail.value : null
+    if (availabilityValue) setAvailability(availabilityValue)
+    else setAvailability((current) => current ?? { available: false, reason: null, provider: null, accounts: [], signer_known: false })
+    setAvailabilityFailed(avail.status === 'rejected')
     // A failed read keeps the orders already on screen and says so (ordersFailed).
     if (list.status === 'fulfilled') setOrders(list.value)
     else setOrders((current) => current ?? [])
@@ -136,7 +144,7 @@ export function PaymentOrdersPage() {
     setOpenLinks(links.status === 'fulfilled' ? links.value : [])
     // The verification rides on the availability (lib/payments/orders/readiness);
     // the line is informational: a failed read leaves it out rather than blocking the page.
-    setVerification(availabilityValue.available ? (availabilityValue.verification ?? null) : null)
+    if (availabilityValue) setVerification(availabilityValue.available ? (availabilityValue.verification ?? null) : null)
   }, [])
 
   // A form is out (opened here, or earlier by someone, or with the
@@ -432,7 +440,7 @@ export function PaymentOrdersPage() {
       {header}
 
       {/* A failed reload takes the place of the verification line: one attention line per page. */}
-      {ordersFailed && hasOrders ? (
+      {(ordersFailed || availabilityFailed) && hasOrders ? (
         <AttnLine action={{ label: tCommon('retry'), onClick: refresh }}>{tCommon('refresh_failed')}</AttnLine>
       ) : (
         verificationLine
@@ -454,6 +462,7 @@ export function PaymentOrdersPage() {
 
       {!available &&
         !hasOrders &&
+        !availabilityFailed &&
         (availability?.reason === 'subscription' ? (
           <>
             {filesSection}
@@ -473,9 +482,9 @@ export function PaymentOrdersPage() {
           />
         ))}
 
-      {available && !hasOrders && ordersFailed && <LoadError title={t('load_failed_title')} onRetry={refresh} />}
+      {!hasOrders && (ordersFailed || availabilityFailed) && <LoadError title={t('load_failed_title')} onRetry={refresh} />}
 
-      {(available || hasOrders) && !hasOrders && !ordersFailed && (
+      {(available || hasOrders) && !hasOrders && !ordersFailed && !availabilityFailed && (
         <EmptyState
           icon={BuildingLibraryIcon}
           title={t('empty_title')}

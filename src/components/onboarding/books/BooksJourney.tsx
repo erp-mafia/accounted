@@ -90,6 +90,9 @@ export default function BooksJourney(props: BooksJourneyProps) {
   const [state, dispatch] = useReducer(booksReducer, entry, initialState)
   const [findings, setFindings] = useState<BooksFindings | null>(null)
   const [loadingFindings, setLoadingFindings] = useState(false)
+  // The last findings read failed: the steps say so with a retry, never
+  // "Inget importerat än", which is only true after a real answer.
+  const [findingsFailed, setFindingsFailed] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [leaveError, setLeaveError] = useState(false)
   const [skipOpen, setSkipOpen] = useState(false)
@@ -117,11 +120,16 @@ export default function BooksJourney(props: BooksJourneyProps) {
         setLoadingFindings(true)
         try {
           const res = await fetch('/api/onboarding/findings')
-          if (!res.ok) return null
+          if (!res.ok) {
+            setFindingsFailed(true)
+            return null
+          }
           const json = (await res.json()) as { data: BooksFindings }
           setFindings(json.data)
+          setFindingsFailed(false)
           return json.data
         } catch {
+          setFindingsFailed(true)
           return null
         } finally {
           setLoadingFindings(false)
@@ -213,6 +221,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
     flags,
     findings,
     loadingFindings,
+    findingsFailed,
     loadFindings,
     landedError: props.landedError,
     isLeaving: () => leavingRef.current,

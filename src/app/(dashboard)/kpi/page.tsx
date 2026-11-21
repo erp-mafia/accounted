@@ -5,7 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { AdjustmentsHorizontalIcon, PrinterIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { LoadError } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, EmptyState, LoadError } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -21,7 +21,7 @@ import { saveKPIPreferences } from '@/components/kpi/save-preferences'
 import { loadKPIPreferences } from '@/components/kpi/load-preferences'
 import { failureDescription, type ActionFailure } from '@/lib/browser/action-failure'
 import { dimensionScopedPreferences } from '@/lib/reports/kpi-definitions'
-import type { ErrorLocale } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { ReportDataStatusResult } from '@/lib/reports/data-status'
 import type { KPIReport, KPIPreferences } from '@/types'
 
@@ -36,7 +36,7 @@ export default function KpiPage() {
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   // The fiscal year is app-wide context (the sidebar); a KPI view needs one started year.
-  const { periodId: scopedPeriodId } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const { periodId: scopedPeriodId, ready: fyReady } = useFiscalScope({ allowAll: false, hideFuture: true })
   const selectedPeriod = scopedPeriodId ?? ''
   // The catalog flags nyckeltal as dimension-filterable; the API narrows the
   // P&L figures and leaves the balance-side ones company-wide.
@@ -53,6 +53,9 @@ export default function KpiPage() {
   const [isLoadingReport, setIsLoadingReport] = useState(false)
   const [isSavingPrefs, setIsSavingPrefs] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A 4xx about the company or year (not applicable, not allowed): the
+  // server's sentence, with no retry, since a retry gets the same answer.
+  const [refusal, setRefusal] = useState<string | null>(null)
   const prefsStatusId = useId()
 
   // A page that could not read the stored layout must not render one, and above
@@ -96,6 +99,7 @@ export default function KpiPage() {
     const seq = ++requestSeq.current
     setIsLoadingReport(true)
     setError(null)
+    setRefusal(null)
     try {
       const params = new URLSearchParams({ period_id: periodId })
       if (dimensionFilter) {
@@ -103,6 +107,15 @@ export default function KpiPage() {
         params.set('dim_code', dimensionFilter.code)
       }
       const res = await fetch(`/api/reports/kpi?${params}`)
+      if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+        const body = await res.json().catch(() => null)
+        if (seq === requestSeq.current) {
+          setReport(null)
+          setDataStatus(null)
+          setRefusal(getErrorMessage(body, { locale, statusCode: res.status, fallback: t('fetch_failed') }))
+        }
+        return
+      }
       if (!res.ok) throw new Error(t('fetch_failed'))
       const { data, data_status } = await res.json()
       if (seq === requestSeq.current) {
@@ -114,7 +127,7 @@ export default function KpiPage() {
     } finally {
       if (seq === requestSeq.current) setIsLoadingReport(false)
     }
-  }, [t, dimensionFilter])
+  }, [t, dimensionFilter, locale])
 
   useEffect(() => {
     if (!selectedPeriod) return
@@ -253,6 +266,10 @@ export default function KpiPage() {
       {/* Renders nothing unless the company uses dimensions; when a value is
           picked it shows the partial-view chip the filtered reports carry. */}
       <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
+
+      {fyReady && !selectedPeriod && <EmptyNoFiscalYear />}
+
+      {refusal && selectedPeriod && !isLoadingReport && <EmptyState title={refusal} />}
 
       {error && selectedPeriod && (
         <LoadError title={error} onRetry={() => void fetchReport(selectedPeriod)} />

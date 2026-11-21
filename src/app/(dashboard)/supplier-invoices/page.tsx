@@ -183,6 +183,10 @@ export default function SupplierInvoicesPage() {
   // The last read failed. With no rows on screen the list says so in place
   // of them; rows already on screen stay, with one line above them.
   const [loadFailed, setLoadFailed] = useState(false)
+  // The open invoices are on screen and the settled history is still on its
+  // way (fetchInvoices): Betalda waits for it, Alla says it is coming.
+  const [historyPending, setHistoryPending] = useState(false)
+  const loadSeq = useRef(0)
   // ?tab= opens a status tab directly: the Att göra row and the byrå client
   // list link to Att betala (to_pay) and the attest queue (registered).
   const [activeTab, setActiveTab] = useState<ListTab>(() => {
@@ -263,23 +267,55 @@ export default function SupplierInvoicesPage() {
   const openNewInvoice = () => router.push('/supplier-invoices?new=1', { scroll: false })
 
   async function fetchInvoices() {
+    const seq = ++loadSeq.current
+    const isCurrent = () => seq === loadSeq.current
     // Skeleton takeover only while nothing is on screen: refetches after an
     // action (register, betalfil, approve fallback) reconcile BEHIND the
     // rendered table instead of collapsing it to 4 skeleton stubs and
     // replaying the entrance animation.
-    if (invoices.length === 0) setIsLoading(true)
-    try {
-      const res = await fetch('/api/supplier-invoices?status=all')
+    const firstLoad = invoices.length === 0
+    if (firstLoad) setIsLoading(true)
+    const readList = async (status: 'unsettled' | 'all') => {
+      const res = await fetch(`/api/supplier-invoices?status=${status}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const { data } = await res.json()
-      setInvoices(data || [])
+      return (data || []) as ListInvoice[]
+    }
+    // A register of thousands of paid invoices took seconds to read before
+    // anything showed. The open invoices (every tab but Betalda, and every
+    // count) are read beside it and paint first; the whole register replaces
+    // them when it lands. Only on a first load, and only with rows to show:
+    // an empty first answer must never read as "Inga fakturor".
+    let wholeLanded = false
+    const whole = readList('all')
+    if (firstLoad) {
+      readList('unsettled')
+        .then((open) => {
+          if (!isCurrent() || wholeLanded || open.length === 0) return
+          setInvoices(open)
+          setHistoryPending(true)
+          setLoadFailed(false)
+          setIsLoading(false)
+        })
+        .catch(() => {
+          // The whole register below decides what the page shows.
+        })
+    }
+    try {
+      const data = await whole
+      wholeLanded = true
+      if (!isCurrent()) return
+      setInvoices(data)
       setLoadFailed(false)
     } catch {
       // Without this, a failed fetch either stuck the skeleton forever or
       // silently rendered the empty state as if the invoices were gone.
-      setLoadFailed(true)
+      if (isCurrent()) setLoadFailed(true)
     } finally {
-      setIsLoading(false)
+      if (isCurrent()) {
+        setHistoryPending(false)
+        setIsLoading(false)
+      }
     }
   }
 
@@ -702,7 +738,7 @@ export default function SupplierInvoicesPage() {
         </AttnLine>
       )}
 
-      {isLoading ? (
+      {isLoading || (historyPending && activeTab === 'paid') ? (
         <LateReveal>
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
@@ -999,6 +1035,10 @@ export default function SupplierInvoicesPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {!isLoading && historyPending && activeTab === 'all' && (
+        <p className="py-3 text-[13px] text-muted-foreground">{t('history_loading')}</p>
       )}
 
       {!isLoading && (

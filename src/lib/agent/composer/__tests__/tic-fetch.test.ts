@@ -14,8 +14,8 @@ vi.mock('@/lib/extensions/registry', () => ({
 
 import { ensureTicSnapshot } from '../tic-fetch'
 
-// `ensureTicSnapshot` is the single chokepoint between the agent build path
-// and the TIC extension's profile service. Every TIC call from agent onboarding goes
+// `ensureTicSnapshot` is the single chokepoint between core and the TIC
+// extension's profile service. Every snapshot fetch goes
 // through here, and the 3000/mo Lens budget makes the cache / fallback
 // branches load-bearing. These tests cover:
 //
@@ -307,8 +307,8 @@ describe('ensureTicSnapshot: degraded paths', () => {
     })
 
     expect(result.source).toBe('fallback')
-    // Degrade to the stale snapshot rather than crash: the agent build path
-    // depends on this contract so a TIC outage never blocks onboarding.
+    // Degrade to the stale snapshot rather than crash: callers depend on
+    // this contract so a TIC outage never blocks them.
     expect(result.snapshot).toEqual(staleSnapshot)
   })
 

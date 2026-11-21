@@ -262,8 +262,9 @@ export default function CommandPalette({
   // Typed: the hits under their area. Nothing typed: one row per area.
   const pageGroups = q ? groupPalettePages(filteredPages) : [{ group: t('section_pages'), pages: filteredPages }]
 
-  // The hand-off-to-assistant entries use the agent name the user chose in
-  // /onboarding/agent, and hide entirely until that onboarding is done and
+  // The hand-off-to-assistant entries use the agent name the user chose when
+  // the assistant was built, and hide entirely for a company without a built
+  // assistant and
   // where the built-in chat is switched off (ASSISTANT_CHAT_ENABLED): the
   // same gates as the FAB.
   const assistantName = identity.displayName?.trim() || t('assistant_default_name')

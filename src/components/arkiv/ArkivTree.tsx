@@ -95,7 +95,16 @@ export function ArkivYearPicker({ year, onYear }: { year: string; onYear: (year:
   )
 }
 
-export function ArkivTree({ refreshKey = 0, year = 'all' }: { refreshKey?: number; year?: string }) {
+export function ArkivTree({
+  refreshKey = 0,
+  year = 'all',
+  onShowAllYears,
+}: {
+  refreshKey?: number
+  year?: string
+  /** Clears the year filter; offered when the chosen year holds no documents. */
+  onShowAllYears?: () => void
+}) {
   const t = useTranslations('arkiv')
   const tCommon = useTranslations('common')
   const router = useRouter()
@@ -196,7 +205,17 @@ export function ArkivTree({ refreshKey = 0, year = 'all' }: { refreshKey?: numbe
           <Skeleton className="h-6 w-2/3" />
         </LateReveal>
       )}
-      {summary && summary.total === 0 && <EmptyState title={t('documents_empty_title')} description={t('documents_empty_body')} />}
+      {/* An empty year is a filter with no hits, not an empty archive: it says which year and offers the rest. */}
+      {summary && summary.total === 0 && year !== 'all' && (
+        <EmptyState
+          title={t('documents_empty_year_title', { year })}
+          secondaryActionLabel={onShowAllYears ? t('documents_show_all_years') : undefined}
+          onSecondaryAction={onShowAllYears}
+        />
+      )}
+      {summary && summary.total === 0 && year === 'all' && (
+        <EmptyState title={t('documents_empty_title')} description={t('documents_empty_body')} />
+      )}
       {summary && summary.total > 0 && (
         <div className="stagger-enter">
           {folders.map((folder) => {

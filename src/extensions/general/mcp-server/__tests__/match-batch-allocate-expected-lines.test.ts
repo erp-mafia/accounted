@@ -245,6 +245,54 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
     expect(inserted.params).toMatchObject({ fees: [{ account: '6570', amount: 1500, description: 'Stripe juni' }] })
   })
 
+  // crm#1954: a supplier payment that also pays invoices registered in the
+  // bookkeeping kept before. The approver sees the 2440 debit for that debt.
+  it('supplier debt rows: the old debt on 2440 in expected_lines and total_debts, the params carry the rows', async () => {
+    const SI_B = '55555555-5555-4555-8555-555555555555'
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: TX_ID, description: 'INTERNET BET 1', merchant_name: null, amount: -28546.5, currency: 'SEK', date: '2026-11-18', journal_entry_id: null, cash_account_id: 'ca-1' },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { id: SI_A, currency: 'SEK', exchange_rate: null, remaining_amount: 6000, total: 6000 },
+        { id: SI_B, currency: 'SEK', exchange_rate: null, remaining_amount: 4000, total: 4000 },
+      ],
+      error: null,
+    })
+    enqueue({ data: [{ account_number: '2440' }], error: null }) // chart_of_accounts
+    enqueueBankAccount(enqueue, '1930')
+    enqueueStage(enqueue)
+
+    const result = (await allocate.execute(
+      {
+        transaction_id: TX_ID,
+        allocations: [
+          { kind: 'supplier_invoice', supplier_invoice_id: SI_A, amount: 6000 },
+          { kind: 'supplier_invoice', supplier_invoice_id: SI_B, amount: 4000 },
+        ],
+        supplier_debts: [{ account: '2440', amount: 18546.5 }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as Staged
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.expected_lines).toEqual([
+      { account_number: '2440', description: 'Leverantörsfaktura 1 av 2', debit: 6000, credit: 0 },
+      { account_number: '2440', description: 'Leverantörsfaktura 2 av 2', debit: 4000, credit: 0 },
+      { account_number: '2440', description: 'Leverantörsskuld från tidigare bokföring', debit: 18546.5, credit: 0 },
+      { account_number: '1930', description: 'Utbetalning 2026-11-18', debit: 0, credit: 28546.5 },
+    ])
+    expect(result.preview).toMatchObject({ total_allocated: 10000, total_debts: 18546.5, expected_lines_balanced: true })
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    // Approval runs the same operation on the stored params: the debt rows travel with them.
+    expect(inserted.params).toMatchObject({ supplier_debts: [{ account: '2440', amount: 18546.5 }] })
+  })
+
   it('fee rows on a class 4 account never stage: a reverse-charge base would reach the momsdeklaration without its VAT', async () => {
     const { supabase, findCall } = createQueuedMockSupabase()
     await expect(

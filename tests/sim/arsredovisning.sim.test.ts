@@ -60,7 +60,7 @@ describe.each(closedYears)('årsredovisning %i', (year) => {
     expectKronor(amount(claims, 'Balanserat resultat'), figures.retainedEarnings)
     expectKronor(amount(claims, 'Årets resultat'), figures.result)
     expectKronor(amount(claims, 'Leverantörsskulder'), figures.supplierPayables)
-    expectKronor(amount(claims, 'Skatteskulder'), figures.corporateTaxLiability)
+    expectKronor(amount(claims, 'Skatteskulder'), figures.corporateTaxLiability + figures.pensionTaxLiability)
     expectKronor(amount(claims, 'Övriga skulder'), figures.vatLiability + figures.payrollLiabilities)
     expectKronor(amount(claims, 'Upplupna kostnader och förutbetalda intäkter'), figures.accruedVacation)
   })

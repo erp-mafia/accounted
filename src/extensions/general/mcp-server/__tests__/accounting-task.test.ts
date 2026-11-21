@@ -46,7 +46,7 @@ const bundle = (extra: Partial<AgentBundle> = {}): AgentBundle => ({
   knowledge: [{ id: 'horizontal/swedish-vat', tier: 'horizontal', source: 'default', title: 'Swedish VAT', summary: '', version: 7, reviewed_at: null, body: '# VAT' }],
   industry_sections: [],
   references: [], company: [], connections: [{ kind: 'skatteverket', status: 'connected' }],
-  company_knowledge: { name: 'Arcim', org_number: null, onboarding_summary: null, facts: [], remembered: [], documents: { total: 0, look_up: [] } },
+  company_knowledge: { name: 'Arcim', org_number: null, facts: [], remembered: [], documents: { total: 0, look_up: [] } },
   ...extra,
 })
 

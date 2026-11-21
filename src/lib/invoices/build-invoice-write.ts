@@ -26,6 +26,7 @@ import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import {
   computeInvoiceDeductionTotal,
   computeLineDeductions,
+  DEDUCTION_INVOICE_ONLY_ERROR,
   validateInvoice as validateRotRut,
 } from '@/lib/bookkeeping/rot-rut-rules'
 import {
@@ -361,6 +362,18 @@ export async function buildInvoiceWriteData(params: {
   const hasAccrualItems = items.some(
     (item) => item.accrual_period_start && item.accrual_period_end,
   )
+  // A skattereduktion exists on a faktura only: a quote, a proforma and a
+  // delivery note have no deduction model and store none of its fields.
+  // Refused like a periodisering on them, never saved without the claim
+  // (#3030): the caller was told nothing and the document had no avdrag.
+  // Text rows carry no amounts and drop the flag on every document type.
+  if (documentType !== 'invoice' && items.some((item) => item.line_type !== 'text' && item.deduction_type)) {
+    return {
+      ok: false,
+      code: 'INVOICE_CREATE_ROT_RUT_VALIDATION',
+      details: { reason: 'document_type', documentType, errors: [DEDUCTION_INVOICE_ONLY_ERROR], warnings: [] },
+    }
+  }
   if (hasAccrualItems) {
     if (documentType !== 'invoice') {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'document_type', documentType } }
@@ -594,9 +607,9 @@ export async function buildInvoiceWriteData(params: {
 
   // ROT/RUT-avdrag: validate prerequisites and compute the per-item +
   // invoice-level deduction. Computed server-side (never trusted from the
-  // client) so a tampered request can't expand the 1513 receivable. Skipped
-  // entirely for proformas, delivery notes, and quotes: those documents don't
-  // post journal entries and have no deduction model.
+  // client) so a tampered request can't expand the 1513 receivable. Only on
+  // an invoice: proformas, delivery notes and quotes don't post journal
+  // entries and have no deduction model (a claim on them is refused above).
   let deductionTotal = 0
   // Per line, aligned with `items`: what each deduction row stores and books.
   let lineDeductions: number[] = []

@@ -29,6 +29,11 @@ vi.mock('@/lib/expenses/expense-claims-service', async () => {
 })
 
 import { createSupplierInvoice, type CreateSupplierInvoiceInput } from '../create'
+import {
+  supplierInvoiceRegistrationLines,
+  type SupplierInvoiceBookingItem,
+  type SupplierInvoiceRegistrationHeader,
+} from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 
 const { supabase, setTable, reset, calls } = createTableMockSupabase()
 
@@ -334,6 +339,38 @@ describe('createSupplierInvoice: VAT as the document states it', () => {
     if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
     expect(result.preview.items.map((i) => i.vat_amount)).toEqual([125, 2.49, 2.5])
     expect(result.preview.vat_amount).toBe(129.99)
+  })
+
+  // #3571: an explicit vat_amount of 0 on a 25 % line was stored as 0 kr moms
+  // on the invoice, while the registration verifikat read the stored 0 as
+  // "nothing stored" and booked 250 on 2641 and 1 250 on 2440.
+  it('books an explicit vat_amount of 0 as no moms, the way the invoice stores it', async () => {
+    setTable('company_settings', { data: { accounting_method: 'accrual', vat_registered: true } })
+    const result = await createSupplierInvoice(
+      ctx(),
+      body({
+        items: [
+          { description: 'Test', quantity: 1, unit_price: 1000, amount: 1000, account_number: '5010', vat_rate: 0.25, vat_amount: 0 },
+          { description: 'Material', amount: 1000, account_number: '4010', vat_rate: 0.25 },
+        ],
+      }),
+      { dryRun: true },
+    )
+
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview).toMatchObject({ subtotal: 2000, vat_amount: 250, total: 2250 })
+    expect(result.preview.items.map((i) => [i.vat_rate, i.vat_amount])).toEqual([[0, 0], [0.25, 250]])
+
+    const lines = supplierInvoiceRegistrationLines(
+      result.preview as unknown as SupplierInvoiceRegistrationHeader,
+      result.preview.items as unknown as SupplierInvoiceBookingItem[],
+      'swedish_business',
+      'LF',
+      undefined,
+    )
+    const on = (account: string) => lines.filter((l) => l.account_number === account)
+    expect(on('2641').map((l) => l.debit_amount)).toEqual([250])
+    expect(on('2440').map((l) => l.credit_amount)).toEqual([result.preview.total])
   })
 })
 

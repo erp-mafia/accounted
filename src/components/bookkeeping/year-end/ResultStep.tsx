@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -19,6 +20,7 @@ import { formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import {
+  filesIncomeReturn,
   isEntityType,
   preparesArsredovisning,
   preparesForenklatArsbokslut,
@@ -32,7 +34,14 @@ interface ResultStepProps {
 
 const ORE_TOLERANCE = 0.005
 
+/** The report page of each income return the app prepares; INK3 has none of its own yet. */
+const INCOME_RETURN_REPORT: Partial<Record<'INK2' | 'NE' | 'INK3', 'ink2-declaration' | 'ne-declaration'>> = {
+  INK2: 'ink2-declaration',
+  NE: 'ne-declaration',
+}
+
 export function ResultStep({ result }: ResultStepProps) {
+  const t = useTranslations('yearEndResult')
   const [acknowledged, setAcknowledged] = useState(false)
 
   const continuity = result.continuity
@@ -55,6 +64,14 @@ export function ResultStep({ result }: ResultStepProps) {
   // BFNAR 2010:1) is offered that document the same way.
   const offersForenklatArsbokslut = form !== null && preparesForenklatArsbokslut(form) !== null
   const offersDocument = offersArsredovisning || offersForenklatArsbokslut
+  // The tax return is the other half of closing the year: link the form's
+  // own declaration for the year just closed (the window picks the year).
+  const incomeReturn = form ? filesIncomeReturn(form) : null
+  const declarationSlug = incomeReturn ? INCOME_RETURN_REPORT[incomeReturn] ?? null : null
+  const closedOn = result.closingEntry.entry_date
+  const declarationHref = declarationSlug
+    ? `/reports/${declarationSlug}?from_date=${closedOn}&to_date=${closedOn}`
+    : null
   const disabledLink = !acknowledged ? 'pointer-events-none opacity-50' : ''
 
   // If the wizard reached ResultStep, executeYearEndClosing already enforced
@@ -174,7 +191,7 @@ export function ResultStep({ result }: ResultStepProps) {
                 Till bokföringen
               </Link>
             </Button>
-            <Button variant={offersDocument ? 'outline' : 'default'} asChild disabled={!acknowledged}>
+            <Button variant={offersDocument || declarationHref ? 'outline' : 'default'} asChild disabled={!acknowledged}>
               <Link
                 href="/reports"
                 aria-disabled={!acknowledged}
@@ -184,6 +201,18 @@ export function ResultStep({ result }: ResultStepProps) {
                 Generera rapporter
               </Link>
             </Button>
+            {declarationHref && incomeReturn && (
+              <Button variant={offersDocument ? 'outline' : 'default'} asChild disabled={!acknowledged}>
+                <Link
+                  href={declarationHref}
+                  aria-disabled={!acknowledged}
+                  tabIndex={acknowledged ? undefined : -1}
+                  className={disabledLink}
+                >
+                  {incomeReturn === 'NE' ? t('open_ne') : t('open_ink2')}
+                </Link>
+              </Button>
+            )}
             {offersArsredovisning && (
               <Button asChild disabled={!acknowledged}>
                 <Link

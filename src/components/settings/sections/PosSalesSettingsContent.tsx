@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
@@ -65,6 +67,7 @@ export function PosSalesSettingsContent() {
   const t = useTranslations('pos_sales')
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -72,18 +75,37 @@ export function PosSalesSettingsContent() {
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [connections, setConnections] = useState<PosConnectionJson[] | null>(null)
   const [available, setAvailable] = useState(true)
+  // The connections read failed. message: the server's sentence for a 4xx
+  // about the company (no retry helps); null: a failed read, with a retry.
+  // Never the "Accounted Connect is not configured" text: that is only true
+  // after a real answer says so.
+  const [connectionsError, setConnectionsError] = useState<{ message: string | null } | null>(null)
   const [venues, setVenues] = useState<VenuesJson | null>(null)
   const [venuesError, setVenuesError] = useState<string | null>(null)
   const [syncFrom, setSyncFrom] = useState<string>(yesterday())
   const [connecting, setConnecting] = useState<string | null>(null)
 
   const load = useCallback(async () => {
+    let res: Response
     try {
-      const res = await fetch('/api/pos-sales/connections')
-      const json = (await res.json()) as { data?: { connections: PosConnectionJson[]; available: boolean } }
-      setConnections(json.data?.connections ?? [])
-      setAvailable(json.data?.available ?? false)
-      if (!json.data?.available) return
+      res = await fetch('/api/pos-sales/connections')
+    } catch {
+      setConnectionsError({ message: null })
+      return
+    }
+    const json = (await res.json().catch(() => null)) as { data?: { connections: PosConnectionJson[]; available: boolean } } | null
+    if (!res.ok || !json?.data) {
+      const aboutCompany = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429
+      setConnectionsError({
+        message: aboutCompany ? getErrorMessage(json, { statusCode: res.status, locale: errorLocale }) : null,
+      })
+      return
+    }
+    setConnectionsError(null)
+    setConnections(json.data.connections ?? [])
+    setAvailable(json.data.available ?? false)
+    if (!json.data.available) return
+    try {
       const venuesRes = await fetch('/api/pos-sales/venues')
       const venuesJson = await venuesRes.json()
       if (!venuesRes.ok) {
@@ -94,7 +116,6 @@ export function PosSalesSettingsContent() {
       setVenuesError(null)
       setVenues(venuesJson.data as VenuesJson)
     } catch {
-      setConnections((current) => current ?? [])
       setVenuesError(t('venues_failed'))
     }
   }, [errorLocale, t])
@@ -152,7 +173,25 @@ export function PosSalesSettingsContent() {
       <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       <SettingsSectionHeader title={tNav('pos')} intro={tIntro('pos')} />
 
-      {connections === null ? (
+      {connectionsError && connections !== null && (
+        <AttnLine className="pt-6" action={{ label: tCommon('retry'), onClick: () => void load() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
+      {connectionsError && connections === null ? (
+        connectionsError.message ? (
+          <EmptyState title={connectionsError.message} />
+        ) : (
+          <LoadError
+            title={t('connections_load_failed')}
+            onRetry={() => {
+              setConnectionsError(null)
+              void load()
+            }}
+          />
+        )
+      ) : connections === null ? (
         <div className="space-y-2 pt-8">
           <Skeleton className="h-12 w-full" />
           <Skeleton className="h-12 w-full" />

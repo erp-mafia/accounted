@@ -47,6 +47,7 @@ import {
   payoutFeeTotal,
   payoutFeesWithinInvoices,
 } from '@/lib/bookkeeping/payout-fee-lines'
+import { SUPPLIER_DEBT_DESCRIPTION_MAX, isSupplierDebtAccount } from '@/lib/bookkeeping/supplier-debt-lines'
 import {
   isAccruedCostAccount,
   pastPeriodDeferralSuggestion,
@@ -1846,11 +1847,16 @@ const supplierOrgNumber = z.string().transform((v) => orgNumberKey(v) ?? v.trim(
  * agent's create_supplier used to apply three different rule sets). An empty
  * string passes: on create it means "not set", on update "clear it".
  */
-function paymentRoutingField(max: number, valid: (compact: string) => boolean, message: string) {
+/**
+ * A payment routing number, blank or valid. The refusal is Swedish, for the
+ * person at the form; params.en keeps the English for an agent's field
+ * refusal (lib/errors/refusal.ts fieldIssue).
+ */
+function paymentRoutingField(max: number, valid: (compact: string) => boolean, message: { sv: string; en: string }) {
   return z
     .string()
     .max(max)
-    .refine((v) => v.trim() === '' || valid(v.replace(/\s/g, '').toUpperCase()), message)
+    .refine((v) => v.trim() === '' || valid(v.replace(/\s/g, '').toUpperCase()), { message: message.sv, params: { en: message.en } })
     .optional()
 }
 
@@ -1874,11 +1880,23 @@ export const CreateSupplierSchema = z.object({
   // Free text: a non-EU supplier's tax number has no VIES prefix, and reverse
   // charge never reads it (see lib/bookkeeping/supplier-invoice-entries.ts).
   vat_number: z.string().max(20).optional(),
-  bankgiro: paymentRoutingField(20, validateBankgiroNumber, 'Invalid Bankgiro (must be 7-8 digits with valid Luhn check digit)'),
-  plusgiro: paymentRoutingField(20, (v) => /^\d{1,7}-?\d$/.test(v), 'Invalid Plusgiro (expected 2-8 digits)'),
+  bankgiro: paymentRoutingField(20, validateBankgiroNumber, {
+    sv: 'Bankgironumret stämmer inte: det har 7 eller 8 siffror och en kontrollsiffra. Kontrollera det mot fakturan.',
+    en: 'Invalid Bankgiro (must be 7-8 digits with valid Luhn check digit)',
+  }),
+  plusgiro: paymentRoutingField(20, (v) => /^\d{1,7}-?\d$/.test(v), {
+    sv: 'Plusgironumret stämmer inte: det har 2 till 8 siffror. Kontrollera det mot fakturan.',
+    en: 'Invalid Plusgiro (expected 2-8 digits)',
+  }),
   bank_account: z.string().max(50).optional(),
-  iban: paymentRoutingField(42, (v) => /^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(v), 'Invalid IBAN format'),
-  bic: paymentRoutingField(11, (v) => /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(v), 'Invalid BIC/SWIFT format'),
+  iban: paymentRoutingField(42, (v) => /^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(v), {
+    sv: 'IBAN stämmer inte: det börjar med två bokstäver för landet, till exempel SE, och två siffror.',
+    en: 'Invalid IBAN format',
+  }),
+  bic: paymentRoutingField(11, (v) => /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(v), {
+    sv: 'BIC/SWIFT stämmer inte: den har 8 eller 11 tecken, till exempel ESSESESS.',
+    en: 'Invalid BIC/SWIFT format',
+  }),
   clearing_number: z.string().optional(),
   account_number: z.string().optional(),
   default_expense_account: emptyStringAsUndefined(accountNumber),
@@ -3438,16 +3456,37 @@ export const MatchBatchSchema = z
     // MatchInvoiceSchema.expected_journal_entry_id).
     expected_journal_entry_ids: z.array(uuid).max(10).optional(),
     // A payment service's fee on the row (lib/bookkeeping/payout-fee-lines.ts):
-    // a debit on a class 6 cost account, no VAT.
+    // a debit on a class 6 cost account, no VAT. The fee and debt rows are
+    // bare in the MCP tool's listed schema (refinements, not regex or bounds,
+    // which pays for supplier_debts in the frozen tools/list budget); the
+    // refusals say the rule. At most five rows of the two together, below.
     fees: z
       .array(
         z.object({
-          account: accountNumber.refine(isPayoutFeeAccount, 'Fee account must be a BAS class 6 cost account, e.g. 6570'),
-          amount: z.number().positive('Fee amount must be greater than 0'),
-          description: z.string().max(PAYOUT_FEE_DESCRIPTION_MAX).optional(),
+          account: z.string().refine(isPayoutFeeAccount, 'Fee account must be a BAS class 6 cost account, e.g. 6570'),
+          amount: z.number().refine((amount) => amount > 0, 'Fee amount must be greater than 0'),
+          description: z
+            .string()
+            .refine((text) => text.length <= PAYOUT_FEE_DESCRIPTION_MAX, `At most ${PAYOUT_FEE_DESCRIPTION_MAX} characters`)
+            .optional(),
         }),
       )
-      .max(MAX_PAYOUT_FEES)
+      .optional(),
+    // A supplier invoice the row also pays that was registered before the
+    // company kept its books here, so it is only in the 2440 balance
+    // (lib/bookkeeping/supplier-debt-lines.ts): a debit on a 244x account, no
+    // VAT. Supplier batches only; not a fee, so it may exceed the invoices.
+    supplier_debts: z
+      .array(
+        z.object({
+          account: z.string().refine(isSupplierDebtAccount, 'Debt account must be a supplier debt account 2440 to 2449, e.g. 2440'),
+          amount: z.number().refine((amount) => amount > 0, 'Debt amount must be greater than 0'),
+          description: z
+            .string()
+            .refine((text) => text.length <= SUPPLIER_DEBT_DESCRIPTION_MAX, `At most ${SUPPLIER_DEBT_DESCRIPTION_MAX} characters`)
+            .optional(),
+        }),
+      )
       .optional(),
   })
   .superRefine((data, ctx) => {
@@ -3467,6 +3506,22 @@ export const MatchBatchSchema = z
           message: 'The fees must be smaller than the invoices they settle',
         })
       }
+    }
+    if (data.supplier_debts?.length && data.allocations.some((a) => a.kind !== 'supplier_invoice')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['supplier_debts'],
+        message: 'supplier_debts go with supplier_invoice allocations only (an outgoing payment)',
+      })
+    }
+    // At most five extra rows on the verifikat, fees and debts together, as the RPC.
+    const debtRows = data.supplier_debts?.length ?? 0
+    if ((data.fees?.length ?? 0) + debtRows > MAX_PAYOUT_FEES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [debtRows > 0 ? 'supplier_debts' : 'fees'],
+        message: `At most ${MAX_PAYOUT_FEES} fee and debt rows together`,
+      })
     }
     // Reject mixed customer + supplier in a single batch: semantically a
     // single bank transfer settles invoices on one side. The RPC also guards

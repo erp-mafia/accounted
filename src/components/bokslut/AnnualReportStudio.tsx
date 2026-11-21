@@ -656,7 +656,7 @@ export function AnnualReportStudio({
         {ready && (
           <div className="space-y-4 px-1 pt-6">
             <IssueList issues={issuesFor('content')} />
-            <div className="flex justify-end">
+            <div className="flex flex-col items-end gap-1">
               <Button
                 variant={variantFor('confirm_content')}
                 onClick={() => void confirmNarrative()}
@@ -666,6 +666,10 @@ export function AnnualReportStudio({
                 <CheckCircleIcon className="h-4 w-4" />
                 {profile.narrative_confirmed_at ? t('content_confirmed') : t('confirm_content')}
               </Button>
+              {/* Why the button is grey while text is unsaved, as the lock button says it. */}
+              {canWrite && hasUnsavedNarrative && !profile.narrative_confirmed_at && (
+                <p className="text-xs leading-5 text-muted-foreground">{t('save_content_first')}</p>
+              )}
             </div>
           </div>
         )}
