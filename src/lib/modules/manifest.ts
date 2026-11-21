@@ -745,6 +745,9 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   // Permissions: the one catalog of what people and their agents may do,
   // the role presets and the door classes every door reads, across modules.
   'permissions',
+  // The question list: questions put to the company's people. Filing reads
+  // the records of several modules to check what a question rests on.
+  'questions',
   'rate-limits',
   'reference-data',
   'sandbox',

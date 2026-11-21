@@ -114,11 +114,21 @@ export default function RecurringInvoicesPage() {
         })
         fetchSchedules()
       } else {
+        // The server's sentence says why (a schedule that cannot resume, a
+        // missing customer e-mail), not only that it failed.
+        const json = await res.json().catch(() => null)
         toast({
           title: t('schedule_update_failed_title'),
+          description: getErrorMessage(json, { locale, statusCode: res.status }),
           variant: 'destructive',
         })
       }
+    } catch (err) {
+      toast({
+        title: t('schedule_update_failed_title'),
+        description: getErrorMessage(err, { locale }),
+        variant: 'destructive',
+      })
     } finally {
       setTogglingId(null)
     }
@@ -160,6 +170,13 @@ export default function RecurringInvoicesPage() {
         // The schedule's own warning says what to do next (accounted#213).
         fetchSchedules()
       }
+    } catch (err) {
+      toast({
+        title: t('run_now_failed_title'),
+        description: getErrorMessage(err, { locale }),
+        variant: 'destructive',
+      })
+      fetchSchedules()
     } finally {
       setRunningId(null)
     }
@@ -183,8 +200,19 @@ export default function RecurringInvoicesPage() {
         toast({ title: t('schedule_deleted_title') })
         fetchSchedules()
       } else {
-        toast({ title: t('schedule_delete_failed_title'), variant: 'destructive' })
+        const json = await res.json().catch(() => null)
+        toast({
+          title: t('schedule_delete_failed_title'),
+          description: getErrorMessage(json, { locale, statusCode: res.status }),
+          variant: 'destructive',
+        })
       }
+    } catch (err) {
+      toast({
+        title: t('schedule_delete_failed_title'),
+        description: getErrorMessage(err, { locale }),
+        variant: 'destructive',
+      })
     } finally {
       setDeletingId(null)
     }

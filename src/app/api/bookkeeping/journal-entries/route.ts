@@ -109,8 +109,8 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     if (!includeCounts || !data || data.length === 0) return NextResponse.json({ data, count })
     try {
       const ids = (data as { id: string }[]).map((entry) => entry.id)
-      const { counts, invoice_references } = await countUnderlagForJournalEntries(supabase, companyId, ids)
-      return NextResponse.json({ data, count, attachment_counts: counts, invoice_references })
+      const { counts, invoice_references, no_doc_required } = await countUnderlagForJournalEntries(supabase, companyId, ids)
+      return NextResponse.json({ data, count, attachment_counts: counts, invoice_references, no_doc_required })
     } catch (err) {
       log.warn('underlag counts for the verifikat list failed', err)
       return NextResponse.json({ data, count })

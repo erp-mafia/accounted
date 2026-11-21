@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 
 vi.mock('@/lib/reports/ne-bilaga/ne-engine', () => ({
-  generateNEDeclaration: vi.fn(async () => ({ rutor: { R11: 120_000 } })),
+  generateNEDeclaration: vi.fn(async () => ({ rutor: { R11: 120_000 }, sida2: { R12: 120_000, R13: 0, R14: 0 } })),
 }))
 
 import { tools } from '../server'

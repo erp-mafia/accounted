@@ -1491,6 +1491,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // the allmännyttig statement, the exempt/taxable/shared treatment per
   // account and the ruta overrides. The bridge from the books to the return.
   { name: 'ink3_underlag_inputs', file: 'ink3_underlag_inputs.json', orderBy: 'created_at' },
+  // What an enskild firma's owner entered for the NE-bilaga sida 2 per
+  // räkenskapsår: egenavgift category, kapitalunderlag, earlier funds and the
+  // figures last year's declaration handed on. The bridge from the books to
+  // the return.
+  { name: 'ne_declaration_inputs', file: 'ne_declaration_inputs.json', orderBy: 'created_at' },
   // The underskottsregister (IL 40 kap.): per räkenskapsår the deficit
   // brought forward (INK2S 4.14 a), the spärrar and the deficit carried
   // forward, with the ownership change behind a spärr. No personal data.
@@ -1629,6 +1634,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     "which person accepted which version of Accounted's terms and DPA, the provider relationship rather than räkenskapsinformation; company_id is context only",
   company_suggestions:
     'which suggestions are open, snoozed or declined; the proposals and decisions are pending_operations rows and every package switch an audit_log row',
+  company_questions:
+    'questions put to the company and how each ended; an answer worth keeping is saved as an agent_memory fact. AI assistant state, not räkenskapsinformation',
   company_inbound_domains: 'inbound-mail infrastructure',
   company_inboxes: 'inbound-mail infrastructure',
   company_sending_domains: 'outbound-mail infrastructure (sender domain verification state)',

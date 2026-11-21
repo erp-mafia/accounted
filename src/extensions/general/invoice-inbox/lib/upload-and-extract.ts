@@ -13,7 +13,7 @@ import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { routeClassifiedDocument, VOUCHER_TYPES } from './route-from-arkiv'
+import { putInUnderlagByAPerson, routeClassifiedDocument, VOUCHER_TYPES } from './route-from-arkiv'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import { adoptQueuedInboxItem } from '@/lib/documents/queued-inbox-item'
@@ -370,7 +370,7 @@ async function processArchivedDocumentInner(
   supabase: import('@supabase/supabase-js').SupabaseClient,
   userId: string,
   companyId: string,
-  doc: { id: string; mime_type: string | null; deduplicated?: boolean },
+  doc: { id: string; mime_type: string | null; deduplicated?: boolean; upload_source?: string | null },
   file: { name: string; buffer: ArrayBuffer; type: string },
   source: 'upload' | 'email' | 'whatsapp',
   emailMeta?: EmailMeta,
@@ -391,7 +391,7 @@ async function processArchivedDocumentInner(
     const { data: existingItem, error: itemLookupError } = await supabase
       .from('invoice_inbox_items')
       .select(
-        'id, status, created_at, extracted_data, matched_supplier_id, matched_transaction_id, kind_hint, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at',
+        'id, status, source, channel_context, created_at, extracted_data, matched_supplier_id, matched_transaction_id, kind_hint, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at',
       )
       .eq('company_id', companyId)
       .eq('document_id', doc.id)
@@ -405,6 +405,8 @@ async function processArchivedDocumentInner(
     const adopted = (existingItem as Array<{
       id: string
       status: string
+      source?: string | null
+      channel_context?: { intake_source?: unknown; channel?: unknown } | null
       extracted_data: unknown
       matched_supplier_id: string | null
       matched_transaction_id: string | null
@@ -465,6 +467,23 @@ async function processArchivedDocumentInner(
           }
         }
       }
+      // A person uploading again in Underlag their own upload that Arkiv took wants it handled there (crm#1954): the
+      // item comes back, and the routing leaves it (putInUnderlagByAPerson). Guarded like the hint above: a booking or
+      // a match since wins, and the answer stays where the item is.
+      let requeued = false
+      const personsUpload = source === 'upload' && !opts.channelContext && !opts.channelMeta
+      if (duplicateItemState(adopted) === 'arkiv' && personsUpload && putInUnderlagByAPerson(adopted, doc.upload_source) && !isInboxItemTaken(adopted)) {
+        const { data: requeuedRows, error: requeueError } = await whereInboxItemFree(
+          supabase
+            .from('invoice_inbox_items')
+            .update({ routed_to_arkiv_at: null, routed_doc_type: null })
+            .eq('id', adopted.id)
+            .eq('company_id', companyId),
+        ).select('id')
+        if (requeueError) console.error('[invoice-inbox] Failed to bring a re-uploaded item back to Underlag:', requeueError)
+        else requeued = ((requeuedRows as Array<{ id: string }> | null) ?? []).length > 0
+      }
+      const state: DuplicateItemState = requeued ? 'inbox' : duplicateItemState(adopted)
       try {
         await appendProcessingHistory({
           companyId,
@@ -485,6 +504,7 @@ async function processArchivedDocumentInner(
             kind_hint_before: hintBefore,
             kind_hint_after: hintAfter,
             kind_hint_skipped: hintSkipped,
+            requeued_from_arkiv: requeued,
           },
           actor: opts.actorId
             ? { type: 'system', id: opts.actorId }
@@ -512,7 +532,7 @@ async function processArchivedDocumentInner(
         // shows in Behöver dig, and one Arkiv took is in Dokument.
         duplicate_of: {
           received_at: adopted.created_at ?? null,
-          state: duplicateItemState(adopted),
+          state,
         },
       }
     }

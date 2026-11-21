@@ -4,8 +4,8 @@
  * depreciation are booked as year_end vouchers and stand in the key's result
  * like any other line, so a proposal that left one out cannot agree with it.
  *
- * Non-deductible costs are not in these figures: the product does not detect
- * them yet (ink2.sim.test.ts pins that gap against the key).
+ * The non-deductible representation is added back before the cap and the tax
+ * (IL 30 kap. 5 §: the cap is 25 % of the överskott before the avsättning).
  */
 import { describe, expect, it } from 'vitest'
 import { loadSimCompany } from './company'
@@ -49,10 +49,12 @@ describe.each(closedYears)('the tax proposal for %i', (year) => {
     const find = (kind: string) => proposals.find((item: { kind: string }) => item.kind === kind)
     // The överavskrivning the same proposal offers comes off the result first.
     const afterDepreciation = figures.resultBeforeTax - (find('overavskrivningar')?.signedAmount ?? 0)
-    const avsattning = Math.floor(Math.floor(afterDepreciation) * 0.25)
+    const surplus = afterDepreciation + figures.nonDeductibleCosts
+    const avsattning = Math.floor(Math.floor(surplus) * 0.25)
     const tax = find('bolagsskatt')
     expect(find('periodiseringsfond_avsattning').amount).toBe(avsattning)
     expect(tax.computation.resultBeforeTax).toBeCloseTo(afterDepreciation - avsattning, 2)
-    expect(tax.amount).toBe(Math.round((Math.floor((afterDepreciation - avsattning) / 10) * 10) * 0.206))
+    expect(tax.computation.nonDeductibleExpenses).toBe(figures.nonDeductibleCosts)
+    expect(tax.amount).toBe(Math.round((Math.floor((surplus - avsattning) / 10) * 10) * 0.206))
   })
 })

@@ -12,7 +12,7 @@ import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { performCompanySwitch } from '@/lib/company/switch-client'
+import { companySwitchErrorKey, performCompanySwitch } from '@/lib/company/switch-client'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
 import {
   KPI_PERIOD_PRESETS,
@@ -73,6 +73,7 @@ export default function ByraKpiView({
 }: ByraKpiViewProps) {
   const t = useTranslations('byra')
   const tClients = useTranslations('clients')
+  const tSwitcher = useTranslations('company_switcher')
   const { toast } = useToast()
   const router = useRouter()
   const pathname = usePathname()
@@ -134,7 +135,8 @@ export default function ByraKpiView({
     const result = await performCompanySwitch(companyId, { destination: '/' })
     if (result?.error) {
       setPendingId(null)
-      toast({ title: tClients('enter_failed'), variant: 'destructive' })
+      // The same sentences as the company switcher, as on the client list.
+      toast({ title: tSwitcher(companySwitchErrorKey(result.error)), variant: 'destructive' })
     }
   }
 

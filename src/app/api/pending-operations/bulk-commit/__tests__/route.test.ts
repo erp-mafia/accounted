@@ -619,9 +619,9 @@ describe('POST /api/pending-operations/bulk-commit', () => {
     // fallbacks; skip/not-found strings are now Swedish at the source (#337).
     expect(body.data.results).toEqual([
       { id: VALID_ID_1, status: 'committed' },
-      { id: VALID_ID_2, status: 'failed', error: 'Ett oväntat serverfel uppstod. Försök igen senare.' },
+      { id: VALID_ID_2, status: 'failed', error: 'Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.' },
       { id: VALID_ID_3, status: 'skipped', error: 'Redan hanterad (avvisad)' },
-      { id: VALID_ID_4, status: 'rejected', error: 'Resursen kunde inte hittas.' },
+      { id: VALID_ID_4, status: 'rejected', error: 'Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.' },
       { id: VALID_ID_5, status: 'failed', error: 'Åtgärden kunde inte hittas.' },
     ])
     expect(body.data.summary).toEqual({

@@ -47,6 +47,21 @@ export function inboxSawABill(extracted: Record<string, unknown> | null | undefi
   return kind === 'government_letter' || arkivType === 'other'
 }
 
+/**
+ * A person put it in Underlag by hand (crm#1954): the dashboard's upload door files its item with source 'upload'
+ * and no door stamp, which every other door writing source 'upload' sets (Arkiv's queueing, MCP, partner and
+ * digital-mailbox deliveries, lib/intake/sources.ts). An 'api' document under such an item is an MCP upload from
+ * before the MCP tools stamped theirs. The routing leaves such an item in Underlag whatever the model types it: a
+ * person filed it to be handled there, and only their own type in Dokument moves it.
+ */
+export function putInUnderlagByAPerson(
+  item: { source?: string | null; channel_context?: { intake_source?: unknown; channel?: unknown } | null },
+  documentUploadSource: string | null | undefined,
+): boolean {
+  if (item.source !== 'upload' || documentUploadSource === 'api') return false
+  return item.channel_context?.intake_source == null && item.channel_context?.channel == null
+}
+
 export type RouteOutcome =
   | 'queued'
   | 'requeued'
@@ -106,6 +121,8 @@ interface DocumentRow {
 
 interface ItemRow {
   id: string
+  source?: string | null
+  channel_context?: { intake_source?: unknown; channel?: unknown } | null
   kind_hint?: string | null
   extracted_data?: Record<string, unknown> | null
   routed_to_arkiv_at: string | null
@@ -129,7 +146,7 @@ export async function routeClassifiedDocument(
   const d = doc as DocumentRow
   const { data: rows, error: itemsError } = await supabase
     .from('invoice_inbox_items')
-    .select('id, kind_hint, extracted_data, routed_to_arkiv_at, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id')
+    .select('id, source, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id')
     .eq('company_id', input.companyId)
     .eq('document_id', input.documentId)
   if (itemsError) throw new Error(`inbox items fetch failed: ${itemsError.message}`)
@@ -199,7 +216,12 @@ export async function routeClassifiedDocument(
   }
 
   if (!isArkivSectionEnabled(input.companyId)) return 'left'
-  const waiting = items.filter((i) => isOpenInboxItem(i) && !inboxSawABill(i.extracted_data ?? d.extracted_data, input.docType))
+  const waiting = items.filter(
+    (i) =>
+      isOpenInboxItem(i) &&
+      !inboxSawABill(i.extracted_data ?? d.extracted_data, input.docType) &&
+      (input.decidedBy === 'human' || !putInUnderlagByAPerson(i, d.upload_source)),
+  )
   if (waiting.length === 0) return 'left'
   const { error } = await supabase
     .from('invoice_inbox_items')
@@ -247,22 +269,28 @@ export async function routeStaleQueueItems(supabase: SupabaseClient): Promise<nu
   let query = whereInboxItemOpen(
     supabase
       .from('invoice_inbox_items')
-      .select('id, document_id, extracted_data, document_attachments!inner(doc_type, admission_state)')
+      .select('id, document_id, source, channel_context, extracted_data, document_attachments!inner(doc_type, admission_state, upload_source)')
       .not('document_id', 'is', null),
   )
   if (section !== 'all') query = query.in('company_id', section)
   const { data, error } = await query.limit(500)
   if (error) throw new Error(`stale queue select failed: ${error.message}`)
+  type StaleDocument = { doc_type: string | null; admission_state: string; upload_source?: string | null }
   const rows = (data ?? []) as unknown as Array<{
     id: string
+    source?: string | null
+    channel_context?: { intake_source?: unknown; channel?: unknown } | null
     extracted_data?: Record<string, unknown> | null
-    document_attachments: { doc_type: string | null; admission_state: string } | Array<{ doc_type: string | null; admission_state: string }>
+    document_attachments: StaleDocument | StaleDocument[]
   }>
   const byType = new Map<string, string[]>()
   for (const r of rows) {
     const doc = Array.isArray(r.document_attachments) ? r.document_attachments[0] : r.document_attachments
     if (!doc?.doc_type || doc.admission_state !== 'admitted' || VOUCHER_TYPES.has(doc.doc_type)) continue
     if (inboxSawABill(r.extracted_data, doc.doc_type)) continue
+    // The catch-up cannot tell who typed the document: a person's own upload is left to the live route, which moves
+    // it on a person's type only.
+    if (putInUnderlagByAPerson(r, doc.upload_source)) continue
     byType.set(doc.doc_type, [...(byType.get(doc.doc_type) ?? []), r.id])
   }
   let routed = 0

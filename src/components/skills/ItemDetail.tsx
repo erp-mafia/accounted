@@ -31,6 +31,7 @@ import { RoutineOffer, RoutinePanel } from './RoutinePanel'
 import { parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { DeleteOwn, EditOwnButton, Field, Row, ShareBox, SubView } from './AgentDetail'
 import { FlowSymbol } from './FlowSymbol'
 import { CopyIcon } from './CopyIcon'
@@ -181,10 +182,26 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
   }
   const loaded = isRules ? !!options.data : !!catalog.data && !catalog.isValidating
   if (!item) {
+    // A catalog (or, for a knowledge pack, the pack list) that could not be
+    // read is not a missing item: it says so, with a retry, instead of a
+    // header over a blank page or "not found".
+    const catalogFailed = !isRules && !!catalog.error && !catalog.data
+    const optionsFailed = isRules && !!options.error && !options.data
     return (
       <div className={styles.apage}>
         <PageHeader title={tNav('v3_skills')} />
-        {loaded && <p className={styles.muted}>{t('not_found')}</p>}
+        {catalogFailed || optionsFailed ? (
+          <LoadError
+            title={t('load_failed')}
+            onRetry={() => void (optionsFailed ? options.mutate() : catalog.mutate())}
+          />
+        ) : loaded ? (
+          <NotFoundState
+            title={t('not_found')}
+            backHref={backHref}
+            backLabel={t('back_to_catalog', { name: tNav('v3_skills') })}
+          />
+        ) : null}
       </div>
     )
   }

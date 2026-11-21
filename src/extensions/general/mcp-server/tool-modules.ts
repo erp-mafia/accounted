@@ -240,6 +240,9 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_create_skill',
     'gnubok_remember_fact',
     'gnubok_forget_fact',
+    'gnubok_ask_question',
+    'gnubok_list_questions',
+    'gnubok_close_question',
   ],
   byra: [
     'gnubok_client_overview',

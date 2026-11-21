@@ -1,9 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { SupportLink } from '@/components/ui/support-link'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { BankMark } from '@/components/banks/BankMark'
 import { useToast } from '@/components/ui/use-toast'
@@ -51,6 +53,13 @@ export function BankPaymentsSettingsContent() {
   const { canWrite } = useCanWrite()
 
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
+  // The availability read failed. message: the server's sentence for a 4xx
+  // about the company (no retry helps); null: a failed read, with a retry.
+  // Never the "not switched on" text: that is only true after a real answer.
+  const [availabilityError, setAvailabilityError] = useState<{ message: string | null } | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  // Uppdatera could not reach the provider: the server's sentence, in the row.
+  const [refreshError, setRefreshError] = useState<string | null>(null)
   const [verification, setVerification] = useState<CompanyVerification | null | 'failed'>(null)
   const [checkedAt, setCheckedAt] = useState<Date | null>(null)
   const [usage, setUsage] = useState<BankPaymentsUsage | null>(null)
@@ -65,24 +74,23 @@ export function BankPaymentsSettingsContent() {
   const packs = packsView !== null && packsView !== 'failed' ? packsView : null
 
   // The stored answer serves the page (fresh within six hours); Uppdatera
-  // asks the provider. checked_at is when the provider was last asked.
-  const loadVerification = useCallback(async (refresh = false) => {
-    try {
-      const next = await fetchCompanyVerification({ refresh })
-      setVerification(next)
-      setCheckedAt(next.checked_at ? new Date(next.checked_at) : null)
-    } catch {
-      setVerification('failed')
-    }
-  }, [])
-
-  // The provider's answer rarely changes (a verification is valid about a
-  // year), so a refresh needs visible feedback or it looks like nothing happened.
+  // asks the provider. checked_at is when the provider was last asked. The
+  // provider's answer rarely changes (a verification is valid about a year),
+  // so a refresh needs visible feedback or it looks like nothing happened. A
+  // refresh that fails keeps the last known answer and says why in the row.
   async function refreshVerification() {
     setRefreshing(true)
+    setRefreshError(null)
     try {
-      await loadVerification(true)
+      const next = await fetchCompanyVerification({ refresh: true })
+      setVerification(next)
+      setCheckedAt(next.checked_at ? new Date(next.checked_at) : null)
       toast({ title: t('refreshed_title'), description: t('refreshed') })
+    } catch (error) {
+      const failure = error instanceof PaymentsClientError
+        ? getErrorMessage(error.body, { locale, statusCode: error.status })
+        : getErrorMessage(error, { locale })
+      setRefreshError(failure)
     } finally {
       setRefreshing(false)
     }
@@ -93,6 +101,7 @@ export function BankPaymentsSettingsContent() {
     fetchPaymentsAvailability()
       .then((data) => {
         if (cancelled) return
+        setAvailabilityError(null)
         setAvailability(data)
         if (data.available) {
           // The verification rides on the availability (lib/payments/orders/readiness).
@@ -108,13 +117,26 @@ export function BankPaymentsSettingsContent() {
             })
         }
       })
-      .catch(() => {
-        if (!cancelled) setAvailability({ available: false, reason: null, provider: null, accounts: [], signer_known: false })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        const status = error instanceof PaymentsClientError ? error.status : null
+        const aboutCompany = status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429
+        setAvailabilityError({
+          message: aboutCompany && error instanceof PaymentsClientError
+            ? getErrorMessage(error.body, { locale, statusCode: status })
+            : null,
+        })
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reloadKey, locale])
+
+  function retryAvailability() {
+    setAvailabilityError(null)
+    setAvailability(null)
+    setReloadKey((key) => key + 1)
+  }
 
   async function startVerification() {
     setBusy(true)
@@ -160,7 +182,13 @@ export function BankPaymentsSettingsContent() {
       <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       <SettingsSectionHeader title={tNav('bank_payments')} intro={tIntro('bank_payments')} />
 
-      {availability === null ? (
+      {availabilityError ? (
+        availabilityError.message ? (
+          <EmptyState title={availabilityError.message} />
+        ) : (
+          <LoadError title={t('availability_load_failed')} onRetry={retryAvailability} />
+        )
+      ) : availability === null ? (
         <div className="space-y-3 pt-8">
           <Skeleton className="h-4 w-1/2" />
           <Skeleton className="h-4 w-2/3" />
@@ -169,7 +197,18 @@ export function BankPaymentsSettingsContent() {
         availability.reason === 'subscription' ? (
           <UpgradeNote className="mt-8">{t('requires_subscription')}</UpgradeNote>
         ) : (
-          <p className="pt-8 text-[13px] text-muted-foreground">{t('not_available')}</p>
+          <div className="pt-8 text-[13px] text-muted-foreground">
+            {t('not_available')}
+            {/* The way on: support switches it on. The sandbox has no bank to pay from. */}
+            {availability.reason !== 'sandbox' && (
+              <>
+                {' '}
+                <SupportLink variant="inline" className="text-[13px]" subject={t('not_available_support_subject')}>
+                  {t('not_available_support')}
+                </SupportLink>
+              </>
+            )}
+          </div>
         )
       ) : (
         <>
@@ -193,6 +232,11 @@ export function BankPaymentsSettingsContent() {
                   </Button>
                 )}
               </SettingsRowEnd>
+              {refreshError && (
+                <SettingsRowNote className="basis-full text-attn">
+                  <span role="alert">{t('refresh_failed', { reason: refreshError })}</span>
+                </SettingsRowNote>
+              )}
             </SettingsRow>
           </SettingsGroup>
 

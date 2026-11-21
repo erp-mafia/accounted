@@ -127,9 +127,12 @@ describe('singleSupplierAllocation', () => {
   it('leaves every other shape to the batch', () => {
     const two = { allocations: [...one.allocations, { kind: 'supplier_invoice', supplier_invoice_id: SI_B, amount: 1 }] }
     const fee = { ...one, fees: [{ account: '6570', amount: 5 }] }
+    // crm#1954: a debt row beside it pays more than this invoice.
+    const debt = { ...one, supplier_debts: [{ account: '2440', amount: 500 }] }
     const customer = { allocations: [{ kind: 'customer_invoice', invoice_id: SI_A, amount: 1000 }] }
     expect(singleSupplierAllocation(two as MatchBatchInput)).toBeNull()
     expect(singleSupplierAllocation(fee as MatchBatchInput)).toBeNull()
+    expect(singleSupplierAllocation(debt as MatchBatchInput)).toBeNull()
     expect(singleSupplierAllocation(customer as MatchBatchInput)).toBeNull()
   })
 })

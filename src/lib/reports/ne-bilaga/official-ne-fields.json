@@ -1,0 +1,969 @@
+{
+  "$comment": "NE-bilaga (SKV 2161) field codes per beskattningsperiod, from Skatteverket's published field-name tables (the xls in each package listed under source, 'Teknisk information om filöverföring'). row is the R or B ruta, null for identity and övriga uppgifter. Regenerate from the next package; never edit by hand.",
+  "tables": {
+    "2025P4": {
+      "source": {
+        "package": "https://www.skatteverket.se/download/18.4e10387a1997767288d809/1762857356185/_Nyheter_from_beskattningsperiod_2025P4.zip",
+        "packageSha256": "c630855807cfdc9c907fcaf852c8882390992527c00bf6c98ef82ae2b32ef4cf",
+        "file": "NE_SKV2161-13-02-25-02.xls",
+        "sha256": "b94c249bf7bf86c2ded6be47bc295712d50847957a38649fee661d2e4ed389f3",
+        "fetchedAt": "2026-11-20"
+      },
+      "fields": {
+        "7011": {
+          "row": null,
+          "label": "Räkenskapsårets början",
+          "type": "Datum_D",
+          "sign": null
+        },
+        "7012": {
+          "row": null,
+          "label": "Räkenskapsårets slut",
+          "type": "Datum_D",
+          "sign": null
+        },
+        "7020": {
+          "row": null,
+          "label": "Verksamhetens art",
+          "type": "Str_80",
+          "sign": null
+        },
+        "7021": {
+          "row": null,
+          "label": "Jag har bedrivit passiv näringsverksamhet",
+          "type": "Str_X",
+          "sign": null
+        },
+        "7023": {
+          "row": null,
+          "label": "Jag har inte tillämpat reglerna om förenklat årsbokslut",
+          "type": "Str_X",
+          "sign": null
+        },
+        "7024": {
+          "row": null,
+          "label": "Självständig näringsverksamhet bedrivs utanför EES",
+          "type": "Str_X",
+          "sign": null
+        },
+        "7025": {
+          "row": null,
+          "label": "Personnummer redovisningsansvarig",
+          "type": "Orgnr_Id_PD",
+          "sign": null
+        },
+        "7200": {
+          "row": "B1",
+          "label": "Immateriella anläggningstillgångar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7210": {
+          "row": "B2",
+          "label": "Byggnader och markanläggningar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7211": {
+          "row": "B3",
+          "label": "Mark och andra tillgångar som inte får skrivas av",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7212": {
+          "row": "B4",
+          "label": "Maskiner och inventarier",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7213": {
+          "row": "B5",
+          "label": "Övriga anläggningstillgångar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7240": {
+          "row": "B6",
+          "label": "Varulager",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7250": {
+          "row": "B7",
+          "label": "Kundfordringar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7260": {
+          "row": "B8",
+          "label": "Övriga fordringar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7280": {
+          "row": "B9",
+          "label": "Kassa och bank",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7300": {
+          "row": "B10",
+          "label": "Eget kapital (tillgångar - skulder)",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7320": {
+          "row": "B11",
+          "label": "Obeskattade reserver",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7330": {
+          "row": "B12",
+          "label": "Avsättningar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7380": {
+          "row": "B13",
+          "label": "Låneskulder",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7381": {
+          "row": "B14",
+          "label": "Skatteskulder",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7382": {
+          "row": "B15",
+          "label": "Leverantörsskulder",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7383": {
+          "row": "B16",
+          "label": "Övriga skulder",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7400": {
+          "row": "R1",
+          "label": "Försäljning och utfört arbete samt övriga momspliktiga intäkter",
+          "type": "Numeriskt_A",
+          "sign": "+"
+        },
+        "7401": {
+          "row": "R2",
+          "label": "Momsfria intäkter",
+          "type": "Numeriskt_A",
+          "sign": "+"
+        },
+        "7402": {
+          "row": "R3",
+          "label": "Bil- och bostadsförmån m.m.",
+          "type": "Numeriskt_A",
+          "sign": "+"
+        },
+        "7403": {
+          "row": "R4",
+          "label": "Ränteintäkter m.m.",
+          "type": "Numeriskt_A",
+          "sign": "+"
+        },
+        "7440": {
+          "row": "R11",
+          "label": "Bokfört resultat (förs över till sidan 2. R12)",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7500": {
+          "row": "R5",
+          "label": "Varor, material och tjänster",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7501": {
+          "row": "R6",
+          "label": "Övriga externa kostnader",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7502": {
+          "row": "R7",
+          "label": "Anställd personal",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7503": {
+          "row": "R8",
+          "label": "Räntekostnader m.m.",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7504": {
+          "row": "R9",
+          "label": "Avskrivningar och nedskrivningar byggnader och markanläggningar",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7505": {
+          "row": "R10",
+          "label": "Avskrivningar och nedskrivningar maskiner, inventarier och immateriella tillgångar",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7600": {
+          "row": "R12",
+          "label": "Bokfört resultat (förs över från R11 sidan 1)",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7601": {
+          "row": "R13",
+          "label": "Bokförda kostnader som inte ska dras av",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7602": {
+          "row": "R15",
+          "label": "Intäkter som inte bokförts men som ska tas upp",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7603": {
+          "row": "R19",
+          "label": "Gemensam verksamhet - underskott redovisad av annan eller min andel av överskott",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7604": {
+          "row": "R23",
+          "label": "Övriga skattemässiga justeringar, intäkter min andel",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7605": {
+          "row": "R26",
+          "label": "Återföring av värdeminskningsavdrag m.m. vid avyttring av näringsfastighet och s.k. avskattning (skogs- och substansminskningsavdrag redovisas även på N8)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7606": {
+          "row": "R27",
+          "label": "Uttag från skogs-, skogsskade- eller upphovsmannakonto",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7607": {
+          "row": "R31",
+          "label": "Negativ räntefördelning (beloppet förs även till p. 11.2 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7608": {
+          "row": "R32",
+          "label": "Återföring av periodiseringsfond",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7609": {
+          "row": "R37",
+          "label": "Minskning av expansionsfond (beloppet förs även till p. 12.2 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7610": {
+          "row": "R40",
+          "label": "Medgivna avdrag för egenavgifter och särskild löneskatt föregående beskattningsår (R43 i förgående års blankett)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7611": {
+          "row": "R44",
+          "label": "Sjukpenning som hör till denna näringsverksamhet",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7612": {
+          "row": "R45",
+          "label": "Allmänt avdrag. Vid konstnärlig eller nystartad näringsverksamhet utnyttjat underskott (beloppet förs även till p. 14.1 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7613": {
+          "row": "R46",
+          "label": "Undersott som utnyttjas i kapital. Vinst vid avyttring av näringsfastighet/näringsbostadsrätt och underskott i andelshus",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7614": {
+          "row": "R20",
+          "label": "Min andel som medhjälpande make (+)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7630": {
+          "row": "R47",
+          "label": "Överskott (+). Överförs till INK1 sidan 2, p.10.1 eller 10.3",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7700": {
+          "row": "R14",
+          "label": "Bokförda intäkter som inte ska tas upp",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7701": {
+          "row": "R16",
+          "label": "Kostnader som inte bokförts men som ska dras av",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7702": {
+          "row": "R18",
+          "label": "Gemensam verksamhet - överskott redovisad av annan eller min andel av underskott",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7703": {
+          "row": "R20",
+          "label": "andel till medhjälpande make (-)",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7704": {
+          "row": "R22",
+          "label": "Övriga skattemässiga justeringar, kostnader min andel",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7705": {
+          "row": "R24",
+          "label": "Outnyttjat underskott från föregående beskattningsår (R48 i föregående års blankett)",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7706": {
+          "row": "R25",
+          "label": "Skogsavdrag/substansminskningsavdrag enligt blankett N8",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7707": {
+          "row": "R28",
+          "label": "Inbetalning till skogs-, skogsskade- eller upphovsmannakonto",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7708": {
+          "row": "R30",
+          "label": "Positiv räntefördelning, dock högst överskott vid R29 (beloppet förs även till p. 11.1 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7709": {
+          "row": "R34",
+          "label": "Avsättning till periodiseringsfond, dock högst 30 % av överskott vid R33",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7710": {
+          "row": "R36",
+          "label": "Ökning av expansionsfond dock högst överskott vid R35 (beloppet förs även till p. 12.1 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7711": {
+          "row": "R38",
+          "label": "Egna pensionspremier eller inbetalning på pensionssparkonto som dras av i näringsverksamheten",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7712": {
+          "row": "R39",
+          "label": "Särskild löneskatt på pensionssparavdrag i R38",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7713": {
+          "row": "R41",
+          "label": "Påförda egenavgifter och särskild löneskatt enligt slutskattebesked",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7714": {
+          "row": "R43",
+          "label": "Årets beräknade avdrag för egenavgifter och särskild löneskatt",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7730": {
+          "row": "R48",
+          "label": "Underskott (-). Överförs till INK1 sidan 2, p.10.2 eller 10.4. Nästa år förs beloppet till R24.",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "8000": {
+          "row": null,
+          "label": "Har du dragit av kostnader för personbil eller lätt lastbil som är leasad....",
+          "type": "Str_X",
+          "sign": null
+        },
+        "8002": {
+          "row": null,
+          "label": "Har du dragit av bilkostnader för egen bil enligt schablon (18,50 kr/mil), ange beloppet",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8003": {
+          "row": null,
+          "label": "Ränteutgifter enligt kontrolluppgifter för beskattningsåret som dragits av i näringsverksamhet, ange belopp",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8004": {
+          "row": null,
+          "label": "Vid restvärdesavskrivning: återförda belopp för av- och nedskrivning, försäljning och utrangering",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8006": {
+          "row": null,
+          "label": "Årets begärda och tidigare års medgivna värdeminskningsavdrag som finns vid beskattningsårets utgång avseende byggnader.",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8007": {
+          "row": null,
+          "label": "Årets begärda och tidigare års medgivna värdeminskningsavdrag som finns vid beskattningsårets utgång avseende markanläggningar.",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8008": {
+          "row": null,
+          "label": "Ersättningsfonder vid beskattningsårets utgång",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8009": {
+          "row": null,
+          "label": "Kapitalunderlag för räntefördelning (positivt)",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8010": {
+          "row": null,
+          "label": "Kapitalunderlag för räntefördelning (negativt)",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8011": {
+          "row": null,
+          "label": "Positivt fördelningsbelopp som sparas till nästa års taxering",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8012": {
+          "row": null,
+          "label": "Kapitalunderlag expansionsfond (positivt)",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8046": {
+          "row": null,
+          "label": "Uppdragstagare (t.ex. redovisningskonsult) har biträtt vid upprättandet av årsbokslutet: Ja",
+          "type": "Str_X",
+          "sign": null
+        },
+        "8047": {
+          "row": null,
+          "label": "Uppdragstagare (t.ex. redovisningskonsult) har biträtt vid upprättandet av årsbokslutet: Nej",
+          "type": "Str_X",
+          "sign": null
+        }
+      }
+    },
+    "2026P4": {
+      "source": {
+        "package": "https://www.skatteverket.se/download/18.5fb2fa71a0b0adb74a564b/1794382662598/_Nyheter_from_beskattningsperiod_2026P4.zip",
+        "packageSha256": "268d493b85095911b3e99425605e3198249691d2e3cdbb34115ce490368e619d",
+        "file": "NE_SKV2161-14-02-26-02.xls",
+        "sha256": "c3b2fec1b75ad3f121bd85e43d31e9bf4937df3c56ca5a0038e644de05d05396",
+        "fetchedAt": "2026-11-20"
+      },
+      "fields": {
+        "7011": {
+          "row": null,
+          "label": "Räkenskapsårets början",
+          "type": "Datum_D",
+          "sign": null
+        },
+        "7012": {
+          "row": null,
+          "label": "Räkenskapsårets slut",
+          "type": "Datum_D",
+          "sign": null
+        },
+        "7020": {
+          "row": null,
+          "label": "Verksamhetens art",
+          "type": "Str_80",
+          "sign": null
+        },
+        "7021": {
+          "row": null,
+          "label": "Jag har bedrivit passiv näringsverksamhet",
+          "type": "Str_X",
+          "sign": null
+        },
+        "7023": {
+          "row": null,
+          "label": "Jag har inte tillämpat reglerna om förenklat årsbokslut",
+          "type": "Str_X",
+          "sign": null
+        },
+        "7024": {
+          "row": null,
+          "label": "Självständig näringsverksamhet bedrivs utanför EES",
+          "type": "Str_X",
+          "sign": null
+        },
+        "7025": {
+          "row": null,
+          "label": "Personnummer redovisningsansvarig",
+          "type": "Orgnr_Id_PD",
+          "sign": null
+        },
+        "7200": {
+          "row": "B1",
+          "label": "Immateriella anläggningstillgångar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7210": {
+          "row": "B2",
+          "label": "Byggnader och markanläggningar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7211": {
+          "row": "B3",
+          "label": "Mark och andra tillgångar som inte får skrivas av",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7212": {
+          "row": "B4",
+          "label": "Maskiner och inventarier",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7213": {
+          "row": "B5",
+          "label": "Övriga anläggningstillgångar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7240": {
+          "row": "B6",
+          "label": "Varulager",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7250": {
+          "row": "B7",
+          "label": "Kundfordringar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7260": {
+          "row": "B8",
+          "label": "Övriga fordringar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7280": {
+          "row": "B9",
+          "label": "Kassa och bank",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7300": {
+          "row": "B10",
+          "label": "Eget kapital (tillgångar - skulder)",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7320": {
+          "row": "B11",
+          "label": "Obeskattade reserver",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7330": {
+          "row": "B12",
+          "label": "Avsättningar",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7380": {
+          "row": "B13",
+          "label": "Låneskulder",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7381": {
+          "row": "B14",
+          "label": "Skatteskulder",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7382": {
+          "row": "B15",
+          "label": "Leverantörsskulder",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7383": {
+          "row": "B16",
+          "label": "Övriga skulder",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7400": {
+          "row": "R1",
+          "label": "Försäljning och utfört arbete samt övriga momspliktiga intäkter",
+          "type": "Numeriskt_A",
+          "sign": "+"
+        },
+        "7401": {
+          "row": "R2",
+          "label": "Momsfria intäkter",
+          "type": "Numeriskt_A",
+          "sign": "+"
+        },
+        "7402": {
+          "row": "R3",
+          "label": "Bil- och bostadsförmån m.m.",
+          "type": "Numeriskt_A",
+          "sign": "+"
+        },
+        "7403": {
+          "row": "R4",
+          "label": "Ränteintäkter m.m.",
+          "type": "Numeriskt_A",
+          "sign": "+"
+        },
+        "7440": {
+          "row": "R11",
+          "label": "Bokfört resultat (förs över till sidan 2. R12)",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7500": {
+          "row": "R5",
+          "label": "Varor, material och tjänster",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7501": {
+          "row": "R6",
+          "label": "Övriga externa kostnader",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7502": {
+          "row": "R7",
+          "label": "Anställd personal",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7503": {
+          "row": "R8",
+          "label": "Räntekostnader m.m.",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7504": {
+          "row": "R9",
+          "label": "Avskrivningar och nedskrivningar byggnader och markanläggningar",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7505": {
+          "row": "R10",
+          "label": "Avskrivningar och nedskrivningar maskiner, inventarier och immateriella tillgångar",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7600": {
+          "row": "R12",
+          "label": "Bokfört resultat (förs över från R11 sidan 1)",
+          "type": "Numeriskt_A",
+          "sign": "*"
+        },
+        "7601": {
+          "row": "R13",
+          "label": "Bokförda kostnader som inte ska dras av",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7602": {
+          "row": "R15",
+          "label": "Intäkter som inte bokförts men som ska tas upp",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7603": {
+          "row": "R19",
+          "label": "Gemensam verksamhet - underskott redovisad av annan eller min andel av överskott",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7604": {
+          "row": "R23",
+          "label": "Övriga skattemässiga justeringar, intäkter min andel",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7605": {
+          "row": "R26",
+          "label": "Återföring av värdeminskningsavdrag m.m. vid avyttring av näringsfastighet och s.k. avskattning (skogs- och substansminskningsavdrag redovisas även på N8)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7606": {
+          "row": "R27",
+          "label": "Uttag från skogs-, skogsskade- eller upphovsmannakonto",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7607": {
+          "row": "R31",
+          "label": "Negativ räntefördelning (beloppet förs även till p. 11.2 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7608": {
+          "row": "R32",
+          "label": "Återföring av periodiseringsfond",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7609": {
+          "row": "R37",
+          "label": "Minskning av expansionsfond (beloppet förs även till p. 12.2 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7610": {
+          "row": "R40",
+          "label": "Medgivna avdrag för egenavgifter och särskild löneskatt föregående beskattningsår (R43 i förgående års blankett)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7611": {
+          "row": "R44",
+          "label": "Sjukpenning som hör till denna näringsverksamhet",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7612": {
+          "row": "R45",
+          "label": "Allmänt avdrag. Vid konstnärlig eller nystartad näringsverksamhet utnyttjat underskott (beloppet förs även till p. 14.1 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7613": {
+          "row": "R46",
+          "label": "Undersott som utnyttjas i kapital. Vinst vid avyttring av näringsfastighet/näringsbostadsrätt och underskott i andelshus",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7614": {
+          "row": "R20",
+          "label": "Min andel som medhjälpande make (+)",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7630": {
+          "row": "R47",
+          "label": "Överskott (+). Överförs till INK1 sidan 2, p.10.1 eller 10.3",
+          "type": "Numeriskt_B",
+          "sign": "+"
+        },
+        "7700": {
+          "row": "R14",
+          "label": "Bokförda intäkter som inte ska tas upp",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7701": {
+          "row": "R16",
+          "label": "Kostnader som inte bokförts men som ska dras av",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7702": {
+          "row": "R18",
+          "label": "Gemensam verksamhet - överskott redovisad av annan eller min andel av underskott",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7703": {
+          "row": "R20",
+          "label": "andel till medhjälpande make (-)",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7704": {
+          "row": "R22",
+          "label": "Övriga skattemässiga justeringar, kostnader min andel",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7705": {
+          "row": "R24",
+          "label": "Outnyttjat underskott från föregående beskattningsår (R48 i föregående års blankett)",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7706": {
+          "row": "R25",
+          "label": "Skogsavdrag/substansminskningsavdrag enligt blankett N8",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7707": {
+          "row": "R28",
+          "label": "Inbetalning till skogs-, skogsskade- eller upphovsmannakonto",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7708": {
+          "row": "R30",
+          "label": "Positiv räntefördelning, dock högst överskott vid R29 (beloppet förs även till p. 11.1 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7709": {
+          "row": "R34",
+          "label": "Avsättning till periodiseringsfond, dock högst 30 % av överskott vid R33",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7710": {
+          "row": "R36",
+          "label": "Ökning av expansionsfond dock högst överskott vid R35 (beloppet förs även till p. 12.1 på INK1)",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7711": {
+          "row": "R38",
+          "label": "Egna pensionspremier eller inbetalning på pensionssparkonto som dras av i näringsverksamheten",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7712": {
+          "row": "R39",
+          "label": "Särskild löneskatt på pensionssparavdrag i R38",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7713": {
+          "row": "R41",
+          "label": "Påförda egenavgifter och särskild löneskatt enligt slutskattebesked",
+          "type": "Numeriskt_A",
+          "sign": "-"
+        },
+        "7714": {
+          "row": "R43",
+          "label": "Årets beräknade avdrag för egenavgifter och särskild löneskatt",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "7730": {
+          "row": "R48",
+          "label": "Underskott (-). Överförs till INK1 sidan 2, p.10.2 eller 10.4. Nästa år förs beloppet till R24.",
+          "type": "Numeriskt_B",
+          "sign": "-"
+        },
+        "8000": {
+          "row": null,
+          "label": "Har du dragit av kostnader för personbil eller lätt lastbil som är leasad....",
+          "type": "Str_X",
+          "sign": null
+        },
+        "8002": {
+          "row": null,
+          "label": "Har du dragit av bilkostnader för egen bil enligt schablon (18,50 kr/mil), ange beloppet",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8003": {
+          "row": null,
+          "label": "Ränteutgifter enligt kontrolluppgifter för beskattningsåret som dragits av i näringsverksamhet, ange belopp",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8004": {
+          "row": null,
+          "label": "Vid restvärdesavskrivning: återförda belopp för av- och nedskrivning, försäljning och utrangering",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8006": {
+          "row": null,
+          "label": "Årets begärda och tidigare års medgivna värdeminskningsavdrag som finns vid beskattningsårets utgång avseende byggnader.",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8007": {
+          "row": null,
+          "label": "Årets begärda och tidigare års medgivna värdeminskningsavdrag som finns vid beskattningsårets utgång avseende markanläggningar.",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8009": {
+          "row": null,
+          "label": "Kapitalunderlag för räntefördelning (positivt)",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8010": {
+          "row": null,
+          "label": "Kapitalunderlag för räntefördelning (negativt)",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8011": {
+          "row": null,
+          "label": "Positivt fördelningsbelopp som sparas till nästa års taxering",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8012": {
+          "row": null,
+          "label": "Kapitalunderlag expansionsfond (positivt)",
+          "type": "Numeriskt_B",
+          "sign": "*"
+        },
+        "8046": {
+          "row": null,
+          "label": "Uppdragstagare (t.ex. redovisningskonsult) har biträtt vid upprättandet av årsbokslutet: Ja",
+          "type": "Str_X",
+          "sign": null
+        },
+        "8047": {
+          "row": null,
+          "label": "Uppdragstagare (t.ex. redovisningskonsult) har biträtt vid upprättandet av årsbokslutet: Nej",
+          "type": "Str_X",
+          "sign": null
+        }
+      }
+    }
+  }
+}

@@ -96,7 +96,7 @@ describe('upsertAnnualReportProfile', () => {
     const { status, body } = await envelopeFor(err)
     expect(status).toBe(400)
     expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.message).toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect(body.error.message).toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
     expect(body.error.details).toMatchObject({ pgCode: '23514' })
     // The failing row must not reach the client.
     expect(JSON.stringify(body)).not.toContain('Failing row')

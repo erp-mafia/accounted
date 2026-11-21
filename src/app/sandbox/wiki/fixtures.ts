@@ -29,11 +29,10 @@ function demoBriefing(): Record<string, unknown> {
   const sp = typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search)
   if (sp.get('graf') === 'tom') return emptyGraphBriefing()
   if (sp.get('graf') === 'stor') return largeGraphBriefing()
-  const { company, user_name, profile_summary, atoms, ...rest } = sample.briefing
+  const { company, user_name, atoms, ...rest } = sample.briefing
   return {
     company,
     user_name,
-    profile_summary,
     atoms,
     ...(sp.get('grupp') === 'ja' ? { group_memory: GROUP_MEMORY } : {}),
     memory: sp.get('minne') === 'tomt' ? [] : sample.memory,

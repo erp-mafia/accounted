@@ -865,14 +865,11 @@ function findFoldedPublicFlags() {
 // file may not import createAiClient, call `.messages.create/stream(` on an
 // Anthropic client, or import the Vercel AI SDK (`ai`, `@ai-sdk/*`). The
 // allowlist is the pre-abstraction call sites that still speak the Anthropic
-// SDK directly (chat loop, composer, receipt hunt, WhatsApp interpreter, the
-// legacy smoke script); it may only shrink as they migrate or are deleted.
+// SDK directly (chat loop and its client, receipt hunt, WhatsApp interpreter,
+// the legacy smoke script); it may only shrink as they migrate or are deleted.
 const DIRECT_AI_CLIENT_ALLOWED = new Set([
   'lib/agent/chat/run-turn.ts',
-  'lib/agent/composer/atom-selection.ts',
   'lib/agent/composer/client.ts',
-  'lib/agent/composer/narrative.ts',
-  'lib/agent/composer/prewarm.ts',
   'lib/receipt-hunt/adjudicate.ts',
   'extensions/general/whatsapp-inbox/lib/interpret-answer.ts',
   'scripts/smoke-ai.ts',

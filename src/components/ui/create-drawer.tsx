@@ -15,7 +15,9 @@ import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverH
  * footer over the hairline with Avbryt beside it; it submits the form inside
  * through the `form` attribute, so the form keeps its own validation and
  * submit handler and only gives up its submit row (it takes `formId`).
- * Esc, the X, Avbryt and a click on the veil close it.
+ * Esc, the X, Avbryt and a click on the veil close it. A refused or failed
+ * create says so in the footer, beside the primary (`error`), so the drawer
+ * never just stops spinning.
  */
 export function CreateDrawer({
   open,
@@ -24,6 +26,7 @@ export function CreateDrawer({
   formId,
   submitLabel,
   submitting = false,
+  error,
   children,
 }: {
   open: boolean
@@ -37,6 +40,8 @@ export function CreateDrawer({
   formId?: string
   submitLabel?: string
   submitting?: boolean
+  /** Why the last submit failed, as a sentence; shown in the footer beside the primary. */
+  error?: React.ReactNode
   children: React.ReactNode
 }) {
   const t = useTranslations('common')
@@ -49,6 +54,11 @@ export function CreateDrawer({
         <SlideOverBody className="p-6">{children}</SlideOverBody>
         {formId && submitLabel && (
           <SlideOverFooter>
+            {error ? (
+              <p role="alert" className="mr-auto min-w-0 text-[12px] leading-4 text-destructive">
+                {error}
+              </p>
+            ) : null}
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               {t('cancel')}
             </Button>

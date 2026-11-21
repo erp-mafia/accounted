@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { SkatteverketConnectPanel } from '@/components/settings/SkatteverketConnectPanel'
 import { SkattekontoAccountSetting } from '@/components/settings/SkattekontoAccountSetting'
 import { SettingsBackLink, SettingsViewerScope } from '@/components/settings/SettingsRows'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 
@@ -24,6 +25,9 @@ export function SkatteverketSettingsContent() {
   const router = useRouter()
   const { toast } = useToast()
   const companyContext = useCompanyOptional()
+  // The OAuth bounce-back's failure stays on the page above the connection:
+  // a toast alone vanished and left "Anslut" as if nothing had happened.
+  const [connectError, setConnectError] = useState<string | null>(null)
 
   // A link that named a company (an agent's connect link) stored the session
   // for that company, which need not be the one this browser has open: the
@@ -57,8 +61,18 @@ export function SkatteverketSettingsContent() {
       } catch {
         msg = error
       }
-      toast({ title: t('connect_failed_title'), description: msg, variant: 'destructive' })
-      router.replace('/settings/skatteverket')
+      // Deferred off the render path like /settings/banking's ?bank_error=
+      // (react-hooks/set-state-in-effect); the flag drops it if the effect
+      // re-runs before it flushes.
+      let cancelled = false
+      queueMicrotask(() => {
+        if (cancelled) return
+        setConnectError(msg)
+        router.replace('/settings/skatteverket')
+      })
+      return () => {
+        cancelled = true
+      }
     }
   }, [searchParams, router, toast, t, otherCompanyName, activeName])
 
@@ -66,7 +80,16 @@ export function SkatteverketSettingsContent() {
     <div>
       <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       {/* The panel draws the header: what the "?" explains depends on whether the ombud step is there. */}
-      <SkatteverketConnectPanel title={tNav('skatteverket')} />
+      <SkatteverketConnectPanel
+        title={tNav('skatteverket')}
+        notice={
+          connectError ? (
+            <div role="alert" className="mt-6 px-1">
+              <AttnLine>{t('connect_failed_inline', { reason: connectError })}</AttnLine>
+            </div>
+          ) : null
+        }
+      />
       <SettingsViewerScope>
         <SkattekontoAccountSetting />
       </SettingsViewerScope>

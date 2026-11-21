@@ -6,6 +6,8 @@ import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { ArrowPathIcon, CalendarIcon, CheckIcon, Square2StackIcon } from '@/components/icons'
@@ -35,6 +37,10 @@ export function CalendarFeedSettings() {
   const [isSaving, setIsSaving] = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [feed, setFeed] = useState<CalendarFeedWithUrls | null>(null)
+  // The feed could not be read: the answer's status and body (status null:
+  // no answer at all). Never the "activate" row, which is only true after a
+  // real answer says there is no feed.
+  const [loadError, setLoadError] = useState<{ status: number | null; body: unknown } | null>(null)
   const [copied, setCopied] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
@@ -44,12 +50,20 @@ export function CalendarFeedSettings() {
 
   const fetchFeed = async () => {
     setIsLoading(true)
-
-    const response = await fetch('/api/calendar/feed')
-    const { data } = await response.json()
-
-    setFeed(data)
-    setIsLoading(false)
+    setLoadError(null)
+    try {
+      const response = await fetch('/api/calendar/feed')
+      const body = await response.json().catch(() => null)
+      if (!response.ok || body === null) {
+        setLoadError({ status: response.status, body })
+        return
+      }
+      setFeed(body.data ?? null)
+    } catch {
+      setLoadError({ status: null, body: null })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const createFeed = async () => {
@@ -176,6 +190,25 @@ export function CalendarFeedSettings() {
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-3/4" />
       </div>
+    )
+  }
+
+  if (loadError) {
+    // A 4xx is an answer about the company or the person: its sentence, with
+    // no retry. Anything else is a failed read, with one.
+    const status = loadError.status
+    const aboutCompany = status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429
+    return (
+      <SettingsGroup label={t('title')} help={t('description')}>
+        {aboutCompany ? (
+          <EmptyState
+            title={getErrorMessage(loadError.body, { statusCode: status, locale: locale as ErrorLocale })}
+            className="pt-4"
+          />
+        ) : (
+          <LoadError title={t('load_failed')} onRetry={() => void fetchFeed()} className="pt-4" />
+        )}
+      </SettingsGroup>
     )
   }
 

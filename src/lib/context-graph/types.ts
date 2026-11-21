@@ -28,7 +28,6 @@ export type GraphNodeKind =
   | 'bank'
   | 'skatteverket'
   | 'inbox'
-  | 'profile'
   | 'owners'
   | 'archive'
   | 'check'

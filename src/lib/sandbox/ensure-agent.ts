@@ -24,7 +24,7 @@ export const SANDBOX_PROFILE_SUMMARY =
 /**
  * Backfill a verified agent_profile for sandbox companies. Single source of
  * truth for the sandbox assistant's persona (name, avatar, atoms, summary):
- * the seed route, dashboard layout, dashboard page, and chat layout all call
+ * the seed route, dashboard layout and chat layout all call
  * through here so the profile data lives in exactly one place.
  *
  * `verified_by_user_id` is intentionally NULL: the row is synthetic seed

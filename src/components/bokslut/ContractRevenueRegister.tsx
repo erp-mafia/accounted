@@ -121,6 +121,9 @@ export function ContractRevenueRegister() {
   // The fiscal year is app-wide context (the sidebar); the register shows one started year.
   const { periodId } = useFiscalScope({ allowAll: false, hideFuture: true })
   const [preview, setPreview] = useState<Preview | null>(null)
+  // The server refused the year's preview (a 4xx about the company or the
+  // year): its sentence, said as it is, with nothing to retry.
+  const [previewRefusal, setPreviewRefusal] = useState<string | null>(null)
   const [editing, setEditing] = useState<Contract | 'new' | null>(null)
   const [form, setForm] = useState<Form>(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
@@ -163,14 +166,25 @@ export function ContractRevenueRegister() {
   }, [locale, t])
 
   const loadPreview = useCallback(async () => {
-    if (!periodId || !settings) return setPreview(null)
+    if (!periodId || !settings) {
+      setPreviewRefusal(null)
+      return setPreview(null)
+    }
     try {
       const res = await fetch(`/api/bookkeeping/contract-revenue/year?fiscal_period_id=${encodeURIComponent(periodId)}`)
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setLoadError(getErrorMessage(body, { locale, fallback: t('load_failed') }))
+        const message = getErrorMessage(body, { locale, statusCode: res.status, fallback: t('load_failed') })
+        const transient = res.status >= 500 || res.status === 408 || res.status === 429
+        if (transient) {
+          setLoadError(message)
+        } else {
+          setPreview(null)
+          setPreviewRefusal(message)
+        }
         return
       }
+      setPreviewRefusal(null)
       setPreview(body.data ?? null)
     } catch {
       setLoadError(t('load_failed'))
@@ -277,13 +291,15 @@ export function ContractRevenueRegister() {
     : null
   const attention = !loading && !settings
     ? t('not_configured_attn')
-    : notK3
-      ? t('not_k3_attn', { framework: preview?.framework.toUpperCase() ?? '' })
-      : preview && preview.stated_on_other_day.length > 0
-        ? t('other_day_attn', { contracts: preview.stated_on_other_day.join(', '), date: preview.balansdag })
-        : preview && preview.issues.length > 0
-          ? t('issues_attn', { contracts: [...new Set(preview.issues.map((i) => i.contract))].join(', ') })
-          : unregistered
+    : previewRefusal
+      ? previewRefusal
+      : notK3
+        ? t('not_k3_attn', { framework: preview?.framework.toUpperCase() ?? '' })
+        : preview && preview.stated_on_other_day.length > 0
+          ? t('other_day_attn', { contracts: preview.stated_on_other_day.join(', '), date: preview.balansdag })
+          : preview && preview.issues.length > 0
+            ? t('issues_attn', { contracts: [...new Set(preview.issues.map((i) => i.contract))].join(', ') })
+            : unregistered
 
   const money = (value: number | string) => formatCurrency(Number(value))
 

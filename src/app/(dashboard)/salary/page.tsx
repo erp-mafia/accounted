@@ -47,7 +47,7 @@ export default function SalaryPage() {
   // The list loads every run; past RUNS_SHOWN the rest wait behind one line.
   const [showAllRuns, setShowAllRuns] = useState(false)
   // The active roster from the session cache: the start card counts it.
-  const { employees, isLoading: employeesLoading, error: employeesError } = useEmployees()
+  const { employees, isLoading: employeesLoading, error: employeesError, refresh: retryEmployees } = useEmployees()
   const loading = runsLoading || employeesLoading
   // The month being created (formatRunPeriod), 'default' when the server
   // picks it; null when nothing is being started.
@@ -117,6 +117,13 @@ export default function SalaryPage() {
       toast({
         title: t('start_run_failed'),
         description: message,
+        variant: 'destructive',
+      })
+    } catch (err) {
+      // A network failure used to end in silence: the button just stopped.
+      toast({
+        title: t('start_run_failed'),
+        description: getErrorMessage(err, { context: 'salary', locale }),
         variant: 'destructive',
       })
     } finally {
@@ -217,6 +224,17 @@ export default function SalaryPage() {
             void load()
           }}
         />
+      </div>
+    )
+  }
+
+  // No runs and a roster that could not be read: unknown, not "nobody to
+  // pay", so no start card that asks for a first employee.
+  if (employeesError && employees.length === 0 && runs.length === 0) {
+    return (
+      <div className="space-y-8">
+        {header}
+        <LoadError title={t('employees_load_failed')} onRetry={() => void retryEmployees()} />
       </div>
     )
   }

@@ -74,12 +74,12 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
   },
   INTERNAL_ERROR: {
     httpStatus: 500,
-    message_sv: 'Ett oväntat serverfel uppstod. Försök igen senare.',
+    message_sv: 'Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.',
     message_en: 'Internal server error.',
   },
   VALIDATION_ERROR: {
     httpStatus: 400,
-    message_sv: 'Förfrågan innehåller ogiltiga uppgifter.',
+    message_sv: 'Några uppgifter stämmer inte. Kontrollera fälten och försök igen.',
     message_en: 'Validation error.',
   },
   // A typed handle (lib/handles: je_..., inv_...) sent in a field or path
@@ -102,7 +102,7 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
   },
   FORBIDDEN: {
     httpStatus: 403,
-    message_sv: 'Du har inte behörighet att utföra denna åtgärd.',
+    message_sv: 'Du har inte behörighet att göra det här i företaget. Be en ägare eller administratör om behörighet.',
     message_en: 'Insufficient permissions.',
   },
   // A Postgres privilege/RLS denial (42501) on a write the application
@@ -117,7 +117,7 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
   },
   NOT_FOUND: {
     httpStatus: 404,
-    message_sv: 'Resursen kunde inte hittas.',
+    message_sv: 'Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.',
     message_en: 'Resource not found.',
   },
   CONFLICT: {
@@ -5022,6 +5022,11 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
     message_sv: 'SRU-filen kan inte laddas ner förrän bokföringen är rättad. Orsaken står i NE-bilagans varningar.',
     message_en: 'The NE-bilaga SRU file is refused until the books are corrected. details.reason and the NE-bilaga warnings name the cause.',
   },
+  TAX_DECL_INK2_SRU_BLOCKED: {
+    httpStatus: 422,
+    message_sv: 'SRU-filen kan inte laddas ner förrän deklarationen stämmer med bokföringen. Orsaken står i INK2-deklarationens varningar.',
+    message_en: 'The INK2 SRU file is refused until the declaration ties to the books. details.reason and the INK2 warnings name the cause.',
+  },
   // INK3 underlag for ideell förening (lib/reports/ink3, product decisions on #47).
   TAX_DECL_INK3_WRONG_LEGAL_FORM: {
     httpStatus: 400,
@@ -8811,8 +8816,7 @@ const ASSISTANT_CHAT: Record<string, StructuredErrorEntry> = {
   // has the chat switched off (ASSISTANT_CHAT_ENABLED): no turn runs, and the
   // sentence says where the person's own assistant connects. 409 like the
   // other switched-off answers, and never 503: the chat console reads a 503
-  // as "no AI backend configured". Every intent is refused, the onboarding
-  // interview included.
+  // as "no AI backend configured". Every intent is refused.
   ASSISTANT_CHAT_OFF: {
     httpStatus: 409,
     message_sv: 'Chatten är avstängd. Koppla din egen assistent, till exempel Claude, under Agenter > Koppla en agent.',
@@ -9672,6 +9676,25 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Avgifterna måste vara mindre än fakturorna de reglerar.',
     message_en: 'The fees must be smaller than the invoices they settle.',
+  },
+  BATCH_DEBT_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En rad för tidigare leverantörsskuld är ogiltig. Högst 5 extra rader tillsammans med avgiftsraderna, var och en med konto och ett belopp över noll i hela ören.',
+    message_en:
+      'A row for an earlier supplier debt is invalid. At most 5 extra rows together with the fee rows, each with an account and an amount above zero in whole öre.',
+  },
+  BATCH_DEBT_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En tidigare leverantörsskuld bokförs på ett aktivt konto för leverantörsskulder, 2440 till 2449. Aktivera kontot i kontoplanen eller välj ett annat.',
+    message_en:
+      'An earlier supplier debt is booked on an active supplier debt account, 2440 to 2449. Activate the account in the chart of accounts or choose another.',
+  },
+  BATCH_DEBT_SUPPLIER_ONLY: {
+    httpStatus: 400,
+    message_sv: 'En tidigare leverantörsskuld kan bara bokas på en utbetalning till leverantörer, inte på en inbetalning.',
+    message_en: 'An earlier supplier debt can only be booked on a payment to suppliers, not on an incoming payment.',
   },
   BATCH_MIXED_KINDS_UNSUPPORTED: {
     httpStatus: 400,
@@ -13814,6 +13837,58 @@ const SUPPORT_ASSISTANT: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// The question list (company_questions, lib/questions)
+// ─────────────────────────────────────────────────────────────────
+
+const COMPANY_QUESTIONS: Record<string, StructuredErrorEntry> = {
+  // The company is not in COMPANY_QUESTIONS_COMPANY_IDS. 409 like the other
+  // switched-off answers.
+  COMPANY_QUESTIONS_OFF: {
+    httpStatus: 409,
+    message_sv: 'Frågelistan är inte påslagen för det här företaget.',
+    message_en: 'The question list is not switched on for this company.',
+    retryable: false,
+  },
+  // Either limit: the open questions a company holds at once, or the
+  // questions filed for it in 24 hours. The thrown text says which.
+  COMPANY_QUESTION_LIMIT_REACHED: {
+    httpStatus: 409,
+    message_sv: 'Gränsen för frågor till företaget är nådd: högst 5 öppna samtidigt och högst 3 nya per dygn.',
+    message_en: 'The limit for questions to the company is reached: at most 5 open at once and at most 3 new in 24 hours.',
+    retryable: false,
+  },
+  // A question resting on the same records exists, whatever its status. The
+  // thrown text names it.
+  COMPANY_QUESTION_ALREADY_ASKED: {
+    httpStatus: 409,
+    message_sv: 'Den här frågan är redan ställd till företaget.',
+    message_en: 'This question has already been put to the company.',
+    retryable: false,
+  },
+  COMPANY_QUESTION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Frågan hittades inte.',
+    message_en: 'The question was not found.',
+    retryable: false,
+  },
+  COMPANY_QUESTION_ALREADY_ENDED: {
+    httpStatus: 409,
+    message_sv: 'Frågan är redan besvarad eller stängd.',
+    message_en: 'The question is already answered or closed.',
+    retryable: false,
+  },
+  // Undo in the app: the question is open, somebody else ended it, it was
+  // ended through another door, or more than ten minutes ago. The thrown text
+  // says which.
+  COMPANY_QUESTION_UNDO_REFUSED: {
+    httpStatus: 409,
+    message_sv: 'Svaret kan inte ångras längre.',
+    message_en: 'The answer can no longer be undone.',
+    retryable: false,
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -13896,6 +13971,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...STOCK_COUNT,
   ...CASH_FORECAST,
   ...SUPPORT_ASSISTANT,
+  ...COMPANY_QUESTIONS,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

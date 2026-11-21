@@ -74,9 +74,13 @@ export async function readAgents(url: string): Promise<AgentsOverview | null> {
   return (await response.json()).data as AgentsOverview
 }
 
+/**
+ * The knowledge packs an agent can hold. A failed read throws, like
+ * readCatalog: an empty list would read as "this pack does not exist".
+ */
 export async function readOptions(url: string): Promise<KnowledgeOption[]> {
   const response = await fetch(url)
-  if (!response.ok) return []
+  if (!response.ok) throw new Error('Knowledge options request failed')
   return (await response.json()).data as KnowledgeOption[]
 }
 

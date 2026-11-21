@@ -27,6 +27,9 @@
  *     most MAX_ERROR_NOTICE_SENDS times per message, the way pass 2b retries
  *     a combined ack whose send failed. A notice Meta accepted and later
  *     reported failed (131047: the 24h window closed) is not resent.
+ *  8. Expire list questions (questions from a company's question list,
+ *     list-question.ts) past the same 48h TTL. NEVER sends anything; the
+ *     question stays open on the list.
  *
  * A run has a deadline: a re-claimed message can be a file the model reads
  * (up to 250 s), a pass holds up to 25 of them, and nothing stopped a run
@@ -59,6 +62,7 @@ import { finalizeBurst, processInboundMessage, sendErrorNoticeOnce } from './pro
 import { drainParkedRows } from './company-question'
 import { appendQuestionHistory, updateItemContext } from './item-context'
 import { TEMPLATE } from './messages'
+import { expireListQuestions } from './list-question'
 
 const log = createLogger('whatsapp-inbox/sweep')
 
@@ -629,6 +633,15 @@ export async function runSweep(
   } catch (err) {
     log.error('sweep: error notice resend pass failed', err)
     summary.failedPasses.push('error_notice_resend')
+  }
+
+  // ── 8. List question TTL (48h) ─────────────────────────────
+  // List questions ride on idle conversations, which pass 3 does not read.
+  try {
+    summary.expiredQuestions += await expireListQuestions(supabase, now)
+  } catch (err) {
+    log.error('sweep: list question TTL pass failed', err)
+    summary.failedPasses.push('list_question_ttl')
   }
 
   return summary

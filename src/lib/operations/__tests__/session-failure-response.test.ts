@@ -76,7 +76,7 @@ describe('sessionFailureResponse', () => {
             "details": {
               "pgCode": "23505",
             },
-            "message": "Förfrågan innehåller ogiltiga uppgifter.",
+            "message": "Några uppgifter stämmer inte. Kontrollera fälten och försök igen.",
             "message_en": "Validation error.",
             "requestId": "req-1",
           },
@@ -165,7 +165,7 @@ describe('customerFailureResponse', () => {
             "details": {
               "field": "body",
             },
-            "message": "Förfrågan innehåller ogiltiga uppgifter.",
+            "message": "Några uppgifter stämmer inte. Kontrollera fälten och försök igen.",
             "message_en": "Validation error.",
           },
         },
@@ -254,7 +254,7 @@ describe('articleRefusalResponse', () => {
             "details": {
               "id": "a-1",
             },
-            "message": "Resursen kunde inte hittas.",
+            "message": "Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.",
             "message_en": "Resource not found.",
             "requestId": "req-1",
           },
@@ -283,7 +283,7 @@ describe('serviceFailureResponse', () => {
             "details": {
               "pgCode": "23505",
             },
-            "message": "Förfrågan innehåller ogiltiga uppgifter.",
+            "message": "Några uppgifter stämmer inte. Kontrollera fälten och försök igen.",
             "message_en": "Validation error.",
             "requestId": "req-1",
           },
@@ -304,7 +304,7 @@ describe('serviceFailureResponse', () => {
             "details": {
               "id": "o-1",
             },
-            "message": "Resursen kunde inte hittas.",
+            "message": "Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.",
             "message_en": "Resource not found.",
           },
         },
