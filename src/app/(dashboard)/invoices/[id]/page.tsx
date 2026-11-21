@@ -33,7 +33,7 @@ import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
 import { getDisplayTotal, getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
-import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
+import { buildDetailVatRows } from '@/lib/invoices/detail-vat-rows'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
 import { peppolDeliveryAttention } from '@/lib/invoices/peppol-attention'
@@ -2216,35 +2216,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   // Aggregated VAT per rate for the totals block. Shown when at least one
   // rate applies; a VAT-exempt company with a zero-VAT invoice shows no row.
-  const vatRows = (() => {
-    const vatByRate = new Map<number, number>()
-    for (const item of invoice.items) {
-      const rate = item.vat_rate ?? 0
-      // The stored line VAT is what the invoice states and booked (the PDF
-      // prints the same); a legacy row that carries none is recomputed with
-      // the rule the builder stores (crm#1343).
-      const lineVat = item.vat_amount || computeLineVat(item.line_total, rate)
-      vatByRate.set(rate, (vatByRate.get(rate) || 0) + lineVat)
-    }
-    const entries = Array.from(vatByRate.entries())
-      .filter(([, vat]) => vat > 0)
-      .sort(([a], [b]) => b - a)
-    if (entries.length > 0) {
-      return entries.map(([rate, vat]) => ({ key: String(rate), label: t('vat_at_rate', { rate }), amount: vat }))
-    }
-    // crm#1131: a registration from the books has no lines to sum; its header
-    // holds the VAT its verifikat booked, at one rate. Summing nothing printed
-    // "Moms 0" under a total that includes it.
-    if (registeredFromBooks && invoice.vat_amount > 0) {
-      return [{
-        key: 'header',
-        label: invoice.vat_rate ? t('vat_at_rate', { rate: invoice.vat_rate }) : t('vat_label'),
-        amount: invoice.vat_amount,
-      }]
-    }
-    if (vatRegistered === false && invoice.vat_amount === 0) return []
-    return [{ key: 'zero', label: t('vat_label'), amount: 0 }]
-  })()
+  const vatRows = buildDetailVatRows({
+    items: invoice.items,
+    headerVatAmount: invoice.vat_amount,
+    headerVatRate: invoice.vat_rate,
+    vatRegistered: vatRegistered !== false,
+  }).map((row) => ({
+    key: row.key,
+    label: row.rate ? t('vat_at_rate', { rate: row.rate }) : t('vat_label'),
+    amount: row.amount,
+  }))
   const { rounding } = amountToPay
 
   const lineSubInfo = (item: InvoiceItem) => (
