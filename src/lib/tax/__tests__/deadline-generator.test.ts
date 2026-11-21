@@ -116,6 +116,8 @@ function makeRecordingSupabase(opts: {
   euTradeYearsError?: { code: string; message: string }
 } = {}) {
   const calls: string[] = []
+  /** The .or() filters of the fallback's delete, as PostgREST receives them. */
+  const deleteOrFilters: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
   let replaceArgs: Record<string, unknown> | null = null
   const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
@@ -184,8 +186,9 @@ function makeRecordingSupabase(opts: {
       return chain
     })
     chain.eq = vi.fn(self)
-    chain.or = vi.fn(() => {
-      isCompletedQuery = true
+    chain.or = vi.fn((filter: string) => {
+      if (isDelete) deleteOrFilters.push(filter)
+      else isCompletedQuery = true
       return chain
     })
     chain.is = vi.fn(self)
@@ -211,6 +214,7 @@ function makeRecordingSupabase(opts: {
   return {
     supabase: { from, rpc } as unknown as SupabaseClient,
     calls,
+    deleteOrFilters,
     getInsertPayload: () => insertPayload,
     getReplaceArgs: () => replaceArgs,
   }
@@ -406,6 +410,34 @@ describe('generateTaxDeadlinesForUser', () => {
       await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
 
       expect(calls.some((c) => c.startsWith('not('))).toBe(true)
+    })
+
+    it('deletes the old rows of a notice already past due, not only the window (crm#2084)', async () => {
+      // A notice's kvarskatt is written even after its payment date, and its
+      // old row lies before the window: the delete must reach it, or every
+      // regeneration adds one more.
+      const due = new Date()
+      due.setDate(due.getDate() - 10)
+      const paymentDueDate = [
+        due.getFullYear(),
+        String(due.getMonth() + 1).padStart(2, '0'),
+        String(due.getDate()).padStart(2, '0'),
+      ].join('-')
+      const { supabase, deleteOrFilters, getInsertPayload } = makeRecordingSupabase({ functionMissing: true })
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', {
+        ...SETTINGS,
+        tax_assessment_notices: [{ id: 'notice-1', fiscalPeriodName: '2025', decisionType: 'final', paymentDueDate }],
+      }, [])
+
+      expect(getInsertPayload()).toContainEqual(expect.objectContaining({
+        tax_period: 'notice:notice-1',
+        due_date: paymentDueDate,
+      }))
+      const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
+      expect(deleteOrFilters).toHaveLength(1)
+      expect(deleteOrFilters[0]).toContain(`and(due_date.gte.${today},`)
+      expect(deleteOrFilters[0]).toContain('tax_assessment_notice_id.in.(notice-1)')
     })
 
     it('does not delete existing deadlines when the insert fails', async () => {

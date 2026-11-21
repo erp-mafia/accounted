@@ -80,13 +80,14 @@ async function insertExisting(
     isCompleted?: boolean
     dismissed?: boolean
     type?: string
+    noticeId?: string
   },
 ): Promise<string> {
   const { rows } = await getPool().query<{ id: string }>(
     `INSERT INTO public.deadlines
        (company_id, title, due_date, deadline_type, source, is_auto_generated,
-        is_completed, dismissed_at, tax_deadline_type, tax_period)
-     VALUES ($1, 'Befintlig', $2, 'tax', $3, true, $4, $5, $6, $7)
+        is_completed, dismissed_at, tax_deadline_type, tax_period, tax_assessment_notice_id)
+     VALUES ($1, 'Befintlig', $2, 'tax', $3, true, $4, $5, $6, $7, $8)
      RETURNING id`,
     [
       companyId,
@@ -96,9 +97,35 @@ async function insertExisting(
       values.dismissed ? new Date() : null,
       values.type ?? 'moms_monthly',
       values.period,
+      values.noticeId ?? null,
     ],
   )
   return rows[0].id
+}
+
+/** A slutskattebesked whose kvarskatt falls due on `paymentDueDate`. */
+async function insertNotice(
+  company: { companyId: string; userId: string; fiscalPeriodId: string },
+  paymentDueDate: string,
+): Promise<string> {
+  const { rows } = await getPool().query<{ id: string }>(
+    `INSERT INTO public.tax_assessment_notices
+       (company_id, user_id, fiscal_period_id, decision_type, decision_date, payment_due_date)
+     VALUES ($1, $2, $3, 'final', '2026-07-01', $4)
+     RETURNING id`,
+    [company.companyId, company.userId, company.fiscalPeriodId, paymentDueDate],
+  )
+  return rows[0].id
+}
+
+/** The kvarskatt row the generator builds for a notice (deadline-config.ts, type 'kvarskatt'). */
+function noticeRow(companyId: string, noticeId: string, dueDate: string): Record<string, unknown> {
+  return generatorRow(companyId, 'kvarskatt', `notice:${noticeId}`, dueDate, {
+    priority: 'critical',
+    linked_report_type: null,
+    linked_report_period: null,
+    tax_assessment_notice_id: noticeId,
+  })
 }
 
 /** The company's rows as type:period:due date, sorted: what the deadlines page shows. */
@@ -222,6 +249,86 @@ describe('replace_system_tax_deadlines: the new set in, the old pending set out'
 
     expect(await exists(old)).toBe(true)
     expect(await deadlineKeys(companyId)).toEqual(['moms_monthly:2026-10:2026-12-12'])
+  })
+})
+
+describe('replace_system_tax_deadlines: a notice already past its due date (crm#2084)', () => {
+  // The generator writes a notice's row even when its date has passed, so a
+  // newly entered overdue kvarskatt is still shown. Its old pending row sits
+  // before the window, which the window delete never reached: every
+  // regeneration added one more pending kvarskatt for the same notice.
+  it('every regeneration leaves the notice one pending row, the new one', async () => {
+    const company = await seedCompany()
+    const { companyId } = company
+    const noticeId = await insertNotice(company, '2026-11-02')
+    const old = await insertExisting(companyId, {
+      type: 'kvarskatt',
+      period: `notice:${noticeId}`,
+      dueDate: '2026-11-02',
+      noticeId,
+    })
+    // An unfiled moms period before the window: an overdue obligation the
+    // new set does not restate, so it stays.
+    const overdueMoms = await insertExisting(companyId, { period: '2026-08', dueDate: '2026-10-12' })
+
+    const { rows } = await replace(getPool(), companyId, [noticeRow(companyId, noticeId, '2026-11-02')])
+    await replace(getPool(), companyId, [noticeRow(companyId, noticeId, '2026-11-02')])
+    await replace(getPool(), companyId, [noticeRow(companyId, noticeId, '2026-11-02')])
+
+    expect(rows).toEqual([{ created: 1, deleted: 1 }])
+    expect(await exists(old)).toBe(false)
+    expect(await exists(overdueMoms)).toBe(true)
+    expect(await deadlineKeys(companyId, `AND tax_deadline_type = 'kvarskatt'`)).toEqual([
+      `kvarskatt:notice:${noticeId}:2026-11-02`,
+    ])
+  })
+
+  it('a notice moved to another past date keeps one row, on the new date', async () => {
+    const company = await seedCompany()
+    const { companyId } = company
+    const noticeId = await insertNotice(company, '2026-11-05')
+    await insertExisting(companyId, { type: 'kvarskatt', period: `notice:${noticeId}`, dueDate: '2026-11-02', noticeId })
+
+    const { rows } = await replace(getPool(), companyId, [noticeRow(companyId, noticeId, '2026-11-05')])
+
+    expect(rows).toEqual([{ created: 1, deleted: 1 }])
+    expect(await deadlineKeys(companyId)).toEqual([`kvarskatt:notice:${noticeId}:2026-11-05`])
+  })
+
+  it('keeps the notice\'s completed and dismissed rows, and the notices of other companies', async () => {
+    const company = await seedCompany()
+    const other = await seedCompany()
+    const { companyId } = company
+    const noticeId = await insertNotice(company, '2026-11-02')
+    const otherNoticeId = await insertNotice(other, '2026-11-02')
+    const kept = [
+      await insertExisting(companyId, {
+        type: 'kvarskatt', period: `notice:${noticeId}`, dueDate: '2026-11-02', noticeId, isCompleted: true,
+      }),
+      await insertExisting(companyId, {
+        type: 'kvarskatt', period: `notice:${noticeId}`, dueDate: '2026-11-02', noticeId, dismissed: true,
+      }),
+      await insertExisting(other.companyId, {
+        type: 'kvarskatt', period: `notice:${otherNoticeId}`, dueDate: '2026-11-02', noticeId: otherNoticeId,
+      }),
+    ]
+
+    const { rows } = await replace(getPool(), companyId, [noticeRow(companyId, noticeId, '2026-11-02')])
+
+    expect(rows).toEqual([{ created: 1, deleted: 0 }])
+    for (const id of kept) expect(await exists(id)).toBe(true)
+  })
+
+  it('before the window only a notice\'s row is replaced: an overdue row of a period the new set dates later stays', async () => {
+    // A helårsmoms period can hold an overdue row on its EU-trade date next
+    // to a row on the later date (helarsmomsSettledByOpenRows). The overdue
+    // one may be a missed filing, and a replacement never hides one.
+    const { companyId } = await seedCompany()
+    const overdue = await insertExisting(companyId, { type: 'moms_yearly', period: '2025', dueDate: '2026-02-26' })
+
+    await replace(getPool(), companyId, [generatorRow(companyId, 'moms_yearly', '2025', '2026-12-01')])
+
+    expect(await exists(overdue)).toBe(true)
   })
 })
 

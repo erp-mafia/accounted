@@ -650,7 +650,10 @@ export async function generateTaxDeadlinesForUser(
           : adjustDeadlineToNextBankingDay(rawDate)
         const dueDate = formatDateISO(adjustedDate)
 
-        // Skip if the deadline is in the past
+        // Skip if the deadline is in the past. A notice's kvarskatt is kept:
+        // one entered after its payment date must still show. Its old row
+        // lies before the window, so the replacement removes it by notice
+        // (replace_system_tax_deadlines, migration 20261121111517).
         if (adjustedDate < today && !instance.taxAssessmentNoticeId) {
           continue
         }
@@ -730,12 +733,14 @@ export async function generateTaxDeadlinesForUser(
   )
 
   // The new set replaces the old one in one transaction, under a per-company
-  // lock (replace_system_tax_deadlines, migration 20261113020219): the rows
-  // are inserted, then every other pending system row in the window is
-  // deleted. A failed insert leaves the previous deadlines intact, and two
-  // regenerations that overlap (a settings save racing the nightly repair)
-  // run one after the other, so the company always holds one whole set. As
-  // two separate statements each deleted the other's freshly inserted rows.
+  // lock (replace_system_tax_deadlines, migrations 20261113020219 and
+  // 20261121111517): the rows are inserted, then every other pending system
+  // row in the window is deleted, and every other pending row of a notice the
+  // set has a row for, wherever its date falls. A failed insert leaves the
+  // previous deadlines intact, and two regenerations that overlap (a settings
+  // save racing the nightly repair) run one after the other, so the company
+  // always holds one whole set. As two separate statements each deleted the
+  // other's freshly inserted rows.
   //
   // Dismissed rows survive the delete: deleting one would erase the opt-out
   // and let the next regeneration recreate the obligation as a fresh pending
@@ -827,6 +832,16 @@ async function replaceDeadlinesInTwoStatements(
     newIds = (insertedData ?? []).map((d: { id: string }) => d.id)
   }
 
+  // The window, and the old rows of a notice the new set has a row for
+  // wherever they fall (a kvarskatt already past due), as the function does.
+  // The ids went into a uuid column in the insert above, so they are safe
+  // inside the filter string.
+  const noticeIds = Array.from(new Set(
+    uniqueDeadlines
+      .map((row) => row.tax_assessment_notice_id)
+      .filter((id): id is string => typeof id === 'string'),
+  ))
+
   let deleteQuery = supabase
     .from('deadlines')
     .delete()
@@ -834,8 +849,12 @@ async function replaceDeadlinesInTwoStatements(
     .eq('source', 'system')
     .eq('is_completed', false)
     .is('dismissed_at', null)
-    .gte('due_date', todayIso)
-    .lte('due_date', endDate)
+
+  deleteQuery = noticeIds.length > 0
+    ? deleteQuery.or(
+        `and(due_date.gte.${todayIso},due_date.lte.${endDate}),tax_assessment_notice_id.in.(${noticeIds.join(',')})`,
+      )
+    : deleteQuery.gte('due_date', todayIso).lte('due_date', endDate)
 
   if (newIds.length > 0) {
     deleteQuery = deleteQuery.not('id', 'in', `(${newIds.join(',')})`)
