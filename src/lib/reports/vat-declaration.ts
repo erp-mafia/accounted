@@ -390,21 +390,30 @@ export async function fetchInvoiceDeferralShares(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<InvoiceDeferralShares> {
-  const { data, error } = await supabase.rpc('vat_invoice_deferral_shares', { p_company_id: companyId })
-  if (error) {
-    if (error.code === 'PGRST202' || error.code === '42883') {
+  type ShareRow = { journal_entry_id: string; balance_account: string; target_account: string; share: number | string }
+  let rows: ShareRow[]
+  try {
+    // Paged in a total order: the answer covers the company's whole history,
+    // and PostgREST cuts an unpaged one at 1000 rows.
+    rows = await fetchAllRows<ShareRow>(({ from, to }) =>
+      supabase
+        .rpc('vat_invoice_deferral_shares', { p_company_id: companyId })
+        .order('journal_entry_id')
+        .order('balance_account')
+        .order('target_account')
+        .order('share')
+        .range(from, to),
+    )
+  } catch (err) {
+    const code = (err as { code?: unknown }).code
+    if (code === 'PGRST202' || code === '42883') {
       log.warn('vat_invoice_deferral_shares is not deployed yet: no deferred sale is read', { companyId })
       return new Map()
     }
-    throw new Error(`vat_invoice_deferral_shares failed: ${error.message}`)
+    throw new Error(`vat_invoice_deferral_shares failed: ${err instanceof Error ? err.message : String(err)}`)
   }
   const shares = new Map<string, Array<{ balance_account: string; target_account: string; share: number }>>()
-  for (const row of (data ?? []) as Array<{
-    journal_entry_id: string
-    balance_account: string
-    target_account: string
-    share: number | string
-  }>) {
+  for (const row of rows) {
     const ofEntry = shares.get(row.journal_entry_id) ?? []
     ofEntry.push({ balance_account: row.balance_account, target_account: row.target_account, share: Number(row.share) })
     shares.set(row.journal_entry_id, ofEntry)

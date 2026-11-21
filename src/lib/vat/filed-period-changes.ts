@@ -372,17 +372,24 @@ export async function withChangesAfterFiling(
 
     accounts ??= await fetchDynamicVatAccounts(supabase, companyId)
     deferrals ??= await fetchInvoiceDeferralShares(supabase, companyId)
-    const { data: special, error: specialError } = await supabase.rpc('vat_declaration_special_entries', {
-      p_company_id: companyId,
-      p_start: filing.period_start,
-      p_end: filing.period_end,
-      p_net_shape_ruta_accounts: VAT_ACCOUNTS,
-      p_net_shape_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
-      p_ruta_accounts: VAT_ACCOUNTS,
-      p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
-    })
-    if (specialError) throw specialError
-    const specialRows = (special ?? []) as Array<{ journal_entry_id: string; reason: string }>
+    // Paged in a total order: the opening balance chains and the deferral
+    // releases cover the company's whole history, and PostgREST cuts an
+    // unpaged answer at 1000 rows.
+    const specialRows = await fetchAllRows<{ journal_entry_id: string; reason: string }>(({ from, to }) =>
+      supabase
+        .rpc('vat_declaration_special_entries', {
+          p_company_id: companyId,
+          p_start: filing.period_start,
+          p_end: filing.period_end,
+          p_net_shape_ruta_accounts: VAT_ACCOUNTS,
+          p_net_shape_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
+          p_ruta_accounts: VAT_ACCOUNTS,
+          p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
+        })
+        .order('journal_entry_id')
+        .order('reason')
+        .range(from, to),
+    )
     const leftOut = new Set(
       specialRows.filter((row) => LEFT_OUT_REASONS.has(row.reason)).map((row) => row.journal_entry_id),
     )

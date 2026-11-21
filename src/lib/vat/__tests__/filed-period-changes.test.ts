@@ -233,6 +233,27 @@ describe('withChangesAfterFiling', () => {
     expect(record.changed_after_filing).toBeNull()
   })
 
+  it('reads the special verifikat past the first 1000 rows (crm#1919)', async () => {
+    const release = entry({ id: 'e6', voucher_number: 13, entry_date: '2026-07-01', source_type: 'accrual', committed_at: '2026-10-24T18:29:38Z' })
+    const mock = ledger({
+      late: [release],
+      lines: [line('e6', '2970', 2000, 0), line('e6', '3001', 0, 2000)],
+    })
+    // Releases of earlier years fill the first page; this one is on the second.
+    const special = [
+      ...Array.from({ length: 1000 }, (_, i) => ({ journal_entry_id: `old-${i}`, reason: 'invoice_deferral_release' })),
+      { journal_entry_id: 'e6', reason: 'invoice_deferral_release' },
+    ]
+    mock.setTable('rpc:vat_declaration_special_entries', (chain): TableMockResult => {
+      const [from, to] = chain.find((c) => c.method === 'range')!.args as [number, number]
+      return { data: special.slice(from, to + 1) }
+    })
+
+    const [record] = await withChangesAfterFiling(mock.supabase as never, COMPANY, [JULY])
+
+    expect(record.changed_after_filing).toBeNull()
+  })
+
   it('leaves the posted bokslut out', async () => {
     const bokslut = entry({ id: 'e4', voucher_number: 11, source_type: 'year_end', committed_at: '2026-10-01T08:00:00Z' })
     const mock = ledger({ late: [bokslut], lines: [line('e4', '3001', 16952, 0), line('e4', '8999', 0, 16952)], closing: ['e4'] })

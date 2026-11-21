@@ -77,6 +77,24 @@ describe('fetchInvoiceDeferralShares', () => {
     ])
   })
 
+  it('reads every page of the answer, past the 1000 rows PostgREST returns at once', async () => {
+    const rows = Array.from({ length: 1001 }, (_, i) => ({
+      journal_entry_id: `entry-${i}`,
+      balance_account: '2970',
+      target_account: '3001',
+      share: '1',
+    }))
+    const mock = createTableMockSupabase({
+      'rpc:vat_invoice_deferral_shares': (chain: Array<{ method: string; args: unknown[] }>) => {
+        const [from, to] = chain.find((c) => c.method === 'range')!.args as [number, number]
+        return { data: rows.slice(from, to + 1) }
+      },
+    })
+    const shares = await fetchInvoiceDeferralShares(mock.supabase as never, 'company-1')
+    expect(shares.size).toBe(1001)
+    expect(shares.get('entry-1000')).toEqual([{ balance_account: '2970', target_account: '3001', share: 1 }])
+  })
+
   it('reads nothing as a deferred sale while the function is not deployed yet', async () => {
     const mock = createTableMockSupabase({
       'rpc:vat_invoice_deferral_shares': { error: { code: 'PGRST202', message: 'Could not find the function' } },
