@@ -11898,6 +11898,7 @@
     "vat_filing_failed": "Could not mark the period as filed.",
     "vat_filing_unmark_failed": "Could not undo the mark.",
     "vat_filing_period_yearly": "Financial year {label}",
+    "vat_entry_counts": "{invoices, plural, one {# voucher} other {# vouchers}} from customer invoices · {transactions} from bank transactions",
     "vat_basis_fix_all_title": "{fixed} of {total} vouchers corrected",
     "vat_basis_fix_all_created": "Reversals and new vouchers created.",
     "vat_basis_fix_all_failed": "{count} could not be corrected and remain in the list.",
