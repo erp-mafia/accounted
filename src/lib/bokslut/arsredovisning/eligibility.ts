@@ -136,7 +136,7 @@ function k3ScopeIssues(
     issues,
     profile.securities_traded_on_regulated_market,
     'AR-K3-LISTED-UNKNOWN',
-    'Om värdepapper är upptagna till handel på en reglerad marknad',
+    'Om värdepapper som bolaget självt har gett ut är upptagna till handel på en reglerad marknad',
   )
   requireAnswer(issues, profile.is_public_limited_company, 'AR-K3-PUBLIC-UNKNOWN', 'Om bolaget är publikt')
 
@@ -281,7 +281,7 @@ export function evaluateAnnualReportEligibility(
       issues,
       profile.securities_traded_on_regulated_market,
       'AR-K2-LISTED-UNKNOWN',
-      'Om värdepapper är upptagna till handel på en reglerad marknad',
+      'Om värdepapper som bolaget självt har gett ut är upptagna till handel på en reglerad marknad',
     )
     requireAnswer(
       issues,
