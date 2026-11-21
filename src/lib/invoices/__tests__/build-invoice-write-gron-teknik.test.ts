@@ -151,8 +151,6 @@ describe('buildInvoiceWriteData: grön teknik', () => {
       documentType: 'quote',
       input: { ...header, valid_until: '2026-10-15', items: [labour] } as InvoiceWriteInput,
     })
-    expect(result.ok).toBe(false)
-    if (result.ok || !('code' in result)) return
-    expect(result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
+    expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREATE_ROT_RUT_VALIDATION' })
   })
 })

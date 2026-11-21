@@ -64,9 +64,7 @@ describe('buildInvoiceWriteData: a deduction line on a document that is not a fa
 
   it('refuses an incomplete claim on a quote too: no field of it would be kept', async () => {
     const result = await build('quote', [{ ...rutLabour, work_type: null, labor_hours: null }])
-    expect(result.ok).toBe(false)
-    if (result.ok || !('code' in result)) return
-    expect(result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
+    expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREATE_ROT_RUT_VALIDATION' })
   })
 
   it('saves a quote whose lines claim nothing, as it does today', async () => {
@@ -83,6 +81,9 @@ describe('buildInvoiceWriteData: a deduction line on a document that is not a fa
       { ...rutLabour, deduction_type: null, work_type: null, labor_hours: null },
     ] as InvoiceWriteInput['items'])
     expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items[0]).toMatchObject({ line_type: 'text', deduction_type: null, deduction_amount: 0 })
+    expect(result.invoiceFields.deduction_total).toBe(0)
   })
 
   it('still books the claim on a faktura', async () => {

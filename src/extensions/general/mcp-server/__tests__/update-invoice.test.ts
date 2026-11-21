@@ -865,7 +865,7 @@ describe('gnubok_update_invoice: ROT/RUT round trip (issue #1642)', () => {
       ),
     ).rejects.toMatchObject({
       code: 'INVOICE_CREATE_ROT_RUT_VALIDATION',
-      message: expect.stringMatching(/offert.*gnubok_convert_invoice/s),
+      message: expect.stringMatching(/offert.*gnubok_convert_invoice/),
     })
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
   })
