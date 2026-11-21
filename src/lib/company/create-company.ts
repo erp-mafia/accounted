@@ -187,10 +187,9 @@ export async function createCompanyCore(
   // /profile here: that handler fans out to 13 Lens calls and the 5 s
   // timeout in tic-fetch.ts ate ~530 wasted calls in May before yielding
   // zero snapshots (every signup's /profile timed out, but the in-flight
-  // upstream fetches still counted against quota). The agent build path
-  // (app/(onboarding)/onboarding/agent/page.tsx) calls ensureTicSnapshot
-  // with upgradeV1: true lazily, which is the right place: only companies
-  // that actually reach agent onboarding spend the budget.
+  // upstream fetches still counted against quota). A full profile is fetched
+  // lazily by ensureTicSnapshot (lib/agent/composer/tic-fetch.ts), from the
+  // flows that need one, so only those companies spend the budget.
   if (input.ticLookup) {
     const { error: ticErr } = await supabase
       .from('companies')

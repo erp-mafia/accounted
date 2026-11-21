@@ -54,8 +54,8 @@ describe('getErrorMessage: the Swedish floor for database-authored codes', () =>
     ['23502', 'null value in column "company_id" of relation "invoices" violates not-null constraint', 'Ett obligatoriskt fält saknas.'],
     ['22P02', 'invalid input syntax for type uuid: "Företag AB"', 'Ogiltigt värde angavs.'],
     ['22003', 'numeric field overflow', 'Värdet är utanför tillåtet intervall.'],
-    ['42501', 'new row violates row-level security policy for table "invoices"', 'Du har inte behörighet att utföra denna åtgärd.'],
-    ['42501', 'permission denied for table invoices', 'Du har inte behörighet att utföra denna åtgärd.'],
+    ['42501', 'new row violates row-level security policy for table "invoices"', 'Du har inte behörighet att göra det här i företaget. Be en ägare eller administratör om behörighet.'],
+    ['42501', 'permission denied for table invoices', 'Du har inte behörighet att göra det här i företaget. Be en ägare eller administratör om behörighet.'],
   ])('%s: %s', (code, message, expected) => {
     const msg = getErrorMessage(pg(code, message))
     expect(msg).toBe(expected)
@@ -68,9 +68,9 @@ describe('getErrorMessage: the Swedish floor for database-authored codes', () =>
 
   it('a code without its own sentence falls back to status, then context, then generic', () => {
     const tooLong = pg('22001', 'value too long for type character varying(50)')
-    expect(getErrorMessage(tooLong, { statusCode: 400 })).toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect(getErrorMessage(tooLong, { statusCode: 400 })).toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
     expect(getErrorMessage(tooLong, { context: 'supplier' })).toBe('Kunde inte hantera leverantören. Försök igen.')
-    expect(getErrorMessage(tooLong)).toBe('Något gick fel. Försök igen.')
+    expect(getErrorMessage(tooLong)).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 
   it('a schema error (42703) and a PostgREST error never show their text', () => {
@@ -97,7 +97,7 @@ describe('getErrorMessage: the Swedish floor for database-authored codes', () =>
 
   it('English prose our RPCs raise under 42501 around a Swedish name is floored', () => {
     const msg = getErrorMessage(pg('42501', 'Only byrå team owners and admins can create client companies'))
-    expect(msg).toBe('Du har inte behörighet att utföra denna åtgärd.')
+    expect(msg).toBe('Du har inte behörighet att göra det här i företaget. Be en ägare eller administratör om behörighet.')
   })
 
   it('reaches the agent-facing message_sv too, while message_en keeps the raw text', () => {

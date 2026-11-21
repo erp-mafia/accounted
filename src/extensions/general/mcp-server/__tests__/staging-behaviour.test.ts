@@ -1663,6 +1663,19 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     args: { item_type: 'net_deduction_union', description: 'Fackavgift', amount: -350, valid_from: '2026-01-01' },
   },
   gnubok_update_employee_recurring_line: { args: { description: 'Fackavgift Unionen' } },
+  // A hand-entered bonus line on a draft run's payslip, given a new amount.
+  gnubok_update_payslip_line: {
+    args: { amount: 1500 },
+    rows: {
+      salary_line_items: {
+        item_type: 'bonus',
+        description: 'Bonus',
+        amount: 1000,
+        salary_run_employee_id: SOME_UUID,
+        salary_run_employee: { salary_run_id: SOME_UUID },
+      },
+    },
+  },
   // An SIE-imported kundfaktura verifikat (Dr 1510 100) registered as an
   // unpaid invoice: the number and the verifikat are unclaimed.
   gnubok_register_booked_invoice: {

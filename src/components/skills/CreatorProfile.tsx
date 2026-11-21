@@ -5,6 +5,7 @@ import useSWR from 'swr'
 import { CheckBadgeIcon } from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import { PageHeader } from '@/components/ui/page-header'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { AgentCard } from './AgentCard'
 import { CommunityFoot } from './KindViews'
 import { itemHue, seedOf } from './hues'
@@ -33,7 +34,16 @@ export function CreatorProfile({ handle, backHref }: { handle: string; backHref:
   return (
     <div className={styles.apage}>
       <PageHeader title={`@${handle}`} parent={{ label: tNav('v3_skills'), href: backHref }} />
-      {catalog.data && items.length === 0 ? <p className={styles.muted}>{t('creator_not_found')}</p> : (
+      {catalog.error && !catalog.data ? (
+        <LoadError title={t('load_failed')} onRetry={() => void catalog.mutate()} />
+      ) : catalog.data && items.length === 0 ? (
+        <NotFoundState
+          title={t('creator_not_found')}
+          description={t('creator_not_found_hint')}
+          backHref={backHref}
+          backLabel={t('back_to_catalog', { name: tNav('v3_skills') })}
+        />
+      ) : (
         <>
           <section className={styles.creator}>
             <span className={styles.creatorAvatar} style={{ background: `hsl(${hue} 55% 88%)`, color: `hsl(${hue} 50% 30%)` }} aria-hidden>{handle.charAt(0).toUpperCase()}</span>

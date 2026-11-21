@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { useEmployees } from '@/lib/reference-data/hooks'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
@@ -69,12 +69,7 @@ export default function ReportsPage() {
       />
 
       {fyReady && !selectedPeriod ? (
-        <EmptyState
-          title={t('no_fiscal_year_title')}
-          description={t('no_fiscal_year_description')}
-          actionLabel={t('no_fiscal_year_action')}
-          actionHref="/settings"
-        />
+        <EmptyNoFiscalYear />
       ) : (
         <ReportLibrary
           entityType={company?.entity_type}

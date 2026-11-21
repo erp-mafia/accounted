@@ -60,7 +60,7 @@ describe('PUT /items/:id/purchase-category', () => {
       await route.handler(put({ code: 'computers' }), buildCtx(mock.supabase)),
     )
     expect(status).toBe(400)
-    expect(body.error).toMatchObject({ code: 'VALIDATION_ERROR', message: 'Förfrågan innehåller ogiltiga uppgifter.' })
+    expect(body.error).toMatchObject({ code: 'VALIDATION_ERROR', message: 'Några uppgifter stämmer inte. Kontrollera fälten och försök igen.' })
     expect((await route.handler(put({}), buildCtx(mock.supabase))).status).toBe(400)
     expect(mock.calls).toHaveLength(0)
   })

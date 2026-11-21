@@ -83,7 +83,11 @@ export async function proposeForTransactions(
   // The company's own rules plus the global (null-company) defaults. Two
   // static queries rather than one dynamic `.or('company_id.eq.<id>,...')`,
   // which the no-phantom-columns scanner cannot resolve.
-  const [companyRules, globalRules, direct_booking] = await Promise.all([
+  //
+  // Every read below depends only on the company and the rows, so they run
+  // in one round; the proposals are then put together in the same order as
+  // before. The suggestions in Transaktioner wait on this.
+  const [companyRules, globalRules, direct_booking, settingsRead, counterpartyMatches, storedReads, clearings, blockRules] = await Promise.all([
     supabase
       .from('mapping_rules')
       .select('*')
@@ -97,21 +101,30 @@ export async function proposeForTransactions(
       .eq('is_active', true)
       .order('priority', { ascending: false }),
     readDirectBookingSettings(supabase, companyId),
+    supabase
+      .from('company_settings')
+      .select('entity_type')
+      .eq('company_id', companyId)
+      .single(),
+    // Batch counterparty template matching (1 DB query, in-memory matching)
+    findCounterpartyTemplatesBatch(supabase, companyId, transactions),
+    // The assistant's stored reads. Best effort: the list never waits on a
+    // failed read of this table.
+    opts.withReads !== false
+      ? ASSISTANT_READS.load(supabase, companyId, transactions.map((t) => t.id)).catch(() => new Map<string, AssistantRead>())
+      : Promise.resolve(null),
+    // Best effort, like the reads: the list never waits on a failed proposer.
+    proposeClearings(supabase, companyId, transactions, CLEARING_PROPOSERS, log).catch(
+      () => new Map<string, BookingProposal>(),
+    ),
+    loadActiveBookingReviewRules(supabase, companyId),
   ])
   const mappingRules = [
     ...((companyRules.data ?? []) as MappingRule[]),
     ...((globalRules.data ?? []) as MappingRule[]),
   ]
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type')
-    .eq('company_id', companyId)
-    .single()
-  const entityType = (settings?.entity_type as EntityType) || undefined
-
-  // Batch counterparty template matching (1 DB query, in-memory matching)
-  const counterpartyMatches = await findCounterpartyTemplatesBatch(supabase, companyId, transactions)
+  const entityType = (settingsRead.data?.entity_type as EntityType) || undefined
 
   for (const tx of transactions) {
     proposals[tx.id] = await getSuggestedTemplates(tx, entityType, mappingRules)
@@ -208,10 +221,9 @@ export async function proposeForTransactions(
 
   // The assistant's stored reads (the ten-minute cron, or an earlier
   // open): a fresh one with an account joins the row's proposals, and the
-  // read itself goes along so the review opens with it. Best effort: the
-  // list never waits on this table.
-  if (opts.withReads !== false) {
-    const reads = await ASSISTANT_READS.load(supabase, companyId, transactions.map((t) => t.id)).catch(() => new Map<string, AssistantRead>())
+  // read itself goes along so the review opens with it.
+  if (storedReads) {
+    const reads = storedReads
     for (const tx of transactions) {
       const read = reads.get(tx.id)
       if (!read || !ASSISTANT_READS.isFresh(read, tx)) continue
@@ -228,15 +240,10 @@ export async function proposeForTransactions(
     proposals[tx.id] = leadWithSkattekonto(proposals[tx.id] ?? [], tx)
   }
 
-  // Best effort, like the reads: the list never waits on a failed proposer.
-  const clearings = await proposeClearings(supabase, companyId, transactions, CLEARING_PROPOSERS, log).catch(
-    () => new Map<string, BookingProposal>(),
-  )
   for (const [txId, clearing] of clearings) {
     proposals[txId] = leadWithClearing(proposals[txId] ?? [], clearing)
   }
 
-  const blockRules = await loadActiveBookingReviewRules(supabase, companyId)
   if (blockRules.length > 0) {
     for (const tx of transactions) {
       proposals[tx.id] = markBlockedProposals(proposals[tx.id] ?? [], tx, blockRules)

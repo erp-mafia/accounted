@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isWholeKronaRoundingOf, rowNetFromInvoiceTotals, totalFirstFill } from '../total-first'
+import { invoiceTotalsCrosscheck, isWholeKronaRoundingOf, rowNetFromInvoiceTotals, totalFirstFill } from '../total-first'
 import { supplierInvoiceEditorAmounts } from '../editor-amounts'
 
 const row = (amount: number, vat_rate: number) => ({ amount, account_number: '4010', vat_rate })
@@ -71,6 +71,26 @@ describe('totalFirstFill', () => {
     expect(totalFirstFill({ amount: 919.2, net, filled: 919.2, fromReading: true, reverseCharge: true })).toBeNull()
     // Without reverse charge the reading's row follows the totals like any other.
     expect(totalFirstFill({ amount: 919.2, net: 1000, filled: 919.2, fromReading: true, reverseCharge: false })).toBe(1000)
+  })
+})
+
+describe('invoiceTotalsCrosscheck', () => {
+  // crm#1954: leasing 3 995 + fee 50 at 25 %, 499,37 of the moms booked as cost.
+  const rows = { invoiceTotal: 5056.25, toPay: 5056.25, totalVat: 1011.25, deductibleVat: 511.88 }
+
+  it('matches the moms the invoice charges and the moms the rows deduct', () => {
+    expect(invoiceTotalsCrosscheck({ ...rows, invoiceVat: 1011.25 })).toMatchObject({ totalMatches: true, vatMatches: true })
+    expect(invoiceTotalsCrosscheck({ ...rows, invoiceVat: 511.88 })).toMatchObject({ totalMatches: true, vatMatches: true })
+  })
+
+  it('still flags any other moms, against what the invoice charges', () => {
+    expect(invoiceTotalsCrosscheck({ ...rows, invoiceVat: 500 })).toMatchObject({ vatDiff: -511.25, vatMatches: false })
+    const { deductibleVat: _omit, ...withoutDeduction } = rows
+    expect(invoiceTotalsCrosscheck({ ...withoutDeduction, invoiceVat: 511.88 })).toMatchObject({ vatDiff: -499.37, vatMatches: false })
+  })
+
+  it('has no moms difference when the invoice states no moms', () => {
+    expect(invoiceTotalsCrosscheck({ ...rows, invoiceVat: null })).toMatchObject({ vatDiff: null, vatMatches: true })
   })
 })
 

@@ -19,9 +19,10 @@ export const GET = v1ReportFileHandler({
     'Unzip and upload INFO.SRU and BLANKETTER.SRU under exactly those names; do not re-encode them to UTF-8.',
     'Only for aktiebolag: another legal form answers 400 TAX_DECL_INK2_WRONG_LEGAL_FORM.',
     'Refused while an SIE import is unfinished: complete or undo it first.',
+    'A declaration with sruBlockers (an account without an SRU field, a balance sheet that does not tie, a closed year whose declared result is not the booked 2099) answers 422 TAX_DECL_INK2_SRU_BLOCKED with the reason in details.reason: correct the books, do not retry.',
   ],
   contentType: 'application/zip',
-  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'TAX_DECL_INK2_WRONG_LEGAL_FORM', 'FILING_IDENTITY_REFUSED', 'TAX_DECL_GENERATION_FAILED'],
+  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'TAX_DECL_INK2_WRONG_LEGAL_FORM', 'TAX_DECL_INK2_SRU_BLOCKED', 'FILING_IDENTITY_REFUSED', 'TAX_DECL_GENERATION_FAILED'],
   query: z.object({ period_id: z.string().uuid().describe('The fiscal period (räkenskapsår) id.') }),
   build: (ctx, { period_id }) => getInk2SruFile(ctx, period_id),
 })

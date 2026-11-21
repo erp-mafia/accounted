@@ -1,9 +1,8 @@
 /**
  * ASSISTANT_CHAT_ENABLED: the built-in assistant. Its doors are the floating
  * button, the Chatt row in the menu, the /chat pages, the panel a page opens
- * (AgentSheet), the build of the assistant (/onboarding/agent, offered on
- * Hem) with the interview that follows it (/chat/intake), and the turns
- * behind POST /api/agent/invoke and POST /api/agent/ask.
+ * (AgentSheet), and the turns behind POST /api/agent/invoke and
+ * POST /api/agent/ask.
  *
  * On until someone switches it off. Unset, empty or any other value keeps the
  * chat, so a self-hosted installation and hosted production lose nothing by
@@ -15,11 +14,9 @@
  * first.
  *
  * Off: no door is offered, /chat shows what took the chat's place
- * (components/agent/ChatReplaced.tsx), its other pages and the build page
- * lead there, and the two routes answer ASSISTANT_CHAT_OFF instead of running
- * a turn, for every intent. The interview a newly built assistant held with
- * the company (intent onboarding.intake) goes with the rest: no intent is
- * exempt. Nothing is deleted: conversations stay in the database.
+ * (components/agent/ChatReplaced.tsx), its other pages lead there, and the
+ * two routes answer ASSISTANT_CHAT_OFF instead of running a turn, for every
+ * intent. Nothing is deleted: conversations stay in the database.
  *
  * Off is per company (assistantChatEnabledFor): the companies listed in
  * ASSISTANT_CHAT_COMPANY_IDS keep the chat until ASSISTANT_CHAT_UNTIL, so a
@@ -92,8 +89,8 @@ export function assistantChatRowShown(today: string, env: Env = process.env): bo
  * company except the ones in ASSISTANT_CHAT_COMPANY_IDS: the companies that
  * were using it when it was switched off, and any company that asks to have
  * it back. They keep it through ASSISTANT_CHAT_UNTIL; from the day after, it
- * is gone for them too. Nobody else can start: without the chat there is no
- * door to its build or its interview.
+ * is gone for them too. Nobody else can start: the build of the assistant is
+ * removed.
  *
  * `today` is the Swedish calendar day (todayIsoStockholm), passed in so this
  * file reads nothing but the environment.

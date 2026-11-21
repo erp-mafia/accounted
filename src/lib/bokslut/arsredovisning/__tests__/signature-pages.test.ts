@@ -168,6 +168,8 @@ describe('årsredovisning PDF, draft render', () => {
     expect(signatures).toContain('Undertecknad 2026-03-02')
     const certificate = page(pages, 'den 2026-05-20')
     expect(certificate).toContain('beslutade att godkänna styrelsens förslag')
+    // A draft is not the copy that is filed: no bestyrkande on it.
+    expect(certificate).not.toContain('överensstämmer med originalet')
   }, RENDER_TIMEOUT)
 
   it('an ekonomisk förening is told about the föreningsstämma', async () => {
@@ -198,13 +200,16 @@ describe('årsredovisning PDF, signing render', () => {
     expect(certificate).toContain('årsstämma den ____________________')
     // The signature line names both roles that may sign the intyg.
     expect(certificate).toContain('Styrelseledamot eller verkställande direktör')
+    // The paper copy is a bestyrkt kopia (ÅRL 8 kap. 3 § p. 1).
+    expect(certificate).toContain('Jag intygar att denna kopia av årsredovisningen överensstämmer med originalet.')
   }, RENDER_TIMEOUT)
 
   it('K3 keeps them too', async () => {
     const pages = await render(makeData({ framework: 'k3', signatures: SIGNERS }), 'signing')
     const signatures = page(pages, 'Anna Andersson')
     expect(signatures).toContain('Datum: ____________')
-    page(pages, 'Undertecknad styrelseledamot eller verkställande direktör')
+    const certificate = page(pages, 'Undertecknad styrelseledamot eller verkställande direktör')
+    expect(certificate).toContain('överensstämmer med originalet')
   }, RENDER_TIMEOUT)
 })
 

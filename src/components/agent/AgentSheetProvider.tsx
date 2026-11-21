@@ -121,10 +121,10 @@ function useSheetPrefetch() {
 export interface AgentIdentity {
   displayName: string | null
   avatarId: string | null
-  // True only after the user has completed Phase B verification in
-  // /onboarding/agent. Consumers (AgentTrigger, page-level Sparkle
-  // buttons) should hide themselves when this is false so the FAB
-  // doesn't pop up before the agent build flow has run.
+  // True for a company whose assistant was built and confirmed
+  // (agent_profiles.verified_at). Consumers (AgentTrigger, page-level Sparkle
+  // buttons) hide themselves when this is false: the build is removed, so
+  // such a company has no built-in assistant to open.
   isVerified: boolean
 }
 

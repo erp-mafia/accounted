@@ -292,9 +292,18 @@ export function SettlementDetailSheet({ settlementId, words, canWrite, onClose, 
               </>
             ) : (
               <>
+                {/* Bokför waits for an account on a line: say which step is missing, not only grey the button. */}
+                {settlementBookable(detail) && pendingChoices === null && (
+                  <span className="mr-auto text-xs text-muted-foreground">{t('book_needs_account')}</span>
+                )}
                 {/* An unknown claim stays unbookable until the books know its case: answering how it was handled is the step, booking is only a retry. */}
                 {isUnknownCase && settlementBookable(detail) && (
-                  <Button variant="outline" disabled={pendingChoices === null} onClick={() => setConfirm('book')}>
+                  <Button
+                    variant="outline"
+                    disabled={pendingChoices === null}
+                    title={pendingChoices === null ? t('book_needs_account') : undefined}
+                    onClick={() => setConfirm('book')}
+                  >
                     {t('book')}
                   </Button>
                 )}
@@ -304,7 +313,11 @@ export function SettlementDetailSheet({ settlementId, words, canWrite, onClose, 
                   </Button>
                 )}
                 {!isUnknownCase && settlementBookable(detail) && (
-                  <Button disabled={pendingChoices === null} onClick={() => setConfirm('book')}>
+                  <Button
+                    disabled={pendingChoices === null}
+                    title={pendingChoices === null ? t('book_needs_account') : undefined}
+                    onClick={() => setConfirm('book')}
+                  >
                     {t('book')}
                   </Button>
                 )}

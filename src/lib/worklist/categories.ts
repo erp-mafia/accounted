@@ -124,8 +124,38 @@ function logAndZero(category: string, companyId: string, error: unknown): number
     log.warn(`worklist count skipped, schema not migrated yet: ${category}`, fields)
   } else {
     log.error(`worklist count failed: ${category}`, fields)
+    for (const listener of countFailureListeners) listener(category, companyId)
   }
   return 0
+}
+
+/**
+ * A zero from a failed read looks like nothing to do. A caller that shows
+ * "Allt är klart" on a zero total (Hem) watches the failures while its
+ * counts run, so it can say instead that not everything could be read.
+ * Listeners are keyed by company, not by request: two overlapping reads for
+ * one company can each see the other's failure, which only ever shows the
+ * warning, never hides work. A schema gap (the minutes between deploy and
+ * migrate) is not reported: that count is correctly zero until it exists.
+ */
+type CountFailureListener = (category: string, companyId: string) => void
+const countFailureListeners = new Set<CountFailureListener>()
+
+export async function watchCountFailures<T>(
+  companyId: string,
+  run: () => Promise<T>,
+): Promise<{ result: T; failed: string[] }> {
+  const failed: string[] = []
+  const listener: CountFailureListener = (category, id) => {
+    if (id === companyId && !failed.includes(category)) failed.push(category)
+  }
+  countFailureListeners.add(listener)
+  try {
+    const result = await run()
+    return { result, failed }
+  } finally {
+    countFailureListeners.delete(listener)
+  }
 }
 
 /**

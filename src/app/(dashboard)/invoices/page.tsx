@@ -1,6 +1,6 @@
 'use client'
 
-import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { excludeCreditNotes, isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { Fragment, useState, useEffect, useMemo, useRef } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { groupRows, ungrouped } from '@/lib/lists/group-rows'
@@ -21,7 +21,7 @@ import { IntentLink } from '@/components/ui/intent-link'
 import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { LoadError } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import {
   TH_CLASS,
   TD_CLASS,
@@ -333,6 +333,18 @@ export default function InvoicesPage() {
   // Bumped by every load and on unmount: a load that is no longer the
   // newest drops its late pages instead of writing them over a newer list.
   const loadSeq = useRef(0)
+  // What the list asks the company as a whole, now that it loads only the
+  // chosen fiscal year (fetchInvoices): any row at all (the start card),
+  // any invoice past due (Dröjsmålsränta), and the deduction invoices of
+  // every year (the ROT/RUT action and its dialog). Null until read, and
+  // never read when all years are loaded: the rows answer it then.
+  const [registerFacts, setRegisterFacts] = useState<{
+    anyRow: boolean
+    anyPastDue: boolean
+    deductionLines: Array<Pick<ListInvoice, 'deduction_lines'>>
+  } | null>(null)
+  // The scope the rows on screen were read for: another year is another read.
+  const loadedScope = useRef<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<InvoiceListSort | null>(null)
   const [activeTab, setActiveTab] = useState<ListTab>(() => {
@@ -352,7 +364,9 @@ export default function InvoicesPage() {
   const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   // Fiscal-year scope (convention 8): null = all years.
   // The year is app-wide context (the sidebar); "all years" lists everything.
-  const { period: fyPeriod } = useFiscalScope()
+  const { period: fyPeriod, ready: fyReady } = useFiscalScope()
+  // The rows are read for this scope: the chosen fiscal year, or every year.
+  const scopeKey = fyPeriod ? `${fyPeriod.period_start}..${fyPeriod.period_end}` : 'all'
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoices')
@@ -400,7 +414,9 @@ export default function InvoicesPage() {
   // ones. ?rot-rut=1 keeps working regardless, so nothing is unreachable.
   const showRotRutAction =
     !isQuotesList &&
-    (rotRutEnabled || invoices.some((invoice) => (invoice.deduction_total ?? 0) > 0))
+    (rotRutEnabled ||
+      invoices.some((invoice) => (invoice.deduction_total ?? 0) > 0) ||
+      (registerFacts?.deductionLines.length ?? 0) > 0)
   // The begäran column and its filter share that gate: a company without
   // ROT/RUT never sees an empty column or a picker with nothing to pick.
   const showRotRut = showRotRutAction
@@ -408,6 +424,7 @@ export default function InvoicesPage() {
   // once an issued invoice is past its due date, the only case it can list.
   const showLateInterestAction =
     !isQuotesList &&
+    (registerFacts?.anyPastDue ||
     invoices.some(
       (invoice) =>
         invoice.document_type === 'invoice' &&
@@ -415,10 +432,15 @@ export default function InvoicesPage() {
         invoice.status !== 'draft' &&
         invoice.status !== 'cancelled' &&
         isPastDue(invoice.due_date, today),
-    )
+    ))
   // An installer who only invoices grön teknik lands on its list, not an
   // empty ROT one.
-  const rotRutPayoutType = useMemo(() => payoutDialogTypeFor(invoices), [invoices])
+  // Every year's deduction invoices decide the dialog, not only the year on
+  // screen (an invoice without deduction lines adds nothing either way).
+  const rotRutPayoutType = useMemo(
+    () => payoutDialogTypeFor(registerFacts?.deductionLines.length ? registerFacts.deductionLines : invoices),
+    [invoices, registerFacts],
+  )
 
   // Invoice-register coverage (see lib/reports/invoice-register-coverage.ts):
   // a migrated or backfilled company has invoices that live only as verifikat,
@@ -510,7 +532,13 @@ export default function InvoicesPage() {
     // action (bulk Bokför) reconcile BEHIND the rendered table. Collapsing
     // hundreds of rows to 3 skeleton stubs and replaying the stagger-enter
     // entrance for a row-scoped action was the "booking feels glitchy" jump.
-    const firstLoad = invoices.length === 0
+    // Another fiscal year starts from the skeleton: the rows on screen are
+    // last year's, and the list filters them out the moment the year changes.
+    const scope = fyPeriod ? { from: fyPeriod.period_start, to: fyPeriod.period_end } : null
+    const scopeChanged = loadedScope.current !== scopeKey
+    loadedScope.current = scopeKey
+    if (scopeChanged && invoices.length > 0) setInvoices([])
+    const firstLoad = invoices.length === 0 || scopeChanged
     if (firstLoad) setIsLoading(true)
 
     // The list paints after ONE page. It used to wait for the whole
@@ -540,7 +568,12 @@ export default function InvoicesPage() {
         // The cast names the row PostgREST answers with: the client is not
         // generated from the schema, so it types the to-one customer embed
         // as an array.
-        return (isQuotesList ? query.eq('document_type', 'quote') : query)
+        const kind = isQuotesList ? query.eq('document_type', 'quote') : query
+        // Only the chosen fiscal year: the list shows that year and nothing
+        // else, and a company with years of invoices read all of them first
+        // (31 600 for the largest register) to filter them in the browser.
+        const scoped = scope ? kind.gte('invoice_date', scope.from).lte('invoice_date', scope.to) : kind
+        return scoped
           .order('invoice_date', { ascending: false })
           .order('id', { ascending: false })
           .range(from, to) as unknown as PromiseLike<{ data: ListInvoice[] | null; error: { message: string } | null }>
@@ -581,10 +614,58 @@ export default function InvoicesPage() {
       isQuotesList
         ? Promise.resolve(null)
         : Promise.resolve(supabase.rpc('collection_attention_case_ids', { p_company_id: company.id })),
+      // The company as a whole, for what one year cannot answer. Read only
+      // when the list holds one year.
+      scope
+        ? Promise.resolve(
+            (isQuotesList
+              ? supabase.from('invoices').select('id').eq('company_id', company.id).eq('document_type', 'quote')
+              : supabase.from('invoices').select('id').eq('company_id', company.id)
+            ).limit(1),
+          )
+        : Promise.resolve(null),
+      // isPastDue on an issued invoice that is not a credit note
+      // (excludeCreditNotes: the rule isCreditNoteDocument reads).
+      scope && !isQuotesList
+        ? Promise.resolve(
+            excludeCreditNotes(
+              supabase
+                .from('invoices')
+                .select('id')
+                .eq('company_id', company.id)
+                .eq('document_type', 'invoice')
+                .not('status', 'in', '(draft,cancelled)')
+                .lt('due_date', today),
+            ).limit(1),
+          )
+        : Promise.resolve(null),
     ])
-    const [[peppolFailedResult, collectionsResult, collectionAttentionResult], [firstPageResult, factsResult]] =
-      await Promise.all([chipReads, firstPaint])
+    const [
+      [peppolFailedResult, collectionsResult, collectionAttentionResult, anyRowResult, pastDueResult],
+      [firstPageResult, factsResult],
+    ] = await Promise.all([chipReads, firstPaint])
     if (!isCurrent()) return
+    if (!scope) {
+      setRegisterFacts(null)
+    } else {
+      const deductionLines =
+        factsResult.status === 'fulfilled'
+          ? [...factsResult.value.values()]
+              .filter((facts) => facts.deduction_lines !== undefined)
+              .map((facts) => ({ deduction_lines: facts.deduction_lines ?? null }) as Pick<ListInvoice, 'deduction_lines'>)
+          : []
+      const readOk = (r: PromiseSettledResult<unknown>) =>
+        r.status === 'fulfilled' && r.value && !(r.value as { error?: unknown }).error
+      const rowsOf = (r: PromiseSettledResult<unknown>) =>
+        r.status === 'fulfilled' ? ((r.value as { data?: unknown[] | null } | null)?.data ?? []) : []
+      setRegisterFacts({
+        // A failed read answers as if there were rows: the start card is for
+        // a company with nothing, never a guess.
+        anyRow: readOk(anyRowResult) ? rowsOf(anyRowResult).length > 0 : true,
+        anyPastDue: readOk(pastDueResult) ? rowsOf(pastDueResult).length > 0 : false,
+        deductionLines,
+      })
+    }
     if (peppolFailedResult.status === 'fulfilled') setPeppolFailedIds(new Set(peppolFailedResult.value))
     if (collectionsResult.status === 'fulfilled' && collectionsResult.value && !collectionsResult.value.error) {
       const rows = (collectionsResult.value.data ?? []) as Array<{
@@ -636,13 +717,17 @@ export default function InvoicesPage() {
   }
 
   useEffect(() => {
+    // Read once the fiscal-year scope is known (the provider is ready once
+    // the company's years are loaded, a failed read meaning every year), and
+    // again for another year: the list holds only the year it shows.
+    if (!fyReady) return
     fetchInvoices()
     return () => {
-      // An unmounted list takes no more pages.
+      // An unmounted list, or one moved to another year, takes no more pages.
       loadSeq.current += 1
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fyReady, scopeKey])
 
   const normalizedSearch = searchTerm.trim().toLocaleLowerCase('sv-SE')
   // Search + fiscal-year scope, before the status view: the per-view counts
@@ -894,14 +979,21 @@ export default function InvoicesPage() {
       if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
 
       const summary = json.data?.summary as { booked: number; failed: number } | undefined
-      const results = (json.data?.results ?? []) as Array<{ status: string; error?: string }>
+      const results = (json.data?.results ?? []) as Array<{ id: string; status: string; error?: string }>
+      const failedResults = results.filter((r) => r.status === 'failed')
 
-      // One aggregate toast (TOAST_LIMIT is 1), never per-row.
+      // One aggregate toast (TOAST_LIMIT is 1), never per-row. It names the
+      // invoices that failed (number, or the customer for a draft without
+      // one), and those stay selected below, so the user can tell which.
       if (summary && summary.failed > 0) {
-        const firstErrors = results
-          .filter((r) => r.status === 'failed' && r.error)
-          .slice(0, 2)
-          .map((r) => r.error as string)
+        const byId = new Map(invoices.map((inv) => [inv.id, inv]))
+        const named = failedResults.slice(0, 3).map((r) => {
+          const inv = byId.get(r.id)
+          const customer = (inv?.customer as { name: string } | null)?.name ?? null
+          const label = inv?.invoice_number ?? (customer ? t('bulk_book_failed_draft_label', { customer }) : null)
+          if (!label) return r.error ?? ''
+          return r.error ? `${label}: ${r.error}` : `${label}.`
+        })
         toast({
           title: t('bulk_book_partial_title'),
           description: [
@@ -909,8 +1001,11 @@ export default function InvoicesPage() {
               booked: summary.booked,
               failed: summary.failed,
             }),
-            ...firstErrors,
-          ].join(' '),
+            ...named,
+            failedResults.length > 3 ? t('bulk_book_failed_more', { count: failedResults.length - 3 }) : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
           variant: 'destructive',
         })
       } else {
@@ -922,7 +1017,13 @@ export default function InvoicesPage() {
         })
       }
       setShowBulkBookConfirm(false)
-      selection.clear()
+      // Only the booked rows leave the selection: the failed ones stay ticked
+      // so they can be found, fixed and booked again.
+      if (failedResults.length > 0) {
+        selection.deselect(results.filter((r) => r.status === 'booked').map((r) => r.id))
+      } else {
+        selection.clear()
+      }
       fetchInvoices()
     } catch (err) {
       toast({
@@ -1293,7 +1394,7 @@ export default function InvoicesPage() {
               {tCommon('clear_search')}
             </Button>
           </div>
-        ) : invoices.length === 0 && !isQuotesList ? (
+        ) : invoices.length === 0 && !isQuotesList && !registerFacts?.anyRow ? (
           <div className="animate-fade-in">
             <StartCard
               card="venice"
@@ -1304,6 +1405,15 @@ export default function InvoicesPage() {
               secondary={canWrite ? { label: tStart('invoices_secondary'), onClick: openNewInvoice } : undefined}
             />
           </div>
+        ) : invoices.length === 0 && isQuotesList && !registerFacts?.anyRow ? (
+          // No quotes at all: the first-time state with the one way to make one.
+          <EmptyState
+            icon={DocumentTextIcon}
+            title={t('quotes_empty_title')}
+            description={t('quotes_empty_description')}
+            actionLabel={canWrite ? t('create_quote') : undefined}
+            onAction={canWrite ? openNewQuote : undefined}
+          />
         ) : (
           <DataListEmpty
             icon={isQuotesList ? <DocumentTextIcon className="h-6 w-6" /> : <DocumentTextIcon className="h-6 w-6" />}
@@ -1314,13 +1424,18 @@ export default function InvoicesPage() {
                   ? 'no_unsent_title'
                   : 'no_category_title',
             )}
-            description={t(
-              isQuotesList
-                ? 'no_quotes_description'
-                : activeTab === 'unsent'
-                  ? 'no_unsent_description'
-                  : 'no_category_description',
-            )}
+            // "Byt vy" only means something from a view narrower than Alla.
+            description={
+              isQuotesList && activeTab === 'all'
+                ? undefined
+                : t(
+                    isQuotesList
+                      ? 'no_quotes_description'
+                      : activeTab === 'unsent'
+                        ? 'no_unsent_description'
+                        : 'no_category_description',
+                  )
+            }
           />
         )
       ) : (

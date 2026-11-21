@@ -61,6 +61,7 @@ export const MODULE_IDS = [
   'parties',
   'corporate',
   'capital',
+  'formation',
   'agent',
   'byra',
 ] as const
@@ -645,6 +646,21 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     jurisdictions: SE,
   },
   {
+    id: 'formation',
+    kind: 'block',
+    name: 'Company formation',
+    nameSv: 'Starta aktiebolag',
+    summary:
+      'Starting an aktiebolag before it exists: the interview checked against the registration rules, the founding documents and the answers for the e-service, and the setup that turns the registered company into one in Accounted with its aktiebok, roles, beneficial owners and share capital booked.',
+    dependsOn: ['corporate', 'capital'],
+    layer: 'composite',
+    uses: ['parties'],
+    libFolders: ['formation'],
+    operationPrefixes: [],
+    v1Segments: [],
+    jurisdictions: SE,
+  },
+  {
     id: 'agent',
     kind: 'block',
     name: 'AI agent',
@@ -745,6 +761,9 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   // Permissions: the one catalog of what people and their agents may do,
   // the role presets and the door classes every door reads, across modules.
   'permissions',
+  // The question list: questions put to the company's people. Filing reads
+  // the records of several modules to check what a question rests on.
+  'questions',
   'rate-limits',
   'reference-data',
   'sandbox',

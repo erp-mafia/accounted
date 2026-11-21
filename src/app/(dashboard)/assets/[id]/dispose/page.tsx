@@ -13,7 +13,7 @@ import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Label } from '@/components/ui/label'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { LoadError } from '@/components/ui/empty-state'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -75,6 +75,8 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   const [loading, setLoading] = useState(true)
   // A failed load says so in the page with "Försök igen" (Stil v3 states).
   const [loadFailed, setLoadFailed] = useState(false)
+  // The asset does not exist (404): not a failed read to retry.
+  const [notFound, setNotFound] = useState(false)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [disposalType, setDisposalType] = useState<AssetDisposalType>('sale')
@@ -95,10 +97,22 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     let cancelled = false
     fetch(`/api/assets/${id}`)
-      .then((response) => response.json())
-      .then((assetResponse) => {
+      .then(async (response) => {
+        if (cancelled) return
+        if (response.status === 404) {
+          setAsset(null)
+          setNotFound(true)
+          return
+        }
+        // Any other refusal is a failed read with a retry, never "not found".
+        if (!response.ok) {
+          setLoadFailed(true)
+          return
+        }
+        const assetResponse = await response.json()
         if (cancelled) return
         setAsset(assetResponse.data ?? null)
+        if (!assetResponse.data) setNotFound(true)
       })
       .catch(() => {
         if (!cancelled) setLoadFailed(true)
@@ -268,12 +282,21 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     )
   }
 
-  if (!asset || asset.disposed_at) {
+  if (notFound || !asset) {
+    return (
+      <div className="space-y-8">
+        <PageHeader title={t('title')} parent={assetsParent} />
+        <NotFoundState title={t('not_found')} backHref="/assets" backLabel={t('back')} />
+      </div>
+    )
+  }
+
+  if (asset.disposed_at) {
     return (
       <div className="space-y-8">
         <PageHeader title={t('title')} parent={assetsParent} />
         <p className="text-sm text-muted-foreground">
-          {!asset ? t('not_found') : t('already_disposed', { date: formatDate(asset.disposed_at!) })}
+          {t('already_disposed', { date: formatDate(asset.disposed_at) })}
         </p>
         <Link href="/assets"><Button variant="outline"><ArrowLeftIcon className="h-4 w-4" />{t('back')}</Button></Link>
       </div>

@@ -28,7 +28,7 @@ import { readSkattekontoOpeningDate, whereSkattekontoRowOpen } from '@/lib/skatt
  * the destination page makes or the predicate its count is defined by
  * (lib/worklist/categories.ts), never a new route:
  *
- *   attest              GET /api/supplier-invoices?status=all, narrowed with
+ *   attest              GET /api/supplier-invoices?status=unsettled, narrowed with
  *                       the Registrerade rule (lib/supplier-invoices/list-tabs)
  *   to_pay              GET /api/supplier-invoices?status=to_pay (the Att betala tab)
  *   overdue             invoices, the Förfallna rule (lib/invoices/overdue)
@@ -127,8 +127,9 @@ export function byDate(a: StepItem, b: StepItem): number {
 }
 
 async function loadSupplierInvoices(kind: 'attest' | 'to_pay'): Promise<StepItem[]> {
-  // Att betala is asked for as the tab asks (the route narrows it); Registrerade has no filter of its own.
-  const res = await fetch(`/api/supplier-invoices?status=${kind === 'to_pay' ? 'to_pay' : 'all'}`)
+  // Att betala is asked for as the tab asks (the route narrows it); Registrerade
+  // reads what is not settled, since an invoice to attest never is.
+  const res = await fetch(`/api/supplier-invoices?status=${kind === 'to_pay' ? 'to_pay' : 'unsettled'}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const rows = ((await res.json()).data ?? []) as SupplierInvoiceRow[]
   return rows.filter(kind === 'attest' ? isAwaitingAttestInList : isToPayInList).map(supplierInvoiceItem).sort(byDate)

@@ -12,7 +12,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { performCompanySwitch } from '@/lib/company/switch-client'
+import { companySwitchErrorKey, performCompanySwitch } from '@/lib/company/switch-client'
 import { filterClientRows, type ClientBankSwitch, type ClientOverviewRow } from '@/lib/clients/aggregate'
 import type { AttestQueue } from '@/lib/supplier-invoices/attest-queues'
 import { CLIENT_NUMBER_MAX_LENGTH } from '@/lib/clients/client-number'
@@ -29,6 +29,8 @@ interface ClientsTableProps {
   bankSwitchCampaign?: BankSwitchCampaignView | null
   /** The byrå's owners and admins edit the customer number in place; members only read it. */
   canEditClientNumber?: boolean
+  /** Owners and admins have Nytt klientbolag in the header; the empty list points members elsewhere. */
+  canCreate?: boolean
 }
 
 type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; count: number }
@@ -67,9 +69,10 @@ type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; coun
  * on the supplier invoice list's matching tab. Same queues as the client's
  * own Att göra row (lib/supplier-invoices/attest-queues.ts).
  */
-export default function ClientsTable({ clients, bankSwitchCampaign = null, canEditClientNumber = false }: ClientsTableProps) {
+export default function ClientsTable({ clients, bankSwitchCampaign = null, canEditClientNumber = false, canCreate = false }: ClientsTableProps) {
   const t = useTranslations('clients')
   const tCommon = useTranslations('common')
+  const tSwitcher = useTranslations('company_switcher')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [query, setQuery] = useState('')
@@ -98,7 +101,9 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
     const result = await performCompanySwitch(companyId, { destination })
     if (result?.error) {
       setPendingId(null)
-      toast({ title: t('enter_failed'), variant: 'destructive' })
+      // The same sentences as the company switcher: a paused company or a
+      // lost membership says so, not only that the client did not open.
+      toast({ title: tSwitcher(companySwitchErrorKey(result.error)), variant: 'destructive' })
     }
   }
 
@@ -141,7 +146,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
   }
 
   if (clients.length === 0) {
-    return <EmptyState title={t('empty')} />
+    return <EmptyState title={canCreate ? t('empty') : t('empty_member')} />
   }
 
   return (

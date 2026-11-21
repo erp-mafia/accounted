@@ -57,7 +57,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
     return (
       <ReportEmptyState
         title="Ingen data för perioden"
-        description="Det finns inget bokfört underlag för den valda perioden."
+        description="Välj ett annat räkenskapsår eller datumintervall."
       />
     )
   }

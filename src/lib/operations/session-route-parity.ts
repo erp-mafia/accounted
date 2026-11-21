@@ -117,6 +117,12 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/billing/checkout': uiOnly('Stripe checkout'),
   'POST /api/billing/portal': uiOnly('Stripe customer portal'),
   'POST /api/billing/payment-packs': uiOnly('buying bank payment packs on the Stripe subscription: the owner\'s card is charged at once'),
+  // Company formation (lib/formation): a user-level draft before the company
+  // exists, so there is no company-scoped v1 or MCP door to put it behind.
+  'POST /api/formation': uiOnly('company formation draft before any company exists; v1 and MCP doors are company-scoped'),
+  'PUT /api/formation/:id': uiOnly('company formation draft before any company exists; v1 and MCP doors are company-scoped'),
+  'POST /api/formation/:id/submitted': uiOnly('the founder marks the verksamt.se filing as sent in, before the company exists'),
+  'POST /api/formation/:id/setup': uiOnly('one approval that creates the company from the formation; it becomes the company door\'s first write'),
   'POST /api/billing/usage/requests': uiOnly('asking Accounted for more of a priced service: a person asks, the operators open the charge by hand'),
 
   // ── Credentials, OAuth, membership (privilege) ─────────────────────
@@ -411,6 +417,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/transactions/:id/match-rot-rut-payout': covered(['gnubok_settle_rot_rut_payout']),
   'POST /api/transactions/:id/refresh-exchange-rate': covered([`POST ${V}/transactions/:id/refresh-exchange-rate`]),
   'POST /api/transactions/bulk-book': covered([`POST ${V}/transactions/bulk-book`, 'gnubok_bulk_book_transactions']),
+  'POST /api/transactions/previous-system': covered(
+    ['gnubok_bulk_ignore_transactions'],
+    'the tool ignores the unbooked rows of one cash account before a date the agent names; the dashboard takes the date from the SIE import (crm#1954)',
+  ),
   'POST /api/transactions/suggest-categories': covered(['gnubok_suggest_categories']),
 
   // ── Cash accounts ──────────────────────────────────────────────────
@@ -754,6 +764,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     'P2',
     'INK3 account treatments, the allmännyttig statement and ruta overrides; v1 and MCP read the underlag only in this step (product decision on #47)',
   ),
+  'PUT /api/bookkeeping/fiscal-periods/:id/ef-declaration/inputs': gap(
+    'P2',
+    'the enskild firma\'s NE-bilaga sida 2 inputs; MCP gnubok_preview_ef_declaration takes them per call in this step',
+  ),
   'POST /api/vat/validate': uiOnly('read-only VIES VAT-number check for a form, exposed as POST'),
   'POST /api/tax-assessment-notices': gap('P3', 'register a slutskattebesked'),
   'PATCH /api/tax-assessment-notices/:id': gap('P3'),
@@ -882,16 +896,16 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Assistant, skills, knowledge ───────────────────────────────────
   'POST /api/agent/ask': uiOnly(ASSISTANT),
   'POST /api/agent/invoke': uiOnly(ASSISTANT),
-  'POST /api/agent/onboarding/stream': uiOnly(ASSISTANT),
   'POST /api/agent/feedback': uiOnly(ASSISTANT),
   'PATCH /api/agent/conversations/:id': uiOnly(ASSISTANT),
   'POST /api/agent/conversations/:id/reject-pending': uiOnly(ASSISTANT),
-  'PATCH /api/agent/profile': uiOnly(ASSISTANT),
-  'POST /api/agent/profile/verify': uiOnly(ASSISTANT),
   'POST /api/agent/categorize': covered(['gnubok_suggest_categories']),
   'POST /api/agent/categorize/outcome': machine('machine endpoint: calibration telemetry'),
   'POST /api/agent/memory': covered(['gnubok_remember_fact']),
   'PATCH /api/agent/memory/:id': covered(['gnubok_forget_fact'], 'dismiss only; edit and pin have no API'),
+  'POST /api/questions/:id/answer': covered(['gnubok_remember_fact'], 'the answer is a saved fact that names the question (answers_question_id)'),
+  'POST /api/questions/:id/close': covered(['gnubok_close_question']),
+  'POST /api/questions/:id/reopen': uiOnly("the page's own undo: the person who answered in the app takes the answer back within ten minutes"),
   'PATCH /api/agents/knowledge': gap('P3', 'attach knowledge packs to an agent'),
   'POST /api/agents/community/feedback': uiOnly('community upvote by a person'),
   // Community review is Accounted staff moderating the shared instruction
@@ -1149,5 +1163,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * gnubok_withdraw_not_momsredovisning.
  * 163 -> 162 (2026-11-19, crm#1967): confirming the opening balance review,
  * through the staged gnubok_acknowledge_opening_balance_review.
+ * 162 -> 163 (2026-11-20): saving an enskild firma's NE-bilaga sida 2 inputs
+ * (PUT .../ef-declaration/inputs), new and dashboard-only in this step; the
+ * MCP preview takes the same figures per call.
  */
-export const GAP_CEILING = 162
+export const GAP_CEILING = 163

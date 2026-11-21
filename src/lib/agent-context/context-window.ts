@@ -48,7 +48,6 @@ const KEY_SECTION: Readonly<Record<string, ContextSectionId>> = {
   memory_sync: 'memory',
   company: 'company',
   user_name: 'company',
-  profile_summary: 'company',
   bolaget: 'company',
   arkiv: 'company',
   dimensions: 'company',
@@ -56,6 +55,8 @@ const KEY_SECTION: Readonly<Record<string, ContextSectionId>> = {
   unexplained: 'books',
   suggestions: 'books',
   suggestions_how: 'books',
+  open_questions: 'books',
+  open_questions_how: 'books',
   grants: 'books',
   data_status: 'books',
   skatteverket_connection: 'books',
@@ -78,7 +79,6 @@ export type ContextSource =
   | 'ledger'
   | 'checks'
   | 'connections'
-  | 'profile'
   | 'memory'
   | 'accounted'
 
@@ -263,6 +263,7 @@ function itemsFor(key: string, v: unknown): ContextItem[] | null {
       return v === true ? value('memory_truncated', 'true', 'accounted') : []
     case 'memory_sync':
     case 'suggestions_how':
+    case 'open_questions_how':
     case 'bridge_note':
       // Instructions to the agent; their size is counted, the text is in the raw view.
       return []
@@ -277,8 +278,6 @@ function itemsFor(key: string, v: unknown): ContextItem[] | null {
     }
     case 'user_name':
       return value('user_name', str(v), 'settings')
-    case 'profile_summary':
-      return text(str(v), 'profile')
     case 'bolaget': {
       if (!isObject(v)) return []
       const owners = arr(v.owners).filter(isObject).map((o) => `${str(o.name) ?? ''} ${num(o.capital_pct) ?? ''} %`.trim())
@@ -322,6 +321,8 @@ function itemsFor(key: string, v: unknown): ContextItem[] | null {
         ...value('suggestions', arr(v).length || null, 'accounted'),
         ...arr(v).filter(isObject).flatMap((s) => text(str(s.title), 'accounted', str(s.reason))),
       ]
+    case 'open_questions':
+      return arr(v).filter(isObject).flatMap((q) => text(str(q.question), 'accounted', str(q.why), str(q.asked_at)))
     case 'grants': {
       if (!isObject(v)) return []
       return value('grants_posted', arr(v.posted_since_review).length, 'ledger')

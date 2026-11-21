@@ -120,6 +120,21 @@ describe('get_observed_parties (pg)', () => {
     })
   }, 60_000)
 
+  it('reads each voucher lines with a per-voucher LATERAL aggregate, never a join the planner can hash (20261119223000)', async () => {
+    // The join + GROUP BY let the planner scan every tenant's 3000-8999 lines
+    // once a company had about ten thousand vouchers in the window (4 s warm,
+    // 40 s cold in production). An aggregate subquery cannot be flattened,
+    // so the probe by journal_entry_id per voucher is the only plan.
+    const { rows } = await getPool().query<{ src: string }>(`
+      SELECT p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'get_observed_parties'
+    `)
+    const money = rows[0]!.src.split('money AS MATERIALIZED')[1]!.split('descriptions AS MATERIALIZED')[0]!
+    expect(money).toMatch(/CROSS JOIN LATERAL\s*\(/)
+    expect(money).toMatch(/WHERE l\.journal_entry_id = e\.id/)
+    expect(money).not.toMatch(/GROUP BY/)
+  })
+
   it('retains invoker security and the authenticated/service grants without anonymous access', async () => {
     // One function, no overload: PostgREST cannot choose between a 3- and a
     // 4-argument version for a call naming three arguments (20261015160000).

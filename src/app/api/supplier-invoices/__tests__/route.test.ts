@@ -258,6 +258,19 @@ describe('GET /api/supplier-invoices', () => {
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['auto_debit', false])
   })
 
+  it('reads only what is not settled for unsettled: the list paints from it before the history arrives', async () => {
+    setTable('supplier_invoices', { data: [makeSupplierInvoice({ id: 'si-open', status: 'registered', approved_at: null })] })
+
+    const response = await GET(createMockRequest('/api/supplier-invoices', { searchParams: { status: 'unsettled' } }))
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string }> }>(response)
+
+    expect(status).toBe(200)
+    expect(findCall('supplier_invoices', 'not')).toEqual(['status', 'in', '(paid,credited,reversed)'])
+    // Not read as a stored status called 'unsettled'.
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'unsettled'])
+    expect(body.data.map((row) => row.id)).toEqual(['si-open'])
+  })
+
   // to_pay is the Att betala tab, row for row (lib/supplier-invoices/to-pay.ts):
   // an unattested invoice is to pay unless the attest policy holds it; what the
   // bank has, a credit note and one with nothing left are not.

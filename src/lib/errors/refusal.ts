@@ -193,6 +193,15 @@ function swedishReason(issue: z.core.$ZodIssue, value: unknown): string {
   }
 }
 
+/**
+ * The Swedish reason for one Zod issue, read against the input that was
+ * parsed: the dashboard's validation summary (lib/api/validate.ts) words its
+ * field messages with the same sentences as an agent's field refusal.
+ */
+export function swedishIssueReason(issue: z.core.$ZodIssue, input: unknown): string {
+  return swedishReason(issue, valueAtPath(input, issue.path))
+}
+
 function valueAtPath(input: unknown, path: readonly PropertyKey[]): unknown {
   let node = input
   for (const key of path) {

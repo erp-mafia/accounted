@@ -62,7 +62,7 @@ import {
 } from '@/components/icons'
 import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
-import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { fiscalYearShortName, resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { planLedgerProbe } from '@/lib/bookkeeping/ledger-probe'
 import { isBoundedVerifikatScope } from '@/lib/bookkeeping/verifikat-search'
 import { useSeriesFilterLetters } from '@/components/bookkeeping/use-series-filter-letters'
@@ -410,23 +410,29 @@ export default function JournalEntryList({
       batches.push(entryIds.slice(i, i + COUNTS_BATCH_SIZE))
     }
     try {
-      const empty = { counts: {} as Record<string, number>, referenced: [] as string[] }
+      const empty = {
+        counts: {} as Record<string, number>,
+        referenced: [] as string[],
+        exempt: {} as Record<string, string | null>,
+      }
       const results = await Promise.all(
         batches.map(async (batch) => {
           const res = await fetch(
             `/api/documents/counts?journal_entry_ids=${batch.join(',')}`
           )
           if (!res.ok) return empty
-          const { data, invoice_references } = await res.json()
+          const { data, invoice_references, no_doc_required } = await res.json()
           return {
             counts: (data || {}) as Record<string, number>,
             referenced: Object.keys((invoice_references || {}) as Record<string, number>),
+            exempt: (no_doc_required || {}) as Record<string, string | null>,
           }
         })
       )
       if (!isCurrent()) return
       setAttachmentCounts(Object.assign({}, ...results.map((r) => r.counts)))
       setInvoiceReferenced(new Set(results.flatMap((r) => r.referenced)))
+      setNoDocRequired(new Map(results.flatMap((r) => Object.entries(r.exempt))))
     } catch {
       // Non-critical: silently ignore
     } finally {
@@ -442,25 +448,6 @@ export default function JournalEntryList({
     setRattelseFlags(corrected)
     if (incomplete) toast({ title: t('rattelse_flags_failed'), variant: 'destructive' })
   }, [t, toast])
-
-  const fetchNoDocRequired = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bookkeeping/no-doc-required')
-      if (!res.ok) return
-      const { data } = await res.json()
-      const map = new Map<string, string | null>()
-      for (const row of (data || []) as { journal_entry_id: string; reason: string | null }[]) {
-        map.set(row.journal_entry_id, row.reason)
-      }
-      setNoDocRequired(map)
-    } catch {
-      // Non-critical: silently ignore
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchNoDocRequired()
-  }, [fetchNoDocRequired])
 
   // Restore the persisted sort order (per company). Read in an effect rather
   // than the useState initializer to avoid an SSR/client hydration mismatch.
@@ -568,6 +555,7 @@ export default function JournalEntryList({
     // them sends the load to that route as before.
     const carriedCounts: Record<string, number> = {}
     const carriedReferenced: string[] = []
+    const carriedExempt: Record<string, string | null> = {}
     let countsCarried = true
     const fetchChunk = async (offset: number, limit: number) => {
       const chunkParams = new URLSearchParams(params)
@@ -576,10 +564,11 @@ export default function JournalEntryList({
       chunkParams.set('include_counts', 'true')
       const res = await fetch(`/api/bookkeeping/journal-entries?${chunkParams}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const { data, count, attachment_counts, invoice_references } = await res.json()
-      if (attachment_counts && invoice_references) {
+      const { data, count, attachment_counts, invoice_references, no_doc_required } = await res.json()
+      if (attachment_counts && invoice_references && no_doc_required) {
         Object.assign(carriedCounts, attachment_counts as Record<string, number>)
         carriedReferenced.push(...Object.keys(invoice_references as Record<string, number>))
+        Object.assign(carriedExempt, no_doc_required as Record<string, string | null>)
       } else {
         countsCarried = false
       }
@@ -639,6 +628,7 @@ export default function JournalEntryList({
       if (countsCarried && ids.length > 0) {
         setAttachmentCounts(carriedCounts)
         setInvoiceReferenced(new Set(carriedReferenced))
+        setNoDocRequired(new Map(Object.entries(carriedExempt)))
         setAttachmentCountsLoaded(true)
       } else {
         fetchAttachmentCounts(ids, isCurrent)
@@ -968,7 +958,7 @@ export default function JournalEntryList({
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? 0 }),
       })
-      await fetchNoDocRequired()
+      // The reload carries the rows' exemptions with their counts.
       await fetchEntries()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
@@ -1490,6 +1480,35 @@ export default function JournalEntryList({
             {t('filter_clear_all')}
           </button>
         </p>
+      ) : filteredEntries.length === 0 && listMode === 'committed' && periodId && ledgerHasAnyEntry === true ? (
+        // The chosen räkenskapsår is empty but other years hold verifikat:
+        // say which year, with the way to all years, instead of the
+        // first-time copy (the year is app-wide context, not a filter).
+        <DataList
+          className={cn('stagger-enter', loading && 'opacity-60')}
+          aria-busy={loading || undefined}
+        >
+          <DataListEmpty
+            icon={<BookOpenIcon className="h-6 w-6" />}
+            title={t('empty_year_title', {
+              year: fiscalYearShortName(fiscalScope.periods.find((p) => p.id === periodId)?.name ?? ''),
+            })}
+            description={t('empty_year_description')}
+            action={
+              <Button
+                variant="outline"
+                size="toolbar"
+                onClick={() => {
+                  setVisitScope(null)
+                  setPage(0)
+                  fiscalScope.setPeriodId(null)
+                }}
+              >
+                {t('empty_year_action')}
+              </Button>
+            }
+          />
+        </DataList>
       ) : filteredEntries.length === 0 ? (
         // Empty placeholder, scoped to the situation: an empty drafts view, or
         // a committed view with no posted entries yet (but drafts exist, hence

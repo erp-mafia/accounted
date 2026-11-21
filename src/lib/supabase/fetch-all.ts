@@ -5,6 +5,17 @@ const log = createLogger('fetch-all')
 
 const PAGE_SIZE = 1000
 
+/**
+ * Pages in flight at once after the read has proven large. The first two
+ * pages go one by one, so a read of at most two pages (nearly all of them)
+ * issues exactly the requests it always did; from the third page on, a read
+ * that is still full fetches the next pages side by side and keeps them in
+ * order. A register of 31 600 invoices took 32 round trips in a row; now 12.
+ * Small on purpose: every page is its own OFFSET query on the pool.
+ */
+const PAGES_IN_FLIGHT = 3
+const SEQUENTIAL_PAGES = 2
+
 export interface FetchAllRowsOptions<T> {
   /**
    * Stable de-duplication key. When supplied AND more than one page was
@@ -86,8 +97,8 @@ export async function fetchAllRows<T>(
   let from = 0
   let pages = 0
 
-  while (true) {
-    const { data, error } = await queryFn({ from, to: from + PAGE_SIZE - 1 })
+  const readPage = async (start: number): Promise<T[]> => {
+    const { data, error } = await queryFn({ from: start, to: start + PAGE_SIZE - 1 })
     // dbError, not `new Error(error.message)`: the bare form discarded the
     // driver's SQLSTATE, and `isTransientFailure()` checks that code FIRST.
     // A statement timeout (57014) therefore arrived as an anonymous Error and
@@ -101,13 +112,39 @@ export async function fetchAllRows<T>(
     // query_journal's sanitizeDbError already match on it, and this change is
     // meant to add the code, not to reword anything.
     if (error) throw dbError(error, null)
-    if (!data || data.length === 0) break
-    allRows.push(...data)
-    pages += 1
-    if (data.length < PAGE_SIZE) break
-    if (options?.maxRows !== undefined && allRows.length >= options.maxRows) break
-    if (pages === 1) options?.onFirstPage?.(data)
-    from += PAGE_SIZE
+    return data ?? []
+  }
+  const capReached = () => options?.maxRows !== undefined && allRows.length >= options.maxRows
+
+  while (true) {
+    // A large read (two full pages behind it): the next pages at once, kept
+    // in order, up to the first page that is not full. A page after a short
+    // one cannot hold rows (the order is total), so stopping there loses
+    // nothing; a cap is never read past.
+    const inFlight =
+      pages < SEQUENTIAL_PAGES
+        ? 1
+        : Math.max(1, Math.min(
+            PAGES_IN_FLIGHT,
+            options?.maxRows === undefined ? PAGES_IN_FLIGHT : Math.ceil((options.maxRows - allRows.length) / PAGE_SIZE),
+          ))
+    const window = await Promise.all(Array.from({ length: inFlight }, (_, i) => readPage(from + i * PAGE_SIZE)))
+    let done = false
+    for (const data of window) {
+      if (data.length === 0) {
+        done = true
+        break
+      }
+      allRows.push(...data)
+      pages += 1
+      if (data.length < PAGE_SIZE || capReached()) {
+        done = true
+        break
+      }
+      if (pages === 1) options?.onFirstPage?.(data)
+    }
+    if (done) break
+    from += inFlight * PAGE_SIZE
   }
   if (options?.maxRows !== undefined && allRows.length > options.maxRows) allRows.length = options.maxRows
 

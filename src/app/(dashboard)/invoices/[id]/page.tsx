@@ -275,6 +275,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const tInvoices = useTranslations('invoices')
   const tCommon = useTranslations('common')
   const tReminders = useTranslations('reminders_setup')
+  // The editor's sentence for a plan without email_send, so both say the same.
+  const tShell = useTranslations('invoice_editor_shell')
   const locale = useLocale()
   const downloadLocale: ErrorLocale = locale.startsWith('sv') ? 'sv' : 'en'
   const downloadFailureCopy = {
@@ -2542,21 +2544,37 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         </span>
                       </DropdownMenuItem>
                     )}
-                    {canResend && (
-                      <DropdownMenuItem
-                        onSelect={() => setShowResendDialog(true)}
-                        disabled={!canWrite || !customerHasEmail || !canEmail}
-                        className="items-start"
-                      >
-                        <EnvelopeIcon className="mt-0.5 h-4 w-4" />
-                        <span className="min-w-0">
-                          <span className="block">{t('resend_action')}</span>
-                          <span className="block text-xs leading-snug text-muted-foreground">
-                            {customerHasEmail ? t('resend_hint') : t('resend_no_email')}
+                    {/* Without email_send in the plan the item says so and
+                        leads to the plan, instead of a dead entry with the
+                        normal hint. */}
+                    {canResend &&
+                      (canWrite && customerHasEmail && !canEmail ? (
+                        <DropdownMenuItem asChild className="items-start">
+                          <Link href="/settings/billing">
+                            <EnvelopeIcon className="mt-0.5 h-4 w-4" />
+                            <span className="min-w-0">
+                              <span className="block">{t('resend_action')}</span>
+                              <span className="block text-xs leading-snug text-muted-foreground">
+                                {tShell('email_block_no_email_plan')} {t('email_plan_link')}
+                              </span>
+                            </span>
+                          </Link>
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem
+                          onSelect={() => setShowResendDialog(true)}
+                          disabled={!canWrite || !customerHasEmail || !canEmail}
+                          className="items-start"
+                        >
+                          <EnvelopeIcon className="mt-0.5 h-4 w-4" />
+                          <span className="min-w-0">
+                            <span className="block">{t('resend_action')}</span>
+                            <span className="block text-xs leading-snug text-muted-foreground">
+                              {customerHasEmail ? t('resend_hint') : t('resend_no_email')}
+                            </span>
                           </span>
-                        </span>
-                      </DropdownMenuItem>
-                    )}
+                        </DropdownMenuItem>
+                      ))}
                     {canCreateCreditNote && canWrite && (
                       <DropdownMenuItem asChild>
                         <Link href={`/invoices/${invoice.id}/credit`}>
@@ -3424,12 +3442,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           ? t('viewer_disabled_tooltip')
                           : !customerHasEmail
                             ? t('payment_confirmation_no_email')
-                            : t('payment_confirmation_hint')
+                            : !canEmail
+                              ? tShell('email_block_no_email_plan')
+                              : t('payment_confirmation_hint')
                       }
                       className={ROW_ACTION_CLASS}
                     >
                       {t('payment_confirmation_send_short')}
                     </button>
+                    {canWrite && customerHasEmail && !canEmail && (
+                      <span className="text-xs text-muted-foreground">
+                        {tShell('email_block_no_email_plan')}{' '}
+                        <Link href="/settings/billing" className={ROW_ACTION_CLASS}>
+                          {t('email_plan_link')}
+                        </Link>
+                      </span>
+                    )}
                   </span>
                 </DefRow>
               )}

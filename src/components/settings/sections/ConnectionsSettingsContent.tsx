@@ -161,9 +161,10 @@ function DigitalMailboxConnectionRow({ door, status, connected = false, notes, e
 
 interface Status {
   bankName: string | null
-  bankCount: number
-  /** The caller's Skatteverket connection, as the settings panel and the agent's tool judge it. */
-  skv: 'connected' | 'reconnect' | 'off'
+  /** Null when the connections could not be read: unknown, never "not connected". */
+  bankCount: number | null
+  /** The caller's Skatteverket connection, as the settings panel and the agent's tool judge it; 'unknown' when /status could not be read. */
+  skv: 'connected' | 'reconnect' | 'off' | 'unknown'
   /** Receiving published, sending access only, or neither: the Peppol page's own reading. */
   peppol: 'receiving' | 'sending' | 'off'
   /** Null when the mailboxes could not be read (the row then shows no state). */
@@ -282,7 +283,7 @@ export function ConnectionsSettingsContent() {
     // stored but expired session reads as such instead of as Ansluten.
     const skvState: Promise<Status['skv']> = hasSkatteverket
       ? fetch('/api/extensions/ext/skatteverket/status').then(async (res) =>
-          res.ok ? skvConnectionState((await res.json()) as SkvStatusLike) : 'off',
+          res.ok ? skvConnectionState((await res.json()) as SkvStatusLike) : 'unknown',
         )
       : Promise.resolve('off')
     Promise.allSettled([
@@ -301,7 +302,12 @@ export function ConnectionsSettingsContent() {
         .eq('status', 'active'),
     ]).then(([bank, skv, peppol, mail, pos]) => {
       if (cancelled) return
-      const banks = bank.status === 'fulfilled' ? ((bank.value.data ?? []) as Array<{ bank_name: string | null }>) : []
+      // A failed read (rejected, or an error with no rows) is unknown: the row
+      // must not offer Koppla to a company whose bank may be connected.
+      const banks =
+        bank.status === 'fulfilled' && !bank.value.error
+          ? ((bank.value.data ?? []) as Array<{ bank_name: string | null }>)
+          : null
       const peppolData =
         peppol.status === 'fulfilled'
           ? (peppol.value as {
@@ -309,9 +315,9 @@ export function ConnectionsSettingsContent() {
             } | null)?.data
           : null
       setStatus({
-        bankName: banks[0]?.bank_name ?? null,
-        bankCount: banks.length,
-        skv: skv.status === 'fulfilled' ? skv.value : 'off',
+        bankName: banks?.[0]?.bank_name ?? null,
+        bankCount: banks ? banks.length : null,
+        skv: skv.status === 'fulfilled' ? skv.value : 'unknown',
         peppol: peppolConnectionState(peppolData?.access, peppolData?.registration?.status),
         mail: mail.status === 'fulfilled' && mail.value ? summarizeMailboxes(mail.value) : null,
         pos: (() => {
@@ -603,14 +609,16 @@ export function ConnectionsSettingsContent() {
               name: t('bank'),
               help: t('bank_help'),
               state: status
-                ? status.bankCount > 0
-                  ? status.bankCount > 1
-                    ? t('bank_connected_many', { bank: status.bankName ?? '', count: status.bankCount })
-                    : t('bank_connected', { bank: status.bankName ?? '' })
-                  : off
+                ? status.bankCount === null
+                  ? t('status_unknown')
+                  : status.bankCount > 0
+                    ? status.bankCount > 1
+                      ? t('bank_connected_many', { bank: status.bankName ?? '', count: status.bankCount })
+                      : t('bank_connected', { bank: status.bankName ?? '' })
+                    : off
                 : null,
               href: '/settings/banking',
-              connected: (status?.bankCount ?? 0) > 0,
+              connected: status?.bankCount === null ? null : (status?.bankCount ?? 0) > 0,
               // A cardless trial with a bank connection: the new connection
               // (Open Payments) opens once a card is in,
               // so say so where the switch would be instead of hiding it.
@@ -636,10 +644,12 @@ export function ConnectionsSettingsContent() {
                   ? t('connected')
                   : status.skv === 'reconnect'
                     ? t('skatteverket_reconnect')
-                    : off
+                    : status.skv === 'unknown'
+                      ? t('status_unknown')
+                      : off
                 : null,
               href: '/settings/skatteverket',
-              connected: status?.skv === 'connected',
+              connected: status?.skv === 'unknown' ? null : status?.skv === 'connected',
               attention: status?.skv === 'reconnect',
             })}
           {bankPayments === 'on' &&

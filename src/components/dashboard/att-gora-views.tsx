@@ -2,6 +2,7 @@
 
 import { useCallback, useState, useSyncExternalStore, type ComponentType, type ReactNode } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { createPortal } from 'react-dom'
 import { Badge } from '@/components/ui/badge'
@@ -201,11 +202,18 @@ export function HemCalm({
   afterHeadline,
   resume,
   connections,
+  incomplete = false,
 }: {
   rows: NeedRow[]
   todayIso: string
   /** The company has not got going (nothing booked, nothing on its way): an empty list is then not "all done". */
   notStarted?: boolean
+  /**
+   * A count could not be read and answered zero (WorklistCounts.incomplete):
+   * an empty list is then never "Allt är klart", and the page says that
+   * something may be missing, with a way to read it again.
+   */
+  incomplete?: boolean
   /** The primary while nothing waits and the company has not got going: the way to a first row. */
   lead?: LeadAction | null
   /** Proposals waiting in Rutin. */
@@ -214,13 +222,15 @@ export function HemCalm({
   clearBody: ReactNode
   /** The glance line under the headline (next deadline). */
   facts?: ReactNode
-  /** Kom igång and the assistant prompt, for a company that still has them. */
+  /** Kom igång, for a company that still has it. */
   afterHeadline?: ReactNode
   resume?: ReactNode
   connections?: ReactNode
 }) {
   const t = useTranslations('hem')
+  const tCommon = useTranslations('common')
   const tPending = useTranslations('pending')
+  const router = useRouter()
   const { canWrite, lockedTitle } = useViewerLock()
   const locale = useLocale()
   const dateLine = useClockValue((now, timeZone) => weekdayLine(now, timeZone, locale))
@@ -229,9 +239,9 @@ export function HemCalm({
   const first = firstRows(rows, todayIso)
   const groups = groupRows(rows)
   const primary = leadOf(rows, lead, t)
-  // Kom igång and the assistant prompt lead the page until something is
+  // Kom igång leads the page until something is
   // urgent; then the three blocks (Först, Behöver dig, Rutin) come first and
-  // they follow.
+  // it follows.
   const setup = afterHeadline ? <HemPrimaryTaken.Provider value={primary !== null}>{afterHeadline}</HemPrimaryTaken.Provider> : null
   const urgentFirst = headline.urgent > 0 && first.length > 0
 
@@ -246,7 +256,7 @@ export function HemCalm({
         <div role="status" aria-live="polite">
           <h2 className="mt-1.5 text-xl text-strong">
             {headline.kind === 'clear'
-              ? t('headline_clear')
+              ? t(incomplete ? 'headline_incomplete' : 'headline_clear')
               : headline.kind === 'not_started'
                 ? t('headline_not_started')
                 : headline.kind === 'waiting'
@@ -257,7 +267,16 @@ export function HemCalm({
           </h2>
         </div>
         {facts}
-        {(headline.kind === 'clear' || headline.kind === 'not_started') && clearBody && <div className="mt-1.5 max-w-[560px] text-[13px] text-muted-foreground">{clearBody}</div>}
+        {incomplete ? (
+          <div className="mt-1.5 flex max-w-[560px] flex-wrap items-baseline gap-x-2 text-[13px] text-muted-foreground">
+            <span>{t('incomplete_body')}</span>
+            <button type="button" className="text-foreground underline underline-offset-[3px]" onClick={() => router.refresh()}>
+              {tCommon('retry')}
+            </button>
+          </div>
+        ) : (
+          (headline.kind === 'clear' || headline.kind === 'not_started') && clearBody && <div className="mt-1.5 max-w-[560px] text-[13px] text-muted-foreground">{clearBody}</div>
+        )}
         {primary && (
           <div className="mt-4 md:hidden">
             <PhoneStartButton lead={primary} />
@@ -459,6 +478,7 @@ export function NeedList({
   notStarted = false,
   lead,
   resume,
+  incomplete = false,
 }: {
   rows: NeedRow[]
   todayIso: string
@@ -466,11 +486,15 @@ export function NeedList({
   clearBody: ReactNode
   /** See HemCalm.notStarted: the empty list is then a first-time state, not the green check. */
   notStarted?: boolean
+  /** See HemCalm.incomplete. */
+  incomplete?: boolean
   /** See HemCalm.lead. */
   lead?: LeadAction | null
   resume?: ReactNode
 }) {
   const t = useTranslations('hem')
+  const tCommon = useTranslations('common')
+  const router = useRouter()
   const groups = groupRows(rows)
   const primary = leadOf(rows, lead, t)
   // A long group shows its first rows and "Visa alla N": the list stays one screen per group.
@@ -484,7 +508,15 @@ export function NeedList({
           <PhoneStartButton lead={primary} />
         </div>
       )}
-      {rows.length === 0 ? (
+      {rows.length === 0 && incomplete ? (
+        <EmptyState
+          tone="error"
+          title={t('headline_incomplete')}
+          description={t('incomplete_body')}
+          actionLabel={tCommon('retry')}
+          onAction={() => router.refresh()}
+        />
+      ) : rows.length === 0 ? (
         <EmptyState tone={notStarted ? 'empty' : 'done'} icon={notStarted ? undefined : CheckIcon} title={clearTitle}>
           {clearBody && <div className="text-[13px] text-muted-foreground">{clearBody}</div>}
         </EmptyState>

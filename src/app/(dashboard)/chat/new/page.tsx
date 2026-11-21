@@ -15,8 +15,8 @@ interface PageProps {
 // /chat/new: generic conversation bootstrap. Reads ?intent= and ?prompt=
 // from the URL and mounts AgentChat in fresh mode; AgentChat creates the
 // conversation server-side on first invoke and the client swaps the URL
-// to /chat/[id] when the id streams back. Mirrors /chat/intake but with
-// caller-chosen intent/seed, so suggestion chips and ⌘K can route here
+// to /chat/[id] when the id streams back. The intent and seed are the
+// caller's, so suggestion chips and ⌘K can route here
 // inline instead of opening the slide-in sheet.
 export default async function ChatNewPage({ searchParams }: PageProps) {
   const [{ user }, companyId] = await Promise.all([

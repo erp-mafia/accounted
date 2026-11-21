@@ -1,9 +1,10 @@
 'use client'
 
 import { useLocale, useTranslations } from 'next-intl'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Badge } from '@/components/ui/badge'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
@@ -57,7 +58,7 @@ export function BookingTemplatesPanel() {
   // The panel renders the same session-cached list the pickers use
   // (lib/reference-data); every write below invalidates it so registry and
   // pickers can never disagree.
-  const { templates, isLoading, error: templatesError } = useBookingTemplates()
+  const { templates, isLoading, error: templatesError, refresh: retryTemplates } = useBookingTemplates()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [hidingId, setHidingId] = useState<string | null>(null)
   const [showHidden, setShowHidden] = useState(false)
@@ -69,9 +70,10 @@ export function BookingTemplatesPanel() {
   const [activeTemplate, setActiveTemplate] = useState<BookingTemplateLibrary | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    if (templatesError) toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
-  }, [templatesError, toast, t])
+  // A read that failed with nothing cached says so in place of the rows
+  // (LoadError below), never "no templates", which is only true after a real
+  // answer. A failed revalidation keeps the cached list on screen.
+  const loadFailed = !!templatesError && templates.length === 0
 
   const refreshTemplates = () => {
     void invalidateReferenceData('ref:booking-templates')
@@ -261,6 +263,8 @@ export function BookingTemplatesPanel() {
             <Skeleton key={i} className="h-4 w-full" />
           ))}
         </div>
+      ) : loadFailed ? (
+        <LoadError title={t('toast_fetch_failed')} onRetry={() => void retryTemplates()} />
       ) : templates.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted-foreground">
           {t('empty_state')}
