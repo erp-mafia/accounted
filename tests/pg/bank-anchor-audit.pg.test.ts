@@ -5,7 +5,7 @@ import { insertCashAccount, insertPostedJournalEntry, insertTransaction, seedCom
 import { getPool, withUserContext } from './setup'
 
 /**
- * Covers 20261120180000_bank_anchor_audit (#2407): a bank row's booking that
+ * Covers 20261121150000_bank_anchor_audit (#2407): a bank row's booking that
  * moves to another verifikat or is released leaves an audit_log row, on the
  * pointer (transactions.journal_entry_id) and on the junction
  * (transaction_voucher_links, with role and allocated_amount), under the
@@ -196,15 +196,17 @@ describe('bank-anchor audit (#2407)', () => {
   it('behandlingshistorik_sources returns the rows', async () => {
     const s = await company()
     const original = await bankEntry(s)
-    const { tx } = await bookedRow(s, original)
+    const { tx, link } = await bookedRow(s, original)
     const correction = await correctionOf(s, original, 2)
     const { rows } = await withUserContext(s.userId, async (client) => {
       await client.query(`UPDATE public.transactions SET journal_entry_id = $2 WHERE id = $1`, [tx, correction])
+      await client.query(`UPDATE public.transaction_voucher_links SET journal_entry_id = $2 WHERE id = $1`, [link, correction])
       return client.query<{ audit: Array<{ table_name: string; record_id: string }> }>(
         `SELECT audit FROM public.behandlingshistorik_sources($1, $2, now() - interval '1 hour', now() + interval '1 hour', false)`,
         [s.companyId, s.fiscalPeriodId],
       )
     })
     expect(rows[0]!.audit.some((a) => a.table_name === 'transactions' && a.record_id === tx)).toBe(true)
+    expect(rows[0]!.audit.some((a) => a.table_name === 'transaction_voucher_links' && a.record_id === link)).toBe(true)
   })
 })

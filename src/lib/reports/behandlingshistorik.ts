@@ -375,7 +375,7 @@ export const AUDITED_TABLES = [
   // stands in for an attester away, for which days. It decides who may
   // release a payment while the period runs.
   'company_attest_substitutes',
-  // Bank-anchor moves (migration 20261120180000, #2407): a bank row's booking
+  // Bank-anchor moves (migration 20261121150000, #2407): a bank row's booking
   // moved to another verifikat or released (correction, delete of a
   // correction, storno), on the pointer and on the junction. A first booking
   // writes nothing: the verifikat is its record.
@@ -2286,7 +2286,7 @@ const BANK_LINK_ROLE_LABEL: Record<string, string> = {
 /**
  * A bank row's booking moved to another verifikat or released (triggers
  * audit_transactions_anchor and audit_transaction_voucher_links_*, migration
- * 20261120180000, #2407): a correction moves it to the correction, deleting
+ * 20261121150000, #2407): a correction moves it to the correction, deleting
  * a correction moves it back, a storno releases it. The pointer
  * (transactions) and the junction (transaction_voucher_links, with its role
  * and allocated amount) are logged apart, as each moved. A first booking
