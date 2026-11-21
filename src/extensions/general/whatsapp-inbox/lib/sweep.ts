@@ -23,6 +23,10 @@
  *     else reads (delivery_status is otherwise write-only).
  *  6. Re-open parked receipts whose company question is closed but whose
  *     drain never landed (a failed UPDATE), and process them.
+ *  7. Resend an M18 that Meta never accepted (the send itself failed), at
+ *     most MAX_ERROR_NOTICE_SENDS times per message, the way pass 2b retries
+ *     a combined ack whose send failed. A notice Meta accepted and later
+ *     reported failed (131047: the 24h window closed) is not resent.
  *
  * A run has a deadline: a re-claimed message can be a file the model reads
  * (up to 250 s), a pass holds up to 25 of them, and nothing stopped a run
@@ -53,6 +57,7 @@ import {
 import { finalizeBurst, processInboundMessage, sendErrorNoticeOnce } from './process-inbound'
 import { drainParkedRows } from './company-question'
 import { appendQuestionHistory, updateItemContext } from './item-context'
+import { TEMPLATE } from './messages'
 
 const log = createLogger('whatsapp-inbox/sweep')
 
@@ -75,6 +80,12 @@ const BATCH = 25
 /** A parked row younger than this may simply be waiting for its question to
  *  be armed (park, then guarded transition): not an orphan yet. */
 const ORPHAN_PARKED_MIN_AGE_MS = 2 * 60 * 1000
+/** An M18 is sent at most this many times per message, the first send included. */
+const MAX_ERROR_NOTICE_SENDS = 3
+/** Pass 7 waits this long after the last failed M18 send before the next. */
+const ERROR_NOTICE_RESEND_DELAY_MS = 60 * 1000
+/** Pass 7 looks back this far: well inside Meta's 24h service window. */
+const ERROR_NOTICE_RESEND_WINDOW_MS = 60 * 60 * 1000
 
 export interface SweepSummary {
   reclaimedReceived: number
@@ -90,6 +101,8 @@ export interface SweepSummary {
   /** Parked rows with no open company question left to re-open them,
    *  re-opened and processed by pass 6. */
   reopenedOrphans: number
+  /** M18 notices resent by pass 7 after Meta refused the send. */
+  resentErrorNotices: number
   /** Messages, acks and drains not started because the run's time was up:
    *  the next run finds them again. */
   deferred: number
@@ -144,16 +157,25 @@ async function markMaxAttempts(
   })
 }
 
+/** An M18 send Meta refused, as pass 7 reads it. */
+interface FailedNotice {
+  correlation_id: string
+  phone_link_id: string
+  conversation_id: string | null
+  sender_phone_hash: string | null
+  created_at: string
+}
+
 async function loadPhoneLink(
   supabase: SupabaseClient,
   phoneLinkId: string,
-): Promise<{ phone_enc: string | null } | null> {
+): Promise<{ phone_enc: string | null; revoked_at: string | null } | null> {
   const { data } = await supabase
     .from('whatsapp_phone_links')
-    .select('phone_enc')
+    .select('phone_enc, revoked_at')
     .eq('id', phoneLinkId)
     .maybeSingle()
-  return (data as { phone_enc: string | null } | null) ?? null
+  return (data as { phone_enc: string | null; revoked_at: string | null } | null) ?? null
 }
 
 /** A pass's read failed: thrown inside the pass so its catch reports it like any other failure of that pass. */
@@ -180,6 +202,7 @@ export async function runSweep(
     clearedPins: 0,
     outboundFailed24h: 0,
     reopenedOrphans: 0,
+    resentErrorNotices: 0,
     deferred: 0,
     failedPasses: [],
   }
@@ -530,6 +553,60 @@ export async function runSweep(
   } catch (err) {
     log.error('sweep: orphaned parked rows pass failed', err)
     summary.failedPasses.push('orphaned_parked')
+  }
+
+  // ── 7. M18 notices Meta never accepted ─────────────────────
+  // sendText never throws: a refused M18 is persisted 'failed' with no wamid,
+  // and its inbound row is already terminal 'error', so no other pass sends
+  // it again. Without this the sender never heard about that receipt.
+  try {
+    const { data, error } = await supabase
+      .from('whatsapp_messages')
+      .select('correlation_id, phone_link_id, conversation_id, sender_phone_hash, created_at')
+      .eq('direction', 'outbound')
+      .eq('raw_payload->>template', TEMPLATE.m18Error)
+      .eq('delivery_status', 'failed')
+      .is('wamid', null)
+      .not('correlation_id', 'is', null)
+      .not('phone_link_id', 'is', null)
+      .gte('created_at', new Date(now - ERROR_NOTICE_RESEND_WINDOW_MS).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(BATCH * 8)
+    if (error) throw readFailed('failed error notices', error)
+    const byMessage = new Map<string, { notice: FailedNotice; sends: number }>()
+    for (const notice of ((data ?? []) as FailedNotice[])) {
+      const seen = byMessage.get(notice.correlation_id)
+      // Newest first, so the first row seen is the last attempt.
+      if (seen) seen.sends++
+      else byMessage.set(notice.correlation_id, { notice, sends: 1 })
+    }
+    const due = [...byMessage.values()].filter(
+      ({ notice, sends }) =>
+        sends < MAX_ERROR_NOTICE_SENDS &&
+        new Date(notice.created_at).getTime() <= now - ERROR_NOTICE_RESEND_DELAY_MS,
+    )
+    for (const [index, { notice }] of due.entries()) {
+      if (outOfTime()) {
+        summary.deferred += due.length - index
+        break
+      }
+      const link = await loadPhoneLink(supabase, notice.phone_link_id)
+      if (!link || link.revoked_at) continue
+      const to = resolveRecipient(notice as unknown as WhatsAppMessage, link)
+      if (!to) continue
+      // Re-checks for an accepted notice first, so one that went out resends nothing.
+      const resent = await sendErrorNoticeOnce(supabase, {
+        to,
+        senderPhoneHash: notice.sender_phone_hash,
+        phoneLinkId: notice.phone_link_id,
+        conversationId: notice.conversation_id,
+        correlationId: notice.correlation_id,
+      })
+      if (resent) summary.resentErrorNotices++
+    }
+  } catch (err) {
+    log.error('sweep: error notice resend pass failed', err)
+    summary.failedPasses.push('error_notice_resend')
   }
 
   return summary
