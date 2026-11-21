@@ -13,6 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { rpcClientForBulkDelete } from '@/lib/supabase/bulk-delete-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { syncDraftVatHeadersForChangedCustomers } from '@/lib/invoices/sync-draft-vat-headers'
 
 export type RegisterKind = 'customers' | 'suppliers' | 'articles'
 
@@ -226,20 +227,21 @@ export async function undoRegisterImport(
   runId: string,
   userId: string,
 ): Promise<UndoRegisterImportOutcome> {
-  const { data: run, error: lookupError } = await supabase
+  const { data, error: lookupError } = await supabase
     .from('register_import_runs')
-    .select('id, undone_at')
+    .select('id, undone_at, kind, updated_rows')
     .eq('id', runId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (lookupError) return { ok: false, code: 'REG_IMPORT_UNDO_FAILED', error: lookupError }
+  const run = data as { undone_at: string | null; kind: RegisterKind; updated_rows: RegisterUpdatedRow[] | null } | null
   if (!run) return { ok: false, code: 'REG_IMPORT_UNDO_NOT_FOUND' }
-  if ((run as { undone_at: string | null }).undone_at) {
+  if (run.undone_at) {
     return { ok: false, code: 'REG_IMPORT_UNDO_ALREADY_UNDONE' }
   }
 
   const rpcClient = await rpcClientForBulkDelete(supabase)
-  const { data, error } = await rpcClient.rpc('undo_register_import', {
+  const { data: undone, error } = await rpcClient.rpc('undo_register_import', {
     p_company_id: companyId,
     p_run_id: runId,
     p_user_id: userId,
@@ -248,5 +250,18 @@ export async function undoRegisterImport(
     const code = RPC_ERROR_CODES[(error as { code?: string }).code ?? ''] ?? 'REG_IMPORT_UNDO_FAILED'
     return { ok: false, code, error }
   }
-  return { ok: true, result: data as RegisterUndoResult }
+  const result = undone as RegisterUndoResult
+
+  // A customer the undo put back on its old type, country or VAT number
+  // moves the header of its open drafts back with it, as the import moved
+  // it forward. A kept row was not restored, so it is left alone.
+  if (run.kind === 'customers') {
+    const kept = new Set((result.kept ?? []).map((row) => row.id))
+    await syncDraftVatHeadersForChangedCustomers(
+      supabase,
+      companyId,
+      (run.updated_rows ?? []).filter((row) => !kept.has(row.id)),
+    )
+  }
+  return { ok: true, result }
 }

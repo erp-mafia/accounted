@@ -17,6 +17,7 @@
 import { z } from 'zod'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import { revealStoredCustomerPersonalNumber } from './protect-personal-number'
 
 export const MergeCustomersSchema = z.object({
@@ -160,6 +161,11 @@ export async function mergeCustomers(
 
   const result = CustomerMergeResultSchema.parse(answer)
   if (dryRun) return { ok: true, dryRun: true, preview: result }
+  // The duplicates' open drafts now belong to the survivor, whose type,
+  // country or VAT status may differ: their VAT header follows it.
+  if (result.totals.invoices > 0) {
+    await syncDraftVatHeadersForCustomer(ctx.supabase, ctx.companyId, result.survivor.customer_id)
+  }
   ctx.log.info('customers merged', {
     survivorId: result.survivor.customer_id,
     merged: result.merged.length,
@@ -203,5 +209,10 @@ export async function undoCustomerMerge(
   if (error) throw new Error(`undo_customer_merge failed: ${error.message}`)
   const answer = rpcAnswer(data)
   if (!answer.ok) return refusal(answer)
-  return { ok: true, data: CustomerMergeUndoResultSchema.parse(answer) }
+  const result = CustomerMergeUndoResultSchema.parse(answer)
+  // The drafts moved back to the restored card follow its VAT status again.
+  if (result.restored.invoices > 0) {
+    await syncDraftVatHeadersForCustomer(ctx.supabase, ctx.companyId, result.restored_customer_id)
+  }
+  return { ok: true, data: result }
 }
