@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
@@ -24,6 +25,7 @@ import {
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { FORMATION_PATH } from '@/lib/company/no-company-routes'
 import { useBranding } from '@/lib/branding/brand-context'
 import { BOOKS_PATH } from '@/lib/onboarding/books-gate'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
@@ -917,6 +919,14 @@ export default function OnboardingJourney({
                 .
               </p>
             )}
+            {/* Someone who has not formed the company yet: the formation
+                flow prepares it and sets it up here once registered. */}
+            <p className="jny-more">
+              {t('journey_start_ab_pre')}{' '}
+              <Link className="jny-link" href={FORMATION_PATH}>
+                {t('journey_start_ab_link')}
+              </Link>
+            </p>
           </Question>
         )
 

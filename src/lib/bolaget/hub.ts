@@ -11,8 +11,13 @@
  */
 
 export interface BolagetHubAccess {
-  /** The registers: the rollout and a form that keeps an aktiebok. */
+  /**
+   * The registers (aktiebok, styrelse): the rollout, or a company set up from
+   * a formation, and a form that keeps an aktiebok.
+   */
   registers: boolean
+  /** Meetings, capital and owner tax: the rollout and a form that keeps an aktiebok. */
+  money: boolean
   /** Avtal och åtaganden: the rollout, any form. */
   agreements: boolean
 }
@@ -30,9 +35,9 @@ export const BOLAGET_TABS: readonly BolagetTab[] = [
   { key: 'overview', href: '/bolaget', needs: null },
   { key: 'owners', href: '/bolaget/aktiebok', needs: 'registers' },
   { key: 'board', href: '/bolaget/styrelse', needs: 'registers' },
-  { key: 'meetings', href: '/bolaget/moten', needs: 'registers' },
-  { key: 'capital', href: '/bolaget/kapital', needs: 'registers' },
-  { key: 'owner_tax', href: '/bolaget/agarskatt', needs: 'registers' },
+  { key: 'meetings', href: '/bolaget/moten', needs: 'money' },
+  { key: 'capital', href: '/bolaget/kapital', needs: 'money' },
+  { key: 'owner_tax', href: '/bolaget/agarskatt', needs: 'money' },
   { key: 'agreements', href: '/bolaget/avtal', needs: 'agreements' },
 ]
 

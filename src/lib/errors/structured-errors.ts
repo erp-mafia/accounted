@@ -13889,6 +13889,71 @@ const COMPANY_QUESTIONS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Company formation, "Starta aktiebolag" (company_formations, lib/formation)
+// ─────────────────────────────────────────────────────────────────
+
+const COMPANY_FORMATION: Record<string, StructuredErrorEntry> = {
+  FORMATION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bolagsbildningen hittades inte.',
+    message_en: 'The company formation was not found.',
+    retryable: false,
+  },
+  // The company is already set up from the formation, or it was cancelled.
+  FORMATION_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Bolaget är redan uppsatt, så svaren kan inte längre ändras här.',
+    message_en: 'The company is already set up, so the answers can no longer change here.',
+    retryable: false,
+  },
+  FORMATION_ALREADY_SET_UP: {
+    httpStatus: 409,
+    message_sv: 'Bolaget är redan uppsatt i Accounted.',
+    message_en: 'The company is already set up in Accounted.',
+    retryable: false,
+  },
+  // The answers still break a rule verksamt.se applies; the thrown text names it.
+  FORMATION_INCOMPLETE: {
+    httpStatus: 422,
+    message_sv: 'Några svar saknas eller behöver ändras innan dokumenten kan skapas.',
+    message_en: 'Some answers are missing or need a change before the documents can be made.',
+    retryable: false,
+  },
+  FORMATION_DOCUMENT_UNAVAILABLE: {
+    httpStatus: 404,
+    message_sv: 'Det dokumentet finns inte för det här bolaget.',
+    message_en: 'That document does not exist for this company.',
+    retryable: false,
+  },
+  // The organisation number is already a company in Accounted.
+  FORMATION_ORG_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Organisationsnumret finns redan som företag i Accounted.',
+    message_en: 'The organisation number is already a company in Accounted.',
+    retryable: false,
+  },
+  // The organisation number is not an aktiebolag registered after the formation started.
+  FORMATION_ORG_NUMBER_MISMATCH: {
+    httpStatus: 422,
+    message_sv: 'Organisationsnumret hör inte till ett nyregistrerat aktiebolag.',
+    message_en: 'The organisation number does not belong to a newly registered aktiebolag.',
+    retryable: false,
+  },
+  FORMATION_DEED_DATE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Ange dagen ni skrev under stiftelseurkunden. Den kan inte ligga i framtiden.',
+    message_en: 'Give the day you signed the founding deed. It cannot be in the future.',
+    retryable: false,
+  },
+  FORMATION_SETUP_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Uppsättningen stannade på vägen. Försök igen, det som redan är gjort görs inte om.',
+    message_en: 'The setup stopped part way. Try again; what is already done is not redone.',
+    retryable: true,
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -13972,6 +14037,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...CASH_FORECAST,
   ...SUPPORT_ASSISTANT,
   ...COMPANY_QUESTIONS,
+  ...COMPANY_FORMATION,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

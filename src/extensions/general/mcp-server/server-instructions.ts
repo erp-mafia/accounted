@@ -61,6 +61,7 @@ export function buildServerInstructionParts(o: ServerInstructionsOptions): { hea
           'NOT CONNECTED YET. Without an account you can call gnubok_search_tools, gnubok_list_skills and gnubok_load_skill. Every other tool needs the user to connect their Accounted account: calling one returns an authentication challenge that your client shows as a Connect prompt, and the call is then retried automatically.',
           `• The user already has an Accounted account (they say so, or ask about their own books, companies or invoices): call ${CONNECT_TRIGGER_TOOL} with no arguments. It returns the authentication challenge; once they have signed in, it lists their companies.`,
           '• No account yet: the same Connect prompt creates one (BankID or e-mail, about a minute). To set up bookkeeping for a company that is not in Accounted yet, load the "onboarding" skill (gnubok_load_skill) and follow it: gnubok_create_company is the first protected call and triggers the connect step.',
+          '• Starting a NEW aktiebolag that is not registered yet: load the "start-company" skill instead. The interview needs no account; gnubok_formation is its first protected call.',
           '',
         ]
       : []),

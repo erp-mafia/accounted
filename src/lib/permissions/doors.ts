@@ -592,6 +592,9 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     'POST /api/verifiera': OUTSIDE.public,
     '/api/community': OUTSIDE.platform,
     'POST /api/company/check-org-number': OUTSIDE.newCompany,
+    // Starting an aktiebolag (lib/formation): the founder's own draft before
+    // the company exists, and the setup that creates it.
+    '/api/formation': OUTSIDE.newCompany,
     'POST /api/pending-operations/:id/commit': OUTSIDE.approval,
     'POST /api/pending-operations/:id/reject': OUTSIDE.approval,
     'POST /api/pending-operations/bulk-commit': OUTSIDE.approval,

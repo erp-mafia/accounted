@@ -1577,6 +1577,7 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  company_formations: 'the founder\'s draft before the company existed (answers, payment state); the company it set up exports its aktiebok, roles, verifikat and the founding documents themselves',
   ledger_account_days: 'sums of the journal per account and day, derived by triggers and rebuilt from it; the journal itself is exported',
   vat_eu_trade_fiscal_years: 'which räkenskapsår the nightly pass saw EU trade in, derived from the journal exported here; it only dates the helårsmoms deadline',
   ledger_dimension_days: 'the same sums per dimension value, derived from the journal lines exported here',

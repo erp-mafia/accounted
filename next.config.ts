@@ -72,6 +72,8 @@ const nextConfig: NextConfig = {
   // menu alone (src/lib/agent/support/page-texts.ts logs that as an error).
   outputFileTracingIncludes: {
     '/api/support/ask': ['./src/lib/agent/support/_generated/page-texts.json'],
+    // The formation package hands out the start-company skill (skills/), read from disk.
+    '/api/formation/[id]/skill': ['./skills/accounted-start-company/SKILL.md'],
   },
   ...(supabaseImageHostname
     ? {

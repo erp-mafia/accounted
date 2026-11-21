@@ -34,7 +34,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ partyId: string }> }>(
   'bolaget.person_update',
   async (request, ctx, { params }) => {
     const { partyId } = await params
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, PersonSchema)
     if (!validation.success) return validation.response
