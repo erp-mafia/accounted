@@ -6808,7 +6808,9 @@
     "doc_label_quote": "Quote",
     "doc_label_delivery_note": "Delivery note",
     "validation_description_required": "Description required",
-    "validation_quantity_min": "Minimum 0.01",
+    "validation_quantity_number": "Enter a quantity",
+    "validation_quantity_deduction": "A row with a tax deduction needs a positive quantity",
+    "validation_quantity_order_line": "The quantity on an order row cannot be negative",
     "validation_unit_required": "Unit required",
     "validation_customer_required": "Select a customer",
     "validation_invoice_date_required": "Invoice date required",
@@ -11246,6 +11248,7 @@
     "created_description": "Self-billing invoice {number} has been booked as a sale",
     "create_failed_title": "Could not register the self-billing invoice",
     "validation_external_number_required": "Invoice number is required",
+    "validation_quantity_positive": "The quantity must be above 0",
     "validation_received_date_required": "Date received is required"
   },
   "invoices": {
