@@ -269,7 +269,9 @@ export default function SupplierInvoiceDetailPage() {
   // newest request may write state.
   const fetchSeqRef = useRef(0)
 
-  async function fetchInvoice() {
+  // Resolves to the invoice it committed, or null when it committed none (an
+  // error, or a newer fetch owns the page), so a caller can act on fresh data.
+  async function fetchInvoice(): Promise<SupplierInvoice | null> {
     const seq = ++fetchSeqRef.current
     // Blocking skeleton only before the first paint (or when the pager steps
     // to a different invoice). Attest/Bokför/Markera betald/kreditera each
@@ -283,7 +285,7 @@ export default function SupplierInvoiceDetailPage() {
       const res = await fetch(`/api/supplier-invoices/${params.id}`)
       const body = await res.json().catch(() => null)
       // A newer fetch owns the page now: commit nothing from this one.
-      if (seq !== fetchSeqRef.current) return
+      if (seq !== fetchSeqRef.current) return null
       // See the identical fix in suppliers/[id]: `body.error` is the canonical
       // envelope object, and rendering an object as a toast description throws
       // out of the root layout into global-error.
@@ -299,10 +301,13 @@ export default function SupplierInvoiceDetailPage() {
       } else {
         setInvoice(body.data)
         setLoadError(null)
+        return body.data as SupplierInvoice
       }
+      return null
     } catch (err) {
-      if (seq !== fetchSeqRef.current) return
+      if (seq !== fetchSeqRef.current) return null
       setLoadError({ kind: 'failed', description: getErrorMessage(err, { context: 'supplier_invoice' }) })
+      return null
     } finally {
       // A stale request must not stop the newest one's skeleton early: only
       // the request that still owns the page resolves the loading state.
@@ -398,13 +403,18 @@ export default function SupplierInvoiceDetailPage() {
 
   // #967: deferred booking: create the registration verifikat afterwards.
   // A posting action confirms up front with the outcome (as Bokför on a
-  // customer invoice does), naming the date the server books it on.
+  // customer invoice does), naming the date the server books it on. The date
+  // comes from the invoice as it is now, not the copy this page loaded:
+  // another session may have changed the invoice date since, and the server
+  // books by its own fresh read.
   async function handleBook() {
     if (!invoice) return
+    const current = await fetchInvoice()
+    if (!current || current.registration_journal_entry_id) return
     const ok = await confirmAction({
       title: t('book_confirm_title'),
       description: t('book_confirm_description', {
-        date: formatDate(supplierInvoiceRegistrationDate(invoice, invoice.supplier?.supplier_type)),
+        date: formatDate(supplierInvoiceRegistrationDate(current, current.supplier?.supplier_type)),
       }),
       confirmLabel: t('book_action'),
       cancelLabel: tCommon('cancel'),
@@ -1358,7 +1368,9 @@ export default function SupplierInvoiceDetailPage() {
         open={isPayDialogOpen}
         onOpenChange={setIsPayDialogOpen}
         defaultPaymentAccount={companySettings?.last_supplier_payment_account}
-        onPaid={fetchInvoice}
+        onPaid={async () => {
+          await fetchInvoice()
+        }}
       />
     </div>
   )

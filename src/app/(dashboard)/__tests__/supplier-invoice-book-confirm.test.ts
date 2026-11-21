@@ -29,8 +29,12 @@ describe('supplier invoice Bokför confirms before posting', () => {
     expect(body.slice(confirmAt, guardAt)).toContain("t('book_confirm_description'")
   })
 
-  it('names the date the server books on, from the shared rule', () => {
-    expect(page).toMatch(/supplierInvoiceRegistrationDate\(invoice, invoice\.supplier\?\.supplier_type\)/)
+  it('names the date the server books on, from the shared rule and a fresh read', () => {
+    const body = page.slice(page.indexOf('async function handleBook()'))
+    const refetchAt = body.indexOf('const current = await fetchInvoice()')
+    expect(refetchAt).toBeGreaterThan(-1)
+    expect(refetchAt).toBeLessThan(body.indexOf('await confirmAction('))
+    expect(body).toMatch(/supplierInvoiceRegistrationDate\(current, current\.supplier\?\.supplier_type\)/)
   })
 })
 
