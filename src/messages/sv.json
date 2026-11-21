@@ -8531,6 +8531,8 @@
     "no_registration_voucher": "Ingen registreringsverifikation (kontantmetoden)",
     "not_booked_yet": "Ej bokförd ännu",
     "book_action": "Bokför",
+    "book_confirm_title": "Bokför fakturan?",
+    "book_confirm_description": "Fakturan bokförs som registreringsverifikation med datum {date}. Verifikationen kan därefter inte ändras, bara rättas eller stornas.",
     "book_failed_title": "Kunde inte bokföra",
     "booked_title": "Fakturan bokförd",
     "booked_description": "Registreringsverifikationen har skapats.",

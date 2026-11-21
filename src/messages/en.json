@@ -8531,6 +8531,8 @@
     "no_registration_voucher": "No registration verifikat (cash method)",
     "not_booked_yet": "Not booked yet",
     "book_action": "Book",
+    "book_confirm_title": "Book the invoice?",
+    "book_confirm_description": "The invoice is posted as a registration voucher dated {date}. A posted voucher cannot be edited, only corrected or reversed.",
     "book_failed_title": "Booking failed",
     "booked_title": "Invoice booked",
     "booked_description": "The registration verifikat has been created.",
