@@ -219,7 +219,7 @@ import {
   getArticleVatRateAdoptionSet,
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
-import { DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { DEDUCTION_INVOICE_ONLY_ERROR, DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { MAX_INVOICE_ATTACHMENTS, linkInvoiceAttachments } from '@/lib/invoices/invoice-attachments'
@@ -26072,6 +26072,13 @@ export const tools: McpTool[] = [
         // VAT gate above exists for the same reason.) Each refusal carries the
         // code buildInvoiceWriteData answers with, INVOICE_CREATE_ROT_RUT_VALIDATION.
         const deductionLines = items.filter((item) => item.line_type !== 'text' && item.deduction_type)
+        // A quote (or proforma, delivery note) stores no deduction (#3030).
+        if (deductionLines.length > 0 && (invoice.document_type ?? 'invoice') !== 'invoice') {
+          throw codedRefusal(
+            'INVOICE_CREATE_ROT_RUT_VALIDATION',
+            `Skattereduktion: ${DEDUCTION_INVOICE_ONLY_ERROR} Pass these lines with deduction_type null, or convert the quote with gnubok_convert_invoice and set the deduction on the invoice draft.`,
+          )
+        }
         if (deductionLines.length > 0) {
           const claimErrors = validateDeductionLines(
             deductionLines.map((item) => ({

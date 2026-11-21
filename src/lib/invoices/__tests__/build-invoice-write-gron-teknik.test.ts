@@ -141,7 +141,7 @@ describe('buildInvoiceWriteData: grön teknik', () => {
     expect(result.items[0]).toMatchObject({ work_type: 'INSTALLATION_SOLCELLER', deduction_amount: 3375 })
   })
 
-  it('never books a deduction on a quote, even when a line says grön teknik', async () => {
+  it('never books a deduction on a quote: a grön teknik line there is refused, not saved without it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { vat_registered: true }, error: null })
     const result = await buildInvoiceWriteData({
@@ -151,9 +151,8 @@ describe('buildInvoiceWriteData: grön teknik', () => {
       documentType: 'quote',
       input: { ...header, valid_until: '2026-10-15', items: [labour] } as InvoiceWriteInput,
     })
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.invoiceFields.deduction_total).toBe(0)
-    expect(result.items[0]).toMatchObject({ deduction_type: null, deduction_amount: 0 })
+    expect(result.ok).toBe(false)
+    if (result.ok || !('code' in result)) return
+    expect(result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
   })
 })
