@@ -41,6 +41,15 @@ vi.mock('../lib/gmail-client', () => ({
   getMailboxAddress: vi.fn(),
 }))
 
+// Only this host resolves in the brands table: a registered white-label domain.
+const BRAND_ORIGIN = 'https://books.partner.example'
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: vi.fn(async (host: string) => ({
+    brand: host === 'books.partner.example' ? { domain: host } : null,
+    lookupFailed: false,
+  })),
+}))
+
 const { mockCreateClient } = vi.hoisted(() => ({ mockCreateClient: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({
   createClient: mockCreateClient,
@@ -48,8 +57,13 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 import { mailExtension } from '../index'
-import { createOAuthState } from '../lib/crypto'
-import { GMAIL_READONLY_SCOPE, exchangeCodeForTokens, revokeGoogleToken } from '../lib/google-oauth'
+import { createOAuthFlow, createOAuthState } from '../lib/crypto'
+import {
+  GMAIL_READONLY_SCOPE,
+  exchangeCodeForTokens,
+  getGoogleOAuthEnv,
+  revokeGoogleToken,
+} from '../lib/google-oauth'
 import { getMailboxAddress } from '../lib/gmail-client'
 import { saveConnection } from '../lib/connections'
 import { testRoutes } from '@/tests/helpers'
@@ -91,8 +105,8 @@ function useSession(
   })
 }
 
-function callbackRequest(state: string) {
-  const url = new URL(`${APP_URL}${CALLBACK_PATH}`)
+function callbackRequest(state: string, origin = APP_URL) {
+  const url = new URL(`${origin}${CALLBACK_PATH}`)
   url.searchParams.set('code', 'google-code')
   url.searchParams.set('state', state)
   return new Request(url.toString())
@@ -383,5 +397,94 @@ describe('mail GET /oauth/callback: what Google returned decides what is saved',
 
     expect(res.headers.get('location')).toBe(`${APP_URL}/settings/mail?mail=failed`)
     expect(saveConnection).not.toHaveBeenCalled()
+  })
+})
+
+// Google redirects every consent to the one registered callback on the
+// canonical host, while the session cookie is host-only: someone who started
+// on a white-label domain arrives signed out. The signed state carries the
+// origin the consent started on, and every exit of the callback goes there.
+describe('mail GET /oauth/callback: a consent started on a white-label domain', () => {
+  let brandState: string
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', APP_URL)
+    vi.stubEnv('MAIL_TOKEN_ENCRYPTION_KEY', '00'.repeat(32))
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+    vi.stubEnv('GOOGLE_MAIL_CONNECT_COMPANY_IDS', 'company-1')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    brandState = createOAuthFlow('user-1', 'company-1', BRAND_ORIGIN).state
+    ;(exchangeCodeForTokens as Mock).mockResolvedValue({
+      refreshToken: 'refresh-1',
+      accessToken: 'access-1',
+      expiresAt: '2030-01-01T00:00:00Z',
+      scopes: [GMAIL_READONLY_SCOPE],
+    })
+    ;(getMailboxAddress as Mock).mockResolvedValue('ekonomi@example.se')
+    ;(saveConnection as Mock).mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('sends the signed-out callback to the login on the brand host, saving nothing', async () => {
+    useSession(null)
+
+    const res = await callbackRoute().handler(callbackRequest(brandState))
+
+    const location = new URL(res.headers.get('location') as string)
+    expect(location.origin).toBe(BRAND_ORIGIN)
+    expect(location.pathname).toBe('/login')
+    const next = location.searchParams.get('next') as string
+    expect(next.startsWith(`${CALLBACK_PATH}?`)).toBe(true)
+    expect(new URL(next, BRAND_ORIGIN).searchParams.get('state')).toBe(brandState)
+    expect(exchangeCodeForTokens).not.toHaveBeenCalled()
+    expect(saveConnection).not.toHaveBeenCalled()
+  })
+
+  it('completes on the brand host with the canonical redirect URI and lands there', async () => {
+    useSession('user-1')
+
+    // The brand login forwards straight back into the callback on its own host.
+    const res = await callbackRoute().handler(callbackRequest(brandState, BRAND_ORIGIN))
+
+    expect(res.headers.get('location')).toBe(`${BRAND_ORIGIN}/settings/mail?mail=connected`)
+    // Both OAuth legs must send the redirect URI registered with Google.
+    expect(getGoogleOAuthEnv).toHaveBeenCalledWith(APP_URL)
+    expect(saveConnection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+    )
+  })
+
+  it('returns a denied consent to the brand host', async () => {
+    const url = new URL(`${APP_URL}${CALLBACK_PATH}`)
+    url.searchParams.set('error', 'access_denied')
+    url.searchParams.set('state', brandState)
+
+    const res = await callbackRoute().handler(new Request(url.toString()))
+
+    expect(res.headers.get('location')).toBe(`${BRAND_ORIGIN}/settings/mail?mail=denied`)
+  })
+
+  it('returns a completion by a different user to the brand host, saving nothing', async () => {
+    useSession('user-2')
+
+    const res = await callbackRoute().handler(callbackRequest(brandState))
+
+    expect(res.headers.get('location')).toBe(`${BRAND_ORIGIN}/settings/mail?mail=mismatch`)
+    expect(exchangeCodeForTokens).not.toHaveBeenCalled()
+  })
+
+  it('keeps a state minted before the origin was sealed on the canonical host', async () => {
+    useSession(null)
+
+    const res = await callbackRoute().handler(callbackRequest(createOAuthState('user-1', 'company-1')))
+
+    expect(new URL(res.headers.get('location') as string).origin).toBe(APP_URL)
   })
 })
