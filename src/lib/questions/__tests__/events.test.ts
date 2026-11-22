@@ -65,10 +65,15 @@ describe('the question list events', () => {
     vi.restoreAllMocks()
   })
 
-  it('emits company_question.filed for a filed question, with the company and the question by id', async () => {
+  it('emits company_question.filed for a filed question, with the company and the question by id, its status and when it was filed', async () => {
     const mock = createTableMockSupabase({ company_questions: filingTable, transactions: { data: [{ id: TX, amount: -4990, amount_sek: -4990, instructed_amount: null }] } })
     await fileQuestion(mock.supabase as never, fileInput)
-    expect(emitted).toEqual([{ type: 'company_question.filed', payload: { questionId: QUESTION_ID, userId: USER, companyId: COMPANY } }])
+    expect(emitted).toEqual([
+      {
+        type: 'company_question.filed',
+        payload: { questionId: QUESTION_ID, status: 'open', createdAt: '2026-11-19T08:00:00.000Z', userId: USER, companyId: COMPANY },
+      },
+    ])
   })
 
   it('emits nothing for a question that was refused', async () => {
@@ -77,12 +82,22 @@ describe('the question list events', () => {
     expect(emitted).toEqual([])
   })
 
-  it('emits company_question.answered with the door the answer came through', async () => {
+  it('emits company_question.answered with the door the answer came through and when', async () => {
     const answered = row({ status: 'answered', answer_option: 'annual', answered_at: '2026-11-19T09:00:00.000Z', answered_via: 'whatsapp' })
     const mock = createTableMockSupabase({ company_questions: questionsTable(row(), answered) })
     await answerQuestion(mock.supabase as never, { companyId: COMPANY, questionId: QUESTION_ID, option: 'annual', userId: USER, via: 'whatsapp' })
     expect(emitted).toEqual([
-      { type: 'company_question.answered', payload: { questionId: QUESTION_ID, via: 'whatsapp', userId: USER, companyId: COMPANY } },
+      {
+        type: 'company_question.answered',
+        payload: {
+          questionId: QUESTION_ID,
+          status: 'answered',
+          answeredVia: 'whatsapp',
+          answeredAt: '2026-11-19T09:00:00.000Z',
+          userId: USER,
+          companyId: COMPANY,
+        },
+      },
     ])
   })
 
@@ -94,12 +109,23 @@ describe('the question list events', () => {
     expect(emitted).toEqual([])
   })
 
-  it('emits company_question.closed with the reason and the door', async () => {
+  it('emits company_question.closed with the close reason, the door and when', async () => {
     const closed = row({ status: 'closed', close_reason: 'dont_know', answered_at: '2026-11-19T09:00:00.000Z', answered_via: 'app' })
     const mock = createTableMockSupabase({ company_questions: questionsTable(row(), closed) })
     await closeQuestion(mock.supabase as never, { companyId: COMPANY, questionId: QUESTION_ID, reason: 'dont_know', userId: USER, via: 'app' })
     expect(emitted).toEqual([
-      { type: 'company_question.closed', payload: { questionId: QUESTION_ID, reason: 'dont_know', via: 'app', userId: USER, companyId: COMPANY } },
+      {
+        type: 'company_question.closed',
+        payload: {
+          questionId: QUESTION_ID,
+          status: 'closed',
+          closeReason: 'dont_know',
+          answeredVia: 'app',
+          answeredAt: '2026-11-19T09:00:00.000Z',
+          userId: USER,
+          companyId: COMPANY,
+        },
+      },
     ])
   })
 
@@ -113,7 +139,12 @@ describe('the question list events', () => {
       userId: USER,
       now: new Date('2026-11-19T09:05:00.000Z'),
     })
-    expect(emitted).toEqual([{ type: 'company_question.reopened', payload: { questionId: QUESTION_ID, userId: USER, companyId: COMPANY } }])
+    expect(emitted).toEqual([
+      {
+        type: 'company_question.reopened',
+        payload: { questionId: QUESTION_ID, status: 'open', createdAt: '2026-11-19T08:00:00.000Z', userId: USER, companyId: COMPANY },
+      },
+    ])
   })
 
   it('keeps the write when the event cannot be delivered', async () => {

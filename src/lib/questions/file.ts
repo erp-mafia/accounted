@@ -261,7 +261,13 @@ export async function fileQuestion(supabase: SupabaseClient, input: FileQuestion
   const filed = toQuestion(data as QuestionRow)
   await emitQuestionEvent({
     type: 'company_question.filed',
-    payload: { questionId: filed.question_id, userId: input.userId, companyId: input.companyId },
+    payload: {
+      questionId: filed.question_id,
+      status: 'open',
+      createdAt: filed.created_at,
+      userId: input.userId,
+      companyId: input.companyId,
+    },
   })
   return filed
 }

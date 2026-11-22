@@ -476,11 +476,13 @@ describe('GET /api/events', () => {
     expect(status).toBe(400)
   })
 
-  // ── Payroll events need payroll:read on a key ───────────────
+  // ── Scoped event families need their scope on a key ─────────
+  // Payroll events (salary_run.*, agi.*) need payroll:read; question list
+  // events (company_question.*) need agent:read.
 
   it('withholds payroll events from a key without payroll:read', async () => {
     mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
-    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth({ scopes: ['events:read', 'agent:read'] }))
     const keyClient = withKeyClient([membershipFound, { data: sampleEvents }])
 
     const response = await GET(createMockRequest('/api/events'))
@@ -492,9 +494,35 @@ describe('GET /api/events', () => {
     ])
   })
 
-  it('serves payroll events to a key holding payroll:read', async () => {
+  it('withholds question list events from a key without agent:read', async () => {
     mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
     mockValidateApiKey.mockResolvedValue(apiKeyAuth({ scopes: ['events:read', 'payroll:read'] }))
+    const keyClient = withKeyClient([membershipFound, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+
+    expect(response.status).toBe(200)
+    expect(keyClient.findCalls('event_log', 'not')).toEqual([['event_type', 'like', 'company_question.%']])
+  })
+
+  it('withholds both families from a key holding only events:read', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    const keyClient = withKeyClient([membershipFound, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+
+    expect(response.status).toBe(200)
+    expect(keyClient.findCalls('event_log', 'not')).toEqual([
+      ['event_type', 'like', 'salary_run.%'],
+      ['event_type', 'like', 'agi.%'],
+      ['event_type', 'like', 'company_question.%'],
+    ])
+  })
+
+  it('serves payroll and question list events to a key holding payroll:read and agent:read', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth({ scopes: ['events:read', 'payroll:read', 'agent:read'] }))
     const keyClient = withKeyClient([membershipFound, { data: sampleEvents }])
 
     const response = await GET(createMockRequest('/api/events'))
@@ -503,7 +531,36 @@ describe('GET /api/events', () => {
     expect(keyClient.findCalls('event_log', 'not')).toEqual([])
   })
 
-  it('serves payroll events to a session user', async () => {
+  it('serves a question list event as stored: the question by id and its state', async () => {
+    const stored = {
+      sequence: 7,
+      event_type: 'company_question.closed',
+      entity_id: 'e0000000-0000-4000-8000-000000000001',
+      data: {
+        questionId: 'e0000000-0000-4000-8000-000000000001',
+        status: 'closed',
+        closeReason: 'dont_know',
+        answeredVia: 'app',
+        answeredAt: '2026-11-19T09:00:00.000Z',
+      },
+      created_at: '2026-11-19T09:00:01Z',
+    }
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth({ scopes: ['events:read', 'agent:read'] }))
+    const keyClient = withKeyClient([membershipFound, { data: [stored] }])
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'company_question.closed' } }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: unknown[]; cursor: number }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual([stored])
+    expect(body.cursor).toBe(7)
+    expect(keyClient.findCalls('event_log', 'in')).toEqual([['event_type', ['company_question.closed']]])
+  })
+
+  it('serves payroll and question list events to a session user', async () => {
     enqueue({ data: sampleEvents })
 
     const response = await GET(createMockRequest('/api/events'))
@@ -526,6 +583,25 @@ describe('GET /api/events', () => {
     expect(status).toBe(403)
     expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
     expect(body.error.details).toMatchObject({ required_scope: 'payroll:read' })
+    expect(keyClient.findCalls('event_log', 'select')).toEqual([])
+  })
+
+  it('refuses a question list type named in types without agent:read, before reading events', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth({ scopes: ['events:read', 'payroll:read'] }))
+    const keyClient = withKeyClient([membershipFound, { data: sampleEvents }])
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,company_question.answered' } }),
+    )
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+    expect(body.error.details).toMatchObject({
+      required_scope: 'agent:read',
+      reason: 'Reading company_question.answered requires agent:read in addition to events:read.',
+    })
     expect(keyClient.findCalls('event_log', 'select')).toEqual([])
   })
 })

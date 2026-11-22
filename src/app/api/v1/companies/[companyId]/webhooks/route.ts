@@ -24,10 +24,10 @@ import { generateWebhookSecret } from '@/lib/webhooks/signing'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { hasScope } from '@/lib/auth/api-keys'
+import { refusedEventFamily } from '@/lib/webhooks/public-events'
 import {
   WebhookEventTypeListSchema,
   WebhookEventTypeSchema,
-  payrollEventTypesIn,
   refineWebhookEventTypeFields,
   resolveWebhookEventTypes,
 } from '@/lib/webhooks/subscription-event-types'
@@ -197,7 +197,7 @@ registerEndpoint({
     'Subscribing to internal MCP telemetry events (mcp.tool_called etc. are not delivered as webhooks). Replacing an existing webhook URL: use PATCH instead.',
   pitfalls: [
     'The secret is returned exactly once. If lost, rotate it with POST /webhooks/{id}/rotate-secret: a fresh secret is issued in place, the webhook id and delivery history are kept.',
-    'Listing salary_run.* or agi.generated in event_types requires payroll:read in addition to webhooks:manage, as for a single event_type.',
+    'Listing salary_run.* or agi.generated in event_types requires payroll:read in addition to webhooks:manage, as for a single event_type. Listing company_question.* requires agent:read the same way.',
     'A receiver that missed deliveries catches up from GET /api/events (scope events:read), which serves every deliverable event type from a sequence cursor.',
     'Delivery is at-least-once with exponential backoff (1m / 5m / 30m / 2h / 12h / 24h / 48h). Receivers MUST be idempotent.',
     'HTTP 410 from your receiver auto-disables the webhook (sets active=false + disabled_reason).',
@@ -261,11 +261,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // skatteavdrag to an external receiver: a payroll-grade exposure.
     // Require BOTH webhooks:manage AND payroll:read so a key minted only
     // for webhook management can't reach the payroll surface. Any listed
-    // payroll type triggers it. The same pattern will extend to other
-    // sensitive event families when they ship (e.g. document.uploaded with
-    // PII payloads).
-    const payrollTypes = payrollEventTypesIn(eventTypes)
-    if (payrollTypes.length > 0 && !hasScope(ctx.scopes, 'payroll:read')) {
+    // payroll type triggers it. The families and their scopes are
+    // SCOPED_EVENT_FAMILIES (lib/webhooks/public-events.ts): company_question.*
+    // needs agent:read the same way, the scope the question list is read with.
+    const refused = refusedEventFamily(eventTypes, (scope) => hasScope(ctx.scopes, scope))
+    if (refused) {
       return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
         requestId: ctx.requestId,
         // Art.5(1)(f): don't echo the API key's granted_scopes set back to
@@ -274,8 +274,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         // both to the caller (acceptable) and to any log path that
         // captures the error envelope (not acceptable).
         details: {
-          required_scope: 'payroll:read',
-          reason: `Subscribing to ${payrollTypes.join(', ')} requires payroll:read in addition to webhooks:manage.`,
+          required_scope: refused.scope,
+          reason: `Subscribing to ${refused.eventTypes.join(', ')} requires ${refused.scope} in addition to webhooks:manage.`,
         },
       })
     }
