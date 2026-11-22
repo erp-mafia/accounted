@@ -6,7 +6,7 @@ import type {
   VatRevenueAccountWithoutRuta,
   VatAccountWithoutRuta,
 } from '@/types'
-import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
+import { multiplyOre, ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
@@ -371,7 +371,7 @@ export type InvoiceDeferralShares = ReadonlyMap<string, ReadonlyArray<{ target_a
  * ruta 05 is the underlag of the moms in rutorna 10 to 12, so the sale is
  * reported in the period that carries its moms: the invoice's.
  *
- * The SQL decides (vat_invoice_deferral_shares, migration 20261121140000),
+ * The SQL decides (vat_invoice_deferral_shares, migration 20261122140000),
  * for a deferral whose line carries Swedish moms: every 29xx line of the
  * invoice's verifikat and its kreditfaktura (at the invoice's parts), of each
  * release (whole, on its schedule's revenue account) and of every storno and
@@ -422,8 +422,8 @@ export async function fetchInvoiceDeferralShares(
  * One verifikat's lines as the momsdeklaration reads them: on a verifikat the
  * SQL reads as booking a deferred sale (fetchInvoiceDeferralShares), every
  * 29xx line adds that sale on each revenue account, at its part, rounded to
- * öre per line and part as the SQL rounds it. The 29xx line itself stays; it
- * reaches no ruta.
+ * öre per line and part as the SQL's round(amount * share, 2) rounds it
+ * (multiplyOre). The 29xx line itself stays; it reaches no ruta.
  */
 export function readDeferredSaleLines(
   entryId: string,
@@ -438,8 +438,8 @@ export function readDeferredSaleLines(
       if (!line.account_number.startsWith('29')) continue
       read.push({
         account_number: part.target_account,
-        debit_amount: roundOre((Number(line.debit_amount) || 0) * part.share),
-        credit_amount: roundOre((Number(line.credit_amount) || 0) * part.share),
+        debit_amount: multiplyOre(Number(line.debit_amount) || 0, part.share),
+        credit_amount: multiplyOre(Number(line.credit_amount) || 0, part.share),
       })
     }
   }

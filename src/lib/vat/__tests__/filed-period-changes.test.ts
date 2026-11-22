@@ -233,6 +233,33 @@ describe('withChangesAfterFiling', () => {
     expect(record.changed_after_filing).toBeNull()
   })
 
+  it('counts the sale an inline rättelse of a release adds, with its moms, and the release still as nothing (crm#1919)', async () => {
+    const release = entry({ id: 'e8', voucher_number: 15, entry_date: '2026-07-01', source_type: 'accrual', committed_at: '2026-07-01T08:00:00Z' })
+    const mock = ledger({
+      rattelseEntries: [release],
+      rattelser: [{
+        id: 'r8', journal_entry_id: 'e8', rattelse_type: 'lines',
+        old_entry_date: null, new_entry_date: null,
+        struck_lines: [],
+        added_lines: [
+          { account_number: '1510', debit_amount: 1250, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 250 },
+        ],
+        created_at: '2026-09-01T12:00:00Z',
+      }],
+      lines: [
+        line('e8', '2970', 2000, 0), line('e8', '3001', 0, 2000),
+        line('e8', '1510', 1250, 0), line('e8', '3001', 0, 1000), line('e8', '2611', 0, 250),
+      ],
+      deferrals: [{ journal_entry_id: 'e8', target_account: '3001', share: 1 }],
+    })
+
+    const [record] = await withChangesAfterFiling(mock.supabase as never, COMPANY, [JULY])
+
+    expect(record.changed_after_filing?.rutor_change).toEqual({ ruta05: 1000, ruta10: 250, ruta49: 250 })
+  })
+
   it('leaves the posted bokslut out', async () => {
     const bokslut = entry({ id: 'e4', voucher_number: 11, source_type: 'year_end', committed_at: '2026-10-01T08:00:00Z' })
     const mock = ledger({ late: [bokslut], lines: [line('e4', '3001', 16952, 0), line('e4', '8999', 0, 16952)], closing: ['e4'] })

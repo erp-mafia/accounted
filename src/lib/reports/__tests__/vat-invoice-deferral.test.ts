@@ -66,6 +66,13 @@ describe('readDeferredSaleLines', () => {
     expect(rutorFromTotals(totalsOf(readDeferredSaleLines(INVOICE, moved, shares)))).toMatchObject({ ruta05: 16000, ruta10: 4000 })
   })
 
+  it('rounds each part to öre as the SQL rounds round(amount * share, 2), not as the float product lands', () => {
+    // 1,66 x 0,75 is 1,245 exactly, 1,2449999... as a double.
+    const shares = new Map([[INVOICE, [{ target_account: '3001', share: 0.75 }]]])
+    const read = readDeferredSaleLines(INVOICE, [line('2970', 0, 1.66)], shares)
+    expect(read.find((l) => l.account_number === '3001')).toEqual(line('3001', 0, 1.25))
+  })
+
   it('leaves any other verifikat as it is', () => {
     const shares = new Map([['22222222-2222-4222-8222-222222222222', [{ target_account: '3001', share: 1 }]]])
     expect(readDeferredSaleLines(INVOICE, INVOICE_LINES, shares)).toEqual(INVOICE_LINES)

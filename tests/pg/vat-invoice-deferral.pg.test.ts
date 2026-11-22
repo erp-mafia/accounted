@@ -379,6 +379,66 @@ describe('a periodiserad invoice line in the momsdeklaration (crm#1919)', { time
     expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 16000, ruta10: 4000 })
   })
 
+  it('keeps the new sale an inline rättelse adds to a release verifikat, and its moms', async () => {
+    const seed = await seedCompany()
+    await bookDeferredInvoice(seed)
+    const april = await releaseOf(seed, '2026-04-01')
+
+    // The other rättelse path: the release verifikat itself gains a sale of
+    // 1 000 kr + 25 % moms, its release lines untouched.
+    await getPool().query('SELECT public.correct_entry_lines_inline($1, $2, $3, $4, $5)', [
+      seed.companyId, april, [], JSON.stringify([
+        { account_number: '1510', debit_amount: 1250 },
+        { account_number: '3001', credit_amount: 1000 },
+        { account_number: '2611', credit_amount: 250 },
+      ]), seed.userId,
+    ])
+
+    expect(await rutorOf(seed.companyId, Q2)).toEqual({ ruta05: 1000, ruta10: 250 })
+    expect(await drillDownRuta05(seed.companyId, Q2)).toBe(1000)
+    expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 16000, ruta10: 4000 })
+  })
+
+  it('reads a "Lös upp nu" verifikat that releases several months at once as nothing, once', async () => {
+    // 6 000 kr + 25 % moms periodiserad over six months far ahead, so no
+    // month has begun whenever this runs, then the rest released in one
+    // verifikat that every month links to (commit_accrual_dissolution).
+    const seed = await seedCompany()
+    const invoiceId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.invoices (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date, status, currency,
+                                    subtotal, vat_amount, total, vat_treatment, vat_rate, document_type, paid_amount, remaining_amount)
+       VALUES ($1, $2, $3, $4, 'F-3', '2026-11-15', '2026-12-15', 'sent', 'SEK',
+               6000, 1500, 7500, 'standard_25', 25, 'invoice', 0, 7500)`,
+      [invoiceId, seed.userId, seed.companyId, seed.customerId],
+    )
+    await getPool().query(
+      `INSERT INTO public.invoice_items (id, invoice_id, sort_order, description, quantity, unit, unit_price, line_total,
+                                         vat_rate, vat_amount, accrual_period_start, accrual_period_end, accrual_balance_account)
+       VALUES ($1, $2, 0, 'Förskott på abonnemang', 1, 'st', 6000, 6000, 25, 1500, '2031-01-01', '2031-06-30', '2970')`,
+      [randomUUID(), invoiceId],
+    )
+    const invoice = await readInvoice(invoiceId)
+    const supabase = createServiceClientNoCookies()
+    const dissolution = await runWithActor({ type: 'user' }, async () => {
+      const entry = await createInvoiceJournalEntry(supabase, seed.companyId, seed.userId, invoice, 'aktiebolag', 'Kund AB')
+      await createSchedulesForCustomerInvoice(supabase, seed.companyId, seed.userId, invoice, invoice.items, entry!.id, 'aktiebolag')
+      const { rows: [schedule] } = await getPool().query<{ id: string }>(
+        'SELECT id FROM public.accrual_schedules WHERE invoice_id = $1', [invoiceId],
+      )
+      return dissolveScheduleNow(supabase, seed.companyId, seed.userId, schedule.id, { today: '2026-12-10' })
+    })
+    const { rows: [linked] } = await getPool().query<{ months: number }>(
+      'SELECT count(*)::int AS months FROM public.accrual_schedule_installments WHERE journal_entry_id = $1',
+      [dissolution.journalEntryId],
+    )
+    expect(linked.months).toBe(6)
+
+    const Q4 = { start: '2026-10-01', end: '2026-12-31' }
+    expect(await rutorOf(seed.companyId, Q4)).toEqual({ ruta05: 6000, ruta10: 1500 })
+    expect(await drillDownRuta05(seed.companyId, Q4)).toBe(6000)
+  })
+
   it('reads the deferral of a rättelse of the invoice on the 29xx account the rättelse moved it to', async () => {
     const seed = await seedCompany()
     const { entryId } = await bookDeferredInvoice(seed)
