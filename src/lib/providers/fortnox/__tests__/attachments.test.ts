@@ -309,7 +309,13 @@ describe('Fortnox attachments', () => {
       // A booking Fortnox names but cannot single out never falls back to the payment.
       .mockResolvedValueOnce(detail({ Vouchers: [{ Number: 0, Series: 'D', Year: 6, ReferenceType: 'SUPPLIERINVOICE' }, payment(9)] }))
       // No balance stated: not known to be paid.
-      .mockResolvedValueOnce(detail({ Balance: undefined, Vouchers: [payment(9)] }));
+      .mockResolvedValueOnce(detail({ Balance: undefined, Vouchers: [payment(9)] }))
+      // A credit note of -1000 refunded 400: its balance is negative, not settled.
+      .mockResolvedValueOnce(detail({ Total: -1000, Balance: -600, Vouchers: [payment(9)] }))
+      // Marked booked but naming no booking voucher: what booked it is unknown.
+      .mockResolvedValueOnce(detail({ Booked: true, Vouchers: [payment(9)] }))
+      // A credit note refunded in full: the refund booked it.
+      .mockResolvedValueOnce(detail({ Total: -1000, Balance: 0, Vouchers: [payment(9)] }));
     const client = clientWith({ get } as Partial<FortnoxClient>);
     const cashYears = new Set([6]);
     const read = () => fetchFortnoxSupplierInvoiceBookingVoucher(client, 'token', '120', cashYears);
@@ -320,6 +326,9 @@ describe('Fortnox attachments', () => {
     await expect(read()).resolves.toBeNull();
     await expect(read()).resolves.toBeNull();
     await expect(read()).resolves.toBeNull();
+    await expect(read()).resolves.toBeNull();
+    await expect(read()).resolves.toBeNull();
+    await expect(read()).resolves.toEqual({ series: 'E', number: 9, financialYearId: 6 });
   });
 
   it('propagates a refused detail form so the caller can name the scope', async () => {

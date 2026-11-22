@@ -72,9 +72,10 @@ export function fortnoxSupplierInvoicePaymentParts(
  * This is the candidate only: the invoice's one payment when it names no
  * SUPPLIERINVOICE voucher (a booking that fortnoxSupplierInvoiceBookingParts
  * could not single out is never replaced by a payment), null otherwise. The
- * caller takes it only when the payment's financial year is kontantmetod and
- * the invoice is paid in full, so a faktureringsmetod payment, a first
- * instalment or a payment Fortnox later took back never gets the file.
+ * caller takes it only when the payment's financial year is kontantmetod,
+ * the invoice is settled to the öre and Fortnox does not mark it booked, so a
+ * faktureringsmetod payment, a first instalment, a part refund of a credit
+ * note or a payment Fortnox later took back never gets the file.
  *
  * Never the invoice's registration: the migration's registration link reads
  * the booking alone.

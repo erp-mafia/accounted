@@ -1,5 +1,5 @@
 import { FortnoxApiError, type FortnoxClient } from './client';
-import { isFullyPaid } from './mapper';
+import { fortnoxSupplierInvoiceSettled } from './mapper';
 import {
   fortnoxSupplierInvoiceBookingParts,
   fortnoxSupplierInvoiceCashBookingParts,
@@ -301,8 +301,9 @@ export async function fetchFortnoxSupplierInvoiceBookings(
  * in a kontantmetod year (`cashYearIds`, Fortnox's financial-year ids whose
  * AccountingMethod is CASH) was booked by that payment
  * (fortnoxSupplierInvoiceCashBookingParts): that payment is returned. A
- * payment in any other year, a part payment, or a balance Fortnox does not
- * state stays null.
+ * payment in any other year, a part payment or part refund (a balance not
+ * zero), a balance Fortnox does not state, or an invoice Fortnox marks
+ * booked stays null.
  */
 export async function fetchFortnoxSupplierInvoiceBookingVoucher(
   client: FortnoxClient,
@@ -328,7 +329,10 @@ export async function fetchFortnoxSupplierInvoiceBookingVoucher(
 
   const cash = fortnoxSupplierInvoiceCashBookingParts(invoice);
   const payment = cash ? bookingVoucherFrom(cash.series, cash.number, cash.year) : null;
-  if (!payment || !cashYearIds.has(payment.financialYearId) || !isFullyPaid(invoice)) return null;
+  // Marked booked yet naming no SUPPLIERINVOICE voucher: what booked it is
+  // unknown, and the payment may only have cleared 2440.
+  if (!payment || invoice.Booked === true || !cashYearIds.has(payment.financialYearId)) return null;
+  if (!fortnoxSupplierInvoiceSettled(invoice)) return null;
   return payment;
 }
 
