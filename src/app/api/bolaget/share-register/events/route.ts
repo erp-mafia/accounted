@@ -14,7 +14,7 @@ import { registerShareEvent } from '@/lib/bolaget/share-register'
 export const POST = withRouteContext(
   'bolaget.share_register_event_create',
   async (request, ctx) => {
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, shareRegisterEventsCreate.input)
     if (!validation.success) return validation.response

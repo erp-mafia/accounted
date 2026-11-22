@@ -249,6 +249,25 @@ describe('Fortnox attachments', () => {
     expect(get).toHaveBeenNthCalledWith(1, 'token', '/supplierinvoices/113');
   });
 
+  it('reads the booking from the detail form\'s Vouchers, where Fortnox names it on a read', async () => {
+    const get = vi.fn().mockResolvedValueOnce({
+      SupplierInvoice: {
+        GivenNumber: '113',
+        Vouchers: [
+          { Number: 3, Series: 'D', Year: 6, ReferenceType: 'SUPPLIERINVOICE' },
+          { Number: 9, Series: 'E', Year: 6, ReferenceType: 'SUPPLIERPAYMENT' },
+        ],
+      },
+    });
+    const client = clientWith({ get } as Partial<FortnoxClient>);
+
+    await expect(fetchFortnoxSupplierInvoiceBookingVoucher(client, 'token', '113')).resolves.toEqual({
+      series: 'D',
+      number: 3,
+      financialYearId: 6,
+    });
+  });
+
   it('propagates a refused detail form so the caller can name the scope', async () => {
     const forbidden = new FortnoxApiError('forbidden', 403);
     const client = clientWith({ get: vi.fn().mockRejectedValue(forbidden) } as Partial<FortnoxClient>);

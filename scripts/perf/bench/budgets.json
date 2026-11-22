@@ -5,7 +5,8 @@
     "warm: twice the worst p95 (at least 10 ms) while that stays within the 100 ms DB target; 100 ms when 1.5 times the worst still fits under it; otherwise 1.5 times the worst, rounded up to 10 ms, and the case carries a note.",
     "mixed: twice the worst mixed p95, at least 20 ms, rounded up to 10 ms. Mixed has no absolute target: it catches calls that slow down under concurrent postings and builds.",
     "The 100 ms DB target: 200 ms p95 end to end, less the auth proxy and route wrapper (50-90 ms).",
-    "A change that makes a call legitimately slower raises its budget in the same merge request, with before and after numbers."
+    "A change that makes a call legitimately slower raises its budget in the same merge request, with before and after numbers.",
+    "Raised on 2026-11-22, after CI moved to GitHub-hosted runners on 2026-11-19, from eight runs there (three scheduled, 2026-11-20 to 2026-11-22, and five started by hand on 2026-11-22). Every budget under the rule's value for the worst p95 of those runs was raised to that value; none was lowered. page.invoices.deduction_lines was left alone, as its note asks."
   ],
   "targetMs": 100,
   "cases": {
@@ -23,7 +24,7 @@
     },
     "hem.verifikat_without_documents": {
       "warm": 460,
-      "mixed": 830,
+      "mixed": 990,
       "note": "Over the 100 ms target: supplier_invoices_with_document joins document_attachments by id with no company filter, so the planner scans every company's documents; it grows with the whole database, not the company."
     },
     "hem.collection_open_invoice_ids": {
@@ -40,18 +41,18 @@
     },
     "bookkeeping.list_verifikat_missing_underlag": {
       "warm": 720,
-      "mixed": 1350,
+      "mixed": 1470,
       "note": "Over the 100 ms target: the same id joins without a company filter (document_attachments, supplier_invoice_payments, invoices) scan every company's rows."
     },
     "page.bookkeeping.list": {
-      "warm": 370,
-      "mixed": 800,
-      "note": "Over the 100 ms target: the list counts the year's verifikat for its total (50 000 in the fixture year). Warm p95 244.8 ms, mixed 398.9 ms on the first run on main, 2026-11-14."
+      "warm": 480,
+      "mixed": 1230,
+      "note": "Over the 100 ms target: the list counts the year's verifikat for its total (50 000 in the fixture year). Warm p95 244.8 ms, mixed 398.9 ms on the first run on main, 2026-11-14. Worst 317.0 ms warm, 610.3 ms mixed over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22."
     },
     "page.invoices.list": {
-      "warm": 100,
-      "mixed": 180,
-      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 56.9 ms, mixed 87.4 ms."
+      "warm": 130,
+      "mixed": 280,
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 56.9 ms, mixed 87.4 ms. Raised 2026-11-22: worst warm 82.1 ms, mixed 138.4 ms over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22."
     },
     "page.invoices.payout_requests": {
       "warm": 10,
@@ -64,23 +65,23 @@
       "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 59.3 ms, mixed 96.4 ms, for an empty answer: with the partial index on (company_id, deduction_total) the same read takes 5 to 9 ms, so the fixture's plan differs. Look at that plan before raising this."
     },
     "page.supplier_invoices.list": {
-      "warm": 85,
-      "mixed": 130,
+      "warm": 100,
+      "mixed": 310,
       "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 40.4 ms, mixed 60.9 ms."
     },
     "page.transactions.window": {
-      "warm": 85,
-      "mixed": 140,
-      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 41.6 ms, mixed 65.2 ms."
+      "warm": 130,
+      "mixed": 280,
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 41.6 ms, mixed 65.2 ms. Raised 2026-11-22: worst warm 82.9 ms, mixed 136.3 ms over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22."
     },
     "page.transactions.pending": {
       "warm": 20,
-      "mixed": 30,
+      "mixed": 40,
       "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 9.4 ms, mixed 10.3 ms."
     },
     "page.hem.overdue_invoices": {
-      "warm": 10,
-      "mixed": 20,
+      "warm": 20,
+      "mixed": 40,
       "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 4.1 ms, mixed 8.9 ms."
     },
     "tb.ytd.include": {
@@ -88,11 +89,11 @@
       "mixed": 140
     },
     "tb.ytd.exclude_all_year_end": {
-      "warm": 60,
-      "mixed": 60
+      "warm": 65,
+      "mixed": 160
     },
     "tb.prior_ytd.exclude_all_year_end": {
-      "warm": 65,
+      "warm": 70,
       "mixed": 150
     },
     "tb.year.include": {
@@ -112,16 +113,16 @@
       "mixed": 140
     },
     "tb.closed_year.exclude_final": {
-      "warm": 55,
+      "warm": 60,
       "mixed": 150
     },
     "tb.closed_year.to_balance_day": {
-      "warm": 45,
-      "mixed": 70
+      "warm": 50,
+      "mixed": 90
     },
     "opening_balances.prior_years": {
-      "warm": 45,
-      "mixed": 160
+      "warm": 70,
+      "mixed": 170
     },
     "latest_vouchers.resultatrapport": {
       "warm": 10,
@@ -132,46 +133,47 @@
       "mixed": 20
     },
     "kpi.aggregates": {
-      "warm": 100,
-      "mixed": 210
+      "warm": 110,
+      "mixed": 320,
+      "note": "Over the 100 ms DB target by the rule only: worst warm p95 68.3 ms over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22."
     },
     "monthly_breakdown.aggregates": {
       "warm": 100,
-      "mixed": 190
+      "mixed": 290
     },
     "kpi.paid_invoice_days": {
-      "warm": 60,
+      "warm": 70,
       "mixed": 170
     },
     "kpi.supplier_invoices": {
       "warm": 65,
-      "mixed": 140
+      "mixed": 150
     },
     "dimension_pnl.buckets": {
       "warm": 100,
-      "mixed": 120
+      "mixed": 200
     },
     "dimension_cross.buckets": {
-      "warm": 100,
-      "mixed": 120,
-      "note": "Not yet measured on the bench: set to the 100 ms target and dimension_pnl.buckets' mixed budget. The line path took 431 ms for a 70 000-line year, hence ledger_tagset_days; its rows read like ledger_dimension_days (47 700 rows in about 80 ms). Replace with twice the first scheduled run's worst p95."
+      "warm": 210,
+      "mixed": 480,
+      "note": "Over the 100 ms DB target on a slow run. First measured over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22: warm p95 70 to 135 ms, mixed 111 to 236 ms. On the earlier runner 74 to 126 ms warm from 2026-11-02. The line path took 431 ms for a 70 000-line year, hence ledger_tagset_days; its rows read like ledger_dimension_days (47 700 rows in about 80 ms)."
     },
     "dimension_cross.cell_lines": {
-      "warm": 100,
-      "mixed": 120,
-      "note": "Not yet measured on the bench; same rule as dimension_cross.buckets. The cell is read through its first value's locator."
+      "warm": 670,
+      "mixed": 1740,
+      "note": "Over the 100 ms DB target, and over 200 ms end to end: the first page of one cell's lines, read through its first value's locator. First measured over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22: warm p95 215 to 445 ms, mixed 333 to 867 ms. On the earlier runner 245 to 320 ms warm from 2026-11-02. Not yet made faster."
     },
     "huvudbok.line_counts": {
       "warm": 40,
-      "mixed": 50
+      "mixed": 100
     },
     "huvudbok.account_page": {
       "warm": 45,
-      "mixed": 330
+      "mixed": 380
     },
     "huvudbok.account_page.later": {
       "warm": 60,
-      "mixed": 50
+      "mixed": 110
     },
     "huvudbok.drilldown_lines": {
       "warm": 100,
@@ -179,11 +181,11 @@
     },
     "grundbok.page": {
       "warm": 100,
-      "mixed": 170
+      "mixed": 200
     },
     "grundbok.page.later": {
-      "warm": 75,
-      "mixed": 150
+      "warm": 95,
+      "mixed": 260
     },
     "grundbok.totals": {
       "warm": 75,
@@ -191,7 +193,7 @@
     },
     "ar.ledger_invoices": {
       "warm": 75,
-      "mixed": 140
+      "mixed": 150
     },
     "ar.register_coverage": {
       "warm": 60,
@@ -202,24 +204,24 @@
       "mixed": 160
     },
     "ap.ledger_invoices": {
-      "warm": 10,
-      "mixed": 20
+      "warm": 15,
+      "mixed": 40
     },
     "vat.declaration_totals": {
-      "warm": 65,
-      "mixed": 160
+      "warm": 100,
+      "mixed": 230
     },
     "vat.settlement_window": {
-      "warm": 55,
-      "mixed": 180
+      "warm": 90,
+      "mixed": 220
     },
     "vat.ruta_source_lines": {
       "warm": 100,
-      "mixed": 190
+      "mixed": 260
     },
     "vat.rc_basis_gaps": {
       "warm": 35,
-      "mixed": 30
+      "mixed": 60
     },
     "ps.eu_sales_entries": {
       "warm": 35,
@@ -227,7 +229,7 @@
     },
     "audit.sources.month": {
       "warm": 140,
-      "mixed": 220,
+      "mixed": 330,
       "note": "Near the target: 43 ms on a quiet host, up to 91 ms on a busy runner, so the budget sits above it."
     },
     "audit.decisions.month": {
@@ -239,23 +241,23 @@
       "note": "The whole-year behandlingshistorik, over the target by decision (the report opens on the month)."
     },
     "reconciliation.facts.month": {
-      "warm": 270,
-      "mixed": 670,
-      "note": "Over the 100 ms DB target (under 200 ms end to end); kept from getting slower."
+      "warm": 480,
+      "mixed": 1400,
+      "note": "Over the 100 ms DB target, and over 200 ms end to end on most runs. Half again slower from the night of 2026-10-26 (168 ms warm on 2026-10-25, 255 ms the night after, 210 to 280 ms on that runner through November), the day 20261025083000 made the link anchor one join to end a statement timeout in production; the budget was not raised with it. Worst 319.7 ms warm, 697.7 ms mixed over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22. Kept from getting slower."
     },
     "reconciliation.facts.ytd": {
-      "warm": 380,
-      "mixed": 850,
-      "note": "Over the 100 ms DB target; kept from getting slower."
+      "warm": 580,
+      "mixed": 1550,
+      "note": "Over the 100 ms DB target; slower from the night of 2026-10-26, as reconciliation.facts.month (230 ms warm on 2026-10-25, 300 ms the night after). Worst 384.2 ms warm, 773.8 ms mixed over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22. Kept from getting slower."
     },
     "reconciliation.items.month": {
-      "warm": 250,
-      "mixed": 590,
-      "note": "Over the 100 ms DB target; kept from getting slower."
+      "warm": 340,
+      "mixed": 1050,
+      "note": "Over the 100 ms DB target; kept from getting slower. Worst 226.0 ms warm, 520.4 ms mixed over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22."
     },
     "reconciliation.unexplained_bank_legs": {
       "warm": 100,
-      "mixed": 210
+      "mixed": 290
     },
     "bank.open_rows.month_count": {
       "warm": 30,
@@ -279,7 +281,7 @@
     },
     "bank.is_booked.booked_page": {
       "warm": 390,
-      "mixed": 780,
+      "mixed": 810,
       "note": "Over the 100 ms target: is_booked is per row and a booked page walks 501 rows. A list of open rows reads open_bank_rows instead."
     },
     "bank.balance_facts": {
@@ -288,13 +290,13 @@
       "note": "Over the 100 ms DB target: every bank row of the account up to the day; was 41 ms on main with a per-row anchor read."
     },
     "yearend.bank_facts": {
-      "warm": 350,
-      "mixed": 810,
-      "note": "Over the 100 ms DB target: a whole closed year of 1930; kept from getting slower."
+      "warm": 520,
+      "mixed": 1330,
+      "note": "Over the 100 ms DB target: a whole closed year of 1930; slower from the night of 2026-10-26, as reconciliation.facts.month (237 ms warm on 2026-10-25, 305 ms the night after). Worst 344.0 ms warm, 662.7 ms mixed over eight runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22. Kept from getting slower."
     },
     "yearend.voucher_gaps": {
-      "warm": 85,
-      "mixed": 170
+      "warm": 95,
+      "mixed": 190
     },
     "post.commit_journal_entry": {
       "warm": 70,

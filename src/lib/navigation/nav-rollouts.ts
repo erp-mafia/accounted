@@ -21,9 +21,14 @@ import type { NavGateContext } from '@/lib/navigation/nav-gates'
  * stays in the block that owns its page; this composition layer only
  * gathers them.
  */
-export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'arkivBrainEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'commitmentsEnabled' | 'companyQuestionsEnabled' | 'assistantChatEnabled'>
+export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'arkivBrainEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'bolagetMoneyEnabled' | 'commitmentsEnabled' | 'companyQuestionsEnabled' | 'assistantChatEnabled'>
 
-export function navRollouts(companyId: string | null | undefined): NavRollouts {
+/**
+ * `bolagetRegisters`: the company row's `bolaget_registers_enabled` (a
+ * company set up from a formation), which opens the register rows outside
+ * the Bolaget rollout.
+ */
+export function navRollouts(companyId: string | null | undefined, company: { bolagetRegisters?: boolean } = {}): NavRollouts {
   return {
     arkivEnabled: isArkivSectionEnabled(companyId),
     // The Fakta view of the wiki: where Arkiv reads the documents.
@@ -36,7 +41,9 @@ export function navRollouts(companyId: string | null | undefined): NavRollouts {
     // page's actions follow.
     signingEnabled: signingSwitchedOn(companyId),
     // The Bolaget section (Aktiebok, Styrelse och firmateckning).
-    bolagetEnabled: isBolagetEnabled(companyId),
+    bolagetEnabled: isBolagetEnabled(companyId) || company.bolagetRegisters === true,
+    // Möten, Kapital, Ägarskatt: the rollout alone.
+    bolagetMoneyEnabled: isBolagetEnabled(companyId),
     // Avtal och åtaganden (Bolaget rollout, BOLAGET_COMPANY_IDS).
     commitmentsEnabled: commitmentsEnabledFor(companyId),
     // The question list (COMPANY_QUESTIONS_COMPANY_IDS): the Frågor row under Att göra.

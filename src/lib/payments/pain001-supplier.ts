@@ -119,7 +119,7 @@ import { creditorAccountForm, domesticCreditorAccount, type CreditorAccountForm 
 import { sanitizeMigText } from './mig-text'
 import { debtorPartyId, initiatingPartyId } from './initiating-party'
 import { SWEDBANK_BIC, type SwedbankFileIds } from './swedbank'
-import type { PaymentReference, SupplierPayee } from './supplier-payee'
+import { GIRO_MESSAGE_MAX, type PaymentReference, type SupplierPayee } from './supplier-payee'
 
 export interface SupplierPain001Debtor {
   name: string
@@ -174,9 +174,6 @@ export interface SupplierPain001Options {
   /** Batch created_at (ISO timestamp): becomes CreDtTm, NOT the clock. */
   createdAt: string
 }
-
-/** The receiver-side giro message field is 25 positions; keep Ustrd within it. */
-const USTRD_MAX = 25
 
 /**
  * Debtor banks, by 8-character BIC, that take a payment to a bankgiro number
@@ -503,7 +500,7 @@ function pushRemittance(
     lines.push('            </CdtrRefInf>')
     lines.push('          </Strd>')
   } else {
-    lines.push(`          <Ustrd>${escapeXml(text(reference.value).slice(0, USTRD_MAX))}</Ustrd>`)
+    lines.push(`          <Ustrd>${escapeXml(text(reference.value).slice(0, GIRO_MESSAGE_MAX))}</Ustrd>`)
   }
   lines.push('        </RmtInf>')
 }

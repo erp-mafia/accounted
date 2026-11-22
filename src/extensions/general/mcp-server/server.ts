@@ -767,6 +767,7 @@ import { apiKeyArrivalActor, readInboxItemArrivals, recordDocumentArrival, type 
 import { DOCUMENT_DETAIL_PARTS, parseDocumentDetailParts, readDocumentDetail } from '@/lib/documents/read/document-detail'
 import { readTransactionWithVouchers } from '@/lib/transactions/read-with-vouchers'
 import { createArkivTools } from './arkiv-tools'
+import { createFormationTools } from './formation-tools'
 import { createPurchaseCategoryTools } from './purchase-category-tools'
 import { createFeedTools } from './feed-tools'
 import { OPEN_QUESTIONS_HOW, answerQuestionWithFact, briefingQuestion, createQuestionTools } from './question-tools'
@@ -846,6 +847,7 @@ import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/li
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 import { noteCompletionLog } from '@/lib/extensions/completion-log'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
+import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
 import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 
 // ── Actor context ────────────────────────────────────────────
@@ -981,7 +983,12 @@ function resolveInvoiceLineFromArticle(
       vat_rate: 0,
     }
   }
-  if (!item.quantity || item.quantity <= 0) throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: quantity must be positive`)
+  // The web's quantity rule (lib/invoices/line-quantity.ts): zero and
+  // negative are valid, except on a skattereduktion row.
+  const quantityIssue = lineQuantityIssue(item)
+  if (quantityIssue) {
+    throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: ${LINE_QUANTITY_MESSAGES[quantityIssue]}`)
+  }
   // Strict typeof: a host that skips inputSchema validation could send a
   // string, which JS comparisons would coerce past a bare range check while
   // hasLineDiscount (typeof === 'number') then ignores it in the totals.
@@ -7143,6 +7150,13 @@ export const tools: McpTool[] = [
       scope: 'company_create',
       companyFromResult: (result) => (typeof result.company_id === 'string' ? result.company_id : undefined),
     },
+  }),
+
+  ...createFormationTools({
+    annotations: annotationsForEffect('additive', { idempotentHint: true, openWorldHint: true }),
+    appOrigin: connectLinkBaseUrl,
+    defaultTeamForUser,
+    newCompanyReach,
   }),
 
   {
@@ -24216,6 +24230,9 @@ export const tools: McpTool[] = [
     name: 'gnubok_import_rot_rut_beslut',
     keywords: ['rotavdrag', 'rutavdrag', 'beslutsfil', 'skatteverket'],
     title: 'Import Rot/Rut Decision File',
+    // Search-only: tools/list is frozen. The rot/rut page and a raw
+    // tools/call import a beslutsfil.
+    catalogVisibility: 'search',
     description:
       'Import Skatteverkets beslutsfil (decision JSON from the rot/rut e-tjänst) and record godkänt belopp on the matching begäran. Exact matching only; per-beslut outcomes in results. Book the payout afterwards via the settle endpoint hint in next.',
     inputSchema: {
@@ -25978,10 +25995,13 @@ export const tools: McpTool[] = [
         }
         for (const [i, item] of rawItems.entries()) {
           // Text rows are stored with quantity 0 and legitimately come back
-          // that way from gnubok_get_invoice (web parity: the canonical
-          // CreateInvoiceItemSchema exempts them from the quantity rule).
+          // that way from gnubok_get_invoice. Product rows follow the web's
+          // quantity rule (lib/invoices/line-quantity.ts).
           if (item.line_type === 'text') continue
-          if (!item.quantity || item.quantity <= 0) throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: quantity must be positive`)
+          const quantityIssue = lineQuantityIssue(item)
+          if (quantityIssue) {
+            throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: ${LINE_QUANTITY_MESSAGES[quantityIssue]}`)
+          }
         }
       }
 
