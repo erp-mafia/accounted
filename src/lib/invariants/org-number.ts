@@ -101,6 +101,9 @@ export function orgNumberKey(raw: string | null | undefined): string | null {
   return null
 }
 
+/** An enskild firma's registration number as TIC returns it: the century-prefixed personnummer and a 4-digit serial. */
+const SOLE_TRADER_REGISTRATION = /^(18|19|20)\d{14}$/
+
 /**
  * {@link orgNumberKey} for a Bolagsverket registration number as TIC returns
  * it (CompanyRoles, Lens documents), or null when it is not one.
@@ -115,8 +118,29 @@ export function orgNumberKey(raw: string | null | undefined): string | null {
 export function registrationNumberKey(raw: string | null | undefined): string | null {
   if (!raw) return null
   const cleaned = stripOrgNumberFormatting(raw)
-  if (/^(18|19|20)\d{14}$/.test(cleaned)) return cleaned.slice(2, 12)
+  if (SOLE_TRADER_REGISTRATION.test(cleaned)) return cleaned.slice(2, 12)
   return orgNumberKey(cleaned)
+}
+
+/**
+ * Whether two registration numbers as TIC returns them name one registration:
+ * the same {@link registrationNumberKey} and, for an enskild firma, the same
+ * whole number (century, personnummer and serial). A person can register a
+ * firm more than once, and Lens holds each registration (`...0001`,
+ * `...0002`) as its own company, with its own status, fiscal years and
+ * payroll, all under the one personnummer the key reduces them to. A number
+ * without a serial is not the same as one with it. A side with nothing
+ * readable on it is not the same as anything.
+ */
+export function sameRegistration(a: string | null | undefined, b: string | null | undefined): boolean {
+  const key = registrationNumberKey(a)
+  return key !== null && key === registrationNumberKey(b) && soleTraderRegistration(a) === soleTraderRegistration(b)
+}
+
+/** An enskild firma's whole registration number, separators stripped, or null for any other shape. */
+function soleTraderRegistration(raw: string | null | undefined): string | null {
+  const cleaned = raw ? stripOrgNumberFormatting(raw) : ''
+  return SOLE_TRADER_REGISTRATION.test(cleaned) ? cleaned : null
 }
 
 /**
