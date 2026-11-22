@@ -72,15 +72,15 @@ export function BookingScreen({ transaction, account, back }: BookingScreenProps
         }
       />
 
-      {!canWrite ? (
-        <p className="text-sm text-muted-foreground">{lockedTitle}</p>
-      ) : transaction?.journal_entry_id ? (
+      {transaction?.journal_entry_id ? (
         <p className="text-sm">
           {t('already_booked')}{' '}
           <Link href={`/bookkeeping/${transaction.journal_entry_id}`} className="font-medium text-strong underline decoration-foreground/25 underline-offset-[3px] hover:decoration-foreground/60">
             {t('open_voucher')}
           </Link>
         </p>
+      ) : !canWrite ? (
+        <p className="text-sm text-muted-foreground">{lockedTitle}</p>
       ) : transaction ? (
         <TransactionBooking
           transaction={transaction}

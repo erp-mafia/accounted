@@ -252,6 +252,12 @@ describe('underlag survives closing a booking dialog', () => {
     })
   }
 
+  it('both hosts hand every change from their upload zones to the hook', () => {
+    expect(BOOKING_SRC).toContain('const handleFilesChange = attachments.onFilesChange')
+    expect(BOOKING_SRC.match(/onFilesChange=\{handleFilesChange\}/g)?.length).toBe(2)
+    expect(SCREEN_SRC.match(/onFilesChange=\{attachments\.onFilesChange\}/g)?.length).toBe(2)
+  })
+
   it('TransactionBookingDialog keeps the confirm inside its content, so the confirm never dismisses it', () => {
     const confirm = BOOKING_SRC.indexOf('<DestructiveConfirmDialog {...underlag.confirmProps} />')
     expect(confirm).toBeGreaterThan(-1)

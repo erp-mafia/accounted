@@ -7,6 +7,7 @@
  */
 import { isUuid } from '@/lib/invariants/uuid'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
 
 export const BOOKING_SCREEN_PATH = '/bokfor'
 
@@ -26,13 +27,14 @@ function first(value: QueryValue): string | null {
 const RETURN_PATHS = ['/bookkeeping', '/transactions'] as const
 
 /**
- * A return address the screen may follow: a path on one of the pages it
- * returns to, never another host (`//x`), another page or a backslash
- * trick. Anything else is dropped.
+ * A return address the screen may follow: a same-origin path, normalised by
+ * safeReturnTo (dot segments resolved, protocol-relative and backslash forms
+ * refused), that lands on one of the pages the screen returns to. Anything
+ * else is dropped.
  */
 export function safeReturnPath(raw: string | null | undefined): string | null {
-  const path = raw?.trim()
-  if (!path || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return null
+  const path = safeReturnTo(raw?.trim(), '')
+  if (!path) return null
   const known = RETURN_PATHS.some((p) => path === p || path.startsWith(`${p}?`) || path.startsWith(`${p}/`))
   return known ? path : null
 }

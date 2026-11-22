@@ -58,6 +58,14 @@ describe('safeReturnPath', () => {
     expect(safeReturnPath('/\\evil.example')).toBeNull()
     expect(safeReturnPath('/bookkeepingx')).toBeNull()
     expect(safeReturnPath('/settings')).toBeNull()
+  })
+
+  it('judges the normalised path, so dot segments cannot climb to another host or page', () => {
+    expect(safeReturnPath('/bookkeeping/..//evil.com')).toBeNull()
+    expect(safeReturnPath('/bookkeeping/%2e%2e//evil.com')).toBeNull()
+    expect(safeReturnPath('/bookkeeping/a/../..//evil.com')).toBeNull()
+    expect(safeReturnPath('/bookkeeping/../settings')).toBeNull()
+    expect(safeReturnPath('/transactions/./?flik=alla')).toBe('/transactions/?flik=alla')
     expect(safeReturnPath('')).toBeNull()
     expect(safeReturnPath(null)).toBeNull()
   })
