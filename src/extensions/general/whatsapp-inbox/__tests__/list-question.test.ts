@@ -24,7 +24,7 @@ vi.mock('@/lib/questions/app-answer', async () => {
   return { ...actual, answerAsPerson: vi.fn(), closeAsPerson: vi.fn() }
 })
 
-vi.mock('@/lib/questions/list', () => ({ listQuestions: vi.fn() }))
+vi.mock('@/lib/questions/list', () => ({ listOpenQuestionsAcross: vi.fn() }))
 
 vi.mock('@/lib/questions/rows', async () => {
   const actual = await vi.importActual<typeof import('@/lib/questions/rows')>('@/lib/questions/rows')
@@ -35,7 +35,7 @@ import { INTERACTIVE_BODY_MAX, sendReplyButtons, sendText } from '@/extensions/g
 import { resolveRoutedCompany } from '@/extensions/general/whatsapp-inbox/lib/routing'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { answerAsPerson, closeAsPerson } from '@/lib/questions/app-answer'
-import { listQuestions } from '@/lib/questions/list'
+import { listOpenQuestionsAcross } from '@/lib/questions/list'
 import { readQuestionRow } from '@/lib/questions/rows'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -72,11 +72,14 @@ const routedMock = vi.mocked(resolveRoutedCompany)
 const historyMock = vi.mocked(appendProcessingHistory)
 const answerMock = vi.mocked(answerAsPerson)
 const closeMock = vi.mocked(closeAsPerson)
-const listMock = vi.mocked(listQuestions)
+const listMock = vi.mocked(listOpenQuestionsAcross)
 const readRowMock = vi.mocked(readQuestionRow)
 
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
 const OTHER_COMPANY = 'c0000000-0000-4000-8000-000000000002'
+const THIRD_COMPANY = 'c0000000-0000-4000-8000-000000000003'
+const COMPANY_NAME = 'Bolag A AB'
+const OTHER_COMPANY_NAME = 'Bolag B AB'
 const USER = 'a0000000-0000-4000-8000-000000000001'
 const OTHER_USER = 'a0000000-0000-4000-8000-000000000002'
 const QUESTION_ID = 'e0000000-0000-4000-8000-000000000001'
@@ -180,16 +183,40 @@ interface ConversationWrite {
 const conversationWrites = (writes: Write[]): ConversationWrite[] =>
   writes.filter((write) => write.table === 'whatsapp_conversations').map((write) => write.row as ConversationWrite)
 
-/** A database where the person keeps the books of COMPANY with `role` (null: no membership). */
-function db(opts: { role?: string | null; archived?: boolean; link?: WhatsAppPhoneLink; conversation?: WhatsAppConversation; questions?: Record<string, unknown>[] } = {}) {
+/** A membership row as the reads see it: the company's name embedded, and its archive date as the filter column. */
+function membership(companyId: string, name: string | null, opts: { role?: string; archived?: boolean; userId?: string } = {}): Record<string, unknown> {
+  return {
+    user_id: opts.userId ?? USER,
+    company_id: companyId,
+    role: opts.role ?? 'owner',
+    companies: { name },
+    ...(opts.archived ? { 'companies.archived_at': '2026-01-01T00:00:00.000Z' } : {}),
+  }
+}
+
+/** Open questions as the list hands them out, each with the company whose list it is on. */
+const openOf = (questions: CompanyQuestion[], companyId: string = COMPANY) => questions.map((question) => ({ companyId, question }))
+
+/**
+ * A database where the person keeps the books of COMPANY with `role` (null:
+ * no membership), or holds exactly the `memberships` given.
+ */
+function db(
+  opts: {
+    role?: string | null
+    archived?: boolean
+    memberships?: Record<string, unknown>[]
+    link?: WhatsAppPhoneLink
+    conversation?: WhatsAppConversation
+    questions?: Record<string, unknown>[]
+  } = {},
+) {
   const writes: Write[] = []
   const role = opts.role === undefined ? 'owner' : opts.role
   const mock = createRowsMockSupabase(
     {
       company_members:
-        role === null
-          ? []
-          : [{ user_id: USER, company_id: COMPANY, role, ...(opts.archived ? { 'companies.archived_at': '2026-01-01T00:00:00.000Z' } : {}) }],
+        opts.memberships ?? (role === null ? [] : [membership(COMPANY, COMPANY_NAME, { role, archived: opts.archived })]),
       whatsapp_phone_links: [{ ...(opts.link ?? makeLink()) }],
       whatsapp_conversations: [{ ...(opts.conversation ?? makeConversation()) }],
       company_questions: opts.questions ?? [],
@@ -204,7 +231,7 @@ const offer = (overrides: Partial<Parameters<typeof sendListQuestion>[1]> = {}):
   link: makeLink(),
   question: makeQuestion(),
   companyId: COMPANY,
-  routedCompanyId: COMPANY,
+  companyName: null,
   usesBurstSlot: false,
   now: NOW,
   ...overrides,
@@ -314,16 +341,16 @@ describe('the body of the question message', () => {
     const whyRoom = (question: string) => INTERACTIVE_BODY_MAX - question.length - '\n'.length - '\n\n'.length - closing.length
 
     it(`${locale}: carries the question, the why on its own line and the closing line`, () => {
-      expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' }, locale)).toBe(
+      expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' }, { locale })).toBe(
         `Gäller hyran kontoret?\nDet avgör kontot.\n\n${closing}`,
       )
-      expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: null }, locale)).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+      expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: null }, { locale })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
     })
 
     it(`${locale}: keeps the why when the whole is exactly at the limit`, () => {
       const question = 'q'.repeat(500)
       const why = 'w'.repeat(whyRoom(question))
-      const body = listQuestionBody({ question, why }, locale)
+      const body = listQuestionBody({ question, why }, { locale })
       expect(body).toBe(`${question}\n${why}\n\n${closing}`)
       expect(body.length).toBe(INTERACTIVE_BODY_MAX)
     })
@@ -331,27 +358,27 @@ describe('the body of the question message', () => {
     it(`${locale}: leaves the why out first, one character over the limit`, () => {
       const question = 'q'.repeat(500)
       const why = 'w'.repeat(whyRoom(question) + 1)
-      const body = listQuestionBody({ question, why }, locale)
+      const body = listQuestionBody({ question, why }, { locale })
       expect(body).toBe(`${question}\n\n${closing}`)
       expect(body.length).toBeLessThanOrEqual(INTERACTIVE_BODY_MAX)
     })
 
     it(`${locale}: leaves the closing line out next, and never cuts the question`, () => {
       const tight = 'q'.repeat(INTERACTIVE_BODY_MAX - closing.length - 1)
-      expect(listQuestionBody({ question: tight, why: 'Det avgör kontot.' }, locale)).toBe(tight)
+      expect(listQuestionBody({ question: tight, why: 'Det avgör kontot.' }, { locale })).toBe(tight)
       const over = 'q'.repeat(INTERACTIVE_BODY_MAX + 100)
-      expect(listQuestionBody({ question: over, why: null }, locale)).toBe(over)
+      expect(listQuestionBody({ question: over, why: null }, { locale })).toBe(over)
     })
 
     it(`${locale}: keeps the closing line when the question alone leaves room for it`, () => {
       const question = 'q'.repeat(INTERACTIVE_BODY_MAX - closing.length - 2)
-      const body = listQuestionBody({ question, why: 'Det avgör kontot.' }, locale)
+      const body = listQuestionBody({ question, why: 'Det avgör kontot.' }, { locale })
       expect(body).toBe(`${question}\n\n${closing}`)
       expect(body.length).toBe(INTERACTIVE_BODY_MAX)
     })
 
     it(`${locale}: stays within the limit for the longest question and why the list holds`, () => {
-      const body = listQuestionBody({ question: 'q'.repeat(500), why: 'w'.repeat(500) }, locale)
+      const body = listQuestionBody({ question: 'q'.repeat(500), why: 'w'.repeat(500) }, { locale })
       expect(body.length).toBeLessThanOrEqual(INTERACTIVE_BODY_MAX)
       expect(body.startsWith('q'.repeat(500))).toBe(true)
       expect(body.endsWith(closing)).toBe(true)
@@ -360,6 +387,56 @@ describe('the body of the question message', () => {
 
   it('writes in Swedish unless told otherwise', () => {
     expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: null })).toBe(`Gäller hyran kontoret?\n\n${CLOSING.sv}`)
+  })
+
+  for (const locale of ['sv', 'en'] as const) {
+    const closing = CLOSING[locale]
+
+    it(`${locale}: starts with the company's name in bold on a line of its own when one is given`, () => {
+      expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' }, { company: COMPANY_NAME, locale })).toBe(
+        `*${COMPANY_NAME}*\nGäller hyran kontoret?\nDet avgör kontot.\n\n${closing}`,
+      )
+      expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: null }, { company: COMPANY_NAME, locale })).toBe(
+        `*${COMPANY_NAME}*\nGäller hyran kontoret?\n\n${closing}`,
+      )
+    })
+
+    it(`${locale}: leaves the name line out when no name is given`, () => {
+      for (const company of [null, undefined, '', '   ']) {
+        expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: null }, { company, locale })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+      }
+    })
+
+    it(`${locale}: with a long company name, leaves the why out first, then the closing line, and keeps the name and the question whole`, () => {
+      const company = `${'Långa Exempelbolaget '.repeat(9)}AB`
+      const head = `*${company}*\n`
+      const question = 'q'.repeat(500)
+
+      // Name, question, why and closing line fit: all of it goes out.
+      const shortWhy = 'w'.repeat(INTERACTIVE_BODY_MAX - head.length - question.length - '\n'.length - '\n\n'.length - closing.length)
+      const whole = listQuestionBody({ question, why: shortWhy }, { company, locale })
+      expect(whole).toBe(`${head}${question}\n${shortWhy}\n\n${closing}`)
+      expect(whole.length).toBe(INTERACTIVE_BODY_MAX)
+
+      // One character more: the why goes first.
+      const withoutWhy = listQuestionBody({ question, why: `${shortWhy}w` }, { company, locale })
+      expect(withoutWhy).toBe(`${head}${question}\n\n${closing}`)
+      expect(withoutWhy.length).toBeLessThanOrEqual(INTERACTIVE_BODY_MAX)
+
+      // No room for the closing line beside the name and the question: it goes next.
+      const tight = 'q'.repeat(INTERACTIVE_BODY_MAX - head.length - closing.length - 1)
+      expect(listQuestionBody({ question: tight, why: 'Det avgör kontot.' }, { company, locale })).toBe(`${head}${tight}`)
+
+      // The name and the question are never cut, whatever their length.
+      const over = 'q'.repeat(INTERACTIVE_BODY_MAX)
+      expect(listQuestionBody({ question: over, why: null }, { company, locale })).toBe(`${head}${over}`)
+    })
+  }
+
+  it('keeps the name on one bold line: asterisks and line breaks in it are taken out', () => {
+    expect(listQuestionBody({ question: 'Gäller hyran kontoret?', why: null }, { company: ' Bolag *A*\nAB ' })).toBe(
+      `*Bolag A AB*\nGäller hyran kontoret?\n\n${CLOSING.sv}`,
+    )
   })
 })
 
@@ -464,7 +541,7 @@ describe('sendListQuestion: when a question is sent', () => {
   })
 
   const notSent: Array<[string, () => { args: Parameters<typeof sendListQuestion>[1]; role?: string | null; archived?: boolean }]> = [
-    ['the question list is not switched on for the company', () => ({ args: offer({ companyId: OTHER_COMPANY, routedCompanyId: OTHER_COMPANY }) })],
+    ['the question list is not switched on for the company', () => ({ args: offer({ companyId: OTHER_COMPANY }) })],
     ['the question is answered', () => ({ args: offer({ question: makeQuestion({ status: 'answered' }) }) })],
     ['the question is closed', () => ({ args: offer({ question: makeQuestion({ status: 'closed', close_reason: 'settled' }) }) })],
     ['the person is not a member of the company', () => ({ args: offer(), role: null })],
@@ -475,7 +552,6 @@ describe('sendListQuestion: when a question is sent', () => {
     ['the link is paused', () => ({ args: offer({ link: makeLink({ muted_at: '2026-11-19T00:00:00.000Z' }) }) })],
     ['the service window is closed', () => ({ args: offer({ conversation: makeConversation({ service_window_expires_at: new Date(NOW.getTime() - 1000).toISOString() }) }) })],
     ['there has never been a service window', () => ({ args: offer({ conversation: makeConversation({ service_window_expires_at: null }) }) })],
-    ['the conversation is routed to another company', () => ({ args: offer({ routedCompanyId: OTHER_COMPANY }) })],
     ['a receipt question is in flight', () => ({
       args: offer({
         conversation: makeConversation({
@@ -719,12 +795,12 @@ describe('after a burst', () => {
   })
 
   it('sends the oldest open question when the burst asked nothing of its own, and leaves one slot', async () => {
-    listMock.mockResolvedValue([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase, writes } = db()
 
     await offerListQuestionAfterBurst(supabase, 'conv-1', burst(0))
 
-    expect(listMock).toHaveBeenCalledWith(supabase, COMPANY, { status: 'open', limit: 5 })
+    expect(listMock).toHaveBeenCalledWith(supabase, [COMPANY])
     expect(sendButtonsMock).toHaveBeenCalledTimes(1)
     expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${QUESTION_ID}:o:office`)
     const [recorded, held] = conversationWrites(writes)
@@ -734,7 +810,7 @@ describe('after a burst', () => {
   })
 
   it('sends nothing when the burst admitted two questions of its own', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     const { supabase, writes } = db({ conversation: makeConversation({ context: { list_question_slots: 2 } }) })
 
     await offerListQuestionAfterBurst(supabase, 'conv-1', burst(2))
@@ -744,7 +820,7 @@ describe('after a burst', () => {
   })
 
   it('keeps the slot the burst leaves while the burst\'s own question is in flight', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     const conversation = makeConversation({
       state: 'awaiting_representation',
       context: { pending_question: { type: 'representation', inbox_item_id: 'item-1', asked_at: NOW.toISOString() } },
@@ -758,7 +834,7 @@ describe('after a burst', () => {
   })
 
   it('does not send a question that expired in this conversation again, and takes the next one', async () => {
-    listMock.mockResolvedValue([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID, options: [] })])
+    listMock.mockResolvedValue(openOf([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID, options: [] })]))
     const { supabase } = db({ conversation: makeConversation({ context: { list_questions_expired: [QUESTION_ID] } }) })
 
     await offerListQuestionAfterBurst(supabase, 'conv-1', burst(0))
@@ -768,7 +844,7 @@ describe('after a burst', () => {
   })
 
   it('sends nothing when every open question has expired here, or none is open', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     const first = db({ conversation: makeConversation({ context: { list_questions_expired: [QUESTION_ID] } }) })
     await offerListQuestionAfterBurst(first.supabase, 'conv-1', burst(0))
 
@@ -785,11 +861,48 @@ describe('after a burst', () => {
     await expect(offerListQuestionAfterBurst(supabase, 'conv-1', burst(0))).resolves.toBeUndefined()
     expect(sendButtonsMock).not.toHaveBeenCalled()
   })
+
+  it('stays with the company the conversation is routed to: only its questions are read', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    routedMock.mockResolvedValue({ companyId: COMPANY, via: 'pin' })
+    const { supabase } = db({ memberships: [membership(COMPANY, COMPANY_NAME), membership(OTHER_COMPANY, OTHER_COMPANY_NAME)] })
+
+    await offerListQuestionAfterBurst(supabase, 'conv-1', burst(0))
+
+    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(listMock).toHaveBeenCalledWith(supabase, [COMPANY])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  })
+
+  it('sends nothing after a burst when the conversation is routed nowhere, or to a company the person only reads', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
+    routedMock.mockResolvedValue(null)
+    const nowhere = db({ memberships: [membership(COMPANY, COMPANY_NAME), membership(OTHER_COMPANY, OTHER_COMPANY_NAME)] })
+    await offerListQuestionAfterBurst(nowhere.supabase, 'conv-1', burst(0))
+
+    routedMock.mockResolvedValue({ companyId: OTHER_COMPANY, via: 'pin' })
+    const reader = db({ memberships: [membership(COMPANY, COMPANY_NAME), membership(OTHER_COMPANY, OTHER_COMPANY_NAME, { role: 'viewer' })] })
+    await offerListQuestionAfterBurst(reader.supabase, 'conv-1', burst(0, [OTHER_COMPANY]))
+
+    expect(listMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  })
+
+  it('names the company after a burst too, for a person who keeps the books of several', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
+    const { supabase } = db({ memberships: [membership(COMPANY, COMPANY_NAME), membership(OTHER_COMPANY, OTHER_COMPANY_NAME)] })
+
+    await offerListQuestionAfterBurst(supabase, 'conv-1', burst(0))
+
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendButtonsMock.mock.calls[0][1].body.startsWith(`*${COMPANY_NAME}*\n`)).toBe(true)
+  })
 })
 
 describe('when the conversation\'s questions are done', () => {
   it('sends the next open question against the slot the burst left', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     const { supabase, writes } = db({ conversation: makeConversation({ context: { list_question_slots: 1 } }) })
 
     await offerListQuestionWhenDone(supabase, 'conv-1')
@@ -799,7 +912,7 @@ describe('when the conversation\'s questions are done', () => {
   })
 
   it('sends nothing when the burst has no slot left', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     const { supabase } = db({ conversation: makeConversation({ context: { list_question_slots: 0 } }) })
     await offerListQuestionWhenDone(supabase, 'conv-1')
     expect(sendButtonsMock).not.toHaveBeenCalled()
@@ -826,12 +939,12 @@ describe('a text that would get the fallback reply', () => {
   const onText = (supabase: SupabaseClient, link: WhatsAppPhoneLink = makeLink()) => offerListQuestionOnText(supabase, 'conv-1', link)
 
   it('gets the oldest open question of the routed company, without a burst slot', async () => {
-    listMock.mockResolvedValue([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase, writes } = db()
 
     expect(await onText(supabase)).toBe('sent')
 
-    expect(listMock).toHaveBeenCalledWith(supabase, COMPANY, { status: 'open', limit: 5 })
+    expect(listMock).toHaveBeenCalledWith(supabase, [COMPANY])
     expect(sendButtonsMock).toHaveBeenCalledTimes(1)
     expect(sendButtonsMock.mock.calls[0][1].buttons).toEqual([
       { id: `cq:${COMPANY}:${QUESTION_ID}:o:office`, title: 'Kontoret' },
@@ -847,7 +960,7 @@ describe('a text that would get the fallback reply', () => {
   })
 
   it('holds the question in the conversation before the send', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     const { supabase, writes } = db()
     let heldBeforeSend = 0
     sendButtonsMock.mockImplementation(async () => {
@@ -861,7 +974,7 @@ describe('a text that would get the fallback reply', () => {
   })
 
   it('is sent with no burst slot left, and leaves the slots as they are', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     const { supabase, writes } = db({ conversation: makeConversation({ context: { list_question_slots: 0 } }) })
 
     expect(await onText(supabase)).toBe('sent')
@@ -870,7 +983,7 @@ describe('a text that would get the fallback reply', () => {
   })
 
   it('passes by a question that expired in this conversation and takes the next one', async () => {
-    listMock.mockResolvedValue([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID, options: [] })])
+    listMock.mockResolvedValue(openOf([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID, options: [] })]))
     const { supabase } = db({ conversation: makeConversation({ context: { list_questions_expired: [QUESTION_ID] } }) })
 
     expect(await onText(supabase)).toBe('sent')
@@ -915,7 +1028,7 @@ describe('a text that would get the fallback reply', () => {
 
   it.each(noQuestion)('sends nothing, writes nothing and leaves the fallback to go out when %s', async (_name, build) => {
     const { conversation, link, role, open } = build()
-    listMock.mockResolvedValue(open ?? [makeQuestion()])
+    listMock.mockResolvedValue(openOf(open ?? [makeQuestion()]))
     const { supabase, writes } = db({ conversation, link, role })
 
     expect(await onText(supabase, link)).toBe('not_sent')
@@ -926,15 +1039,26 @@ describe('a text that would get the fallback reply', () => {
     expect(historyMock).not.toHaveBeenCalled()
   })
 
-  it('sends nothing when the conversation is routed to a company the list is off for, or routed nowhere', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+  it('sends the question whatever company the conversation is routed to, or to none', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     routedMock.mockResolvedValue({ companyId: OTHER_COMPANY, via: 'pin' })
-    const off = db()
-    expect(await onText(off.supabase)).toBe('not_sent')
+    const elsewhere = db()
+    expect(await onText(elsewhere.supabase)).toBe('sent')
 
     routedMock.mockResolvedValue(null)
     const nowhere = db()
-    expect(await onText(nowhere.supabase)).toBe('not_sent')
+    expect(await onText(nowhere.supabase)).toBe('sent')
+
+    expect(sendButtonsMock).toHaveBeenCalledTimes(2)
+    // One company to choose from: the routing is not read.
+    expect(routedMock).not.toHaveBeenCalled()
+  })
+
+  it('sends nothing when the list is on for none of the companies the person keeps the books of', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
+    const { supabase } = db({ memberships: [membership(OTHER_COMPANY, OTHER_COMPANY_NAME), membership(THIRD_COMPANY, 'Bolag C AB')] })
+
+    expect(await onText(supabase)).toBe('not_sent')
 
     expect(listMock).not.toHaveBeenCalled()
     expect(sendButtonsMock).not.toHaveBeenCalled()
@@ -949,7 +1073,7 @@ describe('a text that would get the fallback reply', () => {
   })
 
   it('says the send failed, with the question taken back and nothing else sent', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     sendButtonsMock.mockResolvedValue(SEND_FAILED)
     const { supabase, writes } = db()
 
@@ -973,7 +1097,7 @@ describe('a text that would get the fallback reply', () => {
   })
 
   it('makes the next written reply the answer: the question it sent is the one in flight', async () => {
-    listMock.mockResolvedValue([makeQuestion()])
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
     const first = db()
     await onText(first.supabase)
     const held: ConversationContext = conversationWrites(first.writes)[0].context ?? {}
@@ -1002,6 +1126,186 @@ describe('a text that would get the fallback reply', () => {
       door: 'whatsapp',
     })
     expect(conversationWrites(second.writes)[0].context?.pending_question).toBeUndefined()
+  })
+})
+
+describe('which question a person who keeps the books of several companies gets', () => {
+  const onText = (supabase: SupabaseClient, link: WhatsAppPhoneLink = makeLink()) => offerListQuestionOnText(supabase, 'conv-1', link)
+  const THIRD_COMPANY_NAME = 'Bolag C AB'
+  const three = () => [
+    membership(COMPANY, COMPANY_NAME),
+    membership(OTHER_COMPANY, OTHER_COMPANY_NAME),
+    membership(THIRD_COMPANY, THIRD_COMPANY_NAME),
+  ]
+  const older = makeQuestion({ question_id: QUESTION_ID, created_at: '2026-11-17T08:00:00.000Z' })
+  const newer = makeQuestion({ question_id: OTHER_QUESTION_ID, created_at: '2026-11-19T08:00:00.000Z' })
+
+  it('in three companies with no default company: the question of the one company with the list on, with its name on top', async () => {
+    routedMock.mockResolvedValue(null)
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
+    const { supabase, writes } = db({ memberships: three() })
+
+    expect(await onText(supabase)).toBe('sent')
+
+    expect(listMock).toHaveBeenCalledWith(supabase, [COMPANY])
+    const message = sendButtonsMock.mock.calls[0][1]
+    expect(message.body).toBe(
+      `*${COMPANY_NAME}*\nGäller hyran på 12 000 kr kontoret eller lagret?\nSvaret avgör vilket konto hyran bokförs på.\n\nDu kan också svara med egna ord.`,
+    )
+    expect(message.buttons.map((button) => button.id)).toEqual([
+      `cq:${COMPANY}:${QUESTION_ID}:o:office`,
+      `cq:${COMPANY}:${QUESTION_ID}:o:storage`,
+      `cq:${COMPANY}:${QUESTION_ID}:k`,
+    ])
+    expect(conversationWrites(writes)[0].context?.pending_question).toMatchObject({ question_id: QUESTION_ID, company_id: COMPANY })
+    // One company with the list on: the routing decides nothing and is not read.
+    expect(routedMock).not.toHaveBeenCalled()
+  })
+
+  it('puts the questions of the routed company first, though another company has an older one', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    routedMock.mockResolvedValue({ companyId: OTHER_COMPANY, via: 'pin' })
+    listMock.mockResolvedValue([
+      { companyId: COMPANY, question: older },
+      { companyId: OTHER_COMPANY, question: newer },
+    ])
+    const { supabase, writes } = db({ memberships: three() })
+
+    expect(await onText(supabase)).toBe('sent')
+
+    expect(listMock).toHaveBeenCalledWith(supabase, [COMPANY, OTHER_COMPANY, THIRD_COMPANY])
+    const message = sendButtonsMock.mock.calls[0][1]
+    expect(message.body.startsWith(`*${OTHER_COMPANY_NAME}*\n`)).toBe(true)
+    expect(message.buttons[0].id).toBe(`cq:${OTHER_COMPANY}:${OTHER_QUESTION_ID}:o:office`)
+    expect(conversationWrites(writes)[0].context?.pending_question).toMatchObject({ question_id: OTHER_QUESTION_ID, company_id: OTHER_COMPANY })
+  })
+
+  it('takes the oldest question of any company when the conversation is routed to none', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    routedMock.mockResolvedValue(null)
+    listMock.mockResolvedValue([
+      { companyId: THIRD_COMPANY, question: older },
+      { companyId: COMPANY, question: newer },
+    ])
+    const { supabase } = db({ memberships: three() })
+
+    expect(await onText(supabase)).toBe('sent')
+
+    const message = sendButtonsMock.mock.calls[0][1]
+    expect(message.body.startsWith(`*${THIRD_COMPANY_NAME}*\n`)).toBe(true)
+    expect(message.buttons[0].id).toBe(`cq:${THIRD_COMPANY}:${QUESTION_ID}:o:office`)
+  })
+
+  it('goes on to the other companies once the routed company has none left for this conversation', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    routedMock.mockResolvedValue({ companyId: OTHER_COMPANY, via: 'default' })
+    listMock.mockResolvedValue([
+      { companyId: COMPANY, question: older },
+      { companyId: OTHER_COMPANY, question: newer },
+    ])
+    const { supabase } = db({
+      memberships: three(),
+      conversation: makeConversation({ context: { list_questions_expired: [OTHER_QUESTION_ID] } }),
+    })
+
+    expect(await onText(supabase)).toBe('sent')
+
+    expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${QUESTION_ID}:o:office`)
+  })
+
+  it('reads the routing as none when it cannot be read, and still sends the oldest question', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    routedMock.mockResolvedValue('transient_error')
+    listMock.mockResolvedValue([
+      { companyId: COMPANY, question: older },
+      { companyId: OTHER_COMPANY, question: newer },
+    ])
+    const { supabase } = db({ memberships: three() })
+
+    expect(await onText(supabase)).toBe('sent')
+
+    expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${QUESTION_ID}:o:office`)
+  })
+
+  const contributesNothing: Array<[string, string, () => Record<string, unknown>[]]> = [
+    ['with the list switched off', `${COMPANY},${THIRD_COMPANY}`, () => three()],
+    ['that is archived', '*', () => [
+      membership(COMPANY, COMPANY_NAME),
+      membership(OTHER_COMPANY, OTHER_COMPANY_NAME, { archived: true }),
+      membership(THIRD_COMPANY, THIRD_COMPANY_NAME),
+    ]],
+    ['where the person only invoices', '*', () => [
+      membership(COMPANY, COMPANY_NAME),
+      membership(OTHER_COMPANY, OTHER_COMPANY_NAME, { role: 'invoicer' }),
+      membership(THIRD_COMPANY, THIRD_COMPANY_NAME),
+    ]],
+    ['where the person only reads the books', '*', () => [
+      membership(COMPANY, COMPANY_NAME),
+      membership(OTHER_COMPANY, OTHER_COMPANY_NAME, { role: 'viewer' }),
+      membership(THIRD_COMPANY, THIRD_COMPANY_NAME),
+    ]],
+  ]
+
+  it.each(contributesNothing)('reads no question of a company %s', async (_name, rollout, memberships) => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', rollout)
+    routedMock.mockResolvedValue(null)
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
+    const { supabase } = db({ memberships: memberships() })
+
+    expect(await onText(supabase)).toBe('sent')
+
+    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(listMock).toHaveBeenCalledWith(supabase, [COMPANY, THIRD_COMPANY])
+  })
+
+  it('counts only the companies the person keeps the books of: one such company gets the message without a name', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
+    const { supabase } = db({
+      memberships: [
+        membership(COMPANY, COMPANY_NAME),
+        membership(OTHER_COMPANY, OTHER_COMPANY_NAME, { role: 'viewer' }),
+        membership(THIRD_COMPANY, THIRD_COMPANY_NAME, { archived: true }),
+      ],
+    })
+
+    expect(await onText(supabase)).toBe('sent')
+
+    expect(listMock).toHaveBeenCalledWith(supabase, [COMPANY])
+    expect(sendButtonsMock.mock.calls[0][1].body).toBe(
+      'Gäller hyran på 12 000 kr kontoret eller lagret?\nSvaret avgör vilket konto hyran bokförs på.\n\nDu kan också svara med egna ord.',
+    )
+  })
+
+  it('leaves the name line out for a company with no name on record', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
+    const { supabase } = db({ memberships: [membership(COMPANY, null), membership(OTHER_COMPANY, OTHER_COMPANY_NAME)] })
+
+    expect(await onText(supabase)).toBe('sent')
+
+    expect(sendButtonsMock.mock.calls[0][1].body.startsWith('Gäller hyran')).toBe(true)
+  })
+
+  it('sends nothing when the person keeps the books of no company', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    listMock.mockResolvedValue(openOf([makeQuestion()]))
+    const { supabase, writes } = db({
+      memberships: [membership(COMPANY, COMPANY_NAME, { role: 'viewer' }), membership(OTHER_COMPANY, OTHER_COMPANY_NAME, { role: 'invoicer' })],
+    })
+
+    expect(await onText(supabase)).toBe('not_sent')
+
+    expect(listMock).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+  })
+
+  it('ends as not sent, never throwing, when the memberships cannot be read', async () => {
+    const mock = createTableMockSupabase({
+      whatsapp_conversations: { data: makeConversation() },
+      company_members: { error: { message: 'statement timeout' } },
+    })
+    await expect(onText(mock.supabase as unknown as SupabaseClient)).resolves.toBe('not_sent')
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 })
 
@@ -1069,36 +1373,35 @@ describe('when a question is filed', () => {
     expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
-  it('a person in two companies gets the question of the company the conversation is routed to, and not the other one\'s', async () => {
+  it('a person in two companies gets the question of either company, whatever the conversation is routed to, with the company named', async () => {
     vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
-    const twoCompanies = () => {
-      const writes: Write[] = []
-      const mock = createRowsMockSupabase(
-        {
-          company_members: [
-            { user_id: USER, company_id: COMPANY, role: 'owner' },
-            { user_id: USER, company_id: OTHER_COMPANY, role: 'owner' },
-          ],
-          whatsapp_phone_links: [{ ...makeLink({ default_company_id: COMPANY }) }],
-          whatsapp_conversations: [{ ...makeConversation() }],
-        },
-        writes,
-      )
-      return mock.supabase as unknown as SupabaseClient
-    }
-    // The conversation is routed to COMPANY (the link's default company).
-    routedMock.mockResolvedValue({ companyId: COMPANY, via: 'default' })
+    const twoCompanies = () =>
+      db({
+        memberships: [membership(COMPANY, COMPANY_NAME), membership(OTHER_COMPANY, OTHER_COMPANY_NAME)],
+        link: makeLink({ default_company_id: COMPANY }),
+      }).supabase
 
     await offerFiledListQuestion(twoCompanies(), { companyId: OTHER_COMPANY, questionId: OTHER_QUESTION_ID })
-    expect(sendButtonsMock).not.toHaveBeenCalled()
-
     await offerFiledListQuestion(twoCompanies(), filed)
-    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+
+    expect(sendButtonsMock).toHaveBeenCalledTimes(2)
+    const [forOther, forFirst] = sendButtonsMock.mock.calls.map((call) => call[1])
+    expect(forOther.body.startsWith(`*${OTHER_COMPANY_NAME}*\n`)).toBe(true)
+    expect(forOther.buttons[0].id.startsWith(`cq:${OTHER_COMPANY}:`)).toBe(true)
+    expect(forFirst.body.startsWith(`*${COMPANY_NAME}*\n`)).toBe(true)
+    expect(forFirst.buttons[0].id.startsWith(`cq:${COMPANY}:`)).toBe(true)
+    // The routing is not read for a filed question.
+    expect(routedMock).not.toHaveBeenCalled()
   })
 
-  it('sends nothing when the conversation is routed nowhere', async () => {
-    routedMock.mockResolvedValue(null)
+  it('sends the question without a company name to a person with one company', async () => {
     const { supabase } = db()
+    await offerFiledListQuestion(supabase, filed)
+    expect(sendButtonsMock.mock.calls[0][1].body.startsWith('Gäller hyran')).toBe(true)
+  })
+
+  it('sends nothing to a member whose company is archived', async () => {
+    const { supabase } = db({ archived: true })
     await offerFiledListQuestion(supabase, filed)
     expect(sendButtonsMock).not.toHaveBeenCalled()
   })
@@ -1297,7 +1600,7 @@ describe('a tap on a button', () => {
   })
 
   it('sends the next open question after the acknowledgement, with no burst slot', async () => {
-    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID }), makeQuestion({ question_id: QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID }), makeQuestion({ question_id: QUESTION_ID })]))
     const { supabase, writes } = db({ questions: [openRow] })
 
     await applyListQuestionTap(supabase, tapArgs(optionTap))
@@ -1316,7 +1619,7 @@ describe('a tap on a button', () => {
   })
 
   it('sends the next open question with the burst slots used up, and leaves them as they are', async () => {
-    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase, writes } = db({ questions: [openRow], conversation: makeConversation({ context: { list_question_slots: 0 } }) })
 
     await applyListQuestionTap(supabase, tapArgs(optionTap))
@@ -1326,7 +1629,7 @@ describe('a tap on a button', () => {
   })
 
   it('sends the next open question after "Vet inte" too', async () => {
-    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase } = db({ questions: [openRow] })
 
     await applyListQuestionTap(supabase, tapArgs(dontKnowTap))
@@ -1339,7 +1642,7 @@ describe('a tap on a button', () => {
 
   it.each(nothingFollows)('sends the acknowledgement and nothing after it when %s', async (_name, build) => {
     const { conversation, link, open } = build()
-    listMock.mockResolvedValue(open ?? [makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf(open ?? [makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase } = db({ questions: [openRow], conversation, link })
 
     await applyListQuestionTap(supabase, { ...tapArgs(optionTap), link: link ?? makeLink() })
@@ -1350,7 +1653,7 @@ describe('a tap on a button', () => {
   })
 
   it('sends nothing after a tap on a question that had already ended', async () => {
-    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase } = db({ questions: [{ ...openRow, status: 'answered', answer_option: 'storage', answered_by: OTHER_USER, answered_via: 'app' }] })
 
     await applyListQuestionTap(supabase, tapArgs(optionTap, makeConversation()))
@@ -1467,7 +1770,7 @@ describe('a written reply to a list question', () => {
   })
 
   it('sends the next open question after the acknowledgement of a written answer, with no burst slot', async () => {
-    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase, writes } = db()
 
     await applyListQuestionText(supabase, textArgs('Kontoret på Storgatan'))
@@ -1483,7 +1786,7 @@ describe('a written reply to a list question', () => {
   })
 
   it('sends the next open question after a written "vet inte" too', async () => {
-    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase } = db()
 
     await applyListQuestionText(supabase, textArgs('Vet inte'))
@@ -1496,7 +1799,7 @@ describe('a written reply to a list question', () => {
 
   it.each(nothingFollows)('sends the acknowledgement and nothing after it when %s', async (_name, build) => {
     const { conversation, link, open } = build()
-    listMock.mockResolvedValue(open ?? [makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf(open ?? [makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase } = db({ conversation, link })
 
     await applyListQuestionText(supabase, { ...textArgs('Kontoret på Storgatan'), link: link ?? makeLink() })
@@ -1507,7 +1810,7 @@ describe('a written reply to a list question', () => {
   })
 
   it('sends nothing after a reply that was too long to save', async () => {
-    listMock.mockResolvedValue([makeQuestion({ question_id: OTHER_QUESTION_ID })])
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase } = db()
 
     await applyListQuestionText(supabase, textArgs('x'.repeat(1001)))
