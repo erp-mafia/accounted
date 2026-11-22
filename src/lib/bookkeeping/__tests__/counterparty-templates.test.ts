@@ -20,6 +20,7 @@ import {
   patternDirection,
   patternReplayPlan,
   referenceFreeKey,
+  verifikatTemplateShape,
 } from '../counterparty-templates'
 import { buildTransactionEntryLines } from '../transaction-entries'
 import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
@@ -2623,33 +2624,207 @@ describe('learning-loop repair (issue #865)', () => {
       expect(row.vat_account).toBeNull()
     })
 
-    it('excludes import output-VAT accounts (2615) from the ratio base like other fiktiv moms', async () => {
+    // #997: a replay regenerates the fiktiv moms (learnedReverseChargeLines,
+    // patternReverseChargeLines) instead of reading it back, so a voucher whose
+    // moms it would book on other accounts must teach nothing. Learned, import
+    // VAT came back as reverse charge (2614 ruta 30 and a 4535 basis in ruta 21
+    // instead of 2615 ruta 60 and ruta 50), domestic reverse charge's basis in
+    // ruta 21 instead of 24, and 12 % as 25 %.
+    async function learnedFrom(lines: SIETransactionLine[]) {
       const vouchers = Array.from({ length: 3 }, (_, i) =>
-        makeSIEVoucher({
-          description: 'Import Goods Ltd',
-          number: i + 1,
-          lines: [
-            { account: '1930', amount: -1000 },
-            { account: '4545', amount: 1000 },
-            { account: '2645', amount: 250 },
-            { account: '2615', amount: -250 }, // output VAT on imports
-          ],
-        })
+        makeSIEVoucher({ description: 'Leverantor AB', number: i + 1, lines }),
       )
-
       const { supabase, inserts } = createCapturingSupabase([
         { data: [] },
         { data: null },
       ])
-
       const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
-      expect(count).toBe(1)
+      return { count, row: count > 0 ? capturedTemplateRow(inserts) : null }
+    }
 
-      const row = capturedTemplateRow(inserts)
-      expect(row.vat_treatment).toBe('reverse_charge')
-      expect(row.debit_account).toBe('4545')
-      // Simple pattern: neither fiktiv leg shrank the business ratio base
-      expect(row.line_pattern).toBeNull()
+    it('teaches nothing from import VAT on an ordinary cost account (2645/2615, #997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4010', amount: 1000 },
+        { account: '2645', amount: 250 },
+        { account: '2615', amount: -250 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('teaches nothing from import VAT booked on the ruta 50 account 4545 (#997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4545', amount: 1000 },
+        { account: '2645', amount: 250 },
+        { account: '2615', amount: -250 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('teaches nothing from import VAT beside a 4545/4598 basis pair, whose replay drops the moms (#997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4010', amount: 1000 },
+        { account: '4545', amount: 1000 },
+        { account: '4598', amount: -1000 },
+        { account: '2645', amount: 250 },
+        { account: '2615', amount: -250 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('teaches nothing from domestic reverse charge without a basis pair (2647/2614, #997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4010', amount: 1000 },
+        { account: '2647', amount: 250 },
+        { account: '2614', amount: -250 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('teaches nothing from 12 % reverse charge on an account that does not carry the sats (2624, #997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4010', amount: 1000 },
+        { account: '2645', amount: 120 },
+        { account: '2624', amount: -120 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('teaches nothing from reverse charge beside a deductible moms line, which the simple replay drops (#997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1250 },
+        { account: '4010', amount: 1000 },
+        { account: '2641', amount: 250 },
+        { account: '2645', amount: 250 },
+        { account: '2614', amount: -250 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('learns 12 % reverse charge on the EU-goods 12 % basis account, which replays at its own sats', async () => {
+      const { count, row } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4516', amount: 1000 },
+        { account: '2645', amount: 120 },
+        { account: '2624', amount: -120 },
+      ])
+      expect(count).toBe(1)
+      expect(row).toMatchObject({ debit_account: '4516', vat_treatment: 'reverse_charge', line_pattern: null })
+      const template = makeCategorizationTemplate({
+        debit_account: '4516', credit_account: '1930', vat_treatment: 'reverse_charge', vat_account: '2645',
+      })
+      const booked = reconcileRcBasisWithCostLines(
+        buildMappingResultFromCounterpartyTemplate(
+          { template, matchMethod: 'exact_alias', confidence: 0.9 }, makeTransaction({ amount: -1000 }), 'aktiebolag',
+        ),
+        new Map(),
+      )
+      expect(booked.vat_lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['2645', 120, 0],
+        ['2624', 0, 120],
+      ])
+    })
+
+    it('still learns domestic reverse charge with its 4425/4598 basis pair, which replays 2647/2614', async () => {
+      const { count, row } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4010', amount: 1000 },
+        { account: '4425', amount: 1000 },
+        { account: '4598', amount: -1000 },
+        { account: '2647', amount: 250 },
+        { account: '2614', amount: -250 },
+      ])
+      expect(count).toBe(1)
+      const learned = row?.line_pattern as LinePatternEntry[]
+      expect(learned.map((e) => e.account).sort()).toEqual(['4010', '4425', '4598'])
+      expect(patternReplayPlan(learned).rcPair?.kind).toBe('domestic_services')
+    })
+
+    it('teaches the bank-link door nothing from an import verifikat either (verifikatTemplateShape, #997)', () => {
+      expect(verifikatTemplateShape([
+        { account: '1930', amount: -1000 },
+        { account: '4010', amount: 1000 },
+        { account: '2645', amount: 250 },
+        { account: '2615', amount: -250 },
+      ])).toBeNull()
+      expect(verifikatTemplateShape([
+        { account: '1930', amount: -1000 },
+        { account: '6540', amount: 1000 },
+        { account: '2645', amount: 250 },
+        { account: '2614', amount: -250 },
+      ])).toMatchObject({ vatTreatment: 'reverse_charge', vatAccount: '2645' })
+    })
+
+    it('teaches nothing from two basis pairs on one 4598, which averaging merges into another split of the sats (#997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4010', amount: 1000 },
+        { account: '4515', amount: 500 },
+        { account: '4598', amount: -500 },
+        { account: '4516', amount: 500 },
+        { account: '4598', amount: -500 },
+        { account: '2645', amount: 185 },
+        { account: '2614', amount: -125 },
+        { account: '2624', amount: -60 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('learns reverse charge booked on two lines of one cost account, which averages to a simple pair', async () => {
+      const { count, row } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '6540', amount: 600 },
+        { account: '6540', amount: 400 },
+        { account: '2645', amount: 250 },
+        { account: '2614', amount: -250 },
+      ])
+      expect(count).toBe(1)
+      expect(row).toMatchObject({ debit_account: '6540', vat_treatment: 'reverse_charge', line_pattern: null })
+    })
+
+    it('teaches nothing from a reverse-charge credit note, which the simple builder replays without moms (#997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: 1000 },
+        { account: '6540', amount: -1000 },
+        { account: '2645', amount: -250 },
+        { account: '2614', amount: 250 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('leaves a counterparty untaught when its dominant shape teaches nothing, never its minority (#997)', async () => {
+      const imports = Array.from({ length: 8 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Leverantor AB',
+          number: i + 1,
+          lines: [
+            { account: '1930', amount: -1000 },
+            { account: '4010', amount: 1000 },
+            { account: '2645', amount: 250 },
+            { account: '2615', amount: -250 },
+          ],
+        }),
+      )
+      const others = Array.from({ length: 2 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Leverantor AB',
+          number: i + 20,
+          lines: [
+            { account: '1930', amount: -1250 },
+            { account: '5710', amount: 1000 },
+            { account: '2641', amount: 250 },
+          ],
+        }),
+      )
+      const { supabase } = createCapturingSupabase([
+        { data: [] },
+        { data: null },
+      ])
+      expect(await populateTemplatesFromSieVouchers(supabase as never, 'company-1', [...imports, ...others])).toBe(0)
     })
 
     it('learns reverse_charge for counterparties booked with fiktiv moms', async () => {
