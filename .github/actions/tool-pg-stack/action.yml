@@ -20,7 +20,7 @@ runs:
         psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
         psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
     - name: Apply every migration
-      # One session for all of them, a fresh session per file
+      # One connection for all of them, the session reset between files
       # (scripts/ci/replay-migrations.sh).
       shell: bash
       run: scripts/ci/replay-migrations.sh supabase/migrations/*.sql

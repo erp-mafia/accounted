@@ -11,8 +11,16 @@ runs:
     - name: Wait for Postgres
       shell: bash
       run: |
-        command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null; }
+        # The 300 s count from before the psql install a runner without psql
+        # needs, so an install that stalls fails this step with a reason
+        # instead of running into the job's timeout.
         started=$(date +%s)
+        if ! command -v psql >/dev/null; then
+          if ! timeout 300 bash -c 'sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null'; then
+            echo "::error::Could not install psql (postgresql-client) within 300 s"
+            exit 1
+          fi
+        fi
         explain() {
           echo "::group::docker run output"; cat "$RUNNER_TEMP/postgres-start.log" 2>/dev/null || true; echo "::endgroup::"
           echo "::group::container log"; docker logs --tail 200 ci-postgres 2>&1 || true; echo "::endgroup::"

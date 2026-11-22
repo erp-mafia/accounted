@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Applies the given migration files, in the order given, to $DATABASE_URL in
-# ONE psql session. Between two files DISCARD ALL puts the session back the way
-# a new connection starts it: search_path and every other setting back to the
-# connection's own (PGOPTIONS included), the role back to the login role, temp
-# tables, prepared statements, cursors, LISTENs and advisory locks gone. Each
-# file still starts from a fresh session; only the connection is reused, which
-# is where one psql per file spent most of its time.
+# Applies the given migration files, in the order given, to $DATABASE_URL over
+# ONE psql connection, which is where one psql per file spent most of its time.
+# Between two files DISCARD ALL resets the session to the state a new connection
+# starts in: search_path and every other setting back to the connection's own
+# (PGOPTIONS included), the role back to the login role, temp tables, prepared
+# statements, cursors, LISTENs and advisory locks gone. One difference stays: a
+# setting an earlier file stores for the login role or the database (ALTER ROLE
+# or ALTER DATABASE ... SET) reaches a new connection, not this one.
 #
 # The first failing statement stops the replay and psql names the file and the
 # line. A file that leaves a transaction open fails too (DISCARD ALL cannot run

@@ -283,7 +283,7 @@ jobs:
         # extensions schema: the session a fresh `supabase db push` gets. A
         # migration that names an extension's type or function without its
         # schema (vector, not extensions.vector) fails here, as it would there.
-        # One session for all of them, a fresh session per file
+        # One connection for all of them, the session reset between files
         # (scripts/ci/replay-migrations.sh).
         env:
           PGOPTIONS: -c search_path="$user",public
