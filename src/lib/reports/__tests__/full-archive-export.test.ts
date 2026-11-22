@@ -585,6 +585,10 @@ describe('generateFullArchive', () => {
         await zip.file('revision/behandlingshistorik.json')!.async('text')
       ) as Array<{ id: string }>
 
+      // The same bytes JSON.stringify wrote when the history was one string.
+      expect(await zip.file('revision/behandlingshistorik.json')!.async('text')).toBe(
+        JSON.stringify([lineRow, outOfWindowCommit, inWindow], null, 2)
+      )
       // Deduped: audit-1 appears once despite arriving via both fetches.
       expect(history).toHaveLength(3)
       const ids = history.map((h) => h.id)
@@ -1361,8 +1365,20 @@ describe('generateBaseDataArchive', () => {
       ...masterDataQueue,
     ])
 
+    // Two rows in one page: the history is written a row at a time.
+    const history = [
+      { id: 'audit-2', action: 'UPDATE', old_state: { name: 'Acme' }, new_state: { name: 'Acme € Ny' }, created_at: '2024-06-02T10:00:00Z' },
+      { id: 'audit-1', action: 'INSERT', old_state: null, new_state: { name: 'Acme' }, created_at: '2024-06-01T10:00:00Z' },
+    ] as unknown as AuditLogEntry[]
+    mockGetAuditLog.mockResolvedValueOnce({ data: history, count: 0 })
+
     const buffer = await generateBaseDataArchive(supabase as any, 'company-1')
     const zip = await JSZip.loadAsync(buffer)
+
+    // The same bytes JSON.stringify wrote when the history was one string.
+    expect(await zip.file('revision/behandlingshistorik.json')!.async('text')).toBe(
+      JSON.stringify(history, null, 2)
+    )
 
     const manifest = JSON.parse(await zip.file('dokument/manifest.json')!.async('text'))
     expect(manifest).toHaveLength(1)
