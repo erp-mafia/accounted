@@ -158,6 +158,31 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
       },
     ],
   },
+  {
+    title: 'Questions',
+    note: "the company's question list; requires `agent:read` scope alongside `webhooks:manage`. A payload names the question and its state, never the text of the question, its options, its evidence or an answer: read those with `accounted_list_questions`",
+    events: [
+      {
+        type: 'company_question.filed',
+        description: 'a question was put on the list. Carries `questionId`, `status` (`open`) and `createdAt` (when it was filed)',
+      },
+      {
+        type: 'company_question.answered',
+        description:
+          'an open question was answered. Carries `questionId`, `status` (`answered`), `answeredVia` (the door the answer came through: `app`, `whatsapp`, or for an MCP connection the label of the connected client; `null` when none was recorded) and `answeredAt`',
+      },
+      {
+        type: 'company_question.closed',
+        description:
+          'an open question was closed without an answer. Carries `questionId`, `status` (`closed`), `closeReason` (`dont_know`, `not_relevant`, `settled` or `withdrawn`), `answeredVia` (the door the close came through) and `answeredAt` (when it was closed)',
+      },
+      {
+        type: 'company_question.reopened',
+        description:
+          'an answer or a close was undone and the question is open again. Carries `questionId`, `status` (`open`) and `createdAt` (when it was first filed)',
+      },
+    ],
+  },
 ] as const satisfies ReadonlyArray<PublicWebhookEventGroup>
 
 /** Union of every deliverable event type, narrowed from the catalogue. */
@@ -172,13 +197,54 @@ export const PUBLIC_WEBHOOK_EVENTS: ReadonlyArray<PublicWebhookEventType> = PUBL
 )
 
 /**
- * Payroll-grade events: salary_run.* and agi.* describe lönesummor and
- * skatteavdrag, so reading them from outside needs `payroll:read` on top of
- * the surface's own scope, whether pushed (webhook create) or polled
- * (GET /api/events).
+ * An event family that is read from outside only with a scope of its own, on
+ * top of the surface's scope (`webhooks:manage` or `events:read`).
  */
-export const PAYROLL_EVENT_PREFIXES = ['salary_run.', 'agi.'] as const
+export interface ScopedEventFamily {
+  /** The scope the caller needs in addition to the surface's own. */
+  scope: 'payroll:read' | 'agent:read'
+  /** An event type belongs to the family when it starts with one of these. */
+  prefixes: ReadonlyArray<string>
+}
 
-export function isPayrollEvent(eventType: string): boolean {
-  return PAYROLL_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))
+/**
+ * The scoped families, asked by every door that hands an event out: pushed
+ * (webhook create, update and delivery retry) or polled (GET /api/events).
+ *   - salary_run.* and agi.* describe lönesummor and skatteavdrag, so they
+ *     need `payroll:read`.
+ *   - company_question.* announce the question list, which is read with
+ *     `agent:read` (gnubok_list_questions), so they need the same scope.
+ * A new family is a line here; no door keeps a list of its own.
+ */
+export const SCOPED_EVENT_FAMILIES: ReadonlyArray<ScopedEventFamily> = [
+  { scope: 'payroll:read', prefixes: ['salary_run.', 'agi.'] },
+  { scope: 'agent:read', prefixes: ['company_question.'] },
+]
+
+/** Whether the event type belongs to the family. */
+export function isEventOfFamily(family: ScopedEventFamily, eventType: string): boolean {
+  return family.prefixes.some((prefix) => eventType.startsWith(prefix))
+}
+
+/** The families whose scope the caller does not hold. */
+export function closedEventFamilies(
+  holdsScope: (scope: ScopedEventFamily['scope']) => boolean,
+): ScopedEventFamily[] {
+  return SCOPED_EVENT_FAMILIES.filter((family) => !holdsScope(family.scope))
+}
+
+/**
+ * The first family that has a type among `eventTypes` and whose scope the
+ * caller does not hold, with those types; null when the caller may read
+ * every listed type.
+ */
+export function refusedEventFamily(
+  eventTypes: ReadonlyArray<string>,
+  holdsScope: (scope: ScopedEventFamily['scope']) => boolean,
+): { scope: ScopedEventFamily['scope']; eventTypes: string[] } | null {
+  for (const family of closedEventFamilies(holdsScope)) {
+    const refused = eventTypes.filter((eventType) => isEventOfFamily(family, eventType))
+    if (refused.length > 0) return { scope: family.scope, eventTypes: refused }
+  }
+  return null
 }

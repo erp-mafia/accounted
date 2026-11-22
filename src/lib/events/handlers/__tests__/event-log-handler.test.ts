@@ -259,6 +259,38 @@ describe('event-log-handler', () => {
     )
   })
 
+  it('records a question list event under its question id, with the state and without the actor', async () => {
+    const questionId = 'e0000000-0000-4000-8000-000000000001'
+
+    await eventBus.emit({
+      type: 'company_question.closed',
+      payload: {
+        questionId,
+        status: 'closed',
+        closeReason: 'dont_know',
+        answeredVia: 'app',
+        answeredAt: '2026-11-19T09:00:00.000Z',
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })
+
+    expect(mockInsert).toHaveBeenCalledTimes(1)
+    expect(mockInsert).toHaveBeenCalledWith({
+      user_id: 'user-1',
+      company_id: 'company-1',
+      event_type: 'company_question.closed',
+      entity_id: questionId,
+      data: {
+        questionId,
+        status: 'closed',
+        closeReason: 'dont_know',
+        answeredVia: 'app',
+        answeredAt: '2026-11-19T09:00:00.000Z',
+      },
+    })
+  })
+
   it('persists an event whose flat id is not a uuid, with a null entity_id', async () => {
     // entity_id is a uuid column: a non-uuid id would fail the whole insert.
     await eventBus.emit({

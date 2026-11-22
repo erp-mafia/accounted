@@ -6,6 +6,7 @@ import {
   tryReconcileTransaction,
 } from '@/lib/reconciliation/bank-reconciliation'
 import { DEFAULT_SETTLEMENT_ACCOUNT } from '@/lib/reconciliation/cash-account-scope'
+import { isBankMovementEntry } from '@/lib/transactions/bank-link'
 import { describeCashAccountSiblings, normalizeIban, shouldRepointToSibling } from '@/lib/cash-accounts/service'
 import type { Transaction } from '@/types'
 
@@ -57,7 +58,11 @@ export const GET = withRouteContext(
     // into "no currency" and disable ranking for a SEK company.
     const accountCurrency = (cashAccount.currency as string | null) ?? 'SEK'
 
-    let lines = await fetchGLLinesForMatching(supabase, companyId, accountNumber, dateFrom, dateTo, includeMatched)
+    // Both pickers link what they offer: a verifikat no link may name (a
+    // label of opening_balance off a year start) is no candidate.
+    let lines = (await fetchGLLinesForMatching(supabase, companyId, accountNumber, dateFrom, dateTo, includeMatched)).filter(
+      isBankMovementEntry,
+    )
 
     if (transactionId) {
       // The "Matcha mot befintlig verifikation" dialog resolves the account
@@ -96,7 +101,7 @@ export const GET = withRouteContext(
               supabase, companyId, ledger, dateFrom, dateTo, includeMatched,
             )
             for (const line of siblingLines) {
-              if (seen.has(line.line_id)) continue
+              if (seen.has(line.line_id) || !isBankMovementEntry(line)) continue
               seen.add(line.line_id)
               merged.push(line)
             }

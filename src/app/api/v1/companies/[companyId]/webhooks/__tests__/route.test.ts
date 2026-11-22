@@ -380,6 +380,56 @@ describe('POST /api/v1/companies/:companyId/webhooks: event_types', () => {
     expect(mock.findCalls('webhooks', 'insert')).toEqual([])
   })
 
+  it('requires agent:read when any listed type is a question list event', async () => {
+    // The default key holds webhooks:manage and payroll:read, not agent:read.
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await post({ event_types: ['invoice.paid', 'company_question.filed', 'company_question.answered'] })
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+    expect(body.error.details.required_scope).toBe('agent:read')
+    expect(body.error.details.reason).toBe(
+      'Subscribing to company_question.filed, company_question.answered requires agent:read in addition to webhooks:manage.',
+    )
+    expect(mock.findCalls('webhooks', 'insert')).toEqual([])
+  })
+
+  it('subscribes a key holding agent:read to the four question list events', async () => {
+    const types = [
+      'company_question.filed',
+      'company_question.answered',
+      'company_question.closed',
+      'company_question.reopened',
+    ]
+    mockValidate.mockResolvedValueOnce({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['webhooks:manage', 'agent:read'],
+      mode: 'live',
+    })
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      webhooks: { data: { ...SAMPLE_WEBHOOK, event_type: types[0], event_types: types }, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await post({ event_types: types })
+
+    expect(res.status).toBe(201)
+    expect(mock.findCall('webhooks', 'insert')?.[0]).toMatchObject({
+      event_type: 'company_question.filed',
+      event_types: types,
+    })
+    expect((await res.json()).data.event_types).toEqual(types)
+  })
+
   it('returns 401 UNAUTHORIZED without a Bearer token', async () => {
     const res = await createWebhook(
       new Request(url, {
@@ -486,6 +536,49 @@ describe('PATCH /api/v1/companies/:companyId/webhooks/:id: event_types', () => {
     expect(res.status).toBe(403)
     expect((await res.json()).error.code).toBe('INSUFFICIENT_SCOPE')
     expect(mock.findCalls('webhooks', 'update')).toEqual([])
+  })
+
+  it('requires agent:read to list a question list type', async () => {
+    // The default key holds webhooks:manage and payroll:read, not agent:read.
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await patch({ event_types: ['invoice.paid', 'company_question.reopened'] })
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+    expect(body.error.details.required_scope).toBe('agent:read')
+    expect(mock.findCalls('webhooks', 'update')).toEqual([])
+  })
+
+  it('lists a question list type for a key holding agent:read', async () => {
+    mockValidate.mockResolvedValueOnce({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['webhooks:manage', 'agent:read'],
+      mode: 'live',
+    })
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      webhooks: {
+        data: { ...SAMPLE_WEBHOOK, event_types: ['invoice.paid', 'company_question.reopened'] },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await patch({ event_types: ['invoice.paid', 'company_question.reopened'] })
+
+    expect(res.status).toBe(200)
+    expect(mock.findCall('webhooks', 'update')?.[0]).toEqual({
+      event_type: 'invoice.paid',
+      event_types: ['invoice.paid', 'company_question.reopened'],
+    })
   })
 
   it('returns 404 NOT_FOUND when the webhook does not exist for this company', async () => {

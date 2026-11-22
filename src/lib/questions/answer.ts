@@ -102,7 +102,14 @@ export async function answerQuestion(supabase: SupabaseClient, input: AnswerQues
   const answered = toQuestion(data as QuestionRow)
   await emitQuestionEvent({
     type: 'company_question.answered',
-    payload: { questionId: answered.question_id, via: answered.answered_via, userId: input.userId, companyId: input.companyId },
+    payload: {
+      questionId: answered.question_id,
+      status: 'answered',
+      answeredVia: answered.answered_via,
+      answeredAt: answered.answered_at,
+      userId: input.userId,
+      companyId: input.companyId,
+    },
   })
   return answered
 }
@@ -141,7 +148,15 @@ export async function closeQuestion(supabase: SupabaseClient, input: CloseQuesti
   const closed = toQuestion(data as QuestionRow)
   await emitQuestionEvent({
     type: 'company_question.closed',
-    payload: { questionId: closed.question_id, reason, via: closed.answered_via, userId: input.userId, companyId: input.companyId },
+    payload: {
+      questionId: closed.question_id,
+      status: 'closed',
+      closeReason: reason,
+      answeredVia: closed.answered_via,
+      answeredAt: closed.answered_at,
+      userId: input.userId,
+      companyId: input.companyId,
+    },
   })
   return closed
 }

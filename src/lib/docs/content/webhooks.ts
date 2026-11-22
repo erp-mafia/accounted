@@ -77,7 +77,7 @@ The challenge is nested in the request but must come back at the top level: echo
 
 ## Event types
 
-The following event types are deliverable as webhooks. Listing a type that requires elevated scope (\`salary_run.*\` and \`agi.*\` need \`payroll:read\`) returns \`INSUFFICIENT_SCOPE\` at registration time, and when \`PATCH\` sets it.
+The following event types are deliverable as webhooks. Listing a type that requires elevated scope (\`salary_run.*\` and \`agi.*\` need \`payroll:read\`; \`company_question.*\` need \`agent:read\`) returns \`INSUFFICIENT_SCOPE\` at registration time, and when \`PATCH\` sets it.
 
 ${renderEventTypes()}
 
@@ -248,7 +248,7 @@ def verify_signature(body: bytes, header: str, secret: bytes) -> bool:
 
 ## Catching up: the event feed
 
-Every event type listed under [Event types](#event-types) is also written to the event log, which \`GET /api/events\` serves in \`sequence\` order (scope \`events:read\`; \`salary_run.*\` and \`agi.*\` also need \`payroll:read\`, and a key without it does not see them; naming one in \`types\` answers \`403 INSUFFICIENT_SCOPE\`). Pass \`after\` (the last \`sequence\` you processed), optionally \`types\` (comma-separated) and \`limit\` (up to 100), and keep the returned \`cursor\`. A receiver that was down past the retry window, or whose webhook was paused, reads from its last cursor to catch up; an agent can use the feed instead of a webhook. Rows are kept 30 days. A polled row carries the same minimised payload under \`data\` but no delivery id, so deduplicate on event type and entity, not on \`X-Gnubok-Delivery\`.
+Every event type listed under [Event types](#event-types) is also written to the event log, which \`GET /api/events\` serves in \`sequence\` order (scope \`events:read\`; \`salary_run.*\` and \`agi.*\` also need \`payroll:read\` and \`company_question.*\` also need \`agent:read\`: a key without the scope does not see those events, and naming one in \`types\` answers \`403 INSUFFICIENT_SCOPE\`). Pass \`after\` (the last \`sequence\` you processed), optionally \`types\` (comma-separated) and \`limit\` (up to 100), and keep the returned \`cursor\`. A receiver that was down past the retry window, or whose webhook was paused, reads from its last cursor to catch up; an agent can use the feed instead of a webhook. Rows are kept 30 days. A polled row carries the same minimised payload under \`data\` but no delivery id, so deduplicate on event type and entity, not on \`X-Gnubok-Delivery\`.
 
 \`journal_entry.committed\` is written to the feed in the same database transaction that posts the verifikat: the row exists exactly when the voucher was posted, even if the request that posted it crashed right after. Webhook deliveries are queued after that commit, so a crash in between can still cost a delivery but never the feed row; reconcile against the feed. Other event types are written to the feed right after their change commits.
 

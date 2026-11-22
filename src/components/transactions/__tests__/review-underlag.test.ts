@@ -12,12 +12,15 @@ import {
   readAfterPin,
   readAfterUnpin,
   removedUpload,
+  shownUnderlag,
   transactionUnderlagId,
   underlagForReview,
   underlagLinkTargets,
   underlagToCarry,
   unpinUnderlag,
   uploadInFlight,
+  withInboxDoc,
+  withoutDocument,
   type CarriedUnderlag,
 } from '../review-underlag'
 
@@ -228,6 +231,66 @@ describe('underlagLinkTargets', () => {
 
   it('links nothing when nothing is attached', () => {
     expect(underlagLinkTargets({ files: [], inboxDocs: [] }, 'tx-1')).toEqual([])
+  })
+})
+
+describe('withoutDocument', () => {
+  it('takes the document out of the uploads and the picks, and keeps the rest', () => {
+    const attached = {
+      files: [upload({ id: 'a', uploadKey: 'ua' }), upload({ id: 'b', uploadKey: 'ub' })],
+      inboxDocs: [inboxDoc({ document_id: 'a' }), inboxDoc({ document_id: 'c', inbox_item_id: 'inbox-c' })],
+    }
+    expect(withoutDocument(attached, 'a')).toEqual({
+      files: [upload({ id: 'b', uploadKey: 'ub' })],
+      inboxDocs: [inboxDoc({ document_id: 'c', inbox_item_id: 'inbox-c' })],
+    })
+  })
+
+  it('changes nothing for a document that is not attached', () => {
+    const attached = { files: [upload()], inboxDocs: [inboxDoc()] }
+    expect(withoutDocument(attached, 'other')).toEqual(attached)
+  })
+})
+
+describe('withInboxDoc', () => {
+  it('adds a pick once', () => {
+    const once = withInboxDoc({ files: [], inboxDocs: [] }, inboxDoc())
+    expect(once.inboxDocs).toEqual([inboxDoc()])
+    expect(withInboxDoc(once, inboxDoc())).toBe(once)
+  })
+})
+
+describe('shownUnderlag', () => {
+  const none = { documentId: null, fileName: null }
+
+  it("shows the row's own underlag first, with the name the route read", () => {
+    expect(shownUnderlag({ files: [upload()], inboxDocs: [] }, { documentId: 'own', fileName: 'kvitto.pdf' })).toEqual({
+      documentId: 'own',
+      mime: null,
+      fileName: 'kvitto.pdf',
+    })
+  })
+
+  it('else the first finished upload, with its own type and name', () => {
+    const pending = upload({ id: undefined, status: 'uploading', uploadKey: 'u0' })
+    const done = upload({ id: 'up', file: { type: 'image/jpeg' } as File, fileName: 'foto.jpg' })
+    expect(shownUnderlag({ files: [pending, done], inboxDocs: [inboxDoc()] }, none)).toEqual({
+      documentId: 'up',
+      mime: 'image/jpeg',
+      fileName: 'foto.jpg',
+    })
+  })
+
+  it('else the first pick, with its file name', () => {
+    expect(shownUnderlag({ files: [], inboxDocs: [inboxDoc()] }, none)).toEqual({
+      documentId: 'doc-inbox-1',
+      mime: null,
+      fileName: 'receipt.pdf',
+    })
+  })
+
+  it('shows nothing when nothing is attached', () => {
+    expect(shownUnderlag({ files: [], inboxDocs: [] }, none)).toEqual({ documentId: null, mime: null, fileName: null })
   })
 })
 
