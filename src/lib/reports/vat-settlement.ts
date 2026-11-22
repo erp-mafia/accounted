@@ -816,9 +816,12 @@ export async function buildVatSettlementProposal(
     }
   }
 
+  // Every posted one stays: each gates booking the period again, and the
+  // notices name them all (#3646). Only drafts are capped, at five.
+  let drafts = 0
   const existingEntries = existing
     .sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : 0))
-    .slice(0, 5)
+    .filter((e) => e.status === 'posted' || drafts++ < 5)
 
   return {
     period: { type: periodType, year, period, start, end },

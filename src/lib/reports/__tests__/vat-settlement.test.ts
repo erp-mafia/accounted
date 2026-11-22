@@ -232,6 +232,25 @@ describe('buildVatSettlementProposal', () => {
     expect(proposal.existing_entries).toEqual(existing)
   })
 
+  it('lists every posted settlement and caps only the drafts (#3646)', async () => {
+    const entry = (id: string, status: string, day: number) => ({
+      id, status, entry_date: `2026-03-${String(day).padStart(2, '0')}`,
+      voucher_series: 'M', voucher_number: day,
+    })
+    const posted = [1, 2, 3, 4, 5, 6].map((day) => entry(`p${day}`, 'posted', day))
+    const drafts = [11, 12, 13, 14, 15, 16].map((day) => entry(`d${day}`, 'draft', day))
+    const supabase = makeClient({
+      totals: [total('2611', 0, 100)],
+      existing: [...posted, ...drafts],
+    })
+
+    const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
+
+    const listed = proposal.existing_entries
+    expect(listed.filter((e) => e.status === 'posted').map((e) => e.id).sort()).toEqual(posted.map((e) => e.id).sort())
+    expect(listed.filter((e) => e.status === 'draft').map((e) => e.id)).toEqual(['d16', 'd15', 'd14', 'd13', 'd12'])
+  })
+
   it('gates on a manual settlement-shaped entry and still proposes the full-period clear (#984)', async () => {
     const manualSettlement = {
       id: 'e2', status: 'posted', entry_date: '2026-03-31',
