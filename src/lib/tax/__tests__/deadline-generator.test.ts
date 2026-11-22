@@ -1976,3 +1976,77 @@ describe('helårsmoms follows the EU trade recorded from the books', () => {
     })
   })
 })
+
+describe('across the new year: last year\'s periods that fall due this year (crm#2128)', () => {
+  // A December or Q4 period falls due in the next calendar year, and the
+  // configs are keyed by the year of the period. Regenerated in January, the
+  // set must still hold them, or replace_system_tax_deadlines deletes the
+  // pending rows while they are still ahead.
+  const QUARTERLY: CompanySettingsForDeadlines = { ...SETTINGS, moms_period: 'quarterly' }
+  const DECEMBER = new Date(2026, 11, 20, 12)
+  const JANUARY = new Date(2027, 0, 5, 12)
+  const STILL_AHEAD = [
+    'arbetsgivardeklaration:2026-12:2027-01-18',
+    'moms_monthly:2026-11:2027-01-18',
+    'moms_monthly:2026-12:2027-02-12',
+  ]
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** The expected rows made on `day` that fall due in January or February 2027. */
+  function dueEarly2027(settings: CompanySettingsForDeadlines, day: Date): string[] {
+    return Array.from(getExpectedUpcomingDeadlineKeys(settings, [], day))
+      .filter((key) => {
+        const due = key.slice(key.lastIndexOf(':') + 1)
+        return due >= '2027-01-05' && due <= '2027-02-28'
+      })
+      .sort()
+  }
+
+  it('the rows ahead in December are still expected in January', () => {
+    for (const settings of [SETTINGS, QUARTERLY]) {
+      expect(dueEarly2027(settings, JANUARY)).toEqual(dueEarly2027(settings, DECEMBER))
+    }
+    expect(dueEarly2027(SETTINGS, JANUARY)).toEqual(expect.arrayContaining(STILL_AHEAD))
+    expect(dueEarly2027(QUARTERLY, JANUARY)).toContain('moms_quarterly:2026-Q4:2027-02-12')
+  })
+
+  it('a regeneration in January keeps them in the set it replaces with', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(JANUARY)
+    const { supabase, getInsertPayload } = makeRecordingSupabase()
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS)
+
+    const keys = getInsertPayload()!.map((row) => `${row.tax_deadline_type}:${row.tax_period}:${row.due_date}`)
+    expect(keys).toEqual(expect.arrayContaining(STILL_AHEAD))
+  })
+
+  it('the new-year pass on 2 January keeps them for every company', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2027, 0, 2, 0, 30))
+    const { fiscal_years: _fy, tax_assessment_notices: _tan, ...raw } = SETTINGS
+    const { supabase, inserts } = makeSupabase({ company_settings: [{ company_id: 'company-1', ...raw }] })
+
+    await generateNewYearDeadlines(supabase)
+
+    expect(inserts).toHaveLength(1)
+    const keys = inserts[0].map((row) => `${row.tax_deadline_type}:${row.tax_period}:${row.due_date}`)
+    expect(keys).toEqual(expect.arrayContaining(STILL_AHEAD))
+  })
+
+  it('the nightly repair leaves a company holding them alone in January', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(JANUARY)
+    const { fiscal_years: _fy, tax_assessment_notices: _tan, ...raw } = SETTINGS
+    const settingsRows = [{ company_id: 'company-1', ...raw, fiscal_years: [], tax_assessment_notices: [] }]
+    const held = storedRows('company-1', SETTINGS)
+    expect(held.map((row) => `${row.tax_deadline_type}:${row.tax_period}:${row.due_date}`))
+      .toEqual(expect.arrayContaining(STILL_AHEAD))
+
+    expect(findSettingsMissingUpcomingDeadlines(settingsRows, held, [], JANUARY)).toEqual([])
+    expect(findSettingsWithStaleUpcomingDeadlines(settingsRows, held, [], JANUARY)).toEqual([])
+  })
+})
