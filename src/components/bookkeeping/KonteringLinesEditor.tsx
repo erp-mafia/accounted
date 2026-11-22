@@ -1,12 +1,13 @@
 'use client'
 
-import type { ComponentProps, ReactNode } from 'react'
+import { useState, type ComponentProps, type ReactNode } from 'react'
+import { useLocale } from 'next-intl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn, formatAmount } from '@/lib/utils'
-import { negativeAmountMove } from '@/lib/bookkeeping/kontering-amount-entry'
+import { konteringAmountText, konteringAmountValue, negativeAmountMove } from '@/lib/bookkeeping/kontering-amount-entry'
 import { KONTERING_ICON_WIDTH_CLASS, konteringGridColumns } from '@/components/bookkeeping/kontering-grid'
 import { PlusIcon, TrashIcon } from '@/components/icons'
 import type { BASAccount } from '@/types'
@@ -46,6 +47,52 @@ export interface KonteringReadOnlyLine {
   line_description: string
   debit_amount: string
   credit_amount: string
+}
+
+/**
+ * One amount field. It is a text field, not a number field: Chrome reads a
+ * number field by the browser's own language, not the page's, so in an
+ * English Chrome "100,50" became 10050 and the verifikat would not balance,
+ * or balanced on a hundred times the amount (PH 305). The line keeps the dot
+ * string a number field handed over (konteringAmountValue), so no reader of
+ * the lines changes. What the person types stays as typed while they type;
+ * once the field is left, and for a value set from outside (a proposal, a
+ * fill, a minus figure moved to the other side), it shows the figure the
+ * line holds, to the öre, with the language's decimal mark. Text that is not
+ * an amount stays, marked invalid, and counts as no figure.
+ */
+function KonteringAmountInput({
+  value,
+  onValueChange,
+  onBlur,
+  ...props
+}: Omit<ComponentProps<typeof Input>, 'type' | 'value' | 'onChange'> & {
+  value: string
+  onValueChange: (value: string) => void
+}) {
+  const decimal = useLocale().startsWith('sv') ? ',' : '.'
+  const [typed, setTyped] = useState<{ text: string; value: string } | null>(null)
+  const current = typed && typed.value === value ? typed : null
+  const refused = current !== null && current.value === '' && current.text.trim() !== ''
+  return (
+    <Input
+      {...props}
+      type="text"
+      inputMode="decimal"
+      autoComplete="off"
+      aria-invalid={refused || undefined}
+      value={current ? current.text : konteringAmountText(value, decimal)}
+      onChange={(e) => {
+        const next = konteringAmountValue(e.target.value, decimal)
+        setTyped({ text: e.target.value, value: next })
+        onValueChange(next)
+      }}
+      onBlur={(e) => {
+        if (current && !refused) setTyped(null)
+        onBlur?.(e)
+      }}
+    />
+  )
 }
 
 interface KonteringLinesEditorProps {
@@ -150,20 +197,16 @@ export function KonteringLinesEditor({
           {label}
         </label>
       )}
-      <Input
+      <KonteringAmountInput
         id={`kontering-${index}-${field}`}
-        type="number"
-        step="0.01"
-        min="0"
-        inputMode="decimal"
         placeholder={header ? '0,00' : label}
         aria-label={label}
         value={lines[index][field]}
-        onChange={(e) => onAmountChange(index, field, e.target.value)}
-        onBlur={(e) => {
+        onValueChange={(value) => onAmountChange(index, field, value)}
+        onBlur={() => {
           // Both sides are written as positive figures: a minus figure is
           // the same figure on the other side, moved when the field is left.
-          const move = negativeAmountMove(field, e.target.value)
+          const move = negativeAmountMove(field, lines[index][field])
           if (!move) return
           onAmountChange(index, field, '')
           onAmountChange(index, move.side, move.value)
