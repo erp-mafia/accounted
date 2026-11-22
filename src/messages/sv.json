@@ -5537,6 +5537,16 @@
     "load_error": "Kunde inte ladda det som väntar på att bokföras"
   },
   "booking_screen": {
+    "walk_keys_hint": "J och K bläddrar · Esc tillbaka",
+    "walk_previous": "Föregående rad",
+    "walk_next": "Nästa rad",
+    "walk_position": "{index} av {total}",
+    "walk_next_up": "Efter bokföringen: {name} · {date} · {amount}",
+    "offer_label": "Förslag: {name}",
+    "offer_use": "Använd",
+    "offer_used": "Förslaget används: {name}",
+    "offer_undo": "Ångra",
+    "offer_failed": "Kunde inte hämta förslagets rader. Kontera själv eller försök igen.",
     "title": "Bokför",
     "back_to_book": "Att bokföra",
     "back_transactions": "Bankrader",

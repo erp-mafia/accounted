@@ -5537,6 +5537,16 @@
     "load_error": "Could not load what waits to be booked"
   },
   "booking_screen": {
+    "walk_keys_hint": "J and K to browse · Esc to go back",
+    "walk_previous": "Previous row",
+    "walk_next": "Next row",
+    "walk_position": "{index} of {total}",
+    "walk_next_up": "After booking: {name} · {date} · {amount}",
+    "offer_label": "Suggestion: {name}",
+    "offer_use": "Use",
+    "offer_used": "Using the suggestion: {name}",
+    "offer_undo": "Undo",
+    "offer_failed": "Could not fetch the suggestion's lines. Enter them yourself or try again.",
     "title": "Book",
     "back_to_book": "To book",
     "back_transactions": "Bank rows",

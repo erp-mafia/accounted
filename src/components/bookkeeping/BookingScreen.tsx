@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { BuildingLibraryIcon, InboxIcon } from '@/components/icons'
+import useSWR from 'swr'
+import { BuildingLibraryIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, InboxIcon, LightBulbIcon } from '@/components/icons'
 import JournalEntryForm from '@/components/bookkeeping/JournalEntryForm'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
@@ -17,11 +18,20 @@ import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import { useHeldUnderlag } from '@/components/transactions/use-held-underlag'
 import { bankRowInitialLines } from '@/components/transactions/bank-row-lines'
-import UnderlagFileRow from '@/components/transactions/UnderlagFileRow'
+import { HeldUnderlagRows } from '@/components/transactions/HeldUnderlagRows'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
-import { formatCurrency, formatDate } from '@/lib/utils'
-import { BOOKING_SCREEN_PATH, bookingScreenOrigin } from '@/lib/bookkeeping/booking-screen'
+import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
+import { BOOKING_SCREEN_PATH, bookingScreenHref, bookingScreenOrigin } from '@/lib/bookkeeping/booking-screen'
+import { bookingWalk, toBookFilterOfBack, type ToBookRow } from '@/lib/bookkeeping/to-book'
+import { focusKeyAction, focusPosition, neighbour } from '@/lib/inkorg/focus'
+import { isEditableTarget, isOverlayBlocking } from '@/lib/hooks/detail-pager-guards'
+import { categorizeBodyFor, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { fetchProposalPreview } from '@/lib/hooks/use-proposal-preview'
+import { proposalLinesToFormLines, type ProposalLine } from '@/lib/bookkeeping/proposal-lines'
+import { useProposalWhy } from '@/components/transactions/proposal-why'
+import { useToBookRows } from './use-to-book-rows'
 import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
 import type { Transaction } from '@/types'
 
@@ -69,11 +79,65 @@ export function BookingScreen({ transaction, account, back }: BookingScreenProps
     ? `${transaction.amount > 0 ? '+' : ''}${formatCurrency(transaction.amount, transaction.currency)}`
     : null
 
+  // Opened from Att bokföra: the screen steps through the list's bank rows
+  // (J, K, Esc) until the person types, and Bokför opens the next one.
+  const [touched, setTouched] = useState(false)
+  const walk = useBookingWalk(transaction && !transaction.journal_entry_id && canWrite ? transaction.id : null, back, backHref)
+  const walking = walk.position !== null
+  useEffect(() => {
+    if (!walking || touched) return
+    const onKey = (e: KeyboardEvent) => {
+      const action = focusKeyAction({
+        key: e.key,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        targetIsEditable: isEditableTarget(e.target),
+        overlayOpen: isOverlayBlocking(document),
+      })
+      const target = action === 'next' ? walk.nextHref : action === 'previous' ? walk.previousHref : action === 'back' ? backHref : null
+      if (!target) return
+      e.preventDefault()
+      router.push(target)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [walking, touched, walk.nextHref, walk.previousHref, backHref, router])
+
   return (
-    <div className="space-y-6">
+    // A keystroke in the form is work the keys must not throw away.
+    <div className="space-y-6" onInputCapture={() => setTouched(true)}>
       <PageHeader
         title={t('title')}
         parent={{ label: backLabel, href: backHref }}
+        action={
+          walk.position ? (
+            <div className="flex items-center gap-2">
+              {!touched && <span className="hidden text-xs text-muted-foreground lg:inline">{t('walk_keys_hint')}</span>}
+              <Button
+                variant="outline"
+                size="icon-toolbar"
+                aria-label={t('walk_previous')}
+                disabled={!walk.previousHref}
+                onClick={() => walk.previousHref && router.push(walk.previousHref)}
+              >
+                <ChevronLeftIcon className="h-4 w-4" />
+              </Button>
+              <span className="whitespace-nowrap text-sm tabular-nums text-strong">
+                {t('walk_position', { index: walk.position.index, total: walk.position.total })}
+              </span>
+              <Button
+                variant="outline"
+                size="icon-toolbar"
+                aria-label={t('walk_next')}
+                disabled={!walk.nextHref}
+                onClick={() => walk.nextHref && router.push(walk.nextHref)}
+              >
+                <ChevronRightIcon className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : undefined
+        }
         // The bank row is named once: in the Betalning strip while it is
         // being booked, here when the page shows it booked or read-only.
         meta={
@@ -99,13 +163,63 @@ export function BookingScreen({ transaction, account, back }: BookingScreenProps
           transaction={transaction}
           account={account}
           amountLabel={amountLabel ?? ''}
-          onDone={() => router.push(backHref)}
+          nextUp={walk.afterRow}
+          onTouched={() => setTouched(true)}
+          onDone={walk.afterBooked}
         />
       ) : (
         <VoucherBooking onDone={() => router.push(backHref)} />
       )}
     </div>
   )
+}
+
+/**
+ * Where the screen is in Att bokföra's list, when it was opened from there
+ * (the return address names the list and its filter): the position, the rows
+ * before and after it, and where Bokför leads (the next row, else the one
+ * before, else back to the list). The rows are the list's own read, shared
+ * through its cache. Opened from anywhere else, there is nothing to step to.
+ */
+function useBookingWalk(transactionId: string | null, back: string | null, backHref: string) {
+  const router = useRouter()
+  const filter = toBookFilterOfBack(back)
+  const { rows, refreshBankRows } = useToBookRows({ enabled: filter !== null && transactionId !== null, cachedOnly: true })
+  const walk = useMemo(() => (filter ? bookingWalk(rows, filter) : []), [rows, filter])
+  const position = focusPosition(walk, transactionId)
+  const previousId = position && transactionId ? neighbour(walk, transactionId, -1) : null
+  const nextId = position && transactionId ? neighbour(walk, transactionId, 1) : null
+  const afterId = nextId ?? previousId
+  const hrefOf = (id: string | null) => (id ? bookingScreenHref({ kind: 'transaction', transactionId: id, account: null }, back) : null)
+  return {
+    position,
+    previousHref: hrefOf(previousId),
+    nextHref: hrefOf(nextId),
+    afterRow: afterId ? (rows.find((r) => r.transactionId === afterId) ?? null) : null,
+    afterBooked: () => {
+      // The booked row leaves the list: read it again, and go on meanwhile.
+      if (position) void refreshBankRows()
+      router.push(hrefOf(afterId) ?? backHref)
+    },
+  }
+}
+
+/**
+ * The suggestion Bankrader shows for the row (POST
+ * /api/transactions/suggest-categories, picked by rowProposal), or null.
+ */
+function useRowProposal(transactionId: string, enabled: boolean): BookingProposal | null {
+  const { data } = useSWR(enabled ? ['booking-screen:proposal', transactionId] : null, async () => {
+    const res = await fetch('/api/transactions/suggest-categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction_ids: [transactionId] }),
+    })
+    if (!res.ok) return null
+    const json = (await res.json()) as { template_suggestions?: Record<string, SuggestedTemplate[]> }
+    return rowProposal(json.template_suggestions?.[transactionId]) ?? null
+  })
+  return data ?? null
 }
 
 /** The section label used on the screen: 12px/500 in the muted ink. */
@@ -164,16 +278,20 @@ function TransactionBooking({
   transaction,
   account,
   amountLabel,
+  nextUp,
+  onTouched,
   onDone,
 }: {
   transaction: Transaction
   account: string | null
   amountLabel: string
+  /** The row Bokför opens next, named under the form. */
+  nextUp: ToBookRow | null
+  /** The person changed the kontering: the screen's keys stop browsing. */
+  onTouched: () => void
   onDone: () => void
 }) {
   const t = useTranslations('booking_screen')
-  const tUnderlag = useTranslations('tx_booking_underlag')
-  const tDetach = useTranslations('tx_detach')
   const { toast } = useToast()
   const dropSurfaceRef = useRef<HTMLDivElement>(null)
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
@@ -186,9 +304,8 @@ function TransactionBooking({
     rowDocumentId: transaction.document_id ?? null,
     open: true,
   })
-  const { underlag, claimUpload, letGo } = attachments
+  const { underlag, claimUpload } = attachments
   const uploadedFiles = attachments.attached.files
-  const pickedInboxDocs = attachments.attached.inboxDocs
   const viewer = attachments.shown
 
   const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
@@ -199,6 +316,31 @@ function TransactionBooking({
       cashAccounts.find((a) => a.id === transaction.cash_account_id) ?? cashAccounts.find((a) => a.ledger_account === ledger)
     return { bankAccount: ledger, bankAccountName: matched?.name ?? null }
   }, [transaction, cashAccounts, cashAccountsLoading])
+
+  // The row's suggestion, the one Bankrader shows, when the person has not
+  // picked an account already. Använd fills the grid with the lines the
+  // suggestion books (POST /api/bookkeeping/proposal-preview, as Bankrader's
+  // review does); nothing fills it by itself.
+  const proposal = useRowProposal(transaction.id, account === null)
+  const whyFor = useProposalWhy()
+  const [used, setUsed] = useState<{ proposal: BookingProposal; lines: ProposalLine[] } | null>(null)
+  const [applying, setApplying] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
+  const applySuggestion = async () => {
+    if (!proposal) return
+    onTouched()
+    setApplying(true)
+    setApplyError(null)
+    try {
+      const lines = await fetchProposalPreview({ transaction_id: transaction.id, booking: categorizeBodyFor(proposal) })
+      if (lines.length > 0) setUsed({ proposal, lines })
+      else setApplyError(t('offer_failed'))
+    } catch {
+      setApplyError(t('offer_failed'))
+    } finally {
+      setApplying(false)
+    }
+  }
 
   const detachEarlierUnderlag = () =>
     attachments.detachEarlier({
@@ -226,6 +368,10 @@ function TransactionBooking({
       {t('doc_pick_inbox')}
     </Button>
   )
+  // No document yet: the underlag is one line over the kontering, which then
+  // takes the width; a document, once there, shows beside it.
+  const shownDocumentId = viewer.documentId
+  const hasDocument = shownDocumentId != null
 
   return (
     <>
@@ -244,80 +390,112 @@ function TransactionBooking({
         </div>
       </section>
 
+      {!hasDocument && (
+        <section aria-labelledby="booking-screen-underlag-line" className="space-y-2">
+          <SectionLabel id="booking-screen-underlag-line">{t('underlag_label')}</SectionLabel>
+          <DocumentUploadZone
+            files={uploadedFiles}
+            onFilesChange={attachments.onFilesChange}
+            onUploaded={claimUpload}
+            compact
+            dropSurfaceRef={dropSurfaceRef}
+            actions={
+              <Button variant="ghost" onClick={() => setInboxPickerOpen(true)}>
+                <InboxIcon className="h-4 w-4" />
+                {t('doc_pick_inbox')}
+              </Button>
+            }
+          />
+        </section>
+      )}
+
       <BookingColumns
         dropSurfaceRef={dropSurfaceRef}
+        split={hasDocument}
         underlag={
-          <>
-            {viewer.documentId ? (
+          hasDocument ? (
+            <>
               <DocumentViewerPane
-                documentId={viewer.documentId}
+                documentId={shownDocumentId}
                 mime={viewer.mime}
                 fileName={viewer.fileName}
                 className="h-[60vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1"
               />
-            ) : (
-              <DocumentUploadZone
-                files={uploadedFiles}
-                onFilesChange={attachments.onFilesChange}
-                onUploaded={claimUpload}
+              <HeldUnderlagRows
+                attachments={attachments}
+                onDetachEarlier={() => void detachEarlierUnderlag()}
                 dropSurfaceRef={dropSurfaceRef}
-              />
-            )}
-            {/* Once a document shows, one compact zone for more (the only
-                zone then, so a drop is handled once), the rows that can
-                be taken off, and the inbox pick. */}
-            {viewer.documentId ? (
-              <div className="flex shrink-0 flex-col gap-2">
-                {attachments.ownFromBefore && (
-                  <UnderlagFileRow
-                    name={underlag.fileName ?? tUnderlag('file_fallback')}
-                    removeLabel={tDetach('menu_item')}
-                    disabled={underlag.busy}
-                    onRemove={() => void detachEarlierUnderlag()}
-                  />
-                )}
-                <DocumentUploadZone
-                  files={uploadedFiles}
-                  onFilesChange={attachments.onFilesChange}
-                  onUploaded={claimUpload}
-                  compact
-                  dropSurfaceRef={dropSurfaceRef}
-                />
-                {pickedInboxDocs.map((doc) => (
-                  <UnderlagFileRow
-                    key={doc.document_id}
-                    name={doc.supplier_name ?? doc.file_name}
-                    removeLabel={t('doc_picked_remove')}
-                    onRemove={() => void letGo(doc.document_id)}
-                  />
-                ))}
-              </div>
-            ) : null}
-            {pickFromInbox}
-          </>
+              >
+                {pickFromInbox}
+              </HeldUnderlagRows>
+            </>
+          ) : null
         }
         kontering={
           bankAccount !== null ? (
-            <JournalEntryForm
-              key={`${transaction.id}-${bankAccount}-${account ?? 'none'}`}
-              embedded
-              onPage
-              initialLines={bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)}
-              initialDate={transaction.date}
-              initialDescription={transaction.description}
-              submitUrl={`/api/transactions/${transaction.id}/book`}
-              sourceType="bank_transaction"
-              sourceId={transaction.id}
-              seriesPicker
-              cashAccountId={transaction.cash_account_id ?? null}
-              onEntryCreated={(entryId) => void handleBooked(entryId)}
-              duplicateMatchTransaction={{
-                id: transaction.id,
-                cash_account_id: transaction.cash_account_id ?? null,
-                currency: transaction.currency ?? 'SEK',
-              }}
-              onDuplicateMatched={(journalEntryId) => void handleBooked(journalEntryId)}
-            />
+            <>
+              {used ? (
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <CheckIcon className="h-4 w-4 text-success" aria-hidden="true" />
+                  <span className="text-foreground/80">{t('offer_used', { name: used.proposal.name_sv })}</span>
+                  <Button variant="ghost" onClick={() => setUsed(null)}>
+                    {t('offer_undo')}
+                  </Button>
+                </div>
+              ) : proposal ? (
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-control px-3 py-2 text-sm shadow-raised">
+                    <LightBulbIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="flex min-w-0 flex-col">
+                      <span className="text-strong">{t('offer_label', { name: proposal.name_sv })}</span>
+                      <span className="text-xs text-muted-foreground">{whyFor(proposal)}</span>
+                    </span>
+                    <Button variant="outline" className="ml-auto" loading={applying} onClick={() => void applySuggestion()}>
+                      {t('offer_use')}
+                    </Button>
+                  </div>
+                  {applyError && <p className="text-xs text-destructive">{applyError}</p>}
+                </div>
+              ) : null}
+              <JournalEntryForm
+                key={`${transaction.id}-${bankAccount}-${account ?? 'none'}-${used ? used.proposal.template_id : 'own'}`}
+                embedded
+                onPage
+                initialLines={
+                  used
+                    ? proposalLinesToFormLines(used.lines, {
+                        settlementAccount: bankAccount,
+                        currency: transaction.currency,
+                        foreignAmount: Math.abs(transaction.amount),
+                        exchangeRate: transaction.exchange_rate,
+                      })
+                    : bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)
+                }
+                initialDate={transaction.date}
+                initialDescription={transaction.description}
+                submitUrl={`/api/transactions/${transaction.id}/book`}
+                sourceType="bank_transaction"
+                sourceId={transaction.id}
+                seriesPicker
+                cashAccountId={transaction.cash_account_id ?? null}
+                onEntryCreated={(entryId) => void handleBooked(entryId)}
+                duplicateMatchTransaction={{
+                  id: transaction.id,
+                  cash_account_id: transaction.cash_account_id ?? null,
+                  currency: transaction.currency ?? 'SEK',
+                }}
+                onDuplicateMatched={(journalEntryId) => void handleBooked(journalEntryId)}
+              />
+              {nextUp && (
+                <p className="text-xs text-muted-foreground" data-ph-mask="">
+                  {t('walk_next_up', {
+                    name: nextUp.name,
+                    date: nextUp.date ? formatDate(nextUp.date) : '',
+                    amount: nextUp.amount == null ? '' : formatRowAmount(nextUp.amount, nextUp.currency),
+                  })}
+                </p>
+              )}
+            </>
           ) : null
         }
       />
