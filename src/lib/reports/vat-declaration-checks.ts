@@ -806,11 +806,15 @@ export function runVatDeclarationChecks(
   // 10-12 carry) is proportionally checkable: every unmapped drift source
   // listed above (VMB, frivillig uthyrning, revenue_account overrides,
   // periodisering in the invoice month) inflates the OUTPUT side and can only
-  // suppress this finding, never trigger it. The one legitimate trigger is
-  // periodiserade invoice lines dissolving (3001 credited with the moms
-  // already declared in the invoice month), which is why this is a WARNING
-  // that names that cause and never blocks filing (isFilingBlocked reads
-  // ERROR only), following the RC_INPUT_VAT_MISMATCH precedent.
+  // suppress this finding, never trigger it. The legitimate triggers left
+  // are an upplupen intäkt on 17xx (its months credit 3001 before the invoice
+  // declares the moms) and a periodisering set up by hand dissolving (3001
+  // credited with moms declared earlier). A förutbetald intäkt an invoice
+  // booked with moms no longer is one: the declaration reads it as the sale
+  // in the invoice's period and its releases net to nothing (crm#1919). So
+  // this is a WARNING that names those causes and never blocks filing
+  // (isFilingBlocked reads ERROR only), following the RC_INPUT_VAT_MISMATCH
+  // precedent.
   //
   // The base comparison is exact per rate (basbelopp = moms/sats summed over
   // 25/12/6), so legitimate mixed-rate declarations net to zero drift; the
@@ -831,9 +835,10 @@ export function runVatDeclarationChecks(
         `${shortfall.toLocaleString('sv-SE')} kr av försäljningen saknar ` +
         'utgående moms. Kontrollera att momsrader (2611/2621/2631) är ' +
         'bokförda för varje intäktsrad, eller flytta momsfri försäljning till ' +
-        'rätt ruta (35/36/39/40). Använder du periodisering av fakturarader ' +
-        'är skillnaden korrekt (momsen redovisas i fakturamånaden, intäkten ' +
-        'löpande) och varningen kan lämnas utan åtgärd.',
+        'rätt ruta (35/36/39/40). Kommer skillnaden från en upplupen intäkt ' +
+        '(17xx) eller en periodisering som lagts upp för hand är den korrekt ' +
+        '(momsen redovisas i fakturamånaden, intäkten löpande) och varningen ' +
+        'kan lämnas utan åtgärd.',
       rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
     })
   }

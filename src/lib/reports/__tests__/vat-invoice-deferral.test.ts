@@ -73,6 +73,14 @@ describe('readDeferredSaleLines', () => {
     expect(read.find((l) => l.account_number === '3001')).toEqual(line('3001', 0, 1.25))
   })
 
+  it('rounds at the 12-decimal part the SQL answers, as the SQL rounds with it', () => {
+    // 5/6 as vat_invoice_deferral_shares answers it: 1 500,15 x 0,833333333333
+    // is 1 250,1249999995, which round(…, 2) makes 1 250,12 in SQL.
+    const shares = new Map([[INVOICE, [{ target_account: '3001', share: 0.833333333333 }]]])
+    const read = readDeferredSaleLines(INVOICE, [line('2970', 0, 1500.15), line('2970', 0, 300.03)], shares)
+    expect(read.filter((l) => l.account_number === '3001')).toEqual([line('3001', 0, 1250.12), line('3001', 0, 250.02)])
+  })
+
   it('leaves any other verifikat as it is', () => {
     const shares = new Map([['22222222-2222-4222-8222-222222222222', [{ target_account: '3001', share: 1 }]]])
     expect(readDeferredSaleLines(INVOICE, INVOICE_LINES, shares)).toEqual(INVOICE_LINES)

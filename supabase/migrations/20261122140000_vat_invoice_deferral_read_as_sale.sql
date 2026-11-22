@@ -45,12 +45,15 @@
 --     only the schedule's account;
 --   - an invoice's part is taken of all the invoice deferred, as its
 --     verifikat booked it on 29xx: a row the schedule door could not schedule
---     is not known to carry moms, so it is not read as a sale with moms, and
---     a negative row lowers the whole.
+--     is not known to carry moms, so it is not read as a sale with moms;
+--   - a manual periodisering spread out of the invoice's verifikat (or a
+--     rättelse of it) releases what a rättelse added to its 29xx lines: the
+--     invoice's period reads that as the sale, so up to that much its months
+--     net to nothing, and the sale is counted once.
 --
 -- Not changed: a deferral whose line has no Swedish moms (a momsfri line on
--- 2970), an upplupen intäkt on 17xx, and a manual periodisering keep the
--- reading they had. get_vat_declaration_totals and get_vat_ruta_source_lines
+-- 2970), an upplupen intäkt on 17xx, and any other manual periodisering keep
+-- the reading they had. get_vat_declaration_totals and get_vat_ruta_source_lines
 -- are restated from 20261023094030 with only the changes above. Signatures,
 -- return shapes, SECURITY INVOKER, search_path and ACLs are unchanged, so the
 -- app deployed before this keeps working during the deploy window.
@@ -144,8 +147,8 @@ AS $$
   -- booked: its deferrals with moms on that account, over all the invoice
   -- deferred. All of it is what the verifikat booked, not the schedules:
   -- createSchedulesForCustomerInvoice goes on past a row it could not
-  -- schedule, such a row is not known to carry moms, and a row may be
-  -- negative. A part without moms is not read, as before.
+  -- schedule, and such a row is not known to carry moms. A part without
+  -- moms is not read, as before.
   invoice_shares AS (
     SELECT d.origin_entry_id,
            d.invoice_id,
@@ -196,18 +199,90 @@ AS $$
       SELECT y.id FROM public.journal_entries y
       WHERE y.correction_of_id = c.id AND y.company_id = p_company_id
     ) n
+  ),
+  -- What a verifikat of an invoice's own chain (the invoice's verifikat, a
+  -- storno or rättelse of it) reads as the sale beyond what the invoice's
+  -- schedules release: what a rättelse added to its 29xx lines over what the
+  -- invoice booked, at the invoice's parts with moms.
+  claimed AS (
+    SELECT c.id,
+           sum(s.share) * (
+             COALESCE((
+               SELECT sum(COALESCE(l.credit_amount, 0) - COALESCE(l.debit_amount, 0))
+               FROM public.journal_entry_lines l
+               WHERE l.journal_entry_id = c.id
+                 AND l.account_number LIKE '29%'
+             ), 0) - b.amount
+           ) AS amount
+    FROM chain c
+    JOIN invoice_shares s ON s.origin_entry_id = c.root_id
+    JOIN booked b ON b.origin_entry_id = c.root_id
+    GROUP BY c.id, b.amount
+  ),
+  -- A manual periodisering spread out of such a verifikat releases what that
+  -- verifikat already reads as the sale, up to that part: so much of each of
+  -- its months nets to nothing, like a release, and the sale is counted once.
+  -- The rest keeps the reading a manual periodisering has. The months of an
+  -- undone plan are all stornoed, so each nets to nothing whole.
+  manual_plans AS (
+    SELECT m.id, m.origin_journal_entry_id, m.target_account, m.total_amount, m.status
+    FROM public.accrual_schedules m
+    WHERE m.company_id = p_company_id
+      AND m.source_kind = 'manual'
+      AND m.direction = 'revenue'
+      AND m.balance_account LIKE '29%'
+      AND m.origin_journal_entry_id IN (SELECT x.id FROM claimed x WHERE x.amount > 0)
+  ),
+  manual_roots AS (
+    SELECT DISTINCT i.journal_entry_id AS root_id,
+           p.target_account,
+           CASE WHEN p.status = 'cancelled' THEN 1::numeric
+                ELSE LEAST(1::numeric, x.amount / t.total) END AS share
+    FROM manual_plans p
+    JOIN claimed x ON x.id = p.origin_journal_entry_id
+    LEFT JOIN (
+      SELECT q.origin_journal_entry_id, sum(q.total_amount) AS total
+      FROM manual_plans q
+      WHERE q.status <> 'cancelled'
+      GROUP BY q.origin_journal_entry_id
+    ) t ON t.origin_journal_entry_id = p.origin_journal_entry_id
+    JOIN public.accrual_schedule_installments i ON i.schedule_id = p.id
+    WHERE i.journal_entry_id IS NOT NULL
+      AND (p.status = 'cancelled' OR t.total > 0)
+  ),
+  manual_chain AS (
+    SELECT DISTINCT r.root_id AS id, r.root_id FROM manual_roots r
+    UNION
+    SELECT n.id, c.root_id
+    FROM manual_chain c
+    CROSS JOIN LATERAL (
+      SELECT x.id FROM public.journal_entries x
+      WHERE x.reverses_id = c.id AND x.company_id = p_company_id
+      UNION ALL
+      SELECT y.id FROM public.journal_entries y
+      WHERE y.correction_of_id = c.id AND y.company_id = p_company_id
+    ) n
   )
-  SELECT c.id, r.target_account, sum(r.share)
-  FROM chain c
-  JOIN root_shares r ON r.root_id = c.root_id
-  GROUP BY c.id, r.target_account
+  -- Each part to 12 decimals, which a double carries exactly, so a fold in
+  -- TS (multiplyOre) rounds every line as round(amount * share, 2) does here.
+  SELECT r.id, r.target_account, round(sum(r.share), 12)
+  FROM (
+    SELECT c.id, s.target_account, s.share
+    FROM chain c
+    JOIN root_shares s ON s.root_id = c.root_id
+    UNION ALL
+    SELECT c.id, s.target_account, s.share
+    FROM manual_chain c
+    JOIN manual_roots s ON s.root_id = c.root_id
+  ) r
+  GROUP BY r.id, r.target_account
 $$;
 
 REVOKE ALL ON FUNCTION public.vat_invoice_deferral_shares(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.vat_invoice_deferral_shares(uuid) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.vat_invoice_deferral_shares(uuid) IS
-  'The verifikat whose 29xx lines the momsdeklaration reads as the sale a customer invoice deferred with moms, and on which revenue account at which part (crm#1919): the invoice''s verifikat and its kreditfaktura at the invoice''s parts, each release whole, and every storno and rättelse down from any of them. get_vat_declaration_totals, get_vat_ruta_source_lines and lib/vat/filed-period-changes.ts read it.';
+  'The verifikat whose 29xx lines the momsdeklaration reads as the sale a customer invoice deferred with moms, and on which revenue account at which part (crm#1919): the invoice''s verifikat and its kreditfaktura at the invoice''s parts, each release whole, the months of a manual periodisering spread out of what a rättelse added to the invoice''s 29xx lines, and every storno and rättelse down from any of them. get_vat_declaration_totals, get_vat_ruta_source_lines and lib/vat/filed-period-changes.ts read it.';
 
 CREATE OR REPLACE FUNCTION public.get_vat_declaration_totals(
   p_company_id uuid,
@@ -556,6 +631,12 @@ BEGIN
              sum(round(COALESCE(dl.debit_amount, 0) * ds.share, 2)) AS debit,
              sum(round(COALESCE(dl.credit_amount, 0) * ds.share, 2)) AS credit
       FROM public.vat_invoice_deferral_shares(p_company_id) ds
+      -- The period first, so only its verifikat's lines are read and grouped.
+      JOIN public.journal_entries dj
+        ON dj.id = ds.journal_entry_id
+       AND dj.company_id = p_company_id
+       AND dj.entry_date >= p_start
+       AND dj.entry_date <= p_end
       JOIN public.journal_entry_lines dl
         ON dl.journal_entry_id = ds.journal_entry_id
        AND dl.account_number LIKE '29%'

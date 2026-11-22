@@ -374,10 +374,12 @@ export type InvoiceDeferralShares = ReadonlyMap<string, ReadonlyArray<{ target_a
  * The SQL decides (vat_invoice_deferral_shares, migration 20261122140000),
  * for a deferral whose line carries Swedish moms: every 29xx line of the
  * invoice's verifikat and its kreditfaktura (at the invoice's parts), of each
- * release (whole, on its schedule's revenue account) and of every storno and
- * rättelse down from any of them is read as the sale, with its own sign. So a
- * release (Dr 29xx / Cr the revenue account) nets to nothing, and a rättelse
- * that moves the deferral to another 29xx account still reads it.
+ * release (whole, on its schedule's revenue account), of the months of a
+ * manual periodisering spread out of what a rättelse added to the invoice's
+ * 29xx lines (up to that part) and of every storno and rättelse down from any
+ * of them is read as the sale, with its own sign. So a release (Dr 29xx / Cr
+ * the revenue account) nets to nothing, and a rättelse that moves the
+ * deferral to another 29xx account still reads it.
  * The figure and the drill-down apply it in SQL; a fold over one verifikat's
  * own lines (the changes to a filed period) reads it here and applies it with
  * readDeferredSaleLines.

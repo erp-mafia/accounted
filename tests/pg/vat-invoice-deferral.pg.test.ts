@@ -26,9 +26,13 @@ import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { createCreditNoteJournalEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { cancelSchedulesForSource, dissolveScheduleNow } from '@/lib/bookkeeping/accruals/service'
+import { createManualAccrualSchedule } from '@/lib/bookkeeping/accruals/manual'
+import { createLogger } from '@/lib/logger'
 import {
   ACCOUNT_RUTA,
   loadVatDeclarationLedger,
+  readDeferredSaleLines,
+  rutorFromTotals,
   VAT_ACCOUNTS,
   VAT_SETTLEMENT_NET_ACCOUNTS,
 } from '@/lib/reports/vat-declaration'
@@ -365,11 +369,14 @@ describe('a periodiserad invoice line in the momsdeklaration (crm#1919)', { time
     const company = { userId: seed.userId, companyId: seed.companyId, fiscalPeriodId: seed.fiscalPeriodId, nextPeriodId: seed.fiscalPeriodId }
     const april = await releaseOf(seed, '2026-04-01')
 
-    // The April release stornoed and booked again by a rättelse that also
-    // books a sale of 1 000 kr + 25 % moms the release verifikat never had.
+    // The April release stornoed and booked again by a rättelse that releases
+    // 1 500 kr instead of 2 000 and also books a sale of 1 000 kr + 25 % moms
+    // the release verifikat never had. Read through the release's chain, the
+    // storno and the new release each net to nothing; read off the accounts
+    // alone, the quarter would hold the 500 kr the release changed by.
     const stornoId = await postStorno(company, april, { date: '2026-05-10' })
     await postCorrection(seed, april, '2026-05-10', [
-      ['2970', 2000, 0], ['3001', 0, 2000],
+      ['2970', 1500, 0], ['3001', 0, 1500],
       ['1510', 1250, 0], ['3001', 0, 1000], ['2611', 0, 250],
     ])
     await markReversed(april, stornoId)
@@ -445,16 +452,18 @@ describe('a periodiserad invoice line in the momsdeklaration (crm#1919)', { time
     await ensureAccount(seed, '2971', 'Förutbetalda hyresintäkter')
     const company = { userId: seed.userId, companyId: seed.companyId, fiscalPeriodId: seed.fiscalPeriodId, nextPeriodId: seed.fiscalPeriodId }
 
-    // The invoice verifikat stornoed and booked again with the 12 000 kr on
-    // 2971 instead of 2970: a lawful rättelse, the schedule unchanged.
+    // The invoice verifikat stornoed and booked again with the deferral on
+    // 2971 instead of 2970, and 10 000 kr of it instead of 12 000 (its moms
+    // 2 500): a lawful rättelse, the schedule unchanged. The storno takes the
+    // whole sale back and the rättelse books the new one, on 2971.
     const stornoId = await postStorno(company, entryId, { date: '2026-03-20' })
     await postCorrection(seed, entryId, '2026-03-20', [
-      ['1510', 20000, 0], ['2971', 0, 12000], ['3001', 0, 4000], ['2611', 0, 4000],
+      ['1510', 17500, 0], ['2971', 0, 10000], ['3001', 0, 4000], ['2611', 0, 3500],
     ])
     await markReversed(entryId, stornoId)
 
-    expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 16000, ruta10: 4000 })
-    expect(await drillDownRuta05(seed.companyId, Q1)).toBe(16000)
+    expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 14000, ruta10: 3500 })
+    expect(await drillDownRuta05(seed.companyId, Q1)).toBe(14000)
     expect(await rutorOf(seed.companyId, Q2)).toEqual({ ruta05: 0, ruta10: 0 })
   })
 
@@ -472,6 +481,76 @@ describe('a periodiserad invoice line in the momsdeklaration (crm#1919)', { time
 
     expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 16000, ruta10: 4000 })
     expect(await drillDownRuta05(seed.companyId, Q1)).toBe(16000)
+  })
+
+  it('reads the deferral an inline rättelse lowered at what the verifikat holds now, its part taken of what it booked', async () => {
+    // The sale corrected inside the invoice verifikat: 10 000 kr periodiserad
+    // instead of 12 000, its moms 2 500 instead of 3 000. The part stays the
+    // schedule's 12 000 over the 12 000 the verifikat booked (the rättelse
+    // log gives the booked amount back), so the lowered line reads whole.
+    const seed = await seedCompany()
+    const { entryId } = await bookDeferredInvoice(seed)
+    const { rows: struck } = await getPool().query<{ id: string }>(
+      `SELECT id FROM public.journal_entry_lines WHERE journal_entry_id = $1 AND account_number IN ('1510', '2970', '2611')`,
+      [entryId],
+    )
+    await getPool().query('SELECT public.correct_entry_lines_inline($1, $2, $3, $4, $5)', [
+      seed.companyId, entryId, struck.map((line) => line.id), JSON.stringify([
+        { account_number: '1510', debit_amount: 17500 },
+        { account_number: '2970', credit_amount: 10000 },
+        { account_number: '2611', credit_amount: 3500 },
+      ]), seed.userId,
+    ])
+
+    expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 14000, ruta10: 3500 })
+    expect(await drillDownRuta05(seed.companyId, Q1)).toBe(14000)
+    expect(await rutorOf(seed.companyId, Q2)).toEqual({ ruta05: 0, ruta10: 0 })
+  })
+
+  it('counts a sale once when a rättelse moves it onto 2970 and a manual periodisering spreads it from the invoice verifikat', async () => {
+    // The 4 000 kr of setup moved by a rättelse from 3001 onto 2970, then
+    // periodiserad by hand over April to July from the invoice verifikat. The
+    // invoice's period reads all of 2970 as the sale, so the manual months
+    // net to nothing like the invoice's own; read the old way, they would
+    // count the 4 000 kr a second time.
+    const seed = await seedCompany()
+    const { entryId } = await bookDeferredInvoice(seed)
+    const { rows: [setup] } = await getPool().query<{ id: string }>(
+      `SELECT id FROM public.journal_entry_lines WHERE journal_entry_id = $1 AND account_number = '3001'`,
+      [entryId],
+    )
+    await getPool().query('SELECT public.correct_entry_lines_inline($1, $2, $3, $4, $5)', [
+      seed.companyId, entryId, [setup.id], JSON.stringify([{ account_number: '2970', credit_amount: 4000 }]), seed.userId,
+    ])
+    const outcome = await runWithActor({ type: 'user' }, () =>
+      createManualAccrualSchedule(
+        { supabase: createServiceClientNoCookies(), companyId: seed.companyId, userId: seed.userId, log: createLogger('pg-test') },
+        {
+          direction: 'revenue',
+          amount_sek: 4000,
+          balance_account: '2970',
+          target_account: '3001',
+          period_start: '2026-04-01',
+          period_end: '2026-07-31',
+          description: 'Uppsättning',
+          origin_journal_entry_id: entryId,
+        },
+        { dryRun: false },
+      ),
+    )
+    expect(outcome.ok).toBe(true)
+    const { rows: [manual] } = await getPool().query<{ months: number }>(
+      `SELECT count(*)::int AS months FROM public.accrual_schedule_installments i
+         JOIN public.accrual_schedules s ON s.id = i.schedule_id
+        WHERE s.company_id = $1 AND s.source_kind = 'manual' AND i.journal_entry_id IS NOT NULL`,
+      [seed.companyId],
+    )
+    expect(manual.months).toBe(4)
+
+    expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 16000, ruta10: 4000 })
+    expect(await rutorOf(seed.companyId, Q2)).toEqual({ ruta05: 0, ruta10: 0 })
+    expect(await rutorOf(seed.companyId, Q3)).toEqual({ ruta05: 0, ruta10: 0 })
+    expect(await drillDownRuta05(seed.companyId, Q2)).toBe(0)
   })
 
   it('reads only the part with moms when a row of the deferral could not be scheduled', async () => {
@@ -511,6 +590,96 @@ describe('a periodiserad invoice line in the momsdeklaration (crm#1919)', { time
     expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 1000, ruta10: 250 })
     expect(await drillDownRuta05(seed.companyId, Q1)).toBe(1000)
     expect(await rutorOf(seed.companyId, Q2)).toEqual({ ruta05: 0, ruta10: 0 })
+  })
+
+  it('reads no row as a sale with moms that no schedule says carries it, also when the row has moms', async () => {
+    // Two 25 % rows on 2970, and the 2 000 kr row's schedule missing: only
+    // the 1 000 kr a schedule names is read. The missing row is not read in
+    // any period, as on main, until a schedule for it exists.
+    const seed = await seedCompany()
+    const invoiceId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.invoices (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date, status, currency,
+                                    subtotal, vat_amount, total, vat_treatment, vat_rate, document_type, paid_amount, remaining_amount)
+       VALUES ($1, $2, $3, $4, 'F-4', '2026-03-15', '2026-04-14', 'sent', 'SEK',
+               3000, 750, 3750, 'standard_25', 25, 'invoice', 0, 3750)`,
+      [invoiceId, seed.userId, seed.companyId, seed.customerId],
+    )
+    const [scheduled, missing] = [randomUUID(), randomUUID()]
+    await getPool().query(
+      `INSERT INTO public.invoice_items (id, invoice_id, sort_order, description, quantity, unit, unit_price, line_total,
+                                         vat_rate, vat_amount, accrual_period_start, accrual_period_end, accrual_balance_account)
+       VALUES ($1, $2, 0, 'Abonnemang', 1, 'st', 1000, 1000, 25, 250, '2026-04-01', '2026-06-30', '2970'),
+              ($3, $2, 1, 'Support', 1, 'st', 2000, 2000, 25, 500, '2026-04-01', '2026-06-30', '2970')`,
+      [scheduled, invoiceId, missing],
+    )
+    const invoice = await readInvoice(invoiceId)
+    const supabase = createServiceClientNoCookies()
+    await runWithActor({ type: 'user' }, async () => {
+      const entry = await createInvoiceJournalEntry(supabase, seed.companyId, seed.userId, invoice, 'aktiebolag', 'Kund AB')
+      const first = invoice.items.filter((item) => item.id === scheduled)
+      await createSchedulesForCustomerInvoice(supabase, seed.companyId, seed.userId, invoice, first, entry!.id, 'aktiebolag')
+    })
+
+    expect(await rutorOf(seed.companyId, Q1)).toEqual({ ruta05: 1000, ruta10: 750 })
+    expect(await rutorOf(seed.companyId, Q2)).toEqual({ ruta05: 0, ruta10: 0 })
+  })
+
+  it('reads a verifikat in TS (the changes to a filed period) to the öre as the figure reads it, at a part that is no round number', async () => {
+    // 1 500,15 kr at 25 % and 300,03 kr momsfri, both periodiserade on 2970
+    // for April to June: the 25 % part is 5/6, and 1 500,15 x 5/6 is
+    // 1 250,125 exactly. Both readers round each line at the same 12-decimal
+    // part, so the fold over the verifikat's lines gives the figure's ruta 05.
+    const seed = await seedCompany()
+    const invoiceId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.invoices (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date, status, currency,
+                                    subtotal, vat_amount, total, vat_treatment, vat_rate, document_type, paid_amount, remaining_amount)
+       VALUES ($1, $2, $3, $4, 'F-5', '2026-03-15', '2026-04-14', 'sent', 'SEK',
+               1800.18, 375.04, 2175.22, 'standard_25', 25, 'invoice', 0, 2175.22)`,
+      [invoiceId, seed.userId, seed.companyId, seed.customerId],
+    )
+    await getPool().query(
+      `INSERT INTO public.invoice_items (id, invoice_id, sort_order, description, quantity, unit, unit_price, line_total,
+                                         vat_rate, vat_amount, accrual_period_start, accrual_period_end, accrual_balance_account)
+       VALUES ($1, $2, 0, 'Abonnemang', 1, 'st', 1500.15, 1500.15, 25, 375.04, '2026-04-01', '2026-06-30', '2970'),
+              ($3, $2, 1, 'Momsfri avgift', 1, 'st', 300.03, 300.03, 0, 0, '2026-04-01', '2026-06-30', '2970')`,
+      [randomUUID(), invoiceId, randomUUID()],
+    )
+    const invoice = await readInvoice(invoiceId)
+    const supabase = createServiceClientNoCookies()
+    const entryId = await runWithActor({ type: 'user' }, async () => {
+      const entry = await createInvoiceJournalEntry(supabase, seed.companyId, seed.userId, invoice, 'aktiebolag', 'Kund AB')
+      await createSchedulesForCustomerInvoice(supabase, seed.companyId, seed.userId, invoice, invoice.items, entry!.id, 'aktiebolag')
+      return entry!.id
+    })
+
+    const { rows: shareRows } = await getPool().query<{ journal_entry_id: string; target_account: string; share: string }>(
+      'SELECT * FROM public.vat_invoice_deferral_shares($1)',
+      [seed.companyId],
+    )
+    const shares = new Map<string, Array<{ target_account: string; share: number }>>()
+    for (const row of shareRows) {
+      shares.set(row.journal_entry_id, [...(shares.get(row.journal_entry_id) ?? []), { target_account: row.target_account, share: Number(row.share) }])
+    }
+    const { rows: lines } = await getPool().query<{ account_number: string; debit: number; credit: number }>(
+      `SELECT account_number, debit_amount::float8 AS debit, credit_amount::float8 AS credit
+         FROM public.journal_entry_lines WHERE journal_entry_id = $1`,
+      [entryId],
+    )
+    const totals = new Map<string, { debit: number; credit: number }>()
+    for (const line of readDeferredSaleLines(
+      entryId,
+      lines.map((l) => ({ account_number: l.account_number, debit_amount: l.debit, credit_amount: l.credit })),
+      shares,
+    )) {
+      const t = totals.get(line.account_number) ?? { debit: 0, credit: 0 }
+      totals.set(line.account_number, { debit: t.debit + line.debit_amount, credit: t.credit + line.credit_amount })
+    }
+
+    const { ruta05 } = await rutorOf(seed.companyId, Q1)
+    expect(ruta05).toBe(1500.14)
+    expect(rutorFromTotals(totals).ruta05).toBe(ruta05)
   })
 
   it('keeps ruta 10 a quarter of ruta 05 in every period, and the year whole', async () => {
