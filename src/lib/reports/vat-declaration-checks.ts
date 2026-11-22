@@ -719,8 +719,8 @@ export function runVatDeclarationChecks(
   //   - an upplupen intäkt credits 17xx on the invoice with the full moms on
   //     2611, its months having credited 3001 with no moms before it, so both
   //     directions drift. (A förutbetald intäkt on 29xx no longer does: the
-  //     declaration reads its 29xx line as the sale in the invoice's period
-  //     and leaves the releases out, crm#1919.)
+  //     declaration reads its 29xx line as the sale in the invoice's period,
+  //     and a release nets to nothing, crm#1919.)
   // Any of those would turn a proportional check into a permanent filing-
   // blocking ERROR (isFilingBlocked) on a correct declaration. Making ruta 07
   // mappable and reconciling the revenue_account override is the

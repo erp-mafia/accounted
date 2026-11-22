@@ -85,7 +85,7 @@ function ledger(opts: {
   rattelser?: unknown[]
   lines?: ReturnType<typeof line>[]
   special?: Array<{ journal_entry_id: string; reason: string }>
-  deferrals?: Array<{ journal_entry_id: string; balance_account: string; target_account: string; share: number }>
+  deferrals?: Array<{ journal_entry_id: string; target_account: string; share: number }>
   submissions?: Array<{ id: string; key: string; value: unknown }>
   closing?: string[]
 }) {
@@ -202,7 +202,7 @@ describe('withChangesAfterFiling', () => {
       late: [sale],
       // 4 000 on 3001 and 12 000 periodiserad on 2970, 25 % moms on both.
       lines: [line('e5', '1510', 20000, 0), line('e5', '2970', 0, 12000), line('e5', '3001', 0, 4000), line('e5', '2611', 0, 4000)],
-      deferrals: [{ journal_entry_id: 'e5', balance_account: '2970', target_account: '3001', share: 1 }],
+      deferrals: [{ journal_entry_id: 'e5', target_account: '3001', share: 1 }],
     })
 
     const [record] = await withChangesAfterFiling(mock.supabase as never, COMPANY, [JULY])
@@ -222,31 +222,10 @@ describe('withChangesAfterFiling', () => {
         struck_lines: null, added_lines: null, created_at: '2026-10-24T19:00:00Z',
       }],
       lines: [line('e6', '2970', 2000, 0), line('e6', '3001', 0, 2000), line('e7', '2970', 2000, 0), line('e7', '3001', 0, 2000)],
-      special: [
-        { journal_entry_id: 'e6', reason: 'invoice_deferral_release' },
-        { journal_entry_id: 'e7', reason: 'invoice_deferral_release' },
+      deferrals: [
+        { journal_entry_id: 'e6', target_account: '3001', share: 1 },
+        { journal_entry_id: 'e7', target_account: '3001', share: 1 },
       ],
-    })
-
-    const [record] = await withChangesAfterFiling(mock.supabase as never, COMPANY, [JULY])
-
-    expect(record.changed_after_filing).toBeNull()
-  })
-
-  it('reads the special verifikat past the first 1000 rows (crm#1919)', async () => {
-    const release = entry({ id: 'e6', voucher_number: 13, entry_date: '2026-07-01', source_type: 'accrual', committed_at: '2026-10-24T18:29:38Z' })
-    const mock = ledger({
-      late: [release],
-      lines: [line('e6', '2970', 2000, 0), line('e6', '3001', 0, 2000)],
-    })
-    // Releases of earlier years fill the first page; this one is on the second.
-    const special = [
-      ...Array.from({ length: 1000 }, (_, i) => ({ journal_entry_id: `old-${i}`, reason: 'invoice_deferral_release' })),
-      { journal_entry_id: 'e6', reason: 'invoice_deferral_release' },
-    ]
-    mock.setTable('rpc:vat_declaration_special_entries', (chain): TableMockResult => {
-      const [from, to] = chain.find((c) => c.method === 'range')!.args as [number, number]
-      return { data: special.slice(from, to + 1) }
     })
 
     const [record] = await withChangesAfterFiling(mock.supabase as never, COMPANY, [JULY])

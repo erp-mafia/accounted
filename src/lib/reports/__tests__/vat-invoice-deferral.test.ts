@@ -30,7 +30,7 @@ function totalsOf(lines: ReturnType<typeof line>[]) {
 
 describe('readDeferredSaleLines', () => {
   it('reads the 29xx line of a deferred invoice sale as the sale on its revenue account', () => {
-    const shares = new Map([[INVOICE, [{ balance_account: '2970', target_account: '3001', share: 1 }]]])
+    const shares = new Map([[INVOICE, [{ target_account: '3001', share: 1 }]]])
     const read = readDeferredSaleLines(INVOICE, INVOICE_LINES, shares)
     expect(rutorFromTotals(totalsOf(read))).toMatchObject({ ruta05: 16000, ruta10: 4000 })
     // Without the reading, the sale its moms is reported on is missing.
@@ -39,14 +39,14 @@ describe('readDeferredSaleLines', () => {
 
   it('reads a kreditfaktura with its own sign', () => {
     const credit = INVOICE_LINES.map((l) => line(l.account_number, l.credit_amount, l.debit_amount))
-    const shares = new Map([[INVOICE, [{ balance_account: '2970', target_account: '3001', share: 1 }]]])
+    const shares = new Map([[INVOICE, [{ target_account: '3001', share: 1 }]]])
     expect(rutorFromTotals(totalsOf(readDeferredSaleLines(INVOICE, credit, shares)))).toMatchObject({ ruta05: -16000, ruta10: -4000 })
   })
 
   it('splits a 29xx account two deferrals share by their parts, and leaves a part without moms unread', () => {
     const shares = new Map([[INVOICE, [
-      { balance_account: '2970', target_account: '3001', share: 0.75 },
-      { balance_account: '2970', target_account: '3913', share: 0.125 },
+      { target_account: '3001', share: 0.75 },
+      { target_account: '3913', share: 0.125 },
     ]]])
     expect(rutorFromTotals(totalsOf(readDeferredSaleLines(INVOICE, INVOICE_LINES, shares)))).toMatchObject({
       ruta05: 13000,
@@ -54,8 +54,20 @@ describe('readDeferredSaleLines', () => {
     })
   })
 
+  it('reads a release as nothing: its 29xx debit takes back the revenue it credits', () => {
+    const release = [line('2970', 2000, 0), line('3001', 0, 2000)]
+    const shares = new Map([[INVOICE, [{ target_account: '3001', share: 1 }]]])
+    expect(rutorFromTotals(totalsOf(readDeferredSaleLines(INVOICE, release, shares)))).toMatchObject({ ruta05: 0, ruta10: 0 })
+  })
+
+  it('reads the deferral on the 29xx account a rättelse moved it to', () => {
+    const moved = INVOICE_LINES.map((l) => (l.account_number === '2970' ? line('2971', l.debit_amount, l.credit_amount) : l))
+    const shares = new Map([[INVOICE, [{ target_account: '3001', share: 1 }]]])
+    expect(rutorFromTotals(totalsOf(readDeferredSaleLines(INVOICE, moved, shares)))).toMatchObject({ ruta05: 16000, ruta10: 4000 })
+  })
+
   it('leaves any other verifikat as it is', () => {
-    const shares = new Map([['22222222-2222-4222-8222-222222222222', [{ balance_account: '2970', target_account: '3001', share: 1 }]]])
+    const shares = new Map([['22222222-2222-4222-8222-222222222222', [{ target_account: '3001', share: 1 }]]])
     expect(readDeferredSaleLines(INVOICE, INVOICE_LINES, shares)).toEqual(INVOICE_LINES)
   })
 })
@@ -65,22 +77,21 @@ describe('fetchInvoiceDeferralShares', () => {
     const mock = createTableMockSupabase({
       'rpc:vat_invoice_deferral_shares': {
         data: [
-          { journal_entry_id: INVOICE, balance_account: '2970', target_account: '3001', share: '0.75' },
-          { journal_entry_id: INVOICE, balance_account: '2970', target_account: '3002', share: '0.25' },
+          { journal_entry_id: INVOICE, target_account: '3001', share: '0.75' },
+          { journal_entry_id: INVOICE, target_account: '3002', share: '0.25' },
         ],
       },
     })
     const shares = await fetchInvoiceDeferralShares(mock.supabase as never, 'company-1')
     expect(shares.get(INVOICE)).toEqual([
-      { balance_account: '2970', target_account: '3001', share: 0.75 },
-      { balance_account: '2970', target_account: '3002', share: 0.25 },
+      { target_account: '3001', share: 0.75 },
+      { target_account: '3002', share: 0.25 },
     ])
   })
 
   it('reads every page of the answer, past the 1000 rows PostgREST returns at once', async () => {
     const rows = Array.from({ length: 1001 }, (_, i) => ({
       journal_entry_id: `entry-${i}`,
-      balance_account: '2970',
       target_account: '3001',
       share: '1',
     }))
@@ -92,7 +103,7 @@ describe('fetchInvoiceDeferralShares', () => {
     })
     const shares = await fetchInvoiceDeferralShares(mock.supabase as never, 'company-1')
     expect(shares.size).toBe(1001)
-    expect(shares.get('entry-1000')).toEqual([{ balance_account: '2970', target_account: '3001', share: 1 }])
+    expect(shares.get('entry-1000')).toEqual([{ target_account: '3001', share: 1 }])
   })
 
   it('reads nothing as a deferred sale while the function is not deployed yet', async () => {

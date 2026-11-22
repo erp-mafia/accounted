@@ -306,7 +306,7 @@ interface VatTotalsRpcPayload {
  *
  * Förutbetalda intäkter on customer invoices (crm#1919): the totals of a
  * revenue account hold the sale an invoice deferred to 29xx on the invoice's
- * date, and not its releases. See fetchInvoiceDeferralShares.
+ * date, and its releases net to nothing. See fetchInvoiceDeferralShares.
  */
 export async function fetchVatAccountTotals(
   supabase: SupabaseClient,
@@ -360,10 +360,7 @@ export async function fetchVatAccountTotals(
 }
 
 /** Per verifikat, the revenue accounts its 29xx lines read as, and at which part. */
-export type InvoiceDeferralShares = ReadonlyMap<
-  string,
-  ReadonlyArray<{ balance_account: string; target_account: string; share: number }>
->
+export type InvoiceDeferralShares = ReadonlyMap<string, ReadonlyArray<{ target_account: string; share: number }>>
 
 /**
  * Which verifikat's 29xx lines the momsdeklaration reads as a sale, and on
@@ -374,13 +371,15 @@ export type InvoiceDeferralShares = ReadonlyMap<
  * ruta 05 is the underlag of the moms in rutorna 10 to 12, so the sale is
  * reported in the period that carries its moms: the invoice's.
  *
- * The SQL decides (vat_invoice_deferral_shares, migration 20261121140000):
- * the invoice's verifikat, its kreditfaktura and every storno and rättelse
- * down from either, for a deferral whose line carries Swedish moms. The
- * releases of such a deferral are left out of the rutor as
- * invoice_deferral_release (vat_declaration_special_entries). The figure and
- * the drill-down apply it in SQL; a fold over one verifikat's own lines (the
- * changes to a filed period) reads it here and applies it with
+ * The SQL decides (vat_invoice_deferral_shares, migration 20261121140000),
+ * for a deferral whose line carries Swedish moms: every 29xx line of the
+ * invoice's verifikat and its kreditfaktura (at the invoice's parts), of each
+ * release (whole, on its schedule's revenue account) and of every storno and
+ * rättelse down from any of them is read as the sale, with its own sign. A
+ * release, Dr 29xx / Cr the revenue account, so nets to nothing, and a
+ * rättelse that moves the deferral to another 29xx account still reads it.
+ * The figure and the drill-down apply it in SQL; a fold over one verifikat's
+ * own lines (the changes to a filed period) reads it here and applies it with
  * readDeferredSaleLines.
  *
  * A database that has not run the migration yet (the deploy window) has no
@@ -390,7 +389,7 @@ export async function fetchInvoiceDeferralShares(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<InvoiceDeferralShares> {
-  type ShareRow = { journal_entry_id: string; balance_account: string; target_account: string; share: number | string }
+  type ShareRow = { journal_entry_id: string; target_account: string; share: number | string }
   let rows: ShareRow[]
   try {
     // Paged in a total order: the answer covers the company's whole history,
@@ -399,9 +398,7 @@ export async function fetchInvoiceDeferralShares(
       supabase
         .rpc('vat_invoice_deferral_shares', { p_company_id: companyId })
         .order('journal_entry_id')
-        .order('balance_account')
         .order('target_account')
-        .order('share')
         .range(from, to),
     )
   } catch (err) {
@@ -412,20 +409,21 @@ export async function fetchInvoiceDeferralShares(
     }
     throw new Error(`vat_invoice_deferral_shares failed: ${err instanceof Error ? err.message : String(err)}`)
   }
-  const shares = new Map<string, Array<{ balance_account: string; target_account: string; share: number }>>()
+  const shares = new Map<string, Array<{ target_account: string; share: number }>>()
   for (const row of rows) {
     const ofEntry = shares.get(row.journal_entry_id) ?? []
-    ofEntry.push({ balance_account: row.balance_account, target_account: row.target_account, share: Number(row.share) })
+    ofEntry.push({ target_account: row.target_account, share: Number(row.share) })
     shares.set(row.journal_entry_id, ofEntry)
   }
   return shares
 }
 
 /**
- * One verifikat's lines as the momsdeklaration reads them: each 29xx line the
- * SQL reads as a deferred sale (fetchInvoiceDeferralShares) adds that sale on
- * its revenue account, at its part. The 29xx line itself stays; it reaches no
- * ruta.
+ * One verifikat's lines as the momsdeklaration reads them: on a verifikat the
+ * SQL reads as booking a deferred sale (fetchInvoiceDeferralShares), every
+ * 29xx line adds that sale on each revenue account, at its part, rounded to
+ * öre per line and part as the SQL rounds it. The 29xx line itself stays; it
+ * reaches no ruta.
  */
 export function readDeferredSaleLines(
   entryId: string,
@@ -437,7 +435,7 @@ export function readDeferredSaleLines(
   if (!ofEntry) return read
   for (const line of lines) {
     for (const part of ofEntry) {
-      if (part.balance_account !== line.account_number) continue
+      if (!line.account_number.startsWith('29')) continue
       read.push({
         account_number: part.target_account,
         debit_amount: roundOre((Number(line.debit_amount) || 0) * part.share),

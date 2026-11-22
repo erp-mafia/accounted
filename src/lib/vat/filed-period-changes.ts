@@ -26,12 +26,12 @@
  * Which verifikat the rutor read is the SQL's decision, asked of the same
  * function get_vat_declaration_totals reads (vat_declaration_special_entries):
  * a tagged momsredovisning, the posted bokslut, a kontantmetod cut-off
- * reversal, a carried opening balance, the release of a förutbetald intäkt an
- * invoice booked with moms and a momsredovisning-shaped verifikat are left
- * out. Each counted verifikat moves the rutor by the fold the declaration
- * files (rutorChangeOfLines), with the company's own account classification
- * and its 29xx lines of a deferred invoice sale read as that sale
- * (readDeferredSaleLines, crm#1919).
+ * reversal, a carried opening balance and a momsredovisning-shaped verifikat
+ * are left out. Each counted verifikat moves the rutor by the fold the
+ * declaration files (rutorChangeOfLines), with the company's own account
+ * classification and the 29xx lines of a verifikat that books a deferred
+ * invoice sale read as that sale (readDeferredSaleLines, crm#1919): the
+ * invoice moves its whole sale, a release nets to nothing.
  *
  * Only verifikat move a filed period here. A change to how the declaration
  * reads verifikat it already holds (crm#1919 read the 29xx line of a
@@ -97,12 +97,7 @@ export type VatFilingChange = z.infer<typeof VatFilingChangeSchema> & { rutor_ch
 export type VatFilingRecordWithChange = VatFilingRecord & { changed_after_filing: VatFilingChange | null }
 
 /** Why vat_declaration_special_entries leaves a verifikat out of the rutor. */
-const LEFT_OUT_REASONS = new Set([
-  'kontantmetod_cutoff',
-  'carried_opening_balance',
-  'momsredovisning_shape',
-  'invoice_deferral_release',
-])
+const LEFT_OUT_REASONS = new Set(['kontantmetod_cutoff', 'carried_opening_balance', 'momsredovisning_shape'])
 
 /** Ids per `.in()` filter: well inside PostgREST's URL limits. */
 const IN_CHUNK = 200
@@ -372,31 +367,20 @@ export async function withChangesAfterFiling(
 
     accounts ??= await fetchDynamicVatAccounts(supabase, companyId)
     deferrals ??= await fetchInvoiceDeferralShares(supabase, companyId)
-    // Paged in a total order: the opening balance chains and the deferral
-    // releases cover the company's whole history, and PostgREST cuts an
-    // unpaged answer at 1000 rows.
-    const specialRows = await fetchAllRows<{ journal_entry_id: string; reason: string }>(({ from, to }) =>
-      supabase
-        .rpc('vat_declaration_special_entries', {
-          p_company_id: companyId,
-          p_start: filing.period_start,
-          p_end: filing.period_end,
-          p_net_shape_ruta_accounts: VAT_ACCOUNTS,
-          p_net_shape_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
-          p_ruta_accounts: VAT_ACCOUNTS,
-          p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
-        })
-        .order('journal_entry_id')
-        .order('reason')
-        .range(from, to),
-    )
+    const { data: special, error: specialError } = await supabase.rpc('vat_declaration_special_entries', {
+      p_company_id: companyId,
+      p_start: filing.period_start,
+      p_end: filing.period_end,
+      p_net_shape_ruta_accounts: VAT_ACCOUNTS,
+      p_net_shape_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
+      p_ruta_accounts: VAT_ACCOUNTS,
+      p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
+    })
+    if (specialError) throw specialError
     const leftOut = new Set(
-      specialRows.filter((row) => LEFT_OUT_REASONS.has(row.reason)).map((row) => row.journal_entry_id),
-    )
-    // A release is never read, wherever it is dated, so one moved out of the
-    // period took nothing with it either.
-    const deferralReleases = new Set(
-      specialRows.filter((row) => row.reason === 'invoice_deferral_release').map((row) => row.journal_entry_id),
+      ((special ?? []) as Array<{ journal_entry_id: string; reason: string }>)
+        .filter((row) => LEFT_OUT_REASONS.has(row.reason))
+        .map((row) => row.journal_entry_id),
     )
     const readByRutor = (entry: EntryRow) =>
       entry.source_type !== 'vat_settlement' &&
@@ -455,7 +439,7 @@ export async function withChangesAfterFiling(
         // shape is judged on its own lines, as a staged voucher is.
         taxAccounts ??= await skattekontoShapeAccounts(supabase, companyId)
         const shaped = momsredovisningShapeOfLines(linesOf(entry.id).map((line) => line.account_number), taxAccounts)
-        if (entry.source_type === 'vat_settlement' || closingIds.has(entry.id) || shaped || deferralReleases.has(entry.id)) continue
+        if (entry.source_type === 'vat_settlement' || closingIds.has(entry.id) || shaped) continue
       }
       const change: RutorChange = {}
       addInto(change, linesChange(entry.id, linesOf(entry.id), accounts, deferrals), movedIn ? 1 : -1)

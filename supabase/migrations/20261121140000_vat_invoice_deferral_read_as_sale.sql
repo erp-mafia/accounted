@@ -15,35 +15,45 @@
 -- ruta 05 is the underlag of the moms in rutorna 10 to 12: the sale belongs
 -- to the declaration that carries its moms. The books stay as they are (the
 -- deferral is right for the income statement, ÅRL 2 kap. 4 §); only the
--- reading changes:
+-- reading changes, by one rule: every 29xx line of a verifikat that books a
+-- deferral with moms is read as the sale, on its revenue account, with its
+-- own sign.
 --
 --   1. vat_invoice_deferral_schedules(): every förutbetald intäkt a customer
 --      invoice booked (a revenue schedule with an invoice, its origin
 --      verifikat and a 29xx account), and whether its line carries Swedish
---      moms (the invoice row's moms-sats above 0). One definition, read by
---      the two below.
---   2. vat_invoice_deferral_shares(): the verifikat whose 29xx lines read as
---      the deferred sale, and on which revenue account: the invoice's own
---      verifikat, the kreditfaktura of the invoice, and every storno and
---      rättelse down from either (reverses_id, correction_of_id), each with
---      its own lines and sign. When several deferrals of one verifikat share
---      a 29xx account, each with moms takes its part of the account by its
---      schedule's amount; a part without moms stays unread, as before.
---   3. vat_declaration_special_entries(): a new reason,
---      invoice_deferral_release, for the releases of a deferral with moms and
---      every storno and rättelse down from them. The rutor leave them out like
---      a kontantmetod cut-off reversal.
---   4. get_vat_declaration_totals() adds the deferred sale to its revenue
+--      moms (the invoice row's moms-sats above 0).
+--   2. vat_invoice_deferral_shares(): the verifikat that book such a
+--      deferral, and the part of their 29xx lines each revenue account
+--      reads: the invoice's verifikat and its kreditfaktura at the invoice's
+--      parts, each release whole on its schedule's revenue account, and every
+--      storno and rättelse down from any of them (reverses_id,
+--      correction_of_id) at its root's parts.
+--   3. get_vat_declaration_totals() adds the read sale to its revenue
 --      account's totals, and get_vat_ruta_source_lines() lists the 29xx line
 --      in that ruta, so the drill-down still lists what the figure sums.
+--
+-- The one rule covers every way the books move a deferral:
+--   - the invoice counts its deferred sale in its own period;
+--   - a release (Dr 29xx / Cr revenue) nets to nothing on its revenue
+--     account, so no release month reports a sale; a storno or rättelse of
+--     one nets to nothing the same way, and a rättelse of a release that also
+--     books a new sale keeps that sale and its moms;
+--   - a kreditfaktura, a storno or a rättelse of the invoice moves the sale
+--     with its own lines, also when the rättelse books the deferral on
+--     another 29xx account: every 29xx line of the verifikat is read, not
+--     only the schedule's account;
+--   - an invoice's part is taken of all the invoice deferred, as its
+--     verifikat booked it on 29xx: a row the schedule door could not schedule
+--     is not known to carry moms, so it is not read as a sale with moms, and
+--     a negative row lowers the whole.
 --
 -- Not changed: a deferral whose line has no Swedish moms (a momsfri line on
 -- 2970), an upplupen intäkt on 17xx, and a manual periodisering keep the
 -- reading they had. get_vat_declaration_totals and get_vat_ruta_source_lines
--- are restated from 20261023094030, vat_declaration_special_entries from
--- 20261115090244, each with only the changes above. Signatures, return
--- shapes, SECURITY INVOKER, search_path and ACLs are unchanged, so the app
--- deployed before this keeps working during the deploy window.
+-- are restated from 20261023094030 with only the changes above. Signatures,
+-- return shapes, SECURITY INVOKER, search_path and ACLs are unchanged, so the
+-- app deployed before this keeps working during the deploy window.
 
 CREATE OR REPLACE FUNCTION public.vat_invoice_deferral_schedules(p_company_id uuid)
 RETURNS TABLE (
@@ -82,12 +92,11 @@ REVOKE ALL ON FUNCTION public.vat_invoice_deferral_schedules(uuid) FROM PUBLIC, 
 GRANT EXECUTE ON FUNCTION public.vat_invoice_deferral_schedules(uuid) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.vat_invoice_deferral_schedules(uuid) IS
-  'Every förutbetald intäkt (29xx) a customer invoice booked, with whether its line carries Swedish moms (crm#1919). The one definition vat_invoice_deferral_shares and vat_declaration_special_entries read.';
+  'Every förutbetald intäkt (29xx) a customer invoice booked, with whether its line carries Swedish moms (crm#1919). The one definition vat_invoice_deferral_shares reads.';
 
 CREATE OR REPLACE FUNCTION public.vat_invoice_deferral_shares(p_company_id uuid)
 RETURNS TABLE (
   journal_entry_id uuid,
-  balance_account text,
   target_account text,
   share numeric
 )
@@ -99,31 +108,67 @@ AS $$
   WITH RECURSIVE deferrals AS MATERIALIZED (
     SELECT * FROM public.vat_invoice_deferral_schedules(p_company_id)
   ),
-  -- Per origin verifikat and 29xx account, each revenue account's part of
-  -- what the deferrals with moms put there.
-  shares AS (
+  -- What each invoice's verifikat booked on 29xx when it was posted, signed:
+  -- its lines now, less what an inline rättelse added and plus what it
+  -- struck (journal_entry_rattelse_log), so a rättelse moves the sale through
+  -- its lines and never through the parts.
+  booked AS (
+    SELECT o.origin_entry_id,
+           COALESCE((
+             SELECT sum(COALESCE(l.credit_amount, 0) - COALESCE(l.debit_amount, 0))
+             FROM public.journal_entry_lines l
+             WHERE l.journal_entry_id = o.origin_entry_id
+               AND l.account_number LIKE '29%'
+           ), 0)
+           - COALESCE((
+             SELECT sum(COALESCE((x ->> 'credit_amount')::numeric, 0) - COALESCE((x ->> 'debit_amount')::numeric, 0))
+             FROM public.journal_entry_rattelse_log r
+             CROSS JOIN LATERAL jsonb_array_elements(COALESCE(r.added_lines, '[]'::jsonb)) x
+             WHERE r.journal_entry_id = o.origin_entry_id
+               AND r.company_id = p_company_id
+               AND r.rattelse_type = 'lines'
+               AND x ->> 'account_number' LIKE '29%'
+           ), 0)
+           + COALESCE((
+             SELECT sum(COALESCE((x ->> 'credit_amount')::numeric, 0) - COALESCE((x ->> 'debit_amount')::numeric, 0))
+             FROM public.journal_entry_rattelse_log r
+             CROSS JOIN LATERAL jsonb_array_elements(COALESCE(r.struck_lines, '[]'::jsonb)) x
+             WHERE r.journal_entry_id = o.origin_entry_id
+               AND r.company_id = p_company_id
+               AND r.rattelse_type = 'lines'
+               AND x ->> 'account_number' LIKE '29%'
+           ), 0) AS amount
+    FROM (SELECT DISTINCT d.origin_entry_id FROM deferrals d) o
+  ),
+  -- Per invoice, each revenue account's part of every 29xx krona the invoice
+  -- booked: its deferrals with moms on that account, over all the invoice
+  -- deferred. All of it is what the verifikat booked, not the schedules:
+  -- createSchedulesForCustomerInvoice goes on past a row it could not
+  -- schedule, such a row is not known to carry moms, and a row may be
+  -- negative. A part without moms is not read, as before.
+  invoice_shares AS (
     SELECT d.origin_entry_id,
            d.invoice_id,
-           d.balance_account,
            d.target_account,
-           sum(d.total_amount) FILTER (WHERE d.with_moms) / t.total AS share
+           sum(d.total_amount) FILTER (WHERE d.with_moms) / b.amount AS share
     FROM deferrals d
-    JOIN (
-      SELECT x.origin_entry_id, x.balance_account, sum(x.total_amount) AS total
-      FROM deferrals x
-      GROUP BY x.origin_entry_id, x.balance_account
-    ) t ON t.origin_entry_id = d.origin_entry_id AND t.balance_account = d.balance_account
-    GROUP BY d.origin_entry_id, d.invoice_id, d.balance_account, d.target_account, t.total
+    JOIN booked b ON b.origin_entry_id = d.origin_entry_id
+    WHERE b.amount <> 0
+    GROUP BY d.origin_entry_id, d.invoice_id, d.target_account, b.amount
     HAVING bool_or(d.with_moms)
   ),
-  -- The invoice's verifikat, and the kreditfaktura of the invoice (its rows
-  -- carry the original's periodisering, so it books the same 29xx account).
-  roots AS (
-    SELECT DISTINCT s.origin_entry_id AS id, s.origin_entry_id AS root_id
-    FROM shares s
-    UNION
-    SELECT e.id, s.origin_entry_id
-    FROM shares s
+  -- The verifikat that book a deferral with moms, each with the parts its
+  -- 29xx lines are read at: the invoice's verifikat, and the kreditfaktura of
+  -- the invoice (its rows carry the original's periodisering), at the
+  -- invoice's parts; a release (Dr 29xx / Cr its revenue account) whole, on
+  -- its schedule's revenue account, once also when "Lös upp nu" links several
+  -- months to one verifikat (commit_accrual_dissolution).
+  root_shares AS (
+    SELECT s.origin_entry_id AS root_id, s.target_account, s.share
+    FROM invoice_shares s
+    UNION ALL
+    SELECT e.id, s.target_account, s.share
+    FROM invoice_shares s
     JOIN public.invoices cn
       ON cn.credited_invoice_id = s.invoice_id
      AND cn.company_id = p_company_id
@@ -131,10 +176,16 @@ AS $$
       ON e.source_type = 'credit_note'
      AND e.source_id = cn.id
      AND e.company_id = p_company_id
+    UNION ALL
+    SELECT DISTINCT i.journal_entry_id, d.target_account, 1::numeric
+    FROM deferrals d
+    JOIN public.accrual_schedule_installments i ON i.schedule_id = d.schedule_id
+    WHERE d.with_moms
+      AND i.journal_entry_id IS NOT NULL
   ),
   -- Every storno and rättelse down from them, each following its root.
   chain AS (
-    SELECT r.id, r.root_id FROM roots r
+    SELECT DISTINCT r.root_id AS id, r.root_id FROM root_shares r
     UNION
     SELECT n.id, c.root_id
     FROM chain c
@@ -146,264 +197,17 @@ AS $$
       WHERE y.correction_of_id = c.id AND y.company_id = p_company_id
     ) n
   )
-  SELECT c.id, s.balance_account, s.target_account, s.share
+  SELECT c.id, r.target_account, sum(r.share)
   FROM chain c
-  JOIN shares s ON s.origin_entry_id = c.root_id
+  JOIN root_shares r ON r.root_id = c.root_id
+  GROUP BY c.id, r.target_account
 $$;
 
 REVOKE ALL ON FUNCTION public.vat_invoice_deferral_shares(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.vat_invoice_deferral_shares(uuid) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.vat_invoice_deferral_shares(uuid) IS
-  'The verifikat whose 29xx lines the momsdeklaration reads as the sale a customer invoice deferred, and on which revenue account at which part (crm#1919): the invoice''s verifikat, its kreditfaktura, and every storno and rättelse down from either. get_vat_declaration_totals, get_vat_ruta_source_lines and lib/vat/filed-period-changes.ts read it.';
-
-CREATE OR REPLACE FUNCTION public.vat_declaration_special_entries(
-  p_company_id uuid,
-  p_start date,
-  p_end date,
-  p_net_shape_ruta_accounts text[],
-  p_net_shape_net_accounts text[],
-  p_ruta_accounts text[],
-  p_net_accounts text[]
-)
-RETURNS TABLE (journal_entry_id uuid, reason text)
-LANGUAGE plpgsql
-STABLE
-SECURITY INVOKER
-SET search_path TO 'public'
-ROWS 20
-AS $$
-#variable_conflict use_column
-DECLARE
-  -- 1630, plus 2012 for an enskild firma.
-  v_tax_accounts text[] := public.skattekonto_shape_accounts(p_company_id);
-  v_shape_line_accounts text[];
-  v_shape_days date[];
-BEGIN
-  -- Shape 1 needs a line on one of its net accounts, shape 2 one on the
-  -- skattekonto: no other verifikat can be a momsredovisning.
-  v_shape_line_accounts := ARRAY(
-    SELECT a FROM unnest(p_net_shape_net_accounts) a
-    UNION
-    SELECT a FROM unnest(v_tax_accounts) a
-  );
-
-  -- The days such a line can be on: once the company is built, the days on
-  -- which those accounts moved; until then every day of the period.
-  IF public.ledger_account_days_ready(p_company_id) THEN
-    v_shape_days := ARRAY(
-      SELECT DISTINCT d.entry_date
-      FROM public.ledger_account_days d
-      WHERE d.company_id = p_company_id
-        AND d.entry_date >= p_start
-        AND d.entry_date <= p_end
-        AND d.account_number = ANY (v_shape_line_accounts)
-        AND d.line_count > 0
-    );
-  ELSE
-    v_shape_days := ARRAY(
-      SELECT g::date
-      FROM generate_series(p_start::timestamp, p_end::timestamp, interval '1 day') g
-    );
-  END IF;
-
-  RETURN QUERY
-  WITH closing_entries AS (
-    SELECT fp.closing_entry_id AS id
-    FROM public.fiscal_periods fp
-    WHERE fp.company_id = p_company_id
-      AND fp.closing_entry_id IS NOT NULL
-  ),
-  -- Every opening balance of the company with the stornos and rättelser of
-  -- it, down the chain, each with the IB at its root (crm#1333). Not dated by
-  -- the period on purpose: a storno can be dated apart from its IB. An
-  -- opening balance is always its own root. Only a balance is an IB: an entry
-  -- tagged opening_balance that books a resultatkonto (class 3-8, which no IB
-  -- door writes: a verifikat marked as IB in bank reconciliation) is an
-  -- ordinary verifikat here.
-  ib_chain AS (
-    WITH RECURSIVE chain AS (
-      SELECT o.id, o.id AS root_id
-      FROM public.journal_entries o
-      WHERE o.company_id = p_company_id
-        AND o.source_type = 'opening_balance'
-        AND NOT EXISTS (
-          SELECT 1 FROM public.journal_entry_lines r
-          WHERE r.journal_entry_id = o.id
-            AND substr(r.account_number, 1, 1) IN ('3', '4', '5', '6', '7', '8')
-        )
-      UNION
-      SELECT n.id, c.root_id
-      FROM chain c
-      CROSS JOIN LATERAL (
-        SELECT x.id FROM public.journal_entries x
-        WHERE x.reverses_id = c.id AND x.company_id = p_company_id
-          AND x.source_type IS DISTINCT FROM 'opening_balance'
-        UNION ALL
-        SELECT y.id FROM public.journal_entries y
-        WHERE y.correction_of_id = c.id AND y.company_id = p_company_id
-          AND y.source_type IS DISTINCT FROM 'opening_balance'
-      ) n
-    )
-    SELECT chain.id, chain.root_id FROM chain
-  ),
-  -- Whether an opening balance feeds this declaration. It does only when it
-  -- is dated after the period's first day AND the books hold no other
-  -- verifikat of the period before it: then it is the only carrier of those
-  -- days' VAT (a migration mid-period). An IB on the first day carries only
-  -- earlier periods; one after the first day with the period's earlier days
-  -- in the books (the year-end roll-forward into a räkenskapsår starting
-  -- mid-period, an import that brought the earlier verifikat) would count
-  -- them twice.
-  ib_roots AS (
-    SELECT o.id,
-           o.entry_date > p_start
-           AND o.entry_date <= p_end
-           AND NOT EXISTS (
-             SELECT 1 FROM public.journal_entries v
-             WHERE v.company_id = p_company_id
-               AND v.status IN ('posted', 'reversed')
-               AND v.entry_date >= p_start
-               AND v.entry_date < o.entry_date
-               AND NOT EXISTS (SELECT 1 FROM ib_chain b WHERE b.id = v.id)
-           ) AS counts
-    FROM public.journal_entries o
-    WHERE o.id IN (SELECT ib_chain.root_id FROM ib_chain)
-  ),
-  -- Each chain member follows the IB at its root (if two roots ever meet, it
-  -- counts only when both do).
-  ib_members AS (
-    SELECT b.id, bool_and(r.counts) AS counts
-    FROM ib_chain b
-    JOIN ib_roots r ON r.id = b.root_id
-    GROUP BY b.id
-  ),
-  cutoff_reversals AS (
-    SELECT DISTINCT k.journal_entry_id AS id
-    FROM public.kontantmetod_cutoff_entries k
-    WHERE k.kind IN ('receivable_reversal', 'payable_reversal')
-      AND k.journal_entry_id IS NOT NULL
-  ),
-  -- The releases of a förutbetald intäkt a customer invoice booked with moms
-  -- (crm#1919), with every storno and rättelse down from them: the invoice's
-  -- own period reads the deferred sale (vat_invoice_deferral_shares), so a
-  -- release, Dr 29xx / Cr the revenue account with no moms, is no sale of
-  -- its own month, and neither is a correction of one.
-  deferral_release_members AS (
-    WITH RECURSIVE chain AS (
-      SELECT i.journal_entry_id AS id
-      FROM public.vat_invoice_deferral_schedules(p_company_id) s
-      JOIN public.accrual_schedule_installments i ON i.schedule_id = s.schedule_id
-      WHERE s.with_moms
-        AND i.journal_entry_id IS NOT NULL
-      UNION
-      SELECT n.id
-      FROM chain c
-      CROSS JOIN LATERAL (
-        SELECT x.id FROM public.journal_entries x
-        WHERE x.reverses_id = c.id AND x.company_id = p_company_id
-        UNION ALL
-        SELECT y.id FROM public.journal_entries y
-        WHERE y.correction_of_id = c.id AND y.company_id = p_company_id
-      ) n
-    )
-    SELECT chain.id FROM chain
-  ),
-  -- The verifikat a person marked as no momsredovisning (crm#1849): the
-  -- latest mark on a verifikat decides, a withdrawn one restores the shapes.
-  marked_roots AS (
-    SELECT latest.id
-    FROM (
-      SELECT DISTINCT ON (k.journal_entry_id) k.journal_entry_id AS id, k.action
-      FROM public.vat_momsredovisning_marks k
-      WHERE k.company_id = p_company_id
-      ORDER BY k.journal_entry_id, k.created_at DESC, k.id DESC
-    ) latest
-    WHERE latest.action = 'not_momsredovisning'
-  ),
-  -- A storno annuls its original line for line, so it follows the original's
-  -- mark: otherwise the storno alone would pass for a momsredovisning while
-  -- the annulled original still counts.
-  marked AS (
-    SELECT r.id FROM marked_roots r
-    UNION
-    SELECT s.id
-    FROM public.journal_entries s
-    JOIN marked_roots r ON r.id = s.reverses_id
-    WHERE s.company_id = p_company_id
-  ),
-  -- The verifikat of the period the rutor read (not tagged, not a cut-off
-  -- reversal, no chain member: neither shape applies to a chain member, not
-  -- marked as no momsredovisning) with a line on a shape's own account.
-  shape_candidates AS MATERIALIZED (
-    SELECT e.id
-    FROM public.journal_entries e
-    WHERE e.company_id = p_company_id
-      AND e.status IN ('posted', 'reversed')
-      AND e.entry_date = ANY (v_shape_days)
-      AND e.entry_date >= p_start
-      AND e.entry_date <= p_end
-      AND NOT (
-        e.status = 'posted'
-        AND EXISTS (SELECT 1 FROM closing_entries c WHERE c.id = e.id)
-      )
-      AND e.source_type IS DISTINCT FROM 'vat_settlement'
-      AND NOT EXISTS (SELECT 1 FROM cutoff_reversals k WHERE k.id = e.id)
-      AND NOT EXISTS (SELECT 1 FROM ib_members m WHERE m.id = e.id)
-      AND NOT EXISTS (SELECT 1 FROM marked k WHERE k.id = e.id)
-      AND EXISTS (
-        SELECT 1 FROM public.journal_entry_lines l
-        WHERE l.journal_entry_id = e.id
-          AND l.account_number = ANY (v_shape_line_accounts)
-      )
-  ),
-  -- Both momsredovisning shapes, from every line of each candidate:
-  --   net_shape (shape 1): a declaration account AND a 2650/1650 line.
-  --   tax_shape (shape 2): a pure movement between VAT accounts and the
-  --     skattekonto: a 26xx declaration line, a skattekonto line, no
-  --     2650/1650 line, and NOTHING else but 26xx, the skattekonto and 3740
-  --     (öres- och kronutjämning) on any line.
-  shape_flags AS (
-    SELECT f.id,
-           f.ruta_line AND f.net_line AS net_shape,
-           f.moms_ruta_line AND f.tax_line AND NOT f.any_net_line AND NOT f.other_line AS tax_shape
-    FROM (
-      SELECT l.journal_entry_id AS id,
-             COALESCE(bool_or(l.account_number = ANY (p_net_shape_ruta_accounts)), false) AS ruta_line,
-             COALESCE(bool_or(l.account_number = ANY (p_net_shape_net_accounts)), false) AS net_line,
-             COALESCE(bool_or(l.account_number = ANY (p_ruta_accounts)
-                              AND l.account_number LIKE '26%'), false) AS moms_ruta_line,
-             COALESCE(bool_or(l.account_number = ANY (v_tax_accounts)), false) AS tax_line,
-             COALESCE(bool_or(l.account_number = ANY (p_net_accounts)), false) AS any_net_line,
-             COALESCE(bool_or(l.account_number NOT LIKE '26%'
-                              AND l.account_number <> ALL (v_tax_accounts)
-                              AND l.account_number <> '3740'), false) AS other_line
-      FROM shape_candidates c
-      JOIN public.journal_entry_lines l ON l.journal_entry_id = c.id
-      GROUP BY l.journal_entry_id
-    ) f
-  )
-  SELECT m.id,
-         CASE WHEN m.counts THEN 'counted_opening_balance' ELSE 'carried_opening_balance' END
-  FROM ib_members m
-  UNION ALL
-  SELECT k.id, 'kontantmetod_cutoff'
-  FROM cutoff_reversals k
-  UNION ALL
-  SELECT d.id, 'invoice_deferral_release'
-  FROM deferral_release_members d
-  UNION ALL
-  SELECT f.id, 'momsredovisning_shape'
-  FROM shape_flags f
-  WHERE f.net_shape OR f.tax_shape;
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.vat_declaration_special_entries(uuid, date, date, text[], text[], text[], text[]) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.vat_declaration_special_entries(uuid, date, date, text[], text[], text[], text[]) TO authenticated, service_role;
-
-COMMENT ON FUNCTION public.vat_declaration_special_entries(uuid, date, date, text[], text[], text[], text[]) IS
-  'The verifikat the momsdeklaration treats specially: opening balance chain members (counted or carried), kontantmetod cut-off reversals, the releases of a förutbetald intäkt an invoice booked with moms (crm#1919) and the period''s momsredovisning-shaped verifikat. The one definition get_vat_declaration_totals and get_vat_ruta_source_lines read.';
+  'The verifikat whose 29xx lines the momsdeklaration reads as the sale a customer invoice deferred with moms, and on which revenue account at which part (crm#1919): the invoice''s verifikat and its kreditfaktura at the invoice''s parts, each release whole, and every storno and rättelse down from any of them. get_vat_declaration_totals, get_vat_ruta_source_lines and lib/vat/filed-period-changes.ts read it.';
 
 CREATE OR REPLACE FUNCTION public.get_vat_declaration_totals(
   p_company_id uuid,
@@ -424,14 +228,14 @@ DECLARE
   -- Shape 1 of the figure reads only the accounts it measures.
   v_net_shape_ruta text[] := ARRAY(SELECT unnest(p_ruta_accounts) INTERSECT SELECT unnest(p_accounts));
   v_net_shape_net text[] := ARRAY(SELECT unnest(p_net_accounts) INTERSECT SELECT unnest(p_accounts));
-  v_left_out uuid[];  -- cut-off reversals, carried chain members and deferral releases, of any period
+  v_left_out uuid[];  -- cut-off reversals and carried chain members, of any period
   v_shaped uuid[];    -- the period's momsredovisning-shaped verifikat
   v_counted uuid[];   -- chain members that count, of any period
   v_counts jsonb;     -- the period's verifikat per source_type
   v_not_read uuid[];  -- the period's verifikat left out before any shape
 BEGIN
   SELECT COALESCE(array_agg(s.journal_entry_id) FILTER (
-           WHERE s.reason IN ('kontantmetod_cutoff', 'carried_opening_balance', 'invoice_deferral_release')), '{}'),
+           WHERE s.reason IN ('kontantmetod_cutoff', 'carried_opening_balance')), '{}'),
          COALESCE(array_agg(s.journal_entry_id) FILTER (WHERE s.reason = 'momsredovisning_shape'), '{}'),
          COALESCE(array_agg(s.journal_entry_id) FILTER (WHERE s.reason = 'counted_opening_balance'), '{}')
     INTO v_left_out, v_shaped, v_counted
@@ -570,21 +374,24 @@ BEGIN
       GROUP BY l.account_number
     ),
     -- A förutbetald intäkt an invoice booked with moms (crm#1919) is read as
-    -- the sale it defers, on the date of the verifikat that books it: the
-    -- invoice's 29xx line counts on the revenue account it is released to,
-    -- in the invoice's period, and so do the 29xx lines of its kreditfaktura,
-    -- storno or rättelse, each with its own sign. Its releases are left out
-    -- above (invoice_deferral_release). not_read holds the posted bokslut.
+    -- the sale it defers, on the date of the verifikat that books it: every
+    -- 29xx line of the invoice's verifikat, its kreditfaktura and its
+    -- releases, and of every storno and rättelse down from them, counts on
+    -- the revenue account at its part (vat_invoice_deferral_shares), with its
+    -- own sign. The invoice's line counts in the invoice's period; a release,
+    -- Dr 29xx / Cr the revenue account, nets to nothing. Each line's part is
+    -- rounded to öre before it is summed, as the drill-down lists it.
+    -- not_read holds the posted bokslut.
     deferral_totals AS (
       SELECT d.target_account AS account_number,
-             round(sum(COALESCE(l.debit_amount, 0) * d.share), 2) AS debit,
-             round(sum(COALESCE(l.credit_amount, 0) * d.share), 2) AS credit
+             sum(round(COALESCE(l.debit_amount, 0) * d.share, 2)) AS debit,
+             sum(round(COALESCE(l.credit_amount, 0) * d.share, 2)) AS credit
       FROM public.vat_invoice_deferral_shares(p_company_id) d
       JOIN account_lists a ON a.account_number = d.target_account AND a.measured
       JOIN public.journal_entries e ON e.id = d.journal_entry_id
       JOIN public.journal_entry_lines l
         ON l.journal_entry_id = e.id
-       AND l.account_number = d.balance_account
+       AND l.account_number LIKE '29%'
       WHERE e.company_id = p_company_id
         AND e.status IN ('posted', 'reversed')
         AND e.entry_date >= p_start
@@ -729,7 +536,7 @@ BEGIN
   ),
   -- The ruta's lines: those on its accounts, and the 29xx lines read as a
   -- sale on one of them (vat_invoice_deferral_shares, crm#1919), each at the
-  -- part the figure sums.
+  -- parts the figure sums, every part rounded to öre as the figure rounds it.
   read_lines AS (
     SELECT l.id AS line_id, je.id AS entry_id, je.voucher_number AS voucher,
            je.voucher_series AS series, je.entry_date AS day, je.description AS text,
@@ -741,19 +548,21 @@ BEGIN
       AND je.entry_date = ANY (v_days)
       AND l.account_number = ANY (p_accounts)
     UNION ALL
-    SELECT l.id, je.id, je.voucher_number, je.voucher_series, je.entry_date, je.description,
-           je.status, je.source_type,
-           round(l.debit_amount * d.share, 2), round(l.credit_amount * d.share, 2)
+    SELECT d.line_id, je.id, je.voucher_number, je.voucher_series, je.entry_date, je.description,
+           je.status, je.source_type, d.debit, d.credit
     FROM (
-      SELECT ds.journal_entry_id, ds.balance_account, sum(ds.share) AS share
+      SELECT ds.journal_entry_id,
+             dl.id AS line_id,
+             sum(round(COALESCE(dl.debit_amount, 0) * ds.share, 2)) AS debit,
+             sum(round(COALESCE(dl.credit_amount, 0) * ds.share, 2)) AS credit
       FROM public.vat_invoice_deferral_shares(p_company_id) ds
+      JOIN public.journal_entry_lines dl
+        ON dl.journal_entry_id = ds.journal_entry_id
+       AND dl.account_number LIKE '29%'
       WHERE ds.target_account = ANY (p_accounts)
-      GROUP BY ds.journal_entry_id, ds.balance_account
+      GROUP BY ds.journal_entry_id, dl.id
     ) d
     JOIN public.journal_entries je ON je.id = d.journal_entry_id
-    JOIN public.journal_entry_lines l
-      ON l.journal_entry_id = je.id
-     AND l.account_number = d.balance_account
     WHERE je.company_id = p_company_id
   )
   SELECT
@@ -774,8 +583,8 @@ BEGIN
       AND EXISTS (SELECT 1 FROM closing_entries c WHERE c.id = r.entry_id)
     )
     AND r.entry_source IS DISTINCT FROM 'vat_settlement'
-    -- Left out (cut-off reversal, carried opening balance, deferral release)
-    -- or shaped; a counted chain member stays.
+    -- Left out (cut-off reversal, carried opening balance) or shaped; a
+    -- counted chain member stays.
     AND NOT EXISTS (
       SELECT 1 FROM special x
       WHERE x.id = r.entry_id
