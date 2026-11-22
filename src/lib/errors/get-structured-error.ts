@@ -123,6 +123,9 @@ const TRANSIENT_MESSAGE_PATTERNS = [
   /rate limit/i,
   /timed out/i,
   /aborted due to timeout/i,
+  // Cloudflare's 524 page by its title, which is what a gateway page keeps
+  // (lib/supabase/gateway-error-page.ts); its body's "timed out" is gone.
+  /a timeout occurred/i,
 ]
 
 /**
