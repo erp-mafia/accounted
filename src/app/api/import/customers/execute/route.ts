@@ -19,6 +19,22 @@ import {
 import { invoiceTermsFor } from '@/lib/invoices/due-date'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 
+/**
+ * A large register goes in as several requests (lib/import/register-import-flow.ts
+ * executeBatches); one batch's merges and the drafts they move fit well
+ * inside this, as on the article import.
+ */
+export const maxDuration = 300
+
+/**
+ * How far into the request the draft sync may still run before the import
+ * run is recorded. Past it the run is recorded first, so a slow sync can never
+ * cost the import its undo; the customers the sync had not reached are synced
+ * after the record, and the undo keeps those as used since the import. A
+ * minute short of maxDuration leaves the record and that sync their room.
+ */
+const DRAFT_SYNC_BEFORE_RECORD_MS = (maxDuration - 60) * 1000
+
 interface ExistingCustomer {
   id: string
   name: string
@@ -56,6 +72,7 @@ interface ExistingCustomer {
 export const POST = withRouteContext(
   'register_import.customers.execute',
   async (request, ctx) => {
+    const startedAt = Date.now()
     const { user, supabase, companyId, log, requestId } = ctx
 
     const result = await validateBody(request, CustomerImportExecuteSchema, {
@@ -230,14 +247,23 @@ export const POST = withRouteContext(
       // A merge that changed a field the VAT header is derived from moves the
       // header of that customer's open drafts, as the customer form does
       // (updateCustomer). Before the run is recorded: the undo reads a draft
-      // written after the run as the customer used since the import.
-      await syncDraftVatHeadersForChangedCustomers(
+      // written after the run as the customer used since the import. Within
+      // DRAFT_SYNC_BEFORE_RECORD_MS, so the run is always recorded.
+      const draftSync = await syncDraftVatHeadersForChangedCustomers(
         supabase,
         companyId,
         diffUpdatedRows(beforeImport, new Set(created.map((c) => c.id)), updated),
+        { deadline: startedAt + DRAFT_SYNC_BEFORE_RECORD_MS },
       )
 
       await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
+
+      if (draftSync.unsynced.length > 0) {
+        opLog.warn('draft VAT sync finished after the import run was recorded: its undo keeps these customers', {
+          customers: draftSync.unsynced.length,
+        })
+        await syncDraftVatHeadersForChangedCustomers(supabase, companyId, draftSync.unsynced)
+      }
 
       const response: CustomerImportExecuteResult = {
         success: errors.length === 0,

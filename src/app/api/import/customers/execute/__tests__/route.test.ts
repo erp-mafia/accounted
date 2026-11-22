@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   createMockRequest,
   parseJsonResponse,
@@ -279,10 +279,7 @@ describe('POST /api/import/customers/execute', () => {
     expect(decryptPersonnummer(inserted.personal_number!)).toBe(PERSONAL_NUMBER)
   })
 
-  // The draft follows the customer (sync-draft-vat-headers): an import that
-  // makes a reverse-charge customer Swedish must not leave its open draft
-  // on reverse charge, ruta 39 and the reverse-charge notice (#3481).
-  it('re-derives the VAT header of open drafts when the import changes the customer type', async () => {
+  describe('open drafts follow the customer (#3481)', () => {
     const existingCard = {
       id: 'old',
       name: 'Acme GmbH',
@@ -295,26 +292,8 @@ describe('POST /api/import/customers/execute', () => {
       vat_number: 'DE123456789',
       personal_number: null,
     }
-    mockFetchAllRows.mockResolvedValue([existingCard])
-    enqueue({ data: { ...existingCard, name: 'Acme AB', customer_type: 'swedish_business', country: 'SE', org_number: '5566778899' } })
-    // syncDraftVatHeadersForCustomer: the customer as it is now, its drafts, the seller's VAT registration, the write.
-    enqueue({ data: { id: 'old', customer_type: 'swedish_business', vat_number: 'DE123456789', vat_number_validated: true, country: 'SE' } })
-    enqueue({
-      data: [{
-        id: 'draft-1',
-        vat_treatment: 'reverse_charge',
-        moms_ruta: '39',
-        reverse_charge_text: 'Omvänd skattskyldighet',
-        vat_treatment_override: null,
-        delivery_country: null,
-        items: [{ vat_rate: 0, line_type: 'service' }],
-      }],
-    })
-    enqueue({ data: { vat_registered: true } })
-    enqueue({ data: null })
-    enqueue({ data: { id: 'run-1' } })
-
-    const res = await POST(makeRequest({
+    const madeSwedish = { ...existingCard, name: 'Acme AB', customer_type: 'swedish_business', country: 'SE', org_number: '5566778899' }
+    const importMadeSwedish = () => makeRequest({
       rows: [row({
         name: 'Acme AB',
         customer_type: 'swedish_business',
@@ -323,22 +302,110 @@ describe('POST /api/import/customers/execute', () => {
         country: 'SE',
       })],
       update_duplicates: true,
-    }), ROUTE_CTX)
-    const { status, body } = await parseJsonResponse<{ data: { updated: number } }>(res)
-
-    expect(status).toBe(200)
-    expect(body.data.updated).toBe(1)
-    expect(findCall('invoices', 'update')![0]).toEqual({
-      vat_treatment: 'standard_25',
-      moms_ruta: '05',
-      reverse_charge_text: null,
     })
-    // Before the run is recorded: the undo reads a draft written after the
-    // run as the customer used since the import, and would keep it.
-    const draftWrite = calls.findIndex((c) => c.table === 'invoices' && c.method === 'update')
-    const runInsert = calls.findIndex((c) => c.table === 'register_import_runs' && c.method === 'insert')
-    expect(draftWrite).toBeGreaterThan(-1)
-    expect(draftWrite).toBeLessThan(runInsert)
+    // syncDraftVatHeadersForCustomer: the customer as it is now, its drafts,
+    // the seller's VAT registration, the write.
+    const enqueueDraftSync = () => {
+      enqueue({ data: { id: 'old', customer_type: 'swedish_business', vat_number: 'DE123456789', vat_number_validated: true, country: 'SE' } })
+      enqueue({
+        data: [{
+          id: 'draft-1',
+          vat_treatment: 'reverse_charge',
+          moms_ruta: '39',
+          reverse_charge_text: 'Omvänd skattskyldighet',
+          vat_treatment_override: null,
+          delivery_country: null,
+          items: [{ vat_rate: 0, line_type: 'service' }],
+        }],
+      })
+      enqueue({ data: { vat_registered: true } })
+      enqueue({ data: null })
+    }
+    const callIndex = (table: string, method: string) =>
+      calls.findIndex((c) => c.table === table && c.method === method)
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    // An import that makes a reverse-charge customer Swedish must not leave
+    // its open draft on reverse charge, ruta 39 and the reverse-charge notice.
+    it('re-derives the VAT header of open drafts when the import changes the customer type', async () => {
+      mockFetchAllRows
+        .mockResolvedValueOnce([existingCard]) // the undo snapshot
+        .mockResolvedValueOnce([existingCard]) // the register to match against
+        .mockResolvedValueOnce([{ customer_id: 'old' }]) // which changed customers have a draft
+      enqueue({ data: madeSwedish })
+      enqueueDraftSync()
+      enqueue({ data: { id: 'run-1' } })
+
+      const res = await POST(importMadeSwedish(), ROUTE_CTX)
+      const { status, body } = await parseJsonResponse<{ data: { updated: number } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.updated).toBe(1)
+      expect(findCall('invoices', 'update')![0]).toEqual({
+        vat_treatment: 'standard_25',
+        moms_ruta: '05',
+        reverse_charge_text: null,
+      })
+      // Before the run is recorded: the undo reads a draft written after the
+      // run as the customer used since the import, and would keep it.
+      expect(callIndex('invoices', 'update')).toBeGreaterThan(-1)
+      expect(callIndex('invoices', 'update')).toBeLessThan(callIndex('register_import_runs', 'insert'))
+    })
+
+    it('syncs no customer whose drafts lookup finds none', async () => {
+      mockFetchAllRows
+        .mockResolvedValueOnce([existingCard])
+        .mockResolvedValueOnce([existingCard])
+        .mockResolvedValueOnce([])
+      enqueue({ data: madeSwedish })
+      enqueue({ data: { id: 'run-1' } })
+
+      const res = await POST(importMadeSwedish(), ROUTE_CTX)
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(mockFetchAllRows).toHaveBeenCalledTimes(3)
+      // The merge's own write is the only customers call that selects: no
+      // card is read for a sync, and no draft.
+      expect(findCalls('customers', 'select')).toEqual([[]])
+      expect(findCall('invoices', 'select')).toBeUndefined()
+      expect(findCall('invoices', 'update')).toBeUndefined()
+      expect(findCall('register_import_runs', 'insert')).toBeDefined()
+    })
+
+    // A slow sync must never cost the import its undo.
+    it('records the run first when the import has run past the sync deadline, then syncs the drafts', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-22T10:00:00Z'))
+      mockFetchAllRows
+        .mockResolvedValueOnce([existingCard])
+        .mockImplementationOnce(async () => {
+          // Reading and writing the register took four minutes.
+          vi.setSystemTime(new Date('2026-11-22T10:04:01Z'))
+          return [existingCard]
+        })
+        .mockResolvedValueOnce([{ customer_id: 'old' }])
+      enqueue({ data: madeSwedish })
+      enqueue({ data: { id: 'run-1' } })
+      enqueueDraftSync()
+
+      const res = await POST(importMadeSwedish(), ROUTE_CTX)
+      const { status, body } = await parseJsonResponse<{ data: { updated: number } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.updated).toBe(1)
+      expect(callIndex('register_import_runs', 'insert')).toBeGreaterThan(-1)
+      expect(callIndex('register_import_runs', 'insert')).toBeLessThan(callIndex('invoices', 'select'))
+      // The draft still follows the customer.
+      expect(findCall('invoices', 'update')![0]).toEqual({
+        vat_treatment: 'standard_25',
+        moms_ruta: '05',
+        reverse_charge_text: null,
+      })
+    })
   })
 
   it('reads no drafts when the import changes no field the VAT header is derived from', async () => {
@@ -370,6 +437,8 @@ describe('POST /api/import/customers/execute', () => {
     const { status } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
+    // The snapshot and the register: no drafts lookup either.
+    expect(mockFetchAllRows).toHaveBeenCalledTimes(2)
     expect(findCall('invoices', 'select')).toBeUndefined()
     expect(findCall('register_import_runs', 'insert')).toBeDefined()
   })
