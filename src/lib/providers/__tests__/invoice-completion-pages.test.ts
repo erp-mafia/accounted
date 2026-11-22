@@ -10,7 +10,7 @@ vi.mock('../bokio/client', async importOriginal => ({
   BokioClient: class { getPage = page; getDetail = detail },
 }))
 import { BokioApiError } from '../bokio/client'
-import { fetchInvoiceCompletionPage, fetchInvoiceCompletionDetail } from '../provider-data-fetcher'
+import { MIGRATION_LIST_TIMEOUT_MS, fetchInvoiceCompletionPage, fetchInvoiceCompletionDetail } from '../provider-data-fetcher'
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -30,7 +30,7 @@ describe('invoice completion discovery', () => {
     page.mockResolvedValue({ items: [{ id: 'invoice', invoiceNumber: '42', invoiceDate: '2026-09-01' }], page: 3, totalPages: 3 })
     const result = await fetchInvoiceCompletionPage('bokio', 'token', 'tenant', 'invoices', 3)
     expect(result).toMatchObject({ nextPage: 1, nextPart: 'creditNotes', sources: [{ id: 'invoice', creditNote: false }] })
-    expect(page).toHaveBeenCalledExactlyOnceWith('token', 'tenant', '/invoices', { page: 3, pageSize: 100 })
+    expect(page).toHaveBeenCalledExactlyOnceWith('token', 'tenant', '/invoices', { page: 3, pageSize: 100, timeoutMs: MIGRATION_LIST_TIMEOUT_MS })
   })
 
   it('resumes Bokio credit pages and retrieves the matching credit detail', async () => {

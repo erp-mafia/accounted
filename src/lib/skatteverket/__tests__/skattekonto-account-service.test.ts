@@ -217,13 +217,17 @@ describe('createSkattekontoTransferDraft', () => {
       code: 'SKATTEKONTO_TRANSFER_NOTHING_TO_MOVE',
     })
 
-    const locked = createQueuedMockSupabase()
-    locked.enqueue({ data: { entity_type: 'enskild_firma', skattekonto_account: '2012' } })
+    // No open period covers the date, e.g. early January before the company
+    // has created the new räkenskapsår: the user is told the year is missing,
+    // never that the books are locked.
+    const noYear = createQueuedMockSupabase()
+    noYear.enqueue({ data: { entity_type: 'enskild_firma', skattekonto_account: '2012' } })
     balances.set('1630', 10)
     findPeriodMock.mockResolvedValue(null)
-    expect(await createSkattekontoTransferDraft(ctxWith(locked.supabase))).toMatchObject({
+    expect(await createSkattekontoTransferDraft(ctxWith(noYear.supabase), { entry_date: '2027-01-05' })).toEqual({
       ok: false,
-      code: 'PERIOD_LOCKED',
+      code: 'NO_OPEN_PERIOD_FOR_DATE',
+      details: { entry_date: '2027-01-05' },
     })
     expect(createDraftMock).not.toHaveBeenCalled()
   })
