@@ -215,16 +215,14 @@ async function alreadyBookedByKey(ctx: OperationContext, sourceId: string): Prom
     return { ok: false, code: 'VAT_SETTLEMENT_ALREADY_BOOKED' }
   }
   const winner = data as { id: string; voucher_series: string | null; voucher_number: number | null; entry_date: string }
-  return {
-    ok: false,
-    code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
-    details: {
-      journal_entry_id: winner.id,
-      voucher_series: winner.voucher_series,
-      voucher_number: winner.voucher_number,
-      entry_date: winner.entry_date,
-    },
+  const named = {
+    journal_entry_id: winner.id,
+    voucher_series: winner.voucher_series,
+    voucher_number: winner.voucher_number,
+    entry_date: winner.entry_date,
   }
+  // The same details as alreadyPostedRefusal: the winner is the one this read knows of.
+  return { ok: false, code: 'VAT_SETTLEMENT_ALREADY_BOOKED', details: { ...named, posted_settlements: [named] } }
 }
 
 /**
