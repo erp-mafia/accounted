@@ -38,7 +38,7 @@ import {
   requireWritePermission,
 } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
-import type { ActiveCompanyFacts } from '@/lib/company/active-company'
+import { CompanyContextError, type ActiveCompanyFacts } from '@/lib/company/active-company'
 import type { CompanyRole } from '@/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { shouldExposeTimingHeaders } from '@/lib/observability/timing-headers'
@@ -68,9 +68,10 @@ export interface RouteContext {
    */
   supabase: SupabaseClient
   /**
-   * Resolved active company id. The wrapper short-circuits with
-   * COMPANY_CONTEXT_MISSING before invoking the handler when no company is
-   * resolved, so handlers can treat this as guaranteed non-null. Routes that
+   * Resolved active company id. The wrapper short-circuits before invoking
+   * the handler when no company is resolved (resolveSessionCompany:
+   * COMPANY_CONTEXT_MISSING, or TRANSIENT_ERROR when the resolution itself
+   * failed), so handlers can treat this as guaranteed non-null. Routes that
    * need to opt out of the guarantee (e.g. onboarding) shouldn't use
    * withRouteContext.
    *
@@ -134,6 +135,48 @@ function generateRequestId(): string {
   return `req_${crypto.randomUUID()}`
 }
 
+export type SessionCompany = { ok: true; companyId: string } | { ok: false; response: NextResponse }
+
+/**
+ * The active company of a cookie-session request, or the answer when there
+ * is none. Both session doors resolve through this, withRouteContext and the
+ * extension dispatcher (app/api/extensions/ext/[...path]/route.ts), so a
+ * route answers alike whichever door it sits behind:
+ *
+ *   - the user has no company to resolve: COMPANY_CONTEXT_MISSING (400);
+ *   - the resolution failed (CompanyContextError 'resolution_failed': a query
+ *     that got no answer, lib/company/active-company.ts): TRANSIENT_ERROR
+ *     (503, retryable). The active company is unknown for the moment, not
+ *     absent: "Välj ett företag" would be the wrong answer, and no other
+ *     company is tried in its place.
+ *
+ * `facts` receives what the resolution reported (the caller's role). Any
+ * other throw is not an answer about the company and propagates.
+ */
+export async function resolveSessionCompany(
+  supabase: SupabaseClient,
+  userId: string,
+  facts: ActiveCompanyFacts,
+  log: Logger,
+  requestId: string,
+): Promise<SessionCompany> {
+  let companyId: string | null
+  try {
+    companyId = await getActiveCompanyId(supabase, userId, facts)
+  } catch (err) {
+    if (!(err instanceof CompanyContextError && err.code === 'resolution_failed')) throw err
+    log.error('failed to resolve active company', err)
+    return {
+      ok: false,
+      response: errorResponseFromCode('TRANSIENT_ERROR', log, { requestId, reason: 'active company resolution failed' }),
+    }
+  }
+  if (!companyId) {
+    return { ok: false, response: errorResponseFromCode('COMPANY_CONTEXT_MISSING', log, { requestId }) }
+  }
+  return { ok: true, companyId }
+}
+
 export function withRouteContext<P extends DynamicParams = { params: Promise<Record<string, never>> }>(
   operation: string,
   handler: RouteHandler<P>,
@@ -174,21 +217,15 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       const userLog = log.child({ userId: user.id })
       errLog = userLog
 
-      let companyId: string | null = null
       // The resolver RPC also reports the caller's role in that company, so
       // the write guard below needs no company_members read of its own.
       const resolved: ActiveCompanyFacts = {}
       const companyStart = Date.now()
-      try {
-        companyId = await getActiveCompanyId(supabase, user.id, resolved)
-      } catch (err) {
-        userLog.error('failed to resolve active company', err as Error)
-      }
+      const company = await resolveSessionCompany(supabase, user.id, resolved, userLog, requestId)
       const companyMs = Date.now() - companyStart
 
-      if (!companyId) {
-        return errorResponseFromCode('COMPANY_CONTEXT_MISSING', userLog, { requestId })
-      }
+      if (!company.ok) return company.response
+      const { companyId } = company
 
       recordShadow = sessionShadow({
         door: `session:${operation}`,
