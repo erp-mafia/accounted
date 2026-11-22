@@ -3,12 +3,20 @@
  * or a close, read off what the routes answer.
  */
 import type { AppQuestion } from '@/lib/questions/app-answer'
+import type { EvidenceLine } from '@/lib/questions/evidence-lines'
 
 /** The two ways the page closes a question without an answer. */
 export type AppCloseChoice = 'dont_know' | 'not_relevant'
 
-/** How a question ended on this page: the saved fact, or the reason it was closed. */
-export type EndedState = { kind: 'answered'; fact: string } | { kind: 'closed'; reason: AppCloseChoice }
+/**
+ * How a question ended: on this page, with the saved fact or the reason it
+ * was closed; or closed as settled before the page was read, with the note
+ * and the records its close named.
+ */
+export type EndedState =
+  | { kind: 'answered'; fact: string }
+  | { kind: 'closed'; reason: AppCloseChoice }
+  | { kind: 'settled'; note: string | null; evidence: EvidenceLine[] }
 
 export interface QuestionItem {
   question: AppQuestion
@@ -20,8 +28,14 @@ export interface QuestionItem {
   error: string | null
 }
 
+/** A question closed as settled comes in ended; every other one is open. */
 export function listItems(questions: readonly AppQuestion[]): QuestionItem[] {
-  return questions.map((question) => ({ question, ended: null, busy: false, error: null }))
+  return questions.map((question) => ({
+    question,
+    ended: question.settled ? { kind: 'settled', note: question.settled.close_note, evidence: question.settled.close_evidence } : null,
+    busy: false,
+    error: null,
+  }))
 }
 
 /** The block after an answer: the sentence the answer route says it saved. */

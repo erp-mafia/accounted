@@ -21572,6 +21572,8 @@
     "saved": "Saved: {fact}",
     "closed_dont_know": "Closed without an answer.",
     "closed_not_relevant": "Closed. We have noted that you don't want questions like this.",
+    "settled": "Settled without you",
+    "settled_evidence_label": "Records that answered the question",
     "undo": "Undo",
     "undo_failed": "Could not undo.",
     "action_failed": "Could not save."
