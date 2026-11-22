@@ -69,6 +69,17 @@ describe('engine: the log level of a failed commit', () => {
     expect(commitLogs(logger.error)).toHaveLength(0)
   })
 
+  it("the bank-booking guard's refusal of a draft that does not name its bank row is a warning", async () => {
+    // Answered 409 BANK_BOOKING_CONTEXT_REQUIRED, with what to do instead: no
+    // retry posts it. Logged at error 10 times in the 30 days to 2026-11-22.
+    const supabase = supabaseFailingCommit({ code: '23514', message: 'BANK_BOOKING_CONTEXT_REQUIRED', details: null, hint: null })
+    const refusal = commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1')
+    await expect(refusal).rejects.toThrow(BookkeepingDatabaseError)
+    await expect(refusal).rejects.toMatchObject({ code: 'BANK_BOOKING_CONTEXT_REQUIRED' })
+    expect(logger.warn).toHaveBeenCalledWith(COMMIT_FAILED, expect.anything(), expect.objectContaining({ pgCode: '23514' }))
+    expect(commitLogs(logger.error)).toHaveLength(0)
+  })
+
   it('any other database failure stays an error', async () => {
     const supabase = supabaseFailingCommit({ code: '23514', message: 'BANK_BOOKING_CASH_ACCOUNT_MISSING', details: null, hint: null })
     await expect(commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1')).rejects.toThrow(BookkeepingDatabaseError)

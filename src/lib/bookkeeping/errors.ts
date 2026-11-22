@@ -1097,10 +1097,19 @@ export class BookkeepingDatabaseError extends Error {
     this.code =
       pgCode === 'PT409'
         ? conflictCode(cause)
-        : pgCode === '23514' && cause === BANK_BOOKING_CONTEXT_REQUIRED
+        : isBankBookingContextRefusal(pgCode, cause)
           ? BANK_BOOKING_CONTEXT_REQUIRED
           : BOOKKEEPING_DATABASE_ERROR
   }
+}
+
+/**
+ * guard_bank_booking_context's refusal as the database raises it: 23514,
+ * named BANK_BOOKING_CONTEXT_REQUIRED. An answer, not a failure: the doors
+ * reply 409 with where to book the bank row instead.
+ */
+export function isBankBookingContextRefusal(pgCode: unknown, message: unknown): boolean {
+  return pgCode === '23514' && message === BANK_BOOKING_CONTEXT_REQUIRED
 }
 
 export interface UnusedVoucherAllocation {

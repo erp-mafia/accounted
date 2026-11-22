@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { commitSIEImportChunk, reverseSIEImportChunk } from '@/lib/bookkeeping/engine'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, readSIEClosingBalances, readSIESourceVouchers,
@@ -408,6 +409,20 @@ export async function finishCompletedSIEImport(
   return {learned,swept}
 }
 
+/**
+ * lock_sie_execution's refusal of a run that no longer holds its job: the
+ * lease lapsed, or another run claimed the job (SQLSTATE 55000, migration
+ * 20260911141611). import_sie_chunk and the undo chunks pass it on as a
+ * BookkeepingDatabaseError without the SQLSTATE, so the database's own
+ * sentence is what names it.
+ */
+const LOST_LEASE = 'SIE worker lease or attempt is stale'
+
+function isLostLease(err: unknown): boolean {
+  if (err instanceof BookkeepingDatabaseError) return err.cause === LOST_LEASE
+  return err instanceof Error && err.message === LOST_LEASE
+}
+
 /** after() is only a fast path. Cron owns recovery, independent of the browser. */
 export async function runSIEWorker(options: { importId?:string; budgetMs?:number; supabase?:SupabaseClient } = {}): Promise<{ jobs:number; chunks:number }> {
   if (!runsSIEJobs()) return {jobs:0,chunks:0}
@@ -456,19 +471,28 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
       }
       await finishCompletedSIEImport(supabase,job,learning,deadline)
     } catch (err) {
-      const reason = err instanceof Error ? err.message : 'Unknown SIE worker error'
-      log.error('SIE job requires recovery',err as Error,{alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase})
-      try {
-        if (err instanceof SIEJobValidationError && job.job_phase === 'prepare') {
-          await sieJobRPC(supabase,job,'fail_sie_preparation',{p_reason:reason})
-        } else {
-          // This queues behind any in-flight write and preserves its receipt.
-          await sieJobRPC(supabase,job,'record_sie_job_failure',{p_error:reason})
+      if (isLostLease(err)) {
+        // A hand-over, not a failure: the run that holds the lease now, or
+        // the next claim, carries the job on, and the stall sweep counts a
+        // lapsed lease that made no progress. Nothing to record either:
+        // record_sie_job_failure takes the same lease and is refused the same way.
+        log.warn('SIE worker lost the job lease; the run that holds it carries the job on',
+          {companyId:job.company_id,importId:job.id,phase:job.job_phase})
+      } else {
+        const reason = err instanceof Error ? err.message : 'Unknown SIE worker error'
+        log.error('SIE job requires recovery',err as Error,{alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase})
+        try {
+          if (err instanceof SIEJobValidationError && job.job_phase === 'prepare') {
+            await sieJobRPC(supabase,job,'fail_sie_preparation',{p_reason:reason})
+          } else {
+            // This queues behind any in-flight write and preserves its receipt.
+            await sieJobRPC(supabase,job,'record_sie_job_failure',{p_error:reason})
+          }
+        } catch (reconciliationError) {
+          // Revocation, a dead connection, or another owner winning is not a
+          // rollback signal. The persisted lease/receipt remains authoritative.
+          log.error('SIE recovery recording failed; lease takeover required',reconciliationError as Error,{importId:job.id})
         }
-      } catch (reconciliationError) {
-        // Revocation, a dead connection, or another owner winning is not a
-        // rollback signal. The persisted lease/receipt remains authoritative.
-        log.error('SIE recovery recording failed; lease takeover required',reconciliationError as Error,{importId:job.id})
       }
     }
     if (options.importId) break
