@@ -8,7 +8,40 @@
  * to stand in the column it belonged to.
  */
 
+import { formatAmountInput, parseAmountInput, parseSwedishAmount } from '@/lib/money'
+
 export type KonteringAmountSide = 'debit_amount' | 'credit_amount'
+
+/**
+ * The line's value for what a person typed in an amount field: the figure as
+ * a dot string ("100.5"), which is what the field handed over while it was a
+ * number input, so every reader of the lines reads what it always read. The
+ * field is text because Chrome reads a number field by the browser's own
+ * language, not the page's: in an English Chrome "100,50" became 10050
+ * (PH 305). The text is read by the app's language, `decimal` being its
+ * decimal mark:
+ * - Swedish (','): as parseAmountInput reads it, a comma or a dot decimal and
+ *   space-grouped thousands, so "10,000" is ten kronor.
+ * - English ('.'): a dot decimal and comma-grouped thousands, so "10,000" is
+ *   ten thousand, as an English Chrome's number field read it; "100,50" is
+ *   refused rather than guessed.
+ * Text that is not one amount is no figure ('').
+ */
+export function konteringAmountValue(text: string, decimal: ',' | '.'): string {
+  if (!text.trim()) return ''
+  const n = decimal === ',' ? parseAmountInput(text) : parseSwedishAmount(text, '.')
+  return n === null ? '' : String(n)
+}
+
+/**
+ * What an amount field shows for a line's value while nobody is typing in
+ * it: the figure to the öre with the decimal mark of the app's language
+ * ("100,50"), so a figure read another way than it was meant shows once the
+ * field is left. A value that is not a plain figure is shown as it is.
+ */
+export function konteringAmountText(value: string, decimal: ',' | '.'): string {
+  return /^-?\d+(\.\d+)?$/.test(value) ? formatAmountInput(Number(value), decimal) : value
+}
 
 function otherSide(side: KonteringAmountSide): KonteringAmountSide {
   return side === 'debit_amount' ? 'credit_amount' : 'debit_amount'
