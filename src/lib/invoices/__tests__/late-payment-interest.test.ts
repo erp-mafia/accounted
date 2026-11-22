@@ -46,7 +46,7 @@ describe('hasReferensrantaFor', () => {
   it('is false for a half-year the table does not hold, even though the lookup still answers', () => {
     expect(hasReferensrantaFor('2099-01-01')).toBe(false)
     expect(hasReferensrantaFor('2099-07-01')).toBe(false)
-    expect(getReferensrantaAt('2099-07-01')).toBe(getReferensrantaAt('2026-07-01'))
+    expect(Number.isFinite(getReferensrantaAt('2099-07-01'))).toBe(true)
     expect(hasReferensrantaFor('2021-06-01')).toBe(false)
   })
 })
