@@ -20,14 +20,18 @@ describe('Fortnox attachments', () => {
   it('maps financial years and skips malformed rows', async () => {
     const getPaginated = vi.fn().mockResolvedValue([
       { Id: 3, FromDate: '2021-01-01', ToDate: '2021-12-31' },
-      { Id: '4', FromDate: '2022-01-01', ToDate: '2022-12-31' },
-      { Id: null, FromDate: '2023-01-01', ToDate: '2023-12-31' },
+      { Id: '4', FromDate: '2022-01-01', ToDate: '2022-12-31', AccountingMethod: 'CASH' },
+      { Id: 5, FromDate: '2023-01-01', ToDate: '2023-12-31', AccountingMethod: 'ACCRUAL' },
+      { Id: 6, FromDate: '2024-01-01', ToDate: '2024-12-31', AccountingMethod: 'SOMETHING' },
+      { Id: null, FromDate: '2025-01-01', ToDate: '2025-12-31' },
     ]);
     const client = clientWith({ getPaginated } as Partial<FortnoxClient>);
 
-    await expect(fetchFortnoxFinancialYears(client, 'token')).resolves.toEqual([
+    await expect(fetchFortnoxFinancialYears(client, 'token')).resolves.toStrictEqual([
       { id: 3, fromDate: '2021-01-01', toDate: '2021-12-31' },
-      { id: 4, fromDate: '2022-01-01', toDate: '2022-12-31' },
+      { id: 4, fromDate: '2022-01-01', toDate: '2022-12-31', accountingMethod: 'CASH' },
+      { id: 5, fromDate: '2023-01-01', toDate: '2023-12-31', accountingMethod: 'ACCRUAL' },
+      { id: 6, fromDate: '2024-01-01', toDate: '2024-12-31' },
     ]);
     expect(getPaginated).toHaveBeenCalledWith(
       'token',
@@ -268,51 +272,54 @@ describe('Fortnox attachments', () => {
     });
   });
 
-  it('takes the one payment as the booking of a kontantmetod invoice, never past a named booking', async () => {
+  it('leaves a paid invoice with no booking to the detail form, never drops it', async () => {
     const payment = (Number: number) => ({ Number, Series: 'E', ReferenceType: 'SUPPLIERPAYMENT', Year: 5 });
     const getPaginated = vi.fn().mockResolvedValue([
-      // Kontantmetoden: Fortnox books the purchase on the payment voucher alone.
+      // Kontantmetoden: Fortnox books the purchase on the payment voucher alone,
+      // and only the detail form says whether the invoice is paid in full.
       { GivenNumber: '120', Booked: false, Vouchers: [payment(9)] },
       { GivenNumber: '121', Booked: true, Vouchers: [payment(10)] },
-      // Paid in two parts: two verifikat, neither is guessed.
-      { GivenNumber: '122', Booked: false, Vouchers: [payment(11), payment(12)] },
-      { GivenNumber: '123', Booked: true, Vouchers: [payment(13), payment(14)] },
-      // A booking Fortnox names but cannot single out never falls back to the payment.
-      { GivenNumber: '124', Booked: true, Vouchers: [{ Number: 0, Series: 'D', ReferenceType: 'SUPPLIERINVOICE', Year: 5 }, payment(15)] },
-      { GivenNumber: '125', Booked: false, Cancel: true, Vouchers: [payment(16)] },
+      { GivenNumber: '122', Booked: false, Cancel: true, Vouchers: [payment(11)] },
     ]);
     const client = clientWith({ getPaginated } as Partial<FortnoxClient>);
 
     const bookings = await fetchFortnoxSupplierInvoiceBookings(client, 'token');
 
     expect(Object.fromEntries(bookings)).toEqual({
-      '120': { state: 'booked', voucher: { series: 'E', number: 9, financialYearId: 5 } },
-      '121': { state: 'booked', voucher: { series: 'E', number: 10, financialYearId: 5 } },
+      '120': { state: 'unknown' },
+      '121': { state: 'unknown' },
       '122': { state: 'unbooked' },
-      '123': { state: 'unknown' },
-      '124': { state: 'unknown' },
-      '125': { state: 'unbooked' },
     });
   });
 
-  it('reads the one payment from the detail form of a kontantmetod invoice', async () => {
-    const get = vi.fn().mockResolvedValueOnce({
-      SupplierInvoice: {
-        GivenNumber: '120',
-        Booked: false,
-        VoucherSeries: 'D',
-        VoucherNumber: 0,
-        VoucherYear: 6,
-        Vouchers: [{ Number: 9, Series: 'E', Year: 6, ReferenceType: 'SUPPLIERPAYMENT' }],
-      },
+  it('takes the one payment of a fully paid invoice in a kontantmetod year from the detail form, and nothing else', async () => {
+    const payment = (Number: number, Year = 6) => ({ Number, Series: 'E', Year, ReferenceType: 'SUPPLIERPAYMENT' });
+    const detail = (extra: Record<string, unknown>) => ({
+      SupplierInvoice: { GivenNumber: '120', Booked: false, VoucherSeries: 'D', VoucherNumber: 0, VoucherYear: 6, Balance: 0, ...extra },
     });
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce(detail({ Vouchers: [payment(9)] }))
+      // A first instalment: the rest is unpaid.
+      .mockResolvedValueOnce(detail({ Balance: 400, Vouchers: [payment(9)] }))
+      // Paid in a faktureringsmetod year: that payment cleared 2440, it did not book the purchase.
+      .mockResolvedValueOnce(detail({ Vouchers: [payment(9, 5)] }))
+      // Paid in two parts: two verifikat, neither is guessed.
+      .mockResolvedValueOnce(detail({ Vouchers: [payment(9), payment(10)] }))
+      // A booking Fortnox names but cannot single out never falls back to the payment.
+      .mockResolvedValueOnce(detail({ Vouchers: [{ Number: 0, Series: 'D', Year: 6, ReferenceType: 'SUPPLIERINVOICE' }, payment(9)] }))
+      // No balance stated: not known to be paid.
+      .mockResolvedValueOnce(detail({ Balance: undefined, Vouchers: [payment(9)] }));
     const client = clientWith({ get } as Partial<FortnoxClient>);
+    const cashYears = new Set([6]);
+    const read = () => fetchFortnoxSupplierInvoiceBookingVoucher(client, 'token', '120', cashYears);
 
-    await expect(fetchFortnoxSupplierInvoiceBookingVoucher(client, 'token', '120')).resolves.toEqual({
-      series: 'E',
-      number: 9,
-      financialYearId: 6,
-    });
+    await expect(read()).resolves.toEqual({ series: 'E', number: 9, financialYearId: 6 });
+    await expect(read()).resolves.toBeNull();
+    await expect(read()).resolves.toBeNull();
+    await expect(read()).resolves.toBeNull();
+    await expect(read()).resolves.toBeNull();
+    await expect(read()).resolves.toBeNull();
   });
 
   it('propagates a refused detail form so the caller can name the scope', async () => {

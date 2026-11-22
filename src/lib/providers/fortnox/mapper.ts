@@ -107,7 +107,7 @@ function providerEmailAddresses(
  * supplier-invoice list payload omits Balance); only an explicit FullyPaid flag
  * or a present non-positive Balance counts as paid.
  */
-function isFullyPaid(raw: Record<string, unknown>): boolean {
+export function isFullyPaid(raw: Record<string, unknown>): boolean {
   return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
 }
 

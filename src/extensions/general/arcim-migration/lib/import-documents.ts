@@ -55,7 +55,8 @@
  * the invoice (series, number, financial year) and the SIE import preserved
  * as the source ref: the same resolution as a voucher file. Under
  * kontantmetoden Fortnox books the invoice only when it is paid, so that
- * verifikat is its one payment (crm#2112). That source is
+ * verifikat is its one payment, taken only in a year Fortnox marks CASH and
+ * only once the invoice is paid in full (crm#2112). That source is
  * additive: a refusal on it (scope or licence) is reported in
  * `unreachableSources` and never stops the voucher files.
  *
@@ -569,6 +570,8 @@ function fortnoxSource(
 ): ProviderAttachmentSource {
   // Read by resolveRef on later attachments of the same call.
   let financialYearById = new Map<number, FortnoxFinancialYear>()
+  /** Fortnox's kontantmetod years: a supplier invoice's payment there booked it. */
+  let cashYearIds = new Set<number>()
 
   /**
    * The register's list form, read as an index of booking vouchers, or null
@@ -737,6 +740,7 @@ function fortnoxSource(
           financialYears.map((year) => year.id),
         )
         financialYearById = new Map(financialYears.map((year) => [year.id, year]))
+        cashYearIds = new Set(financialYears.filter((year) => year.accountingMethod === 'CASH').map((year) => year.id))
 
         voucherAttachments = connections.map((connection): ProviderAttachment => {
           voucherFileKeys.add(fortnoxFileVoucherKey(connection.fileId, connection))
@@ -790,6 +794,7 @@ function fortnoxSource(
         client,
         accessToken(),
         attachment.supplierInvoiceNumber,
+        cashYearIds,
       )
       return voucher ? fortnoxRef(voucher, financialYearById) : null
     },

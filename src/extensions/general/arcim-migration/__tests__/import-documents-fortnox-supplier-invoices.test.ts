@@ -280,34 +280,83 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
     expect(requested()).not.toContain(`/archive/${FILE_SI_115}`)
   })
 
-  it('links a kontantmetod invoice\'s file to the payment verifikat that booked it', async () => {
+  describe('kontantmetoden (crm#2112)', () => {
     const FILE_SI_130 = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
-    const { requested } = stubFortnox({
-      '/voucherfileconnections?financialyear=5&page=1&limit=500': { json: NO_VOUCHER_FILES },
-      '/supplierinvoicefileconnections?page=1&limit=500': {
-        json: {
-          MetaInformation: meta(1),
-          SupplierInvoiceFileConnections: [
-            { FileId: FILE_SI_130, Name: 'faktura-telefoni.pdf', SupplierInvoiceNumber: '130', SupplierName: 'Leverantören AB' },
-          ],
+    const PAYMENT_E9 = { Number: 9, Series: 'E', ReferenceType: 'SUPPLIERPAYMENT', Year: 5 }
+
+    // Financial year 5 kept by kontantmetoden unless a test says otherwise.
+    function cashCompany(method = 'CASH', overrides: Record<string, Route> = {}) {
+      return stubFortnox({
+        '/financialyears?page=1&limit=500': {
+          json: {
+            ...FINANCIAL_YEARS,
+            FinancialYears: FINANCIAL_YEARS.FinancialYears.map((year) => (year.Id === 5 ? { ...year, AccountingMethod: method } : year)),
+          },
         },
-      },
-      // Kontantmetoden: no SUPPLIERINVOICE voucher, the purchase is booked at payment (E9).
-      '/supplierinvoices?page=1&limit=100': {
-        json: {
-          MetaInformation: meta(1),
-          SupplierInvoices: [listItem('130', { Booked: false, Vouchers: [{ Number: 9, Series: 'E', ReferenceType: 'SUPPLIERPAYMENT', Year: 5 }] })],
+        '/voucherfileconnections?financialyear=5&page=1&limit=500': { json: NO_VOUCHER_FILES },
+        '/supplierinvoicefileconnections?page=1&limit=500': {
+          json: {
+            MetaInformation: meta(1),
+            SupplierInvoiceFileConnections: [
+              { FileId: FILE_SI_130, Name: 'faktura-telefoni.pdf', SupplierInvoiceNumber: '130', SupplierName: 'Leverantören AB' },
+            ],
+          },
         },
-      },
-      [`/archive/${FILE_SI_130}`]: { bytes: 'PDF-SI-130' },
+        // No SUPPLIERINVOICE voucher: the purchase is booked at payment (E9).
+        '/supplierinvoices?page=1&limit=100': {
+          json: { MetaInformation: meta(1), SupplierInvoices: [listItem('130', { Booked: false, Vouchers: [PAYMENT_E9] })] },
+        },
+        '/supplierinvoices/130': {
+          json: { SupplierInvoice: { GivenNumber: '130', Booked: false, Cancelled: false, Balance: 0, Total: 1250, Vouchers: [PAYMENT_E9] } },
+        },
+        [`/archive/${FILE_SI_130}`]: { bytes: 'PDF-SI-130' },
+        ...overrides,
+      })
+    }
+    const withPayment = () => supabaseWith({ entries: [...ENTRIES, entry('je-e9-2024', 'fp-2024', '2024-04-15', 'E', 9)] })
+
+    it('links the file of a fully paid invoice to the payment verifikat that booked it', async () => {
+      const { requested } = cashCompany()
+
+      const result = await importProviderDocuments({ supabase: withPayment(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ total: 1, linked: 1, unmatched: 0, failed: 0 })
+      expect(linkedEntries()).toEqual(['je-e9-2024'])
+      expect(requested()).toContain('/supplierinvoices/130')
     })
-    const supabase = supabaseWith({ entries: [...ENTRIES, entry('je-e9-2024', 'fp-2024', '2024-04-15', 'E', 9)] })
 
-    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+    it('counts the file as unmatched, never on the payment, in a faktureringsmetod year', async () => {
+      const { requested } = cashCompany('ACCRUAL')
 
-    expect(result).toMatchObject({ total: 1, linked: 1, unmatched: 0, failed: 0 })
-    expect(linkedEntries()).toEqual(['je-e9-2024'])
-    expect(requested().some((path) => path.startsWith('/supplierinvoices/'))).toBe(false)
+      const result = await importProviderDocuments({ supabase: withPayment(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      // It used to be dropped before it was counted: a complete run showing 0 unmatched.
+      expect(result).toMatchObject({ total: 1, linked: 0, unmatched: 1, failed: 0 })
+      expect(mockUpload).not.toHaveBeenCalled()
+      expect(requested()).not.toContain(`/archive/${FILE_SI_130}`)
+    })
+
+    it('counts a part-paid invoice as unmatched: its first instalment does not take the file', async () => {
+      cashCompany('CASH', {
+        '/supplierinvoices/130': {
+          json: { SupplierInvoice: { GivenNumber: '130', Booked: false, Cancelled: false, Balance: 500, Total: 1250, Vouchers: [PAYMENT_E9] } },
+        },
+      })
+
+      const result = await importProviderDocuments({ supabase: withPayment(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ total: 1, linked: 0, unmatched: 1 })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('links through the detail form alone when the invoice list times out', async () => {
+      cashCompany('CASH', { '/supplierinvoices?page=1&limit=100': { timeout: true } })
+
+      const result = await importProviderDocuments({ supabase: withPayment(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ total: 1, linked: 1, unmatched: 0 })
+      expect(linkedEntries()).toEqual(['je-e9-2024'])
+    })
   })
 
   it('previews without downloads or detail reads: the list-resolved file counts, the pending one is found', async () => {
