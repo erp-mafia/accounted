@@ -486,7 +486,7 @@
     }
   },
   "sekLiteral": {
-    "count": 259,
+    "count": 254,
     "files": {
       "app/(dashboard)/bookkeeping/[id]/page.tsx": 1,
       "app/(dashboard)/deadlines/page.tsx": 1,
@@ -545,8 +545,6 @@
       "extensions/general/mcp-server/server.ts": 5,
       "extensions/general/mcp-server/widgets/receipt-matcher.ts": 1,
       "lib/agent-context/underlag-candidates.ts": 1,
-      "lib/agent/composer/atom-selection.ts": 1,
-      "lib/agent/composer/inputs.ts": 4,
       "lib/agent/intents/inbox-bulk-book.ts": 3,
       "lib/agent/intents/supplier-invoice-review.ts": 3,
       "lib/api/schemas.ts": 1,
@@ -706,7 +704,7 @@
     "files": {}
   },
   "duplicateBlocks": {
-    "count": 5629,
+    "count": 5574,
     "window": 10,
     "pairs": {
       "app/(auth)/account/set-password/page.tsx <-> app/(auth)/reset-password/page.tsx": 11,
@@ -730,9 +728,6 @@
       "app/(dashboard)/orders/page.tsx <-> app/(dashboard)/skattekonto/page.tsx": 10,
       "app/(dashboard)/skattekonto/page.tsx <-> app/(dashboard)/transactions/page.tsx": 10,
       "app/api/agent/ask/route.ts <-> app/api/agent/categorize/route.ts": 15,
-      "app/api/agent/invoke/route.ts <-> app/api/agent/onboarding/stream/route.ts": 10,
-      "app/api/agent/onboarding/stream/route.ts <-> components/onboarding/agent/AgentOnboarding.tsx": 11,
-      "app/api/agent/onboarding/stream/route.ts <-> components/onboarding/agent/ReviewCard.tsx": 11,
       "app/api/bank/open-payments/connections/[id]/poll/route.ts <-> app/api/koppla/[token]/connections/[id]/poll/route.ts": 11,
       "app/api/bank/open-payments/connections/[id]/select/route.ts <-> app/api/koppla/[token]/connections/[id]/select/route.ts": 12,
       "app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/versions/route.ts <-> lib/api/v1/owns-fiscal-period.ts": 10,
@@ -906,7 +901,6 @@
       "components/import/OpeningBalanceColumnMappingStep.tsx <-> components/import/RegisterColumnMappingStep.tsx": 14,
       "components/invoices/editor/CreditNoteEditor.tsx <-> components/invoices/InvoiceEditor.tsx": 58,
       "components/invoices/PaymentBookingDialog.tsx <-> components/invoices/SendInvoiceDialog.tsx": 24,
-      "components/onboarding/agent/AgentOnboarding.tsx <-> components/onboarding/agent/ReviewCard.tsx": 23,
       "components/payments/ApprovePaymentOrdersDialog.tsx <-> components/payments/PayViaBankDialog.tsx": 10,
       "components/payments/BankIdSigningFlow.tsx <-> components/payments/PaymentOrdersPage.tsx": 13,
       "components/payments/payee-change-client.ts <-> components/payments/payments-client.ts": 11,
@@ -1045,7 +1039,7 @@
     }
   },
   "errorMasking": {
-    "count": 472,
+    "count": 466,
     "files": {
       "app/(auth)/register/register-client.tsx": 1,
       "app/(dashboard)/bookkeeping/[id]/page.tsx": 1,
@@ -1062,7 +1056,6 @@
       "app/(dashboard)/settings/data-sharing/page.tsx": 1,
       "app/(dashboard)/skattekonto/page.tsx": 1,
       "app/(dashboard)/transactions/page.tsx": 3,
-      "app/(onboarding)/onboarding/agent/page.tsx": 1,
       "app/api/account/delete/route.ts": 1,
       "app/api/agent/ask/route.ts": 1,
       "app/api/agent/categorize/outcome/route.ts": 1,
@@ -1243,7 +1236,6 @@
       "lib/agent-skills/reviewer-mfa.ts": 1,
       "lib/agent-skills/types.ts": 1,
       "lib/agent/chat/run-turn.ts": 1,
-      "lib/agent/composer/inputs.ts": 5,
       "lib/agent/fiscal-years.ts": 1,
       "lib/ai/json.ts": 1,
       "lib/ai/rasterize-pdf.ts": 1,
@@ -1378,7 +1370,7 @@
     }
   },
   "swedishUiLiteral": {
-    "count": 2748,
+    "count": 2707,
     "files": {
       "app/(auth)/account/set-password/page.tsx": 16,
       "app/(auth)/auth/email-change/page.tsx": 8,
@@ -1392,7 +1384,6 @@
       "app/(dashboard)/pending/page.tsx": 20,
       "app/(dashboard)/skattekonto/page.tsx": 13,
       "app/(dashboard)/transactions/page.tsx": 67,
-      "app/(onboarding)/onboarding/agent/page.tsx": 2,
       "app/(public)/invoice-action/[token]/page.tsx": 23,
       "app/attest/[token]/page.tsx": 3,
       "app/betala/[token]/page.tsx": 4,
@@ -1412,7 +1403,6 @@
       "components/agent/ApprovalCard.tsx": 37,
       "components/agent/AskConsole.tsx": 19,
       "components/agent/ChatEmptyState.tsx": 19,
-      "components/agent/ChatIntakeStarter.tsx": 3,
       "components/agent/ChatNewStarter.tsx": 1,
       "components/agent/ChatSidebar.tsx": 13,
       "components/agent/conversation-display.ts": 13,
@@ -1484,8 +1474,6 @@
       "components/import/RegisterUploadStep.tsx": 9,
       "components/inbox/TransactionMatchPicker.tsx": 12,
       "components/invoices/SendInvoiceDialog.tsx": 5,
-      "components/onboarding/agent/AgentOnboarding.tsx": 12,
-      "components/onboarding/agent/ReviewCard.tsx": 24,
       "components/onboarding/books/steps/BankStep.tsx": 1,
       "components/orders/OrderBookingDialog.tsx": 1,
       "components/payments/BankIdSigningFlow.tsx": 1,

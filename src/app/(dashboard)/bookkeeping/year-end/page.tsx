@@ -380,9 +380,9 @@ export default function YearEndPage() {
           <EmptyState
             icon={CalendarIcon}
             title="Inget räkenskapsår ännu"
-            description="Bokslut görs per räkenskapsår. Skapa företagets räkenskapsår i bokföringsinställningarna för att komma igång."
-            actionLabel="Öppna bokföringsinställningar"
-            actionHref="/settings/bookkeeping"
+            description="Bokslut görs per räkenskapsår. Lägg upp företagets räkenskapsår för att komma igång."
+            actionLabel="Lägg upp räkenskapsår"
+            actionHref="/settings/fiscal-years"
           />
         )
       )}

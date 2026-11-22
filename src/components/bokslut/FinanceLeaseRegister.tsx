@@ -274,7 +274,7 @@ export function FinanceLeaseRegister() {
 
       {loadError && leases.length > 0 ? (
         <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
-      ) : !loading && !loadError && !chosen ? (
+      ) : !loading && !loadError && !chosen && leases.length > 0 ? (
         <AttnLine action={isAdmin ? { label: t('opt_in_action'), onClick: () => setConfirmOptIn(true) } : undefined}>
           {t('relief_attn')}
         </AttnLine>
@@ -291,11 +291,18 @@ export function FinanceLeaseRegister() {
           description={loadError === t('load_failed') ? undefined : loadError}
           onRetry={() => void load()}
         />
+      ) : leases.length === 0 && !chosen ? (
+        // Not chosen: the choice comes first, since leases can be added only after it.
+        <EmptyState
+          title={t('relief_attn')}
+          description={isAdmin ? t('empty_not_chosen_description') : t('empty_not_chosen_member')}
+          {...(isAdmin ? { actionLabel: t('opt_in_action'), onAction: () => setConfirmOptIn(true) } : {})}
+        />
       ) : leases.length === 0 ? (
         <EmptyState
           title={t('empty_title')}
           description={t('empty_description')}
-          {...(chosen && canWrite ? { actionLabel: t('add'), onAction: () => setCreating(true) } : {})}
+          {...(canWrite ? { actionLabel: t('add'), onAction: () => setCreating(true) } : {})}
         />
       ) : (
         <div className="-mx-2 overflow-x-auto">

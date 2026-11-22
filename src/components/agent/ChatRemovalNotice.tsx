@@ -23,8 +23,7 @@ import { useFormat } from '@/lib/hooks/use-format'
  * without the MCP server extension has no Koppla en agent and gets the first
  * sentence alone.
  *
- * On every conversation, the interview a newly built assistant holds with
- * the company included: that goes with the chat.
+ * On every conversation, whatever its intent.
  */
 export function ChatRemovalNotice() {
   const t = useTranslations('agent_chat')

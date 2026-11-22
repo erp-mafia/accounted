@@ -10,7 +10,7 @@ import { bolagetGateResponse, operationContext } from '@/lib/bolaget/session'
 export const POST = withRouteContext(
   'bolaget.signatory_rule_set',
   async (request, ctx) => {
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, signatoryRulesSet.input)
     if (!validation.success) return validation.response

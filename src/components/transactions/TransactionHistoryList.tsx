@@ -89,6 +89,8 @@ interface TransactionHistoryListProps {
   onSkvMatch?: (row: StoredSkattekontoTransaction) => void
   hasMore?: boolean
   isLoadingMore?: boolean
+  /** The last page could not be read: the button says so and becomes the retry. */
+  loadMoreFailed?: boolean
   onLoadMore?: () => void
   /** Whose giro number a row that names nobody shows (lib/transactions/giro-counterparty, crm#1204). */
   giroCounterpartyFor?: (transaction: TransactionWithInvoice) => GiroCounterparty | null
@@ -122,6 +124,7 @@ export default function TransactionHistoryList({
   onSkvMatch,
   hasMore,
   isLoadingMore,
+  loadMoreFailed = false,
   onLoadMore,
   giroCounterpartyFor,
 }: TransactionHistoryListProps) {
@@ -252,9 +255,14 @@ export default function TransactionHistoryList({
           loads every ignored row of the period) where it cannot change the
           visible list. */}
       {hasMore && onLoadMore && !searchTerm && sourceFilter !== 'skatteverket' && filter !== 'ignored' && (
-        <div className="flex justify-center">
+        <div className="flex flex-col items-center gap-2">
+          {loadMoreFailed && !isLoadingMore && (
+            <p role="alert" className="text-[13px] text-muted-foreground">
+              {t('load_more_failed')}
+            </p>
+          )}
           <Button variant="outline" onClick={onLoadMore} loading={isLoadingMore}>
-            {isLoadingMore ? t('loading_more') : t('load_more')}
+            {isLoadingMore ? t('loading_more') : loadMoreFailed ? tCommon('retry') : t('load_more')}
           </Button>
         </div>
       )}

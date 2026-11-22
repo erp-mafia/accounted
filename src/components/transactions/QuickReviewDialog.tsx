@@ -222,6 +222,8 @@ export default function QuickReviewDialog({
   const [enrichedTx, setEnrichedTx] = useState<TransactionWithInvoice | null>(transaction)
   const [rateLoading, setRateLoading] = useState(false)
   const [rateError, setRateError] = useState<string | null>(null)
+  // Bumped by "Försök igen" beside a failed rate read: runs the read again.
+  const [rateAttempt, setRateAttempt] = useState(0)
   // Dimension tagging (kostnadsställe/projekt): the picker renders only when
   // company_settings.dimensions_enabled, same gate as BulkBookDialog. Seeded
   // from the counterparty template's learned bag so the user sees what the
@@ -486,7 +488,7 @@ export default function QuickReviewDialog({
     return () => {
       cancelled = true
     }
-  }, [open, transaction, t])
+  }, [open, transaction, t, rateAttempt])
 
   // ── The lines the proposal books ─────────────────────────────────────
   // Built on the server by the code the booking posts with (POST
@@ -936,13 +938,22 @@ export default function QuickReviewDialog({
             {isIncome ? '+' : ''}
             {isForeign ? formatCurrency(tx.amount, tx.currency) : formatCurrency(sekAmount, 'SEK')}
           </p>
-          {isForeign && (
+          {isForeign && rateError && !rateLoading ? (
+            // A failed rate read takes the loading line's place, with the
+            // way to read it again: Bokför waits for the SEK amount.
+            <p role="alert" className="text-[13px] text-destructive">
+              {rateError}{' '}
+              <button type="button" className={QUIET_LINK_CLASS} onClick={() => setRateAttempt((n) => n + 1)}>
+                {tCommon('retry')}
+              </button>
+            </p>
+          ) : isForeign ? (
             <p className="text-[13px] tabular-nums text-foreground/80">
               {rateLoading || sekConversionMissing
                 ? t('amount_loading')
                 : t('amount_approx', { sign: isIncome ? '+' : '', sek: formatCurrency(sekAmount, 'SEK') })}
             </p>
-          )}
+          ) : null}
           {isForeign && tx.exchange_rate != null && tx.exchange_rate_date && !sekConversionMissing && (
             <p className="text-xs text-muted-foreground">
               {t('rate_footnote', {
@@ -952,7 +963,6 @@ export default function QuickReviewDialog({
               })}
             </p>
           )}
-          {rateError && <p role="alert" className="mt-1 text-xs text-destructive">{rateError}</p>}
         </div>
 
         {/* One header says what will be booked and why: the pick, the source

@@ -78,6 +78,7 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
       outboundFailed24h: 3,
       reopenedOrphans: 0,
       deferred: 0,
+      resentErrorNotices: 0,
       failedPasses: [],
     })
 
@@ -96,6 +97,7 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
       outboundFailed24h: 3,
       reopenedOrphans: 0,
       deferred: 0,
+      resentErrorNotices: 0,
       failedPasses: [],
     })
   })
@@ -110,6 +112,7 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
     outboundFailed24h: 0,
     reopenedOrphans: 0,
     deferred: 0,
+    resentErrorNotices: 0,
     failedPasses: [] as string[],
   }
 

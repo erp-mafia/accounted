@@ -19,6 +19,11 @@
  *   - Android: the universal link with redirect=null. The BankID app returns
  *     through the task stack; a real redirect URL would spawn a new tab or
  *     Chrome instance instead (components/auth/BankIdAuth.tsx learned this).
+ *   - Android in Samsung Internet, Firefox or Edge: the bankid:/// scheme with
+ *     redirect=null. These browsers do not hand the app.bankid.com link to the
+ *     app: they load it in the tab, where BankID's own page says
+ *     "BankID-appen kunde inte startas" (crm#2077; the ActiveLogin library
+ *     found the same in its Android browser tests and falls back the same way).
  */
 
 export interface BankIdDevice {
@@ -26,6 +31,8 @@ export interface BankIdDevice {
   mobile: boolean
   /** An iPhone or iPad, where the app returns to the page named in `redirect`. */
   ios: boolean
+  /** A phone browser that opens the BankID app from an https://app.bankid.com link. */
+  appLink: boolean
   /** The page to come back to; null when there is no page (server render). */
   pageUrl: string | null
 }
@@ -35,13 +42,14 @@ export function detectBankIdDevice(userAgent: string | null = typeof navigator =
   const ua = userAgent ?? ''
   const ios = /iPhone|iPad|iPod/i.test(ua)
   const mobile = ios || /Android/i.test(ua)
-  return { mobile, ios, pageUrl }
+  const appLink = ios || (mobile && !/SamsungBrowser|Firefox|EdgA/i.test(ua))
+  return { mobile, ios, appLink, pageUrl }
 }
 
 /** The BankID app link for an autostart token on this device (see the module note). */
 export function bankIdAutostartHref(token: string, device: BankIdDevice = detectBankIdDevice()): string {
   const autostart = `autostarttoken=${encodeURIComponent(token)}`
-  if (!device.mobile) return `bankid:///?${autostart}&redirect=null`
+  if (!device.mobile || !device.appLink) return `bankid:///?${autostart}&redirect=null`
   const redirect = device.ios && device.pageUrl ? encodeURIComponent(device.pageUrl) : 'null'
   return `https://app.bankid.com/?${autostart}&redirect=${redirect}`
 }

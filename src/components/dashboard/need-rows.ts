@@ -43,9 +43,11 @@ export interface CountRowInput {
   invoiceSetRows: number
   /** Attest rows of the signed-in person, shown one per invoice. */
   personAttestRows: number
+  /** The company's open questions (lib/questions); 0 where the question list is not switched on. */
+  openQuestions?: number
 }
 
-export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, personAttestRows }: CountRowInput): CountRowSpec[] {
+export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, personAttestRows, openQuestions = 0 }: CountRowInput): CountRowSpec[] {
   const specs: CountRowSpec[] = []
   const add = (count: number, spec: Omit<CountRowSpec, 'count' | 'things'> & { things?: number }) => {
     if (count > 0) specs.push({ ...spec, count, things: spec.things ?? count })
@@ -78,6 +80,11 @@ export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, person
 
   add(n('collection_decision'), {
     key: 'collection-decision', items: 'collection_decision', group: 'decide', href: '/invoices?status=collections', labelKey: 'row_collection_decision', hintKey: 'row_collection_decision_detail',
+  })
+
+  // The question list is one place to go, whatever the number of questions.
+  add(Math.max(0, Math.floor(openQuestions)), {
+    key: 'company-questions', group: 'decide', href: '/questions', labelKey: 'row_company_questions', things: 1,
   })
 
   add(n('document_relevance'), {

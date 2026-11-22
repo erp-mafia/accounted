@@ -20,7 +20,7 @@ const VIEWS: readonly AktiebokCsvView[] = ['shares', 'holders', 'history']
  * the full personnummer the aktiebok must hold (5:5); everyone else masked.
  */
 export const GET = withRouteContext('bolaget.aktiebok_export', async (request, ctx) => {
-  const gate = await bolagetGateResponse(ctx)
+  const gate = await bolagetGateResponse(ctx, 'registers')
   if (gate) return gate
   const url = new URL(request.url)
   const format = url.searchParams.get('format') ?? 'pdf'

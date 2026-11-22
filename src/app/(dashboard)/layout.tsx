@@ -585,7 +585,7 @@ export default async function DashboardLayout({
     hasMileage,
     hasExpenseClaims: navFlags.hasExpenseClaims,
     hasPosSales: navFlags.hasPosSales,
-    ...navRollouts(companyId),
+    ...navRollouts(companyId, { bolagetRegisters: (companyRow as { bolaget_registers_enabled?: boolean }).bolaget_registers_enabled === true }),
   }
 
   const isSandbox = settings?.is_sandbox === true

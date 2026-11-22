@@ -10,7 +10,6 @@ import { verifikationDraft } from './verifikation-draft'
 import { kpiExplain } from './kpi-explain'
 import { settingsHelp } from './settings-help'
 import { onboardingEmpty } from './onboarding-empty'
-import { onboardingIntake } from './onboarding-intake'
 
 // Static intent table. Adding a new intent: write a file under
 // lib/agent/intents/<id>.ts that calls defineAgentIntent({...}), import it
@@ -33,7 +32,6 @@ const INTENTS: AgentIntent<any, any>[] = [
   kpiExplain,
   settingsHelp,
   onboardingEmpty,
-  onboardingIntake,
 ]
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

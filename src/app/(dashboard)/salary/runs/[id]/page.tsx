@@ -8,7 +8,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { StepBar } from '@/components/ui/step-bar'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import {
   Dialog,
@@ -949,7 +949,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   }
 
   if (!run) {
-    return <EmptyState title={t('not_found')} />
+    return <NotFoundState title={t('not_found')} backHref="/salary" backLabel={tCommon('back_to_list')} />
   }
 
   const periodLabel = periodLabelOf(run)

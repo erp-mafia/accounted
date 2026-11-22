@@ -145,7 +145,7 @@ export function LonejournalView() {
       ) : error || !report ? (
         <LoadError title={error ?? t('load_failed')} onRetry={() => setAttempt((n) => n + 1)} />
       ) : report.rows.length === 0 ? (
-        <EmptyState title={t('empty')} />
+        <EmptyState title={t('empty')} actionLabel={t('empty_action')} actionHref="/salary" />
       ) : (
         <Card>
           <CardContent>

@@ -11,7 +11,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { COMPANY_ADMIN_ROLES } from '@/lib/operations/access'
 import type { OperationContext } from '@/lib/operations/types'
 import type { Logger } from '@/lib/logger'
-import { bolagetGate } from './gate'
+import { bolagetGate, type BolagetScope } from './gate'
 import type { PdfCompany } from './pdf-data'
 
 export interface BolagetRouteContext {
@@ -27,8 +27,8 @@ export function operationContext(ctx: BolagetRouteContext): OperationContext {
 }
 
 /** The gate's refusal as a response, or null when the company may use the registers. */
-export async function bolagetGateResponse(ctx: BolagetRouteContext): Promise<NextResponse | null> {
-  const code = await bolagetGate(ctx.supabase, ctx.companyId)
+export async function bolagetGateResponse(ctx: BolagetRouteContext, scope: BolagetScope = 'all'): Promise<NextResponse | null> {
+  const code = await bolagetGate(ctx.supabase, ctx.companyId, scope)
   return code ? errorResponseFromCode(code, ctx.log, { requestId: ctx.requestId }) : null
 }
 

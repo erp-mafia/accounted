@@ -210,7 +210,11 @@ export async function triggerConnectionSync(
       supabase,
       companyId,
       userId,
-      connection: { id: connection.id as string, session_id: connection.session_id as string | null },
+      connection: {
+        id: connection.id as string,
+        session_id: connection.session_id as string | null,
+        bank_name: connection.bank_name as string | null,
+      },
       accounts,
       fromDate,
       toDate,

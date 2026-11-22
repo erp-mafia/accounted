@@ -5,6 +5,7 @@ import {
   MEMBERSHIP_FEE_ACCOUNT,
 } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
   SIGN_RECLASSIFICATION_RULES,
@@ -27,6 +28,17 @@ import {
 } from './types'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
 import { computePeriodiseringsfondSchablonintakt } from './schablonintakt'
+import {
+  computePeriodiseringsfondUppraekning,
+  fondMovementsFromTrialBalance,
+  hasFondReversal,
+  loadTaxYearSpans,
+  NO_UPPRAEKNING,
+  type PeriodiseringsfondUppraekning,
+} from './periodiseringsfond-uppraekning'
+import { computeSarskildLoneskattUnderlag } from './sarskild-loneskatt-underlag'
+import { priorYearDeficit, priorYearDeficitWarning } from './prior-year-deficit'
+import { bolagsskattOn } from './corporate-tax'
 
 import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
 import { companyIdentityFrom } from '@/lib/company/org-number'
@@ -159,9 +171,15 @@ function toSignedBalances(rows: TrialBalanceRow[]): Map<string, number> {
   return balances
 }
 
-function findMappingForAccount(accountNumber: string): INK2AccountMapping | null {
+function findMappingForAccount(
+  accountNumber: string,
+  savedSruCode?: string | null,
+): INK2AccountMapping | null {
   for (const mapping of INK2R_ACCOUNT_MAPPINGS) {
     if (isAccountInMapping(accountNumber, mapping)) return mapping
+  }
+  if (savedSruCode) {
+    return MAPPING_BY_CODE.get(savedSruCode as INK2RSRUCode) ?? null
   }
   return null
 }
@@ -224,12 +242,27 @@ function resultOnResultAccounts(rows: TrialBalanceRow[]): number {
 }
 
 /**
+ * A few kronor between the booked tax and the tax on the declared överskott
+ * are the form's truncation: every field drops its öre, and a ten-krona floor
+ * can then fall one step lower. More than this is a tax booked on another base.
+ */
+const BOOKED_TAX_TOLERANCE_KR = 3
+
+/**
  * Generate INK2 declaration for a fiscal period
  */
 export async function generateINK2Declaration(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  options: {
+    /**
+     * Read last year's declaration to remind about an underskott missing
+     * from 4.14 a (./prior-year-deficit). Off for that inner read, so the
+     * check never walks further back than one year.
+     */
+    priorYearCheck?: boolean
+  } = {},
 ): Promise<INK2Declaration> {
 
   // Fetch fiscal period
@@ -261,7 +294,7 @@ export async function generateINK2Declaration(
 
   // The balance sheet reads the closed books, the income statement the
   // pre-closing books. See the module docblock for why the two differ.
-  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, buildingTax] =
+  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, buildingTax, chartAccounts] =
     await Promise.all([
       loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, entityType),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
@@ -270,6 +303,14 @@ export async function generateINK2Declaration(
       }),
       // INK2S 4.9: buildings, markanläggningar and mark on their tax plan.
       loadBuildingTaxAdjustment(supabase, companyId, period as FiscalPeriod),
+      fetchAllRows<{ account_number: string; sru_code: string | null }>(({ from, to }) =>
+        supabase
+          .from('chart_of_accounts')
+          .select('account_number, sru_code')
+          .eq('company_id', companyId)
+          .order('account_number', { ascending: true })
+          .range(from, to),
+      ),
     ])
 
   const balanceSheetBalances = toSignedBalances(closedTrialBalance.rows)
@@ -297,8 +338,13 @@ export async function generateINK2Declaration(
   for (const row of [...closedTrialBalance.rows, ...preClosingTrialBalance.rows]) {
     accountNameMap.set(row.account_number, row.account_name)
   }
+  const savedSruCodes = new Map(
+    chartAccounts.map((account) => [account.account_number, account.sru_code]),
+  )
 
   const warnings: string[] = []
+  // The warnings that also refuse the SRU file (see INK2Declaration.sruBlockers).
+  const sruBlockers: string[] = []
 
   // Collect each account's contribution to its SRU code, keeping the raw
   // balance so a reclassified account can be re-oriented under its new code.
@@ -313,7 +359,7 @@ export async function generateINK2Declaration(
     // other posts, so a balance here would be counted twice.
     if (accountNumber >= '8990' && accountNumber <= '8999') continue
 
-    const mapping = findMappingForAccount(accountNumber)
+    const mapping = findMappingForAccount(accountNumber, savedSruCodes.get(accountNumber))
 
     if (!mapping) {
       // BAS accounts 4500-4599, 4700-4899, and 1300-1310 have no standard SRU
@@ -323,8 +369,11 @@ export async function generateINK2Declaration(
         || Math.abs(incomeBalances.get(accountNumber) ?? 0) >= 0.01
       const classChar = accountNumber.charAt(0)
       if (hasBalance && classChar >= '1' && classChar <= '8') {
-        // Only warn for standard BAS range accounts that weren't mapped
-        warnings.push(`Konto ${accountNumber} (${accountNameMap.get(accountNumber) || 'okänt'}) kunde inte mappas till ett SRU-fält.`)
+        // Only warn for standard BAS range accounts that weren't mapped. The
+        // amount is then on no field, so the form cannot be the books.
+        const unmappedWarning = `Konto ${accountNumber} (${accountNameMap.get(accountNumber) || 'okänt'}) kunde inte mappas till ett SRU-fält. Ange kontots SRU-kod under Kontoplan, eller boka om beloppet till ett BAS-konto med SRU-kod, så kommer beloppet med i deklarationen.`
+        warnings.push(unmappedWarning)
+        sruBlockers.push(unmappedWarning)
       }
       continue
     }
@@ -452,6 +501,11 @@ export async function generateINK2Declaration(
   // so the worksheet remains internally consistent.
   const nonDeductibleExpenses = Math.trunc(taxAdjustments.nonDeductibleExpenses)
   const nonTaxableIncome = Math.trunc(taxAdjustments.nonTaxableIncome)
+  // 4.3b and 4.5b are parts of those totals filed on their own rows; the
+  // catch-all rows 4.3c and 4.5c take the rest, so the rows still add up to
+  // exactly the totals the taxable result uses.
+  const financialWriteDowns = Math.min(nonDeductibleExpenses, Math.trunc(taxAdjustments.financialWriteDowns ?? 0))
+  const dividends = Math.min(nonTaxableIncome, Math.trunc(taxAdjustments.dividends ?? 0))
   // 4.14 a: prior years' unused deficit, saved in the year-end flow. Deducted
   // in full (IL 40 kap. 2 §); whatever the result cannot absorb becomes this
   // year's underskott on 4.16 and rolls forward again.
@@ -468,18 +522,36 @@ export async function generateINK2Declaration(
     period.period_start as string,
     period.period_end as string,
   )
+  // 4.6d: the uppräkning on periodiseringsfonder återförda this year (set
+  // aside while bolagsskatten was higher). Never booked; the fiscal years are
+  // read only when a fond fell over the year.
+  const fondMovements = fondMovementsFromTrialBalance(closedTrialBalance.rows)
+  const uppraekning: PeriodiseringsfondUppraekning = hasFondReversal(fondMovements)
+    ? computePeriodiseringsfondUppraekning({
+        funds: fondMovements,
+        periodStart: period.period_start as string,
+        fiscalYears: await loadTaxYearSpans(supabase, companyId),
+      })
+    : NO_UPPRAEKNING
   const taxableResult =
     aretsResultat + taxAmount
     + nonDeductibleExpenses - nonTaxableIncome
     + schablonintakt.amount
+    + uppraekning.amount
     + buildingAdjustment
     - deficitCarryforward
+
+  // 1.4 / 1.5: the underlag för särskild löneskatt, read from the same
+  // pre-closing books as the resultaträkning.
+  const slp = computeSarskildLoneskattUnderlag(preClosingTrialBalance.rows)
 
   const ink2: INK2Rutor = {
     '7011': fyStart,
     '7012': fyEnd,
     '7104': taxableResult >= 0 ? taxableResult : 0,
     '7114': taxableResult < 0 ? Math.abs(taxableResult) : 0,
+    '7132': slp.underlag,
+    '7133': slp.negativtUnderlag,
   }
 
   // Build INK2S (skattemässiga justeringar, auto-derived basics only)
@@ -489,9 +561,12 @@ export async function generateINK2Declaration(
     '7650': aretsResultat >= 0 ? aretsResultat : 0,
     '7750': aretsResultat < 0 ? Math.abs(aretsResultat) : 0,
     '7651': taxAmount, // Skatt (ej avdragsgill)
-    '7653': nonDeductibleExpenses,
-    '7754': nonTaxableIncome,
+    '7652': financialWriteDowns,
+    '7653': nonDeductibleExpenses - financialWriteDowns,
+    '7753': dividends,
+    '7754': nonTaxableIncome - dividends,
     '7654': schablonintakt.amount,
+    '7673': uppraekning.amount,
     '7666': buildingAdjustment > 0 ? buildingAdjustment : 0,
     '7765': buildingAdjustment < 0 ? -buildingAdjustment : 0,
     '7763': deficitCarryforward,
@@ -515,8 +590,36 @@ export async function generateINK2Declaration(
     )
   }
 
+  // 4.14 a empty and no underskottsregister: say when last year's own
+  // declaration in the app ended in an underskott (never entered for them).
+  if (deficitCarryforward === 0 && !taxAdjustments.lossRegister && options.priorYearCheck !== false) {
+    const hint = await priorYearDeficit(supabase, companyId, period as FiscalPeriod, (id) =>
+      generateINK2Declaration(supabase, companyId, id, { priorYearCheck: false }),
+    )
+    if (hint) warnings.push(priorYearDeficitWarning(hint))
+  }
+
   warnings.push(...schablonintakt.warnings)
+  warnings.push(...uppraekning.warnings)
   warnings.push(...buildingTax.warnings)
+  warnings.push(...slp.warnings)
+
+  // The year's bolagsskatt booked on 8910 against the tax on the överskott
+  // this form declares, computed the way the bokslut books it. Apart, the
+  // årsredovisning and 2512 carry a tax worked out on another base (a
+  // run_year_end over a stale 8910, an adjustment saved after the tax was
+  // booked), so one of the two is wrong. 8910 alone: 7528 also holds earlier
+  // years' tax (8920) and deferred tax. Quiet in an open year whose tax is
+  // not booked yet.
+  const bookedYearTax = truncateToWholeKronor(incomeBalances.get('8910') ?? 0)
+  if (bookedYearTax !== 0 || (period as FiscalPeriod).is_closed) {
+    const taxOnDeclared = bolagsskattOn(taxableResult)
+    if (Math.abs(bookedYearTax - taxOnDeclared) > BOOKED_TAX_TOLERANCE_KR) {
+      warnings.push(
+        `Bokförd skatt på årets resultat (konto 8910) är ${bookedYearTax} kr, men 20,6 % av överskottet i punkt 1.1 (${ink2['7104']} kr) är ${taxOnDeclared} kr. Skatten är bokförd på ett annat underlag än deklarationen: rätta skatten i bokslutet (Dispositioner) eller de skattemässiga justeringarna innan deklarationen och årsredovisningen lämnas in.`,
+      )
+    }
+  }
 
   // The underskottsregister's spärrar are netted into the 4.14 a deducted
   // above: the taxable result is right, but Skatteverket's form takes the
@@ -548,6 +651,7 @@ export async function generateINK2Declaration(
   const balanceWarning = checkBalanceWarning(totalAssets, adjustedEquityLiabilities)
   if (balanceWarning) {
     warnings.push(balanceWarning)
+    sruBlockers.push(balanceWarning)
   }
 
   // Cross-surface self-check. When the year is closed, the resultaträkning the
@@ -563,9 +667,9 @@ export async function generateINK2Declaration(
     const bookedResult = truncateToWholeKronor(-(balanceSheetBalances.get('2099') ?? 0))
     const declaredResult = aretsResultat
     if (Math.abs(bookedResult - declaredResult) > ROUNDING_TOLERANCE_KR) {
-      warnings.push(
-        `Årets resultat enligt resultaträkningen (${declaredResult} kr) stämmer inte med det bokförda resultatet på konto 2099 (${bookedResult} kr). Deklarationen stämmer då inte med det fastställda bokslutet.`,
-      )
+      const resultWarning = `Årets resultat enligt resultaträkningen (${declaredResult} kr) stämmer inte med det bokförda resultatet på konto 2099 (${bookedResult} kr). Deklarationen stämmer då inte med det fastställda bokslutet.`
+      warnings.push(resultWarning)
+      sruBlockers.push(resultWarning)
     }
   }
 
@@ -596,6 +700,8 @@ export async function generateINK2Declaration(
       city: settings?.city || null,
       email: settings?.email || null,
     },
-    warnings,
+    // The reasons the file is refused come first, as on the NE-bilaga.
+    warnings: [...sruBlockers, ...warnings.filter((warning) => !sruBlockers.includes(warning))],
+    sruBlockers,
   }
 }

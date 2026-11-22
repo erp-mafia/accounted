@@ -9,6 +9,8 @@ export interface BooksCtx {
   flags: BooksFlags
   findings: BooksFindings | null
   loadingFindings: boolean
+  /** The last findings read failed (a failed answer or no connection). */
+  findingsFailed: boolean
   loadFindings: () => Promise<BooksFindings | null>
   /** Error text a redirect brought back (?bank_error=, ?skv_error=). */
   landedError: string | null

@@ -561,7 +561,7 @@ describe('gnubok_load_skill tool', () => {
     const { error } = toToolError(err)
     expect(error).toMatchObject({ code: 'NOT_FOUND', retryable: false, remediation: { tool: 'gnubok_list_skills' } })
     expect(error.message_en).toMatch(/^Skill not found: "payroll"\. Closest: payroll-monthly\. Available skills: .*month-end-close/)
-    expect(error.message_sv).toBe('Resursen kunde inte hittas.')
+    expect(error.message_sv).toBe('Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.')
   })
 
   it('says an own/ draft waits for a person to add it, instead of not found', async () => {

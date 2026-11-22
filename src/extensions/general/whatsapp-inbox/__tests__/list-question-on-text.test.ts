@@ -1,0 +1,427 @@
+/**
+ * A text from a linked person that nothing else takes, through the real
+ * webhook, the real list-question module and the real answer path, on a
+ * database that answers from rows. Only the Graph API, the deferred kick and
+ * the processing history are mocked.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import crypto from 'crypto'
+import { createRowsMockSupabase, testRoutes } from '@/tests/helpers'
+
+vi.mock('@supabase/supabase-js', () => ({
+  createClient: vi.fn(),
+}))
+
+vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
+  const actual = await vi.importActual<
+    typeof import('@/extensions/general/whatsapp-inbox/lib/graph-api')
+  >('@/extensions/general/whatsapp-inbox/lib/graph-api')
+  return {
+    ...actual,
+    sendText: vi.fn(),
+    sendReplyButtons: vi.fn(),
+    sendReaction: vi.fn().mockResolvedValue(undefined),
+    markReadWithTyping: vi.fn().mockResolvedValue(undefined),
+    downloadMedia: vi.fn(),
+  }
+})
+
+vi.mock('@/extensions/general/whatsapp-inbox/lib/process-inbound', async () => {
+  const actual = await vi.importActual<
+    typeof import('@/extensions/general/whatsapp-inbox/lib/process-inbound')
+  >('@/extensions/general/whatsapp-inbox/lib/process-inbound')
+  return { ...actual, kickInboundProcessing: vi.fn() }
+})
+
+vi.mock('@/extensions/general/whatsapp-inbox/lib/interpret-answer', () => ({
+  interpretChatAnswer: vi.fn(),
+}))
+
+vi.mock('@/lib/rate-limits/agent', () => ({
+  checkAgentRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
+vi.mock('@/lib/rate-limits/inbox', () => ({
+  checkInboxUploadRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: vi.fn().mockResolvedValue('event-1'),
+}))
+
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { whatsappInboxExtension } from '@/extensions/general/whatsapp-inbox'
+import { sendReplyButtons, sendText } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
+import { interpretChatAnswer } from '@/extensions/general/whatsapp-inbox/lib/interpret-answer'
+import { kickInboundProcessing, processInboundMessage } from '@/extensions/general/whatsapp-inbox/lib/process-inbound'
+import { MAX_QUESTIONS_PER_DAY, type ConversationContext } from '@/extensions/general/whatsapp-inbox/lib/conversation'
+import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
+import { encryptPhone, hashPhone } from '@/extensions/general/whatsapp-inbox/lib/phone-crypto'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+
+const createClientMock = vi.mocked(createClient)
+const sendTextMock = vi.mocked(sendText)
+const sendButtonsMock = vi.mocked(sendReplyButtons)
+const kickMock = vi.mocked(kickInboundProcessing)
+const interpretMock = vi.mocked(interpretChatAnswer)
+const historyMock = vi.mocked(appendProcessingHistory)
+
+const SECRET = 'meta-app-secret'
+const COMPANY = 'c0000000-0000-4000-8000-000000000001'
+const OTHER_COMPANY = 'c0000000-0000-4000-8000-000000000002'
+const USER = 'a0000000-0000-4000-8000-000000000001'
+const OLDER_QUESTION = 'e0000000-0000-4000-8000-000000000001'
+const NEWER_QUESTION = 'e0000000-0000-4000-8000-000000000002'
+const PHONE = '46701234567'
+const HOUR = 60 * 60 * 1000
+
+const SENT = { ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null } as const
+const SEND_FAILED = { ok: false, wamid: null, errorDetail: 'Send failed (HTTP 500)', failure: 'http_rejected' } as const
+
+const OLDER_TEXT = 'Gäller hyran på 12 000 kr kontoret eller lagret?'
+const OLDER_WHY = 'Svaret avgör vilket konto hyran bokförs på.'
+
+type Row = Record<string, unknown>
+
+interface Write {
+  table: string
+  method: string
+  row: unknown
+}
+
+const route = testRoutes(whatsappInboxExtension).find((r) => r.method === 'POST' && r.path === '/webhook')!
+
+function signedText(body: string, wamid = 'wamid.TXT1'): Request {
+  const raw = JSON.stringify({
+    object: 'whatsapp_business_account',
+    entry: [
+      {
+        id: 'waba-1',
+        changes: [
+          {
+            field: 'messages',
+            value: {
+              messaging_product: 'whatsapp',
+              messages: [{ from: PHONE, id: wamid, timestamp: '1754000000', type: 'text', text: { body } }],
+            },
+          },
+        ],
+      },
+    ],
+  })
+  const signature = 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw, 'utf8').digest('hex')
+  return new Request('http://localhost:3000/api/extensions/ext/whatsapp-inbox/webhook', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': signature },
+    body: raw,
+  })
+}
+
+function questionRow(id: string, createdAt: string, overrides: Row = {}): Row {
+  return {
+    id,
+    company_id: COMPANY,
+    status: 'open',
+    close_reason: null,
+    question: OLDER_TEXT,
+    why: OLDER_WHY,
+    options: [
+      { id: 'office', label: 'Kontoret' },
+      { id: 'storage', label: 'Lagret' },
+    ],
+    evidence: [],
+    actor_label: null,
+    client: null,
+    answer_option: null,
+    answer_text: null,
+    answered_at: null,
+    answered_via: null,
+    fact_id: null,
+    created_at: createdAt,
+    ...overrides,
+  }
+}
+
+/** Two open questions, the newer one first in the table. */
+const twoOpenQuestions = (): Row[] => [
+  questionRow(NEWER_QUESTION, '2026-11-20T08:00:00.000Z', { question: 'Är kortköpet på 499 kr privat?', why: null, options: [] }),
+  questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z'),
+]
+
+interface Seed {
+  link?: Row
+  conversation?: Row
+  questions?: Row[]
+  memberships?: Row[]
+}
+
+/**
+ * A linked owner of COMPANY with an idle conversation whose service window
+ * closed an hour ago, and the webhook's client answering from these rows. The
+ * conversation row takes its own updates, so a read after the text sees the
+ * window the text opened.
+ */
+function world(seed: Seed = {}) {
+  const conversation: Row = {
+    id: 'conv-1',
+    phone_link_id: 'link-1',
+    state: 'idle',
+    context: {},
+    company_id: null,
+    service_window_expires_at: new Date(Date.now() - HOUR).toISOString(),
+    debounce_until: null,
+    pending_ack: false,
+    updated_at: '2026-11-20T09:00:00.000Z',
+    ...seed.conversation,
+  }
+  const writes: Write[] = []
+  const record = writes.push.bind(writes)
+  writes.push = (...items: Write[]): number => {
+    for (const item of items) {
+      if (item.table !== 'whatsapp_conversations' || item.method !== 'update') continue
+      for (const [column, value] of Object.entries(item.row as Row)) {
+        if (value !== undefined) conversation[column] = value
+      }
+    }
+    return record(...items)
+  }
+  const messages: Row[] = []
+  const tables: Record<string, Row[]> = {
+    whatsapp_phone_links: [
+      {
+        id: 'link-1',
+        user_id: USER,
+        phone_hash: hashPhone(PHONE),
+        phone_enc: encryptPhone(PHONE),
+        phone_masked: '+46 70 *** ** 67',
+        default_company_id: COMPANY,
+        last_company_id: null,
+        revoked_at: null,
+        muted_at: null,
+        ...seed.link,
+      },
+    ],
+    whatsapp_conversations: [conversation],
+    whatsapp_messages: messages,
+    company_members: seed.memberships ?? [{ user_id: USER, company_id: COMPANY, role: 'owner' }],
+    company_questions: seed.questions ?? twoOpenQuestions(),
+    agent_memory: [],
+  }
+  const mock = createRowsMockSupabase(tables, writes)
+  createClientMock.mockReturnValue(mock.supabase as never)
+  return { writes, messages, supabase: mock.supabase as unknown as SupabaseClient }
+}
+
+/** The conversation writes that carry a context, in order. */
+function contextWrites(writes: Write[]): ConversationContext[] {
+  return writes
+    .filter((write) => write.table === 'whatsapp_conversations')
+    .map((write) => (write.row as { context?: ConversationContext }).context)
+    .filter((context): context is ConversationContext => context !== undefined)
+}
+
+const writesTo = (writes: Write[], table: string): Row[] =>
+  writes.filter((write) => write.table === table).map((write) => write.row as Row)
+
+describe('a text from a linked person that nothing else takes', () => {
+  const originalEnv = { ...process.env }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sendTextMock.mockResolvedValue(SENT)
+    sendButtonsMock.mockResolvedValue(SENT)
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = COMPANY
+    process.env.WHATSAPP_APP_SECRET = SECRET
+    process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
+    process.env.WHATSAPP_PHONE_ENCRYPTION_KEY = 'a'.repeat(64)
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+  })
+
+  it('gets the oldest open question with its buttons, and no fallback: the text itself opens the window', async () => {
+    const { writes, messages } = world()
+
+    const response = await route.handler(signedText('Hey'))
+
+    expect(response.status).toBe(200)
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    const message = sendButtonsMock.mock.calls[0][1]
+    expect(message.to).toBe(PHONE)
+    expect(message.template).toBe(TEMPLATE.m23ListQuestion)
+    expect(message.body).toBe(`${OLDER_TEXT}\n${OLDER_WHY}`)
+    expect(message.buttons).toEqual([
+      { id: `cq:${COMPANY}:${OLDER_QUESTION}:o:office`, title: 'Kontoret' },
+      { id: `cq:${COMPANY}:${OLDER_QUESTION}:o:storage`, title: 'Lagret' },
+      { id: `cq:${COMPANY}:${OLDER_QUESTION}:k`, title: 'Vet inte' },
+    ])
+    expect(sendTextMock).not.toHaveBeenCalled()
+
+    // The conversation holds the question, on its own daily counter.
+    const [held] = contextWrites(writes)
+    expect(held.pending_question).toMatchObject({ type: 'list_question', question_id: OLDER_QUESTION, company_id: COMPANY })
+    expect(held.list_question_budget).toEqual({ day_key: todayIsoStockholm(), count: 1 })
+    expect(held.budget).toBeUndefined()
+    expect(historyMock.mock.calls[0][0]).toMatchObject({ aggregateId: OLDER_QUESTION, eventType: 'ChannelQuestionAsked' })
+
+    // The text itself is handled and answers nothing.
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ body_text: 'Hey', processing_status: 'done', error_message: null })
+    expect(writesTo(writes, 'company_questions')).toEqual([])
+    expect(writesTo(writes, 'agent_memory')).toEqual([])
+    expect(kickMock).toHaveBeenCalledWith([])
+  })
+
+  const fallbackAsBefore: Array<[string, () => Seed]> = [
+    ['no question is open', () => ({ questions: [] })],
+    ['every question is answered or closed', () => ({
+      questions: [
+        questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z', { status: 'answered', answered_at: '2026-11-19T08:00:00.000Z' }),
+        questionRow(NEWER_QUESTION, '2026-11-20T08:00:00.000Z', { status: 'closed', close_reason: 'dont_know', answered_at: '2026-11-20T09:00:00.000Z' }),
+      ],
+    })],
+    ['a burst of receipts waits for its ack', () => ({ conversation: { pending_ack: true } })],
+    ['the company choice still takes a late answer', () => ({
+      conversation: { context: { company_options: [{ id: COMPANY, name: 'A AB' }, { id: OTHER_COMPANY, name: 'B AB' }] } },
+    })],
+    ['a receipt question waits in the queue', () => ({
+      conversation: { context: { question_queue: [{ type: 'context', inbox_item_id: 'item-2' }] } },
+    })],
+    ['the day has no question left: receipt questions used it', () => ({
+      conversation: { context: { budget: { day_key: todayIsoStockholm(), count: MAX_QUESTIONS_PER_DAY } } },
+    })],
+    ['the day has no question left: list questions used it', () => ({
+      conversation: { context: { list_question_budget: { day_key: todayIsoStockholm(), count: MAX_QUESTIONS_PER_DAY } } },
+    })],
+    ['the person only reads the books', () => ({ memberships: [{ user_id: USER, company_id: COMPANY, role: 'viewer' }] })],
+    ['the conversation is routed to no company', () => ({
+      link: { default_company_id: null },
+      memberships: [
+        { user_id: USER, company_id: COMPANY, role: 'owner' },
+        { user_id: USER, company_id: OTHER_COMPANY, role: 'owner' },
+      ],
+    })],
+    ['the only open question expired in this conversation', () => ({
+      conversation: { context: { list_questions_expired: [OLDER_QUESTION] } },
+      questions: [questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z')],
+    })],
+  ]
+
+  it.each(fallbackAsBefore)('gets the fallback as before when %s', async (_name, seed) => {
+    const { writes, messages } = world(seed())
+
+    await route.handler(signedText('Hey'))
+
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1]).toMatchObject({ to: PHONE, template: TEMPLATE.m16Fallback })
+    expect(contextWrites(writes)).toEqual([])
+    expect(messages[0]).toMatchObject({ processing_status: 'done', error_message: null })
+  })
+
+  it.each([
+    ['the list is switched on for another company only', OTHER_COMPANY],
+    ['the list is switched on for nobody', ''],
+  ])('gets the fallback as before when %s', async (_name, rollout) => {
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = rollout
+    const { writes } = world()
+
+    await route.handler(signedText('Hey'))
+
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m16Fallback)
+    expect(contextWrites(writes)).toEqual([])
+  })
+
+  it('is not read while the link is paused, as before: no question and no reply', async () => {
+    const { writes, messages } = world({ link: { muted_at: '2026-11-19T00:00:00.000Z' } })
+
+    await route.handler(signedText('Hey'))
+
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(contextWrites(writes)).toEqual([])
+    expect(messages[0]).toMatchObject({ processing_status: 'skipped', body_text: null })
+  })
+
+  it('pauses the link on "stopp" as before, with open questions waiting', async () => {
+    const { writes } = world()
+
+    await route.handler(signedText('stopp'))
+
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m11Stop)
+    expect(contextWrites(writes)).toEqual([])
+  })
+
+  it('takes the question back and sends nothing more when the question cannot be sent', async () => {
+    sendButtonsMock.mockResolvedValue(SEND_FAILED)
+    const { writes } = world()
+
+    await route.handler(signedText('Hey'))
+
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock).not.toHaveBeenCalled()
+    const [held, takenBack] = contextWrites(writes)
+    expect(held.pending_question?.question_id).toBe(OLDER_QUESTION)
+    expect(takenBack.pending_question).toBeUndefined()
+    expect(takenBack.list_question_budget?.count).toBe(0)
+    expect(contextWrites(writes)).toHaveLength(2)
+    expect(historyMock).not.toHaveBeenCalled()
+  })
+
+  it('takes the next written reply as the answer, saved on the question and as a fact through the whatsapp door', async () => {
+    const first = world()
+    await route.handler(signedText('Hey', 'wamid.TXT1'))
+    const [held] = contextWrites(first.writes)
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+
+    // The reply arrives on the conversation as the question left it.
+    const second = world({ conversation: { context: held as Row } })
+    await route.handler(signedText('Kontoret på Storgatan', 'wamid.TXT2'))
+
+    expect(second.messages).toHaveLength(1)
+    const reply = second.messages[0]
+    expect(reply).toMatchObject({
+      body_text: 'Kontoret på Storgatan',
+      processing_status: 'received',
+      error_message: `list_question_reply:${COMPANY}:${OLDER_QUESTION}`,
+    })
+    expect(kickMock).toHaveBeenLastCalledWith([reply.id as string])
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+
+    // The worker answers the question from the reply.
+    reply.attempts = 0
+    await processInboundMessage(second.supabase, reply.id as string)
+
+    expect(interpretMock).not.toHaveBeenCalled()
+    const [fact] = writesTo(second.writes, 'agent_memory')
+    expect(fact).toMatchObject({
+      company_id: COMPANY,
+      kind: 'fact',
+      content: `${OLDER_TEXT} Svar: Kontoret på Storgatan`,
+      source: 'user_taught',
+      created_by_user_id: USER,
+    })
+    const [answered] = writesTo(second.writes, 'company_questions')
+    expect(answered).toMatchObject({
+      status: 'answered',
+      answer_option: null,
+      answer_text: 'Kontoret på Storgatan',
+      answered_by: USER,
+      answered_via: 'whatsapp',
+    })
+    expect(answered.fact_id).toEqual(expect.any(String))
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m24ListAnswered)
+    // The text that brought the question out is in neither.
+    expect(JSON.stringify([fact, answered])).not.toContain('Hey')
+  })
+})

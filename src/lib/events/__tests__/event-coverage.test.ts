@@ -37,6 +37,8 @@ const UNCONSUMED: readonly CoreEventType[] = [
   'collection.case_opened',
   'collection.case_updated',
   'collection.case_closed',
+  // The question list (lib/questions): a reopened question wakes nothing.
+  'company_question.reopened',
   // Invoicing and payroll.
   'recurring_invoice.executed',
   'salary_run.approval_reverted',

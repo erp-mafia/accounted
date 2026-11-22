@@ -80,6 +80,13 @@ export type BucketEntry = {
    * entry (reconcileStableExternalIds).
    */
   providerTransactionId: string | null
+  /**
+   * The batch's feed reads the stored row as not booked (IngestOptions.isNotBooked):
+   * id re-keying never gives it an incoming row (reconcileStableExternalIds),
+   * and it is no cross-channel mirror twin (decideIngestRow). Absent for every
+   * other row.
+   */
+  notBooked?: true
 }
 
 /**
@@ -136,6 +143,7 @@ function addToBucket(
   externalId: string | null,
   bankConnectionId: string | null,
   providerTransactionId: string | null,
+  notBooked: boolean,
 ): string {
   const key = contentBucketKey(date, amount)
   const entry: BucketEntry = {
@@ -148,6 +156,7 @@ function addToBucket(
     externalId,
     bankConnectionId,
     providerTransactionId,
+    ...(notBooked ? { notBooked: true as const } : {}),
   }
   const entries = bucket.get(key)
   if (entries) entries.push(entry)
@@ -210,11 +219,15 @@ type StoredDedupRow = {
  * company used to dedup against a TRUNCATED map and insert the remainder as
  * duplicates. `.order('id')` supplies the stable total order `.range()`
  * paging requires (see fetch-all.ts).
+ *
+ * @param isNotBooked IngestOptions.isNotBooked: marks the stored rows the
+ *   batch's feed reads as not booked (BucketEntry.notBooked), by their bank text.
  */
 export async function buildExistingTransactionMaps(
   supabase: SupabaseClient,
   companyId: string,
-  rawTransactions: Array<{ date: string }>
+  rawTransactions: Array<{ date: string }>,
+  isNotBooked?: IngestOptions['isNotBooked'],
 ): Promise<ExistingTransactionMaps> {
   const booked: DescBucket = new Map()
   const unbookedImported: DescBucket = new Map()
@@ -252,12 +265,13 @@ export async function buildExistingTransactionMaps(
       // description: a title edit must never make the dedup bridge miss a
       // genuine re-import. Falls back to description for rows predating the
       // original_description column.
+      const text = normalizeImportedDescription(tx.original_description ?? tx.description)
       const key = addToBucket(
         booked,
         tx.id ?? null,
         tx.date,
         tx.amount,
-        normalizeImportedDescription(tx.original_description ?? tx.description),
+        text,
         tx.cash_account_id ?? null,
         tx.import_source ?? null,
         isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
@@ -265,6 +279,7 @@ export async function buildExistingTransactionMaps(
         tx.external_id ?? null,
         tx.bank_connection_id ?? null,
         tx.provider_transaction_id?.trim() || null,
+        isNotBooked?.(text) === true,
       )
       if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
@@ -296,12 +311,13 @@ export async function buildExistingTransactionMaps(
     for (const tx of unbookedRows) {
       // See booked-map note: dedup on the immutable bank original so a
       // user title edit cannot reopen the duplicate-import window.
+      const text = normalizeImportedDescription(tx.original_description ?? tx.description)
       const key = addToBucket(
         unbookedImported,
         tx.id ?? null,
         tx.date,
         tx.amount,
-        normalizeImportedDescription(tx.original_description ?? tx.description),
+        text,
         tx.cash_account_id ?? null,
         tx.import_source ?? null,
         isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
@@ -309,6 +325,7 @@ export async function buildExistingTransactionMaps(
         tx.external_id ?? null,
         tx.bank_connection_id ?? null,
         tx.provider_transaction_id?.trim() || null,
+        isNotBooked?.(text) === true,
       )
       if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
@@ -544,7 +561,8 @@ export function buildIngestDedupState(input: {
     for (const bucket of [existingMaps.booked, existingMaps.unbookedImported]) {
       for (const [k, entries] of bucket) {
         for (const entry of entries) {
-          if (entry.isImportFeed && entry.source !== batchSource) {
+          // A row the feed reads as not booked is no mirror twin (see decideIngestRow).
+          if (entry.isImportFeed && entry.source !== batchSource && !entry.notBooked) {
             crossSourceStoredByBucket.set(k, (crossSourceStoredByBucket.get(k) ?? 0) + 1)
           }
         }
@@ -736,6 +754,11 @@ export type IngestRowDecision =
  * same-feed entries, so it narrows the text bridge and leaves both mirrors,
  * which match other channels, as they were.
  *
+ * Not-booked guard: a stored row the batch's feed reads as not booked
+ * (BucketEntry.notBooked, a card hold another feed stored, crm#2076) is no
+ * cross-channel mirror twin and is not counted for the mirror's symmetry. Only
+ * a bridging text can still take it, as when the hold itself is read again.
+ *
  * @param description the row's normalized description (normalizeImportedDescription)
  */
 export function decideIngestRow(
@@ -805,7 +828,7 @@ export function decideIngestRow(
       // Text-independent fallback: in a cross-channel mirror bucket a stored
       // entry from a different feed is the same transaction even when the
       // descriptions don't bridge. Remember the first eligible one.
-      if (crossIdx === -1 && crossSourceMirror && entry.isImportFeed && entry.source !== batchSource) {
+      if (crossIdx === -1 && crossSourceMirror && entry.isImportFeed && entry.source !== batchSource && !entry.notBooked) {
         crossIdx = i
       }
       // Booked-hand-entered fallback: hand-entered entries only exist in the
@@ -1112,7 +1135,7 @@ export async function ingestTransactions(
   // catch the common case where a PSD2 row is still unbooked when the user
   // re-imports the same period via CSV, or the reverse, a CSV import that
   // predates the first PSD2 sync of the same account.
-  const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rawTransactions)
+  const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rawTransactions, options?.isNotBooked)
 
   // Re-key stable (date, öre, index) ids against the stored rows before any
   // dedup layer runs. The ids the caller sent are kept for the per-row report.

@@ -19,11 +19,11 @@
  * months first); the rest collapse into one "+N" dot per kind, the chips
  * keep the full counts, and every thing stays in the lists under the graph.
  *
- * The briefing does not carry deadlines, open questions or permissions today
- * (2026-11). The keys `deadlines`, `open_questions` and `permissions` are
- * read in the prototype's shape so the dots appear the day it does; until
- * then the waiting family holds the checks that differ and the open
- * suggestions.
+ * The briefing carries open questions for a company with the question list
+ * switched on (2026-11); it does not carry deadlines or permissions today.
+ * The keys `deadlines` and `permissions` are read in the prototype's shape so
+ * the dots appear the day it does; until then the waiting family holds the
+ * checks that differ, the open suggestions and the open questions.
  */
 import type { ChipFamily, ContextGraphModel, GraphEdge, GraphFamily, GraphNode, GraphNodeKind } from './types'
 
@@ -184,10 +184,6 @@ export function buildContextGraph(briefing: Json, caps: GraphCaps = GRAPH_CAPS):
   }
 
   // --- What Accounted reads: the company, its connections, counterparties and their accounts. ---
-  const profile = str(briefing.profile_summary)
-  if (profile) link('agent', single('read', { id: 'profile', kind: 'profile', label: null, text: profile }))
-  for (const s of skillIds) if (s.atom.startsWith('vertical/') || s.atom.startsWith('modifier/')) link(s.id, 'profile')
-
   const bolaget = isObject(briefing.bolaget) ? briefing.bolaget : null
   if (bolaget) {
     const owners = objects(bolaget.owners)
@@ -297,7 +293,7 @@ export function buildContextGraph(briefing: Json, caps: GraphCaps = GRAPH_CAPS):
 
   capped(objects(briefing.open_questions).filter((q) => str(q.question)), caps.questions, 'wait', 'question', 'agent', (q, i) => {
     const question = str(q.question)!
-    const subject = str(q.about)
+    const subject = str(q.about) ?? str(q.why)
     const id = add({ id: `question:${i}`, family: 'wait', kind: 'question', label: shortLabel(question), text: question, detail: subject, date: str(q.asked_at) })
     link('agent', id)
     about(id, `${question} ${subject ?? ''}`)

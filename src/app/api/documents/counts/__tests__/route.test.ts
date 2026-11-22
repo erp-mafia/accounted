@@ -34,8 +34,9 @@ beforeEach(() => {
 })
 
 // Queue order mirrors the route: the Promise.all (direct docs, supplier_invoices
-// references, supplier_invoice_payments references), then the customer-invoice
-// resolver (invoices by journal_entry_id, invoice_payments by journal_entry_id).
+// references, supplier_invoice_payments references, "Inget underlag krävs"
+// marks, then the customer-invoice resolver: invoices by journal_entry_id,
+// invoice_payments by journal_entry_id).
 // The `document` embed carries the anchor state (journal_entry_id) of the SI's
 // retained doc.
 function enqueueAll(opts: {
@@ -55,10 +56,12 @@ function enqueueAll(opts: {
   }>
   invoices?: Array<{ id: string; journal_entry_id: string | null }>
   payments?: Array<{ id: string; invoice_id: string | null; journal_entry_id: string | null }>
+  exempt?: Array<{ journal_entry_id: string; reason: string | null }>
 }) {
   enqueue({ data: opts.direct ?? [], error: null })
   enqueue({ data: opts.si ?? [], error: null })
   enqueue({ data: opts.sip ?? [], error: null })
+  enqueue({ data: opts.exempt ?? [], error: null })
   enqueue({ data: opts.invoices ?? [], error: null })
   enqueue({ data: opts.payments ?? [], error: null })
 }
@@ -220,6 +223,19 @@ describe('GET /api/documents/counts', () => {
     expect(body.invoice_references).toEqual({ [JE_A]: 2, [JE_B]: 1 })
   })
 
+  it('returns the asked rows "Inget underlag krävs" marks with their reason', async () => {
+    enqueueAll({
+      exempt: [
+        { journal_entry_id: JE_A, reason: 'Bankavgift' },
+        { journal_entry_id: JE_B, reason: null },
+      ],
+    })
+    const res = await GET(makeReq([JE_A, JE_B]), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ no_doc_required: Record<string, string | null> }>(res)
+    expect(status).toBe(200)
+    expect(body.no_doc_required).toEqual({ [JE_A]: 'Bankavgift', [JE_B]: null })
+  })
+
   it('never returns invoice references for entries the caller did not ask about', async () => {
     enqueueAll({
       payments: [{ id: 'pay-1', invoice_id: 'inv-1', journal_entry_id: JE_C }],
@@ -233,6 +249,7 @@ describe('GET /api/documents/counts', () => {
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null }) // "Inget underlag krävs" marks
     enqueue({ data: null, error: { message: 'boom' } }) // invoices by journal_entry_id
     const res = await GET(makeReq([JE_A]), { params: Promise.resolve({}) })
     expect((await parseJsonResponse(res)).status).toBe(500)

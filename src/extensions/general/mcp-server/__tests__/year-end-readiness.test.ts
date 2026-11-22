@@ -18,13 +18,14 @@ vi.mock('@/lib/core/bookkeeping/year-end-service', () => ({
 vi.mock('@/lib/bokslut/dispositions-proposal-builder', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bokslut/dispositions-proposal-builder')>()),
   bolagsskattOnLedger: vi.fn(),
+  bookedTaxCorrection: vi.fn(async () => null),
 }))
 
 import {
   validateYearEndReadiness,
   previewYearEndClosing,
 } from '@/lib/core/bookkeeping/year-end-service'
-import { bolagsskattOnLedger } from '@/lib/bokslut/dispositions-proposal-builder'
+import { bolagsskattOnLedger, bookedTaxCorrection } from '@/lib/bokslut/dispositions-proposal-builder'
 
 describe('gnubok_year_end_readiness: registration', () => {
   it('is registered in the tools array', () => {
@@ -347,6 +348,40 @@ describe('gnubok_year_end_readiness: execute', () => {
     expect(result.preview).toBeNull()
     expect(vi.mocked(previewYearEndClosing)).not.toHaveBeenCalled()
     expect(result.summary).toMatch(/Klart för bokslut/)
+  })
+
+  it('warns before closing when the booked bolagsskatt is not the tax on the ledger', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: true,
+      blockers: [],
+      errors: [],
+      warnings: [],
+      draftCount: 0,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+    vi.mocked(bookedTaxCorrection).mockResolvedValueOnce(
+      'Bokförd skatt är 60 000 kr, men bokföringen som den ser ut nu ger 104 236 kr.',
+    )
+
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const supabase = makeMockSupabase({
+      id: 'period-1', name: '2026',
+      period_start: '2026-01-01', period_end: '2026-12-31',
+      is_closed: false, locked_at: null, closing_entry_id: null, continuity_verified: true,
+    })
+
+    const result = (await tool.execute(
+      { fiscal_period_id: 'period-1' },
+      'company-1', 'user-1', supabase,
+    )) as { ready: boolean; warnings: string[]; summary: string }
+
+    expect(result.ready).toBe(true)
+    expect(result.warnings).toEqual(['Bokförd skatt är 60 000 kr, men bokföringen som den ser ut nu ger 104 236 kr.'])
+    expect(result.summary).toBe('Klart för bokslut. 1 varning(ar) att granska.')
+    expect(bookedTaxCorrection).toHaveBeenCalledWith(supabase, 'company-1', 'period-1')
   })
 
   it('returns the preview when include_preview=true and ready', async () => {

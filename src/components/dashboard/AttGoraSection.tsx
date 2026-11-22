@@ -59,6 +59,7 @@ import {
   LinkIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
+  QuestionMarkCircleIcon,
   ScaleIcon,
   ShieldCheckIcon,
   ShieldExclamationIcon,
@@ -179,6 +180,8 @@ interface AttGoraSectionProps {
    * aldrig. The customer's agent finds the same three in its briefing.
    */
   suggestions?: OpenSuggestion[]
+  /** How many questions wait for the company's people (lib/questions): one row that opens the list. */
+  openQuestions?: number
   /**
    * What the company's rules for automatic booking (lib/grants) let an agent
    * book without asking, since someone last marked it reviewed: the
@@ -246,7 +249,7 @@ interface AttGoraSectionProps {
   initialStep?: string | null
   /** Today in Stockholm (yyyy-MM-dd): what "brådskar" and "Först" are read against. */
   todayIso: string
-  /** Hem: Kom igång and the assistant prompt, under the headline. */
+  /** Hem: Kom igång, under the headline. */
   afterHeadline?: ReactNode
   /** Hem: the glance line under the headline. */
   facts?: ReactNode
@@ -349,6 +352,7 @@ export default function AttGoraSection({
   paymentsFailed = [],
   invoiceSets = [],
   suggestions = [],
+  openQuestions = 0,
   grantReview = null,
   expiringBankConnections = [],
   emptyLedger = false,
@@ -408,7 +412,9 @@ export default function AttGoraSection({
   useEffect(() => {
     if (!wantsCompanyAttest) return
     let live = true
-    fetch('/api/supplier-invoices?status=all')
+    // Only what is not settled: an invoice to attest is never paid, and
+    // the whole register took seconds for a company with years of them.
+    fetch('/api/supplier-invoices?status=unsettled')
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status))
         const data = ((await res.json()).data ?? []) as SupplierInvoiceRow[]
@@ -469,8 +475,11 @@ export default function AttGoraSection({
   // server render: take its numbers instead of keeping the first ones. Same
   // adjust-state-during-render pattern as DashboardNav.
   const [renderedWorklist, setRenderedWorklist] = useState(worklist)
+  // A count that could not be read answered zero: never "Allt är klart" then.
+  const [countsIncomplete, setCountsIncomplete] = useState(worklist.incomplete === true)
   if (worklist !== renderedWorklist) {
     setRenderedWorklist(worklist)
+    setCountsIncomplete(worklist.incomplete === true)
     setCounts(worklist.counts)
     setOverdueInvoices(worklist.overdueInvoices ?? null)
     setAttestRows(attestsDue)
@@ -487,6 +496,7 @@ export default function AttGoraSection({
       if (json.data) {
         setCounts(json.data.counts)
         setOverdueInvoices(json.data.overdueInvoices ?? null)
+        setCountsIncomplete(json.data.incomplete === true)
       }
     } catch (err) {
       // Stale counts self-correct on the next page load: never block the
@@ -570,6 +580,7 @@ export default function AttGoraSection({
       inboxHref: worklist.inboxHref ?? LEGACY_INBOX_HREF,
       invoiceSetRows: invoiceSetRows.length,
       personAttestRows: attestSteps.length,
+      openQuestions,
     }).map((spec) => [spec.key, spec]),
   )
   // A step that is many things names them: its heading says how many of what
@@ -820,6 +831,7 @@ export default function AttGoraSection({
     })
   }
   specRow('collection-decision', ScaleIcon)
+  specRow('company-questions', QuestionMarkCircleIcon)
   countRow(counts.collection_batch_ready > 0, {
     key: 'collection-batch',
     group: 'decide',
@@ -1125,6 +1137,7 @@ export default function AttGoraSection({
           notStarted={notStarted}
           lead={emptyState === 'new_ledger' ? { label: tHem('back_home'), href: '/' } : lead}
           resume={resume}
+          incomplete={countsIncomplete}
         />
       ) : (
         <HemCalm
@@ -1141,6 +1154,7 @@ export default function AttGoraSection({
           afterHeadline={afterHeadline}
           resume={resume}
           connections={connections}
+          incomplete={countsIncomplete}
         />
       )}
 

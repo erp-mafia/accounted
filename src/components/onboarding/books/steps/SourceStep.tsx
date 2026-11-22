@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { LockClosedIcon } from '@/components/icons'
 import { BRANCH_PROVIDERS } from '@/lib/onboarding-journey/branch'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import Question from '@/components/onboarding/journey/Question'
 import { Pill } from '../ui/Pills'
 import type { BooksCtx } from '../context'
@@ -16,7 +17,9 @@ import type { BooksCtx } from '../context'
  * vidare" is the way out). Under the list, before anything leaves the old
  * system: where the data will live, in the two facts the privacy policy and
  * the DPA already state (Stockholm, TLS 1.3 and AES-256). Nothing here that
- * is not yet true.
+ * is not yet true. Those facts are the hosted product's: a self-hosted
+ * install keeps its data wherever its operator runs it, so the block is not
+ * shown there.
  */
 
 /** The Swedish flag at chip size: 16:10, the cross at 5:2:9 by 4:2:4. */
@@ -50,13 +53,15 @@ export function SourceStep({ ctx }: { ctx: BooksCtx }) {
           {t('source_fresh')}
         </Pill>
       </div>
-      <div className="trust" aria-label={t('trust_line')}>
-        <p className="trust-line">{t('trust_line')}</p>
-        <ul className="trust-chips">
-          <li><SwedishFlag />{t('trust_region')}</li>
-          <li><LockClosedIcon className="size-3.5" aria-hidden="true" />{t('trust_encryption')}</li>
-        </ul>
-      </div>
+      {isSelfHosted() ? null : (
+        <div className="trust" aria-label={t('trust_line')}>
+          <p className="trust-line">{t('trust_line')}</p>
+          <ul className="trust-chips">
+            <li><SwedishFlag />{t('trust_region')}</li>
+            <li><LockClosedIcon className="size-3.5" aria-hidden="true" />{t('trust_encryption')}</li>
+          </ul>
+        </div>
+      )}
     </Question>
   )
 }

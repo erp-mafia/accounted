@@ -18,6 +18,7 @@ import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
 import {
   generateSRUSubmission as generateInk2SruSubmission,
   getZipFilename as getInk2ZipFilename,
+  Ink2SruBlockedError,
 } from '@/lib/reports/ink2/sru-generator'
 import type { INK2Declaration } from '@/lib/reports/ink2/types'
 import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
@@ -173,6 +174,9 @@ export async function getInk2SruFile(ctx: OperationContext, periodId: string): P
       data: { filename: getInk2ZipFilename(declaration.data), contentType: 'application/zip', bytes },
     }
   } catch (err) {
+    if (err instanceof Ink2SruBlockedError) {
+      return { ok: false, code: 'TAX_DECL_INK2_SRU_BLOCKED', details: { reason: getUserErrorMessage(err) } }
+    }
     return declarationFailure(ctx, err, 'ink2 sru')
   }
 }

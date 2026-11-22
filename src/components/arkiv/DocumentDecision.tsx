@@ -14,6 +14,7 @@ import { DOC_TYPES, type DocType } from '@/lib/documents/classify/taxonomy'
 import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatDateLong } from '@/lib/utils'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { DefList, DefRow, SourceLink, inlineHref } from './DefList'
 import { useFieldLabel } from './useFieldLabel'
 
@@ -62,9 +63,19 @@ function effectKey(type: DocType | null): string {
   return 'decision_effect_generic'
 }
 
+/** A refused save, with the route's body so the sheet can say why (a 409 "Dokumentet är redan antaget."). */
+class SaveRefused extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: unknown,
+  ) {
+    super(String(status))
+  }
+}
+
 async function post(url: string, body: unknown): Promise<void> {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  if (!res.ok) throw new Error(String(res.status))
+  if (!res.ok) throw new SaveRefused(res.status, await res.json().catch(() => null))
 }
 
 const asText = (value: unknown): string => (value == null ? '' : String(value))
@@ -92,6 +103,8 @@ export function DocumentDecision({
   const [picks, setPicks] = useState<Record<string, string>>({})
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
+  // Why the last save or discard was refused, shown in the footer by the buttons.
+  const [failure, setFailure] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [custom, setCustom] = useState<Record<string, boolean>>({})
 
@@ -104,6 +117,7 @@ export function DocumentDecision({
     setChosen(doc.doc_type && doc.doc_type !== 'other' ? (doc.doc_type as DocType) : (typeFromSuggestion(doc.suggested_type) ?? ((doc.doc_type as DocType | null) ?? null)))
     setPicks({})
     setReason('')
+    setFailure(null)
     setShowAll(false)
     setCustom({})
     fetch(`/api/documents/${doc.document_id}/extraction`)
@@ -149,10 +163,15 @@ export function DocumentDecision({
     .filter(Boolean)
     .join(' · ')
   const typeLabel = (type: DocType) => t(`types.${type}` as never)
+  const failureOf = (err: unknown) =>
+    err instanceof SaveRefused
+      ? getErrorMessage(err.body, { statusCode: err.status, locale: locale as ErrorLocale, fallback: t('action_failed') })
+      : getErrorMessage(err, { locale: locale as ErrorLocale, fallback: t('action_failed') })
 
   const save = async () => {
     if (!chosen) return
     setBusy(true)
+    setFailure(null)
     try {
       if (doc.question === 'held') await post(`/api/documents/${doc.document_id}/admission`, { decision: 'admit', reason: reason.trim() || undefined })
       if (chosen !== doc.doc_type || doc.question === 'type') await post(`/api/documents/${doc.document_id}/classification`, { doc_type: chosen })
@@ -161,7 +180,8 @@ export function DocumentDecision({
         await post(`/api/documents/${doc.document_id}/extraction/fields`, { fields })
       }
       onSaved(doc.question === 'held' ? t('admitted') : doc.question === 'type' ? t('type_saved') : t('fields_saved'))
-    } catch {
+    } catch (err) {
+      setFailure(failureOf(err))
       onFailed()
     } finally {
       setBusy(false)
@@ -169,10 +189,12 @@ export function DocumentDecision({
   }
   const discard = async () => {
     setBusy(true)
+    setFailure(null)
     try {
       await post(`/api/documents/${doc.document_id}/admission`, { decision: 'discard' })
       onSaved(t('discarded'))
-    } catch {
+    } catch (err) {
+      setFailure(failureOf(err))
       onFailed()
     } finally {
       setBusy(false)
@@ -346,7 +368,12 @@ export function DocumentDecision({
           </div>
           <p className="m-0 text-[13px] text-muted-foreground">{t(effectKey(chosen) as never)}</p>
         </SlideOverBody>
-        <SlideOverFooter>
+        <SlideOverFooter className="flex-wrap">
+          {failure && (
+            <p role="alert" className="basis-full text-[12px] leading-4 text-destructive">
+              {failure}
+            </p>
+          )}
           {doc.question === 'held' && (
             <Button variant="outline" disabled={busy || !canWrite} title={lockedTitle} onClick={discard} className="mr-auto">
               {t('discard')}

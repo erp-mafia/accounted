@@ -350,6 +350,19 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
         )
         return
       }
+      case 'pension_premium':
+        await bankVoucher(event.date, 'Tjänstepensionspremie', -event.amount, [
+          { account_number: '7411', debit_amount: event.amount },
+        ])
+        return
+      case 'pension_tax': {
+        const tax = key.pensionTax[event.year]
+        await voucher(event.date, `Särskild löneskatt på pensionskostnader ${event.year}`, [
+          { account_number: '7533', debit_amount: tax },
+          { account_number: '2514', credit_amount: tax },
+        ])
+        return
+      }
       case 'salary_change':
         await doors.write('gnubok_update_employee', {
           employee_id: employees.get(event.employee),
@@ -431,8 +444,10 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
       }
       case 'corporate_tax_paid': {
         const tax = key.corporateTax[event.year]
-        await bankVoucher(event.date, `Slutlig skatt ${event.year}`, -tax, [
+        const pension = key.pensionTax[event.year] ?? 0
+        await bankVoucher(event.date, `Slutlig skatt ${event.year}`, -(tax + pension), [
           { account_number: '2512', debit_amount: tax },
+          ...(pension > 0 ? [{ account_number: '2514', debit_amount: pension }] : []),
         ])
         return
       }

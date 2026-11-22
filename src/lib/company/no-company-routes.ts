@@ -42,3 +42,15 @@ export function isNoCompanyDashboardPath(pathname: string): boolean {
     (path) => pathname === path || pathname.startsWith(`${path}/`),
   )
 }
+
+/**
+ * "Starta aktiebolag": a founder prepares a company that does not exist yet,
+ * so the page works with no company at all (and with one, for a holding or a
+ * second company). Linked from onboarding and from the website.
+ */
+export const FORMATION_PATH = '/starta-bolag'
+
+/** True when `pathname` is the formation page or below it. */
+export function isFormationPath(pathname: string): boolean {
+  return pathname === FORMATION_PATH || pathname.startsWith(`${FORMATION_PATH}/`)
+}

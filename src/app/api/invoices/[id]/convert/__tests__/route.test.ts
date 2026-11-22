@@ -170,7 +170,7 @@ describe('POST /api/invoices/[id]/convert', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)
-    expect(body.error).toBe('Något gick fel. Försök igen.')
+    expect(body.error).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
     // Counter must not have been touched and orphan invoice must have been
     // deleted (5 enqueued calls all consumed).
     expect(mockSupabase.rpc).not.toHaveBeenCalled()

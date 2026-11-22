@@ -251,7 +251,9 @@ fi
 
 if [ "$HAVE_STORAGE" = 1 ] && [ -n "${RESTORE_STORAGE_DIR:-}" ]; then
   mkdir -p "$RESTORE_STORAGE_DIR"
-  tar -C "$RESTORE_STORAGE_DIR" -xzf "${WORK}/${NAME}.storage.tar.gz"
+  # Restore the user.supabase.* xattrs backup.sh archived: storage-api reads
+  # each object's content type from them.
+  tar -C "$RESTORE_STORAGE_DIR" --xattrs --xattrs-include='user.supabase.*' -xzf "${WORK}/${NAME}.storage.tar.gz"
   echo "restore: storage unpacked into ${RESTORE_STORAGE_DIR} (restart storage-api)"
 elif [ "$HAVE_STORAGE" = 1 ]; then
   echo "restore: storage archive present but RESTORE_STORAGE_DIR unset; skipped"
