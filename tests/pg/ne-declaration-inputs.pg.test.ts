@@ -84,7 +84,7 @@ describe('ne_declaration_inputs RLS', () => {
     ).rejects.toThrow(/row-level security|viewer|role/i)
   })
 
-  it("refuses a viewer's move of a row into a company they write (20261120153000)", async () => {
+  it("refuses a viewer's move of a row into a company they write (20261122121500)", async () => {
     const a = await seedCompany()
     const b = await seedCompany()
     const id = await insertInputs(a.companyId, a.fiscalPeriodId, a.userId)
