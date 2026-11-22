@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { BOOKING_SCREEN_PATH, bookingScreenHref, parseBookingScreenBack, parseBookingScreenSubject, safeReturnPath } from '../booking-screen'
+import {
+  BOOKING_SCREEN_PATH,
+  bookingScreenHref,
+  bookingScreenOrigin,
+  parseBookingScreenBack,
+  parseBookingScreenSubject,
+  safeReturnPath,
+} from '../booking-screen'
 
 const TX = '3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f'
 
@@ -82,5 +89,18 @@ describe('the return address', () => {
   it('is left out when it is not one the screen may return to', () => {
     expect(bookingScreenHref({ kind: 'voucher' }, '//evil.example')).toBe(BOOKING_SCREEN_PATH)
     expect(parseBookingScreenBack({ tillbaka: 'https://evil.example' })).toBeNull()
+  })
+})
+
+describe('bookingScreenOrigin', () => {
+  it('reads the page the screen was opened from off its return address, with the list query kept', () => {
+    expect(bookingScreenOrigin('/att-bokfora', true)).toBe('/att-bokfora')
+    expect(bookingScreenOrigin('/transactions?tab=unbooked&sok=sj', true)).toBe('/transactions')
+    expect(bookingScreenOrigin('/bookkeeping?serie=A', false)).toBe('/bookkeeping')
+  })
+
+  it('without one, a bank row came from Bankrader and a verifikation from Verifikat', () => {
+    expect(bookingScreenOrigin(null, true)).toBe('/transactions')
+    expect(bookingScreenOrigin(null, false)).toBe('/bookkeeping')
   })
 })

@@ -5538,6 +5538,7 @@
   },
   "booking_screen": {
     "title": "Bokför",
+    "back_to_book": "Att bokföra",
     "back_transactions": "Bankrader",
     "back_vouchers": "Verifikat",
     "payment_label": "Betalning",
