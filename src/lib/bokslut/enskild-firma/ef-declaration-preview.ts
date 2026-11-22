@@ -94,12 +94,13 @@ export interface EfDeclarationPreview extends EfDeclarationFigures {
 }
 
 /**
- * The NE engine has no R12-R28 adjustments, so R29 is the booked result.
- * Said on every preview: the owner is the one who knows whether they have
- * such adjustments, and every figure after R29 moves with them.
+ * R29 is the booked result with R13 and R14 from the BAS accounts; R15-R28
+ * are not computed. Said on every preview: the owner is the one who knows
+ * whether they have such adjustments, and every figure after R29 moves with
+ * them.
  */
 export const R29_FROM_BOOKED_RESULT =
-  'R29 utgår från bokfört resultat (R11): skattemässiga justeringar i R13-R28, till exempel ej avdragsgill representation eller underskott från förra året, är inte med. Har du sådana ändras R29 och alla belopp efter den.'
+  'R29 utgår från bokfört resultat (R12) med ej avdragsgilla kostnader (R13) och ej skattepliktiga intäkter (R14) från de BAS-konton kontoplanen anger. Övriga justeringar i R15-R28, till exempel underskott från förra året (R24), är inte med: har du sådana ändras R29 och alla belopp efter den.'
 
 function listYears(years: number[]): string {
   if (years.length <= 1) return years.join('')
@@ -132,7 +133,7 @@ function mandatoryAteforing(fonder: EfExistingFond[], fiscalYear: number): EfDec
  * defined once here and each deduction by its calculator, from the sum the
  * form caps it at.
  *
- *   R29 = R11 (no R12-R28 adjustments)
+ *   R29 = R12 (= R11) + R13 - R14 (R15-R28 not computed)
  *   R30/R31 räntefördelning, R30 at most R29
  *   R32 återföring of earlier periodiseringsfonder
  *   R33 = R29 - R30 + R31 + R32; R34 at most 30 % of R33
@@ -143,12 +144,24 @@ export function buildEfDeclarationFigures(
   bookedSurplus: number,
   period: { period_start: string; period_end: string },
   input: EfDeclarationPreviewInput = {},
+  /**
+   * R13 and R14: the year's non-deductible costs and non-taxable income, as
+   * the NE-bilaga's sida 2 gives them (lib/reports/tax-adjustments.ts, the
+   * detection the aktiebolag's INK2S reads too). 0 when not given.
+   */
+  adjustments: { nonDeductibleExpenses: number; nonTaxableIncome: number } = {
+    nonDeductibleExpenses: 0,
+    nonTaxableIncome: 0,
+  },
 ): EfDeclarationFigures {
   const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
   const warnings = [R29_FROM_BOOKED_RESULT]
   const items: EfDeclarationItem[] = []
 
-  const r29 = truncateToWholeKronor(bookedSurplus)
+  const r12 = truncateToWholeKronor(bookedSurplus)
+  const r13 = Math.max(0, truncateToWholeKronor(adjustments.nonDeductibleExpenses))
+  const r14 = Math.max(0, truncateToWholeKronor(adjustments.nonTaxableIncome))
+  const r29 = r12 + r13 - r14
 
   const rantefordelning = calculateRantefordelning({
     kapitalunderlag: input.kapitalunderlag ?? 0,
@@ -223,7 +236,7 @@ export function buildEfDeclarationFigures(
   return {
     items,
     pfondFonder: classifyEfPfonder(fonder, fiscalYear),
-    rutor: { R29: r29, R30: r30, R31: r31, R32: r32, R33: r33, R34: r34, R35: r35, R36: r36, R37: r37, R40: r40, R41: r41, R42: r42, R43: r43 },
+    rutor: { R12: r12, R13: r13, R14: r14, R29: r29, R30: r30, R31: r31, R32: r32, R33: r33, R34: r34, R35: r35, R36: r36, R37: r37, R40: r40, R41: r41, R42: r42, R43: r43 },
     ovrigaUppgifter,
     warnings,
   }
@@ -265,6 +278,11 @@ export async function computeEfDeclarationPreview(
   return {
     fiscalPeriod: period,
     bookedSurplus,
-    ...buildEfDeclarationFigures(bookedSurplus, period, input),
+    // R13 and R14 as the NE-bilaga files them (the declaration's sida 2), so
+    // the preview and the SRU file cannot disagree.
+    ...buildEfDeclarationFigures(bookedSurplus, period, input, {
+      nonDeductibleExpenses: neDeclaration.sida2.R13,
+      nonTaxableIncome: neDeclaration.sida2.R14,
+    }),
   }
 }

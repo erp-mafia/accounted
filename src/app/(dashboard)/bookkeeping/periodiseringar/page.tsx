@@ -271,6 +271,15 @@ export default function AccrualSchedulesPage() {
         </LateReveal>
       ) : loadError && schedules.length === 0 ? (
         <LoadError title={t('load_failed')} description={loadError} onRetry={() => void fetchSchedules(statusFilter)} />
+      ) : schedules.length === 0 && statusFilter !== 'all' ? (
+        // The segment narrows the list: none under it is a no-hits line
+        // with the way to every periodisering, not the first-time copy.
+        <p className="px-1 py-3 text-[13px] text-muted-foreground">
+          {statusFilter === 'active' ? t('empty_active_line') : t('empty_completed_line')}{' '}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setStatusFilter('all')}>
+            {t('show_all')}
+          </button>
+        </p>
       ) : schedules.length === 0 ? (
         <EmptyState
           icon={CalendarDaysIcon}

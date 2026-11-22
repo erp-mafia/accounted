@@ -27,8 +27,7 @@ import { trackInstructions } from '@/components/skills/track'
  * and carries the connect pill. A connected one renders nothing, and with
  * all three connected the row is gone: "connected" is the normal state, and
  * a chip on every visit saying so marks nothing (convention 5). While the
- * agent is off its chip is Hem's one agent prompt (DashboardContent holds
- * AgentPromo back until an agent is connected). What the three give is
+ * agent is off its chip is Hem's one agent prompt. What the three give is
  * explained behind the page's "?" (convention 7), not in a sentence under
  * the row. Product direction 2026-09-14: the connections are part of the Att
  * göra section, in the same visual language, with the connect action as a

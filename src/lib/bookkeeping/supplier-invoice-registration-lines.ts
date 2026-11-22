@@ -176,6 +176,18 @@ function rowInputVat(item: Pick<SupplierInvoiceBookingItem, 'line_total' | 'vat_
 }
 
 /**
+ * The rate to store on a row whose moms the create path settled on, so that
+ * rowInputVat reads that moms back. A stored 0 reads as "nothing stored", so
+ * a row with a rate above 0 whose moms is truly 0 (an explicit
+ * items[].vat_amount of 0) would be booked at line_total × rate on 2641 while
+ * the invoice says 0 kr moms (#3571). Such a row is stored at rate 0, as
+ * limited-deduction stores a row with no deductible part.
+ */
+export function rateForStoredRowVat(lineTotal: number, rate: number, vatAmount: number): number {
+  return vatAmount === 0 && netVat(lineTotal, rate) !== 0 ? 0 : rate
+}
+
+/**
  * True if any item would produce a non-zero ingående moms line: mirrors the
  * same stored-vs-computed fallback groupVatByRate uses (stored vat_amount,
  * else line_total × rate), whatever the row's sign. Callers must gate the VAT

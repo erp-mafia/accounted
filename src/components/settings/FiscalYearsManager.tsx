@@ -5,6 +5,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -58,7 +59,9 @@ export function FiscalYearsManager() {
   // Session-cached registry (lib/reference-data): the same list every
   // picker renders, so a lock/unlock/reset here is visible everywhere the
   // moment the cache is invalidated below.
-  const { periods, isLoading, error: periodsError } = useFiscalPeriods()
+  const { periods, isLoading, error: periodsError, refresh: retryPeriods } = useFiscalPeriods()
+  // The list is unknown, not empty: it says so with Försök igen, and a new
+  // year cannot be created against years it cannot see.
   const hasError = !!periodsError && periods.length === 0
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mutatingId, setMutatingId] = useState<string | null>(null)
@@ -217,7 +220,7 @@ export function FiscalYearsManager() {
           <Skeleton className="h-4 w-40" />
         </div>
       ) : hasError ? (
-        <p className="px-1 py-3 text-sm text-muted-foreground">{t('fy_load_error')}</p>
+        <LoadError title={t('fy_load_error_title')} onRetry={() => void retryPeriods()} />
       ) : sorted.length === 0 ? (
         <p className="px-1 py-3 text-sm text-muted-foreground">{t('fy_empty')}</p>
       ) : (
@@ -364,8 +367,8 @@ export function FiscalYearsManager() {
           variant="outline"
           className="text-muted-foreground hover:text-foreground"
           onClick={() => setDialogOpen(true)}
-          disabled={!canWrite || isLoading}
-          title={lockedTitle}
+          disabled={!canWrite || isLoading || hasError}
+          title={hasError ? t('fy_create_needs_list') : lockedTitle}
         >
           <PlusIcon className="h-4 w-4" />
           {t('fy_create')}

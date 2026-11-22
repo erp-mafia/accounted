@@ -96,6 +96,7 @@ function CustomersPageInner() {
   const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   // Company default payment terms (Inställningar → Fakturering). Prefilled
   // into the new-customer form so it opens on the company's own default
   // instead of a hardcoded 30.
@@ -118,24 +119,25 @@ function CustomersPageInner() {
     resetVisible,
   )
 
+  // A network error or a non-JSON 502 used to throw out of the handler and
+  // leave the drawer spinning: every failure now ends in a sentence in the
+  // drawer's footer, and the spinner always stops.
   async function handleCreateCustomer(data: CreateCustomerInput) {
     setIsCreating(true)
-
-    const response = await fetch('/api/customers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-
-    const result = await response.json()
-
-    if (!response.ok) {
-      toast({
-        title: t('create_failed_title'),
-        description: getErrorMessage(result, { context: 'customer', locale: errorLocale }),
-        variant: 'destructive',
+    setCreateError(null)
+    try {
+      const response = await fetch('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
       })
-    } else {
+
+      const result = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        setCreateError(getErrorMessage(result, { context: 'customer', statusCode: response.status, locale: errorLocale }))
+        return
+      }
       toast({
         title: t('created_title'),
         description: t('created_description', { name: data.name }),
@@ -144,9 +146,11 @@ function CustomersPageInner() {
       // this page's copy.
       await invalidateReferenceData('ref:customers')
       setIsDialogOpen(false)
+    } catch (err) {
+      setCreateError(getErrorMessage(err, { context: 'customer', locale: errorLocale }))
+    } finally {
+      setIsCreating(false)
     }
-
-    setIsCreating(false)
   }
 
   const filteredCustomers = useMemo(() => {
@@ -250,11 +254,15 @@ function CustomersPageInner() {
               forms): the list stays in place behind it. */}
           <CreateDrawer
             open={isDialogOpen}
-            onOpenChange={setIsDialogOpen}
+            onOpenChange={(open) => {
+              setIsDialogOpen(open)
+              if (!open) setCreateError(null)
+            }}
             title={t('new_customer')}
             formId="create-customer-form"
             submitLabel={t('create_submit')}
             submitting={isCreating}
+            error={createError}
           >
             <CustomerForm
               onSubmit={handleCreateCustomer}

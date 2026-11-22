@@ -21,7 +21,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { CreateDrawer } from '@/components/ui/create-drawer'
 import { OpenOnParam } from '@/components/ui/open-on-param'
-import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { AdjustmentsHorizontalIcon, CheckIcon, CreditCardIcon, SpinnerIcon } from '@/components/icons'
 import { useUiState } from '@/lib/hooks/use-ui-state'
@@ -44,6 +44,7 @@ import { ContextPicker, type ContextPickerItem } from '@/components/common/Conte
 import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
+import { usePreviousSystemRowsNotice } from '@/components/transactions/PreviousSystemRowsNotice'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
@@ -499,7 +500,7 @@ export default function TransactionsPage() {
   }
   const tDetach = useTranslations('tx_detach')
   const tCommon = useTranslations('common')
-  const { canWrite } = useCanWrite()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   // The last list fetch failed (failed) or loaded only the window, without the
@@ -739,6 +740,9 @@ export default function TransactionsPage() {
   // Pagination
   const [hasMore, setHasMore] = useState(false)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
+  // The last "Ladda fler" page could not be read: said by the button, which
+  // turns into the retry, instead of a spinner that just stops.
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false)
 
   // The history view pages through ALL transactions newest-first, while the
   // inbox needs every pending row regardless of age. Both live in the single
@@ -1525,6 +1529,7 @@ export default function TransactionsPage() {
       pagedCountRef.current = rows.length
       setPagedThroughDate(rows.length >= windowSize ? rows[rows.length - 1].date : null)
       setHasMore(rows.length >= windowSize)
+      setLoadMoreFailed(false)
 
     } finally {
       // Only the newest request may touch the skeleton: a stale one must not
@@ -1560,68 +1565,75 @@ export default function TransactionsPage() {
     // instead of appending old-scope rows and corrupting the paging offsets.
     const generation = ++fetchGenerationRef.current
     setIsLoadingMore(true)
-    // Offset counts only the contiguous newest-first window, not the older
-    // pending rows merged into state for the inbox.
-    const offset = pagedCountRef.current
-    let pageQuery = supabase
-      .from('transactions')
-      .select(TRANSACTION_WINDOW_SELECT)
-      .eq('company_id', companyId)
-    // Same period scope as the initial window fetch: mixed-scope pages would
-    // corrupt the offset bookkeeping.
-    if (periodBounds) {
-      pageQuery = pageQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
-    }
-    const { data: txData, error: txError } = await pageQuery
-      // Same stable order as the initial window fetch: offset paging over a
-      // date-only order can skip or repeat same-date rows between pages.
-      .order('date', { ascending: false })
-      .order('id', { ascending: true })
-      .range(offset, offset + PAGE_SIZE - 1)
+    setLoadMoreFailed(false)
+    try {
+      // Offset counts only the contiguous newest-first window, not the older
+      // pending rows merged into state for the inbox.
+      const offset = pagedCountRef.current
+      let pageQuery = supabase
+        .from('transactions')
+        .select(TRANSACTION_WINDOW_SELECT)
+        .eq('company_id', companyId)
+      // Same period scope as the initial window fetch: mixed-scope pages would
+      // corrupt the offset bookkeeping.
+      if (periodBounds) {
+        pageQuery = pageQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+      }
+      const { data: txData, error: txError } = await pageQuery
+        // Same stable order as the initial window fetch: offset paging over a
+        // date-only order can skip or repeat same-date rows between pages.
+        .order('date', { ascending: false })
+        .order('id', { ascending: true })
+        .range(offset, offset + PAGE_SIZE - 1)
 
-    if (fetchGenerationRef.current !== generation || txError || !txData) {
+      if (fetchGenerationRef.current !== generation) return
+      if (txError || !txData) {
+        setLoadMoreFailed(true)
+        return
+      }
+
+      const pageRows = (txData as TransactionWithInvoice[]).map(withLivePointer)
+
+      const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutByTransaction }, expensePayouts] = await Promise.all([
+        fetchPotentialMatches(supabase, companyId, pageRows),
+        fetchExpensePayoutMatches(supabase, companyId, pageRows),
+      ])
+      const expensePayoutMap = expensePayouts.byTransaction
+
+      // Same staleness rule after the enrichment await: a newer fetch has
+      // already reset the offsets.
+      if (fetchGenerationRef.current !== generation) return
+
+      // The offsets move only once the page is sure to land, so a failed
+      // read or enrichment leaves "Ladda fler" asking for the same page.
+      pagedCountRef.current += txData.length
+      setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
+      setHasMore(txData.length >= PAGE_SIZE)
+
+      const newTransactions: TransactionWithInvoice[] = pageRows.map((t) => ({
+        ...t,
+        potential_expense_payout: expensePayoutMap.get(t.id),
+        potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
+        potential_supplier_invoice: t.potential_supplier_invoice_id
+          ? supplierInvoiceMap[t.potential_supplier_invoice_id]
+          : undefined,
+        potential_rot_rut_payout: rotRutByTransaction.get(t.id),
+        potential_voucher: t.potential_journal_entry_id
+          ? voucherMap[t.potential_journal_entry_id]
+          : undefined,
+      }))
+
+      // The page may overlap pending rows already merged into state: keep the
+      // existing row (it may carry local edits) and drop the duplicate.
+      setTransactions((prev) => {
+        const prevIds = new Set(prev.map((t) => t.id))
+        return [...prev, ...newTransactions.filter((t) => !prevIds.has(t.id))]
+      })
+    } catch {
+      if (fetchGenerationRef.current === generation) setLoadMoreFailed(true)
+    } finally {
       setIsLoadingMore(false)
-      return
     }
-
-    pagedCountRef.current += txData.length
-    setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
-    setHasMore(txData.length >= PAGE_SIZE)
-    const pageRows = (txData as TransactionWithInvoice[]).map(withLivePointer)
-
-    const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutByTransaction }, expensePayouts] = await Promise.all([
-      fetchPotentialMatches(supabase, companyId, pageRows),
-      fetchExpensePayoutMatches(supabase, companyId, pageRows),
-    ])
-    const expensePayoutMap = expensePayouts.byTransaction
-
-    // Same staleness rule after the enrichment await: the offsets above were
-    // written under this generation, but a newer fetch has already reset them.
-    if (fetchGenerationRef.current !== generation) {
-      setIsLoadingMore(false)
-      return
-    }
-
-    const newTransactions: TransactionWithInvoice[] = pageRows.map((t) => ({
-      ...t,
-      potential_expense_payout: expensePayoutMap.get(t.id),
-      potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
-      potential_supplier_invoice: t.potential_supplier_invoice_id
-        ? supplierInvoiceMap[t.potential_supplier_invoice_id]
-        : undefined,
-      potential_rot_rut_payout: rotRutByTransaction.get(t.id),
-      potential_voucher: t.potential_journal_entry_id
-        ? voucherMap[t.potential_journal_entry_id]
-        : undefined,
-    }))
-
-    // The page may overlap pending rows already merged into state: keep the
-    // existing row (it may carry local edits) and drop the duplicate.
-    setTransactions((prev) => {
-      const prevIds = new Set(prev.map((t) => t.id))
-      return [...prev, ...newTransactions.filter((t) => !prevIds.has(t.id))]
-    })
-    setIsLoadingMore(false)
   }
 
   // Underlag-status enrichment for booked rows. Five RLS-scoped reads per
@@ -3225,6 +3237,27 @@ export default function TransactionsPage() {
   // Read after the first render; applying it relinks, so the list is refetched.
   const ledgerSuggestionNotice = useBankLedgerSuggestionNotice({ onApplied: refreshTransactions })
 
+  // Bank rows from before the SIE import's last verifikat that the previous
+  // system already booked (crm#1954): one sentence, and the confirm that sets
+  // the ignore flag on them. The marked rows fold out like an ignored row.
+  const handlePreviousSystemMarked = useCallback((ids: string[]) => {
+    const marked = new Set(ids)
+    setExitingIds((prev) => new Set([...prev, ...marked]))
+    setTimeout(() => {
+      setTransactions((prev) => prev.map((t) => (marked.has(t.id) ? { ...t, is_ignored: true } : t)))
+      setExitingIds((prev) => new Set([...prev].filter((id) => !marked.has(id))))
+    }, 350)
+  }, [])
+  const showIgnoredRows = useCallback(() => {
+    setHistoryFilter('ignored')
+    setMode('history')
+  }, [])
+  const previousSystemNotice = usePreviousSystemRowsNotice({
+    openRowCount: pendingRowCount,
+    onMarked: handlePreviousSystemMarked,
+    onShowIgnored: showIgnoredRows,
+  })
+
   function handleSelectInvoiceFromPicker(invoice: Invoice & { customer?: Customer }) {
     if (!invoicePickerTransaction) return
     // Don't POST directly from the picker. Route through the confirm dialog
@@ -4741,6 +4774,12 @@ export default function TransactionsPage() {
         >
           {t('review_attn_body', { count: suggestionItems.length })}
         </AttnLine>
+      ) : previousSystemNotice && effectiveSourceFilter !== 'skatteverket' ? (
+        // Rows the previous system booked split, so no single imported bank
+        // line pairs with them (crm#1954). After the review nudge: a row with
+        // a proposed verifikat is better linked than marked, and is not
+        // counted here.
+        previousSystemNotice
       ) : null}
 
       {/* Toolbar: [Att bokföra/Alla-seg] [source ContextPicker] ... [sök] */}
@@ -4872,7 +4911,7 @@ export default function TransactionsPage() {
                     </span>
                     {selectedIds.size > 0 && (
                       <>
-                        <Button onClick={() => setShowBatchSelector(true)} disabled={!canWrite}>
+                        <Button onClick={() => setShowBatchSelector(true)} disabled={!canWrite} title={lockedTitle}>
                           {t('batch_book')}
                         </Button>
                         {/* Bulk-book (samlingsverifikation): only when ≥2 selected
@@ -4882,7 +4921,7 @@ export default function TransactionsPage() {
                           variant="outline"
                           onClick={() => setBulkBookOpen(true)}
                           disabled={!canWrite || !bulkBookEligible}
-                          title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
+                          title={lockedTitle ?? (!bulkBookEligible ? t('batch_bulk_book_hint') : undefined)}
                         >
                           {t('batch_bulk_book')}
                         </Button>
@@ -4891,6 +4930,7 @@ export default function TransactionsPage() {
                           className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
                           onClick={handleBatchDelete}
                           disabled={!canWrite}
+                          title={lockedTitle}
                         >
                           {t('batch_delete')}
                         </button>
@@ -4901,13 +4941,13 @@ export default function TransactionsPage() {
                         the deterministic subset of the selection is bookable;
                         the rest is still ignorable below. */}
                     {skvBookableSelectedRows.length > 0 && (
-                      <Button onClick={() => setSkvBulkConfirmOpen(true)} disabled={!canWrite}>
+                      <Button onClick={() => setSkvBulkConfirmOpen(true)} disabled={!canWrite} title={lockedTitle}>
                         {t('batch_skv_book', { count: skvBookableSelectedRows.length })}
                       </Button>
                     )}
                     {/* Ignorera spans both selections (bank + skattekonto):
                         one confirmation, one progress counter, one toast. */}
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore} disabled={!canWrite}>
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore} disabled={!canWrite} title={lockedTitle}>
                       {t('batch_ignore')}
                     </button>
                     {(selectedIds.size < selectableInboxIds.length ||
@@ -5072,6 +5112,7 @@ export default function TransactionsPage() {
           onSkvMatch={r => setSkvMatchTarget(r)}
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
+          loadMoreFailed={loadMoreFailed}
           onLoadMore={loadMoreTransactions}
           giroCounterpartyFor={giroCounterpartyFor}
         />

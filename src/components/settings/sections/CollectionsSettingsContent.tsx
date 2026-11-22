@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
+import { SupportLink } from '@/components/ui/support-link'
 import { ActivationStepper } from '@/components/collections/ActivationStepper'
 import { ConnectionSettingsPanel } from '@/components/collections/ConnectionSettingsPanel'
 import { ConnectionStatusPanel } from '@/components/collections/ConnectionStatusPanel'
@@ -77,15 +78,25 @@ function CollectionsSettingsBody({ data, reload }: { data: CollectionsSettingsDa
     )
   }
 
+  // Why it cannot start, and the way on: support opens it for the company.
+  const unavailableRow = (reason: string) => (
+    <SettingsGroup>
+      <SettingsRow label={t('status_label')}>
+        <SettingsRowNote>
+          {reason}{' '}
+          <SupportLink variant="inline" className="text-xs" subject={t('unavailable_support_subject')}>
+            {t('unavailable_support')}
+          </SupportLink>
+        </SettingsRowNote>
+      </SettingsRow>
+    </SettingsGroup>
+  )
+
   if (availability.start === 'hidden') {
     return (
       <div>
         {header}
-        <SettingsGroup>
-          <SettingsRow label={t('status_label')}>
-            <SettingsRowNote>{t('unavailable')}</SettingsRowNote>
-          </SettingsRow>
-        </SettingsGroup>
+        {unavailableRow(t('unavailable'))}
       </div>
     )
   }
@@ -105,11 +116,7 @@ function CollectionsSettingsBody({ data, reload }: { data: CollectionsSettingsDa
       {header}
       {sandbox}
       {!offered ? (
-        <SettingsGroup>
-          <SettingsRow label={t('status_label')}>
-            <SettingsRowNote>{t('unavailable')}</SettingsRowNote>
-          </SettingsRow>
-        </SettingsGroup>
+        unavailableRow(t('unavailable_not_offered'))
       ) : !data.canManage ? (
         <SettingsGroup>
           <SettingsRow label={t('status_label')}>

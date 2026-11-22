@@ -9,7 +9,8 @@ import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { AttnLine } from '@/components/ui/attn-line'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/ui/page-header'
 import { RecordAction, RecordHeader } from '@/components/ui/record-header'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -87,6 +88,9 @@ export default function SupplierDetailPage() {
   ) : null
   // Each row carries the payment instruction that already covers it (GET /api/supplier-invoices).
   const [invoices, setInvoices] = useState<Array<SupplierInvoice & { open_payment?: OpenPaymentInstruction | null }>>([])
+  // Whether the invoice list is read: a failed read must never show "Inga
+  // fakturor registrerade", which is only true after a real answer.
+  const [invoicesState, setInvoicesState] = useState<'loading' | 'loaded' | 'failed'>('loading')
   const [isLoading, setIsLoading] = useState(true)
   // What the last read left: nothing wrong, the supplier is gone, or the read
   // failed. A failure with no supplier on screen says so in place of it; a
@@ -135,12 +139,19 @@ export default function SupplierDetailPage() {
   }
 
   async function fetchInvoices() {
-    const res = await fetch(
-      `/api/supplier-invoices?status=all&supplier_id=${encodeURIComponent(String(params.id))}`,
-    )
-    const { data } = await res.json()
-    if (data) {
-      setInvoices(data as Array<SupplierInvoice & { open_payment?: OpenPaymentInstruction | null }>)
+    try {
+      const res = await fetch(
+        `/api/supplier-invoices?status=all&supplier_id=${encodeURIComponent(String(params.id))}`,
+      )
+      if (!res.ok) {
+        setInvoicesState('failed')
+        return
+      }
+      const { data } = await res.json()
+      setInvoices((data ?? []) as Array<SupplierInvoice & { open_payment?: OpenPaymentInstruction | null }>)
+      setInvoicesState('loaded')
+    } catch {
+      setInvoicesState('failed')
     }
   }
 
@@ -151,23 +162,30 @@ export default function SupplierDetailPage() {
 
   async function handleUpdate(data: CreateSupplierInput) {
     setIsSaving(true)
-    const res = await fetch(`/api/suppliers/${params.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    const result = await res.json()
-    if (!res.ok) {
-      toast({ title: t('update_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
-    } else {
-      toast({ title: t('saved_title'), description: t('saved_description') })
-      // Every supplier picker reads the cached roster: refresh it now, not
-      // after the dedupe window, so a renamed supplier shows renamed.
-      void invalidateReferenceData('ref:suppliers')
-      setSupplier({ ...result.data, stats: supplier?.stats })
-      setIsEditOpen(false)
+    // try/finally: a dropped connection or a non-JSON error page threw out of
+    // here and left Spara spinning with nothing said.
+    try {
+      const res = await fetch(`/api/suppliers/${params.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+      const result = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({ title: t('update_failed_title'), description: getErrorMessage(result, { context: 'supplier', statusCode: res.status }), variant: 'destructive' })
+      } else {
+        toast({ title: t('saved_title'), description: t('saved_description') })
+        // Every supplier picker reads the cached roster: refresh it now, not
+        // after the dedupe window, so a renamed supplier shows renamed.
+        void invalidateReferenceData('ref:suppliers')
+        setSupplier({ ...result.data, stats: supplier?.stats })
+        setIsEditOpen(false)
+      }
+    } catch (err) {
+      toast({ title: t('update_failed_title'), description: getErrorMessage(err, { context: 'supplier' }), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
     }
-    setIsSaving(false)
   }
 
   async function handleDelete() {
@@ -205,7 +223,7 @@ export default function SupplierDetailPage() {
             onRetry={() => void fetchSupplier()}
           />
         ) : (
-          <EmptyState title={t('not_found')} actionLabel={t('back')} actionHref="/suppliers" />
+          <NotFoundState title={t('not_found')} backHref="/suppliers" backLabel={t('back')} />
         )}
       </div>
     )
@@ -375,7 +393,21 @@ export default function SupplierDetailPage() {
           </Link>
         ) : undefined}
       >
-          {invoices.length === 0 ? (
+          {invoicesState === 'failed' ? (
+            <LoadError
+              title={t('invoices_load_failed')}
+              onRetry={() => {
+                setInvoicesState('loading')
+                void fetchInvoices()
+              }}
+              className="pt-4"
+            />
+          ) : invoicesState === 'loading' ? (
+            <LateReveal className="space-y-3 py-4">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-4 w-1/2" />
+            </LateReveal>
+          ) : invoices.length === 0 ? (
             <p className="text-muted-foreground text-sm py-4">
               {t('no_invoices')}
             </p>

@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // crm#1135: a new account saw no assistant anywhere. Every entry point waits
 // for a built agent (agent_profiles.verified_at), and /chat forwarded an
-// unbuilt agent to Hem, so the Assistent nav entry had to hide too. /chat now
-// leads to the build instead, which is what lets that entry always show.
+// unbuilt agent to Hem, so the Assistent nav entry had to hide too. /chat then
+// led to the build, which let that entry always show. The build is removed:
+// a company without a built assistant is led to Koppla en agent
+// (/settings/api), where its own assistant connects.
 
 const redirect = vi.fn((url: string) => {
   throw new Error(`NEXT_REDIRECT:${url}`)
@@ -41,16 +43,18 @@ describe('ChatLayout', () => {
     conversations.mockResolvedValue({ data: [], error: null })
   })
 
-  it('sends a company with no agent yet to the build flow, not to Hem', async () => {
+  it('sends a company with no agent to Koppla en agent, not to Hem and not to the removed build', async () => {
     getResolvedDashboardAgentProfile.mockResolvedValue(null)
-    await expect(ChatLayout({ children: null })).rejects.toThrow('NEXT_REDIRECT:/onboarding/agent')
-    expect(redirect).toHaveBeenCalledWith('/onboarding/agent')
+    await expect(ChatLayout({ children: null })).rejects.toThrow('NEXT_REDIRECT:/settings/api')
+    expect(redirect).toHaveBeenCalledWith('/settings/api')
+    expect(redirect).not.toHaveBeenCalledWith('/onboarding/agent')
     expect(conversations).not.toHaveBeenCalled()
   })
 
-  it('sends a started but unconfirmed build back to the build flow', async () => {
+  it('sends a build that was started but never confirmed to Koppla en agent too', async () => {
     getResolvedDashboardAgentProfile.mockResolvedValue({ display_name: 'Anna', avatar_id: null, verified_at: null })
-    await expect(ChatLayout({ children: null })).rejects.toThrow('NEXT_REDIRECT:/onboarding/agent')
+    await expect(ChatLayout({ children: null })).rejects.toThrow('NEXT_REDIRECT:/settings/api')
+    expect(conversations).not.toHaveBeenCalled()
   })
 
   it('renders the chat once the agent is built', async () => {
@@ -76,7 +80,7 @@ function sidebarOf(layout: unknown): unknown {
 // ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts). Switched off for
 // the company, the layout draws no chat around its page: /chat shows what
 // took the chat's place and the other pages lead there (chat-switch.ts,
-// pages.test.ts), before the build gate and before the conversation list.
+// pages.test.ts), before the built-assistant gate and before the conversation list.
 describe('ChatLayout with the chat switched off', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -87,7 +91,7 @@ describe('ChatLayout with the chat switched off', () => {
     vi.unstubAllEnvs()
   })
 
-  it('does not send a company without an agent into the build: the page is shown as it is', async () => {
+  it('does not lead a company without an agent anywhere: the page is shown as it is', async () => {
     getResolvedDashboardAgentProfile.mockResolvedValue(null)
     const out = await ChatLayout({ children: 'the page' })
     expect((out as { props: { children: unknown } }).props.children).toBe('the page')

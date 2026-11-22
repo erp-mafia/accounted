@@ -47,6 +47,13 @@ export const GET = withRouteContext(
           if (status === 'to_pay') {
             // The statuses a payment may be made in; isToPayInList below decides.
             query = query.in('status', [...PAYABLE_SUPPLIER_INVOICE_STATUSES]).eq('auto_debit', false)
+          } else if (status === 'unsettled') {
+            // Everything not yet settled: what the attest, to-pay and
+            // in-payment tabs and their counts are read from. The list
+            // paints from this read and the settled history follows behind,
+            // so a register of thousands of paid invoices no longer holds up
+            // the page.
+            query = query.not('status', 'in', `(${[...SETTLED_SUPPLIER_INVOICE_STATUSES].join(',')})`)
           } else {
             // approved and overdue are read from the attest mark and the due
             // date, every other status as stored (reported-status.ts).

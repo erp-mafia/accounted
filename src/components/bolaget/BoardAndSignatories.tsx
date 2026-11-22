@@ -58,7 +58,7 @@ interface BoCandidate {
 interface BoData {
   proposal: { as_of: string; owners: BoCandidate[]; indirect: BoCandidate[]; conclusion: 'owners_identified' | 'no_beneficial_owner' }
   confirmed: Array<{ company_role_id: string; party_id: string; name: string; extent: string | null; valid_from: string | null }>
-  assessments: Array<{ beneficial_owner_assessment_id: string; assessed_on: string; conclusion: string; owners: Array<{ name?: string }>; changed: boolean; basis: string }>
+  assessments: Array<{ beneficial_owner_assessment_id: string; assessed_on: string; conclusion: string; owners: Array<{ name?: string }>; changed: boolean; filed?: boolean; basis: string }>
   differs: boolean
   filing_url: string
 }
@@ -90,6 +90,8 @@ export function BoardAndSignatories() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [roles, setRoles] = useState<RolesData | null>(null)
   const [bo, setBo] = useState<BoData | null>(null)
+  // The verkliga huvudmän could not be read: said in their section.
+  const [boFailed, setBoFailed] = useState(false)
   const [roleForm, setRoleForm] = useState<FormState | null>(null)
   const [ending, setEnding] = useState<(RoleRow & { valid_to: string }) | null>(null)
   const [ruleForm, setRuleForm] = useState<FormState | null>(null)
@@ -115,7 +117,11 @@ export function BoardAndSignatories() {
       }
       setRoles(rolesBody.data as RolesData)
       setLoadFailed(false)
-      if (boRes.ok) {
+      setBoFailed(!boRes.ok)
+      if (!boRes.ok) {
+        // Never another date's owners in place of the ones that did not load.
+        setBo(null)
+      } else {
         const view = boBody.data as BoData
         setBo(view)
         setBoForm({
@@ -225,7 +231,7 @@ export function BoardAndSignatories() {
   })
 
   const latest = bo?.assessments[0] ?? null
-  const attn = bo && bo.differs ? <AttnLine>{t('attn_bo_differs')}</AttnLine> : latest?.changed ? (
+  const attn = bo && bo.differs ? <AttnLine>{t('attn_bo_differs')}</AttnLine> : latest?.changed && !latest.filed ? (
     <AttnLine action={{ label: t('attn_bo_file_action'), href: bo!.filing_url }}>{t('attn_bo_file')}</AttnLine>
   ) : null
 
@@ -322,6 +328,13 @@ export function BoardAndSignatories() {
                   </p>
                 ))}
           </section>
+
+          {boFailed && (
+            <section className="space-y-3">
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('bo_heading')}</h2>
+              <LoadError title={t('bo_load_failed')} onRetry={() => void load()} />
+            </section>
+          )}
 
           {bo && boForm && (
             <section className="space-y-3">

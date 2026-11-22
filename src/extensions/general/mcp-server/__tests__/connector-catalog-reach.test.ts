@@ -215,6 +215,14 @@ const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {
   // direct writes.
   gnubok_upsert_cash_forecast_rows: 'Direct forecast-row write (not bookkeeping), search-only by the tools/list ceiling; v1 POST /cash-forecast-rows carries it.',
   gnubok_cancel_cash_forecast_row: 'Direct forecast-row write (not bookkeeping), search-only by the tools/list ceiling; v1 POST /cash-forecast-rows/cancel carries it.',
+  // The question list (lib/questions): closing a question without an answer
+  // is not bookkeeping, so it saves at once, and it is search-only because
+  // tools/list is frozen. A raw tools/call carries it. Filing a question is
+  // the listed gnubok_ask_question, and an answer goes through the listed
+  // gnubok_remember_fact (answers_question_id).
+  gnubok_close_question: 'Direct close of a question (not bookkeeping), search-only by the frozen tools/list; an answer goes through the listed gnubok_remember_fact.',
+  // Search-only by the frozen tools/list; the rot/rut page imports the same file.
+  gnubok_import_rot_rut_beslut: 'Direct import of a beslutsfil, search-only by the frozen tools/list; a raw tools/call and the rot/rut page carry it.',
 }
 
 describe('no search-only WRITE is out of reach (issue #2800)', () => {

@@ -43,7 +43,8 @@ function Way({
  * lib/env/assistant-chat-switch.ts): what took its place, said once where a
  * person goes looking for the chat: the Chatt row stays in the menu until
  * the chat is gone for everyone, and for a company without the chat it leads
- * here, as its other pages and the build page do.
+ * here, as its other pages and the addresses of the removed build and
+ * interview do.
  *
  * Two ways forward and one way back: questions go to the AI assistant in the
  * support dialog, the bookkeeping to a person's own AI connected under

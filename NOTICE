@@ -619,7 +619,7 @@ Apache-2.0 (155)
   @vercel/oidc 3.2.0
   @vercel/speed-insights 2.0.0
   ai 6.0.259
-  baseline-browser-mapping 2.11.20
+  baseline-browser-mapping 2.11.39
   class-variance-authority 0.7.1
   detect-libc 2.1.2
   fuse.js 7.4.2
@@ -741,7 +741,7 @@ BlueOak-1.0.0 (1)
   lru-cache 11.5.3
 
 CC-BY-4.0 (1)
-  caniuse-lite 1.0.30001810
+  caniuse-lite 1.0.30001826
 
 LGPL-3.0 (1)
   libheif-js 1.23.2

@@ -50,7 +50,7 @@ describe('package map', () => {
     ).toEqual({
       Bokföring: {
         switchable: false,
-        modules: ['capital', 'corporate', 'deadlines', 'import', 'ledger', 'parties', 'skatteverket', 'transactions', 'vat', 'year-end'],
+        modules: ['capital', 'corporate', 'deadlines', 'formation', 'import', 'ledger', 'parties', 'skatteverket', 'transactions', 'vat', 'year-end'],
       },
       Bank: { switchable: true, modules: ['bank-feed'] },
       Kundfakturor: { switchable: true, modules: ['collections', 'invoicing'] },

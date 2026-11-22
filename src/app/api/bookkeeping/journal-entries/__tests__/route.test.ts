@@ -887,8 +887,9 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       count: number
       attachment_counts?: Record<string, number>
       invoice_references?: Record<string, number>
+      no_doc_required?: Record<string, string | null>
     }
-    const counted = { counts: { 'je-1': 2 }, invoice_references: { 'je-2': 1 } }
+    const counted = { counts: { 'je-1': 2 }, invoice_references: { 'je-2': 1 }, no_doc_required: { 'je-2': 'Bankavgift' } }
     const noParams = { params: Promise.resolve({}) }
 
     it('leaves the counts out unless asked, and reads none', async () => {
@@ -914,6 +915,9 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       expect(body.count).toBe(2)
       expect(body.attachment_counts).toEqual({ 'je-1': 2 })
       expect(body.invoice_references).toEqual({ 'je-2': 1 })
+      // The rows' "Inget underlag krävs" marks ride along too: the list no
+      // longer reads the company's whole exemption list on mount.
+      expect(body.no_doc_required).toEqual({ 'je-2': 'Bankavgift' })
       expect(mockCountUnderlag).toHaveBeenCalledWith(mockSupabase, 'company-1', ['je-1', 'je-2'])
     })
 
@@ -976,6 +980,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       expect(body.data.map((e) => e.id)).toEqual(['je-1'])
       expect(body.attachment_counts).toBeUndefined()
       expect(body.invoice_references).toBeUndefined()
+      expect(body.no_doc_required).toBeUndefined()
     })
   })
 

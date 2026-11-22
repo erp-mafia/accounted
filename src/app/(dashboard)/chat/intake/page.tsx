@@ -1,30 +1,10 @@
 import { redirect } from 'next/navigation'
-import ChatIntakeStarter from '@/components/agent/ChatIntakeStarter'
-import { getAiStatus } from '@/lib/ai'
-import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
-import { leaveWhenChatSwitchedOff } from '../chat-switch'
+import { CHAT_REPLACED_HREF } from '../chat-switch'
 
-export const dynamic = 'force-dynamic'
-
-// /chat/intake: Phase C bootstrap surface. ReviewCard navigates here after
-// Phase B "kör" succeeds. The client component mounts AgentChat with
-// intent='onboarding.intake' in fresh-start mode; AgentChat auto-fires the
-// first invoke which creates the conversation row, and we swap the URL to
-// /chat/[id] when the new id streams back.
-export default async function ChatIntakePage() {
-  const [{ user }, companyId] = await Promise.all([
-    getDashboardAuthContext(),
-    getDashboardCompanyId(),
-  ])
-  if (!user) redirect('/login')
-  if (!companyId) redirect('/onboarding')
-  // The interview goes with the built-in assistant (ASSISTANT_CHAT_ENABLED):
-  // switched off for the company, it is not started.
-  leaveWhenChatSwitchedOff(companyId)
-  // onboarding.intake runs on the tool-loop runtime; without it (#2204) the
-  // starter would fire an invoke that answers 503. The agent is built by now,
-  // so the general-help console on /chat is the working next step.
-  if (!getAiStatus().assistantAvailable) redirect('/chat')
-
-  return <ChatIntakeStarter />
+// /chat/intake started the interview that followed the assistant's build.
+// Both are gone; the address stays so an old link does not end in a 404, and
+// leads to /chat: the chat for a company that has it, and for every other
+// company the page that says what took its place.
+export default function ChatIntakePage() {
+  redirect(CHAT_REPLACED_HREF)
 }

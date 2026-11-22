@@ -149,6 +149,7 @@ import {
   buildSelfBilledPayload,
   domesticReverseChargeStatement,
   hasDimensionValues,
+  selfBilledQuantityRefusals,
 } from '@/lib/invoices/editor-payload'
 import { InvoiceEditorShell, type EditorPane } from '@/components/invoices/editor/InvoiceEditorShell'
 import { EditorTopBar, type TopBarMenuEntry } from '@/components/invoices/editor/EditorTopBar'
@@ -258,6 +259,7 @@ import {
 } from '@/types'
 import { addDaysIso, todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
+import { lineQuantityIssue } from '@/lib/invoices/line-quantity'
 
 const currencies: readonly Currency[] = CURRENCIES
 
@@ -550,8 +552,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       if (item.description.trim().length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: t('validation_description_required') })
       }
-      if (!(item.quantity >= 0.01)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: t('validation_quantity_min') })
+      // Zero and negative quantities are allowed, except on a skattereduktion
+      // row or (negative) a sales order row: lib/invoices/line-quantity.ts.
+      const quantityIssue = lineQuantityIssue(item)
+      if (quantityIssue) {
+        const message =
+          quantityIssue === 'deduction_needs_positive'
+            ? t('validation_quantity_deduction')
+            : quantityIssue === 'negative_on_order_line'
+              ? t('validation_quantity_order_line')
+              : t('validation_quantity_number')
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message })
       }
       if (item.unit.trim().length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: t('validation_unit_required') })
@@ -2373,6 +2384,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
     if (!data.received_date) {
       setError('received_date', { message: ts('validation_received_date_required') })
+      valid = false
+    }
+    for (const index of selfBilledQuantityRefusals(data.items)) {
+      setError(`items.${index}.quantity`, { message: ts('validation_quantity_positive') })
       valid = false
     }
     if (!valid) return

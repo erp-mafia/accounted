@@ -82,8 +82,11 @@ describe('validateBody', () => {
       // `type` stays the discriminator.
       expect(body.error).not.toBe('Validation failed')
       expect(body.error).toMatch(/^Valideringsfel: /)
-      expect(body.error).toContain('name')
+      // A field a person knows by name is named so ('name' is Namn); one
+      // without a label keeps its key. The reasons are Swedish.
+      expect(body.error).toContain('Namn: Får inte vara tomt.')
       expect(body.error).toContain('age')
+      expect(body.error).not.toMatch(/Too small|expected/)
       expect(body.type).toBe('validation_error')
       expect(body.errors).toBeInstanceOf(Array)
       expect(body.errors.length).toBeGreaterThan(0)
@@ -134,6 +137,29 @@ describe('validateBody', () => {
       expect(getErrorMessage(body, { statusCode: 400 })).toContain(
         'Ange periodens startdatum',
       )
+    }
+  })
+
+  it('names a row field by its row, and words query refusals in Swedish too', async () => {
+    const ItemsSchema = z.object({ items: z.array(z.object({ quantity: z.number().positive() })).min(1) })
+    const body = await validateBody(createJsonRequest({ items: [{ quantity: 1 }, { quantity: 0 }] }), ItemsSchema)
+    expect(body.success).toBe(false)
+    if (!body.success) {
+      const json = await body.response.json()
+      expect(json.error).toBe('Valideringsfel: Antal (rad 2): Måste vara större än 0.')
+      // The machine-readable detail keeps the path and Zod's own message.
+      expect(json.errors[0]).toMatchObject({ field: 'items.1.quantity', code: 'too_small' })
+    }
+
+    const query = validateQuery(
+      new Request('http://localhost/api/x?due_date=igår'),
+      z.object({ due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
+    )
+    expect(query.success).toBe(false)
+    if (!query.success) {
+      const json = await query.response.json()
+      expect(json.error).toBe('Valideringsfel: Förfallodatum: Ogiltigt format.')
+      expect(getErrorMessage(json, { statusCode: 400 })).toBe(json.error)
     }
   })
 

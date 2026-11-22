@@ -22,11 +22,18 @@
  * per-minute sweep cron (app/api/extensions/whatsapp-inbox/sweep/cron)
  * re-claims stuck rows and expires stale questions/pins.
  *
+ * The question list (lib/list-question.ts): an open question from a company's
+ * question list is sent in the chat when one is filed, after a burst, or in
+ * place of the fallback reply to a text; a tap on its buttons answers it
+ * here, and an answer through another door takes it out of the conversation
+ * (the company_question.* event handlers below).
+ *
  * Deferred to PR5: retention cron, FieldsRail surfacing, booking-notes
  * threading.
  */
 
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
+import type { EventPayload } from '@/lib/events/types'
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -62,6 +69,17 @@ import {
 } from './lib/conversation'
 import { summarizeInboundEvent } from './lib/last-event'
 import { applyCompanyChoice, type CompanyChoiceVia } from './lib/company-question'
+import {
+  applyListQuestionTap,
+  clearEndedListQuestion,
+  listQuestionReplyMarker,
+  offerFiledListQuestion,
+  offerListQuestionOnText,
+  parseQuestionButtonId,
+  pendingListQuestion,
+  type ListQuestionRef,
+  type QuestionTap,
+} from './lib/list-question'
 
 const log = createLogger('whatsapp-inbox')
 
@@ -371,6 +389,8 @@ type Disposition =
   | { kind: 'company_digit'; digit: number }
   | { kind: 'company_interactive'; companyId: string }
   | { kind: 'company_retry' }
+  | { kind: 'question_tap'; tap: QuestionTap }
+  | { kind: 'question_text'; question: ListQuestionRef }
   | { kind: 'answer' }
   | { kind: 'text_open' }
   | { kind: 'voice' }
@@ -378,7 +398,8 @@ type Disposition =
   | { kind: 'fallback' }
   | { kind: 'silence'; reason: SilenceReason }
 
-/** Dispositions with a durable side effect (mute, pin, company routing).
+/** Dispositions with a durable side effect (mute, pin, company routing, an
+ *  answer to a list question).
  *  Their effect runs BEFORE the terminal row is written: see
  *  handleLinkedSender. Reply-only dispositions keep the persist-first shape. */
 const DURABLE_DISPOSITIONS: ReadonlySet<Disposition['kind']> = new Set([
@@ -387,6 +408,7 @@ const DURABLE_DISPOSITIONS: ReadonlySet<Disposition['kind']> = new Set([
   'byt',
   'company_digit',
   'company_interactive',
+  'question_tap',
 ])
 
 function classify(
@@ -430,12 +452,21 @@ function classify(
     ) {
       return { kind: 'answer' }
     }
+    // Free text while a list question is in flight goes to the worker as
+    // that question's answer; the worker keeps a reply that quotes a receipt
+    // with the receipt.
+    const listQuestion = conversation ? pendingListQuestion(conversation) : null
+    if (listQuestion) return { kind: 'question_text', question: listQuestion }
     // Idle free text: maybe a late answer to an earlier question (quoted
     // reply or the most recent open one); resolved below.
     return { kind: 'text_open' }
   }
   if (muted) return { kind: 'silence', reason: 'muted' }
   if (msg.type === 'interactive') {
+    // A tap on a list question's button answers that question, whatever the
+    // conversation is waiting for.
+    const tap = parseQuestionButtonId(msg.interactiveReplyId)
+    if (tap) return { kind: 'question_tap', tap }
     if ((conversation?.state === 'awaiting_company' || companyChoiceOpen) && msg.interactiveReplyId) {
       return { kind: 'company_interactive', companyId: msg.interactiveReplyId }
     }
@@ -589,6 +620,15 @@ async function handleLinkedSender(
         // Other rejections stay silent (stale or forged payloads).
         break
       }
+      case 'question_tap':
+        await applyListQuestionTap(supabase, {
+          link,
+          conversation,
+          tap: disposition.tap,
+          to: msg.from,
+          replyBase,
+        })
+        break
       case 'byt': {
         if (conversation) {
           await updateConversation(supabase, conversation, (_current, context) => {
@@ -643,7 +683,7 @@ async function handleLinkedSender(
   // Dedupe on the inbound-wamid partial unique index. A redelivered wamid
   // violates it (23505): already handled, stop entirely.
   const initialStatus =
-    disposition.kind === 'media' || disposition.kind === 'answer'
+    disposition.kind === 'media' || disposition.kind === 'answer' || disposition.kind === 'question_text'
       ? 'received'
       : disposition.kind === 'silence'
         ? 'skipped'
@@ -671,8 +711,15 @@ async function handleLinkedSender(
       raw_payload: keepContent ? redactRawPayload(msg.raw) : null,
       processing_status: initialStatus,
       // Deliberate silences carry their reason (#1552): a skipped row with
-      // no explanation is exactly the blind spot this exists to close.
-      error_message: disposition.kind === 'silence' ? SILENCE_REASON_TEXT[disposition.reason] : null,
+      // no explanation is exactly the blind spot this exists to close. A
+      // reply to a list question carries the question it answers, for the
+      // worker (listQuestionReplyMarker).
+      error_message:
+        disposition.kind === 'silence'
+          ? SILENCE_REASON_TEXT[disposition.reason]
+          : disposition.kind === 'question_text'
+            ? listQuestionReplyMarker(disposition.question)
+            : null,
       correlation_id: correlationId,
     })
     .select('id')
@@ -690,6 +737,7 @@ async function handleLinkedSender(
   switch (disposition.kind) {
     case 'media':
     case 'answer':
+    case 'question_text':
       // Media intake and answer interpretation both run deferred (the answer
       // path may call the LLM; the webhook must 200 in seconds).
       if (messageId) deferredMessageIds.push(messageId)
@@ -726,9 +774,17 @@ async function handleLinkedSender(
     case 'unsupported':
       await sendText(supabase, { to: msg.from, body: copy.m15Unsupported(), template: TEMPLATE.m15Unsupported, ...replyBase })
       return
-    case 'fallback':
-      await sendText(supabase, { to: msg.from, body: copy.m16Fallback(), template: TEMPLATE.m16Fallback, ...replyBase })
+    case 'fallback': {
+      // An open question from the company's question list goes out in place
+      // of the fallback when one may be sent now (lib/list-question.ts). The
+      // fallback follows only when no question was there to send: a question
+      // whose send failed is taken back and nothing more is sent.
+      const offer = conversationId ? await offerListQuestionOnText(supabase, conversationId, link) : 'not_sent'
+      if (offer === 'not_sent') {
+        await sendText(supabase, { to: msg.from, body: copy.m16Fallback(), template: TEMPLATE.m16Fallback, ...replyBase })
+      }
       return
+    }
     case 'silence':
       return
   }
@@ -736,11 +792,36 @@ async function handleLinkedSender(
 
 // ── Extension definition ─────────────────────────────────────
 
+/** The service-role client an event handler works on: the registry's, or one of its own when the event names no person. */
+function eventClient(ctx: ExtensionContext | undefined): SupabaseClient {
+  return ctx?.supabase ?? buildServiceClient()
+}
+
 export const whatsappInboxExtension: Extension = {
   id: 'whatsapp-inbox',
   name: 'WhatsApp-inkorg',
   version: '1.0.0',
   sector: 'general',
+
+  // The question list in the chat (lib/list-question.ts). Each handler
+  // catches its own failures: the write that emitted the event has happened.
+  eventHandlers: [
+    {
+      eventType: 'company_question.filed',
+      handler: (payload: EventPayload<'company_question.filed'>, ctx?: ExtensionContext) =>
+        offerFiledListQuestion(eventClient(ctx), { companyId: payload.companyId, questionId: payload.questionId }),
+    },
+    {
+      eventType: 'company_question.answered',
+      handler: (payload: EventPayload<'company_question.answered'>, ctx?: ExtensionContext) =>
+        clearEndedListQuestion(eventClient(ctx), payload.questionId),
+    },
+    {
+      eventType: 'company_question.closed',
+      handler: (payload: EventPayload<'company_question.closed'>, ctx?: ExtensionContext) =>
+        clearEndedListQuestion(eventClient(ctx), payload.questionId),
+    },
+  ],
 
   apiRoutes: [
     // ── Meta webhook: subscription handshake ────────────────
@@ -1051,7 +1132,7 @@ export const whatsappInboxExtension: Extension = {
 
         // The caller must be a LIVE member of the company receipts are routed
         // to: otherwise a user could point their intake at someone else's
-        // books. Same filter shape as isMember in process-inbound.ts, which
+        // books. Same filter shape as isMember in lib/routing.ts, which
         // is what intake consults: a default pointing at an archived company
         // used to save fine here and then be silently ignored there (#2062).
         if (parsedBody.companyId) {

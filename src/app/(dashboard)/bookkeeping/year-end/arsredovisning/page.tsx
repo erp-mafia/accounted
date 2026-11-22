@@ -7,7 +7,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { LoadError } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, LoadError } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -32,8 +32,9 @@ import {
   TrashIcon,
 } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
+import { AttnLine } from '@/components/ui/attn-line'
 import { formatRowAmount } from '@/lib/utils'
-import { useUrlFiscalPeriod } from '@/components/providers/FiscalScopeProvider'
+import { useFiscalScope, useUrlFiscalPeriod } from '@/components/providers/FiscalScopeProvider'
 import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
 import { ArsredovisningBankIdSigning, useVersionSigningRequests } from '@/components/bokslut/ArsredovisningBankIdSigning'
 import { useSigningAvailability } from '@/components/signing/use-signing-availability'
@@ -68,6 +69,11 @@ import { postDocumentForm } from '@/lib/documents/direct-upload'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import {
+  ANNUAL_MEETING_MONTHS,
+  BOLAGSVERKET_FILING_MONTHS,
+  deadlineAfterYearEnd,
+} from '@/lib/tax/annual-report-deadlines'
 import { parseAmountInput } from '@/lib/money'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -107,6 +113,9 @@ export default function ArsredovisningPage() {
   // The year is app-wide context: a visit without ?period takes the sidebar
   // year into the URL, and a pick in the sidebar moves the URL.
   useUrlFiscalPeriod(periodId, '/bookkeeping/year-end/arsredovisning', { allowAll: false, hideFuture: true })
+  // With no year in the URL and none begun, there is nothing to pick: the
+  // company has no started räkenskapsår yet.
+  const { periodId: scopePeriodId, ready: scopeReady } = useFiscalScope({ allowAll: false, hideFuture: true })
   const { toast } = useToast()
   const tStudio = useTranslations('annualReportStudio')
   const tNotes = useTranslations('annualReportNotes')
@@ -116,11 +125,15 @@ export default function ArsredovisningPage() {
   const tBoard = useTranslations('bolaget_roles')
   // Avtal och åtaganden (Bolaget): what the registers write when a field is left empty.
   const tCommitments = useTranslations('bolaget_commitments')
+  const tCommon = useTranslations('common')
   const { appName } = useBranding()
   const { periods: fiscalPeriods, isLoading: periodsLoading } = useFiscalPeriods()
 
   const [data, setData] = useState<ArsredovisningData | null>(null)
   const [signatures, setSignatures] = useState<SignatureRequest[]>([])
+  // The signer roster could not be read: said in the roster, not shown as
+  // an empty one.
+  const [signaturesFailed, setSignaturesFailed] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // Bumped by "Försök igen" to load the same year again.
@@ -241,6 +254,8 @@ export default function ArsredovisningPage() {
   // evidence reference used to be typed by hand, and nobody could know an
   // archive id to type (PH 186). null until the list is loaded.
   const [evidenceDocuments, setEvidenceDocuments] = useState<EvidenceDocument[] | null>(null)
+  // The archive could not be read: the picker says so instead of "empty".
+  const [evidenceFailed, setEvidenceFailed] = useState(false)
   const [uploadingEvidence, setUploadingEvidence] = useState(false)
   const evidenceFileInput = useRef<HTMLInputElement>(null)
   const hasLockedVersion = versions.some((version) => version.status === 'ready_for_signature')
@@ -285,12 +300,19 @@ export default function ArsredovisningPage() {
     if (!hasLockedVersion || evidenceDocuments !== null) return
     let cancelled = false
     fetch('/api/arkiv/documents?limit=100')
-      .then((response) => (response.ok ? response.json() : { data: [] }))
+      .then((response) => {
+        if (!response.ok) throw new Error(String(response.status))
+        return response.json()
+      })
       .then((body: { data?: EvidenceDocument[] }) => {
-        if (!cancelled) setEvidenceDocuments(orderEvidenceCandidates(body.data ?? []))
+        if (cancelled) return
+        setEvidenceFailed(false)
+        setEvidenceDocuments(orderEvidenceCandidates(body.data ?? []))
       })
       .catch(() => {
-        if (!cancelled) setEvidenceDocuments([])
+        if (cancelled) return
+        setEvidenceFailed(true)
+        setEvidenceDocuments([])
       })
     return () => {
       cancelled = true
@@ -325,11 +347,15 @@ export default function ArsredovisningPage() {
           return registerAnswerRef.current.answer
         },
       }),
-      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`).then((r) =>
-        r.json(),
-      ),
+      // A failed roster read is not an empty roster: null, said in the roster.
+      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`)
+        .then(async (r) => {
+          const body = r.ok ? await r.json().catch(() => null) : null
+          return Array.isArray(body?.data) ? (body.data as SignatureRequest[]) : null
+        })
+        .catch(() => null), // null is the failed roster, which the roster section says
     ])
-      .then(([arBody, sigBody]) => {
+      .then(([arBody, signerRows]) => {
         if (cancelled) return
         if (arBody?.error) {
           setError(getUserErrorMessage(arBody.error) ?? 'Kunde inte hämta årsredovisning')
@@ -403,7 +429,8 @@ export default function ArsredovisningPage() {
         setSavedCashFlowOmissionConfirmed(
           d.disclosures.kassaflodesanalys_omission_confirmed ?? false,
         )
-        setSignatures((sigBody.data ?? []) as SignatureRequest[])
+        setSignatures(signerRows ?? [])
+        setSignaturesFailed(signerRows === null)
       })
       .catch(() => {
         if (!cancelled) setError('Kunde inte hämta årsredovisning')
@@ -863,11 +890,17 @@ export default function ArsredovisningPage() {
   const reloadSigning = useCallback(() => {
     if (!periodId) return
     fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`)
-      .then((response) => response.json())
-      .then((body: { data?: SignatureRequest[] }) => {
-        if (Array.isArray(body?.data)) setSignatures(body.data)
+      .then((response) => {
+        if (!response.ok) throw new Error(String(response.status))
+        return response.json()
       })
-      .catch(() => undefined) // a refresh: the list reloads on the next visit
+      .then((body: { data?: SignatureRequest[] }) => {
+        if (!Array.isArray(body?.data)) throw new Error('no roster')
+        setSignatures(body.data)
+        setSignaturesFailed(false)
+      })
+      // A refresh: a roster on screen stays, a failed one stays failed.
+      .catch(() => undefined) // the roster section already shows the read that failed
     setSigningReload((n) => n + 1)
     refreshCompliance()
   }, [periodId, refreshCompliance])
@@ -898,30 +931,17 @@ export default function ArsredovisningPage() {
     [periodId, router],
   )
 
-  if (!periodId) {
+  if (!periodId && scopeReady && !scopePeriodId) {
     return (
       <div className="space-y-8">
-        <PageHeader
-          title="Årsredovisning"
-          description="Förhandsgranska och ladda ner årsredovisningen för valt räkenskapsår."
-        />
-        <div className="max-w-xl px-1">
-            <h3 className="font-sans text-sm font-medium">Välj räkenskapsår</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Välj det räkenskapsår du vill se årsredovisningen för. Du kan
-              förhandsgranska och ladda ner PDF-utkastet utan att stänga året: det
-              fullständiga bokslutet görs sedan via{' '}
-              <Link href="/bookkeeping/year-end" className="text-foreground underline underline-offset-4 decoration-foreground/25 hover:decoration-foreground">
-                Bokslut
-              </Link>
-              .
-            </p>
-        </div>
+        <PageHeader title="Årsredovisning" />
+        <EmptyNoFiscalYear />
       </div>
     )
   }
 
-  if (loading) {
+  // No year in the URL yet: the sidebar year is on its way into it.
+  if (!periodId || loading) {
     return (
       <div className="space-y-8">
         <PageHeader title="Årsredovisning" />
@@ -951,6 +971,18 @@ export default function ArsredovisningPage() {
   // user (2026-08-20): say what is missing and where the button lives.
   const lockedVersions = versions.filter((version) => version.status === 'ready_for_signature')
   const draftVersionCount = versions.filter((version) => version.status === 'draft').length
+  // The version the paper filing prints: the newest signed one, else the
+  // newest locked one. Only these carry the signature lines and the
+  // fastställelseintyg (pdfModeForVersionStatus); the live draft explains
+  // those pages instead.
+  const filingVersion = (() => {
+    const signed = versions.filter((version) => ['signed', 'filed', 'registered'].includes(version.status))
+    const pool = signed.length > 0 ? signed : lockedVersions
+    return [...pool].sort((a, b) => b.version_number - a.version_number)[0] ?? null
+  })()
+  const filingPdfUrl = filingVersion ? `${pdfUrl}?version=${filingVersion.id}` : null
+  const agmDeadline = deadlineAfterYearEnd(data.fiscal_period.period_end, ANNUAL_MEETING_MONTHS)
+  const bolagsverketDeadline = deadlineAfterYearEnd(data.fiscal_period.period_end, BOLAGSVERKET_FILING_MONTHS)
   const blockingCount = complianceSummary
     ? complianceSummary.issues.filter((issue) => issue.severity === 'error').length
     : null
@@ -1602,7 +1634,9 @@ export default function ArsredovisningPage() {
         boardSection={
           <div className="max-w-[760px] space-y-4 px-1 pt-2">
             {signingAvailable && <p className="text-xs leading-5 text-muted-foreground">{tSign('board_name_rule')}</p>}
-            {signatures.length === 0 ? (
+            {signaturesFailed ? (
+              <AttnLine action={{ label: tCommon('retry'), onClick: reloadSigning }}>{tSteps('board_load_failed')}</AttnLine>
+            ) : signatures.length === 0 ? (
               <p className="text-sm text-muted-foreground italic">{tSteps('board_empty')}</p>
             ) : (
               signatures.map((sig) => (
@@ -1789,7 +1823,7 @@ export default function ArsredovisningPage() {
                   <SelectTrigger id="signature-document" className="min-w-0 flex-1">
                     <SelectValue
                       placeholder={
-                        evidenceDocuments && evidenceDocuments.length === 0
+                        evidenceDocuments && evidenceDocuments.length === 0 && !evidenceFailed
                           ? tSteps('signature_document_empty')
                           : tSteps('signature_document_placeholder')
                       }
@@ -1828,6 +1862,21 @@ export default function ArsredovisningPage() {
                     : tSteps('signature_document_upload')}
                 </Button>
               </div>
+              {evidenceFailed && (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {tSteps('signature_document_load_failed')}{' '}
+                  <button
+                    type="button"
+                    className={TEXT_LINK_CLASS}
+                    onClick={() => {
+                      setEvidenceFailed(false)
+                      setEvidenceDocuments(null)
+                    }}
+                  >
+                    {tCommon('retry')}
+                  </button>
+                </p>
+              )}
               <p className="text-xs leading-5 text-muted-foreground">{tSteps('signature_document_help')}</p>
               <Label htmlFor="signature-evidence" className="text-xs text-muted-foreground">
                 {tSteps('signature_reference_label')}
@@ -1959,16 +2008,31 @@ export default function ArsredovisningPage() {
       <section id={annualReportStepAnchor('filing')} className="scroll-mt-24">
         <StepSectionHeader step="filing" title={tSteps('section_filing')} />
         <div className="space-y-4 px-1 pt-2 text-sm">
-          <p className="text-muted-foreground">
-            Ladda ner PDF-utkastet och granska det. För pappersinlämning ska
-            årsredovisningens original skrivas under av samtliga styrelseledamöter och
-            eventuell VD. En bestyrkt kopia med fastställelseintyg skickas sedan per post
-            till Bolagsverket. PDF-filen kan inte laddas upp som digital årsredovisning.
-          </p>
+          <div className="space-y-2">
+            <p className="font-medium">{tSteps('filing_paper_title')}</p>
+            <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
+              <li>{tSteps('filing_paper_step_sign')}</li>
+              <li>{tSteps('filing_paper_step_agm', { date: agmDeadline })}</li>
+              <li>{tSteps('filing_paper_step_certify')}</li>
+              <li>{tSteps('filing_paper_step_send', { date: bolagsverketDeadline })}</li>
+            </ol>
+            <p className="text-xs text-muted-foreground">{tSteps('filing_pdf_not_digital')}</p>
+          </div>
+          {!filingPdfUrl && (
+            <p className="text-xs text-muted-foreground">{tSteps('filing_no_locked_version')}</p>
+          )}
           <div className="flex flex-wrap gap-3">
+            {filingPdfUrl && (
+              <Button asChild>
+                <Link href={filingPdfUrl} target="_blank" rel="noopener noreferrer">
+                  <DocumentArrowDownIcon className="mr-2 h-4 w-4" />
+                  {tSteps('filing_download_version', { number: filingVersion!.version_number })}
+                </Link>
+              </Button>
+            )}
             <Button variant="outline" asChild>
               <Link href={pdfUrl} target="_blank" rel="noopener noreferrer">
-                <DocumentArrowDownIcon className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
+                <DocumentArrowDownIcon className="mr-2 h-4 w-4" /> {tSteps('filing_preview_draft')}
               </Link>
             </Button>
             {/* Bolagsverket-delarna blurras tills integrationen är godkänd:

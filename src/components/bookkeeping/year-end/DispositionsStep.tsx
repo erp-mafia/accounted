@@ -54,6 +54,10 @@ interface TaxAdjustmentDraft {
   detectedAccounts: Record<string, boolean>
 }
 
+// Why "Bokför valda dispositioner" is off while a booked bolagsskatt does not
+// match: shown under the button whenever it holds, not only after a click.
+const TAX_CORRECTION_REQUIRED = 'Rätta den bokförda bolagsskatten och ladda om sidan innan du fortsätter.'
+
 /**
  * Phase 2 bokslutsdispositioner step. Fetches proposals from the dispositions
  * API, lets the user adjust amounts (or skip) per proposal, then POSTs the
@@ -176,7 +180,7 @@ export function DispositionsStep({
       return
     }
     if (proposal.completedDispositions?.some((item) => item.status === 'needs_correction')) {
-      setPostError('Rätta den bokförda bolagsskatten och ladda om sidan innan du fortsätter.')
+      setPostError(TAX_CORRECTION_REQUIRED)
       return
     }
     setPosting(true)
@@ -443,6 +447,12 @@ export function DispositionsStep({
         </p>
       )}
 
+      {hasCorrectionRequired && postError !== TAX_CORRECTION_REQUIRED && (
+        <p className="text-sm text-attn" role="status">
+          {TAX_CORRECTION_REQUIRED}
+        </p>
+      )}
+
       <StepBar>
         <Button
           variant="ghost"
@@ -459,7 +469,9 @@ export function DispositionsStep({
             lockedTitle ??
             (taxDepreciationDirty
               ? 'Spara ändringarna i skattemässig avskrivning innan du fortsätter.'
-              : undefined)
+              : hasCorrectionRequired
+                ? TAX_CORRECTION_REQUIRED
+                : undefined)
           }
         >
           {posting ? (

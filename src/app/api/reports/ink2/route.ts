@@ -3,6 +3,7 @@ import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
 import {
   generateSRUSubmission,
   getZipFilename,
+  Ink2SruBlockedError,
 } from '@/lib/reports/ink2/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -51,6 +52,12 @@ export const GET = withRouteContext(
 
       return NextResponse.json({ data: declaration })
     } catch (err) {
+      if (err instanceof Ink2SruBlockedError) {
+        return errorResponseFromCode('TAX_DECL_INK2_SRU_BLOCKED', opLog, {
+          requestId,
+          details: { reason: getUserErrorMessage(err) },
+        })
+      }
       if (err instanceof FilingIdentityError) return errorResponseFromCode(err.code, opLog, { requestId })
       opLog.error('ink2 declaration generation failed', err as Error)
       return errorResponseFromCode('TAX_DECL_GENERATION_FAILED', opLog, {

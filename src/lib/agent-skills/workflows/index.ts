@@ -8,6 +8,7 @@ import { kreditfakturaProcessSkill } from './kreditfaktura-process'
 import { customerOnboardingSkill } from './customer-onboarding'
 import { reconcileMonthSkill } from './reconcile-month'
 import { onboardingSkill } from './onboarding'
+import { startCompanySkill } from './start-company'
 import { bookkeepSkill } from './bookkeep'
 import { taxPlanningSkill } from './tax-planning'
 import { createSkillSkill } from './create-skill'
@@ -18,7 +19,7 @@ import type { Skill } from '../types'
 export const workflowSkills: Skill[] = [
   bookkeepSkill, monthEndCloseSkill, quarterlyVatReviewSkill, yearEndCloseSkill,
   invoicingRulesSkill, payrollMonthlySkill, bankReconciliationSkill,
-  kreditfakturaProcessSkill, customerOnboardingSkill, reconcileMonthSkill, onboardingSkill,
+  kreditfakturaProcessSkill, customerOnboardingSkill, reconcileMonthSkill, onboardingSkill, startCompanySkill,
   taxPlanningSkill, createSkillSkill, companyFactsImportSkill,
   // Accounted's own analyses (itemKind analysis): loadable like any skill, listed under Analyser.
   ...analysisSkills,

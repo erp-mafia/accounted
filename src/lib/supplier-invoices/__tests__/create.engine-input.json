@@ -248,7 +248,7 @@
       "ok": false,
       "code": "SI_CREATE_FAILED",
       "details": {
-        "reason": "Något gick fel. Försök igen.",
+        "reason": "Något gick fel. Försök igen, och kontakta support om det fortsätter.",
         "step": "registration_journal_entry"
       }
     }

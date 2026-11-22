@@ -30,6 +30,17 @@ describe('countUnderlagForJournalEntries', () => {
         return { data: range ? [] : [{ id: `inv-${asked[0]}`, journal_entry_id: asked[0] }] }
       },
       invoice_payments: { data: [] },
+      // Every tenth asked entry is marked "Inget underlag krävs"; one row for
+      // an entry nobody asked about must not leak into the answer.
+      journal_entry_no_doc_required: (chain) => {
+        const asked = (chain.find((c) => c.method === 'in')?.args[1] ?? []) as string[]
+        return {
+          data: [
+            ...asked.filter((_, i) => i % 10 === 0).map((id) => ({ journal_entry_id: id, reason: 'Bankavgift' })),
+            { journal_entry_id: uuid(999), reason: null },
+          ],
+        }
+      },
     })
 
     const result = await countUnderlagForJournalEntries(supabase as unknown as SupabaseClient, 'company-1', ids)
@@ -39,6 +50,16 @@ describe('countUnderlagForJournalEntries', () => {
     expect(Object.keys(result.counts)).toHaveLength(120)
     expect(result.counts[uuid(119)]).toBe(1)
     expect(Object.keys(result.invoice_references).sort()).toEqual([uuid(0), uuid(50), uuid(100)])
+    // Only the asked rows' exemptions, read per chunk with the counts (never
+    // the company's whole exemption list).
+    expect(findCalls('journal_entry_no_doc_required', 'in').map((args) => (args[1] as string[]).length)).toEqual([
+      UNDERLAG_COUNTS_CHUNK,
+      UNDERLAG_COUNTS_CHUNK,
+      20,
+    ])
+    expect(Object.keys(result.no_doc_required)).toHaveLength(12)
+    expect(result.no_doc_required[uuid(10)]).toBe('Bankavgift')
+    expect(result.no_doc_required[uuid(999)]).toBeUndefined()
   })
 
   it('reads nothing for no ids', async () => {
@@ -46,6 +67,7 @@ describe('countUnderlagForJournalEntries', () => {
     expect(await countUnderlagForJournalEntries(supabase as unknown as SupabaseClient, 'company-1', [])).toEqual({
       counts: {},
       invoice_references: {},
+      no_doc_required: {},
     })
     expect(findCalls('document_attachments', 'in')).toEqual([])
   })
@@ -55,6 +77,7 @@ describe('countUnderlagForJournalEntries', () => {
       document_attachments: { data: null, error: { message: 'boom' } },
       supplier_invoices: { data: [] },
       supplier_invoice_payments: { data: [] },
+      journal_entry_no_doc_required: { data: [] },
     })
     await expect(
       countUnderlagForJournalEntries(supabase as unknown as SupabaseClient, 'company-1', [uuid(1)]),
