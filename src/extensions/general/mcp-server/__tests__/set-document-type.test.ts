@@ -7,9 +7,15 @@
  * (lib/documents/classify/set-type.ts).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, createTableMockSupabase } from '@/tests/helpers'
 
 vi.mock('@/lib/documents/classify/set-type', () => ({ setDocumentTypeByPerson: vi.fn() }))
+// document_classifications is written by the service role only.
+const { SERVICE } = vi.hoisted(() => ({ SERVICE: { service: true } }))
+vi.mock('@/lib/supabase/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase/server')>()),
+  createServiceClient: vi.fn(() => SERVICE),
+}))
 
 import { setDocumentTypeByPerson } from '@/lib/documents/classify/set-type'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
@@ -129,27 +135,37 @@ describe('gnubok_set_document_type', () => {
 
   describe('approval (documents.set-type run)', () => {
     const ctx = (supabase: unknown) => ({ supabase: supabase as never, companyId: 'company-1', userId: 'approver-1', log: createLogger('test') })
+    /** The door's client, which answers the approver's role in the company. */
+    const doorAs = (role: string | null) => createTableMockSupabase({ company_members: { data: role ? { role } : null } })
 
-    it('runs the service Dokument runs, as the approving person, and answers the type it replaced', async () => {
+    it('runs the service Dokument runs, as the approving person, through the service role, and answers the type it replaced', async () => {
       vi.mocked(setDocumentTypeByPerson).mockResolvedValue({ status: 'set', documentId: DOC, docType: 'minutes.board', previousDocType: 'other', withdrawnAgreementId: null })
-      const supabase = {}
+      const door = doorAs('member')
 
-      const out = await documentsSetType.run(ctx(supabase), { document_id: DOC, doc_type: 'minutes.board' }, { dryRun: false })
+      const out = await documentsSetType.run(ctx(door.supabase), { document_id: DOC, doc_type: 'minutes.board' }, { dryRun: false })
 
-      expect(setDocumentTypeByPerson).toHaveBeenCalledExactlyOnceWith(supabase, { companyId: 'company-1', documentId: DOC, userId: 'approver-1', docType: 'minutes.board' })
+      expect(setDocumentTypeByPerson).toHaveBeenCalledExactlyOnceWith(SERVICE, { companyId: 'company-1', documentId: DOC, userId: 'approver-1', docType: 'minutes.board' })
+      expect(door.findCalls('company_members', 'eq')).toEqual(expect.arrayContaining([['company_id', 'company-1'], ['user_id', 'approver-1']]))
       expect(out).toEqual({ ok: true, data: { document_id: DOC, doc_type: 'minutes.board', previous_doc_type: 'other' } })
+    })
+
+    it.each([['viewer'], ['invoicer'], [null]])('refuses an approver who does not keep the books (%s) before anything is written', async (role) => {
+      const out = await documentsSetType.run(ctx(doorAs(role).supabase), { document_id: DOC, doc_type: 'minutes.board' }, { dryRun: false })
+
+      expect(out).toMatchObject({ ok: false, code: 'FORBIDDEN', details: { code: 'ROLE_READ_ONLY' } })
+      expect(setDocumentTypeByPerson).not.toHaveBeenCalled()
     })
 
     it('answers DOC_NOT_FOUND when the document is gone by approval', async () => {
       vi.mocked(setDocumentTypeByPerson).mockResolvedValue({ status: 'not_found' })
 
-      expect(await documentsSetType.run(ctx({}), { document_id: DOC, doc_type: 'minutes.board' }, { dryRun: false })).toEqual({ ok: false, code: 'DOC_NOT_FOUND' })
+      expect(await documentsSetType.run(ctx(doorAs('member').supabase), { document_id: DOC, doc_type: 'minutes.board' }, { dryRun: false })).toEqual({ ok: false, code: 'DOC_NOT_FOUND' })
     })
 
     it('fails the approval, without a type, when the service could not save it', async () => {
       vi.mocked(setDocumentTypeByPerson).mockResolvedValue({ status: 'error', reason: 'insert failed: boom' })
 
-      const out = await documentsSetType.run(ctx({}), { document_id: DOC, doc_type: 'minutes.board' }, { dryRun: false })
+      const out = await documentsSetType.run(ctx(doorAs('member').supabase), { document_id: DOC, doc_type: 'minutes.board' }, { dryRun: false })
 
       expect(out).toMatchObject({ ok: false, code: 'UNKNOWN_ERROR' })
     })
