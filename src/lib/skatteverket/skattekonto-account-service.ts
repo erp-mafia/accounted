@@ -255,7 +255,9 @@ export async function createSkattekontoTransferDraft(
   }
   const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId, entryDate)
   if (!fiscalPeriodId) {
-    return { ok: false, code: 'PERIOD_LOCKED', details: { entry_date: entryDate } }
+    // No open period covers the date (most often the new räkenskapsår is not
+    // created yet): the year is missing, not locked.
+    return { ok: false, code: 'NO_OPEN_PERIOD_FOR_DATE', details: { entry_date: entryDate } }
   }
   const value = roundOre(Math.abs(amount))
   // A debit balance on the old account (an överskott at Skatteverket) moves
