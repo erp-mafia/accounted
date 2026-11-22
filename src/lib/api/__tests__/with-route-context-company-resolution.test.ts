@@ -93,6 +93,7 @@ describe('withRouteContext: resolving the active company', () => {
 
       expect(status).toBe(503)
       expect(body.error.code).toBe('TRANSIENT_ERROR')
+      expect(body.error.requestId).toMatch(/^req_/)
       expect(body.error.requestId).toBe(res.headers.get('X-Request-Id'))
       // No other company is tried in its place: the resolver is asked once,
       // the membership query path is never read, and the handler never runs.
