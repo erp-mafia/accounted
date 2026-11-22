@@ -255,6 +255,7 @@ export function McpConnectionsPanel({
     const kind = connectionKind(key)
     if (kind === 'key') return key.name
     if (kind === 'claude' || kind === 'chatgpt' || kind === 'grok' || kind === 'gemini' || kind === 'copilot') return targetName(kind)
+    if (kind === 'partner') return key.client_label ?? t('kind_partner')
     return t(`kind_${kind}`)
   }
 

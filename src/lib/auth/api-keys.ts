@@ -6,6 +6,7 @@ import { createLogger } from '@/lib/logger'
 // company cookie, and this file is reachable from bundles where that import
 // is a build error.
 import { getActiveCompanyId } from '@/lib/company/active-company'
+import { partnerClientNames, partnerSlugOf } from './oauth-partner-clients'
 
 const KEY_PREFIX = 'gnubok_sk_'
 const REFRESH_TOKEN_PREFIX = 'gnubok_rt_'
@@ -444,8 +445,14 @@ export async function validateApiKey(
   }
 }
 
-/** The client's own name for a 'registered:<id>' client, as the records name it. A failed read keeps the reserved name. */
+/**
+ * The client's name in the records: a 'partner:<slug>' client by its
+ * partner's name (verified, so no suffix), a 'registered:<id>' client by the
+ * name it gave itself. A failed read keeps the reserved name.
+ */
 async function registeredClientName(supabase: SupabaseClient, client: string | null): Promise<string | null> {
+  const slug = partnerSlugOf(client)
+  if (slug) return (await partnerClientNames(supabase, [slug])).get(slug) ?? null
   const id = client?.match(/^registered:([0-9a-f-]{36})$/i)?.[1]
   if (!id) return null
   const { data } = await supabase.from('oauth_client_registrations').select('client_name').eq('id', id).maybeSingle()

@@ -17,6 +17,8 @@ export interface ApiKeyRow {
   revoked_at: string | null
   created_at: string
   client?: string | null
+  /** The partner's name for a key minted through a partner (client 'partner:<slug>'); null otherwise. */
+  client_label?: string | null
   source?: 'signin' | 'manual'
   /** Per-key company allowlist; null = every company the owner belongs to. */
   company_ids?: string[] | null

@@ -254,6 +254,43 @@ describe('resolveRedirectUri', () => {
     })
   })
 
+  describe('partner rows (oauth_partner_clients)', () => {
+    const PARTNERS: Row[] = [
+      { id: 'p-1', slug: 'gateway', name: 'Gateway', host: 'gateway.example.com', path: '/upstream', match: 'prefix', created_at: '2026-11-19T10:00:00Z', revoked_at: null },
+      { id: 'p-2', slug: 'gone', name: 'Gone', host: 'gone.example.com', path: '/cb', match: 'exact', created_at: '2026-11-19T10:00:00Z', revoked_at: '2026-11-19T11:00:00Z' },
+    ]
+    const WITH_PARTNERS = {
+      ...DB,
+      oauth_partner_clients: PARTNERS,
+      // A member also registered a URI under the partner's prefix: the
+      // partner answers first.
+      oauth_client_registrations: [
+        ...REGISTRATIONS,
+        { id: 'reg-x', user_id: 'user-1', client_name: 'Egen', redirect_uri: 'https://gateway.example.com/upstream/a/callback', revoked_at: null },
+      ],
+    }
+
+    it('resolves a URI under an active partner row for any user, before the member registrations', async () => {
+      const partner = { allowed: true, kind: 'partner', partnerId: 'p-1', slug: 'gateway', name: 'Gateway' }
+      const sb = fakeClient(WITH_PARTNERS)
+      expect(await resolveRedirectUri('https://gateway.example.com/upstream/a/callback', sb, { consentingUserId: 'user-9' })).toEqual(partner)
+      expect(await resolveRedirectUri('https://gateway.example.com/upstream/a/callback', sb)).toEqual(partner)
+      expect(sb.from).not.toHaveBeenCalledWith('oauth_client_registrations')
+    })
+
+    it('refuses a revoked partner row and a URI that leaves the prefix', async () => {
+      const sb = fakeClient(WITH_PARTNERS)
+      expect(await resolveRedirectUri('https://gone.example.com/cb', sb)).toEqual({ allowed: false })
+      expect(await resolveRedirectUri('https://gateway.example.com/upstream/../evil', sb)).toEqual({ allowed: false })
+    })
+
+    it('fails closed for partners when the table cannot be read, and the registrations still answer', async () => {
+      const sb = fakeClient(WITH_PARTNERS, 'oauth_partner_clients')
+      expect(await resolveRedirectUri('https://gateway.example.com/upstream/b/callback', sb)).toEqual({ allowed: false })
+      expect(await resolveRedirectUri('https://mine.example/cb', sb, { consentingUserId: 'user-1' })).toMatchObject({ allowed: true, kind: 'registered', registrationId: 'reg-3' })
+    })
+  })
+
   it("accepts the consenting user's own registration", async () => {
     const result = await resolveRedirectUri('https://mine.example/cb', fakeClient(DB), {
       consentingUserId: 'user-1',

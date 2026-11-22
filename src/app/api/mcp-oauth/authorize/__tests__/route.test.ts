@@ -77,6 +77,7 @@ const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provid
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
 const SQUIDLER: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'squidler' }
 const CELEMINE: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'celemine' }
+const PARTNER: RedirectUriResolution = { allowed: true, kind: 'partner', partnerId: 'p-1', slug: 'acme', name: 'Acme <Gateway>' }
 const FLYTT_EXTENSION: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'flytt_extension' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
@@ -589,6 +590,25 @@ describe('client identity on the consent page', () => {
     expect(html).toContain('Squidler')
     expect(html).toContain('Verifierad')
     expect(html).toContain('squidler.io')
+    expect(html).not.toContain('En extern applikation')
+  })
+
+  it('names a partner row by its name as a verified client, escaped', async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(PARTNER)
+    const html = await (
+      await GET(
+        new Request(
+          buildAuthorizeUrl({
+            ...params,
+            redirect_uri: 'https://gateway.example.com/upstream/a/callback',
+          }),
+        ),
+      )
+    ).text()
+
+    expect(html).toContain('Acme &lt;Gateway&gt;')
+    expect(html).not.toContain('Acme <Gateway>')
+    expect(html).toContain('Verifierad')
     expect(html).not.toContain('En extern applikation')
   })
 
