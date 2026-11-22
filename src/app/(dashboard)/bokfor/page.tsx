@@ -33,7 +33,9 @@ export default async function BookingScreenRoute({
   if (!companyId || !isBookingScreenEnabled(companyId)) {
     redirect(subject.kind === 'transaction' ? (back ?? '/transactions') : '/bookkeeping?new')
   }
-  if (subject.kind === 'voucher') return <BookingScreen transaction={null} account={null} back={back} />
+  // One screen per row: stepping to the next row (same route, new query) must
+  // start fresh, never keep the last row's filled-in lines or state.
+  if (subject.kind === 'voucher') return <BookingScreen key="voucher" transaction={null} account={null} back={back} />
 
   const { data } = await supabase
     .from('transactions')
@@ -42,5 +44,12 @@ export default async function BookingScreenRoute({
     .eq('id', subject.transactionId)
     .maybeSingle()
   if (!data) notFound()
-  return <BookingScreen transaction={data as Transaction} account={subject.account} back={back} />
+  return (
+    <BookingScreen
+      key={`${subject.transactionId}:${subject.account ?? ''}`}
+      transaction={data as Transaction}
+      account={subject.account}
+      back={back}
+    />
+  )
 }
