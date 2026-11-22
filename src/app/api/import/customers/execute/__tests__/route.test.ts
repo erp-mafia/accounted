@@ -32,6 +32,8 @@ vi.mock('@/lib/supabase/fetch-all', () => ({
 }))
 
 import { POST } from '../route'
+import { parseCustomersFile } from '@/lib/import/customers/parser'
+import { rowsForExecute } from '@/lib/import/register-import-flow'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 const ROUTE_CTX = { params: Promise.resolve({}) }
@@ -296,13 +298,16 @@ describe('POST /api/import/customers/execute', () => {
       personal_number: null,
     }
     const madeSwedish = { ...existingCard, name: 'Acme AB', customer_type: 'swedish_business', country: 'SE', org_number: '5566778899' }
+    // A file that states the type and the country.
     const importMadeSwedish = () => makeRequest({
       rows: [row({
         name: 'Acme AB',
         customer_type: 'swedish_business',
+        customer_type_stated: 'type',
         org_number: '5566778899',
         email: 'acme@example.test',
         country: 'SE',
+        country_stated: true,
       })],
       update_duplicates: true,
     })
@@ -347,6 +352,7 @@ describe('POST /api/import/customers/execute', () => {
 
       expect(status).toBe(200)
       expect(body.data.updated).toBe(1)
+      expect(findCall('customers', 'update')![0]).toMatchObject({ customer_type: 'swedish_business', country: 'SE' })
       expect(findCall('invoices', 'update')![0]).toEqual({
         vat_treatment: 'standard_25',
         moms_ruta: '05',
@@ -433,6 +439,326 @@ describe('POST /api/import/customers/execute', () => {
       // No lookup and no draft read: the snapshot and the register only.
       expect(mockFetchAllRows).toHaveBeenCalledTimes(2)
       expect(findCall('invoices', 'select')).toBeUndefined()
+    })
+  })
+
+  // Through the real parser and the wizard's own rowsForExecute, so these
+  // send what the wizard sends for the file.
+  describe('an update keeps what the file does not state', () => {
+    const euCard = {
+      id: 'old',
+      name: 'Acme GmbH',
+      customer_type: 'eu_business',
+      customer_number: null,
+      org_number: null,
+      email: 'acme@example.test',
+      phone: null,
+      country: 'DE',
+      vat_number: 'DE123456789',
+      vat_number_validated: true,
+      personal_number: null,
+    }
+
+    async function importFile(csv: string) {
+      const parsed = await parseCustomersFile(new TextEncoder().encode(csv).buffer as ArrayBuffer, 'kunder.csv')
+      return POST(makeRequest({ rows: rowsForExecute(parsed.rows), update_duplicates: true }), ROUTE_CTX)
+    }
+
+    /** The database's answer to the merge: the card as the update left it. */
+    function cardAfterUpdate(card: Record<string, unknown>) {
+      const now = (): Record<string, unknown> => ({
+        ...card,
+        ...(findCall('customers', 'update')?.[0] as Record<string, unknown> | undefined),
+      })
+      return new Proxy({}, {
+        get: (_target, key) => now()[key as string],
+        has: (_target, key) => key in now(),
+        ownKeys: () => Reflect.ownKeys(now()),
+        getOwnPropertyDescriptor: (_target, key) => ({
+          value: now()[key as string], enumerable: true, configurable: true, writable: true,
+        }),
+      })
+    }
+
+    const merged = () => findCall('customers', 'update')![0] as Record<string, unknown>
+
+    beforeEach(() => {
+      // No file here has a terms column: the route first reads the company's
+      // default terms.
+      enqueue({ data: { invoice_default_days: 30 } })
+    })
+
+    it('keeps the type and country of a customer when the file has no type or country column', async () => {
+      mockFetchAllRows.mockResolvedValueOnce([euCard]).mockResolvedValueOnce([euCard])
+      enqueue({ data: cardAfterUpdate(euCard) })
+
+      const res = await importFile('Namn,E-post,Telefon\nAcme GmbH,acme@example.test,+49 30 123456\n')
+      const { status, body } = await parseJsonResponse<{ data: { updated: number } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.updated).toBe(1)
+      expect(merged().phone).toBe('+49 30 123456')
+      expect(merged()).not.toHaveProperty('customer_type')
+      expect(merged()).not.toHaveProperty('country')
+    })
+
+    it('keeps them when the columns are there but the row leaves them empty', async () => {
+      mockFetchAllRows.mockResolvedValueOnce([euCard]).mockResolvedValueOnce([euCard])
+      enqueue({ data: cardAfterUpdate(euCard) })
+
+      const res = await importFile('Namn,E-post,Kundtyp,Land,Telefon\nAcme GmbH,acme@example.test,,,+49 30 123456\n')
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(merged().phone).toBe('+49 30 123456')
+      expect(merged()).not.toHaveProperty('customer_type')
+      expect(merged()).not.toHaveProperty('country')
+    })
+
+    it('writes the type and country the file states', async () => {
+      const swedishCard = { ...euCard, customer_type: 'swedish_business', country: 'SE', vat_number: null, vat_number_validated: false }
+      mockFetchAllRows.mockResolvedValueOnce([swedishCard]).mockResolvedValueOnce([swedishCard])
+      enqueue({ data: cardAfterUpdate(swedishCard) })
+
+      const res = await importFile('Namn,E-post,Kundtyp,Land,VAT-nummer\nAcme GmbH,acme@example.test,EU,DE,DE123456789\n')
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(merged()).toMatchObject({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE123456789' })
+    })
+
+    it('keeps them on a customer from before the country rule, which already breaks it', async () => {
+      const legacy = { ...euCard, country: 'SE', vat_number: null, vat_number_validated: false }
+      mockFetchAllRows.mockResolvedValueOnce([legacy]).mockResolvedValueOnce([legacy])
+      enqueue({ data: cardAfterUpdate(legacy) })
+
+      const res = await importFile('Namn,E-post,Telefon\nAcme GmbH,acme@example.test,+49 30 123456\n')
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(merged().phone).toBe('+49 30 123456')
+      expect(merged()).not.toHaveProperty('customer_type')
+      expect(merged()).not.toHaveProperty('country')
+    })
+
+    it('keeps the country of a private person abroad when the file states only the type', async () => {
+      const abroad = { ...euCard, name: 'Anna Svensson', customer_type: 'individual', email: 'anna@example.test', vat_number: null, vat_number_validated: false }
+      mockFetchAllRows.mockResolvedValueOnce([abroad]).mockResolvedValueOnce([abroad])
+      enqueue({ data: cardAfterUpdate(abroad) })
+
+      const res = await importFile('Namn,E-post,Kundtyp\nAnna Svensson,anna@example.test,Privat\n')
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(merged().customer_type).toBe('individual')
+      expect(merged()).not.toHaveProperty('country')
+    })
+
+    // The customer form refuses a Swedish business outside Sweden (#2025).
+    it('takes the type the file reads when the customer\'s own cannot have the country the file states', async () => {
+      const swedishCard = { ...euCard, customer_type: 'swedish_business', country: 'SE', vat_number: null, vat_number_validated: false }
+      mockFetchAllRows.mockResolvedValueOnce([swedishCard]).mockResolvedValueOnce([swedishCard])
+      enqueue({ data: cardAfterUpdate(swedishCard) })
+
+      const res = await importFile('Namn,E-post,Land\nAcme GmbH,acme@example.test,DE\n')
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(merged()).toMatchObject({ customer_type: 'eu_business', country: 'DE' })
+    })
+
+    // Read without a type, a personnummer-shaped number is a private
+    // person's, and the schema moves it to personal_number.
+    it('keeps a business a business when the file gives it a personnummer-shaped org number but no type', async () => {
+      const soleTrader = { ...euCard, name: 'Ekfirman', customer_type: 'swedish_business', country: 'SE', email: 'ek@firman.example', vat_number: null, vat_number_validated: false }
+      mockFetchAllRows.mockResolvedValueOnce([soleTrader]).mockResolvedValueOnce([soleTrader])
+      enqueue({ data: cardAfterUpdate(soleTrader) })
+
+      const res = await importFile('Namn,E-post,Orgnr\nEkfirman,ek@firman.example,800101-1234\n')
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(merged()).not.toHaveProperty('customer_type')
+      expect(merged()).not.toHaveProperty('personal_number')
+      expect(merged().org_number).toBe('800101-1234')
+    })
+
+    // Företag is Fortnox's own Typ value; Spiris writes IsPrivatePerson False.
+    it.each([
+      ['a no in a private-person column', 'Namn,E-post,Privatperson\nAcme GmbH,acme@example.test,Nej\n'],
+      ['a word for any company', 'Namn,E-post,Kundtyp\nAcme GmbH,acme@example.test,Företag\n'],
+    ])('keeps a company\'s kind when the file says only that it is a company (%s)', async (_label, csv) => {
+      mockFetchAllRows.mockResolvedValueOnce([euCard]).mockResolvedValueOnce([euCard])
+      enqueue({ data: cardAfterUpdate(euCard) })
+
+      const res = await importFile(csv)
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(merged()).not.toHaveProperty('customer_type')
+      expect(merged()).not.toHaveProperty('country')
+      // No VAT field changed: no drafts lookup.
+      expect(mockFetchAllRows).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps a company\'s kind for Typ Företag next to the customer\'s own VAT number', async () => {
+      mockFetchAllRows.mockResolvedValueOnce([euCard]).mockResolvedValueOnce([euCard])
+      enqueue({ data: cardAfterUpdate(euCard) })
+
+      const res = await importFile('Namn,E-post,Typ,VAT-nummer\nAcme GmbH,acme@example.test,Företag,DE123456789\n')
+      const { status, body } = await parseJsonResponse<{ data: { updated: number } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.updated).toBe(1)
+      expect(merged()).not.toHaveProperty('customer_type')
+      expect(merged()).not.toHaveProperty('country')
+      expect(mockFetchAllRows).toHaveBeenCalledTimes(2)
+    })
+
+    it('refuses a VAT number that does not fit the country the customer keeps, also next to its own type', async () => {
+      const austrian = { ...euCard, country: 'AT', vat_number: 'ATU12345678' }
+      mockFetchAllRows.mockResolvedValueOnce([austrian]).mockResolvedValueOnce([austrian])
+
+      const res = await importFile('Namn,E-post,Kundtyp,VAT-nummer\nAcme GmbH,acme@example.test,EU,DE811234567\n')
+      const { status, body } = await parseJsonResponse<{ data: { failed: number; errors: { reason: string }[] } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.failed).toBe(1)
+      expect(body.data.errors[0].reason).toMatch(/landsprefix/)
+      expect(findCall('customers', 'update')).toBeUndefined()
+    })
+
+    it('refuses a VAT number that does not fit the country the customer keeps', async () => {
+      mockFetchAllRows.mockResolvedValueOnce([euCard]).mockResolvedValueOnce([euCard])
+
+      const res = await importFile('Namn,E-post,VAT-nummer\nAcme GmbH,acme@example.test,SE556677889901\n')
+      const { status, body } = await parseJsonResponse<{ data: { failed: number; errors: { reason: string }[] } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.failed).toBe(1)
+      expect(body.data.errors[0].reason).toMatch(/landsprefix/)
+      expect(findCall('customers', 'update')).toBeUndefined()
+    })
+
+    it('refuses a bare "not a private person" on a private person abroad, whose kind it does not say', async () => {
+      const abroad = { ...euCard, name: 'Anna Svensson', customer_type: 'individual', email: 'anna@example.test', vat_number: null, vat_number_validated: false }
+      mockFetchAllRows.mockResolvedValueOnce([abroad]).mockResolvedValueOnce([abroad])
+
+      const res = await importFile('Namn,E-post,Privatperson\nAnna Svensson,anna@example.test,Nej\n')
+      const { status, body } = await parseJsonResponse<{ data: { failed: number; errors: { reason: string }[] } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.failed).toBe(1)
+      expect(body.data.errors[0].reason).toMatch(/svenskt företag måste ha landet Sverige/)
+      expect(findCall('customers', 'update')).toBeUndefined()
+    })
+
+    it('judges a stored personnummer-shaped org number only against a type the update changes', async () => {
+      const legacy = { ...euCard, org_number: '800101-1234' }
+      mockFetchAllRows.mockResolvedValueOnce([legacy]).mockResolvedValueOnce([legacy])
+      enqueue({ data: cardAfterUpdate(legacy) })
+
+      const res = await importFile('Namn,E-post,Kundtyp,Land,Telefon\nAcme GmbH,acme@example.test,EU,DE,+49 30 123456\n')
+      const { status, body } = await parseJsonResponse<{ data: { updated: number; failed: number } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.failed).toBe(0)
+      expect(merged().phone).toBe('+49 30 123456')
+    })
+
+    it('makes a private person a company when the file says it is one', async () => {
+      const person = { ...euCard, name: 'Ekfirman', customer_type: 'individual', country: 'SE', email: 'ek@firman.example', vat_number: null, vat_number_validated: false }
+      mockFetchAllRows.mockResolvedValueOnce([person]).mockResolvedValueOnce([person])
+      enqueue({ data: cardAfterUpdate(person) })
+
+      const res = await importFile('Namn,E-post,Privatperson\nEkfirman,ek@firman.example,Nej\n')
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(merged().customer_type).toBe('swedish_business')
+      expect(merged()).not.toHaveProperty('country')
+    })
+
+    it('refuses a personnummer-shaped org number on a foreign business the file does not type', async () => {
+      mockFetchAllRows.mockResolvedValueOnce([euCard]).mockResolvedValueOnce([euCard])
+
+      const res = await importFile('Namn,E-post,Orgnr\nAcme GmbH,acme@example.test,800101-1234\n')
+      const { status, body } = await parseJsonResponse<{ data: { updated: number; failed: number; errors: { reason: string }[] } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.updated).toBe(0)
+      expect(body.data.failed).toBe(1)
+      expect(body.data.errors[0].reason).toMatch(/personnummer, vilket ett utländskt företag inte kan ha/)
+      expect(findCall('customers', 'update')).toBeUndefined()
+    })
+
+    it('refuses a row that leaves the country next to a VAT number of another country', async () => {
+      const french = { ...euCard, name: 'Acme SARL', country: 'FR', vat_number: 'FR12345678901' }
+      mockFetchAllRows.mockResolvedValueOnce([french]).mockResolvedValueOnce([french])
+
+      const res = await importFile('Namn,E-post,Land\nAcme SARL,acme@example.test,DE\n')
+      const { status, body } = await parseJsonResponse<{ data: { failed: number; errors: { reason: string }[] } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.failed).toBe(1)
+      expect(body.data.errors[0].reason).toMatch(/landsprefix/)
+      expect(findCall('customers', 'update')).toBeUndefined()
+    })
+
+    it('refuses a foreign type on a sole trader whose org number is a personnummer', async () => {
+      const soleTrader = { ...euCard, name: 'Ekfirman', customer_type: 'swedish_business', country: 'SE', org_number: '800101-1234', email: 'ek@firman.example', vat_number: null, vat_number_validated: false }
+      mockFetchAllRows.mockResolvedValueOnce([soleTrader]).mockResolvedValueOnce([soleTrader])
+
+      const res = await importFile('Namn,E-post,Kundtyp,Land\nEkfirman,ek@firman.example,EU,DE\n')
+      const { status, body } = await parseJsonResponse<{ data: { failed: number; errors: { reason: string }[] } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.failed).toBe(1)
+      expect(body.data.errors[0].reason).toMatch(/personnummer/)
+      expect(findCall('customers', 'update')).toBeUndefined()
+    })
+
+    it('gives a new customer the defaults', async () => {
+      enqueue({ data: { id: 'c1', name: 'Acme AB', customer_type: 'swedish_business', country: 'SE' } })
+
+      const res = await importFile('Namn,E-post\nAcme AB,info@acme.example.test\n')
+      const { status, body } = await parseJsonResponse<{ data: { created: number } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.created).toBe(1)
+      expect(findCall('customers', 'insert')![0]).toMatchObject({ customer_type: 'swedish_business', country: 'SE' })
+    })
+
+    it('leaves the open drafts alone when the customer did not change', async () => {
+      mockFetchAllRows
+        .mockResolvedValueOnce([euCard]) // the undo snapshot
+        .mockResolvedValueOnce([euCard]) // the register to match against
+        .mockResolvedValueOnce([{ customer_id: 'old' }]) // which changed customers have a draft
+      enqueue({ data: cardAfterUpdate(euCard) })
+      // What a draft sync would read: the card, its draft on reverse charge,
+      // the seller's VAT registration; then its write.
+      enqueue({ data: cardAfterUpdate(euCard) })
+      enqueue({
+        data: [{
+          id: 'draft-1',
+          vat_treatment: 'reverse_charge',
+          moms_ruta: '39',
+          reverse_charge_text: 'Omvänd skattskyldighet',
+          vat_treatment_override: null,
+          delivery_country: null,
+          items: [{ vat_rate: 0, line_type: 'service' }],
+        }],
+      })
+      enqueue({ data: { vat_registered: true } })
+      enqueue({ data: null })
+
+      const res = await importFile('Namn,E-post,Telefon\nAcme GmbH,acme@example.test,+49 30 123456\n')
+      const { status } = await parseJsonResponse(res)
+
+      expect(status).toBe(200)
+      expect(findCall('invoices', 'update')).toBeUndefined()
+      // The snapshot and the register: no drafts lookup either.
+      expect(mockFetchAllRows).toHaveBeenCalledTimes(2)
     })
   })
 

@@ -13,9 +13,13 @@ import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import {
+  isOrgNumberRefusedOnIndividual,
+  isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
 } from '@/lib/invariants/personal-number-shape'
+import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { invoiceTermsFor } from '@/lib/invoices/due-date'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 
@@ -60,12 +64,87 @@ interface ExistingCustomer {
 }
 
 /**
+ * What an update does to a matched customer's type and country: the fields to
+ * write, or why the row is not imported.
+ *
+ * It writes what the row states and nothing it does not: the parser fills a
+ * type and a country in for a new customer, and an update keeps the
+ * customer's own. A row that says only that the customer is a company (a no
+ * in a private-person column, a word like Företag) changes a private person
+ * and keeps a company's own kind. The customer form's rules (the country rule,
+ * #2025; an org number on a private person; a personnummer on a foreign
+ * business) are judged on the result, each only when the update touches a
+ * field it reads, as in updateCustomer. When one breaks, the row's own reading
+ * fills in the one of the two the row does not state from the one it does: a
+ * type it names in place of the customer's takes the country the row reads
+ * for it, a country it states takes the type the row reads from it, but never
+ * a private person (a personnummer-shaped number may be a sole trader's org
+ * number). Anything else that breaks a rule, or still does, refuses the row:
+ * a VAT number or an org number alone never rewrites a type or a country.
+ */
+function typeAndCountryForUpdate(
+  row: {
+    customer_type: string
+    customer_type_stated: 'type' | 'business' | null
+    country: string
+    country_stated: boolean
+    vat_number: string | null
+    org_number: string | null
+    personal_number: string | null
+  },
+  customer: ExistingCustomer,
+): { write: { customer_type?: string; country?: string } } | { refusal: string } {
+  const typeNamed = row.customer_type_stated === 'type'
+  const typeStated = typeNamed
+    || (row.customer_type_stated === 'business' && customer.customer_type === 'individual')
+  // The file's org number: the schema moves a personnummer out of it when
+  // the row reads as a private person.
+  const fileOrgNumber = row.org_number || row.personal_number
+  const brokenRule = (customerType: string, country: string | null, writesTypeOrCountry: boolean) => {
+    if (writesTypeOrCountry || row.vat_number) {
+      const issue = checkCountryConsistency({ partyType: customerType, country, vatNumber: row.vat_number || customer.vat_number })
+      if (issue) return COUNTRY_CONSISTENCY_MESSAGES[issue].sv
+    }
+    if (isOrgNumberRefusedOnIndividual(customerType, fileOrgNumber)) {
+      return getErrorEntry('CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL')?.message_sv ?? null
+    }
+    // A company keeps its org number when the file has none; that one is
+    // judged only against a type the update changes.
+    const orgNumber = fileOrgNumber || (customerType !== customer.customer_type ? customer.org_number : null)
+    if (isPersonalNumberOrgNumberDisallowed(customerType, orgNumber)) {
+      return getErrorEntry('CUSTOMER_ORG_NUMBER_IS_PERSONAL')?.message_sv ?? null
+    }
+    return null
+  }
+
+  const customerType = typeStated ? row.customer_type : customer.customer_type
+  const country = row.country_stated ? row.country : customer.country
+  const broken = brokenRule(customerType, country, typeStated || row.country_stated)
+  if (!broken) {
+    return {
+      write: {
+        ...(typeStated ? { customer_type: customerType } : {}),
+        ...(row.country_stated ? { country } : {}),
+      },
+    }
+  }
+  const fillsIn = typeNamed
+    ? !row.country_stated && row.customer_type !== customer.customer_type
+    : row.country_stated && !typeStated && row.customer_type !== 'individual'
+  if (!fillsIn) return { refusal: broken }
+  const stillBroken = brokenRule(row.customer_type, row.country, true)
+  if (stillBroken) return { refusal: stillBroken }
+  return { write: { customer_type: row.customer_type, country: row.country } }
+}
+
+/**
  * POST /api/import/customers/execute
  *
  * Imports validated customer rows. Duplicates (matched by customer number,
  * org number or e-mail, or a same-name customer the user confirmed: see
  * lib/import/shared/register-match.ts) are either updated (merge: only
- * non-empty file fields overwrite) or skipped based on `update_duplicates`.
+ * non-empty file fields overwrite, and the type and country only when the
+ * file states them) or skipped based on `update_duplicates`.
  *
  * An individual's personnummer arrives in the org number column; the schema
  * moves it into personal_number and this route stores it encrypted, with
@@ -127,12 +206,17 @@ export const POST = withRouteContext(
             continue
           }
 
+          const typeAndCountry = typeAndCountryForUpdate(row, match)
+          if ('refusal' in typeAndCountry) {
+            errors.push({ row_index: row.row_index, name: row.name, reason: typeAndCountry.refusal })
+            continue
+          }
           // Merge mode: only overwrite fields where the file has a non-empty value.
-          const merged: Record<string, unknown> = {}
+          const merged: Record<string, unknown> = { ...typeAndCountry.write }
+          const customerType = typeAndCountry.write.customer_type ?? match.customer_type
           if (row.name) merged.name = row.name
-          if (row.customer_type) merged.customer_type = row.customer_type
           if (row.customer_number) merged.customer_number = row.customer_number
-          if (row.customer_type === 'individual') {
+          if (customerType === 'individual') {
             // An individual has no org number, so whatever the matched row
             // carried there goes. A personnummer an earlier import stored
             // there is kept, encrypted in personal_number, unless the file
@@ -143,8 +227,12 @@ export const POST = withRouteContext(
                 ? normalizeReroutedPersonalNumber(match.org_number!)
                 : null)
             if (personalNumber) merged.personal_number = encryptCustomerPersonalNumber(personalNumber)
-          } else if (row.org_number) {
-            merged.org_number = row.org_number
+          } else {
+            // A business's org number may be a personnummer (an enskild
+            // firma's): one the schema moved out because the file did not
+            // type the row and it read as a private person goes back.
+            const orgNumber = row.org_number || row.personal_number
+            if (orgNumber) merged.org_number = orgNumber
           }
           if (row.email) merged.email = row.email
           if (row.phone) merged.phone = row.phone
@@ -152,7 +240,6 @@ export const POST = withRouteContext(
           if (row.address_line2) merged.address_line2 = row.address_line2
           if (row.postal_code) merged.postal_code = row.postal_code
           if (row.city) merged.city = row.city
-          if (row.country) merged.country = row.country
           if (row.vat_number) merged.vat_number = row.vat_number
           if (row.default_payment_terms !== null) merged.default_payment_terms = row.default_payment_terms
           if (row.notes) merged.notes = row.notes
