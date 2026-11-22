@@ -55,7 +55,8 @@ export interface ConnectionSyncInput {
   companyId: string
   /** Whose sync it is: the caller, or the connection's owner for the cron. */
   userId: string
-  connection: { id: string; session_id: string | null }
+  /** bank_name names the bank: Nordea's card holds are read as not booked (isNordeaCardHold). */
+  connection: { id: string; session_id: string | null; bank_name: string | null }
   /** The accounts to fetch: the door has kept only synced ones (isSyncedAccount). */
   accounts: StoredAccount[]
   fromDate: string
@@ -151,6 +152,7 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     ...(rawInsertOnly ? { rawInsertOnly: true } : {}),
     ...(input.firstSync || input.lookbackDays >= LONGEST_STRATEGY_MIN_DAYS ? { strategy: 'longest' as const } : {}),
     ...(input.signer ? { signer: input.signer } : {}),
+    ...(connection.bank_name ? { bankName: connection.bank_name } : {}),
   }
 
   const fetches = Promise.all(
