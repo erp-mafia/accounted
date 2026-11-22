@@ -130,9 +130,13 @@ export function describeEvent(
     default:
       text = 'Anteckning'
   }
-  if (e.kind === 'anteckning') return `Anteckning: ${e.note ?? ''}`
   // An entry made once the register is in use carries the day it was made; the day of the event is said in its text.
-  const dated = e.occurred_on ? `${text}. Händelsens dag ${e.occurred_on}` : text
+  const occurred = e.occurred_on ? `Händelsens dag ${e.occurred_on}` : ''
+  if (e.kind === 'anteckning') {
+    const note = e.note ?? ''
+    return occurred ? `Anteckning: ${note.replace(/\.\s*$/, '')}. ${occurred}` : `Anteckning: ${note}`
+  }
+  const dated = occurred ? `${text}. ${occurred}` : text
   return e.note ? `${dated}. ${e.note}` : dated
 }
 

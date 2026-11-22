@@ -36,7 +36,7 @@ export async function briefBolaget(ctx: OperationContext): Promise<BolagetBriefi
       board: roles.board.map((r) => ({ name: r.party?.name ?? 'okänd', role: r.label_sv })),
       ceo: roles.ceo?.party?.name ?? null,
       signatory_rule: roles.signatory_rule,
-      how: 'Aktieboken: gnubok_get_share_register (as_of) and gnubok_list_share_events; roles: gnubok_list_company_roles. Stage changes with gnubok_register_share_event or gnubok_add_company_role. A company that kept its aktiebok elsewhere enters today\'s holdings as kind ingaende, never as bildande; completes_setup on the last entry takes the register into use. Personnummer are collected in Accounted only, never in a call.',
+      how: 'Aktieboken: gnubok_get_share_register (as_of) and gnubok_list_share_events; roles: gnubok_list_company_roles. Stage changes with gnubok_register_share_event or gnubok_add_company_role. A company that kept its aktiebok elsewhere enters its holdings as kind ingaende dated the day they stood, never as bildande; completes_setup on the last entry takes the register into use. Personnummer are collected in Accounted only, never in a call.',
     }
   } catch (error) {
     ctx.log.warn('[bolaget] briefing block failed', { companyId: ctx.companyId, error: String(error) })

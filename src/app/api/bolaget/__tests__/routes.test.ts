@@ -224,13 +224,21 @@ describe('PATCH /api/bolaget/people/{partyId}', () => {
     expect(renameRegisterParty).not.toHaveBeenCalled()
   })
 
-  it('changes the name and the organisationsnummer through the rename, apart from the particulars', async () => {
-    vi.mocked(renameRegisterParty).mockResolvedValueOnce({ ok: true, party_id: ANNA, name: 'Ek Holding AB', org_number: '5560000001', changed: true })
+  it('checks the name, saves the particulars, then writes the name', async () => {
+    const renamed = { ok: true as const, party_id: ANNA, name: 'Ek Holding AB', org_number: '5560000001', changed: true }
+    vi.mocked(renameRegisterParty).mockResolvedValue(renamed)
     vi.mocked(savePersonPrivate).mockResolvedValueOnce({ ok: true, personnummer_masked: null })
     const res = await patch({ name: 'Ek Holding AB', org_number: '556000-0001', city: 'Lund' })
     expect(res.status).toBe(200)
-    expect(vi.mocked(renameRegisterParty).mock.calls[0]!.slice(1)).toEqual([ANNA, { name: 'Ek Holding AB', org_number: '556000-0001' }])
+    const calls = vi.mocked(renameRegisterParty).mock.calls
+    expect(calls.map((call) => call.slice(1))).toEqual([
+      [ANNA, { name: 'Ek Holding AB', org_number: '556000-0001' }, { dryRun: true }],
+      [ANNA, { name: 'Ek Holding AB', org_number: '556000-0001' }],
+    ])
     expect(savePersonPrivate).toHaveBeenCalledWith('company-1', ANNA, { city: 'Lund' })
+    // The check runs before the particulars are saved, the write after.
+    const order = [calls.length > 0 ? vi.mocked(renameRegisterParty).mock.invocationCallOrder[0]! : 0, vi.mocked(savePersonPrivate).mock.invocationCallOrder[0]!, vi.mocked(renameRegisterParty).mock.invocationCallOrder[1]!]
+    expect(order).toEqual([...order].sort((a, b) => a - b))
   })
 
   it('saves nothing when the name is refused, and says why', async () => {
@@ -239,6 +247,15 @@ describe('PATCH /api/bolaget/people/{partyId}', () => {
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatchObject({ code: 'BOLAGET_PARTY_INVALID', message: 'Organisationsnumret är inte giltigt.' })
     expect(savePersonPrivate).not.toHaveBeenCalled()
+  })
+
+  it('leaves the name alone when the particulars are refused', async () => {
+    vi.mocked(renameRegisterParty).mockResolvedValue({ ok: true, party_id: ANNA, name: 'Anna Berg', org_number: null, changed: true })
+    vi.mocked(savePersonPrivate).mockResolvedValueOnce({ ok: false, code: 'BOLAGET_PERSONNUMMER_INVALID' })
+    const res = await patch({ name: 'Anna Berg', personnummer: '123' })
+    expect(res.status).toBe(400)
+    // Checked, never written.
+    expect(vi.mocked(renameRegisterParty).mock.calls.map((call) => call[3])).toEqual([{ dryRun: true }])
   })
 
   it('refuses an empty name before anything is read', async () => {

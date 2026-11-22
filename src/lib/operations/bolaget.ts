@@ -396,8 +396,8 @@ export const beneficialOwnersGet = defineOperation({
 
 const ShareEventIn = z
   .object({
-    kind: z.enum(SHARE_EVENT_KINDS).describe('bildande, ingaende (a holding carried over from the register the company kept before; only while the register is set up), nyemission, fondemission, overlatelse, indragning, omvandling, split, sammanlaggning, aktiebrev, pant, nyttjanderatt, anteckning or rattelse.'),
-    event_date: saneIsoDateSchema.nullish().describe('The day of the event (YYYY-MM-DD); never in the future, today when left out. For ingaende: the day the holding stood. Once the register is in use (setup_completed_at set) the entry carries today, and an earlier day given here is kept as occurred_on.'),
+    kind: z.enum(SHARE_EVENT_KINDS).describe('bildande, ingaende (a holding carried over from the register the company kept before, as it stood on event_date; only while the register is set up), nyemission, fondemission, overlatelse, indragning, omvandling, split, sammanlaggning, aktiebrev, pant, nyttjanderatt, anteckning or rattelse.'),
+    event_date: saneIsoDateSchema.nullish().describe('The day of the event (YYYY-MM-DD); never in the future, today when left out. For ingaende: the day the holding stood; the register shows the holding from that day on. Once the register is in use (setup_completed_at set) the entry carries today, and an earlier day given here is kept as occurred_on.'),
     occurred_on: saneIsoDateSchema.nullish().describe('The day of the event, when the entry carries a later day. Seldom needed: an earlier event_date becomes this by itself once the register is in use.'),
     completes_setup: z.boolean().nullish().describe('True on the entry that makes the register complete: every share of the company is then entered, the register is taken into use, entries carry the day they are made from then on, and no ingaende entry is taken. Cannot be undone. To complete a register that needs no further entry, send it with kind anteckning.'),
     share_class_code: z.string().trim().max(12).nullish().describe('The class, e.g. A. Optional when the company has one class; the first issue creates class A.'),
@@ -442,7 +442,7 @@ export const shareRegisterEventsCreate = defineOperation({
     summary: 'Add a dated entry to the aktiebok: an issue, a transfer, a cancellation, a conversion, a split, an aktiebrev, a pledge or a note.',
     description:
       'Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided with kind rattelse and entered again. The register refuses an entry its history cannot hold: no share held twice, a transfer only of shares the transferor holds on that date. ' +
-      'A register is first set up: the history is entered with the day of each event, or, for a company that kept its aktiebok elsewhere, today\'s holdings as kind ingaende. The entry with completes_setup true takes the register into use; from then on an entry carries the day it is made (a shareholder has rights from the day they are entered, ABL 4:37 and 7:2) and the day of the event is kept as occurred_on. ' +
+      'A register is first set up: the history is entered with the day of each event, or, for a company that kept its aktiebok elsewhere, its holdings as kind ingaende, each dated the day it stood. The entry with completes_setup true takes the register into use; from then on an entry carries the day it is made (a shareholder has rights from the day they are entered, ABL 4:37 and 7:2) and the day of the event is kept as occurred_on. ' +
       'A new holder is named by to_name; their personnummer and address are completed in Accounted. Dry-runnable: the preview shows holdings before and after and the day the entry will carry.',
     useWhen: 'Shares were issued, sold, given, inherited, cancelled, split, pledged, or an aktiebrev was issued or returned.',
     doNotUseFor: 'Booking the money of an emission or a dividend (a voucher), or changing votes per share (PATCH /share-classes/{id}).',
@@ -451,7 +451,7 @@ export const shareRegisterEventsCreate = defineOperation({
       'SHARE_REGISTER_RANGE_TAKEN: an issue overlaps shares already held; omit the range and send share_count.',
       'SHARE_REGISTER_STALE: the register got an entry after the one you saw; read it again and retry.',
       'SHARE_REGISTER_SETUP_COMPLETE: the register is in use; kind ingaende and completes_setup belong to the setup only.',
-      'A company with a history never enters today\'s holdings as bildande: use ingaende, or enter the history as it happened.',
+      'A company with a history never enters its current holdings as bildande: use ingaende dated the day the holdings stood, or enter the history as it happened.',
       'A range_start with a share_count names the whole block (range_start to range_start + share_count - 1).',
       'FORBIDDEN: only the company\'s owner or an administrator adds to the aktiebok.',
       'BOLAGET_PERSONNUMMER_IN_APP_ONLY: a personnummer was sent; name the person and complete them in the app.',

@@ -86,6 +86,16 @@ describe('matchRegisterPerson', () => {
     const two = [{ id: 'short', display_name: 'Anna Ek' }, { id: 'long', display_name: 'Ek, Anna Maria' }]
     expect(matchRegisterPerson(two, 'anna ek')?.id).toBe('short')
   })
+
+  it('counts a word that stands twice as two words', () => {
+    expect(personNameWords('Anna Anna')).toEqual(['anna', 'anna'])
+    // One typed word never names "Anna Anna".
+    expect(matchRegisterPerson([{ id: 'twice', display_name: 'Anna Anna' }], 'Anna')).toBeNull()
+    // A reordered name still finds its one person beside a namesake with a repeated word.
+    const two = [{ id: 'plain', display_name: 'Ek, Anna' }, { id: 'twice', display_name: 'Ek, Anna Anna' }]
+    expect(matchRegisterPerson(two, 'Anna Ek')?.id).toBe('plain')
+    expect(matchRegisterPerson(two, 'Anna Anna Ek')?.id).toBe('twice')
+  })
 })
 
 describe('renameRegisterParty', () => {
@@ -126,11 +136,29 @@ describe('renameRegisterParty', () => {
     expect(await renameRegisterParty(ctx, 'p2', { org_number: '19800101-1234' })).toMatchObject({ ok: false, code: 'BOLAGET_PERSONNUMMER_IN_APP_ONLY' })
   })
 
-  it('says that the organisationsnummer is on another party', async () => {
+  it('says that the organisationsnummer is on another party, before anything is written', async () => {
+    enqueue({ data: [{ ...holder, org_number: null }] }) // parties in company
+    enqueue({ data: { id: 'other' } }) // the party that has the number
+    const outcome = await renameRegisterParty(ctx, 'p1', { org_number: '556000-0001' })
+    expect(outcome).toMatchObject({ ok: false, code: 'BOLAGET_PARTY_INVALID' })
+    if (!outcome.ok) expect(outcome.messageSv).toMatch(/finns redan/)
+    expect(findCall('parties', 'update')).toBeUndefined()
+  })
+
+  it('says the same when another party takes the number between the check and the write', async () => {
     enqueue({ data: [{ ...holder, org_number: null }] })
+    enqueue({ data: null }) // nobody has the number yet
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "parties_company_org_number_live"' } })
     const outcome = await renameRegisterParty(ctx, 'p1', { org_number: '556000-0001' })
     expect(outcome).toMatchObject({ ok: false, code: 'BOLAGET_PARTY_INVALID' })
     if (!outcome.ok) expect(outcome.messageSv).toMatch(/finns redan/)
+  })
+
+  it('checks everything and writes nothing on a dry run', async () => {
+    enqueue({ data: [holder] })
+    expect(await renameRegisterParty(ctx, 'p1', { name: 'Ek Holding AB' }, { dryRun: true })).toMatchObject({ ok: true, name: 'Ek Holding AB', changed: true })
+    expect(findCall('parties', 'update')).toBeUndefined()
+    enqueue({ data: [holder] })
+    expect(await renameRegisterParty(ctx, 'p1', { name: ' ' }, { dryRun: true })).toMatchObject({ ok: false, code: 'BOLAGET_PARTY_INVALID' })
   })
 })

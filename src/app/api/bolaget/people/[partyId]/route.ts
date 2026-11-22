@@ -46,16 +46,23 @@ export const PATCH = withRouteContext<{ params: Promise<{ partyId: string }> }>(
     const validation = await validateBody(request, PersonSchema)
     if (!validation.success) return validation.response
     const { name, org_number: orgNumber, ...particulars } = validation.data
-    // The name first: a refused name saves nothing.
-    if (name !== undefined || orgNumber !== undefined) {
-      const renamed = await renameRegisterParty(operationContext(ctx), partyId, {
-        ...(name !== undefined ? { name } : {}),
-        ...(orgNumber !== undefined ? { org_number: orgNumber } : {}),
-      })
-      if (!renamed.ok) return sessionFailureResponse(renamed, ctx.log, ctx.requestId)
+    const rename =
+      name !== undefined || orgNumber !== undefined
+        ? { ...(name !== undefined ? { name } : {}), ...(orgNumber !== undefined ? { org_number: orgNumber } : {}) }
+        : null
+    // Neither half is written when the other is refused: the name is checked
+    // first without being written, the particulars are saved (a personnummer
+    // is validated there), and the name is written last.
+    if (rename) {
+      const checked = await renameRegisterParty(operationContext(ctx), partyId, rename, { dryRun: true })
+      if (!checked.ok) return sessionFailureResponse(checked, ctx.log, ctx.requestId)
     }
     const outcome = await savePersonPrivate(ctx.companyId, partyId, particulars)
     if (!outcome.ok) return errorResponseFromCode(outcome.code, ctx.log, { requestId: ctx.requestId })
+    if (rename) {
+      const renamed = await renameRegisterParty(operationContext(ctx), partyId, rename)
+      if (!renamed.ok) return sessionFailureResponse(renamed, ctx.log, ctx.requestId)
+    }
     return NextResponse.json({ data: { party_id: partyId, personnummer_masked: outcome.personnummer_masked } })
   },
   { requireAdmin: true },

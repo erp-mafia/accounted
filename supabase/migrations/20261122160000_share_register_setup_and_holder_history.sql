@@ -26,7 +26,8 @@
 --      postal address in party_person_private; both were changed in place.
 --      Removed register data is kept at least ten years (ABL 5:3) and a
 --      change is dated (5:9). A change of name or organisationsnummer of a
---      party the register names now adds a dated note; the replaced identity
+--      party the register names now adds a dated note, and is the owner's or
+--      an admin's when it is their own statement; the replaced identity
 --      number and address are kept in party_person_private_history.
 --
 -- Nothing here changes an existing entry.
@@ -391,9 +392,54 @@ GRANT EXECUTE ON FUNCTION public.share_register_replay(uuid, date) TO authentica
 -- party is one row shared with the customer and supplier registers, renamed by
 -- whoever keeps those and by the registry lookup. The register must not be
 -- silently rewritten by that (ABL 5:3, 5:9): the change is entered as an
--- anteckning that says what the name or number was. SECURITY DEFINER because
--- the one who renames a party need not be one who may write the aktiebok; the
--- note is the register's own record of a change that has already happened.
+-- anteckning that says what the name or number was.
+--
+-- Who may make the change: the board keeps the aktiebok (ABL 5:7), so a
+-- statement of the caller's own that renames such a party, or changes its
+-- organisationsnummer, is the owner's or an admin's
+-- (parties_share_register_guard). A change another trigger makes while a
+-- customer or supplier is saved (the party learns its organisationsnummer)
+-- is not refused: refusing it would fail that save. It is noted like any
+-- other, which is why the note function is SECURITY DEFINER: the one whose
+-- save changed the party need not be one who may write the aktiebok, and the
+-- note is the register's own record of a change that has happened.
+
+CREATE OR REPLACE FUNCTION public.parties_share_register_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  -- Inside another trigger's statement, or the service role: not refused.
+  IF pg_trigger_depth() > 1 OR auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF public.user_is_company_admin(NEW.company_id) THEN
+    RETURN NEW;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.share_register_events e
+     WHERE e.company_id = NEW.company_id
+       AND (e.to_party_id = NEW.id OR e.from_party_id = NEW.id OR e.counterparty_party_id = NEW.id)
+  ) THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'SHARE_REGISTER_HOLDER_ADMIN_ONLY: only the owner or an admin changes the name or the organisationsnummer of a party the aktiebok names'
+    USING ERRCODE = 'insufficient_privilege';
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.parties_share_register_guard() FROM PUBLIC, anon, authenticated;
+
+COMMENT ON FUNCTION public.parties_share_register_guard() IS
+  'ABL 5:7: a statement of the caller''s own that changes the name or the organisationsnummer of a party the aktiebok names is the owner''s or an admin''s. A change made inside another trigger''s statement and the service role pass; parties_share_register_note enters every change in the register.';
+
+DROP TRIGGER IF EXISTS parties_share_register_guard ON public.parties;
+CREATE TRIGGER parties_share_register_guard
+  BEFORE UPDATE ON public.parties
+  FOR EACH ROW
+  WHEN (OLD.display_name IS DISTINCT FROM NEW.display_name OR OLD.org_number IS DISTINCT FROM NEW.org_number)
+  EXECUTE FUNCTION public.parties_share_register_guard();
 
 CREATE OR REPLACE FUNCTION public.parties_share_register_note()
 RETURNS trigger

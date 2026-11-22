@@ -300,7 +300,9 @@ describe('buildEventBody: the two phases of the register', () => {
     expect(bodyOf(opening)).toMatchObject({ kind: 'ingaende', to_party_id: RECEIVER, share_count: 500, completes_setup: true })
     expect(bodyOf({ kind: 'anteckning', note: 'x', completes_setup: 'true' })).not.toHaveProperty('completes_setup')
     const used = buildEventBody(form({ ...opening, kind: 'nyemission' }), { today: TODAY, inUse: true })
-    expect(used.ok && used.body).not.toHaveProperty('completes_setup')
+    if (!used.ok) throw new Error(`expected a body, got errors ${JSON.stringify(used.errors)}`)
+    expect(used.body).toMatchObject({ kind: 'nyemission', to_party_id: RECEIVER, share_count: 500 })
+    expect(used.body).not.toHaveProperty('completes_setup')
   })
 
   it('asks no price for a holding carried over from an earlier register', () => {

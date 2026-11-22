@@ -223,6 +223,10 @@ describe('pdf data', () => {
       new Map(),
     )
     expect(text).toBe('Överlåtelse (gåva): aktie 1-10 (10 st, serie A) från Anna Ek till Cia Ek. Händelsens dag 2026-10-01')
+    // A free-text note says it too.
+    const note = describeEvent(ev({ id: 'n', event_number: 11, kind: 'anteckning', event_date: '2026-11-22', occurred_on: '2026-10-01', note: 'Hembud avslutat.' }), parties, [A], new Map())
+    expect(note).toBe('Anteckning: Hembud avslutat. Händelsens dag 2026-10-01')
+    expect(describeEvent(ev({ id: 'n2', event_number: 12, kind: 'anteckning', event_date: '2026-11-22', note: 'Hembud avslutat.' }), parties, [A], new Map())).toBe('Anteckning: Hembud avslutat.')
   })
 })
 

@@ -13239,6 +13239,11 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
     message_en: 'The share register is already set up and in use. An opening holding is entered only while the register is set up: enter a transfer or an issue instead.',
     thrown_message_sv: true,
   },
+  SHARE_REGISTER_HOLDER_ADMIN_ONLY: {
+    httpStatus: 403,
+    message_sv: 'Bara företagets ägare eller en administratör kan ändra namn eller organisationsnummer på någon som står i aktieboken.',
+    message_en: 'Only the company\'s owner or an administrator can change the name or the organisation number of somebody the share register names.',
+  },
   SHARE_REGISTER_EMPTY: {
     httpStatus: 409,
     message_sv: 'Aktieboken har inga aktier än. För in aktierna först.',

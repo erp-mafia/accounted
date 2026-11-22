@@ -1171,7 +1171,7 @@ Example response `200`:
 **Add a dated entry to the aktiebok: an issue, a transfer, a cancellation, a conversion, a split, an aktiebrev, a pledge or a note.**
 `scope:companies:write · risk:medium · idempotent · dry-run`
 
-Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided with kind rattelse and entered again. The register refuses an entry its history cannot hold: no share held twice, a transfer only of shares the transferor holds on that date. A register is first set up: the history is entered with the day of each event, or, for a company that kept its aktiebok elsewhere, today's holdings as kind ingaende. The entry with completes_setup true takes the register into use; from then on an entry carries the day it is made (a shareholder has rights from the day they are entered, ABL 4:37 and 7:2) and the day of the event is kept as occurred_on. A new holder is named by to_name; their personnummer and address are completed in Accounted. Dry-runnable: the preview shows holdings before and after and the day the entry will carry.
+Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided with kind rattelse and entered again. The register refuses an entry its history cannot hold: no share held twice, a transfer only of shares the transferor holds on that date. A register is first set up: the history is entered with the day of each event, or, for a company that kept its aktiebok elsewhere, its holdings as kind ingaende, each dated the day it stood. The entry with completes_setup true takes the register into use; from then on an entry carries the day it is made (a shareholder has rights from the day they are entered, ABL 4:37 and 7:2) and the day of the event is kept as occurred_on. A new holder is named by to_name; their personnummer and address are completed in Accounted. Dry-runnable: the preview shows holdings before and after and the day the entry will carry.
 
 **Use when:** Shares were issued, sold, given, inherited, cancelled, split, pledged, or an aktiebrev was issued or returned.
 **Do not use for:** Booking the money of an emission or a dividend (a voucher), or changing votes per share (PATCH /share-classes/{id}).
@@ -1181,7 +1181,7 @@ Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided
 - SHARE_REGISTER_RANGE_TAKEN: an issue overlaps shares already held; omit the range and send share_count.
 - SHARE_REGISTER_STALE: the register got an entry after the one you saw; read it again and retry.
 - SHARE_REGISTER_SETUP_COMPLETE: the register is in use; kind ingaende and completes_setup belong to the setup only.
-- A company with a history never enters today's holdings as bildande: use ingaende, or enter the history as it happened.
+- A company with a history never enters its current holdings as bildande: use ingaende dated the day the holdings stood, or enter the history as it happened.
 - A range_start with a share_count names the whole block (range_start to range_start + share_count - 1).
 - FORBIDDEN: only the company's owner or an administrator adds to the aktiebok.
 - BOLAGET_PERSONNUMMER_IN_APP_ONLY: a personnummer was sent; name the person and complete them in the app.

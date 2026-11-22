@@ -5,15 +5,33 @@
  * happens once, is the owner's or an admin's and is entered in the register;
  * once in use an entry carries the day it is made and keeps the day of the
  * event; a change of a holder's name or organisationsnummer is entered as a
- * dated note whoever made it; and a holder's replaced identity number and
- * address are kept, out of members' reach and append-only.
+ * dated note, is the owner's or an admin's when it is their own statement
+ * and goes through when another row's trigger makes it; and a holder's
+ * replaced identity number and address are kept, out of members' reach and
+ * append-only.
  */
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
 
 type Company = { userId: string; companyId: string; fiscalPeriodId: string }
+
+// Every date is counted from today on the Swedish calendar, so the suite
+// answers the same whenever it runs.
+let TODAY = ''
+function day(offset: number): string {
+  const d = new Date(`${TODAY}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + offset)
+  return d.toISOString().slice(0, 10)
+}
+/** The day the opening holdings stand, and a later day still in the past. */
+const OPENING = -300
+const LATER = -200
+
+beforeAll(async () => {
+  TODAY = (await getPool().query<{ today: string }>(`SELECT public.stockholm_today()::text AS today`)).rows[0]!.today
+})
 
 async function party(company: Company, name: string, kind = 'person', origin = 'bolaget'): Promise<string> {
   const id = randomUUID()
@@ -52,7 +70,7 @@ async function companyWithRegister() {
   const company = await seedCompany()
   const cls = await shareClass(company)
   const anna = await party(company, 'Anna Ek')
-  await holding(company, 'ingaende', '2026-01-01', cls, anna, 1, 500)
+  await holding(company, 'ingaende', day(OPENING), cls, anna, 1, 500)
   return { company, cls, anna }
 }
 
@@ -74,16 +92,16 @@ describe('aktiebok: a holding carried over from an earlier register', () => {
     const state = await getPool().query(`SELECT party_id, range_start::int, range_end::int FROM public.share_register_state($1, NULL)`, [company.companyId])
     expect(state.rows).toEqual([{ party_id: anna, range_start: 1, range_end: 500 }])
     // Not yet on the day before it stands.
-    const before = await getPool().query(`SELECT 1 FROM public.share_register_state($1, '2025-12-31')`, [company.companyId])
+    const before = await getPool().query(`SELECT 1 FROM public.share_register_state($1, $2)`, [company.companyId, day(OPENING - 1)])
     expect(before.rowCount).toBe(0)
     // A share is held once, whatever kind entered it.
-    await expect(holding(company, 'ingaende', '2026-01-01', cls, anna, 400, 600)).rejects.toThrow(/SHARE_REGISTER_RANGE_TAKEN/)
+    await expect(holding(company, 'ingaende', day(OPENING), cls, anna, 400, 600)).rejects.toThrow(/SHARE_REGISTER_RANGE_TAKEN/)
   })
 
   it('needs the holder, the class and the share numbers, like a bildande', async () => {
     const company = await seedCompany()
     await expect(
-      getPool().query(`INSERT INTO public.share_register_events (company_id, event_date, kind, note) VALUES ($1, '2026-01-01', 'ingaende', 'x')`, [company.companyId]),
+      getPool().query(`INSERT INTO public.share_register_events (company_id, event_date, kind, note) VALUES ($1, $2, 'ingaende', 'x')`, [company.companyId, day(OPENING)]),
     ).rejects.toMatchObject({ code: '23514' })
   })
 })
@@ -152,18 +170,18 @@ describe('aktiebok: completing the setup (ABL 5:3)', () => {
 describe('aktiebok: the day an entry carries (ABL 4:37, 5:9, 7:2)', () => {
   it('keeps the day of the event while the register is set up', async () => {
     const { company, cls, anna } = await companyWithRegister()
-    const entry = await holding(company, 'nyemission', '2026-03-01', cls, anna, 501, 600)
-    expect(entry).toMatchObject({ event_date: '2026-03-01', occurred_on: null })
+    const entry = await holding(company, 'nyemission', day(LATER), cls, anna, 501, 600)
+    expect(entry).toMatchObject({ event_date: day(LATER), occurred_on: null })
   })
 
   it('carries the day it is made once the register is in use, and keeps the day of the event beside it', async () => {
     const { company, cls, anna } = await companyWithRegister()
     await getPool().query(COMPLETE, [company.companyId])
-    const today = (await getPool().query<{ today: string }>(`SELECT public.stockholm_today()::text AS today`)).rows[0]!.today
-    const entry = await holding(company, 'nyemission', '2026-03-01', cls, anna, 501, 600)
-    expect(entry).toMatchObject({ event_date: today, occurred_on: '2026-03-01' })
+    const today = TODAY
+    const entry = await holding(company, 'nyemission', day(LATER), cls, anna, 501, 600)
+    expect(entry).toMatchObject({ event_date: today, occurred_on: day(LATER) })
     // The register on the day of the event does not show what was entered later.
-    const then = await getPool().query(`SELECT range_end::int FROM public.share_register_state($1, '2026-03-01')`, [company.companyId])
+    const then = await getPool().query(`SELECT range_end::int FROM public.share_register_state($1, $2)`, [company.companyId, day(LATER)])
     expect(then.rows).toEqual([{ range_end: 500 }])
     const now = await getPool().query(`SELECT range_end::int FROM public.share_register_state($1, NULL)`, [company.companyId])
     expect(now.rows).toEqual([{ range_end: 600 }])
@@ -175,15 +193,15 @@ describe('aktiebok: the day an entry carries (ABL 4:37, 5:9, 7:2)', () => {
   it('takes no holding carried over from an earlier register once in use', async () => {
     const { company, cls, anna } = await companyWithRegister()
     await getPool().query(COMPLETE, [company.companyId])
-    await expect(holding(company, 'ingaende', '2026-01-01', cls, anna, 501, 600)).rejects.toThrow(/SHARE_REGISTER_SETUP_COMPLETE/)
+    await expect(holding(company, 'ingaende', day(OPENING), cls, anna, 501, 600)).rejects.toThrow(/SHARE_REGISTER_SETUP_COMPLETE/)
   })
 
   it('never stores a day of the event that is not earlier than the entry\'s day', async () => {
     const { company } = await companyWithRegister()
     const res = await getPool().query<{ occurred_on: string | null }>(
       `INSERT INTO public.share_register_events (company_id, event_date, occurred_on, kind, note)
-       VALUES ($1, '2026-02-01', '2026-02-01', 'anteckning', 'x') RETURNING occurred_on::text`,
-      [company.companyId],
+       VALUES ($1, $2, $2, 'anteckning', 'x') RETURNING occurred_on::text`,
+      [company.companyId, day(LATER)],
     )
     expect(res.rows[0]!.occurred_on).toBeNull()
   })
@@ -203,7 +221,7 @@ describe('aktiebok: a holder\'s name or organisationsnummer changes (ABL 5:3, 5:
     const company = await seedCompany()
     const cls = await shareClass(company)
     const holder = await party(company, 'Ek Holding AB', 'company')
-    await holding(company, 'ingaende', '2026-01-01', cls, holder, 1, 100)
+    await holding(company, 'ingaende', day(OPENING), cls, holder, 1, 100)
     await getPool().query(`UPDATE public.parties SET org_number = '5560000001' WHERE id = $1`, [holder])
     await getPool().query(`UPDATE public.parties SET org_number = NULL WHERE id = $1`, [holder])
     expect((await notes(company)).map((n) => n.note)).toEqual([
@@ -220,16 +238,50 @@ describe('aktiebok: a holder\'s name or organisationsnummer changes (ABL 5:3, 5:
     expect(await notes(company)).toHaveLength(0)
   })
 
-  it('is entered whoever renames the party: a member who may not write the aktiebok still leaves the note, in their name', async () => {
+  it('is the owner\'s or an admin\'s when it is their own statement (ABL 5:7), and a viewer\'s or a member\'s never', async () => {
     const { company, anna } = await companyWithRegister()
     const memberId = await insertAuthUser()
     await insertCompanyMember({ companyId: company.companyId, userId: memberId, role: 'member' })
-    const seen = await withUserContext(memberId, async (client) => {
-      await client.query(`UPDATE public.parties SET display_name = 'A. Ek' WHERE id = $1`, [anna])
-      // The member cannot enter a note of their own.
+    const viewerId = await insertAuthUser()
+    await insertCompanyMember({ companyId: company.companyId, userId: viewerId, role: 'viewer' })
+    const rename = `UPDATE public.parties SET display_name = 'A. Ek' WHERE id = $1`
+    for (const userId of [memberId, viewerId]) {
+      await expect(withUserContext(userId, (client) => client.query(rename, [anna]))).rejects.toThrow(/SHARE_REGISTER_HOLDER_ADMIN_ONLY/)
+    }
+    expect(await notes(company)).toHaveLength(0)
+    // A party the register does not name is theirs to rename as before.
+    const customer = await party(company, 'Kund AB', 'company', 'manual')
+    const renamed = await withUserContext(memberId, async (client) =>
+      (await client.query(`UPDATE public.parties SET display_name = 'Kund Sverige AB' WHERE id = $1`, [customer])).rowCount)
+    expect(renamed).toBe(1)
+
+    const byOwner = await withUserContext(company.userId, async (client) => {
+      await client.query(rename, [anna])
       return (await client.query(`SELECT note, created_by FROM public.share_register_events WHERE company_id = $1 AND kind = 'anteckning'`, [company.companyId])).rows
     })
-    expect(seen).toEqual([{ note: 'A. Ek: namnet ändrat från Anna Ek till A. Ek.', created_by: memberId }])
+    expect(byOwner).toEqual([{ note: 'A. Ek: namnet ändrat från Anna Ek till A. Ek.', created_by: company.userId }])
+  })
+
+  it('goes through, and is noted in their name, when a member\'s save of a supplier teaches the party its organisationsnummer', async () => {
+    const company = await seedCompany()
+    const cls = await shareClass(company)
+    // A supplier without an organisationsnummer, whose party also holds shares.
+    const supplier = await getPool().query<{ id: string; party_id: string }>(
+      `INSERT INTO public.suppliers (company_id, user_id, name) VALUES ($1, $2, 'Ek Holding AB') RETURNING id, party_id`,
+      [company.companyId, company.userId],
+    )
+    const holder = supplier.rows[0]!.party_id
+    await holding(company, 'ingaende', day(OPENING), cls, holder, 1, 100)
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId: company.companyId, userId: memberId, role: 'member' })
+    const seen = await withUserContext(memberId, async (client) => {
+      // The supplier row is the member's to change; its trigger completes the party.
+      await client.query(`UPDATE public.suppliers SET org_number = '556666-1012' WHERE id = $1`, [supplier.rows[0]!.id])
+      const p = await client.query(`SELECT org_number FROM public.parties WHERE id = $1`, [holder])
+      const written = await client.query(`SELECT note, created_by FROM public.share_register_events WHERE company_id = $1 AND kind = 'anteckning'`, [company.companyId])
+      return { org: p.rows[0].org_number, notes: written.rows }
+    })
+    expect(seen).toEqual({ org: '5566661012', notes: [{ note: 'Ek Holding AB: organisationsnummer 5566661012 infört.', created_by: memberId }] })
   })
 
   it('enters nothing for an avstämningsbolag, whose register is not kept here', async () => {

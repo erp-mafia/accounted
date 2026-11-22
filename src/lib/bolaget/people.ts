@@ -18,6 +18,7 @@ import { normalizeSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
 import { formatOrgNumberDisplay, isValidOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { OperationContext } from '@/lib/operations/types'
 import type { PartyAddress, PartyKind, RegisterParty } from './types'
 
@@ -95,9 +96,24 @@ export async function assertPartiesInCompany(supabase: SupabaseClient, companyId
   }
 }
 
-/** A person's name as the words in it, lower case: "Lindqvist, Karl Erik" is erik, karl, lindqvist. */
+/**
+ * A person's name as the words in it, lower case and sorted: "Lindqvist,
+ * Karl Erik" is erik, karl, lindqvist. A word that stands twice is kept
+ * twice: "Anna Anna" is not "Anna".
+ */
 export function personNameWords(name: string): string[] {
-  return [...new Set(name.toLocaleLowerCase('sv').split(/[\s,]+/).filter(Boolean))].sort()
+  return name.toLocaleLowerCase('sv').split(/[\s,]+/).filter(Boolean).sort()
+}
+
+/** Whether every word of `part` is in `whole`, as many times as it stands in `part`. */
+function wordsWithin(part: readonly string[], whole: readonly string[]): boolean {
+  const left = [...whole]
+  return part.every((word) => {
+    const at = left.indexOf(word)
+    if (at === -1) return false
+    left.splice(at, 1)
+    return true
+  })
 }
 
 /**
@@ -122,7 +138,7 @@ export function matchRegisterPerson<T extends { display_name: string }>(people: 
   if (exact !== undefined) return exact
   const sameWords = only(people.filter((p) => personNameWords(p.display_name).join(' ') === words.join(' ')))
   if (sameWords !== undefined) return sameWords
-  const within = (a: string[], b: string[]) => a.length >= 2 && a.every((w) => b.includes(w))
+  const within = (a: string[], b: string[]) => a.length >= 2 && wordsWithin(a, b)
   const contained = only(
     people.filter((p) => {
       const theirs = personNameWords(p.display_name)
@@ -145,17 +161,22 @@ export async function findRegisterPersonByName(
   companyId: string,
   name: string,
 ): Promise<{ party_id: string; name: string } | null> {
-  const { data, error } = await supabase
-    .from('parties')
-    .select('id, display_name')
-    .eq('company_id', companyId)
-    .eq('kind', 'person')
-    .eq('origin', 'bolaget')
-    .is('merged_into', null)
-    .order('id')
-    .limit(1000)
-  if (error) throw new Error(`parties read failed: ${error.message}`)
-  const match = matchRegisterPerson((data ?? []) as Array<{ id: string; display_name: string }>, name)
+  // Every register person, read in pages: a name is compared against all of
+  // them, and a read cut at one page would call a person in the rest new.
+  const people = await fetchAllRows<{ id: string; display_name: string }>(
+    ({ from, to }) =>
+      supabase
+        .from('parties')
+        .select('id, display_name')
+        .eq('company_id', companyId)
+        .eq('kind', 'person')
+        .eq('origin', 'bolaget')
+        .is('merged_into', null)
+        .order('id')
+        .range(from, to),
+    { dedupeBy: (row) => row.id },
+  )
+  const match = matchRegisterPerson(people, name)
   return match ? { party_id: match.id, name: match.display_name } : null
 }
 
@@ -214,8 +235,16 @@ export type PartyNameOutcome =
  * 5:9). Fields left undefined keep their value. A customer or supplier row
  * of the same party keeps the name it has: this is the name the registers
  * print.
+ *
+ * `dryRun` checks everything and writes nothing, so a caller that saves
+ * something else with the name can refuse both before either is written.
  */
-export async function renameRegisterParty(ctx: OperationContext, partyId: string, input: PartyNameInput): Promise<PartyNameOutcome> {
+export async function renameRegisterParty(
+  ctx: OperationContext,
+  partyId: string,
+  input: PartyNameInput,
+  { dryRun = false }: { dryRun?: boolean } = {},
+): Promise<PartyNameOutcome> {
   const found = await partiesInCompany(ctx.supabase, ctx.companyId, [partyId])
   const current = found.get(partyId)
   if (!current) return { ok: false, code: 'BOLAGET_PARTY_NOT_FOUND' }
@@ -239,10 +268,26 @@ export async function renameRegisterParty(ctx: OperationContext, partyId: string
   const name = update.display_name ?? current.display_name
   const orgNumber = update.org_number !== undefined ? update.org_number : current.org_number
   if (Object.keys(update).length === 0) return { ok: true, party_id: partyId, name, org_number: orgNumber, changed: false }
+  const ORG_TAKEN_SV = 'Organisationsnumret finns redan på en annan motpart i företaget.'
+  if (update.org_number) {
+    // One live party per organisationsnummer and company: said before anything is written.
+    const { data: holder, error: lookupError } = await ctx.supabase
+      .from('parties')
+      .select('id')
+      .eq('company_id', ctx.companyId)
+      .eq('org_number', update.org_number)
+      .is('merged_into', null)
+      .neq('id', partyId)
+      .limit(1)
+      .maybeSingle()
+    if (lookupError) throw new Error(`parties read failed: ${lookupError.message}`)
+    if (holder) return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: ORG_TAKEN_SV }
+  }
+  if (dryRun) return { ok: true, party_id: partyId, name, org_number: orgNumber, changed: true }
   const { error } = await ctx.supabase.from('parties').update(update).eq('company_id', ctx.companyId).eq('id', partyId)
   if (error) {
-    // One live party per organisationsnummer and company.
-    if (error.code === '23505') return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: 'Organisationsnumret finns redan på en annan motpart i företaget.' }
+    // Another party took the number between the check above and the write.
+    if (error.code === '23505') return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: ORG_TAKEN_SV }
     throw new Error(`parties update failed: ${error.message}`)
   }
   return { ok: true, party_id: partyId, name, org_number: orgNumber, changed: true }
