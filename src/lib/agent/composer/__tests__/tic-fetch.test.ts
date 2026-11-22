@@ -464,22 +464,23 @@ describe('ensureTicSnapshot: incomplete sections', () => {
 
   // The reopen gate reads the report list as of tic_snapshot_fetched_at, which
   // a refetch sets to now: a list carried from an older fetch would read as
-  // fresh, and an empty one as "no report registered". Every key the gate
-  // reads is answered in the previous fetch and missing from this one, so a
-  // key it starts reading later is held to the same rule.
+  // fresh, and an empty one as "no report registered". Every key in
+  // FISCAL_YEAR_REOPEN_REGISTRY_KEYS, and the two the gate's SQL reads today
+  // whatever that list says, is answered in the previous fetch and missing
+  // from this one, so a key added to the list later is held to the same rule.
   it.each([
     ['a known report', [{ periodEnd: '2025-12-31', isInterimReport: false }]],
     ['no report', []],
   ])('never carries a key the closed-year reopen gate reads (%s)', async (_label, reports) => {
+    const gateKeys = [...new Set<string>([...FISCAL_YEAR_REOPEN_REGISTRY_KEYS, 'financialReports', 'financialReportsComplete'])]
     const answered: Record<string, unknown> = { financialReports: reports, financialReportsComplete: true }
     const unanswered: Record<string, unknown> = { financialReports: [], financialReportsComplete: false }
-    const previous: Record<string, unknown> = { orgNumber: '5560125790', statuses: [{ code: 'isActive' }], incompleteSections: [] }
-    const partial: Record<string, unknown> = {
-      orgNumber: '5560125790',
-      statuses: [],
-      incompleteSections: [...FISCAL_YEAR_REOPEN_REGISTRY_KEYS, 'statuses'],
-    }
-    for (const key of FISCAL_YEAR_REOPEN_REGISTRY_KEYS) {
+    // A section no gate reads is still carried, so the test cannot pass by
+    // carrying nothing.
+    const kept = 'sectionNoGateReads'
+    const previous: Record<string, unknown> = { orgNumber: '5560125790', [kept]: [{ answered: true }], incompleteSections: [] }
+    const partial: Record<string, unknown> = { orgNumber: '5560125790', [kept]: [], incompleteSections: [...gateKeys, kept] }
+    for (const key of gateKeys) {
       previous[key] = key in answered ? answered[key] : [{ answeredBy: 'the previous fetch' }]
       partial[key] = key in unanswered ? unanswered[key] : null
     }
@@ -494,10 +495,9 @@ describe('ensureTicSnapshot: incomplete sections', () => {
 
     // What the gate will read: the saved row, not just the returned value.
     expect((updateCalls[0][0] as Record<string, unknown>).tic_snapshot).toEqual(snapshot)
-    for (const key of FISCAL_YEAR_REOPEN_REGISTRY_KEYS) expect(snapshot[key]).toEqual(partial[key])
-    expect(snapshot.incompleteSections).toEqual([...FISCAL_YEAR_REOPEN_REGISTRY_KEYS])
-    // The sections nothing decides on are still kept.
-    expect(snapshot.statuses).toEqual([{ code: 'isActive' }])
+    for (const key of gateKeys) expect(snapshot[key]).toEqual(partial[key])
+    expect(snapshot.incompleteSections).toEqual(gateKeys)
+    expect(snapshot[kept]).toEqual([{ answered: true }])
   })
 
   it('takes nothing from a snapshot of another firm', async () => {
