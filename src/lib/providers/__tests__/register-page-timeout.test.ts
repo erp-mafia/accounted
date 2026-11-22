@@ -61,18 +61,25 @@ describe.each(CLIENTS)('$name client timeouts', (client) => {
     timeoutSpy.mockRestore()
   })
 
+  /** The signal the timeout made is the one the request carries. */
+  const expectSignalOnRequest = () =>
+    expect((fetchSpy.mock.calls[0][1] as RequestInit).signal).toBe(timeoutSpy.mock.results[0].value)
+
   it('getPage forwards a caller-supplied timeout to the request signal', async () => {
     await client.page(60_000)
     expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(60_000)
+    expectSignalOnRequest()
   })
 
   it('getPage without a timeout keeps the 15 s default', async () => {
     await client.page()
     expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(15_000)
+    expectSignalOnRequest()
   })
 
   it('get keeps the 15 s single-record default', async () => {
     await client.get()
     expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(15_000)
+    expectSignalOnRequest()
   })
 })
