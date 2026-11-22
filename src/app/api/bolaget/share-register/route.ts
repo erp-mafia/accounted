@@ -19,7 +19,7 @@ import { readAsOf } from '../as-of'
  * who holds what, which needs none of the three.
  */
 export const GET = withRouteContext('bolaget.share_register', async (request, ctx) => {
-  const gate = await bolagetGateResponse(ctx)
+  const gate = await bolagetGateResponse(ctx, 'registers')
   if (gate) return gate
   const asOf = readAsOf(request)
   if (asOf === null) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, details: { field: 'as_of' } })

@@ -10,9 +10,8 @@ import SandboxAgentPreview from './SandboxAgentPreview'
 import { useAgentSheet } from './AgentSheetProvider'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 
-// Inline starter used by suggestion chips and ⌘K. Mirrors ChatIntakeStarter
-// but accepts any intent + seed so we don't fork the intake-specific
-// onboarding path. When AgentChat emits the new conversation_id, the URL
+// Inline starter used by suggestion chips and ⌘K: accepts any intent + seed.
+// When AgentChat emits the new conversation_id, the URL
 // is swapped to /chat/[id] so reload / share / browser-back all work.
 export default function ChatNewStarter({
   intentId,

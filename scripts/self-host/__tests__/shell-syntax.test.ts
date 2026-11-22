@@ -208,6 +208,56 @@ describe('self-host shell scripts', () => {
     expect(readFileSync(join(DIR, 'backup.sh'), 'utf8')).not.toMatch(dockerShell)
   })
 
+  it("the storage archive keeps storage-api's user.supabase.* xattrs (the content type) from backup to restore", () => {
+    // storage-api's file backend keeps each object's content type in an
+    // xattr, and GNU tar drops xattrs unless asked: without the flags a
+    // restored attachment downloads instead of opening inline. Runs the two
+    // scripts' own storage tar lines; the round trip is skipped where the
+    // temp filesystem or python3 cannot set a user xattr.
+    const storageTar = (name: string) =>
+      readFileSync(join(DIR, name), 'utf8')
+        .split('\n')
+        .find((line) => /^\s*tar -C "\$(BACKUP|RESTORE)_STORAGE_DIR"/.test(line))
+        ?.trim() ?? ''
+    const backupLine = storageTar('backup.sh')
+    const restoreLine = storageTar('restore.sh')
+    expect(backupLine).toContain("--xattrs --xattrs-include='user.supabase.*'")
+    expect(restoreLine).toContain("--xattrs --xattrs-include='user.supabase.*'")
+
+    const root = mkdtempSync(join(tmpdir(), 'selfhost-xattr-'))
+    try {
+      const src = join(root, 'src')
+      const dst = join(root, 'dst')
+      const file = join(src, 'doc.png')
+      execFileSync('mkdir', ['-p', src, dst])
+      writeFileSync(file, 'png')
+      const xattr = (code: string, path: string) =>
+        execFileSync('python3', ['-c', code, path], { stdio: 'pipe' }).toString()
+      try {
+        xattr("import os,sys; os.setxattr(sys.argv[1], 'user.supabase.content-type', b'image/png')", file)
+      } catch {
+        return
+      }
+      const env = {
+        ...BARE_PROCESS_ENV,
+        BACKUP_STORAGE_DIR: src,
+        STORAGE_FILE: join(root, 'set.storage.tar.gz'),
+        RESTORE_STORAGE_DIR: dst,
+        WORK: root,
+        NAME: 'set',
+      }
+      execFileSync('bash', ['-c', backupLine], { env, stdio: 'pipe' })
+      execFileSync('bash', ['-c', restoreLine], { env, stdio: 'pipe' })
+      const restored = xattr(
+        "import os,sys; print(os.getxattr(sys.argv[1], 'user.supabase.content-type').decode())",
+        join(dst, 'doc.png')
+      )
+      expect(restored.trim()).toBe('image/png')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('restore.sh refuses to run without --yes', () => {
     let status = 0
     let stderr = ''

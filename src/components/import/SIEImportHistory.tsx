@@ -38,6 +38,8 @@ interface SIEImportListRow {
   job_kind?: string | null
   /** job_result->>repairOutcome: the route leaves the rest of job_result out. */
   repair_outcome?: string | null
+  /** When support removed this undone import from the ledger (job_result.support_removal). */
+  removed_at?: string | null
   imported_at: string | null
   created_at: string
 }
@@ -210,7 +212,7 @@ export default function SIEImportHistory() {
                   {fiscalYearLabel(row)}
                 </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.transactions_count}</td>
-                <td className={TD_CLASS}>{row.repair_outcome === 'stopped' ? t('sie_job.repairStopped') : row.job_state ? t(`sie_job.states.${row.job_state}`) : statusCell(row.status)}</td>
+                <td className={TD_CLASS}>{row.repair_outcome === 'stopped' ? t('sie_job.repairStopped') : row.removed_at ? t('sie_job.removed') : row.job_state ? t(`sie_job.states.${row.job_state}`) : statusCell(row.status)}</td>
                 <td className={cn(TD_CLASS, 'text-right')}>
                   {row.job_state && !['completed','undone','failed'].includes(row.job_state) && (
                     <Link className="text-primary underline underline-offset-4" href={`/import?mode=sie&job=${row.id}`}>{t('sie_job.open')}</Link>

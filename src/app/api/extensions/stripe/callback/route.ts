@@ -1,4 +1,5 @@
 import { completePartnerOAuthCallback } from '@/lib/auth/partner-oauth-callback'
+import { resolveTrustedAppOrigin } from '@/lib/domains/trusted-app-origin'
 import {
   exchangeCodeForAccount,
   fetchAccountDisplayName,
@@ -14,16 +15,22 @@ import {
  * shared partner callback.
  */
 export function GET(request: Request) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
   return completePartnerOAuthCallback(request, {
     extensionId: 'stripe',
     displayName: 'Stripe',
     provider: 'stripe',
     table: 'stripe_connections',
-    pendingColumns: 'id, user_id, company_id',
+    pendingColumns: 'id, user_id, company_id, return_origin',
     // The Stripe surface lives on the import page (?mode=stripe opens the
-    // panel directly); the shared flow appends its params with '&'.
-    returnUrl: async () => `${baseUrl}/import?mode=stripe`,
+    // panel directly); the shared flow appends its params with '&'. Stripe
+    // redirects to the one registered callback on the canonical host, so the
+    // browser goes back to the origin /connect recorded (the app or a brand
+    // domain). Re-validated here: members can update the row through RLS, and
+    // the column must never turn this callback into an open redirect.
+    returnUrl: async (row) =>
+      `${await resolveTrustedAppOrigin((row?.return_origin as string | null | undefined) ?? null, {
+        onLookupFailure: 'canonical',
+      })}/import?mode=stripe`,
     async exchange(code) {
       const { stripeAccountId, livemode } = await exchangeCodeForAccount(code)
       const displayName = await fetchAccountDisplayName(stripeAccountId)

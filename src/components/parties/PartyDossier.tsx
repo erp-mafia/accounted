@@ -95,10 +95,18 @@ export function PartyDossier({
     partyId: string
     reloadKey: number
     retryKey: number
+    period: RegisterPeriod
     dossier: Dossier | null
   } | null>(null)
+  // The stats follow the list's period, so another period is another read.
   const current =
-    loaded && loaded.partyId === partyId && loaded.reloadKey === reloadKey && loaded.retryKey === retryKey ? loaded : null
+    loaded &&
+    loaded.partyId === partyId &&
+    loaded.reloadKey === reloadKey &&
+    loaded.retryKey === retryKey &&
+    loaded.period === period
+      ? loaded
+      : null
   const dossier = partyId ? (current?.dossier ?? (loaded?.partyId === partyId ? loaded.dossier : null)) : null
   const loading = Boolean(partyId) && current === null
   const failed = Boolean(partyId) && current !== null && current.dossier === null
@@ -108,19 +116,22 @@ export function PartyDossier({
     let cancelled = false
     const key = reloadKey
     const retry = retryKey
-    fetch(`/api/parties/${partyId}`)
+    const shownPeriod = period
+    // The money rows say which period they cover ("senaste 12 mån" or "hela
+    // historiken"): the stats are read for that period, the list's.
+    fetch(`/api/parties/${partyId}?period=${shownPeriod}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status))
         const json = (await res.json()) as { data: Dossier }
-        if (!cancelled) setLoaded({ partyId, reloadKey: key, retryKey: retry, dossier: json.data })
+        if (!cancelled) setLoaded({ partyId, reloadKey: key, retryKey: retry, period: shownPeriod, dossier: json.data })
       })
       .catch(() => {
-        if (!cancelled) setLoaded({ partyId, reloadKey: key, retryKey: retry, dossier: null })
+        if (!cancelled) setLoaded({ partyId, reloadKey: key, retryKey: retry, period: shownPeriod, dossier: null })
       })
     return () => {
       cancelled = true
     }
-  }, [partyId, reloadKey, retryKey])
+  }, [partyId, reloadKey, retryKey, period])
 
   const p = dossier?.party
   const stats = p?.stats ?? null
@@ -254,7 +265,14 @@ export function PartyDossier({
                         note={period === '12m' ? t('money_period_12m') : t('money_period_all')}
                       />
                     ) : null}
-                    {stats?.firstSeen ? <Row label={t('money_first')} value={formatDate(stats.firstSeen)} /> : null}
+                    {stats?.firstSeen ? (
+                      <Row
+                        label={t('money_first')}
+                        value={formatDate(stats.firstSeen)}
+                        // First within the period the list shows, like the sums above.
+                        note={period === '12m' ? t('money_period_12m') : t('money_period_all')}
+                      />
+                    ) : null}
                     {stats?.lastSeen ? <Row label={t('money_last')} value={formatDate(stats.lastSeen)} /> : null}
                   </tbody>
                 </table>

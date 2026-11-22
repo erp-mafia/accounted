@@ -7,7 +7,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, formatRowAmount } from '@/lib/utils'
@@ -55,6 +55,7 @@ function Pill({ children }: { children: React.ReactNode }) {
 export default function RuleDetail({ id }: { id: string }) {
   const t = useTranslations('rules')
   const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const { data, isLoading, error, mutate } = useSWR<Payload>(`/api/rules/${id}`, fetchRule)
   const [busy, setBusy] = useState(false)
@@ -108,8 +109,19 @@ export default function RuleDetail({ id }: { id: string }) {
   // fetchRule throws "<url> <status>": a 404 is a rule that does not exist,
   // anything else a load that failed and can be tried again.
   const notFound = error instanceof Error && / 404$/.test(error.message)
-  if (error && !notFound) return <LoadError title={t('detail_load_failed')} onRetry={() => void mutate()} />
-  if (!data) return <EmptyState title={t('not_found')} />
+  if (error || !data) {
+    // The header and the way back stay on both states.
+    return (
+      <>
+        <PageHeader title={tNav('v2_rules')} />
+        {error && !notFound ? (
+          <LoadError title={t('detail_load_failed')} onRetry={() => void mutate()} />
+        ) : (
+          <NotFoundState title={t('not_found')} backHref="/rules" backLabel={tCommon('back_to_list')} />
+        )}
+      </>
+    )
+  }
 
   const { rule, matches } = data
   const step = ruleStep(rule.mode)

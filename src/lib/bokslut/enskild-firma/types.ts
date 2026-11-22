@@ -35,10 +35,17 @@ export interface EfDeclarationItem {
  * NE-bilaga sida 2 (SKV 2161) as the preview fills it, whole kronor, one
  * definition per ruta. The sums follow the form: R29 = R12 + R13..R28,
  * R33 = R29 - R30 + R31 + R32, R35 = R33 - R34,
- * R42 = R35 - R36 + R37 - R38 - R39 + R40 - R41. R12-R28 and R38-R39 are
- * not computed, so R29 is the booked result (R11) and R38-R39 are 0.
+ * R42 = R35 - R36 + R37 - R38 - R39 + R40 - R41. R12 is the booked result
+ * (R11); R13 and R14 are read from the BAS accounts the chart names as not
+ * deductible and not taxable; R15-R28 and R38-R39 are not computed (0).
  */
 export interface EfNeRutor {
+  /** Bokfört resultat, carried over from R11. */
+  R12: number
+  /** Bokförda kostnader som inte ska dras av. */
+  R13: number
+  /** Bokförda intäkter som inte ska tas upp. */
+  R14: number
   R29: number
   R30: number
   R31: number
@@ -53,6 +60,17 @@ export interface EfNeRutor {
   R42: number
   R43: number
 }
+
+/**
+ * R12-R14 as the form names them (Skatteverket's labels, Swedish in every
+ * locale): the booked result and the two adjustments the books give. R12 is
+ * shown like a sum, always.
+ */
+export const EF_NE_BOOKED_ROWS: ReadonlyArray<{ ruta: 'R12' | 'R13' | 'R14'; label: string; sum?: boolean }> = [
+  { ruta: 'R12', label: 'Bokfört resultat', sum: true },
+  { ruta: 'R13', label: 'Bokförda kostnader som inte ska dras av' },
+  { ruta: 'R14', label: 'Bokförda intäkter som inte ska tas upp' },
+]
 
 /**
  * A field under "Övriga uppgifter" on NE-bilagan. Named by its SRU fältkod,

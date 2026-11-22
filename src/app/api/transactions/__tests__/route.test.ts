@@ -285,7 +285,7 @@ describe('GET /api/transactions', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)
-    expect(body.error).toBe('Något gick fel. Försök igen.')
+    expect(body.error).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 })
 

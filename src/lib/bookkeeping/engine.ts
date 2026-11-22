@@ -68,6 +68,7 @@ import { commitAsReviewed, isBookingReviewRefusal } from '@/lib/bookkeeping/book
 import { linkBusinessEventToDraft, type BusinessEventLink, type SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { callWithBusinessEvents } from '@/lib/bookkeeping/business-event-rpc'
 import type { PayoutFeeLine } from '@/lib/bookkeeping/payout-fee-lines'
+import type { SupplierDebtLine } from '@/lib/bookkeeping/supplier-debt-lines'
 import {
   findKontantmetodCarry,
   kontantmetodCarryHasSettlements,
@@ -2420,6 +2421,14 @@ export interface MatchBatchAllocationInput {
     }>
   >
   /**
+   * A supplier batch: the supplier debt from before the company kept its
+   * books here that the row also pays (supplierDebtLines,
+   * lib/bookkeeping/supplier-debt-lines.ts), sent as p_debt_lines (migration
+   * 20261120150000). Empty or omitted: the parameter is not sent. Sent to a
+   * database without it, the call answers PGRST202: a refusal, never a fee row.
+   */
+  debtLines?: SupplierDebtLine[]
+  /**
    * The posting port's events, one per allocation (sale.payment_received or
    * purchase.paid), linked to the samlingsverifikat before its number is
    * drawn. Omitted: the RPC is called as before.
@@ -2459,6 +2468,7 @@ export async function commitMatchBatchAllocation(
       p_user_id: userId,
       ...(input.feeLines?.length ? { p_fee_lines: input.feeLines } : {}),
       ...(input.cashLines && Object.keys(input.cashLines).length > 0 ? { p_cash_lines: input.cashLines } : {}),
+      ...(input.debtLines?.length ? { p_debt_lines: input.debtLines } : {}),
       ...events,
     }),
   )

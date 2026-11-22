@@ -19,6 +19,11 @@ export interface SettingsState {
   isLoading: boolean
   /** True once a fetch finished without a row (or errored): distinct from loading. */
   error: boolean
+  /**
+   * True when the read itself failed and no row is on screen: a failed load
+   * to retry, not a company without settings (which `error` alone cannot tell).
+   */
+  loadFailed: boolean
   updateSettings: (updates: Partial<CompanySettings>) => void
   refetch: () => Promise<void>
 }
@@ -88,6 +93,7 @@ export function useCompanySettings(): SettingsState {
     // Same contract as before SWR: error means "settled without a row"
     // (query failure or missing company_settings row), never mid-flight.
     error: companyId ? !firstLoadPending && (Boolean(swrError) || !data) : false,
+    loadFailed: companyId ? !firstLoadPending && Boolean(swrError) && !data : false,
     updateSettings,
     refetch,
   }

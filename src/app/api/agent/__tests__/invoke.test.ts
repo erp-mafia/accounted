@@ -128,6 +128,26 @@ describe('POST /api/agent/invoke', () => {
     expect(status).toBe(400)
   })
 
+  // The onboarding interview (onboarding.intake) is no longer an intent. A
+  // conversation it left behind still opens on /chat/[id]; a new turn in it
+  // gets the unknown-intent answer, before anything is read or written.
+  it('refuses a new turn in a conversation whose intent is retired, with nothing read or written', async () => {
+    getIntentMock.mockReturnValue(undefined)
+    const res = await POST(
+      createMockRequest('/api/agent/invoke', {
+        method: 'POST',
+        body: body({
+          intent_id: 'onboarding.intake',
+          conversation_id: CONVERSATION_ID,
+          user_message: 'Vi är två anställda.',
+        }),
+      }),
+    )
+    expect(res.status).toBe(400)
+    expect(runChatTurnMock).not.toHaveBeenCalled()
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
   // A self-host without an AI key, or on an OpenAI-compatible endpoint the
   // chat loop does not speak yet: say so up front with a distinct code, never
   // open a stream that dies on the first model call, never confuse it with
@@ -324,7 +344,7 @@ describe('POST /api/agent/invoke', () => {
 
 // ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts). Switched off, the
 // route runs no turn and says where the person's own assistant connects, for
-// every intent: the onboarding interview goes with the rest.
+// every intent.
 describe('POST /api/agent/invoke with the chat switched off', () => {
   const OFF_SV = 'Chatten är avstängd. Koppla din egen assistent, till exempel Claude, under Agenter > Koppla en agent.'
   const OFF_EN = 'The chat is switched off. Connect your own assistant, for example Claude, under Agents > Connect an agent.'
@@ -385,49 +405,6 @@ describe('POST /api/agent/invoke with the chat switched off', () => {
     expect(json.error.code).toBe('ASSISTANT_CHAT_OFF')
     expect(runChatTurnMock).not.toHaveBeenCalled()
   })
-
-  it('does not start the onboarding interview: 409, no turn, nothing read or written', async () => {
-    const capture = vi.fn().mockResolvedValue({})
-    getIntentMock.mockReturnValue({
-      id: 'onboarding.intake',
-      sheetTitle: 'Introduktion',
-      capture,
-      promptTemplate: vi.fn().mockReturnValue('intake greeting prompt'),
-    })
-
-    const res = await POST(
-      createMockRequest('/api/agent/invoke', {
-        method: 'POST',
-        body: { intent_id: 'onboarding.intake' }, // the auto-fired first turn of /chat/intake
-      }),
-    )
-    const { status, body: json } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
-
-    expect(status).toBe(409)
-    expect(json.error.code).toBe('ASSISTANT_CHAT_OFF')
-    expect(json.error.message).toBe(OFF_SV)
-    expect(capture).not.toHaveBeenCalled()
-    expect(runChatTurnMock).not.toHaveBeenCalled()
-    expect(supabase.from).not.toHaveBeenCalled()
-  })
-
-  it('does not continue an onboarding interview either, so no completion is stamped', async () => {
-    getIntentMock.mockReturnValue({ id: 'onboarding.intake', sheetTitle: 'Introduktion' })
-
-    const res = await POST(
-      createMockRequest('/api/agent/invoke', {
-        method: 'POST',
-        body: body({ intent_id: 'onboarding.intake', conversation_id: CONVERSATION_ID, user_message: 'Vi är två anställda.' }),
-      }),
-    )
-    const { status, body: json } = await parseJsonResponse<{ error: { code: string } }>(res)
-
-    expect(status).toBe(409)
-    expect(json.error.code).toBe('ASSISTANT_CHAT_OFF')
-    expect(runChatTurnMock).not.toHaveBeenCalled()
-    // The intake_completed_at stamp on agent_profiles is a write: none happens.
-    expect(supabase.from).not.toHaveBeenCalled()
-  })
 })
 
 // ASSISTANT_CHAT_COMPANY_IDS: the companies that keep the chat while it is
@@ -484,32 +461,6 @@ describe('POST /api/agent/invoke with the chat switched off and some companies k
 describe('POST /api/agent/invoke with the chat switch unset or on', () => {
   afterEach(() => {
     vi.unstubAllEnvs()
-  })
-
-  it.each([undefined, 'true'])('starts the onboarding interview when ASSISTANT_CHAT_ENABLED is %j', async (value) => {
-    if (value !== undefined) vi.stubEnv('ASSISTANT_CHAT_ENABLED', value)
-    getIntentMock.mockReturnValue({
-      id: 'onboarding.intake',
-      sheetTitle: 'Introduktion',
-      capture: vi.fn().mockResolvedValue({}),
-      promptTemplate: vi.fn().mockReturnValue('intake greeting prompt'),
-    })
-    enqueuePreamble()
-    enqueueAcceptedTail()
-    enqueue({ data: { id: CONVERSATION_ID } }) // conversation insert
-    enqueue({ data: { profile_summary: 'Byggkonsult, K2' } }) // agent_profiles
-    enqueue({ data: [] }) // agent_memory
-
-    const res = await POST(
-      createMockRequest('/api/agent/invoke', { method: 'POST', body: { intent_id: 'onboarding.intake' } }),
-    )
-
-    expect(res.status).toBe(200)
-    await res.text()
-    expect(runChatTurnMock).toHaveBeenCalledTimes(1)
-    const turn = runChatTurnMock.mock.calls[0]![0] as { userMessage: string; conversationId: string }
-    expect(turn.userMessage).toBe('intake greeting prompt')
-    expect(turn.conversationId).toBe(CONVERSATION_ID)
   })
 
   it.each([undefined, '', 'true', '1', 'anything'])('runs a general turn when ASSISTANT_CHAT_ENABLED is %j', async (value) => {

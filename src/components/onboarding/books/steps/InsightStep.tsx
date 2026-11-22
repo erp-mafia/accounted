@@ -13,14 +13,31 @@ import { Button } from '@/components/ui/button'
  */
 export function InsightStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
-  const { dispatch, flags, findings } = ctx
+  const tCommon = useTranslations('common')
+  const { dispatch, flags, findings, findingsFailed, loadingFindings, loadFindings } = ctx
   const next = flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')
+  // A failed read is not "nothing imported": it says so, with the retry.
+  const failed = !findings && findingsFailed
   return (
     <Question
-      title={findings && findings.books.entries > 0 ? t('insight_title', { count: findings.books.entries, years: findings.books.periods.length }) : t('insight_title_empty')}
-      sub={t('insight_sub')}
+      title={
+        failed
+          ? t('insight_title_failed')
+          : findings && findings.books.entries > 0
+            ? t('insight_title', { count: findings.books.entries, years: findings.books.periods.length })
+            : t('insight_title_empty')
+      }
+      sub={failed ? undefined : t('insight_sub')}
     >
-      <InsightPanel ctx={ctx} />
+      {failed ? (
+        <div className="jny-qactions">
+          <Button variant="outline" loading={loadingFindings} onClick={() => void loadFindings()}>
+            {tCommon('retry')}
+          </Button>
+        </div>
+      ) : (
+        <InsightPanel ctx={ctx} />
+      )}
       <div className="jny-qactions">
         <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
           {next}

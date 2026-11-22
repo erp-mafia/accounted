@@ -746,7 +746,7 @@ describe('AGI kvittenser cron', () => {
     expect(body.errors).toBe(1)
     expect(body.results[0]).toMatchObject({
       status: 'error',
-      error: 'Något gick fel. Försök igen.',
+      error: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
     })
     expect(errorRecorder).not.toHaveBeenCalled()
     expect(warnRecorder).toHaveBeenCalledWith('agi kvittens: declarations could not be reconciled (kinds: Error)', {

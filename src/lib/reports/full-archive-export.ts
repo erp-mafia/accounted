@@ -1491,6 +1491,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // the allmännyttig statement, the exempt/taxable/shared treatment per
   // account and the ruta overrides. The bridge from the books to the return.
   { name: 'ink3_underlag_inputs', file: 'ink3_underlag_inputs.json', orderBy: 'created_at' },
+  // What an enskild firma's owner entered for the NE-bilaga sida 2 per
+  // räkenskapsår: egenavgift category, kapitalunderlag, earlier funds and the
+  // figures last year's declaration handed on. The bridge from the books to
+  // the return.
+  { name: 'ne_declaration_inputs', file: 'ne_declaration_inputs.json', orderBy: 'created_at' },
   // The underskottsregister (IL 40 kap.): per räkenskapsår the deficit
   // brought forward (INK2S 4.14 a), the spärrar and the deficit carried
   // forward, with the ownership change behind a spärr. No personal data.
@@ -1572,6 +1577,7 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  company_formations: 'the founder\'s draft before the company existed (answers, payment state); the company it set up exports its aktiebok, roles, verifikat and the founding documents themselves',
   ledger_account_days: 'sums of the journal per account and day, derived by triggers and rebuilt from it; the journal itself is exported',
   vat_eu_trade_fiscal_years: 'which räkenskapsår the nightly pass saw EU trade in, derived from the journal exported here; it only dates the helårsmoms deadline',
   ledger_dimension_days: 'the same sums per dimension value, derived from the journal lines exported here',
@@ -1629,6 +1635,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     "which person accepted which version of Accounted's terms and DPA, the provider relationship rather than räkenskapsinformation; company_id is context only",
   company_suggestions:
     'which suggestions are open, snoozed or declined; the proposals and decisions are pending_operations rows and every package switch an audit_log row',
+  company_questions:
+    'questions put to the company and how each ended; an answer worth keeping is saved as an agent_memory fact. AI assistant state, not räkenskapsinformation',
   company_inbound_domains: 'inbound-mail infrastructure',
   company_inboxes: 'inbound-mail infrastructure',
   company_sending_domains: 'outbound-mail infrastructure (sender domain verification state)',

@@ -14,7 +14,7 @@ vi.mock('@/lib/bokslut/tax-provision/bolagsskatt-calculator', () => ({
     const m = opts.manualAdjustments
     const base = Math.max(0, Math.floor(
       opts.resultBeforeTax + m.nonDeductibleExpenses - m.nonTaxableIncome - m.deficitCarryforward
-      + m.schablonintaktPeriodiseringsfond,
+      + m.schablonintaktPeriodiseringsfond + m.uppraekningPeriodiseringsfond,
     ))
     const amount = Math.round(base * 0.206)
     return { kind: 'bolagsskatt', label: 'Bolagsskatt', amount, lines: [], warnings: [] }
@@ -27,6 +27,7 @@ import {
   ateforingDispositions,
   avsattningDisposition,
   bolagsskattDisposition,
+  fondUppraekning,
   type DispositionState,
 } from '../dispositions-proposal-builder'
 
@@ -41,6 +42,8 @@ function stateWith(overrides: Partial<DispositionState> = {}): DispositionState 
       { account_number: '2129', cohort_year: 2019, balance: 60_000, opening_balance: 60_000, must_return_this_year: true },
     ],
     buildingTaxAdjustment: 0,
+    periodStart: '2025-01-01',
+    taxYears: [],
     ...overrides,
   }
 }
@@ -54,13 +57,18 @@ describe('bokslutsdispositioner: the booked amount is the previewed amount', () 
     const ateforing = ateforingDispositions(preview, { schablonintaktRate: 0.025 })
     const ateforingTotal = ateforing.proposals.reduce((sum, p) => sum + p.amount, 0)
     expect(ateforingTotal).toBe(60_000)
+    // The 2019 fond was set aside for a beskattningsår that began 2019-01-01:
+    // återförd at 104 %, so 4.6d is 2 400 kr, pending like the återföring.
+    expect(ateforing.uppraekning.amount).toBe(2_400)
     const previewAvsattning = avsattningDisposition(preview, {
       pendingResultEffect: ateforingTotal - slpAmount,
       schablonintaktAmount: ateforing.schablonintaktAmount,
+      uppraekningAmount: ateforing.uppraekning.amount,
     })
     const previewTax = bolagsskattDisposition(preview, {
       pendingResultEffect: ateforingTotal - (previewAvsattning?.amount ?? 0) - slpAmount,
       schablonintaktAmount: ateforing.schablonintaktAmount,
+      uppraekningAmount: ateforing.uppraekning.amount,
     })
 
     // ---- Commit: återföring and SLP posted (their effect is in the result) ----
@@ -72,9 +80,12 @@ describe('bokslutsdispositioner: the booked amount is the previewed amount', () 
         { account_number: '2129', cohort_year: 2019, balance: 0, opening_balance: 60_000, must_return_this_year: true },
       ],
     })
+    // Booked, the återföring is no longer pending; the uppräkning follows it.
+    expect(fondUppraekning(afterAteforingAndSlp).amount).toBe(2_400)
     const bookedAvsattning = avsattningDisposition(afterAteforingAndSlp, {
       pendingResultEffect: 0,
       schablonintaktAmount: ateforingDispositions(afterAteforingAndSlp, { schablonintaktRate: 0.025 }).schablonintaktAmount,
+      uppraekningAmount: fondUppraekning(afterAteforingAndSlp).amount,
     })
     expect(bookedAvsattning?.amount).toBe(previewAvsattning?.amount)
     expect(bookedAvsattning?.amount).toBeGreaterThan(0)
@@ -91,6 +102,7 @@ describe('bokslutsdispositioner: the booked amount is the previewed amount', () 
     const bookedTax = bolagsskattDisposition(beforeTax, {
       pendingResultEffect: 0,
       schablonintaktAmount: ateforingDispositions(beforeTax, { schablonintaktRate: 0.025 }).schablonintaktAmount,
+      uppraekningAmount: fondUppraekning(beforeTax).amount,
     })
     expect(bookedTax.amount).toBe(previewTax.amount)
     const bases = vi.mocked(calculateBolagsskatt).mock.calls.map(([input]) => input.resultBeforeTax)

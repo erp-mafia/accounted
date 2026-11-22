@@ -50,3 +50,16 @@ describe('report catalog: the dimension cross report', () => {
     expect(slugs(false)).not.toContain('dimension-cross')
   })
 })
+
+describe('report catalog: the library footnote', () => {
+  // reports.catalog_footnote says most reports open for the period you choose
+  // and can be downloaded as PDF or Excel (#1307: it used to claim every
+  // report exports to PDF, true for a minority). Keep the claim true.
+  it('gives most reports both a period and an export, and PDF to only some', () => {
+    const total = REPORT_CATALOG.length
+    const withBoth = REPORT_CATALOG.filter((r) => r.params !== 'none' && (r.exports ?? []).length > 0).length
+    const withPdf = REPORT_CATALOG.filter((r) => r.exports?.includes('pdf')).length
+    expect(withBoth * 2).toBeGreaterThan(total)
+    expect(withPdf).toBeLessThan(total)
+  })
+})

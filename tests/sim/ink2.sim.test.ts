@@ -26,7 +26,7 @@ describe.each(closedYears)('INK2 %i', (year) => {
     expectKronor(ink2r['7301'], figures.shareCapital)
     expectKronor(ink2r['7302'], figures.retainedEarnings + figures.result)
     expectKronor(ink2r['7365'], figures.supplierPayables)
-    expectKronor(ink2r['7368'], figures.corporateTaxLiability)
+    expectKronor(ink2r['7368'], figures.corporateTaxLiability + figures.pensionTaxLiability)
     expectKronor(ink2r['7369'], figures.vatLiability + figures.payrollLiabilities)
     expectKronor(ink2r['7370'], figures.accruedVacation)
     expectKronor(ink2r['7410'], figures.revenue)
@@ -44,16 +44,21 @@ describe.each(closedYears)('INK2 %i', (year) => {
     expectKronor(ink2s['7651'], figures.corporateTax)
   })
 
-  // Found by this suite: the product books meal representation on 6072, but
-  // only 6992 and 8423 are detected as non-deductible (tax-adjustment-service),
-  // so INK2S 4.3c stays 0 and the överskott is understated by the representation.
-  // When this starts passing, drop `.fails`.
-  it.fails('adds back the representation that gives no deduction (4.3c)', async () => {
+  // The meal representation is booked on 6072, which crm#1681 added to the
+  // accounts INK2S 4.3c adds back.
+  it('adds back the representation that gives no deduction (4.3c)', async () => {
     const { ink2s } = await declaration()
     expect(ink2s['7653']).toBe(figures.nonDeductibleCosts)
   })
 
-  it.fails('declares the överskott the tax was paid on', async () => {
+  it('declares the tjänstepension premiums as the underlag för särskild löneskatt (1.4)', async () => {
+    const { ink2, warnings } = await declaration()
+    expect(ink2['7132']).toBe(figures.pensionCosts)
+    expect(ink2['7133']).toBe(0)
+    expect(warnings.join(' ')).not.toMatch(/punkt 1\.4/)
+  })
+
+  it('declares the överskott the tax was paid on', async () => {
     const { ink2 } = await declaration()
     expectKronor(ink2['7104'], figures.resultBeforeTax + figures.nonDeductibleCosts)
   })

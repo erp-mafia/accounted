@@ -77,7 +77,7 @@ describe('with MAIL_TOKEN_ENCRYPTION_KEY', () => {
   it('keeps OAuth states working under the dedicated key', () => {
     const state = createOAuthState('user-1', 'company-1', 'verifier')
     expect(state.startsWith('v2.')).toBe(true)
-    expect(verifyOAuthState(state)).toEqual({ userId: 'user-1', companyId: 'company-1', codeVerifier: 'verifier' })
+    expect(verifyOAuthState(state)).toEqual({ userId: 'user-1', companyId: 'company-1', codeVerifier: 'verifier', origin: null })
   })
 })
 

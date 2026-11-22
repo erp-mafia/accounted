@@ -152,7 +152,12 @@
    Flex items do not collapse margins, so the title block's last margin is
    dropped to keep its 18px to the stage, and they shrink to fit beside an
    auto margin, so each block is held at full width (.tokfields keeps its
-   360px column). Phones keep the scrolling page. */
+   360px column). Phones keep the scrolling page.
+   The theater never shrinks below its own content with the stage at 280px
+   (the stage grows from a zero basis, so that is what the theater's content
+   height is): a block under it, such as the register card after a SIE import
+   (#3563), then sits below the progress lines, and the page scrolls when the
+   window is too short, instead of the block being drawn over the lines. */
 @media (min-width: 641px) {
   .bks:has(.th-stage) { height: 100dvh; min-height: 0; display: flex; flex-direction: column; }
   .bks:has(.th-stage) .bks-center,
@@ -160,8 +165,8 @@
   .bks-host:has(> .theater) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   .bks-host:has(> .theater) > * { width: 100%; }
   .bks-host:has(> .theater) > .jny-qstep > :last-child { margin-bottom: 0; }
-  .bks-host > .theater { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  .bks-host > .theater > .th-stage { flex: 1 1 490px; height: auto; min-height: 280px; max-height: 490px; }
+  .bks-host > .theater { flex: 1 1 auto; display: flex; flex-direction: column; }
+  .bks-host > .theater > .th-stage { flex: 1 1 0; height: auto; min-height: 280px; max-height: 490px; }
 }
 
 /* ── waiting ──────────────────────────────────────────────────────── */

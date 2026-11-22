@@ -410,6 +410,38 @@ describe('reconcileStableExternalIds: the bank\'s own id (crm#2024)', () => {
   })
 })
 
+describe('reconcileStableExternalIds: a stored row the feed reads as not booked (crm#2076)', () => {
+  // A Nordea card hold stored before the sync left holds out of its read: the
+  // hold keeps index 0, and the purchase booked on its day for its amount is
+  // now the only row of the read with that day and amount, so it comes as _0.
+  const id = (n: number) => `eb_SE0000000000000000000002_2026-11-20_-12900_${n}`
+  const ref = { source: 'enable_banking', bankConnectionId: 'bc-1' }
+  const hold = { externalId: id(0), desc: 'reservation kortköp bokhandeln', providerTransactionId: 'hold-1', notBooked: true, ...ref }
+  const purchase = (providerTransactionId: string, description = 'Kortköp 261119 BOKHANDELN') =>
+    ({ external_id: id(0), description, providerTransactionId, ...ref })
+
+  it("gives the purchase a fresh index instead of the hold's id", () => {
+    expect(reconcileStableExternalIds([purchase('pay-1')], [hold])).toEqual([id(1)])
+  })
+
+  it("pairs it by nothing else either: not the bank's id, not a bridging text", () => {
+    expect(reconcileStableExternalIds([purchase('hold-1')], [hold])).toEqual([id(1)])
+    expect(reconcileStableExternalIds([purchase('pay-1', 'Reservation Kortköp')], [hold])).toEqual([id(1)])
+  })
+
+  it('leaves the rows around it paired as before', () => {
+    // The purchase an earlier sync stored next to the hold, at index 1.
+    const storedPurchase = { externalId: id(1), desc: 'kortköp 261119 bokhandeln', providerTransactionId: 'pay-1', ...ref }
+    expect(reconcileStableExternalIds([purchase('pay-1')], [hold, storedPurchase])).toEqual([id(1)])
+    expect(reconcileStableExternalIds([{ ...purchase('pay-2'), providerTransactionId: null }], [hold, storedPurchase])).toEqual([id(1)])
+  })
+
+  it("unmarked, the stored row takes the purchase by its id alone, as for any row", () => {
+    const { notBooked: _unmarked, ...plain } = hold
+    expect(reconcileStableExternalIds([purchase('pay-1')], [plain])).toEqual([id(0)])
+  })
+})
+
 describe('dropRepeatedBankRows (crm#1295)', () => {
   type Row = { ptid?: string | null; date: string; amount: number | string; description: string }
   const swish = (ptid: string | null, description = `Swish ${ptid}`, amount: number | string = 250): Row =>

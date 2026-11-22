@@ -82,7 +82,7 @@ const POSTGRES_ERROR_MAP: Record<string, Bilingual> = {
   '23505': { sv: 'En post med samma uppgifter finns redan.', en: 'A record with the same details already exists.' },
   '23503': { sv: 'Posten kan inte ändras eftersom den refereras av annan data.', en: 'This record cannot be changed because other data refers to it.' },
   '23502': { sv: 'Ett obligatoriskt fält saknas.', en: 'A required field is missing.' },
-  '42501': { sv: 'Du har inte behörighet att utföra denna åtgärd.', en: 'You do not have permission to perform this action.' },
+  '42501': { sv: 'Du har inte behörighet att göra det här i företaget. Be en ägare eller administratör om behörighet.', en: 'You do not have permission to do this in the company. Ask an owner or administrator for access.' },
   '42P01': { sv: 'Resursen kunde inte hittas.', en: 'The resource could not be found.' },
   '23514': { sv: 'Värdet uppfyller inte de tillåtna kraven.', en: 'The value does not meet the allowed constraints.' },
   '40001': { sv: 'En annan ändring pågick samtidigt. Försök igen.', en: 'A concurrent change was in progress. Please try again.' },
@@ -105,10 +105,10 @@ const ACCRUED_COST_BLOCK_REASON_SV: Record<string, string> = {
 
 // HTTP status codes -> localized messages
 const HTTP_STATUS_MAP: Record<number, Bilingual> = {
-  400: { sv: 'Förfrågan innehåller ogiltiga uppgifter.', en: 'The request contains invalid data.' },
+  400: { sv: 'Några uppgifter stämmer inte. Kontrollera fälten och försök igen.', en: 'Some of the details are not valid. Check the fields and try again.' },
   401: { sv: 'Din session har gått ut. Logga in igen.', en: 'Your session has expired. Please sign in again.' },
-  403: { sv: 'Du har inte behörighet att utföra denna åtgärd.', en: 'You do not have permission to perform this action.' },
-  404: { sv: 'Resursen kunde inte hittas.', en: 'The resource could not be found.' },
+  403: { sv: 'Du har inte behörighet att göra det här i företaget. Be en ägare eller administratör om behörighet.', en: 'You do not have permission to do this in the company. Ask an owner or administrator for access.' },
+  404: { sv: 'Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.', en: 'It could not be found. It may have been removed: reload the page.' },
   409: { sv: 'En konflikt uppstod. Ladda om sidan och försök igen.', en: 'A conflict occurred. Reload the page and try again.' },
   // 413 is answered by the hosting platform, before any route runs, with a
   // plain-text body: the status is the only thing a caller has to go on.
@@ -116,9 +116,15 @@ const HTTP_STATUS_MAP: Record<number, Bilingual> = {
   415: { sv: 'Filtypen stöds inte.', en: 'That file type is not supported.' },
   422: { sv: 'Uppgifterna kunde inte bearbetas. Kontrollera fälten och försök igen.', en: 'The data could not be processed. Check the fields and try again.' },
   429: { sv: 'För många förfrågningar. Vänta en stund och försök igen.', en: 'Too many requests. Wait a moment and try again.' },
-  500: { sv: 'Ett oväntat serverfel uppstod. Försök igen senare.', en: 'An unexpected server error occurred. Please try again later.' },
+  500: { sv: 'Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.', en: 'An unexpected error occurred. Try again in a moment, and contact support if it keeps happening.' },
   502: { sv: 'Servern är tillfälligt otillgänglig. Försök igen om en stund.', en: 'The server is temporarily unavailable. Please try again shortly.' },
   503: { sv: 'Tjänsten är tillfälligt otillgänglig. Försök igen om en stund.', en: 'The service is temporarily unavailable. Please try again shortly.' },
+  // 408 and 504 are answered by the browser or the hosting platform (a
+  // function that ran past its time limit), with no body a route wrote: the
+  // status is all there is. Without them a timeout read as the generic
+  // "Något gick fel", which does not say that waiting and retrying helps.
+  408: { sv: 'Det tog för lång tid att skicka uppgifterna. Kontrollera anslutningen och försök igen.', en: 'Sending took too long. Check your connection and try again.' },
+  504: { sv: 'Det tog för lång tid att få svar. Försök igen om en stund.', en: 'The answer took too long. Please try again shortly.' },
 }
 
 // Context-specific fallbacks
@@ -135,7 +141,13 @@ const CONTEXT_FALLBACKS: Record<ErrorContext, Bilingual> = {
   salary: { sv: 'Kunde inte hantera löneuppgifterna. Försök igen.', en: 'Could not process the payroll data. Please try again.' },
 }
 
-const GENERIC_FALLBACK: Bilingual = { sv: 'Något gick fel. Försök igen.', en: 'Something went wrong. Please try again.' }
+// Every sentence in the fallback chain names a next step; the last one also
+// names the way out when trying again does not help (the dashboard error
+// boundary says the same).
+const GENERIC_FALLBACK: Bilingual = {
+  sv: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
+  en: 'Something went wrong. Try again, and contact support if it keeps happening.',
+}
 
 // Known error patterns → user-friendly Swedish messages
 const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
@@ -372,7 +384,7 @@ const SWEDISH_STRONG_WORDS = [
   'och', 'att', 'inte', 'är', 'ska', 'finns', 'ingen', 'inget', 'inga', 'redan',
   'bara', 'hos', 'från', 'eller', 'utan', 'också', 'endast', 'ännu', 'igen',
   'kunde', 'gick', 'går', 'måste', 'får', 'saknas', 'lyckades', 'misslyckades',
-  'bifogad', 'svarade',
+  'bifogad', 'svarade', 'ange', 'anges',
 ]
 const SWEDISH_WEAK_WORDS = [
   'för', 'med', 'till', 'det', 'den', 'ett', 'av', 'på', 'som', 'har', 'kan',
@@ -1019,6 +1031,19 @@ export function getErrorMessage(
       const more = items.length > 5 ? ` (+${items.length - 5} till)` : ''
       const lead = typeof obj.error === 'string' && obj.error.trim() ? `${obj.error.trim()}: ` : ''
       return `${lead}${shown}${more}`
+    }
+
+    // The dashboard's validation summary (lib/api/validate.ts): field labels
+    // and Swedish reasons, already the sentence for the person. The errors[]
+    // beside it keeps Zod's English for machines, and read first it put
+    // "bankgiro: Invalid Bankgiro (...)" in front of a Swedish user.
+    if (
+      locale === 'sv' &&
+      obj.type === 'validation_error' &&
+      typeof obj.error === 'string' &&
+      obj.error.startsWith('Valideringsfel: ')
+    ) {
+      return obj.error
     }
 
     // Try Zod validation errors

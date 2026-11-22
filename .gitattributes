@@ -19,10 +19,16 @@ src/lib/bokslut/ixbrl/taxonomy/generated/*.json text eol=lf linguist-generated=t
 src/lib/extensions/_generated/** text eol=lf linguist-generated=true
 *.snap text eol=lf linguist-generated=true
 
+# Migrations check out with LF everywhere. Some patch a stored function by
+# searching its definition for multi-line text, and the definition holds LF
+# (CI applies from Linux, and some migrations normalize it), so a CRLF copy
+# from core.autocrlf=true finds no match and the replay stops. Every blob here
+# is LF except the SIE files pinned to -text below; later lines override this.
+supabase/migrations/*.sql text eol=lf
+
 # Skill seed migrations are written by `npm run skills:generate`; never edit them
-# by hand. Marked generated only (collapsed in pull request diffs): no text/eol
-# attribute, so the bytes Supabase already recorded for
-# every existing seed check out exactly as before.
+# by hand. Marked generated (collapsed in pull request diffs); their blobs are
+# LF, so the rule above checks out the bytes Supabase already recorded.
 supabase/migrations/*_seed_agent_atom_bodies.sql linguist-generated=true
 
 # CP437 SIE4 fixture. The bytes ARE the test: it is #FORMAT PC8, deliberately

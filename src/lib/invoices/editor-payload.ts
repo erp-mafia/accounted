@@ -11,6 +11,7 @@
  */
 
 import type { DeductionType } from '@/types'
+import { SelfBillingInvoiceItemSchema } from '@/lib/api/schemas'
 
 /** True when a dimensions bag ({sie_dim_no: code}) carries at least one value. */
 export function hasDimensionValues(
@@ -137,13 +138,22 @@ export interface InvoiceWritePayloadOptions {
  * inline, near-identical builders in InvoiceEditor.tsx: same dimension
  * pruning, same ROT/RUT privacy strip, same invoice-level personnummer /
  * housing sanitization.
+ *
+ * A skattereduktion is claimed on a faktura only, and the server refuses one
+ * on a quote, proforma or delivery note. The editor hides the Avdrag column
+ * on those, so a row flagged before the document type was switched is sent
+ * without its claim: what the document shows is what it saves.
  */
 export function buildInvoiceWritePayload<
   TItem extends DeductionItemFields & { dimensions?: Record<string, string> | null },
-  TForm extends SelfBillingCarrierFields & { items: TItem[] },
+  TForm extends SelfBillingCarrierFields & { items: TItem[]; document_type?: string },
 >(data: TForm, options: InvoiceWritePayloadOptions) {
-  const anyDeduction = data.items.some((i) => i.deduction_type)
-  const sanitizedItems = sanitizeDeductionItems(pruneItemDimensions(data.items))
+  const items =
+    data.document_type && data.document_type !== 'invoice'
+      ? data.items.map((item) => ({ ...item, deduction_type: null }))
+      : data.items
+  const anyDeduction = items.some((i) => i.deduction_type)
+  const sanitizedItems = sanitizeDeductionItems(pruneItemDimensions(items))
   return {
     ...stripSelfBillingFields(data),
     ...(options.saveAsDraft ? { save_as_draft: true } : {}),
@@ -176,6 +186,18 @@ export interface SelfBilledFormShape {
     unit_price: number
     vat_rate: number
   }>
+}
+
+/**
+ * The rows of a mottagen självfaktura whose quantity POST
+ * /api/invoices/self-billed refuses, read from its own item schema (a
+ * positive quantity). The editor's form schema takes 0 and negative for an
+ * invoice (lib/invoices/line-quantity.ts), so self-billed mode marks these
+ * rows inline instead of meeting a 400 after the click.
+ */
+export function selfBilledQuantityRefusals(items: ReadonlyArray<{ quantity: number }>): number[] {
+  const quantity = SelfBillingInvoiceItemSchema.shape.quantity
+  return items.flatMap((item, index) => (quantity.safeParse(item.quantity).success ? [] : [index]))
 }
 
 /**

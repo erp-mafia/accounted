@@ -259,7 +259,7 @@ describe('getErrorMessage: accumulated validation details', () => {
     expect(msg).toContain('Bankuppgifter saknas')
     expect(msg).toContain('Valideringsfel')
     // Must NOT collapse to the generic HTTP-400 fallback.
-    expect(msg).not.toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect(msg).not.toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
   })
 
   it('joins multiple items and caps the list with an overflow hint', () => {
@@ -274,7 +274,7 @@ describe('getErrorMessage: accumulated validation details', () => {
 
   it('ignores a non-string details array and falls through to the status fallback', () => {
     const msg = getErrorMessage({ error: 'oklart fel', details: [{ x: 1 }] }, { statusCode: 400 })
-    expect(msg).toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect(msg).toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
   })
 })
 
@@ -288,7 +288,7 @@ describe('getErrorMessage: payment-file route messages surface (issue #945)', ()
       { context: 'salary', statusCode: 400 },
     )
     expect(msg).toBe('2 anställd(a) saknar bankkontouppgifter')
-    expect(msg).not.toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect(msg).not.toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
   })
 
   it('surfaces a "... krävs ..." message instead of the generic 400', () => {
@@ -297,7 +297,7 @@ describe('getErrorMessage: payment-file route messages surface (issue #945)', ()
       { context: 'settings', statusCode: 400 },
     )
     expect(msg).toContain('krävs')
-    expect(msg).not.toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect(msg).not.toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
   })
 
   it('surfaces the missing company bank-account message', () => {
@@ -306,7 +306,7 @@ describe('getErrorMessage: payment-file route messages surface (issue #945)', ()
       { context: 'salary', statusCode: 400 },
     )
     expect(msg).toContain('Företagets bankkonto')
-    expect(msg).not.toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect(msg).not.toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
   })
 })
 
@@ -361,12 +361,22 @@ describe('getErrorMessage: existing patterns still work', () => {
 
   it('falls through to HTTP status map', () => {
     const msg = getErrorMessage(null, { statusCode: 404 })
-    expect(msg).toBe('Resursen kunde inte hittas.')
+    expect(msg).toBe('Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.')
+  })
+
+  it('says a platform timeout (504, 408) is worth waiting for, not the generic line', () => {
+    // A function past its time limit answers 504 from the platform with a
+    // plain-text body: only the status reaches the reader.
+    expect(getErrorMessage(null, { statusCode: 504 })).toBe('Det tog för lång tid att få svar. Försök igen om en stund.')
+    expect(getErrorMessage('An error occurred with your deployment', { statusCode: 504, locale: 'en' })).toBe(
+      'The answer took too long. Please try again shortly.',
+    )
+    expect(getErrorMessage(null, { statusCode: 408 })).toMatch(/^Det tog för lång tid att skicka/)
   })
 
   it('falls through to generic message', () => {
     const msg = getErrorMessage(null)
-    expect(msg).toBe('Något gick fel. Försök igen.')
+    expect(msg).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 })
 
@@ -402,13 +412,13 @@ describe('getErrorMessage: API response body vs new Error(body.error)', () => {
     const msg = getErrorMessage(envelope, { statusCode: 409 })
     expect(msg).toContain('låst')
     expect(msg).toContain('2026-03-31')
-    expect(msg).not.toBe('Något gick fel. Försök igen.')
+    expect(msg).not.toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 
   it('the inner error object alone also resolves (forwarded body.error)', () => {
     const msg = getErrorMessage(envelope.error, { statusCode: 409 })
     expect(msg).toContain('låst')
-    expect(msg).not.toBe('Något gick fel. Försök igen.')
+    expect(msg).not.toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 
   // A body the platform rejects never reaches a route, and the 413 it answers
@@ -429,7 +439,7 @@ describe('getErrorMessage: API response body vs new Error(body.error)', () => {
 
   it('new Error(body.error) discards the reason and yields the generic fallback', () => {
     const thrown = new Error(envelope.error as unknown as string)
-    expect(getErrorMessage(thrown)).toBe('Något gick fel. Försök igen.')
+    expect(getErrorMessage(thrown)).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 
   it('new Error(body.error) is not rescued by passing statusCode either', () => {
@@ -473,14 +483,14 @@ describe('getErrorMessage: API response body vs new Error(body.error)', () => {
   it('the same call handles an unparseable body via statusCode', () => {
     // `await response.json().catch(() => null)` on an HTML 403 page.
     expect(getErrorMessage(null, { statusCode: 403 })).toBe(
-      'Du har inte behörighet att utföra denna åtgärd.',
+      'Du har inte behörighet att göra det här i företaget. Be en ägare eller administratör om behörighet.',
     )
   })
 
   it('English locale gets message_en from the envelope, not the Swedish prose', () => {
     const msg = getErrorMessage(envelope, { statusCode: 409, locale: 'en' })
     expect(msg).not.toContain('Räkenskapsperioden')
-    expect(msg).not.toBe('Something went wrong. Please try again.')
+    expect(msg).not.toBe('Something went wrong. Try again, and contact support if it keeps happening.')
   })
 })
 
@@ -522,12 +532,12 @@ describe('getErrorMessage: Swedish heuristic covers real route sentences', () =>
     }
     const msg = getErrorMessage(body, { statusCode: 423 })
     expect(msg).toContain('låst eller saknad räkenskapsperiod')
-    expect(msg).not.toBe('Något gick fel. Försök igen.')
+    expect(msg).not.toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 
   it('an English body still falls to the status map, not passthrough', () => {
     expect(getErrorMessage({ error: 'Extension context required' }, { statusCode: 500 })).toBe(
-      'Ett oväntat serverfel uppstod. Försök igen senare.',
+      'Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.',
     )
   })
 
@@ -541,7 +551,7 @@ describe('getErrorMessage: Swedish heuristic covers real route sentences', () =>
     )
     const msg = getErrorMessage(thrown)
     expect(msg).toContain('0 verifikationer')
-    expect(msg).not.toBe('Något gick fel. Försök igen.')
+    expect(msg).not.toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
   })
 })
 
@@ -755,18 +765,18 @@ describe('getErrorMessage: Swedish route messages without a keyword pass through
 
   it('still hides English and technical text behind the status/context fallback', () => {
     expect(getErrorMessage({ error: 'Failed to fetch customer' }, { statusCode: 500 })).toBe(
-      'Ett oväntat serverfel uppstod. Försök igen senare.',
+      'Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.',
     )
     expect(
       getErrorMessage({ error: 'TypeError: Cannot read properties of undefined (reading "id")' }, { statusCode: 500 }),
-    ).toBe('Ett oväntat serverfel uppstod. Försök igen senare.')
+    ).toBe('Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.')
     // Swedish words next to a leak are still a leak.
     expect(
       getErrorMessage({ error: 'Kontot är trasigt: TypeError: x is not a function' }, { statusCode: 500 }),
-    ).toBe('Ett oväntat serverfel uppstod. Försök igen senare.')
+    ).toBe('Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.')
     expect(
       getErrorMessage({ error: 'Det gick inte att läsa relation "public.invoices"' }, { statusCode: 500 }),
-    ).toBe('Ett oväntat serverfel uppstod. Försök igen senare.')
+    ).toBe('Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.')
   })
 
   it('looksLikeUserFacingSwedish scores on å/ä/ö, a strong Swedish word, or two weak ones, never on English', () => {
@@ -900,7 +910,7 @@ describe('getErrorMessage: the caller fallback', () => {
 
   it('ranks a known HTTP status above the fallback, and ignores a blank fallback', () => {
     expect(getErrorMessage(null, { statusCode: 403, fallback: 'FB' })).toBe(
-      'Du har inte behörighet att utföra denna åtgärd.',
+      'Du har inte behörighet att göra det här i företaget. Be en ägare eller administratör om behörighet.',
     )
     expect(getErrorMessage(null, { fallback: '  ' })).toBe(getErrorMessage(null))
   })

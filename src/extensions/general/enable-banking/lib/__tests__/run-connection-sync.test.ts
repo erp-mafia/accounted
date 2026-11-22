@@ -41,7 +41,7 @@ function input(supabase: unknown, overrides: Partial<ConnectionSyncInput> = {}):
     supabase: supabase as SupabaseClient,
     companyId: 'company-1',
     userId: 'user-1',
-    connection: { id: 'conn-1', session_id: 'session-1' },
+    connection: { id: 'conn-1', session_id: 'session-1', bank_name: null },
     accounts: ACCOUNTS,
     fromDate: '2026-07-01',
     toDate: '2026-10-01',
@@ -119,6 +119,15 @@ describe('runConnectionSync', () => {
     await runConnectionSync(input(supabase, { lookbackDays: 7 }))
 
     expect(mockSync.mock.calls[0][8]).toEqual({})
+  })
+
+  it("hands the connection's bank to every account read, so Nordea's card holds stay out (crm#2076)", async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync.mockResolvedValue(result() as never)
+
+    await runConnectionSync(input(supabase, { lookbackDays: 7, connection: { id: 'conn-1', session_id: 'session-1', bank_name: 'Nordea' } }))
+
+    expect(mockSync.mock.calls.map((call) => call[8])).toEqual([{ bankName: 'Nordea' }, { bankName: 'Nordea' }])
   })
 
   it('hands the person who asked to every account read, and nobody when none did', async () => {

@@ -95,8 +95,6 @@ export function describeNode(node: GraphNode, t: T, formatDateLong: (date: strin
       }
     case 'inbox':
       return { kind, title: node.text ?? '', meta: [t('sources.connections')], link: null }
-    case 'profile':
-      return { kind, title: node.text ?? '', meta: [t('sources.profile')], link: null }
     case 'owners':
       return {
         kind,

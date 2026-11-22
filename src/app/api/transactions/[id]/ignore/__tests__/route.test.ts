@@ -146,7 +146,7 @@ describe('POST /api/transactions/[id]/ignore', () => {
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
-    expect(body).toEqual({ error: 'Något gick fel. Försök igen.' })
+    expect(body).toEqual({ error: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.' })
   })
 })
 
@@ -213,6 +213,6 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
-    expect(body).toEqual({ error: 'Något gick fel. Försök igen.' })
+    expect(body).toEqual({ error: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.' })
   })
 })

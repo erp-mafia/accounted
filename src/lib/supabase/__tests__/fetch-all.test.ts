@@ -134,6 +134,82 @@ describe('fetchAllRows', () => {
   })
 })
 
+describe('fetchAllRows on a large read', () => {
+  // A deferred page: resolves only when the test says so, to see what is in flight.
+  function gatedQuery(pages: Record<number, Row[]>) {
+    const asked: number[] = []
+    const open = new Map<number, () => void>()
+    const queryFn = ({ from }: { from: number; to: number }) => {
+      asked.push(from)
+      return new Promise<{ data: Row[]; error: null }>((resolve) => {
+        open.set(from, () => resolve({ data: pages[from] ?? [], error: null }))
+      })
+    }
+    const release = async (from: number) => {
+      await Promise.resolve()
+      open.get(from)?.()
+      await new Promise((r) => setTimeout(r, 0))
+    }
+    return { queryFn, asked, release }
+  }
+
+  it('reads the first two pages one by one, then three at a time, and keeps the rows in order', async () => {
+    const pages: Record<number, Row[]> = {}
+    for (let i = 0; i < 5; i++) pages[i * PAGE_SIZE] = makeRows(i * PAGE_SIZE, PAGE_SIZE)
+    pages[5 * PAGE_SIZE] = makeRows(5 * PAGE_SIZE, 500)
+    const { queryFn, asked, release } = gatedQuery(pages)
+
+    const result = fetchAllRows<Row>(queryFn)
+    expect(asked).toEqual([0])
+    await release(0)
+    // The second page only once the first came back full: nothing speculative
+    // while the read may still be small.
+    expect(asked).toEqual([0, PAGE_SIZE])
+    await release(PAGE_SIZE)
+    expect(asked).toEqual([0, PAGE_SIZE, 2 * PAGE_SIZE, 3 * PAGE_SIZE, 4 * PAGE_SIZE])
+    // Out of order on purpose: the rows still come back in page order.
+    await release(4 * PAGE_SIZE)
+    await release(2 * PAGE_SIZE)
+    await release(3 * PAGE_SIZE)
+    expect(asked.slice(5)).toEqual([5 * PAGE_SIZE, 6 * PAGE_SIZE, 7 * PAGE_SIZE])
+    await release(7 * PAGE_SIZE)
+    await release(6 * PAGE_SIZE)
+    await release(5 * PAGE_SIZE)
+
+    const out = await result
+    expect(out).toHaveLength(5 * PAGE_SIZE + 500)
+    expect(out.map((r) => Number(r.id))).toEqual(Array.from({ length: 5500 }, (_, i) => i))
+  })
+
+  it('never reads past maxRows, and returns exactly the cap', async () => {
+    const offsets: number[] = []
+    const pages: Record<number, Row[]> = {}
+    for (let i = 0; i < 8; i++) pages[i * PAGE_SIZE] = makeRows(i * PAGE_SIZE, PAGE_SIZE)
+    const out = await fetchAllRows<Row>(
+      (range) => {
+        offsets.push(range.from)
+        return pagedQuery(pages)(range)
+      },
+      { maxRows: 3500 },
+    )
+    expect(out).toHaveLength(3500)
+    expect(offsets).toEqual([0, PAGE_SIZE, 2 * PAGE_SIZE, 3 * PAGE_SIZE])
+  })
+
+  it('throws the error of a page read side by side', async () => {
+    const pages: Record<number, Row[]> = { 0: makeRows(0, PAGE_SIZE), [PAGE_SIZE]: makeRows(PAGE_SIZE, PAGE_SIZE) }
+    await expect(
+      fetchAllRows<Row>(({ from }) =>
+        Promise.resolve(
+          from === 3 * PAGE_SIZE
+            ? { data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } as { message: string } }
+            : { data: pages[from] ?? makeRows(from, PAGE_SIZE), error: null },
+        ),
+      ),
+    ).rejects.toMatchObject({ message: expect.stringContaining('statement timeout') })
+  })
+})
+
 describe('fetchAllRows onFirstPage', () => {
   it('hands over the first page before the rest is fetched, and still returns every row', async () => {
     const seen: Array<{ rows: number; requestedSoFar: number }> = []

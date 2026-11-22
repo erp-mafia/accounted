@@ -626,6 +626,12 @@ export interface WorklistCounts {
    * inbox row links here. Absent from older payloads.
    */
   inboxHref?: string
+  /**
+   * True when at least one count could not be read and answered zero
+   * (lib/worklist/categories.ts watchCountFailures): a zero total then does
+   * not mean nothing waits. Absent from older payloads.
+   */
+  incomplete?: boolean
 }
 
 /**

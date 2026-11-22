@@ -10,7 +10,8 @@
 # docs/SOVEREIGN.md ("Backup and restore") for the runbook and the cron line.
 #
 # Requirements on the host running it: bash, pg_dump and psql (matching the
-# server's major version), tar, gzip, sha256sum (or shasum), AWS CLI v2 (works
+# server's major version), GNU tar (BusyBox and bsdtar lack --xattrs-include),
+# gzip, sha256sum (or shasum), AWS CLI v2 (works
 # against any S3-compatible endpoint: Safespring, GleSYS, Elastx via
 # --endpoint-url).
 #
@@ -170,7 +171,11 @@ if [ -n "${BACKUP_STORAGE_DIR:-}" ]; then
     exit 2
   fi
   STORAGE_FILE="${WORK}/${NAME}.storage.tar.gz"
-  tar -C "$BACKUP_STORAGE_DIR" -czf "$STORAGE_FILE" .
+  # storage-api's file backend keeps each object's content type and cache
+  # control in extended attributes (user.supabase.*), not in the database.
+  # GNU tar drops xattrs unless asked; without them a restored document is
+  # served as a download instead of opening inline.
+  tar -C "$BACKUP_STORAGE_DIR" --xattrs --xattrs-include='user.supabase.*' -czf "$STORAGE_FILE" .
   echo "backup: storage archive $(du -h "$STORAGE_FILE" | cut -f1)"
 fi
 

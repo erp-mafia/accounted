@@ -30,6 +30,24 @@ export const SKATTEKONTO_TAX_ACCOUNTS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * The accounts that hold the same skattekonto event, for a guard that looks
+ * for the event on its counter account. An aktiebolag's debiterad
+ * preliminärskatt was proposed on 2510 Skatteskulder until migration
+ * 20261120150000 and on 2518 Betald F-skatt since, so a verifikat holds the
+ * event on either, and books made before and after the change must still
+ * find each other.
+ */
+const SAME_TAX_EVENT_ACCOUNTS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  '2510': ['2510', '2518'],
+  '2518': ['2510', '2518'],
+})
+
+/** The accounts that hold the same skattekonto event as `account` (itself included). */
+export function sameTaxEventAccounts(account: string): readonly string[] {
+  return SAME_TAX_EVENT_ACCOUNTS[account] ?? [account]
+}
+
+/**
  * The accounts the skattekonto may run on: SKATTEKONTO_LEDGER_ACCOUNTS in
  * lib/skatteverket/skattekonto-account.ts (a test pins the two equal), held
  * here as data so the transactions module does not import the skatteverket

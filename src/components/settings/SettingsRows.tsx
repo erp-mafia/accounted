@@ -6,7 +6,7 @@ import { ChevronLeftIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { FIELD_CLASS } from '@/components/ui/field-classes'
 import { HelpPopover, type HelpPopoverContent } from '@/components/ui/help-popover'
-import { openNativePicker } from '@/components/ui/input'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { ViewerLock } from '@/components/ui/viewer-lock'
 import { SettingsTopBarPortal, useSettingsTopBarSlots } from './SettingsTopBar'
@@ -244,21 +244,13 @@ const SETTINGS_FIELD_CLASS = cn(FIELD_CLASS, 'min-w-0 flex-1 px-2.5')
 
 /**
  * Boxed text input that fills the control column (read-only values render
- * disabled). A date field opens its calendar on a click anywhere, as the
- * shared Input does: in Chromium a click on the text only selects a segment,
- * and the settings date fields (fiscal year, lock date) were rage-clicked.
+ * disabled). A date field is the shared Input's typed date field (crm#1954):
+ * the settings date fields (fiscal year, lock date) take a typed date and
+ * open the calendar from its icon, like every other date in the app.
  */
-export function SettingsInput({ className, onClick, ...rest }: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...rest}
-      onClick={(e) => {
-        onClick?.(e)
-        if (!e.defaultPrevented) openNativePicker(e.currentTarget)
-      }}
-      className={cn(SETTINGS_FIELD_CLASS, 'h-8 pointer-coarse:h-10', className)}
-    />
-  )
+export function SettingsInput({ className, ...rest }: React.InputHTMLAttributes<HTMLInputElement>) {
+  if (rest.type === 'date') return <Input {...rest} className={cn('min-w-0 flex-1', className)} />
+  return <input {...rest} className={cn(SETTINGS_FIELD_CLASS, 'h-8 pointer-coarse:h-10', className)} />
 }
 
 /** Boxed textarea sibling of SettingsInput. */

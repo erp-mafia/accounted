@@ -64,12 +64,6 @@ export async function generateResultatrapport(
   const effectiveFromDate = options?.fromDate ?? period.period_start
   const effectiveToDate = options?.toDate ?? period.period_end
 
-  const currentRows = await resultatrapportRows(supabase, companyId, fiscalPeriodId, {
-    fromDate: options?.fromDate,
-    toDate: options?.toDate,
-    dimensions: options?.dimensions,
-  })
-
   // Prior-period comparison. Full period: the previous fiscal period.
   // Narrowed range: the same window shifted one year back (#862), so
   // "Hittills i år" compares against the same dates last year.
@@ -77,30 +71,28 @@ export async function generateResultatrapport(
   // under K2/K3 (registry start/end dates), so "this code last year" may be
   // a different project entirely: drop the column rather than compare
   // unrelated activity (#862 review).
-  let priorRows: TrialBalanceRow[] = []
-  let priorPeriodInfo: { start: string; end: string } | null = null
   const hasRange = Boolean(options?.fromDate || options?.toDate)
   const isFullPeriod = !hasRange && !options?.dimensions
-  if (isFullPeriod) {
-    // The year ending the day before this one starts: the continuity link
-    // when it is adjacent, the date otherwise (multi-year SIE imports created
-    // before the importer set previous_period_id), never a year across a gap.
-    const prior = await resolvePreviousFiscalPeriod<{ id: string; period_start: string; period_end: string }>(
-      supabase,
-      companyId,
-      period,
-      'id, period_start, period_end',
-    )
-    if (prior) {
+  const readPrior = async (): Promise<{ rows: TrialBalanceRow[]; info: { start: string; end: string } | null }> => {
+    if (isFullPeriod) {
+      // The year ending the day before this one starts: the continuity link
+      // when it is adjacent, the date otherwise (multi-year SIE imports created
+      // before the importer set previous_period_id), never a year across a gap.
+      const prior = await resolvePreviousFiscalPeriod<{ id: string; period_start: string; period_end: string }>(
+        supabase,
+        companyId,
+        period,
+        'id, period_start, period_end',
+      )
+      if (!prior) return { rows: [], info: null }
       // Same exclusion as the current period: a prior year is almost always
       // closed, so without it the comparison column reads zero throughout.
       const priorTb = await generateTrialBalance(supabase, companyId, prior.id, {
         closingEntry: 'exclude-all-year-end',
       })
-      priorRows = filterPnl(priorTb.rows)
-      priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
+      return { rows: filterPnl(priorTb.rows), info: { start: prior.period_start, end: prior.period_end } }
     }
-  } else if (hasRange && !options?.dimensions) {
+    if (!hasRange || options?.dimensions) return { rows: [], info: null }
     // Same window, prior year. Shift the window back one year (leap-day
     // clamped) and read activity from whichever fiscal period(s) cover the
     // shifted dates: brutet räkenskapsår can split a calendar window across
@@ -110,61 +102,47 @@ export async function generateResultatrapport(
     const shiftedTo = shiftDateOneYearBack(effectiveToDate)
     // A window longer than a year would overlap itself when shifted back;
     // that comparison is meaningless, so leave the column empty.
-    if (shiftedTo < effectiveFromDate) {
-      const { data: candidatePeriods } = await supabase
-        .from('fiscal_periods')
-        .select('id, period_start, period_end')
-        .eq('company_id', companyId)
-        .lte('period_start', shiftedTo)
-        .gte('period_end', shiftedFrom)
-        .order('period_start', { ascending: true })
+    if (shiftedTo >= effectiveFromDate) return { rows: [], info: null }
+    const { data: candidatePeriods } = await supabase
+      .from('fiscal_periods')
+      .select('id, period_start, period_end')
+      .eq('company_id', companyId)
+      .lte('period_start', shiftedTo)
+      .gte('period_end', shiftedFrom)
+      .order('period_start', { ascending: true })
 
-      const merged = new Map<string, TrialBalanceRow>()
-      let coveredAny = false
-      for (const p of candidatePeriods ?? []) {
-        const from = shiftedFrom > p.period_start ? shiftedFrom : p.period_start
-        const to = shiftedTo < p.period_end ? shiftedTo : p.period_end
-        if (from > to) continue
-        const tbPart = await generateTrialBalance(supabase, companyId, p.id, {
+    const parts = (candidatePeriods ?? [])
+      .map((p) => ({
+        id: p.id,
+        from: shiftedFrom > p.period_start ? shiftedFrom : p.period_start,
+        to: shiftedTo < p.period_end ? shiftedTo : p.period_end,
+      }))
+      .filter((part) => part.from <= part.to)
+    if (parts.length === 0) return { rows: [], info: null }
+    // Each covering period's slice is read at once, merged in period order.
+    const tbParts = await Promise.all(
+      parts.map((part) =>
+        generateTrialBalance(supabase, companyId, part.id, {
           closingEntry: 'exclude-all-year-end',
-          fromDate: from,
-          toDate: to,
-        })
-        coveredAny = true
-        for (const row of filterPnl(tbPart.rows)) {
-          const existing = merged.get(row.account_number)
-          if (!existing) {
-            merged.set(row.account_number, { ...row })
-          } else {
-            existing.period_debit = roundOre(existing.period_debit + row.period_debit)
-            existing.period_credit = roundOre(existing.period_credit + row.period_credit)
-          }
+          fromDate: part.from,
+          toDate: part.to,
+        }),
+      ),
+    )
+    const merged = new Map<string, TrialBalanceRow>()
+    for (const tbPart of tbParts) {
+      for (const row of filterPnl(tbPart.rows)) {
+        const existing = merged.get(row.account_number)
+        if (!existing) {
+          merged.set(row.account_number, { ...row })
+        } else {
+          existing.period_debit = roundOre(existing.period_debit + row.period_debit)
+          existing.period_credit = roundOre(existing.period_credit + row.period_credit)
         }
       }
-      if (coveredAny) {
-        priorRows = [...merged.values()]
-        priorPeriodInfo = { start: shiftedFrom, end: shiftedTo }
-      }
     }
+    return { rows: [...merged.values()], info: { start: shiftedFrom, end: shiftedTo } }
   }
-
-  const priorByAccount = new Map<string, TrialBalanceRow>()
-  for (const r of priorRows) priorByAccount.set(r.account_number, r)
-
-  const budget = options?.budgetId
-    ? await loadReportBudget(supabase, companyId, {
-        budgetId: options.budgetId,
-        fiscalPeriodId,
-        period: { start: period.period_start, end: period.period_end },
-        window: { from: effectiveFromDate, to: effectiveToDate },
-        dimensions: options.dimensions,
-      })
-    : null
-
-  const groups = buildGroups(currentRows, priorByAccount, budget?.info.applied ? budget : null)
-
-  const netResultCurrent = sumNet(currentRows)
-  const netResultPrior = sumNet(priorRows)
 
   // Reconciliation aid for the header: which vouchers are actually in here.
   // Scoped to the reported window, so a Q1 report says something true about Q1.
@@ -172,17 +150,49 @@ export async function generateResultatrapport(
   // partial, and an unfiltered voucher range next to a filtered result invites
   // exactly the wrong conclusion during avstämning.
   // Best-effort: a header nicety never breaks the report.
-  let latestVouchers: LatestVoucherPerSeries[] = []
-  if (!options?.dimensions) {
+  const readLatestVouchers = async (): Promise<LatestVoucherPerSeries[]> => {
+    if (options?.dimensions) return []
     try {
-      latestVouchers = await getLatestPostedVouchers(supabase, companyId, fiscalPeriodId, {
+      return await getLatestPostedVouchers(supabase, companyId, fiscalPeriodId, {
         fromDate: effectiveFromDate,
         toDate: effectiveToDate,
       })
     } catch {
       // Best-effort header line only.
+      return []
     }
   }
+
+  // Every read below depends only on the period: one round of reads, not
+  // four in a row (the report page waits on all of them).
+  const [currentRows, prior, budget, latestVouchers] = await Promise.all([
+    resultatrapportRows(supabase, companyId, fiscalPeriodId, {
+      fromDate: options?.fromDate,
+      toDate: options?.toDate,
+      dimensions: options?.dimensions,
+    }),
+    readPrior(),
+    options?.budgetId
+      ? loadReportBudget(supabase, companyId, {
+          budgetId: options.budgetId,
+          fiscalPeriodId,
+          period: { start: period.period_start, end: period.period_end },
+          window: { from: effectiveFromDate, to: effectiveToDate },
+          dimensions: options.dimensions,
+        })
+      : Promise.resolve(null),
+    readLatestVouchers(),
+  ])
+  const priorRows = prior.rows
+  const priorPeriodInfo = prior.info
+
+  const priorByAccount = new Map<string, TrialBalanceRow>()
+  for (const r of priorRows) priorByAccount.set(r.account_number, r)
+
+  const groups = buildGroups(currentRows, priorByAccount, budget?.info.applied ? budget : null)
+
+  const netResultCurrent = sumNet(currentRows)
+  const netResultPrior = sumNet(priorRows)
 
   return {
     groups,

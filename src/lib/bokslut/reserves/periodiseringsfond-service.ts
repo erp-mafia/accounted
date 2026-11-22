@@ -3,6 +3,9 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { roundOre } from '@/lib/money'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from '@/lib/reports/ink2/account-mappings'
 import type { ProposedDisposition } from '../types'
+import { cohortYearFromAccount } from '@/lib/reports/ink2/periodiseringsfond-cohort'
+
+export { cohortYearFromAccount }
 
 /** Maximum periodiseringsfond avsättning for aktiebolag: 25 % of skattemässigt
  *  resultat före avsättning. Enskild firma uses 30 % but is handled in NE/INK1
@@ -358,23 +361,6 @@ export async function listExistingPeriodiseringsfonder(
     return a.account_number.localeCompare(b.account_number)
   })
   return fonder
-}
-
-/**
- * Derive the cohort year from a BAS account number. Returns null for accounts
- * that don't follow the '212X' convention or its '213X' twin (BAS names 2130
- * "Periodiseringsfond 2020: nr 2", and so on), e.g. 2110 = periodiseringsfonder
- * in general, no specific cohort.
- */
-function cohortYearFromAccount(accountNumber: string): number | null {
-  if (!/^21[23]\d$/.test(accountNumber)) return null
-  const lastDigit = parseInt(accountNumber.slice(-1), 10)
-  // BAS 2020: 2129 represents 2019 by convention; 2128 = 2028.
-  if (lastDigit === 9) return 2019
-  // For 0-8, the cohort year is in the 2020s. As fiscal years extend past
-  // 2029 the convention will recycle (2120 might mean 2030 then); cap at
-  // 2020-decade interpretation for now and surface ambiguity in a warning.
-  return 2020 + lastDigit
 }
 
 export interface PfondAteforingProposal {

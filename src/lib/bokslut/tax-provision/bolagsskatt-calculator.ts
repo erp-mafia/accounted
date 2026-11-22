@@ -2,9 +2,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import type { ProposedDisposition } from '../types'
+import {
+  BOLAGSSKATT_RATE,
+  bolagsskattOn,
+  taxableResultInWholeTens,
+} from '@/lib/reports/ink2/corporate-tax'
 
-/** Bolagsskatt rate. 20.6 % since 2021 (gäller räkenskapsår påbörjat efter 31 dec 2020). */
-export const BOLAGSSKATT_RATE = 0.206
+// Re-exported so existing importers (deferred tax, K3 transition) keep their path.
+export { BOLAGSSKATT_RATE }
 
 export interface BolagsskattInput {
   /** Resultat före skatt after every disposition: the ledger's (readYearResult)
@@ -26,6 +31,8 @@ export interface BolagsskattInput {
      *  × ingående saldo). Computed by periodiseringsfond-service so callers
      *  can pass it through. */
     schablonintaktPeriodiseringsfond?: number
+    /** INK2S 4.6d: uppräkning on periodiseringsfonder återförda this year. */
+    uppraekningPeriodiseringsfond?: number
     /** Other adjustments: free-form. */
     other?: number
   }
@@ -37,6 +44,7 @@ export interface BolagsskattComputation {
   nonTaxableIncome: number
   deficitCarryforward: number
   schablonintaktPeriodiseringsfond: number
+  uppraekningPeriodiseringsfond: number
   otherAdjustments: number
   taxableResult: number
   /** Taxable result before tax, floored to a whole 10 SEK and clamped at zero. */
@@ -86,6 +94,7 @@ export function calculateBolagsskatt(input: BolagsskattInput): ProposedDispositi
   const nonTaxableIncome = adjustments.nonTaxableIncome ?? 0
   const deficitCarryforward = adjustments.deficitCarryforward ?? 0
   const schablonintaktPeriodiseringsfond = adjustments.schablonintaktPeriodiseringsfond ?? 0
+  const uppraekningPeriodiseringsfond = adjustments.uppraekningPeriodiseringsfond ?? 0
   const otherAdjustments = adjustments.other ?? 0
 
   // roundOre the sum before it is floored below: five independently sourced
@@ -99,13 +108,14 @@ export function calculateBolagsskatt(input: BolagsskattInput): ProposedDispositi
     nonTaxableIncome -
     deficitCarryforward +
     schablonintaktPeriodiseringsfond +
+    uppraekningPeriodiseringsfond +
     otherAdjustments,
   )
 
   // Round down to a whole 10 SEK before applying the rate. Negative taxable
   // result means no tax provision (handled as inrullat underskott in INK2).
-  const taxableResultClamped = Math.floor(Math.max(0, taxableResult) / 10) * 10
-  const taxAmount = Math.round(taxableResultClamped * BOLAGSSKATT_RATE)
+  const taxableResultClamped = taxableResultInWholeTens(taxableResult)
+  const taxAmount = bolagsskattOn(taxableResult)
 
   const computation: BolagsskattComputation = {
     resultBeforeTax,
@@ -113,6 +123,7 @@ export function calculateBolagsskatt(input: BolagsskattInput): ProposedDispositi
     nonTaxableIncome,
     deficitCarryforward,
     schablonintaktPeriodiseringsfond,
+    uppraekningPeriodiseringsfond,
     otherAdjustments,
     taxableResult,
     taxableResultClamped,

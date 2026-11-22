@@ -82,6 +82,10 @@ export const SE_PACK_TERRITORY = [
   'lib/reports/ne-bilaga/',
   'lib/reports/sru/',
   'lib/reports/sru-encoding.ts',
+  // The tax adjustments INK2S and the NE-bilaga both read: which BAS accounts
+  // the chart names as not deductible or not taxable (IL), moved out of
+  // lib/bokslut into the kernel so the NE engine can read them.
+  'lib/reports/tax-adjustments.ts',
   // The kassaflödesanalys to K3 kapitel 7: which BAS range is which line of
   // the statement (interest, dividends, investing and financing by kind,
   // likvida medel per 7.4). The ledger reports read it, so it lives beside

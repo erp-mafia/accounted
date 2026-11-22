@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { PlusIcon, XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,6 +12,7 @@ import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 interface AllowlistEntry {
   id: string
@@ -33,6 +34,7 @@ interface AccessData {
  */
 export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
   const t = useTranslations('clients')
+  const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [data, setData] = useState<AccessData | null>(null)
   const [loadError, setLoadError] = useState<'no_brand' | 'failed' | null>(null)
@@ -73,20 +75,27 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
       ...data,
       brand: { ...data.brand, signupMode: inviteOnly ? 'invite_only' : 'open' },
     })
+    const revert = (title: string) => {
+      setData((current) =>
+        current
+          ? { ...current, brand: { ...current.brand, signupMode: previous } }
+          : current,
+      )
+      toast({ title, variant: 'destructive' })
+    }
     try {
       const res = await fetch('/api/clients/signup-access', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ signup_mode: inviteOnly ? 'invite_only' : 'open' }),
       })
-      if (!res.ok) throw new Error(`PATCH failed: ${res.status}`)
+      if (!res.ok) {
+        // The server's sentence when it refused (not allowed, no domain), else ours.
+        const body = await res.json().catch(() => ({}))
+        revert(getErrorMessage(body, { locale, statusCode: res.status, fallback: t('access_save_failed') }))
+      }
     } catch {
-      setData((current) =>
-        current
-          ? { ...current, brand: { ...current.brand, signupMode: previous } }
-          : current,
-      )
-      toast({ title: t('access_save_failed'), variant: 'destructive' })
+      revert(t('access_save_failed'))
     } finally {
       setSavingMode(false)
     }
@@ -111,7 +120,7 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
           title:
             res.status === 409
               ? t('access_duplicate')
-              : t('access_save_failed'),
+              : getErrorMessage(json, { locale, statusCode: res.status, fallback: t('access_save_failed') }),
           variant: 'destructive',
         })
         return
@@ -141,7 +150,14 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       })
-      if (!res.ok) throw new Error(`DELETE failed: ${res.status}`)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        toast({
+          title: getErrorMessage(body, { locale, statusCode: res.status, fallback: t('access_save_failed') }),
+          variant: 'destructive',
+        })
+        return
+      }
       // Functional update: see addEntry. Avoids clobbering a concurrent
       // mode toggle or add with a stale snapshot.
       setData((current) =>
@@ -157,7 +173,9 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
   }
 
   if (loadError === 'no_brand') {
-    return <EmptyState title={t('access_no_brand')} />
+    // The domain is set up with the byrå (brands rows are ops-managed): say
+    // what it is for and that support is the way to one.
+    return <EmptyState title={t('access_no_brand')} description={t('access_no_brand_description')} supportHint />
   }
   if (loadError === 'failed') {
     return (

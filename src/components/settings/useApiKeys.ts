@@ -47,21 +47,30 @@ export function useApiKeys({ mine = false }: { mine?: boolean } = {}) {
   const [keys, setKeys] = useState<ApiKeyRow[]>([])
   const [companies, setCompanies] = useState<PickerCompany[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed: what is connected is unknown, so the panel says so
+  // instead of showing an empty list (and the connect-Claude hero) to a user
+  // who may already be connected.
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const refetch = useCallback(async () => {
     try {
       const res = await fetch(mine ? '/api/settings/api-keys?scope=mine' : '/api/settings/api-keys')
+      if (!res.ok) {
+        setLoadFailed(true)
+        return
+      }
       const json = await res.json()
       if (json.data) {
         setKeys(json.data.filter((k: ApiKeyRow) => !k.revoked_at))
       }
       setCompanies(Array.isArray(json.meta?.companies) ? json.meta.companies : [])
+      setLoadFailed(false)
     } catch {
-      toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
+      setLoadFailed(true)
     } finally {
       setIsLoading(false)
     }
-  }, [toast, t, mine])
+  }, [mine])
 
   useEffect(() => {
     refetch()
@@ -89,5 +98,5 @@ export function useApiKeys({ mine = false }: { mine?: boolean } = {}) {
     [toast, t],
   )
 
-  return { keys, companies, isLoading, refetch, revoke }
+  return { keys, companies, isLoading, loadFailed, refetch, revoke }
 }

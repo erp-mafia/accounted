@@ -208,14 +208,14 @@ describe('gnubok_update_invoice: validation and staging', () => {
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
-  it('rejects an item without a positive quantity before querying', async () => {
+  it('rejects an item without a quantity before querying', async () => {
     const { supabase } = createQueuedMockSupabase()
 
     await expect(
       tool().execute(
         {
           invoice_id: INVOICE_ID,
-          items: [{ description: 'Konsultation', quantity: 0, unit: 'tim', unit_price: 1000 }],
+          items: [{ description: 'Konsultation', unit: 'tim', unit_price: 1000 }],
         },
         'company-1',
         'user-1',
@@ -847,6 +847,45 @@ describe('gnubok_update_invoice: ROT/RUT round trip (issue #1642)', () => {
       housing_designation: 'Almgren 1:23',
     })
     expect(JSON.stringify(result)).not.toContain('ROT-CIPHERTEXT')
+  })
+
+  // #3030: a quote stores no deduction, so a claim on it was validated,
+  // shown to the approver and then saved without it. Refused at staging.
+  it('refuses a deduction line on a quote at staging, not after approval', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ invoice_number: 'OF-001', document_type: 'quote', quote_status: 'open', deduction_personnummer_encrypted: 'ROT-CIPHERTEXT' }) })
+    enqueue({ data: CUSTOMER })
+
+    await expect(
+      tool().execute(
+        { invoice_id: INVOICE_ID, items: [{ ...ROT_LINE, deduction_type: 'rut', work_type: 'TRADGARD' }] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'INVOICE_CREATE_ROT_RUT_VALIDATION',
+      message: expect.stringMatching(/offert.*gnubok_convert_invoice/),
+    })
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('stages a quote line passed back with deduction_type null', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ invoice_number: 'OF-001', document_type: 'quote', quote_status: 'open' }) })
+    enqueue({ data: CUSTOMER })
+    enqueue({ data: CURRENT_ROWS })
+    enqueue({ data: { id: 'op-quote-2' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, items: [{ ...ROT_LINE, deduction_type: null, labor_hours: null, work_type: null, housing_designation: null }] },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.items?.[0]).toMatchObject({ deduction_type: null })
   })
 
   it('fails at staging, not approval, when a ROT set lacks the property info', async () => {

@@ -3,11 +3,13 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 
 // ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts) on the /chat
 // pages. Switched off, /chat shows what took the chat's place and every other
-// page leads there: a new conversation, a stored conversation and the
-// onboarding interview, which starts on /chat/intake and continues as an
-// ordinary conversation on /chat/[id] (the interview goes with the rest). A
-// company on ASSISTANT_CHAT_COMPANY_IDS keeps every page through
-// ASSISTANT_CHAT_UNTIL. Unset or on, nothing here redirects.
+// page leads there: a new conversation and a stored conversation, whatever
+// its intent. A company on ASSISTANT_CHAT_COMPANY_IDS keeps every page
+// through ASSISTANT_CHAT_UNTIL. Unset or on, nothing here redirects.
+//
+// /chat/intake started the onboarding interview, which is removed: the
+// address leads to the start page, and a conversation the interview left
+// behind (intent onboarding.intake) still opens like any other.
 
 const redirect = vi.fn((url: string) => {
   throw new Error(`NEXT_REDIRECT:${url}`)
@@ -24,7 +26,6 @@ vi.mock('next-intl/server', () => ({ getTranslations: async () => (key: string) 
 vi.mock('@/components/agent/ChatEmptyState', () => ({ default: () => null }))
 vi.mock('@/components/agent/ChatReplaced', () => ({ ChatReplaced: () => null }))
 vi.mock('@/components/agent/ChatNewStarter', () => ({ default: () => null }))
-vi.mock('@/components/agent/ChatIntakeStarter', () => ({ default: () => null }))
 vi.mock('@/components/agent/ChatConversationView', () => ({ default: () => null }))
 vi.mock('@/lib/agent/intents/registry', () => ({ getIntent: (id: string) => ({ id }) }))
 vi.mock('@/lib/ai', () => ({ getAiStatus: () => ({ configured: true, assistantAvailable: true }) }))
@@ -78,19 +79,29 @@ describe.each([
     if (value !== undefined) vi.stubEnv('ASSISTANT_CHAT_ENABLED', value)
   })
 
-  it('opens the start page, a new conversation, a conversation and the intake', async () => {
+  it('opens the start page, a new conversation and a conversation', async () => {
     expect((await ChatIndexPage()).type).toBe(ChatEmptyState)
     expect(await newPage()).toBeTruthy()
     enqueueConversation('general.help')
     expect(await conversationPage()).toBeTruthy()
-    expect(await ChatIntakePage()).toBeTruthy()
     expect(redirect).not.toHaveBeenCalled()
   })
 
-  it('leaves the build gate to the chat layout: no page reads the agent profile', async () => {
+  it('still opens a conversation the removed interview left behind', async () => {
+    enqueueConversation('onboarding.intake')
+    expect(await conversationPage()).toBeTruthy()
+    expect(redirect).not.toHaveBeenCalled()
+    expect(notFound).not.toHaveBeenCalled()
+  })
+
+  it('sends the old interview address to the start page', () => {
+    expect(() => ChatIntakePage()).toThrow('NEXT_REDIRECT:/chat')
+    expect(redirect).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the built-assistant gate to the chat layout: no page reads the agent profile', async () => {
     enqueueConversation('general.help')
     await conversationPage()
-    await ChatIntakePage()
     expect(getResolvedDashboardAgentProfile).not.toHaveBeenCalled()
   })
 
@@ -128,7 +139,6 @@ describe.each(['false', '0', 'off', 'no', 'OFF'])('the /chat pages with ASSISTAN
     user.mockReturnValue(null)
     await expect(newPage()).rejects.toThrow('NEXT_REDIRECT:/login')
     await expect(conversationPage()).rejects.toThrow('NEXT_REDIRECT:/login')
-    await expect(ChatIntakePage()).rejects.toThrow('NEXT_REDIRECT:/login')
   })
 
   it.each(['general.help', 'verifikation.draft', 'transaction.categorization', 'onboarding.intake'])(
@@ -153,14 +163,14 @@ describe.each(['false', '0', 'off', 'no', 'OFF'])('the /chat pages with ASSISTAN
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
-  it('does not start the onboarding interview: /chat/intake leads to the start page', async () => {
-    await expect(ChatIntakePage()).rejects.toThrow('NEXT_REDIRECT:/chat')
+  it('sends the old interview address to the start page', () => {
+    expect(() => ChatIntakePage()).toThrow('NEXT_REDIRECT:/chat')
   })
 
   it('never sends anyone into the build, built agent or not', async () => {
     for (const agent of [null, { ...BUILT, verified_at: null }, BUILT]) {
       getResolvedDashboardAgentProfile.mockResolvedValue(agent)
-      await expect(ChatIntakePage()).rejects.toThrow('NEXT_REDIRECT:/chat')
+      expect(() => ChatIntakePage()).toThrow('NEXT_REDIRECT:/chat')
       enqueueConversation('onboarding.intake')
       await expect(conversationPage()).rejects.toThrow('NEXT_REDIRECT:/chat')
     }
@@ -180,7 +190,6 @@ describe('the /chat pages for a company that keeps the chat while it is switched
     expect(await newPage()).toBeTruthy()
     enqueueConversation('verifikation.draft')
     expect(await conversationPage()).toBeTruthy()
-    expect(await ChatIntakePage()).toBeTruthy()
     expect(redirect).not.toHaveBeenCalled()
   })
 
@@ -188,7 +197,7 @@ describe('the /chat pages for a company that keeps the chat while it is switched
     vi.stubEnv('ASSISTANT_CHAT_UNTIL', '2000-01-31')
     expect((await ChatIndexPage()).type).toBe(ChatReplaced)
     await expect(newPage()).rejects.toThrow('NEXT_REDIRECT:/chat')
-    await expect(ChatIntakePage()).rejects.toThrow('NEXT_REDIRECT:/chat')
+    expect(() => ChatIntakePage()).toThrow('NEXT_REDIRECT:/chat')
   })
 
   it('gives a company that is not on the list nothing', async () => {

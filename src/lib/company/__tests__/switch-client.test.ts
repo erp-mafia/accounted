@@ -21,7 +21,7 @@ vi.mock('@/lib/company/tab-guard', () => ({
   markSelfSwitchTarget: vi.fn(),
 }))
 
-import { performCompanySwitch } from '../switch-client'
+import { companySwitchErrorKey, performCompanySwitch } from '../switch-client'
 
 function memoryStorage() {
   const data = new Map<string, string>()
@@ -100,5 +100,14 @@ describe('performCompanySwitch', () => {
     switchCompany.mockRejectedValueOnce(new Error('network down'))
     await expect(performCompanySwitch('company-2')).rejects.toThrow('network down')
     expect(reload).not.toHaveBeenCalled()
+  })
+})
+
+describe('companySwitchErrorKey', () => {
+  it('names a lost membership and a paused company, and the rest as a failed switch', () => {
+    expect(companySwitchErrorKey('not_member')).toBe('error_no_access')
+    expect(companySwitchErrorKey('company_locked')).toBe('error_locked')
+    expect(companySwitchErrorKey('stale_client')).toBe('error_switch_failed')
+    expect(companySwitchErrorKey('anything_else')).toBe('error_switch_failed')
   })
 })
