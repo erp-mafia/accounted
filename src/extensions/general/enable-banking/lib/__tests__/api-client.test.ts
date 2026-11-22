@@ -1482,14 +1482,15 @@ describe('expected-condition log levels', () => {
     expect(errorSpy).not.toHaveBeenCalled()
   })
 
-  it('still logs a 400 that names no dead session at error', async () => {
+  it('still logs a 400 with another error code at error, whatever its text says about the session', async () => {
     fetchSpy.mockResolvedValue(
-      new Response('{"code":400,"message":"Bad request","error":"WRONG_REQUEST_PARAMETERS","detail":null}', { status: 400 })
+      new Response('{"code":400,"message":"Invalid session id","error":"WRONG_REQUEST_PARAMETERS","detail":null}', { status: 400 })
     )
 
     await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
 
     expect(errorSpy).toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
   it('still logs an unexpected revoke failure at error', async () => {
