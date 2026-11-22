@@ -16,7 +16,6 @@ vi.mock('@/lib/init', () => ({
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
@@ -63,7 +62,7 @@ import { mfaStepUpApplies, shouldEnforceMfa } from '@/lib/auth/mfa'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { requireCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId } from '@/lib/company/context'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { DELETE, GET, PATCH, POST, PUT } from '../route'
 import { getTraceId } from '@/lib/observability/trace-context'
@@ -595,7 +594,7 @@ describe('Extension Catch-All Route', () => {
       const handler = vi.fn()
       register({ handler })
       signIn()
-      vi.mocked(requireCompanyId).mockImplementationOnce(async (_s, _u, facts) => {
+      vi.mocked(getActiveCompanyId).mockImplementationOnce(async (_s, _u, facts) => {
         if (facts) facts.role = 'invoicer'
         return 'company-1'
       })
@@ -682,7 +681,7 @@ describe('Extension Catch-All Route', () => {
     async function asRole(role: string) {
       const actual = await vi.importActual<typeof import('@/lib/auth/require-write')>('@/lib/auth/require-write')
       mockRequireWritePermission.mockImplementation(actual.requireWritePermission)
-      vi.mocked(requireCompanyId).mockImplementationOnce(async (_s, _u, facts) => {
+      vi.mocked(getActiveCompanyId).mockImplementationOnce(async (_s, _u, facts) => {
         if (facts) facts.role = role as never
         return 'company-1'
       })
@@ -783,7 +782,7 @@ describe('Extension Catch-All Route', () => {
       expect(response.status).toBe(200)
       expect(handler).toHaveBeenCalledTimes(1)
       expect(supabase.auth.getUser).not.toHaveBeenCalled()
-      expect(requireCompanyId).not.toHaveBeenCalled()
+      expect(getActiveCompanyId).not.toHaveBeenCalled()
       expect(mockRequireWritePermission).not.toHaveBeenCalled()
     })
 
@@ -796,7 +795,7 @@ describe('Extension Catch-All Route', () => {
 
       expect(response.status).toBe(200)
       expect(handler).toHaveBeenCalledTimes(1)
-      expect(requireCompanyId).not.toHaveBeenCalled()
+      expect(getActiveCompanyId).not.toHaveBeenCalled()
       expect(mockRequireWritePermission).not.toHaveBeenCalled()
     })
   })
