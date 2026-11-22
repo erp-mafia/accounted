@@ -78,6 +78,29 @@ describe('list question wording', () => {
       expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
     })
 
+    it(`${locale}: starts with the company's name in bold on a line of its own when one is given`, () => {
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.', company: 'Bolag A AB' })).toBe(
+        `*Bolag A AB*\nGäller hyran kontoret?\nDet avgör kontot.\n\n${closing}`,
+      )
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', company: 'Bolag A AB' })).toBe(
+        `*Bolag A AB*\nGäller hyran kontoret?\n\n${closing}`,
+      )
+    })
+
+    it(`${locale}: has no name line without a name, and keeps the name on one bold line`, () => {
+      for (const company of [null, undefined, '', '  ']) {
+        expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', company })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+      }
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', company: ' Bolag *A*\nAB ' }).split('\n')[0]).toBe('*Bolag A AB*')
+    })
+
+    it(`${locale}: leaves the closing line out when told to, and keeps the name and the question`, () => {
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.', company: 'Bolag A AB', closing: false })).toBe(
+        '*Bolag A AB*\nGäller hyran kontoret?\nDet avgör kontot.',
+      )
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', closing: false })).toBe('Gäller hyran kontoret?')
+    })
+
     it(`${locale}: closes the question with one line saying a written answer is welcome, without a dash`, () => {
       const lines = copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' }).split('\n')
       expect(lines.at(-1)).toBe(closing)

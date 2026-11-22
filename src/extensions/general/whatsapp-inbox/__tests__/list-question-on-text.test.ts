@@ -70,6 +70,10 @@ const historyMock = vi.mocked(appendProcessingHistory)
 const SECRET = 'meta-app-secret'
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
 const OTHER_COMPANY = 'c0000000-0000-4000-8000-000000000002'
+const THIRD_COMPANY = 'c0000000-0000-4000-8000-000000000003'
+const COMPANY_NAME = 'Bolag A AB'
+const OTHER_COMPANY_NAME = 'Bolag B AB'
+const THIRD_COMPANY_NAME = 'Bolag C AB'
 const USER = 'a0000000-0000-4000-8000-000000000001'
 const OLDER_QUESTION = 'e0000000-0000-4000-8000-000000000001'
 const NEWER_QUESTION = 'e0000000-0000-4000-8000-000000000002'
@@ -141,6 +145,17 @@ function questionRow(id: string, createdAt: string, overrides: Row = {}): Row {
     fact_id: null,
     created_at: createdAt,
     ...overrides,
+  }
+}
+
+/** A membership row as the reads see it: the company's name embedded, and its archive date as the filter column. */
+function member(companyId: string, name: string, opts: { role?: string; archived?: boolean } = {}): Row {
+  return {
+    user_id: USER,
+    company_id: companyId,
+    role: opts.role ?? 'owner',
+    companies: { name },
+    ...(opts.archived ? { 'companies.archived_at': '2026-01-01T00:00:00.000Z' } : {}),
   }
 }
 
@@ -216,7 +231,7 @@ function world(seed: Seed = {}) {
     ],
     whatsapp_conversations: [conversation],
     whatsapp_messages: messages,
-    company_members: seed.memberships ?? [{ user_id: USER, company_id: COMPANY, role: 'owner' }],
+    company_members: seed.memberships ?? [member(COMPANY, COMPANY_NAME)],
     company_questions: questions,
     agent_memory: [],
   }
@@ -309,13 +324,10 @@ describe('a text from a linked person that nothing else takes', () => {
     ['the day has no question left: list questions used it', () => ({
       conversation: { context: { list_question_budget: { day_key: todayIsoStockholm(), count: MAX_QUESTIONS_PER_DAY } } },
     })],
-    ['the person only reads the books', () => ({ memberships: [{ user_id: USER, company_id: COMPANY, role: 'viewer' }] })],
-    ['the conversation is routed to no company', () => ({
-      link: { default_company_id: null },
-      memberships: [
-        { user_id: USER, company_id: COMPANY, role: 'owner' },
-        { user_id: USER, company_id: OTHER_COMPANY, role: 'owner' },
-      ],
+    ['the person only reads the books', () => ({ memberships: [member(COMPANY, COMPANY_NAME, { role: 'viewer' })] })],
+    ['the only open question is on the list of a company that has the list switched off', () => ({
+      memberships: [member(COMPANY, COMPANY_NAME), member(OTHER_COMPANY, OTHER_COMPANY_NAME)],
+      questions: [questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z', { company_id: OTHER_COMPANY })],
     })],
     ['the only open question expired in this conversation', () => ({
       conversation: { context: { list_questions_expired: [OLDER_QUESTION] } },
@@ -499,3 +511,152 @@ describe('a text from a linked person that nothing else takes', () => {
     expect((second.conversation.context as ConversationContext).pending_question).toBeUndefined()
   })
 })
+
+describe('a person who keeps the books of several companies', () => {
+  const originalEnv = { ...process.env }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sendTextMock.mockResolvedValue(SENT)
+    sendButtonsMock.mockResolvedValue(SENT)
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = COMPANY
+    process.env.WHATSAPP_APP_SECRET = SECRET
+    process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
+    process.env.WHATSAPP_PHONE_ENCRYPTION_KEY = 'a'.repeat(64)
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+  })
+
+  const three = (): Row[] => [member(COMPANY, COMPANY_NAME), member(OTHER_COMPANY, OTHER_COMPANY_NAME), member(THIRD_COMPANY, THIRD_COMPANY_NAME)]
+  const CLOSING = 'Du kan också svara med egna ord.'
+
+  it('with three companies and no default company: gets the question of the one company with the list on, its name on top', async () => {
+    const { writes, messages } = world({ link: { default_company_id: null }, memberships: three() })
+
+    await route.handler(signedText('Hey'))
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    const message = sendButtonsMock.mock.calls[0][1]
+    expect(message.body).toBe(`*${COMPANY_NAME}*\n${OLDER_TEXT}\n${OLDER_WHY}\n\n${CLOSING}`)
+    expect(message.buttons.map((button) => button.id)).toEqual([
+      `cq:${COMPANY}:${OLDER_QUESTION}:o:office`,
+      `cq:${COMPANY}:${OLDER_QUESTION}:o:storage`,
+      `cq:${COMPANY}:${OLDER_QUESTION}:k`,
+    ])
+    const [held] = contextWrites(writes)
+    expect(held.pending_question).toMatchObject({ type: 'list_question', question_id: OLDER_QUESTION, company_id: COMPANY })
+    expect(messages[0]).toMatchObject({ body_text: 'Hey', processing_status: 'done', error_message: null })
+  })
+
+  it('answers the right company\'s question from a written reply, though the conversation is routed to another company', async () => {
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = '*'
+    const seed = (): Seed => ({
+      // The conversation is routed to the second company, which has no open question.
+      link: { default_company_id: OTHER_COMPANY },
+      memberships: three(),
+      questions: [questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z', { company_id: THIRD_COMPANY })],
+    })
+    const first = world(seed())
+    await route.handler(signedText('Hey', 'wamid.TXT1'))
+    const [held] = contextWrites(first.writes)
+    expect(sendButtonsMock.mock.calls[0][1].body.startsWith(`*${THIRD_COMPANY_NAME}*\n`)).toBe(true)
+    expect(held.pending_question).toMatchObject({ question_id: OLDER_QUESTION, company_id: THIRD_COMPANY })
+
+    const second = world({ ...seed(), conversation: { context: held as Row } })
+    await route.handler(signedText('Kontoret på Storgatan', 'wamid.TXT2'))
+    const reply = second.messages[0]
+    expect(reply.error_message).toBe(`list_question_reply:${THIRD_COMPANY}:${OLDER_QUESTION}`)
+
+    reply.attempts = 0
+    await processInboundMessage(second.supabase, reply.id as string)
+
+    const [fact] = writesTo(second.writes, 'agent_memory')
+    expect(fact).toMatchObject({ company_id: THIRD_COMPANY, content: `${OLDER_TEXT} Svar: Kontoret på Storgatan`, created_by_user_id: USER })
+    const [answered] = writesTo(second.writes, 'company_questions')
+    expect(answered).toMatchObject({ status: 'answered', answer_text: 'Kontoret på Storgatan', answered_by: USER, answered_via: 'whatsapp' })
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+  })
+
+  it('answers the right company\'s question from a tap, and follows with the next company\'s question under its own name', async () => {
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = '*'
+    const seed = (): Seed => ({
+      link: { default_company_id: OTHER_COMPANY },
+      memberships: three(),
+      questions: [
+        questionRow(NEWER_QUESTION, '2026-11-20T08:00:00.000Z', { company_id: THIRD_COMPANY, question: 'Är kortköpet på 499 kr privat?', why: null, options: [] }),
+        questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z', { company_id: COMPANY }),
+      ],
+    })
+    const first = world(seed())
+    await route.handler(signedText('Hey', 'wamid.TXT1'))
+    const [held] = contextWrites(first.writes)
+    // No open question in the routed company: the oldest of the others goes first.
+    expect(sendButtonsMock.mock.calls[0][1].body.startsWith(`*${COMPANY_NAME}*\n${OLDER_TEXT}`)).toBe(true)
+
+    const second = world({ ...seed(), conversation: { context: held as Row } })
+    await route.handler(signedTap(`cq:${COMPANY}:${OLDER_QUESTION}:o:office`))
+
+    const [answered] = writesTo(second.writes, 'company_questions')
+    expect(answered).toMatchObject({ status: 'answered', answer_option: 'office', answered_by: USER, answered_via: 'whatsapp' })
+    expect(writesTo(second.writes, 'agent_memory')[0]).toMatchObject({ company_id: COMPANY, content: `${OLDER_TEXT} Svar: Kontoret` })
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(2)
+    const next = sendButtonsMock.mock.calls[1][1]
+    expect(next.body).toBe(`*${THIRD_COMPANY_NAME}*\nÄr kortköpet på 499 kr privat?\n\n${CLOSING}`)
+    expect(next.buttons).toEqual([{ id: `cq:${THIRD_COMPANY}:${NEWER_QUESTION}:k`, title: 'Vet inte' }])
+    expect((second.conversation.context as ConversationContext).pending_question).toMatchObject({ question_id: NEWER_QUESTION, company_id: THIRD_COMPANY })
+  })
+
+  it('puts the question of the company the conversation is routed to first, though another company has an older one', async () => {
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = '*'
+    world({
+      link: { default_company_id: OTHER_COMPANY },
+      memberships: three(),
+      questions: [
+        questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z', { company_id: COMPANY }),
+        questionRow(NEWER_QUESTION, '2026-11-20T08:00:00.000Z', { company_id: OTHER_COMPANY, question: 'Är kortköpet på 499 kr privat?', why: null, options: [] }),
+      ],
+    })
+
+    await route.handler(signedText('Hey'))
+
+    const message = sendButtonsMock.mock.calls[0][1]
+    expect(message.body).toBe(`*${OTHER_COMPANY_NAME}*\nÄr kortköpet på 499 kr privat?\n\n${CLOSING}`)
+    expect(message.buttons).toEqual([{ id: `cq:${OTHER_COMPANY}:${NEWER_QUESTION}:k`, title: 'Vet inte' }])
+  })
+
+  const contributesNothing: Array<[string, () => Row[]]> = [
+    ['that is archived', () => [member(COMPANY, COMPANY_NAME), member(OTHER_COMPANY, OTHER_COMPANY_NAME, { archived: true })]],
+    ['where the person only invoices', () => [member(COMPANY, COMPANY_NAME), member(OTHER_COMPANY, OTHER_COMPANY_NAME, { role: 'invoicer' })]],
+    ['where the person only reads the books', () => [member(COMPANY, COMPANY_NAME), member(OTHER_COMPANY, OTHER_COMPANY_NAME, { role: 'viewer' })]],
+  ]
+
+  it.each(contributesNothing)('gets the fallback when the only open question is on the list of a company %s', async (_name, memberships) => {
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = '*'
+    const { writes } = world({
+      memberships: memberships(),
+      questions: [questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z', { company_id: OTHER_COMPANY })],
+    })
+
+    await route.handler(signedText('Hey'))
+
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m16Fallback])
+    expect(contextWrites(writes)).toEqual([])
+  })
+
+  it('names no company for a person who keeps the books of one company and only reads another', async () => {
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = '*'
+    world({ memberships: [member(COMPANY, COMPANY_NAME), member(OTHER_COMPANY, OTHER_COMPANY_NAME, { role: 'viewer' })] })
+
+    await route.handler(signedText('Hey'))
+
+    expect(sendButtonsMock.mock.calls[0][1].body).toBe(`${OLDER_TEXT}\n${OLDER_WHY}\n\n${CLOSING}`)
+  })
+})
+
