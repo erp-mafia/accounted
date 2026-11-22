@@ -1,6 +1,7 @@
 import type { CustomerType } from '@/types'
 import type { ImportNotice } from '@/lib/import/notices'
 import type { RegisterMatchKey } from '@/lib/import/shared/register-match'
+import type { TypeStated } from '@/lib/import/shared/stated-fields'
 
 /** Result of auto-detecting columns in a customer register file. */
 export interface DetectedCustomerColumns {
@@ -39,7 +40,7 @@ export interface ParsedCustomerRow {
    * customer only: an update keeps the customer's own, and a 'business' row
    * changes only a private person.
    */
-  customer_type_stated: 'type' | 'business' | null
+  customer_type_stated: TypeStated
   country_stated: boolean
   customer_number: string | null
   org_number: string | null

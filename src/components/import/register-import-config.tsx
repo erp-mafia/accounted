@@ -255,7 +255,7 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
         },
         columns: [
           nameColumn(t('col_name')),
-          typeColumn(
+          typeColumn<AnnotatedSupplierRow>(
             t('col_type'),
             'w-44',
             'supplier_type',
@@ -263,6 +263,8 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
               value: v,
               label: tSuppliers(`type_${v}`),
             })),
+            // A type picked here is written onto a matched supplier too.
+            { supplier_type_stated: 'type' },
           ),
           {
             key: 'org_number',

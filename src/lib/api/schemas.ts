@@ -4880,6 +4880,9 @@ export const OpeningBalanceSplitApplySchema = z.object({
 // Register import schemas (customers, suppliers)
 // ============================================================
 
+/** What a register row states of the type: TypeStated in lib/import/shared/stated-fields.ts. */
+const statedTypeField = z.enum(['type', 'business']).nullable().default(null)
+
 const ImportedCustomerRowSchema = z.object({
   row_index: z.number().int(),
   name: z.string().min(1),
@@ -4888,7 +4891,7 @@ const ImportedCustomerRowSchema = z.object({
   // (lib/import/customers/types.ts): an update writes only that. Nothing
   // stated for a wizard opened before the fields existed, so its update
   // leaves both.
-  customer_type_stated: z.enum(['type', 'business']).nullable().default(null),
+  customer_type_stated: statedTypeField,
   country_stated: z.boolean().default(false),
   // Defaulted so a wizard opened before the field existed can still submit.
   customer_number: z.string().trim().max(32).nullable().default(null),
@@ -4947,6 +4950,13 @@ const ImportedSupplierRowSchema = z.object({
   row_index: z.number().int(),
   name: z.string().min(1),
   supplier_type: SupplierTypeSchema,
+  // What the file (or the review step) states of the type, the country and
+  // the currency (lib/import/suppliers/types.ts): an update writes only that.
+  // Nothing stated for a wizard opened before the fields existed, so its
+  // update leaves all three.
+  supplier_type_stated: statedTypeField,
+  country_stated: z.boolean().default(false),
+  default_currency_stated: z.boolean().default(false),
   org_number: z.string().nullable(),
   email: z.string().nullable(),
   phone: z.string().nullable(),
