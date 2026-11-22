@@ -392,15 +392,17 @@ function settlementLines(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicV
  * Whether the momsredovisningar cleared an account past zero by a krona or
  * more: more than the period's balance on it, anything where the period has
  * none, or a clearing the usual way of a balance a later verifikat turned to
- * the other side (`natural` is the side the account's ruta reads it on: 1
- * credit, output VAT; -1 debit, ruta 48; 0 unknown). Öre past zero is left
- * alone: it is the öre of an earlier period a momsredovisning swept. Pure.
+ * the other side, all of which is then past it (`natural` is the side the
+ * account's ruta reads it on: 1 credit, output VAT; -1 debit, ruta 48; 0
+ * unknown). Under a krona past zero is left alone: it is the öre of an
+ * earlier period a momsredovisning swept. Pure.
  */
 function clearedPastBalance(balance: number, cleared: number, natural: number): boolean {
   const after = roundOre(balance - cleared)
-  if (Math.abs(after) < FILED_ROUNDING) return false
-  if (balance > 0 ? after < 0 : balance < 0 ? after > 0 : after !== 0) return true
-  return natural * balance < 0 && natural * cleared > 0
+  const pastBalance = balance > 0 ? after < 0 : balance < 0 ? after > 0 : after !== 0
+  const turned = !pastBalance && natural * balance < 0 && natural * cleared > 0
+  const past = pastBalance ? Math.abs(after) : turned ? Math.abs(cleared) : 0
+  return past >= FILED_ROUNDING
 }
 
 /**
@@ -419,14 +421,38 @@ function clearedPastBalance(balance: number, cleared: number, natural: number): 
  * With none there (öre aside), what it cleared past the period's balance was
  * the period's own and is no longer there: a verifikat dated in the period
  * lowered the account after it (a credit note, #3624), so the rest takes it
- * back, a balance on the other side. Pure.
+ * back, a balance on the other side. A rest decides its accounts together
+ * (restLeftToClear). Pure.
  */
 export function balanceLeftToClear(balance: number, cleared: number, carried: number, natural = 0): number {
+  return takesBack(balance, cleared, carried, natural) ? roundOre(balance - cleared) : cappedLeft(balance, cleared)
+}
+
+/** What is left never past zero: what was cleared off the balance, the balance when moved the wrong way. Pure. */
+function cappedLeft(balance: number, cleared: number): number {
   const after = roundOre(balance - cleared)
-  const capped = balance > 0 ? Math.min(balance, Math.max(after, 0)) : balance < 0 ? Math.max(balance, Math.min(after, 0)) : 0
-  if (!clearedPastBalance(balance, cleared, natural)) return capped
-  const carriedOnItsSide = after < 0 ? carried : -carried
-  return carriedOnItsSide >= FILED_ROUNDING ? capped : after
+  return balance > 0 ? Math.min(balance, Math.max(after, 0)) : balance < 0 ? Math.max(balance, Math.min(after, 0)) : 0
+}
+
+/** Whether the rest takes back what was cleared past zero: nothing (öre aside) stands on that side. Pure. */
+function takesBack(balance: number, cleared: number, carried: number, natural: number): boolean {
+  if (!clearedPastBalance(balance, cleared, natural)) return false
+  return (roundOre(balance - cleared) < 0 ? carried : -carried) < FILED_ROUNDING
+}
+
+/**
+ * balanceLeftToClear over every account of a rest, decided together. When a
+ * momsredovisning cleared one account past zero where a balance stands on
+ * that side, the net reads its excess as that balance: taking back on
+ * another account beside it would leave 2650 off ruta 49. Every account
+ * then keeps what is left never past zero, as the rest was before #3624's
+ * follow-up. Pure.
+ */
+export function restLeftToClear(
+  rows: ReadonlyArray<{ balance: number; cleared: number; carried: number; natural: number }>,
+): number[] {
+  const unclear = rows.some((r) => clearedPastBalance(r.balance, r.cleared, r.natural) && !takesBack(r.balance, r.cleared, r.carried, r.natural))
+  return rows.map((r) => (unclear ? cappedLeft(r.balance, r.cleared) : balanceLeftToClear(r.balance, r.cleared, r.carried, r.natural)))
 }
 
 /**
@@ -437,7 +463,7 @@ export function balanceLeftToClear(balance: number, cleared: number, carried: nu
  * cleared it (#3624), a quarter settled month by month and not finished. The
  * full period's lines would clear a second time what those verifikat already
  * moved. Each account the declaration reads, with a period balance or moved
- * by them, keeps what the settlements left on it (balanceLeftToClear; what
+ * by them, keeps what the settlements left on it (restLeftToClear; what
  * else stands on an account is read only when they cleared it past zero),
  * and the net is the filed net less the net they
  * placed for the period's own balances. netLines puts it on 2650 and moves
@@ -479,10 +505,11 @@ async function remainingSettlementLines(
   const balances = vatClearingAccounts(ledger.dynamicVatAccounts)
     .filter((account) => own.has(account) || cleared.has(account))
     .map((account) => [account, own.get(account) ?? 0] as const)
-  // What else stands on an account at the period's end, read only for one
-  // they cleared past zero: what accountBalanceThrough reads there, less the
-  // period's own balance, plus what its own momsredovisningar dated in it
-  // moved (credit minus debit).
+  // What else stands on an account at the period's end (credit minus
+  // debit), read only for one they cleared past zero: what
+  // accountBalanceThrough reads there, less the period's own balance, plus
+  // what its own momsredovisningar dated in it moved off it (debit minus
+  // credit, as movedByAccount sums it).
   const datedIn = settlements.filter((e) => e.entry_date <= periodEnd).map((e) => e.id)
   const carriedOn = async (account: string, balance: number): Promise<number> => {
     const standing = await accountBalanceThrough(supabase, companyId, account, periodEnd)
@@ -492,14 +519,16 @@ async function remainingSettlementLines(
   }
   // The side each account's ruta reads it on, as the declaration resolves it.
   const rutaOf = accountRutaFor(ledger.dynamicVatAccounts)
-  const left: Array<readonly [string, number]> = []
+  const rows: Array<{ balance: number; cleared: number; carried: number; natural: number }> = []
   for (const [account, balance] of balances) {
     const amount = cleared.get(account) ?? 0
     const box = rutaOf(account)
     const natural = box === 'ruta48' ? -1 : box ? 1 : 0
     const carried = clearedPastBalance(balance, amount, natural) ? await carriedOn(account, balance) : 0
-    left.push([account, balanceLeftToClear(balance, amount, carried, natural)])
+    rows.push({ balance, cleared: amount, carried, natural })
   }
+  const restLeft = restLeftToClear(rows)
+  const left = balances.map(([account], i) => [account, restLeft[i]] as const)
   if (left.every(([, rest]) => Math.abs(rest) < FILED_ROUNDING)) return null
   if (left.every(([, rest], i) => rest === balances[i][1])) return null
   const coveredOn = new Map(balances.map(([account, balance], i) => [account, roundOre(balance - left[i][1])]))

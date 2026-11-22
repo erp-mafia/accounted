@@ -10,6 +10,7 @@ import { createFakeLedger, type FakeEntry, type FakeLedgerData } from '@/lib/mea
 import {
   balanceLeftToClear,
   buildVatSettlementProposal,
+  restLeftToClear,
   postedVatSettlements,
   vatSettlementBookingStatus,
   type VatSettlementProposalLine,
@@ -902,6 +903,32 @@ describe('a refund period whose rest comes before or after its declaration is fi
     expect(partlySettledRestBooksAlone(proposal)).toBe(true)
   })
 
+  it("reads the side of a company's own momsruta: a 2617 on ruta 48 turned by a supplier's credit note is taken back (#3624)", async () => {
+    // The company routed its own 2617 to ruta 48; the BAS map does not know it.
+    const chart = [...CHART, { account_number: '2617', account_name: 'Ingående moms, egen', account_class: 2, vat_box: '48' } as never]
+    const bought = entry('2026-07-20', [{ account_number: '5010', debit: 1_200 }, { account_number: '2617', debit: 300 }, { account_number: '2440', credit: 1_500 }])
+    const claimed = entry('2026-09-30', [{ account_number: '2617', credit: 300 }, { account_number: '1650', debit: 300 }], {
+      description: 'Momsredovisning Kvartal 3 2026',
+      source_type: 'vat_settlement',
+    })
+    const credited = entry('2026-09-25', [{ account_number: '2440', debit: 2_000 }, { account_number: '5010', credit: 1_600 }, { account_number: '2617', credit: 400 }])
+    const supabase = createFakeLedger({
+      companyId: CO,
+      fiscalPeriods: years,
+      chart,
+      entries: [bought, claimed, credited],
+      vatShapedEntryIds: [],
+      extraTables: { company_settings: [{ company_id: CO, accounting_method: 'accrual', bookkeeping_locked_through: null }], deadlines: [] },
+    }).supabase
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.filed_net).toBe(100)
+    expect(proposal.lines).toEqual([
+      { account_number: '2617', debit_amount: 400, credit_amount: 0 },
+      { account_number: '1650', debit_amount: 0, credit_amount: 300, line_description: 'Momsfordran' },
+      { account_number: '2650', debit_amount: 0, credit_amount: 100, line_description: 'Redovisningskonto för moms' },
+    ])
+  })
+
   it("takes back the claim and the rest when a supplier's credit note is larger than the claim the momsredovisning cleared (#3624)", async () => {
     const settled = settledClaim(300)
     // 400 of input VAT credited after a claim of 300 was settled: 2641 is C 100, ruta 49 is +100.
@@ -1108,6 +1135,25 @@ describe('a credit note dated in the period after its momsredovisning (#3624)', 
     ])
   })
 
+  it('stays as on main for the whole rest when one account it cleared past zero has a balance standing on that side', async () => {
+    // A migration left a stray 2645 D 30. An EU purchase (2614 C 250 / 2645
+    // D 250) is settled with the sale, then credited by 50 on both legs.
+    // Taking back 2614 alone, with 2645's excess read as the stray balance,
+    // would leave 2650 50 under ruta 49.
+    const ib = entry('2026-01-01', [{ account_number: '2645', debit: 30 }, { account_number: '2099', credit: 30 }], { source_type: 'opening_balance', description: 'Ingående balans' })
+    const eu = entry('2026-07-20', [{ account_number: '4535', debit: 1_000 }, { account_number: '2614', credit: 250 }, { account_number: '2645', debit: 250 }, { account_number: '2440', credit: 1_000 }])
+    const both = entry('2026-09-30', [{ account_number: '2611', debit: 500 }, { account_number: '2614', debit: 250 }, { account_number: '2645', credit: 250 }, { account_number: '2650', credit: 500 }], {
+      description: 'Momsredovisning Kvartal 3 2026',
+      source_type: 'vat_settlement',
+    })
+    const euCredit = entry('2026-09-25', [{ account_number: '2440', debit: 200 }, { account_number: '4535', credit: 200 }, { account_number: '2614', debit: 50 }, { account_number: '2645', credit: 50 }])
+    const opening: FakeLedgerData['fiscalPeriods'] = [{ ...years[0], opening_balance_entry_id: ib.id }]
+    const proposal = await buildVatSettlementProposal(ledger({ fiscalPeriods: opening, entries: [ib, sale, eu, both, euCredit], shaped: [] }), CO, 'quarterly', 2026, 3)
+    expect(proposal.filed_net).toBe(500)
+    expect(proposal.partly_settled).toBe(false)
+    expect(netAccountsAfter(both.lines, [])).toEqual({ '2650': 500, '1650': 0 })
+  })
+
   it("stays as on main when the books carry a balance on that side the momsredovisning may have taken (#3647's review 3, item 4)", async () => {
     // Q2's 80 of output VAT was never settled. Q3's momsredovisning cleared
     // 500 and the credit note then left 2611 cleared 100 past Q3's 400. A
@@ -1118,6 +1164,11 @@ describe('a credit note dated in the period after its momsredovisning (#3624)', 
     const proposal = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [q2, sale, settled, credit], shaped: [] }), CO, 'quarterly', 2026, 3)
     expect(proposal.partly_settled).toBe(false)
     expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+    // The lines are the whole period's, as on main.
+    expect(proposal.lines).toEqual([
+      { account_number: '2611', debit_amount: 400, credit_amount: 0 },
+      { account_number: '2650', debit_amount: 0, credit_amount: 400, line_description: 'Moms att betala' },
+    ])
   })
 })
 
@@ -1453,9 +1504,29 @@ describe('balanceLeftToClear', () => {
     expect(balanceLeftToClear(-100, 500, 0)).toBe(-100)
   })
 
+  it('decides a rest together: one account that may have taken a balance on its side keeps every account capped', () => {
+    // 2614 cleared 50 past its balance with nothing on that side, 2645 50 past with 30 standing there.
+    expect(restLeftToClear([
+      { balance: 200, cleared: 250, carried: 0, natural: 1 },
+      { balance: -200, cleared: -250, carried: -30, natural: -1 },
+    ])).toEqual([0, 0])
+    // Without the stray balance both are taken back.
+    expect(restLeftToClear([
+      { balance: 200, cleared: 250, carried: 0, natural: 1 },
+      { balance: -200, cleared: -250, carried: 0, natural: -1 },
+    ])).toEqual([-50, 50])
+    // Öre left alone on one account does not hold back another.
+    expect(restLeftToClear([
+      { balance: 500, cleared: 500.4, carried: 0.4, natural: 1 },
+      { balance: 0, cleared: 80, carried: 0, natural: 1 },
+    ])).toEqual([0, -80])
+  })
+
   it('leaves öre cleared past zero alone: an earlier period\'s öre the momsredovisning swept', () => {
     expect(balanceLeftToClear(500, 500.4, 0.4)).toBe(0)
     expect(balanceLeftToClear(500, 500.4, 0)).toBe(0)
+    // Also when a credit note turned the balance over: only the öre swept is past zero, and stays.
+    expect(balanceLeftToClear(-100, 0.4, 0, 1)).toBe(-100)
   })
 
   it('leaves the period balance when the verifikat moved the account the other way', () => {
