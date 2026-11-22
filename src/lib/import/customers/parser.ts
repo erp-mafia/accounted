@@ -65,13 +65,20 @@ function parsePrivatePersonFlag(value: string | null): boolean | null {
   return null
 }
 
+/**
+ * Type words that say a company without saying which kind ("Företag" is
+ * Fortnox's own value). A new customer is read as a Swedish business; an
+ * update keeps a company's own kind.
+ */
+const ANY_BUSINESS_WORDS = ['företag', 'foretag', 'business']
+
 function normalizeCustomerType(value: string | null): CustomerType | null {
   if (!value) return null
   const lower = value.toLowerCase().trim()
   if (lower === 'individual' || lower === 'privat' || lower === 'privatperson' || lower === 'person') {
     return 'individual'
   }
-  if (lower === 'swedish_business' || lower === 'swedish' || lower === 'företag' || lower === 'foretag' || lower === 'business' || lower === 'ab' || lower === 'aktiebolag') {
+  if (lower === 'swedish_business' || lower === 'swedish' || ANY_BUSINESS_WORDS.includes(lower) || lower === 'ab' || lower === 'aktiebolag') {
     return 'swedish_business'
   }
   if (lower === 'eu_business' || lower === 'eu') {
@@ -217,6 +224,10 @@ export async function parseCustomersFile(
     // org number (enskild firma), so the customer is a business.
     const customerType: CustomerType =
       privatePerson === false && classified === 'individual' ? 'swedish_business' : classified
+    // A no in a private-person column, or a word for any company, says only
+    // that the customer is a company, not which kind.
+    const anyBusiness = privatePerson === false
+      || (privatePerson === null && typeRaw !== null && ANY_BUSINESS_WORDS.includes(typeRaw.toLowerCase().trim()))
 
     // ISO 3166-1 alpha-2 (customers.country is a code). A name the register
     // cannot map is kept as typed so the preview can show it and the row is
@@ -261,6 +272,8 @@ export async function parseCustomersFile(
       row_index: i + 2, // 1-based + header
       name,
       customer_type: customerType,
+      customer_type_stated: anyBusiness ? 'business' : explicitType !== null ? 'type' : null,
+      country_stated: countryRaw !== null,
       customer_number: customerNumber,
       org_number: orgNumber,
       email,

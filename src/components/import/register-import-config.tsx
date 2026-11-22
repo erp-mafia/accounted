@@ -147,12 +147,16 @@ function nameColumn<R extends ReviewRow>(header: string): EditColumn<R> {
   }
 }
 
-/** The register's type as an inline select, labelled from its own namespace. */
+/**
+ * The register's type as an inline select, labelled from its own namespace.
+ * `onPick` is set on the row with a pick, besides the type.
+ */
 function typeColumn<R extends ReviewRow>(
   header: string,
   headClassName: string,
   field: keyof R & string,
   options: readonly { value: string; label: string }[],
+  onPick?: Partial<R>,
 ): EditColumn<R> {
   return {
     key: field,
@@ -161,7 +165,7 @@ function typeColumn<R extends ReviewRow>(
     cell: (row, update) => (
       <Select
         value={String(row[field])}
-        onValueChange={(v) => update({ [field]: v } as Partial<R>)}
+        onValueChange={(v) => update({ [field]: v, ...onPick } as Partial<R>)}
       >
         <SelectTrigger className="h-8">
           <SelectValue />
@@ -210,7 +214,7 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
             cell: (row) => row.customer_number || '-',
           },
           nameColumn(t('col_name')),
-          typeColumn(
+          typeColumn<AnnotatedCustomerRow>(
             t('col_customer_type'),
             'w-44',
             'customer_type',
@@ -218,6 +222,8 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
               value: v,
               label: tCustomers(`type_${v}`),
             })),
+            // A type picked here is written onto a matched customer too.
+            { customer_type_stated: 'type' },
           ),
           {
             key: 'org_number',
