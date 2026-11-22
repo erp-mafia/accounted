@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { SupportLink } from '@/components/ui/support-link'
 import { StandaloneMessage } from '@/components/standalone/StandalonePage'
+import { captureBoundaryError } from '@/lib/analytics/client'
 
 /**
  * App-wide error boundary (rendered from app/error.tsx). It catches any render
@@ -86,6 +87,7 @@ export function AppErrorBoundary({
       `[${scope}] Unhandled error${error.digest ? ` (digest ${error.digest})` : ''}:`,
       error,
     )
+    captureBoundaryError(error, scope, phase === 'reloading')
     // The one-shot flag is already claimed in decideInitialPhase, so reaching
     // 'reloading' guarantees it persisted: reload exactly once.
     if (phase === 'reloading') window.location.reload()
