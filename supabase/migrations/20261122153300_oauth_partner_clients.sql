@@ -20,11 +20,20 @@
 -- localhost); path is '/' or plain segments of the same shape. A prefix on
 -- '/' (a whole host) is refused. One active row per (host, path).
 --
+-- Whatever answers on a matching URI receives the codes of every user who
+-- signs in there, under a verified name. So prefer an exact row. A prefix row
+-- is added only once it is known that no path under the prefix is served for
+-- the partner's own customers or forwards the browser onward (an open
+-- redirect), and its note says who checked that and when; the table refuses a
+-- prefix row without a note.
+--
 -- Rows sharing a slug (a partner's production and dev hosts) are one client:
 -- one connector identity per user, one name in the records. revoked_at stops
 -- new sign-ins through the row; a key already minted keeps working until its
--- person disconnects it, as with a revoked registration. Rows are revoked,
--- never deleted, so a revoked partner's name still labels its old keys.
+-- person disconnects it, as with a revoked registration. To cut a partner off
+-- entirely, also revoke the api_keys whose client is 'partner:<slug>'. Rows
+-- are revoked, never deleted, so a revoked partner's name still labels its
+-- old keys.
 --
 -- The slug may not be a built-in provider or a connection kind the code
 -- already uses (claude, chatgpt, ...): a row with that slug would be shadowed
@@ -61,6 +70,8 @@ CREATE TABLE public.oauth_partner_clients (
     CHECK (match IN ('exact', 'prefix')),
   CONSTRAINT oauth_partner_clients_prefix_not_root
     CHECK (match = 'exact' OR path <> '/'),
+  CONSTRAINT oauth_partner_clients_prefix_has_note
+    CHECK (match = 'exact' OR btrim(coalesce(note, '')) <> ''),
   CONSTRAINT oauth_partner_clients_revoked_after_created
     CHECK (revoked_at IS NULL OR revoked_at >= created_at)
 );

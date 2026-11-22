@@ -11,7 +11,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * Adding a partner is an INSERT, revoking one an UPDATE of revoked_at; no
  * deploy. The table's CHECK constraints hold the same shapes as the code
  * below, and the code checks them again, so a row that slipped past them
- * still matches nothing.
+ * still matches nothing. A shape is not a vetting: whatever answers under a
+ * prefix receives every user's codes, so a prefix row needs a note saying who
+ * checked that no path under it is a customer's page or an open redirect (the
+ * migration's header has the rule).
  */
 
 export type PartnerClientMatch = 'exact' | 'prefix'

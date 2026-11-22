@@ -200,6 +200,15 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(response.status).toBe(400)
   })
 
+  it('accepts twenty redirect_uris and refuses twenty-one', async () => {
+    const uris = Array.from({ length: 21 }, (_, i) => `http://localhost:${3000 + i}/callback`)
+    expect((await POST(createRequest({ redirect_uris: uris.slice(0, 20) }))).status).toBe(201)
+
+    const response = await POST(createRequest({ redirect_uris: uris }))
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('invalid_redirect_uri')
+  })
+
   it('accepts registration with no redirect_uris', async () => {
     const response = await POST(createRequest({
       client_name: 'No URIs',

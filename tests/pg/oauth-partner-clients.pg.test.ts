@@ -14,6 +14,7 @@ import { getPool, runAsServiceRole, withUserContext } from './setup'
  *   - the shapes the matcher relies on: a lower-case DNS host, a path of
  *     plain segments, exact or prefix, never a prefix on a whole host, a slug
  *     that no built-in provider or connection kind uses;
+ *   - a prefix row carries a note saying who vetted the paths under it;
  *   - one active row per (host, path), free again once revoked.
  */
 
@@ -21,13 +22,15 @@ function host(): string {
   return `p${randomUUID().slice(0, 8)}.example.com`
 }
 
-type Row = { slug?: string; name?: string; host?: string; path?: string; match?: string; revoked_at?: string | null }
+type Row = { slug?: string; name?: string; host?: string; path?: string; match?: string; note?: string | null; revoked_at?: string | null }
+
+const VETTED = 'No customer pages or redirects under the prefix (checked 2026-11-22)'
 
 async function insert(row: Row) {
-  const values = { slug: 'acme', name: 'Acme', host: host(), path: '/oauth/callback', match: 'exact', revoked_at: null, ...row }
+  const values = { slug: 'acme', name: 'Acme', host: host(), path: '/oauth/callback', match: 'exact', note: null, revoked_at: null, ...row }
   return getPool().query<{ id: string }>(
-    `INSERT INTO public.oauth_partner_clients (slug, name, host, path, match, revoked_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [values.slug, values.name, values.host, values.path, values.match, values.revoked_at],
+    `INSERT INTO public.oauth_partner_clients (slug, name, host, path, match, note, revoked_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [values.slug, values.name, values.host, values.path, values.match, values.note, values.revoked_at],
   )
 }
 
@@ -69,8 +72,8 @@ describe('oauth_partner_clients (migration 20261122153300)', () => {
     const h = host()
     const inserted = await runAsServiceRole((client) =>
       client.query<{ id: string; match: string; revoked_at: string | null }>(
-        `INSERT INTO public.oauth_partner_clients (slug, name, host, path, match) VALUES ('gateway', 'Gateway', $1, '/upstream', 'prefix') RETURNING id, match, revoked_at`,
-        [h],
+        `INSERT INTO public.oauth_partner_clients (slug, name, host, path, match, note) VALUES ('gateway', 'Gateway', $1, '/upstream', 'prefix', $2) RETURNING id, match, revoked_at`,
+        [h, VETTED],
       ),
     )
     expect(inserted.rows).toEqual([{ id: expect.any(String), match: 'prefix', revoked_at: null }])
@@ -92,7 +95,7 @@ describe('oauth_partner_clients (migration 20261122153300)', () => {
     )
     expect(exact.rows).toEqual([{ match: 'exact' }])
     await expect(insert({ path: '/' })).resolves.toBeTruthy()
-    await expect(insert({ path: '/upstream/', match: 'prefix' })).resolves.toBeTruthy()
+    await expect(insert({ path: '/upstream/', match: 'prefix', note: VETTED })).resolves.toBeTruthy()
     await expect(insert({ path: '/v1.2/cb_x-y' })).resolves.toBeTruthy()
     await expect(insert({ host: `dev.${host()}` })).resolves.toBeTruthy()
   })
@@ -117,7 +120,9 @@ describe('oauth_partner_clients (migration 20261122153300)', () => {
     ['a query', { path: '/oauth/callback?x=1' }, /oauth_partner_clients_path_format/],
     ['an empty segment', { path: '//callback' }, /oauth_partner_clients_path_format/],
     ['an unknown match kind', { match: 'regex' }, /oauth_partner_clients_match_check/],
-    ['a prefix on a whole host', { path: '/', match: 'prefix' }, /oauth_partner_clients_prefix_not_root/],
+    ['a prefix on a whole host', { path: '/', match: 'prefix', note: VETTED }, /oauth_partner_clients_prefix_not_root/],
+    ['a prefix without a note', { path: '/upstream', match: 'prefix' }, /oauth_partner_clients_prefix_has_note/],
+    ['a prefix with a blank note', { path: '/upstream', match: 'prefix', note: '  ' }, /oauth_partner_clients_prefix_has_note/],
   ])('refuses %s', async (_label, row, constraint) => {
     await expect(insert(row)).rejects.toThrow(constraint)
   })
