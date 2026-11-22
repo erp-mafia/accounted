@@ -28,6 +28,20 @@
       }
     ]
   },
+  "covers": [
+    "2026P4",
+    "2027P1",
+    "2027P2",
+    "2027P3"
+  ],
+  "coversSource": {
+    "package": "https://www.skatteverket.se/download/18.5fb2fa71a0b0adb74a564b/1794382662598/_Nyheter_from_beskattningsperiod_2026P4.zip",
+    "packageSha256": "268d493b85095911b3e99425605e3198249691d2e3cdbb34115ce490368e619d",
+    "file": "_Nyheter_from_beskattningsperiod_2026P4.pdf",
+    "sha256": "353b9c0a7eacaaf2438539ead6dbacfda5edfb5bd4f0d3fbcae3b7bffe6882c0",
+    "fetchedAt": "2026-11-22",
+    "note": "Kapitel 1: if a blankett does not change between two beskattningsperioder, the latest edition in SKV269 holds until further notice. Kapitel 2 lists the periods this edition covers: 2026P4 and 2027P1 to 2027P3 (räkenskapsår ending 2026-09-01 to 2027-08-31). The republished package (2026-11-11) holds the same INK3R, INK3S, INK3SUF and Vardeforrad files as under source, byte for byte."
+  },
   "datatypes": {
     "Numeriskt_A": "Heltal: (-999999999999) - 999999999999",
     "Numeriskt_B": "Heltal: 0 - 999999999999",

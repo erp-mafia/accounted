@@ -93,6 +93,14 @@ describe('generateInk3Underlag', () => {
     await expect(generateInk3Underlag(supabase, COMPANY, PERIOD)).rejects.toBeInstanceOf(Ink3WrongLegalFormError)
   })
 
+  it('names the räkenskapsår its own period when an earlier edition covers it', async () => {
+    const { supabase } = setup({ periodEnd: '2027-04-30' })
+    const underlag = await generateInk3Underlag(supabase, COMPANY, PERIOD)
+    expect(underlag.beskattningsperiod).toBe('2027P1')
+    expect(underlag.fieldTable.beskattningsperiod).toBe('2026P4')
+    expect(underlag.fieldTable.files).toContain('INK3R_SKV2003-33-02-26-07.xls')
+  })
+
   it('refuses a räkenskapsår without a pinned field table', async () => {
     const { supabase } = setup({ periodEnd: '2026-06-30' })
     await expect(generateInk3Underlag(supabase, COMPANY, PERIOD)).rejects.toBeInstanceOf(Ink3PeriodNotSupportedError)
@@ -155,7 +163,7 @@ describe('INK3 inputs service', () => {
     expect(await putInk3UnderlagInputs(ctx(p2.supabase), PERIOD, body)).toMatchObject({
       ok: false,
       code: 'TAX_DECL_INK3_PERIOD_NOT_SUPPORTED',
-      details: { beskattningsperiod: '2026P2', supported: ['2026P4'] },
+      details: { beskattningsperiod: '2026P2', supported: ['2026P4', '2027P1', '2027P2', '2027P3'] },
     })
 
     const ok = setup()

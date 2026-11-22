@@ -41,6 +41,7 @@ import type {
 } from '@/lib/reports/periodisk-sammanstallning'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { stockholmYearMonth } from '@/lib/dates/iso'
+import { lastEndedCalendarPeriod } from '@/lib/vat/period-defaults'
 
 function typeBadge(row: { services: number; goods: number; triangulation: number }) {
   const types: string[] = []
@@ -63,12 +64,15 @@ function deadlineLabel(end: string): string {
 
 export function PeriodiskSammanstallningView() {
   const errorLocale = useLocale() as ErrorLocale
-  const { year: currentYear, month: currentMonth } = stockholmYearMonth()
-  const currentQuarter = Math.ceil(currentMonth / 3)
+  const currentYear = stockholmYearMonth().year
+  // Opens on the period that ended most recently: the one that is due, by
+  // the 25th of the month after it (SFL 35 kap 9 §). The running period
+  // cannot be filed yet.
+  const initial = lastEndedCalendarPeriod('quarterly')
 
   const [periodType, setPeriodType] = useState<PsPeriodType>('quarterly')
-  const [year, setYear] = useState(currentYear)
-  const [period, setPeriod] = useState(currentQuarter)
+  const [year, setYear] = useState(initial.year)
+  const [period, setPeriod] = useState(initial.period)
   // Fetch outcome tagged with the key it was requested under: the report
   // follows the picker automatically and stale responses are discarded
   // (same pattern as the momsdeklaration view).
@@ -97,11 +101,15 @@ export function PeriodiskSammanstallningView() {
         { value: 4, label: 'Kvartal 4 (okt-dec)' },
       ]
 
-  // Switching periodicity resets the period to "now" in the new unit, in the
-  // change handler so the auto-fetch never sees an inconsistent pair.
+  // Switching periodicity resets to the last ended period in the new unit
+  // (year and period: in February the last month is this year's January but
+  // the last quarter is last year's Q4), in the change handler so the
+  // auto-fetch never sees an inconsistent pair.
   const handlePeriodTypeChange = (value: PsPeriodType) => {
+    const ended = lastEndedCalendarPeriod(value)
     setPeriodType(value)
-    setPeriod(value === 'monthly' ? currentMonth : currentQuarter)
+    setYear(ended.year)
+    setPeriod(ended.period)
   }
 
   const fetchKey = `${periodType}:${year}:${period}:${retryKey}`
