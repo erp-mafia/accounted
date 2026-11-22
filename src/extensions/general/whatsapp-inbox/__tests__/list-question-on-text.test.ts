@@ -660,3 +660,200 @@ describe('a person who keeps the books of several companies', () => {
   })
 })
 
+describe('a written reply when the company has a reply reader', () => {
+  const originalEnv = { ...process.env }
+  const READER_URL = 'https://reader.example.test/read'
+  const fetchMock = vi.fn<typeof fetch>()
+
+  /** The reader answers every request with this body. */
+  const reads = (body: unknown, status = 200): void => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(body), { status })))
+  }
+
+  /** The bodies the reader was sent, in order. */
+  const handedOver = (): Row[] => fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)) as Row)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sendTextMock.mockResolvedValue(SENT)
+    sendButtonsMock.mockResolvedValue(SENT)
+    vi.stubGlobal('fetch', fetchMock)
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = COMPANY
+    process.env.QUESTION_REPLY_READER_URL = READER_URL
+    process.env.QUESTION_REPLY_READER_SECRET = 'test-secret'
+    process.env.QUESTION_REPLY_READER_COMPANY_IDS = COMPANY
+    process.env.WHATSAPP_APP_SECRET = SECRET
+    process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
+    process.env.WHATSAPP_PHONE_ENCRYPTION_KEY = 'a'.repeat(64)
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    process.env = { ...originalEnv }
+  })
+
+  /** A conversation that holds the older question, as the first text left it. */
+  async function withQuestionInFlight() {
+    const first = world()
+    await route.handler(signedText('Hey', 'wamid.TXT1'))
+    const [held] = contextWrites(first.writes)
+    expect(held.pending_question).toMatchObject({ type: 'list_question', question_id: OLDER_QUESTION })
+    vi.clearAllMocks()
+    sendTextMock.mockResolvedValue(SENT)
+    sendButtonsMock.mockResolvedValue(SENT)
+    return world({ conversation: { context: held as Row } })
+  }
+
+  /** The written reply goes through the webhook, then the worker takes its row. */
+  async function sendsReply(current: ReturnType<typeof world>, text: string, wamid: string): Promise<Row> {
+    await route.handler(signedText(text, wamid))
+    const row = current.messages.at(-1)!
+    expect(row.error_message).toBe(`list_question_reply:${COMPANY}:${OLDER_QUESTION}`)
+    row.attempts = 0
+    await processInboundMessage(current.supabase, row.id as string)
+    return row
+  }
+
+  const stillInFlight = (current: ReturnType<typeof world>): void => {
+    expect((current.conversation.context as ConversationContext).pending_question).toMatchObject({
+      type: 'list_question',
+      question_id: OLDER_QUESTION,
+      company_id: COMPANY,
+    })
+    expect(writesTo(current.writes, 'company_questions')).toEqual([])
+    expect(writesTo(current.writes, 'agent_memory')).toEqual([])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  }
+
+  it('later: the question stays open and in flight with m27, and the reply after it can still answer it', async () => {
+    const current = await withQuestionInFlight()
+    reads({ kind: 'later' })
+
+    await sendsReply(current, 'Jag kollar med hyresvärden och återkommer', 'wamid.TXT2')
+
+    expect(handedOver()).toEqual([
+      {
+        version: 1,
+        company_id: COMPANY,
+        question: {
+          id: OLDER_QUESTION,
+          text: OLDER_TEXT,
+          why: OLDER_WHY,
+          options: [
+            { id: 'office', label: 'Kontoret' },
+            { id: 'storage', label: 'Lagret' },
+          ],
+        },
+        reply: { text: 'Jag kollar med hyresvärden och återkommer' },
+        locale: 'sv',
+      },
+    ])
+    expect(JSON.stringify(handedOver())).not.toContain(PHONE)
+    expect(JSON.stringify(handedOver())).not.toContain(USER)
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual(['m27_list_later'])
+    expect(sendTextMock.mock.calls[0][1]).toMatchObject({ to: PHONE, body: 'Okej, frågan ligger kvar. Svara här när du vet.' })
+    stillInFlight(current)
+
+    // The next written reply is read again, and this time it is the answer.
+    reads({ kind: 'answer' })
+    await sendsReply(current, 'Kontoret på Storgatan', 'wamid.TXT3')
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [answered] = writesTo(current.writes, 'company_questions')
+    expect(answered).toMatchObject({ status: 'answered', answer_text: 'Kontoret på Storgatan', answered_by: USER, answered_via: 'whatsapp' })
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual(['m27_list_later', TEMPLATE.m24ListAnswered])
+    // The other open question follows the answer, as without a reader.
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('question_back: the reader\'s cleaned reply goes out as m28, and the question stays open and in flight', async () => {
+    const current = await withQuestionInFlight()
+    reads({ kind: 'question_back', reply: ' Menar du kontoret\n på Storgatan\u0000 eller   lagret? ' })
+
+    const row = await sendsReply(current, 'Vilken hyra?', 'wamid.TXT2')
+
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1]).toMatchObject({
+      to: PHONE,
+      template: 'm28_list_question_back',
+      body: 'Menar du kontoret på Storgatan eller lagret?',
+    })
+    stillInFlight(current)
+    expect(writesTo(current.writes, 'whatsapp_messages').at(-1)).toMatchObject({ processing_status: 'done' })
+    expect(row.body_text).toBe('Vilken hyra?')
+  })
+
+  it('other: the fallback reply goes out, and the question stays open and in flight', async () => {
+    const current = await withQuestionInFlight()
+    reads({ kind: 'other' })
+
+    await sendsReply(current, 'Kan du boka en taxi åt mig?', 'wamid.TXT2')
+
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m16Fallback])
+    stillInFlight(current)
+  })
+
+  it('dont_know: closes the question as the typed "vet inte" does', async () => {
+    const current = await withQuestionInFlight()
+    reads({ kind: 'dont_know' })
+
+    await sendsReply(current, 'Ingen aning faktiskt', 'wamid.TXT2')
+
+    const [closed] = writesTo(current.writes, 'company_questions')
+    expect(closed).toMatchObject({ status: 'closed', close_reason: 'dont_know', answered_via: 'whatsapp' })
+    expect(writesTo(current.writes, 'agent_memory')).toEqual([])
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListClosed])
+  })
+
+  it('saves the reply as written when the reader does not answer within its 8 seconds', async () => {
+    const current = await withQuestionInFlight()
+    fetchMock.mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')))
+        }),
+    )
+    await route.handler(signedText('Kontoret på Storgatan', 'wamid.TXT2'))
+    const row = current.messages.at(-1)!
+    row.attempts = 0
+
+    vi.useFakeTimers()
+    const processed = processInboundMessage(current.supabase, row.id as string)
+    await vi.advanceTimersByTimeAsync(8_000)
+    await processed
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [answered] = writesTo(current.writes, 'company_questions')
+    expect(answered).toMatchObject({ status: 'answered', answer_text: 'Kontoret på Storgatan', answered_via: 'whatsapp' })
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+  })
+
+  it('saves the reply as written, with no call, for a company that is not in the reader list', async () => {
+    process.env.QUESTION_REPLY_READER_COMPANY_IDS = OTHER_COMPANY
+    const current = await withQuestionInFlight()
+    reads({ kind: 'later' })
+
+    await sendsReply(current, 'Jag återkommer', 'wamid.TXT2')
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    const [answered] = writesTo(current.writes, 'company_questions')
+    expect(answered).toMatchObject({ status: 'answered', answer_text: 'Jag återkommer' })
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+  })
+
+  it('a tap on a button answers the question without a call to the reader', async () => {
+    const current = await withQuestionInFlight()
+    reads({ kind: 'later' })
+
+    await route.handler(signedTap(`cq:${COMPANY}:${OLDER_QUESTION}:o:office`))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    const [answered] = writesTo(current.writes, 'company_questions')
+    expect(answered).toMatchObject({ status: 'answered', answer_option: 'office', answered_via: 'whatsapp' })
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+  })
+})
+
