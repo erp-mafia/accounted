@@ -137,6 +137,28 @@ describe('GET /api/reconciliation/bank/unmatched-entries', () => {
     expect(body.data).toEqual([])
   })
 
+  it('offers no verifikat that a link may not name', async () => {
+    // A verifikat labelled opening_balance off a year start is ledger-only in
+    // the bridge (20261122140000), but every link to it is refused, so the
+    // pickers never offer it; nor a storno.
+    enqueueCashAccount('SEK')
+    enqueueTransaction({ currency: 'SEK', amount: -1150, date: '2026-03-10' })
+    fetchGLLinesForMatchingMock.mockResolvedValue([
+      makeGLLine({ line_id: 'line-label', journal_entry_id: 'je-label', source_type: 'opening_balance' }),
+      makeGLLine({ line_id: 'line-storno', journal_entry_id: 'je-storno', source_type: 'storno' }),
+      makeGLLine({ line_id: 'line-hit', journal_entry_id: 'je-hit' }),
+    ])
+
+    const response = await GET(
+      request({ account_number: '1930', transaction_id: TX_ID }),
+      emptyParams,
+    )
+    const { status, body } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.map((l) => l.journal_entry_id)).toEqual(['je-hit'])
+  })
+
   // ----------------------------------------------------------------
   // SEK: the 95% path, byte-for-byte unchanged
   // ----------------------------------------------------------------

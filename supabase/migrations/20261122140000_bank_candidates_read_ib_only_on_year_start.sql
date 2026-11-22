@@ -18,6 +18,10 @@
 -- year's first day. Bodies verbatim from 20261023094100 otherwise (the live
 -- definitions). A real IB, on a year's first day, stays out of every list.
 --
+-- Links are unchanged: every link to an opening_balance verifikat is still
+-- refused at the write (block_transaction_link_to_opening_balance), so the
+-- matcher and the pickers leave the labelled ones out (isBankMovementEntry).
+--
 -- pg-test: tests/pg/bank-bridge-ib-label-off-year-start.pg.test.ts
 
 -- 1. get_unlinked_gl_lines' predicate --------------------------------------

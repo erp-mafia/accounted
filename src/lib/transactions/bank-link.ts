@@ -177,10 +177,13 @@ const ALREADY_LINKED = 'Transaktionen är redan kopplad till en verifikation.'
 /**
  * Can this verifikat be a bank row's movement? An opening balance predates
  * the feed (a link to one is a permanent phantom difference) and a storno
- * cancels a verifikat, so neither is listed as a candidate, and neither may be
+ * cancels a verifikat, so neither is a match candidate, and neither may be
  * named by id. The database refuses the same pair at the write
  * (block_transaction_link_to_opening_balance), where the answer was only "try
- * again".
+ * again". A verifikat labelled opening_balance off a fiscal year's first day
+ * (marked as IB before 20261006121003) is listed among the verifikat without
+ * a bank row since 20261122140000, so the bridge can name it, but it stays
+ * refused here and at the write.
  */
 export function isBankMovementEntry(entry: { source_type?: string | null }): boolean {
   return entry.source_type !== 'opening_balance' && entry.source_type !== 'storno'

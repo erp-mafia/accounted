@@ -643,8 +643,10 @@ export async function runReconciliation(
   // Fetch unlinked GL lines via RPC. A partially allocated verifikat (1:N
   // slices settle part of it, remaining_amount set) is listed for the user,
   // never auto-linked: its lines carry the full amount, not the open part.
+  // A verifikat labelled opening_balance off a year start is listed too, but
+  // no link may name it (isBankMovementEntry), so it is no match candidate.
   const glLines = (await fetchUnlinkedGLLines(supabase, companyId, accountNumber, dateFrom, dateTo)).filter(
-    (line) => line.remaining_amount == null,
+    (line) => line.remaining_amount == null && isBankMovementEntry(line),
   )
 
   // Fetch unmatched transactions, scoped to the selected cash account.
@@ -946,8 +948,10 @@ export async function getReconciliationStatus(
   const effectiveFrom = facts.effective_from
 
   // The ledger-only verifikat on the account over the floored window, from
-  // get_account_gl_lines_for_matching (RPC excludes opening_balance and
-  // storno; posted correction vouchers are candidates since 20260923150000,
+  // get_account_gl_lines_for_matching (RPC excludes the storno and an
+  // opening_balance verifikat on a fiscal year's first day, the IB; one
+  // labelled so on any other day is ledger-only since 20261122140000;
+  // posted correction vouchers are candidates since 20260923150000,
   // a linked one drops out through its link like any other voucher).
   // Account-scoped since 20260723160000: a voucher whose links all sit on
   // another cash account (a transfer's other leg) counts as unmatched HERE,
