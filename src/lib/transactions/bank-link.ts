@@ -182,7 +182,7 @@ const ALREADY_LINKED = 'Transaktionen är redan kopplad till en verifikation.'
  * (block_transaction_link_to_opening_balance), where the answer was only "try
  * again". A verifikat labelled opening_balance off a fiscal year's first day
  * (marked as IB before 20261006121003) is listed among the verifikat without
- * a bank row since 20261122140000, so the bridge can name it, but it stays
+ * a bank row since 20261122160000, so the bridge can name it, but it stays
  * refused here and at the write.
  */
 export function isBankMovementEntry(entry: { source_type?: string | null }): boolean {

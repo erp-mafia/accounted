@@ -950,7 +950,7 @@ export async function getReconciliationStatus(
   // The ledger-only verifikat on the account over the floored window, from
   // get_account_gl_lines_for_matching (RPC excludes the storno and an
   // opening_balance verifikat on a fiscal year's first day, the IB; one
-  // labelled so on any other day is ledger-only since 20261122140000;
+  // labelled so on any other day is ledger-only since 20261122160000;
   // posted correction vouchers are candidates since 20260923150000,
   // a linked one drops out through its link like any other voucher).
   // Account-scoped since 20260723160000: a voucher whose links all sit on

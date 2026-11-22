@@ -139,7 +139,7 @@ describe('GET /api/reconciliation/bank/unmatched-entries', () => {
 
   it('offers no verifikat that a link may not name', async () => {
     // A verifikat labelled opening_balance off a year start is ledger-only in
-    // the bridge (20261122140000), but every link to it is refused, so the
+    // the bridge (20261122160000), but every link to it is refused, so the
     // pickers never offer it; nor a storno.
     enqueueCashAccount('SEK')
     enqueueTransaction({ currency: 'SEK', amount: -1150, date: '2026-03-10' })
