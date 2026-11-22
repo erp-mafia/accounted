@@ -237,6 +237,17 @@ export function resolveAccountMatch(mapping: AccountMapping): AccountMatchKind |
 }
 
 /**
+ * A mapped row the import asks a person to look at: the "osäkra" count on the
+ * preview and mapping steps, the mapping step's filter and the import's
+ * statistics. One threshold, so the steps agree (#2539): the mapping step
+ * counted below 0.7 and the statistics below 0.5, which split on the 2999
+ * OBS suggestion for a used class 9 account (0.5, prepareSIEPreviewMappings).
+ */
+export function isLowConfidenceMapping(mapping: Pick<AccountMapping, 'targetAccount' | 'confidence'>): boolean {
+  return !!mapping.targetAccount && mapping.confidence < 0.7
+}
+
+/**
  * Validate that all accounts are mapped
  */
 export function validateMappings(mappings: AccountMapping[]): {
@@ -245,7 +256,7 @@ export function validateMappings(mappings: AccountMapping[]): {
   lowConfidenceAccounts: string[]
 } {
   const unmapped = mappings.filter((m) => !m.targetAccount)
-  const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.5)
+  const lowConfidence = mappings.filter(isLowConfidenceMapping)
 
   return {
     valid: unmapped.length === 0,
@@ -279,7 +290,7 @@ export function getMappingStats(mappings: AccountMapping[]): {
   const classMatch = mappings.filter((m) => m.matchType === 'class').length
   const manual = mappings.filter((m) => m.matchType === 'manual').length
 
-  const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.5).length
+  const lowConfidence = mappings.filter(isLowConfidenceMapping).length
 
   const confidenceSum = mappings
     .filter((m) => m.targetAccount)
