@@ -945,11 +945,14 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
   if (!response.ok) {
     const body = await response.text()
-    // A session Enable Banking has already dropped (404, or a 401/403 naming
-    // an expired/closed session) is the expected answer when we revoke a
-    // connection whose PSD2 consent ran out: every caller catches and carries
-    // on, so it does not belong in the error panel.
+    // A session Enable Banking has already dropped (404, a 401/403 naming
+    // an expired/closed session, or a 400 whose error code is CLOSED_SESSION,
+    // its answer to a DELETE of a session that is already closed) is the
+    // expected answer when we revoke a connection whose PSD2 consent ran out:
+    // every caller catches and carries on, so it does not belong in the
+    // error panel.
     const alreadyGone = response.status === 404 || isSessionExpiredResponse(response.status, body)
+      || (response.status === 400 && envelopeErrorCode(body) === 'CLOSED_SESSION')
     const logLine = {
       status: response.status,
       statusText: response.statusText,
@@ -962,6 +965,17 @@ export async function deleteSession(sessionId: string): Promise<void> {
       console.error('[enable-banking] deleteSession failed', logLine)
     }
     throw new Error(`Failed to revoke session (${response.status}): ${body}`)
+  }
+}
+
+/** The code of an Enable Banking error envelope ({"error":"CLOSED_SESSION", ...}), or null for any other body. */
+function envelopeErrorCode(body: string): string | null {
+  try {
+    const { error } = (JSON.parse(body) ?? {}) as { error?: unknown }
+    return typeof error === 'string' ? error : null
+  } catch {
+    // Not JSON, so no envelope and no code: deleteSession logs the raw body.
+    return null
   }
 }
 
