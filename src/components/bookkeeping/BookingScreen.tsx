@@ -21,6 +21,8 @@ import UnderlagFileRow from '@/components/transactions/UnderlagFileRow'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { BOOKING_SCREEN_PATH, bookingScreenOrigin } from '@/lib/bookkeeping/booking-screen'
+import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
 import type { Transaction } from '@/types'
 
 /**
@@ -51,8 +53,17 @@ export function BookingScreen({ transaction, account, back }: BookingScreenProps
   const router = useRouter()
   const { canWrite, lockedTitle } = useViewerLock()
 
-  const backHref = back ?? (transaction ? '/transactions' : '/bookkeeping')
-  const backLabel = transaction ? t('back_transactions') : t('back_vouchers')
+  // The way back is named after the page the screen was opened from, and
+  // that page's menu row stays lit: from Att bokföra the person is still in
+  // Att göra, not moved to Bokföring.
+  const origin = bookingScreenOrigin(back, transaction !== null)
+  useClaimNavRow(BOOKING_SCREEN_PATH, origin)
+  const backHref = back ?? origin
+  const backLabel = {
+    '/att-bokfora': t('back_to_book'),
+    '/transactions': t('back_transactions'),
+    '/bookkeeping': t('back_vouchers'),
+  }[origin]
 
   const amountLabel = transaction
     ? `${transaction.amount > 0 ? '+' : ''}${formatCurrency(transaction.amount, transaction.currency)}`

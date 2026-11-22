@@ -23,8 +23,18 @@ function first(value: QueryValue): string | null {
   return trimmed ? trimmed : null
 }
 
-/** The pages the screen returns to, with the list's own query (filters, search, page) kept. */
-const RETURN_PATHS = ['/bookkeeping', '/transactions', '/att-bokfora'] as const
+/**
+ * The pages the screen returns to, with the list's own query (filters,
+ * search, page) kept. Each is a menu row: the screen keeps the one it was
+ * opened from lit (bookingScreenOrigin).
+ */
+export const BOOKING_SCREEN_RETURN_PATHS = ['/bookkeeping', '/transactions', '/att-bokfora'] as const
+export type BookingScreenOrigin = (typeof BOOKING_SCREEN_RETURN_PATHS)[number]
+
+/** The page a path lands on, of those the screen returns to. */
+function returnPathOf(path: string): BookingScreenOrigin | null {
+  return BOOKING_SCREEN_RETURN_PATHS.find((p) => path === p || path.startsWith(`${p}?`) || path.startsWith(`${p}/`)) ?? null
+}
 
 /**
  * A return address the screen may follow: a same-origin path, normalised by
@@ -35,8 +45,17 @@ const RETURN_PATHS = ['/bookkeeping', '/transactions', '/att-bokfora'] as const
 export function safeReturnPath(raw: string | null | undefined): string | null {
   const path = safeReturnTo(raw?.trim(), '')
   if (!path) return null
-  const known = RETURN_PATHS.some((p) => path === p || path.startsWith(`${p}?`) || path.startsWith(`${p}/`))
-  return known ? path : null
+  return returnPathOf(path) ? path : null
+}
+
+/**
+ * The page the screen was opened from, read off its return address (checked
+ * by safeReturnPath): the way back is named after it and its menu row stays
+ * lit. Without one, a bank row came from Bankrader and a verifikation from
+ * Verifikat.
+ */
+export function bookingScreenOrigin(back: string | null, hasTransaction: boolean): BookingScreenOrigin {
+  return (back ? returnPathOf(back) : null) ?? (hasTransaction ? '/transactions' : '/bookkeeping')
 }
 
 /**

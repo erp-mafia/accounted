@@ -138,7 +138,8 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_date')}</th>
-                <th className={TH_CLASS}>{t('col_what')}</th>
+                {/* w-full: the name takes the width the other columns leave, and truncates only past it. */}
+                <th className={cn(TH_CLASS, 'w-full')}>{t('col_what')}</th>
                 <th className={TH_CLASS}>{t('col_payment')}</th>
                 <th className={TH_CLASS}>{t('col_underlag')}</th>
                 <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>

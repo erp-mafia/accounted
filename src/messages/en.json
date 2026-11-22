@@ -5538,6 +5538,7 @@
   },
   "booking_screen": {
     "title": "Book",
+    "back_to_book": "To book",
     "back_transactions": "Bank rows",
     "back_vouchers": "Vouchers",
     "payment_label": "Payment",
