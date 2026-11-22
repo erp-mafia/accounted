@@ -9,6 +9,7 @@ import {
   bankMatchesQuery,
   bankNameForAlias,
   bankSearchAlias,
+  banksFoundElsewhere,
   searchAliasHint,
 } from '../bank-search'
 
@@ -125,5 +126,26 @@ describe('BANK_SEARCH_ALIASES', () => {
   it('never lets a term be claimed by two banks', () => {
     const terms = BANK_SEARCH_ALIASES.flatMap((a) => a.terms)
     expect(new Set(terms).size).toBe(terms.length)
+  })
+})
+
+describe('banksFoundElsewhere', () => {
+  // The earlier connection's list offers only the banks the BankID connection
+  // does not reach; a search there for one it does reach names where it is.
+  const offeredHere = (bank: { name: string }) => bank.name === 'Svea Bank'
+
+  it('names a bank the search finds but the filtered list leaves out', () => {
+    expect(banksFoundElsewhere(BANKS, offeredHere, 'seb').map((bank) => bank.name)).toEqual(['SEB'])
+    expect(banksFoundElsewhere(BANKS, offeredHere, '  Handels ').map((bank) => bank.name)).toEqual(['Handelsbanken'])
+  })
+
+  it('says nothing about a bank the list offers', () => {
+    expect(banksFoundElsewhere(BANKS, offeredHere, 'svea')).toEqual([])
+    expect(banksFoundElsewhere(BANKS, offeredHere, 'bokio')).toEqual([])
+  })
+
+  it('is empty without a query or without a filter', () => {
+    expect(banksFoundElsewhere(BANKS, offeredHere, '   ')).toEqual([])
+    expect(banksFoundElsewhere(BANKS, undefined, 'seb')).toEqual([])
   })
 })
