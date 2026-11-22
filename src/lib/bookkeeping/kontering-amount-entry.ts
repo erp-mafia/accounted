@@ -45,6 +45,9 @@ export function konteringAmountValue(text: string, decimal: ',' | '.'): string {
 
 function readKonteringAmount(text: string, decimal: ',' | '.'): number | null {
   if (decimal === ',') return parseAmountInput(text)
+  // A first group that starts with a zero ("0,500") groups no thousands, so
+  // its comma is a decimal comma: 0.50, not 500.
+  if (/^0\d{0,2},/.test(text.replace(/\s/g, ''))) return parseAmountInput(text)
   return parseSwedishAmount(text, '.') ?? parseAmountInput(text)
 }
 

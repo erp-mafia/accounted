@@ -75,6 +75,9 @@ describe('konteringAmountValue', () => {
     ['100,50', '100.5'],
     ['0,5', '0.5'],
     ['1.234,56', '1234.56'],
+    ['0,500', '0.5'],
+    ['0,050', '0.05'],
+    ['-0,750', '-0.75'],
   ])('reads %j in English, a comma that cannot group thousands, as the decimal %j', (typed, value) => {
     // A phone set to a Swedish region offers only a comma on its decimal keypad.
     expect(konteringAmountValue(typed, '.')).toBe(value)
