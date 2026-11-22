@@ -595,21 +595,21 @@ export async function offerListQuestionWhenDone(supabase: SupabaseClient, conver
 /**
  * Sends the next open list question of any company the person keeps the
  * books of, with no burst slot, when every other condition in the file
- * header holds, read off the conversation as it stands now. Says how it
- * ended; a read that fails ends as not_sent. Reads nothing unless the list
- * is switched on for some company. Never throws.
+ * header holds, read off the conversation and its phone link as they stand
+ * now (a stop may have come in meanwhile). Says how it ended; a read that
+ * fails ends as not_sent. Reads nothing unless the list is switched on for
+ * some company. Never throws.
  */
 async function offerNextWithoutSlot(
   supabase: SupabaseClient,
   conversationId: string,
-  link: WhatsAppPhoneLink,
   moment: 'text' | 'answer',
 ): Promise<ListQuestionOffer> {
   try {
     if (listIsOnForNobody()) return 'not_sent'
-    const conversation = await loadConversation(supabase, conversationId)
-    if (!conversation) return 'not_sent'
-    return await offerNextListQuestion(supabase, conversation, link, false)
+    const loaded = await loadConversationWithLink(supabase, conversationId)
+    if (!loaded) return 'not_sent'
+    return await offerNextListQuestion(supabase, loaded.conversation, loaded.link, false)
   } catch (err: unknown) {
     log.warn('the next list question was not sent', {
       moment,
@@ -627,12 +627,8 @@ async function offerNextWithoutSlot(
  * slot, read off the conversation as it stands after that text. The text
  * itself answers nothing. Says how it ended. Never throws.
  */
-export function offerListQuestionOnText(
-  supabase: SupabaseClient,
-  conversationId: string,
-  link: WhatsAppPhoneLink,
-): Promise<ListQuestionOffer> {
-  return offerNextWithoutSlot(supabase, conversationId, link, 'text')
+export function offerListQuestionOnText(supabase: SupabaseClient, conversationId: string): Promise<ListQuestionOffer> {
+  return offerNextWithoutSlot(supabase, conversationId, 'text')
 }
 
 /** The active, unpaused links of the company's members with a bookkeeping role. */
@@ -865,7 +861,7 @@ async function answerListQuestion(supabase: SupabaseClient, args: AnswerListQues
   // The next open list question follows the acknowledgement, with no burst
   // slot. A receipt question in flight or in the queue stays first: nothing
   // is sent then.
-  if (conversation) await offerNextWithoutSlot(supabase, conversation.id, link, 'answer')
+  if (conversation) await offerNextWithoutSlot(supabase, conversation.id, 'answer')
 }
 
 interface EndedQuestionRow {

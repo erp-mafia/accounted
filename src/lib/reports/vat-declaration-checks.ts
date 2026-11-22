@@ -716,11 +716,13 @@ export function runVatDeclarationChecks(
   //   - ruta 05 recognises only 3001/3002/3003, but an invoice line may carry
   //     any revenue_account override (3590, 3910, ...) while its moms still
   //     lands on 2611/2621/2631;
-  //   - an upplupen intäkt credits 17xx on the invoice with the full moms on
-  //     2611, its months having credited 3001 with no moms before it, so both
-  //     directions drift. (A förutbetald intäkt on 29xx no longer does: the
-  //     declaration reads its 29xx line as the sale in the invoice's period,
-  //     and a release nets to nothing, crm#1919.)
+  //   - an upplupen intäkt booked by hand (Dr 17xx / Cr 3001 at a bokslut,
+  //     the invoice crediting 17xx with the full moms later) or a periodisering
+  //     set up by hand credits 3001 in a period with no moms, the moms
+  //     declared in another one, so both directions drift. (A periodisering an
+  //     invoice line books with moms no longer does, on 29xx or 17xx: the
+  //     declaration reads its interim line as the sale in the invoice's
+  //     period, and its months net to nothing, crm#1919.)
   // Any of those would turn a proportional check into a permanent filing-
   // blocking ERROR (isFilingBlocked) on a correct declaration. Making ruta 07
   // mappable and reconciling the revenue_account override is the
@@ -807,12 +809,13 @@ export function runVatDeclarationChecks(
   // listed above (VMB, frivillig uthyrning, revenue_account overrides,
   // periodisering in the invoice month) inflates the OUTPUT side and can only
   // suppress this finding, never trigger it. The legitimate triggers left
-  // are an upplupen intäkt on 17xx (its months credit 3001 before the invoice
-  // declares the moms) and a periodisering set up by hand dissolving (3001
-  // credited with moms declared earlier). A förutbetald intäkt an invoice
-  // booked with moms no longer is one: the declaration reads it as the sale
-  // in the invoice's period and its releases net to nothing (crm#1919). So
-  // this is a WARNING that names those causes and never blocks filing
+  // are an upplupen intäkt on 17xx booked by hand (its months credit 3001
+  // before the invoice declares the moms) and a periodisering set up by hand
+  // dissolving (3001 credited with moms declared earlier). A periodisering an
+  // invoice line books with moms, a förutbetald intäkt on 29xx or an upplupen
+  // intäkt on 17xx, no longer is one: the declaration reads it as the sale in
+  // the invoice's period and its months net to nothing (crm#1919). So this is
+  // a WARNING that names those causes and never blocks filing
   // (isFilingBlocked reads ERROR only), following the RC_INPUT_VAT_MISMATCH
   // precedent.
   //

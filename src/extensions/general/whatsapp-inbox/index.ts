@@ -779,7 +779,7 @@ async function handleLinkedSender(
       // of the fallback when one may be sent now (lib/list-question.ts). The
       // fallback follows only when no question was there to send: a question
       // whose send failed is taken back and nothing more is sent.
-      const offer = conversationId ? await offerListQuestionOnText(supabase, conversationId, link) : 'not_sent'
+      const offer = conversationId ? await offerListQuestionOnText(supabase, conversationId) : 'not_sent'
       if (offer === 'not_sent') {
         await sendText(supabase, { to: msg.from, body: copy.m16Fallback(), template: TEMPLATE.m16Fallback, ...replyBase })
       }

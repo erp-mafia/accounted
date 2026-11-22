@@ -131,7 +131,7 @@ describe('renderUiGrounding: the menu', () => {
     const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
     expect(out).toContain('ikonlist längst till vänster')
     expect(out).toContain(
-      `- ${nav.v2_todo}: ${nav.home} (/), ${nav.v3_needs_you} (/?vy=behover), ${nav.v3_routine} (/pending), ${nav.v3_questions} (/questions), ${nav.v3_done} (/?vy=gjort)`,
+      `- ${nav.v2_todo}: ${nav.home} (/), ${nav.v3_to_book} (/att-bokfora), ${nav.v3_needs_you} (/?vy=behover), ${nav.v3_routine} (/pending), ${nav.v3_questions} (/questions), ${nav.v3_done} (/?vy=gjort)`,
     )
     // A named group stands before its rows.
     expect(out).toContain(`${nav.v3_group_registers}: ${nav.v3_agreements} (/bolaget/avtal)`)

@@ -29,13 +29,14 @@
  * reversal, a carried opening balance and a momsredovisning-shaped verifikat
  * are left out. Each counted verifikat moves the rutor by the fold the
  * declaration files (rutorChangeOfLines), with the company's own account
- * classification and the 29xx lines of a verifikat that books a deferred
- * invoice sale read as that sale (readDeferredSaleLines, crm#1919): the
- * invoice moves its whole sale, a release nets to nothing.
+ * classification and the interim lines (17xx, 29xx) of a verifikat that books
+ * a deferred or accrued invoice sale read as that sale (readDeferredSaleLines,
+ * crm#1919): the invoice moves its whole sale, a month of its periodisering
+ * nets to nothing.
  *
  * Only verifikat move a filed period here. A change to how the declaration
- * reads verifikat it already holds (crm#1919 read the 29xx line of a
- * periodiserad invoice into ruta 05) moves its figure without being listed.
+ * reads verifikat it already holds (crm#1919 read the 29xx and 17xx lines of
+ * a periodiserad invoice into ruta 05) moves its figure without being listed.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
@@ -147,8 +148,8 @@ function moved(change: RutorChange): RutorChange {
 
 /**
  * How one verifikat's lines move the rutor, read as the declaration reads
- * them: a 29xx line of a deferred invoice sale counts as that sale
- * (readDeferredSaleLines, crm#1919).
+ * them: an interim line (17xx or 29xx) of a deferred or accrued invoice sale
+ * counts as that sale (readDeferredSaleLines, crm#1919).
  */
 function linesChange(
   entryId: string,
