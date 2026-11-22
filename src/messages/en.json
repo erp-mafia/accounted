@@ -5511,6 +5511,23 @@
     "fetching_rate": "Fetching exchange rate…",
     "book": "Post"
   },
+  "booking_screen": {
+    "title": "Book",
+    "back_transactions": "Bank rows",
+    "back_vouchers": "Vouchers",
+    "payment_label": "Payment",
+    "payment_none": "No bank row. A bank row with the same account, amount and date is paired with the voucher, now or when it arrives.",
+    "underlag_label": "Document",
+    "kontering_label": "Lines",
+    "underlag_empty_voucher": "Drop the document anywhere on the page, or choose a file in the form. It shows here.",
+    "already_booked": "This bank row is already booked.",
+    "open_voucher": "Open the voucher",
+    "bank_line_description": "Business account",
+    "doc_pick_inbox": "Choose from the inbox",
+    "doc_picked_remove": "Remove document",
+    "doc_link_failed_title": "Receipt could not be attached",
+    "doc_link_failed_description": "{count} file(s) could not be linked to the journal entry. Try again from the voucher."
+  },
   "tx_booking_dialog": {
     "doc_label": "Receipt",
     "doc_pick_inbox": "Choose from the inbox",
