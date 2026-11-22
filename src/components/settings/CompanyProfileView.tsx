@@ -1,3 +1,4 @@
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { formatDate } from '@/lib/utils'
 import { statusesInForce } from '@/lib/company/snapshot-statuses'
@@ -50,6 +51,8 @@ interface SnapshotShape {
     positionType?: string | null
     positionStart?: string | null
   }[] | null
+  /** Keys whose detail call failed: empty there means "could not ask" (TICCompanyProfile). */
+  incompleteSections?: string[] | null
 }
 
 // Clean Bolagsverket signatory text: the source carries ">" list markers
@@ -74,12 +77,13 @@ function cleanSignatory(raw: string | null | undefined): string[] {
 }
 
 export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | null }) {
+  const t = useTranslations('settings_company')
   if (!snapshot) {
     // Dynamic status (nothing fetched yet): stays visible as a quiet line.
+    // Nothing fetches it on its own; the Hämta row below does.
     return (
       <p className="border-b-hairline px-1 py-3 text-sm text-muted-foreground">
-        Inga företagsuppgifter hämtade ännu. Uppgifterna hämtas automatiskt
-        från Bolagsverket via organisationsnumret.
+        {t('profile_empty')}
       </p>
     )
   }
