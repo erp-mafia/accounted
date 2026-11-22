@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
-import { listOpenQuestionsForBriefing, listQuestions } from '../list'
+import { listOpenQuestionsAcross, listOpenQuestionsForBriefing, listQuestions } from '../list'
 
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
 
@@ -144,5 +144,72 @@ describe('listOpenQuestionsForBriefing', () => {
     vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
     const mock = createTableMockSupabase({ company_questions: { error: { code: '42P01', message: 'relation does not exist' } } })
     expect(await listOpenQuestionsForBriefing(mock.supabase as never, COMPANY)).toEqual([])
+  })
+})
+
+describe('listOpenQuestionsAcross', () => {
+  const OTHER = 'c0000000-0000-4000-8000-000000000002'
+  const THIRD = 'c0000000-0000-4000-8000-000000000003'
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('lists the open questions of the companies as one list, the oldest first, each with its company', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    const mock = createTableMockSupabase({
+      company_questions: {
+        data: [
+          row('b', { company_id: OTHER, created_at: '2026-11-20T08:00:00.000Z' }),
+          row('a', { company_id: COMPANY, created_at: '2026-11-18T08:00:00.000Z' }),
+          row('c', { company_id: COMPANY, created_at: '2026-11-21T08:00:00+00:00' }),
+        ],
+      },
+    })
+
+    const open = await listOpenQuestionsAcross(mock.supabase as never, [COMPANY, OTHER])
+
+    expect(open.map((entry) => [entry.companyId, entry.question.question_id])).toEqual([
+      [COMPANY, 'a'],
+      [OTHER, 'b'],
+      [COMPANY, 'c'],
+    ])
+    expect(open[0].question).toMatchObject({ status: 'open', question: 'Fråga a' })
+    expect(mock.findCalls('company_questions', 'in')).toEqual([['company_id', [COMPANY, OTHER]]])
+    expect(mock.findCalls('company_questions', 'eq')).toEqual([['status', 'open']])
+    expect(mock.findCalls('company_questions', 'order')).toEqual([['created_at', { ascending: true }]])
+    // Five open questions a company at most.
+    expect(mock.findCalls('company_questions', 'limit')).toEqual([[10]])
+  })
+
+  it('reads only the companies the list is switched on for, each once', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', `${COMPANY},${THIRD}`)
+    const mock = createTableMockSupabase({ company_questions: { data: [] } })
+    await listOpenQuestionsAcross(mock.supabase as never, [COMPANY, OTHER, THIRD, COMPANY])
+    expect(mock.findCalls('company_questions', 'in')).toEqual([['company_id', [COMPANY, THIRD]]])
+  })
+
+  it('is empty, without a read, when the list is switched on for none of them', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', THIRD)
+    const mock = createTableMockSupabase({ company_questions: { data: [row('a', { company_id: COMPANY })] } })
+    expect(await listOpenQuestionsAcross(mock.supabase as never, [COMPANY, OTHER])).toEqual([])
+    expect(await listOpenQuestionsAcross(mock.supabase as never, [])).toEqual([])
+    expect(mock.tables()).toEqual([])
+  })
+
+  it('reads many companies fifty at a time', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    const ids = Array.from({ length: 51 }, (_, index) => `c0000000-0000-4000-8000-${String(index).padStart(12, '0')}`)
+    const mock = createTableMockSupabase({ company_questions: { data: [] } })
+    await listOpenQuestionsAcross(mock.supabase as never, ids)
+    const filters = mock.findCalls('company_questions', 'in') as Array<[string, string[]]>
+    expect(filters.map(([, chunk]) => chunk.length)).toEqual([50, 1])
+    expect(mock.findCalls('company_questions', 'limit')).toEqual([[250], [5]])
+  })
+
+  it('throws when a read fails', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    const failing = createTableMockSupabase({ company_questions: { error: { code: '57014', message: 'canceling statement due to statement timeout' } } })
+    await expect(listOpenQuestionsAcross(failing.supabase as never, [COMPANY])).rejects.toMatchObject({ code: '57014' })
   })
 })
