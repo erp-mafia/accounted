@@ -1,6 +1,7 @@
 /**
  * The session company guard catches a door that writes the no-company answer
- * by hand and leaves a door that asks resolveSessionCompany.
+ * by hand and leaves a door that asks resolveSessionCompany, and a client
+ * that only reads the code.
  */
 import { describe, it, expect } from 'vitest'
 import { findRuleLines } from '../one-definition.mjs'
@@ -20,6 +21,7 @@ describe('session-company-answer', () => {
     'const company = await resolveSessionCompany(supabase, user.id, resolved, log, requestId)',
     'if (!company.ok) return decorateResponse(company.response, requestId)',
     "// a door answers 'COMPANY_CONTEXT_MISSING' through resolveSessionCompany",
+    "if (body.error?.code === 'COMPANY_CONTEXT_MISSING') return showCompanyPicker()",
   ])('leaves %s', (line) => {
     expect(hits(line)).toBe(false)
   })

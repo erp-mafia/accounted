@@ -6,7 +6,8 @@ import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
  * What the extension dispatcher answers when the active company cannot be
  * resolved: the same as a core route (withRouteContext). The real resolver
  * (lib/company/active-company.ts) reads a client whose resolver RPC answers
- * as production's did; only the sign-in is stubbed.
+ * as production's did; the sign-in, lib/init and the extension context are
+ * stubbed.
  */
 
 vi.mock('@/lib/init', () => ({
