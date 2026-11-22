@@ -9,11 +9,10 @@
  * once only (share_register_settings.roles_seeded_at is the claim).
  */
 import { createServiceClient } from '@/lib/supabase/server'
-import { incompleteSectionsOf } from '@/lib/agent/composer/tic-fetch'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { ensureRegisterParty, loadRegisterParties, PartyRefError, checkPartyRef, type PartyRef } from './people'
-import { rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from './tic-seed'
+import { namesRepresentatives, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from './tic-seed'
 import {
   BOARD_MEMBER_ROLES,
   ROLE_LABELS_SV,
@@ -39,9 +38,9 @@ export function dayBefore(iso: string): string {
  * Seed company_roles and company_signatory_rules from companies.tic_snapshot
  * when the company has no roles yet. Service role (a viewer's read may be
  * the first); best-effort: a failure leaves the company unseeded and the
- * next read tries again. A snapshot whose representatives call failed is no
- * answer: nothing is claimed until one has them. Returns how many roles were
- * written.
+ * next read tries again. A snapshot that names no representative is no
+ * answer about the board: nothing is claimed until one does. Returns how many
+ * roles were written.
  */
 export async function seedRolesFromSnapshot(ctx: OperationContext): Promise<number> {
   const { companyId } = ctx
@@ -58,11 +57,12 @@ export async function seedRolesFromSnapshot(ctx: OperationContext): Promise<numb
     .eq('id', companyId)
     .maybeSingle()
   if (companyError || !company) return 0
-  const snapshot = (company as { tic_snapshot: Record<string, unknown> | null }).tic_snapshot
-  // The representatives call failed (budget spent, timeout): its empty list
-  // means "could not ask", not "no board". The claim would then seed the
-  // firmateckning alone, and the board never.
-  if (incompleteSectionsOf(snapshot).includes('representatives')) return 0
+  const snapshot = (company as { tic_snapshot: unknown }).tic_snapshot
+  // No representative named means "could not ask", not "no board": the call
+  // failed (incompleteSections), the registry has no board for the firm yet,
+  // or the snapshot predates the marking of failed calls. The claim would
+  // then seed the firmateckning alone, and the board never.
+  if (!namesRepresentatives(snapshot)) return 0
   const roles = rolesFromTicSnapshot(snapshot)
   const rules = signatoryRulesFromTicSnapshot(snapshot)
   if (roles.length === 0 && rules.length === 0) return 0

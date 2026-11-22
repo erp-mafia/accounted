@@ -462,26 +462,34 @@ describe('roles', () => {
     })
   })
 
-  // A representatives call that failed (budget spent, timeout) leaves the list
-  // empty and names it in incompleteSections: "could not ask", not "no board".
-  it('claims nothing while the snapshot could not fetch the representatives', async () => {
+  // A snapshot that names no representative says "could not ask", not "no
+  // board". Claiming on it would seed the firmateckning alone, and never the board.
+  const signatory = [{ description: 'Firman tecknas av styrelsen' }]
+  it.each([
+    ['the representatives call failed', { representatives: [], board: null, signatory, incompleteSections: ['board', 'representatives'] }],
+    ['the list is empty, unmarked (saved before failed calls were marked, or no board at the registry yet)', { representatives: [], board: null, signatory }],
+    ['the snapshot has no representatives at all', { signatory }],
+  ])('claims nothing while %s', async (_label, tic_snapshot) => {
     enqueue({ data: null, count: 0 }) // company_roles count
-    enqueue({
-      data: {
-        tic_snapshot: {
-          representatives: [],
-          board: null,
-          signatory: [{ description: 'Firman tecknas av styrelsen' }],
-          incompleteSections: ['board', 'representatives'],
-        },
-      },
-    })
+    enqueue({ data: { tic_snapshot } })
     enqueue({ data: null }) // settings upsert, were it reached
     enqueue({ data: [{ company_id: 'company-1' }] }) // the claim, were it reached
     expect(await seedRolesFromSnapshot(ctx)).toBe(0)
-    // Unclaimed, so the read after a complete snapshot seeds the board.
+    // Unclaimed, so the read after a snapshot that names the board seeds it.
     expect(findCalls('share_register_settings', 'update')).toEqual([])
     expect(findCalls('company_signatory_rules', 'insert')).toEqual([])
+  })
+
+  it('seeds the firmateckning when the named representatives hold no role kept here', async () => {
+    // The registry answered: a lay auditor is no role of this register.
+    enqueue({ data: null, count: 0 })
+    enqueue({ data: { tic_snapshot: { representatives: [{ name: 'Bo Lind', positionDescription: 'Lekmannarevisor' }], signatory } } })
+    enqueue({ data: null }) // settings upsert
+    enqueue({ data: [{ company_id: 'company-1' }] }) // claim
+    enqueue({ data: null }) // company_signatory_rules insert
+    expect(await seedRolesFromSnapshot(ctx)).toBe(0)
+    expect(findCalls('share_register_settings', 'update')).toHaveLength(1)
+    expect(findCall('company_signatory_rules', 'insert')?.[0]).toEqual(expect.objectContaining({ rule_text: 'Firman tecknas av styrelsen' }))
   })
 
   it('seeds when only the board summary could not be fetched', async () => {

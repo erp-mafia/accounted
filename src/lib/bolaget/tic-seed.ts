@@ -56,6 +56,18 @@ function textOf(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+/**
+ * Whether the snapshot names any representative, answered or kept from the
+ * last answered fetch. An empty or missing list says nothing about the board:
+ * a failed detail call (incompleteSections), a registry without the board yet
+ * and a snapshot without the detail calls all look like that.
+ */
+export function namesRepresentatives(snapshot: unknown): boolean {
+  if (!snapshot || typeof snapshot !== 'object') return false
+  const reps = (snapshot as { representatives?: unknown }).representatives
+  return Array.isArray(reps) && reps.length > 0
+}
+
 /** The roles the snapshot names, one per person and role; a row without a name is left out. */
 export function rolesFromTicSnapshot(snapshot: unknown): SeedRole[] {
   if (!snapshot || typeof snapshot !== 'object') return []

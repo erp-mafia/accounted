@@ -6,7 +6,7 @@ import { reconcileWithSettings } from '../reconcile'
 import { replayShareRegister, summarizeHoldings } from '../register-state'
 import type { RolesView } from '../roles'
 import type { ShareRegisterData } from '../share-register'
-import { roleFromPosition, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from '../tic-seed'
+import { namesRepresentatives, roleFromPosition, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from '../tic-seed'
 import type { RegisterParty, ShareClass, ShareEvent } from '../types'
 import { bolagetRollout, isBolagetEnabled } from '@/lib/env/bolaget-switch'
 
@@ -99,6 +99,13 @@ describe('tic seed', () => {
     ])
     expect(rolesFromTicSnapshot(null)).toEqual([])
     expect(rolesFromTicSnapshot({ representatives: 'x' })).toEqual([])
+  })
+
+  it('takes only a list that names someone as an answer about the board', () => {
+    expect(namesRepresentatives({ representatives: [{ name: 'Anna Ek' }] })).toBe(true)
+    for (const snapshot of [null, 'x', {}, { representatives: [] }, { representatives: 'x' }, { representatives: [], incompleteSections: ['representatives'] }]) {
+      expect(namesRepresentatives(snapshot)).toBe(false)
+    }
   })
 
   it('splits run-on firmateckning clauses and drops the list markers', () => {
