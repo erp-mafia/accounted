@@ -128,13 +128,15 @@ describe('priceOperation', () => {
   })
 
   it('prices a batch allocation on its sums when the lines cannot be read', () => {
-    // The sums sit below every number a misread of these lines could give (the
-    // 7, the 1 500 credit, the figures in the text), so a misread shows in the
-    // price instead of hiding under the floor.
+    // The sums sit below every figure in these lines (the 7, the 1 500 credit,
+    // the figures in the text), so reading one of them shows in the price
+    // instead of hiding under the floor.
     const sums = { total_allocated: 4, total_debts: 1, transaction_amount: -5 }
-    for (const expected_lines of [undefined, null, 'D 2440 1500', [], [null, 7, { debit: 'n/a' }], [{ debit: 0, credit: 1500 }]]) {
+    const unreadable = [undefined, null, 'D 2440 1500', [], [null, 7, { debit: 'n/a' }], [{ debit: 0, credit: 1500 }], [{ credit: 1500 }]]
+    for (const expected_lines of unreadable) {
       expect(priceOperation('match_batch_allocate', { ...sums, expected_lines })).toBe(5)
-      // With no sums to fall back on, the row stays unpriced: not priced at 0.
+      // With no sums to fall back on, the row stays unpriced: any number read
+      // from these lines, 0 included, would show here.
       expect(priceOperation('match_batch_allocate', { expected_lines })).toBeNull()
     }
     // Lines stored with jsonb string numerics are read as numbers.
