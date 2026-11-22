@@ -68,10 +68,22 @@ describe('list question wording', () => {
   for (const locale of ['sv', 'en'] as const) {
     const copy = botCopy(locale)
 
-    it(`${locale}: sends the question as filed, then the why on a line of its own`, () => {
-      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' })).toBe('Gäller hyran kontoret?\nDet avgör kontot.')
-      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: null })).toBe('Gäller hyran kontoret?')
-      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' })).toBe('Gäller hyran kontoret?')
+    const closing = locale === 'sv' ? 'Du kan också svara med egna ord.' : 'You can also answer in your own words.'
+
+    it(`${locale}: sends the question as filed, the why on a line of its own, then the line about a written answer`, () => {
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' })).toBe(
+        `Gäller hyran kontoret?\nDet avgör kontot.\n\n${closing}`,
+      )
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: null })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+    })
+
+    it(`${locale}: closes the question with one line saying a written answer is welcome, without a dash`, () => {
+      const lines = copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' }).split('\n')
+      expect(lines.at(-1)).toBe(closing)
+      expect(closing).toMatch(locale === 'sv' ? /egna ord/ : /own words/)
+      expect(closing).not.toMatch(/[–—]/)
+      expect(closing.length).toBeLessThanOrEqual(60)
     })
 
     it(`${locale}: fits the "Vet inte" button in a reply button title`, () => {
