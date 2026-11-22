@@ -58,7 +58,8 @@ function supabaseWithObservedRpc() {
   const rpc = (name: string, args?: Record<string, unknown>) => {
     if (name !== 'get_observed_parties') return pagedRpc(name, args)
     rpcArgs.push(args ?? {})
-    const limit = Math.max(1, Math.min(Number(args?.p_limit ?? 200), 1000))
+    // As the RPC: at most 1,000 ranked, none at 0 or below (20261123005000).
+    const limit = Math.max(0, Math.min(Number(args?.p_limit ?? 200), 1000))
     const named = new Set((args?.p_keys as string[] | undefined) ?? [])
     const ranked = [...OBSERVED].sort((a, b) => b.expense_sek + b.revenue_sek - (a.expense_sek + a.revenue_sek))
     const top = new Set(ranked.slice(0, limit).map((r) => r.key))
@@ -89,6 +90,6 @@ describe('parties past the observed ranking cap', () => {
 
     expect(dossier!.party.stats).toMatchObject({ revenueSek: 10, occurrences: 3 })
     expect(dossier!.party.defaultRoles).toEqual(['customer'])
-    expect(rpcArgs[0]).toMatchObject({ p_keys: ['kund ab'] })
+    expect(rpcArgs[0]).toMatchObject({ p_limit: 0, p_keys: ['kund ab'] })
   })
 })
