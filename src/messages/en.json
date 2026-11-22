@@ -1407,6 +1407,7 @@
     "warning_update_supplier_invoice_item_account": "By clicking approve, the invoice line moves to the new account and the registration voucher is corrected in the same voucher, with a log of who and when.",
     "warning_delete_dimension": "By clicking approve, the dimension and its values are removed. This only works if nothing has been booked on it.",
     "warning_create_invoice": "By clicking approve, an invoice draft is created (it is not sent).",
+    "warning_create_self_billed_invoice": "By clicking approve, you register the self-billed invoice. A journal entry is posted on the invoice date under the accrual method and when payment is recorded under the cash method.",
     "warning_categorize_transaction": "By clicking approve, the transaction is categorised and a voucher is created.",
     "warning_match_transaction_invoice": "By clicking approve, the transaction is matched against the invoice.",
     "warning_attach_document_to_transaction": "By clicking approve, the document is attached to the transaction.",

@@ -1431,6 +1431,7 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // Bounded integers the generic 100 overshoots.
   gnubok_create_recurring_schedule: { args: { day_of_month: 15, items: [SALES_ORDER_LINE] } },
   gnubok_create_sales_order: { args: { items: [SALES_ORDER_LINE] } },
+  gnubok_create_self_billed_invoice: { rows: { company_settings: { accounting_method: 'cash' } } },
   // A scrapping needs no VAT treatment; a sale does.
   gnubok_dispose_asset: { args: { disposal_type: 'scrap', disposed_proceeds: 0 } },
   // State preconditions on the row the tool pre-reads.

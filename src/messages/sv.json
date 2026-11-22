@@ -1407,6 +1407,7 @@
     "warning_update_supplier_invoice_item_account": "Genom att klicka godkänn så flyttas fakturaraden till det nya kontot och registreringsverifikationen rättas i samma verifikation, med loggning av vem och när.",
     "warning_delete_dimension": "Genom att klicka godkänn så tas dimensionen och dess värden bort. Det går bara om inget har bokförts på den.",
     "warning_create_invoice": "Genom att klicka godkänn så skapas ett fakturautkast (det skickas inte).",
+    "warning_create_self_billed_invoice": "Genom att klicka godkänn registreras självfakturan. Med faktureringsmetoden bokförs den på fakturadatumet och med kontantmetoden vid betalning.",
     "warning_categorize_transaction": "Genom att klicka godkänn så kategoriseras transaktionen och en verifikation skapas.",
     "warning_match_transaction_invoice": "Genom att klicka godkänn så matchas transaktionen mot fakturan.",
     "warning_attach_document_to_transaction": "Genom att klicka godkänn så bifogas dokumentet till transaktionen.",
