@@ -293,7 +293,7 @@ describe('a periodiserad invoice line in the momsdeklaration (crm#1919)', { time
     expect(await drillDownRuta05(seed.companyId, Q3)).toBe(0)
   })
 
-  it('takes the whole sale back in the kreditfaktura period, and leaves the stornoed releases out', async () => {
+  it('takes the whole sale back in the kreditfaktura period, and reads the stornoed releases as nothing', async () => {
     const seed = await seedCompany()
     const { invoice } = await bookDeferredInvoice(seed)
     await creditInvoice(seed, invoice)
@@ -305,7 +305,7 @@ describe('a periodiserad invoice line in the momsdeklaration (crm#1919)', { time
     expect(await drillDownRuta05(seed.companyId, Q3)).toBe(-16000)
   })
 
-  it('leaves a corrected release out too: its storno, its rättelse and the storno of that', async () => {
+  it('reads a corrected release as nothing too: its storno, its rättelse and the storno of that', async () => {
     const seed = await seedCompany()
     await bookDeferredInvoice(seed)
     const company = { userId: seed.userId, companyId: seed.companyId, fiscalPeriodId: seed.fiscalPeriodId, nextPeriodId: seed.fiscalPeriodId }
