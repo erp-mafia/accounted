@@ -36,6 +36,7 @@ import { mapWithConcurrency } from '@/lib/concurrency'
 import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
 import { createProviderCircuit, isCredentialRejectionError } from '@/extensions/general/enable-banking/lib/provider-circuit'
+import { isTimeoutError } from '@/lib/http/fetch-with-timeout'
 
 // Without this export the route runs under the platform default (60s), which
 // is why the sync loop used to self-limit to 50s and starve the queue: ~17
@@ -312,8 +313,12 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // Enable Banking refusing OUR credentials (a 401/403 naming no session)
       // is about the application, not this consent: the row is left alone too,
       // and the circuit breaker above decides whether the run goes on.
+      // A request timeout on the direct path (the transport rethrows the
+      // AbortError once every attempt timed out) is the same case as the
+      // connector's CONNECTOR_TIMEOUT: nobody answered, the session is fine.
       const isCredentialRejected = isCredentialRejectionError(error)
       const isTransient = error instanceof AspspUnavailableError || error instanceof ConnectorSyncError
+        || isTimeoutError(error)
         || error instanceof BankSyncResultObsoleteError || isBankRoutingConflict(error) || isCredentialRejected
       const failureStatus = isSessionDead ? 'expired' : 'error'
       // A 429 holds the lease of every connection on the session for hours:
