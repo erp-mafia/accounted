@@ -89,6 +89,13 @@ describe('checkAgainstDocument', () => {
     expect(checkAgainstDocument({ payee: null, reference: undefined }, facts)).toEqual({ payee: 'differs', reference: 'differs' })
   })
 
+  it('same: a long invoice number the document states, sent cut to the giro message field', () => {
+    const stated = { payee: 'BG 5050-1055', reference: 'ABC/26/123456-7890/1/123456' }
+    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: 'ABC/26/123456-7890/1/1234' }, stated).reference).toBe('same')
+    // Another number with the same start is still another reference.
+    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: 'ABC/26/123456-7890/1/9999' }, stated).reference).toBe('differs')
+  })
+
   it('missing: the document states nothing to compare with', () => {
     expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: 'F-17' }, { payee: null, reference: null })).toEqual({ payee: 'missing', reference: 'missing' })
     expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: 'F-17' }, { payee: ' - ', reference: '' })).toEqual({ payee: 'missing', reference: 'missing' })

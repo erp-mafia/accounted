@@ -122,12 +122,15 @@ export interface PaymentReferenceSource {
 export const GIRO_MESSAGE_MAX = 25
 
 /**
- * A free-text payment message as a giro takes it: trimmed, then the first
- * GIRO_MESSAGE_MAX characters (code points, the unit the provider counts),
- * without a trailing space left by the cut. Empty when nothing is left.
+ * A free-text payment message as a giro takes it: composed (NFC, so an "ö"
+ * written as "o" plus a mark counts as one character and is never split),
+ * trimmed, then the first GIRO_MESSAGE_MAX characters (code points, the unit
+ * the provider counts), without a trailing space left by the cut. Empty when
+ * nothing is left. Every payee gets the same cut, as the payment file always
+ * gave its Ustrd.
  */
 export function giroMessage(value: string): string {
-  return [...value.trim()].slice(0, GIRO_MESSAGE_MAX).join('').trimEnd()
+  return [...value.normalize('NFC').trim()].slice(0, GIRO_MESSAGE_MAX).join('').trimEnd()
 }
 
 /**

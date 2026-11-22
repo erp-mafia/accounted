@@ -219,4 +219,11 @@ describe('giroMessage', () => {
     expect(giroMessage('😀'.repeat(30))).toBe('😀'.repeat(GIRO_MESSAGE_MAX))
     expect(giroMessage('   ')).toBe('')
   })
+
+  it('composes decomposed letters first, so they count once and are never split', () => {
+    const composed = 'Faktura Göteborg Södra 12'
+    expect([...composed].length).toBe(GIRO_MESSAGE_MAX)
+    expect(giroMessage(composed.normalize('NFD'))).toBe(composed)
+    expect(giroMessage(`${'x'.repeat(24)}Ö1`.normalize('NFD'))).toBe(`${'x'.repeat(24)}Ö`)
+  })
 })

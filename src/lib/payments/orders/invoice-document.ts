@@ -16,6 +16,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { giroMessage } from '@/lib/payments/supplier-payee'
 
 /** The supplier_invoices columns the facts are read from (plus the document's own row). */
 export const INVOICE_DOCUMENT_COLUMNS =
@@ -116,6 +117,17 @@ function check(paid: string | null | undefined, stated: string | null): Document
 }
 
 /**
+ * The reference check also takes the stated reference as the giro message
+ * carries it (giroMessage): a long invoice number goes out cut to the message
+ * field, and that is still the reference the document states.
+ */
+function checkReference(paid: string | null | undefined, stated: string | null): DocumentCheck {
+  const result = check(paid, stated)
+  if (result !== 'differs' || !paid || !stated || !comparable(paid)) return result
+  return comparable(paid) === comparable(giroMessage(stated)) ? 'same' : 'differs'
+}
+
+/**
  * Whether a payment pays the account and the reference the document states.
  * `paid.payee` is the payment's account label, `paid.reference` the value the
  * bank gets (the OCR digits, or the invoice number as a message).
@@ -124,7 +136,7 @@ export function checkAgainstDocument(
   paid: { payee: string | null | undefined; reference: string | null | undefined },
   facts: Pick<InvoiceDocumentFacts, 'payee' | 'reference'>,
 ): DocumentChecks {
-  return { payee: check(paid.payee, facts.payee), reference: check(paid.reference, facts.reference) }
+  return { payee: check(paid.payee, facts.payee), reference: checkReference(paid.reference, facts.reference) }
 }
 
 /**
