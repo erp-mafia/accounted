@@ -126,7 +126,7 @@ export default function JournalEntryAttachments({
             .then(async response => response.ok ? (await response.json()).data?.references ?? [] : []),
       ])
       if (!documentsRes.ok) {
-        setLoadFailed(true)
+        if (generation === documentReadGeneration.current) setLoadFailed(true)
         return
       }
       const { data: directDocuments } = await documentsRes.json()
@@ -166,7 +166,7 @@ export default function JournalEntryAttachments({
       onCountChangeRef.current?.(allDocuments.length)
       setLoadFailed(false)
     } catch {
-      setLoadFailed(true)
+      if (generation === documentReadGeneration.current) setLoadFailed(true)
     } finally {
       if (generation === documentReadGeneration.current) setLoading(false)
     }

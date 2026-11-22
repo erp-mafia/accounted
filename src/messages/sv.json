@@ -9120,6 +9120,7 @@
     "review_shown": "Granskad innan den bokfördes"
   },
   "journal_detail": {
+    "refresh_failed": "Verifikatet kunde inte uppdateras. Senast hämtade uppgifter visas.",
     "dimension_edit": "Ändra dimensioner",
     "dimension_edit_hint": "Ändra dimensioner (påverkar endast internredovisningen)",
     "corrected_label": "Rättad",

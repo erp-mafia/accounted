@@ -315,7 +315,7 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
     return <DetailPageSkeleton />
   }
 
-  if (error || !entry) {
+  if (!entry) {
     return (
       <div className="space-y-8">
         {!notFound && (
@@ -542,6 +542,13 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
 
   return (
     <div className="space-y-8 stagger-enter">
+      {error && (
+        <div role="alert">
+          <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchData() }}>
+            {t('refresh_failed')}
+          </AttnLine>
+        </div>
+      )}
       {/* Header: title, status chips only for deviations (a plain posted
           verifikat carries none), a quiet meta line, the next step right.
           The page-header hooks turn it into the top bar, like the invoice

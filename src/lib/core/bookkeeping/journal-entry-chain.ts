@@ -1,3 +1,4 @@
+import { dbError } from '@/lib/errors/db-error'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { readSieDeleteBlock, type SieDeleteBlock } from './voucher-delete-guard'
 
@@ -9,11 +10,10 @@ export async function getJournalEntryChain(supabase: SupabaseClient, companyId: 
     .select('*, lines:journal_entry_lines(*)')
     .eq('id', id)
     .eq('company_id', companyId)
-    .single()
+    .maybeSingle()
 
-  if (error || !entry) {
-    return null
-  }
+  if (error) throw dbError(error)
+  if (!entry) return null
 
   // Collect all related entry IDs by following FK links iteratively
   const visited = new Set<string>([id])
@@ -25,11 +25,13 @@ export async function getJournalEntryChain(supabase: SupabaseClient, companyId: 
   }
 
   // Also find entries that reference this entry (reverse lookup)
-  const { data: referencing } = await supabase
+  const { data: referencing, error: referencingError } = await supabase
     .from('journal_entries')
     .select('id')
     .eq('company_id', companyId)
     .or(`reverses_id.eq.${id},reversed_by_id.eq.${id},correction_of_id.eq.${id}`)
+
+  if (referencingError) throw dbError(referencingError)
 
   if (referencing) {
     for (const r of referencing) {
@@ -44,12 +46,13 @@ export async function getJournalEntryChain(supabase: SupabaseClient, companyId: 
     toVisit.clear()
     for (const bid of batch) visited.add(bid)
 
-    const { data: batchEntries } = await supabase
+    const { data: batchEntries, error: batchEntriesError } = await supabase
       .from('journal_entries')
       .select('id, reverses_id, reversed_by_id, correction_of_id')
       .eq('company_id', companyId)
       .in('id', batch)
 
+    if (batchEntriesError) throw dbError(batchEntriesError)
     if (!batchEntries) continue
 
     // Collect FK references from forward links
@@ -68,11 +71,13 @@ export async function getJournalEntryChain(supabase: SupabaseClient, companyId: 
       ])
       .join(',')
 
-    const { data: refs } = await supabase
+    const { data: refs, error: refsError } = await supabase
       .from('journal_entries')
       .select('id')
       .eq('company_id', companyId)
       .or(batchOr)
+
+    if (refsError) throw dbError(refsError)
 
     if (refs) {
       for (const r of refs) {
@@ -86,20 +91,21 @@ export async function getJournalEntryChain(supabase: SupabaseClient, companyId: 
   let chain: typeof entry[] = []
 
   if (chainIds.length > 0) {
-    const { data: chainEntries } = await supabase
+    const { data: chainEntries, error: chainEntriesError } = await supabase
       .from('journal_entries')
       .select('*, lines:journal_entry_lines(*)')
       .eq('company_id', companyId)
       .in('id', chainIds)
       .order('created_at', { ascending: true })
 
+    if (chainEntriesError) throw dbError(chainEntriesError)
     chain = chainEntries || []
   }
 
   // Check if entry is the last in its voucher series (enables delete button in UI)
   let isLastInSeries = false
   if (entry.status === 'posted') {
-    const { data: maxResult } = await supabase
+    const { data: maxResult, error: maxResultError } = await supabase
       .from('journal_entries')
       .select('voucher_number')
       .eq('company_id', companyId)
@@ -110,6 +116,7 @@ export async function getJournalEntryChain(supabase: SupabaseClient, companyId: 
       .limit(1)
       .single()
 
+    if (maxResultError) throw dbError(maxResultError)
     isLastInSeries = maxResult?.voucher_number === entry.voucher_number
   }
 

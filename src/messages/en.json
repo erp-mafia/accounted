@@ -9120,6 +9120,7 @@
     "review_shown": "Reviewed before it was booked"
   },
   "journal_detail": {
+    "refresh_failed": "The voucher could not be refreshed. The last retrieved data is shown.",
     "dimension_edit": "Edit dimensions",
     "dimension_edit_hint": "Edit dimensions (affects internal accounting only)",
     "corrected_label": "Corrected",

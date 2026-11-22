@@ -91,3 +91,10 @@ describe('journal entry detail read', () => {
     expect(body.data).toMatchObject({ entry, references: null, retag_log: [], rattelse_log: [], period_status: null })
   })
 })
+
+it('does not report a database outage as a missing voucher', async () => {
+  reads.chain.mockRejectedValue(Object.assign(new Error('Database unavailable'), { code: 'XX000' }))
+  const response = await get()
+  expect(response.status).toBe(500)
+  expect((await response.json()).error.code).not.toBe('JOURNAL_ENTRY_NOT_FOUND')
+})
