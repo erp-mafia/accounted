@@ -2,6 +2,8 @@
  * Calendar tripwire for the yearly figures that live in code. Fails CI once a
  * due date (lib/salary/rates-calendar.ts) has passed without next year's
  * figures, so a missing year is found in December, not by a January payroll.
+ * The referensränta is set per calendar half-year (Räntelagen 9 §), so its
+ * row is required once the half-year has begun.
  * The salary_payroll_config rows are checked against a real database in
  * tests/pg/payroll-rates-calendar.pg.test.ts.
  *
@@ -10,6 +12,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import { CAPITALIZATION_THRESHOLD_YEARS } from '@/lib/bookkeeping/mapping-engine'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { hasReferensrantaFor } from '@/lib/invoices/late-payment-interest'
 import { FALLBACK_TAX_TABLE_YEARS } from '../tax-tables-fallback'
 import {
   PAYROLL_RATES_DUE,
@@ -44,6 +48,14 @@ describe('yearly figures in code', () => {
         `lib/bookkeeping/mapping-engine.ts PRISBASBELOPP_HALVES has no ${year}`,
       ).toBe(true)
     }
+  })
+
+  it('has the referensränta for the half-year that has begun', () => {
+    const today = todayIsoStockholm(now)
+    expect(
+      hasReferensrantaFor(today),
+      `lib/invoices/late-payment-interest.ts REFERENSRANTA_HISTORY has no row for the half-year of ${today}: add Riksbanken's rate from riksbank.se`,
+    ).toBe(true)
   })
 
   it('bundles the fallback tax tables for every required year', () => {
