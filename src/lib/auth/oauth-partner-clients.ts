@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 /**
  * Partner OAuth clients: rows in oauth_partner_clients (migration
- * 20261119132951), read with the service role. A row names a partner
+ * 20261122153300), read with the service role. A row names a partner
  * platform and one callback, exact or a hardened prefix, on the partner's own
  * https host. The MCP OAuth endpoints accept a redirect URI that matches an
  * active row, the consent page names the partner as a verified client, and

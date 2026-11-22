@@ -4,7 +4,7 @@ import { seedCompany } from './fixtures'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
 
 /**
- * pg-real coverage for migration 20261119132951_oauth_partner_clients.
+ * pg-real coverage for migration 20261122153300_oauth_partner_clients.
  *
  * oauth_partner_clients holds the partner OAuth clients the MCP OAuth
  * endpoints accept (src/lib/auth/oauth-partner-clients.ts). Locks in:
@@ -31,7 +31,7 @@ async function insert(row: Row) {
   )
 }
 
-describe('oauth_partner_clients (migration 20261119132951)', () => {
+describe('oauth_partner_clients (migration 20261122153300)', () => {
   it('has RLS enabled, no policies, nothing for anon or authenticated, and no DELETE for the service role', async () => {
     const rls = await getPool().query<{ relrowsecurity: boolean }>(`SELECT relrowsecurity FROM pg_class WHERE oid = 'public.oauth_partner_clients'::regclass`)
     expect(rls.rows[0]?.relrowsecurity).toBe(true)

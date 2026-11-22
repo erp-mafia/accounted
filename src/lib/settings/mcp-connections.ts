@@ -10,7 +10,7 @@ import { partnerSlugOf } from '@/lib/auth/oauth-partner-clients'
  * squidler, celemine and local. `local` is any loopback sign-in (Claude Code,
  * Codex, ...), so it is named as a local client, never guessed as Claude Code.
  * `partner` is a key minted through a partner row (client 'partner:<slug>',
- * migration 20261119132951); the list names it by the partner's name.
+ * migration 20261122153300); the list names it by the partner's name.
  */
 export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'cursor' | 'squidler' | 'celemine' | 'partner' | 'local' | 'mcp' | 'key'
 
