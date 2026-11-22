@@ -225,6 +225,11 @@ export function reverseChargeBasisAccounts(rate?: VatBasisRate): string[] {
     .map((b) => b.account)
 }
 
+/** The import basis accounts (4545-4547, ruta 50): import VAT, not reverse charge. */
+export function importBasisAccounts(): string[] {
+  return BASIS_ACCOUNTS.filter((b) => b.kind === 'import').map((b) => b.account)
+}
+
 /** The basis account for a purchase type at a sats (EU goods at 12 % is 4516), or null for any other sats. */
 export function vatBasisAccount(kind: VatBasisKind, rate: number): string | null {
   return BASIS_ACCOUNTS.find((b) => b.kind === kind && b.rate === rate)?.account ?? null

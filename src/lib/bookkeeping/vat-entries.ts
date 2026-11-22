@@ -6,7 +6,7 @@ import {
 } from '@/lib/vat/account-vat-treatment'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
-import { bookingVatRole, reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
+import { bookingVatRole, importBasisAccounts, reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
 import { grossVat, netVat } from '@/lib/bookkeeping/gross-split'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { getOutputVatAccount } from '@/lib/bookkeeping/invoice-accounts'
@@ -76,6 +76,14 @@ export const RC_BASIS_OFFSET_ACCOUNT = '4598'
 /** True for either leg of the reverse-charge basis pair (the 45xx statistic or its 4598 offset). */
 export function isReverseChargeBasisLeg(account: string): boolean {
   return isReverseChargeBasisAccount(account) || account === RC_BASIS_OFFSET_ACCOUNT
+}
+
+/** The import basis accounts (4545-4547, ruta 50), derived from VAT_ACCOUNT_TABLE. */
+const IMPORT_BASIS_ACCOUNTS: ReadonlySet<string> = new Set(importBasisAccounts())
+
+/** True for an import basis account (4545-4547): import VAT in ruta 50, not a reverse-charge basis. */
+export function isImportBasisAccount(account: string): boolean {
+  return IMPORT_BASIS_ACCOUNTS.has(account)
 }
 
 /**

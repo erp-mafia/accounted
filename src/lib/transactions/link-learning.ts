@@ -45,6 +45,8 @@
  *     import): salary runs, invoice flows and the rest have their own door;
  *   - a verifikat whose bank side is not this row: several money ledgers, or
  *     a bank net other than the row's amount.
+ *   - a verifikat with fiktiv moms its replay would book on other accounts
+ *     (import VAT, domestic or 12 % reverse charge without a basis pair: #997).
  *
  * Learning never fails a link: every read or write error is logged and the
  * link stands. Existing links are not replayed (no backfill).
