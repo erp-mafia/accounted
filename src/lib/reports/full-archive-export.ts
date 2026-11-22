@@ -2,7 +2,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import { ArchiveFolder, ArchiveTooLargeError, collectBytes, readAhead, type ArchiveRead } from './archive-folder'
+import { ArchiveFolder, ArchiveTooLargeError, collectBytes, jsonArray, jsonArrayElement, readAhead, type ArchiveRead } from './archive-folder'
 import { generateSIEExport } from './sie-export'
 import { generateTrialBalance } from './trial-balance'
 import { generateIncomeStatement } from './income-statement'
@@ -282,11 +282,12 @@ async function buildFullArchive(
   const revision = zip.folder('revision')
 
   const budget = options.max_bytes !== undefined ? auditBudget(options.max_bytes) : undefined
-  const auditEntries =
+  revision.file(
+    'behandlingshistorik.json',
     options.scope === 'period'
       ? await fetchPeriodAuditEntries(supabase, companyId, periods[0], budget)
-      : await fetchAllAuditEntries(supabase, companyId, {}, budget)
-  revision.file('behandlingshistorik.json', JSON.stringify(auditEntries, null, 2))
+      : await fetchAllAuditJson(supabase, companyId, budget)
+  )
 
   const systemDoc = await buildSystemDoc(supabase, companyId, periods, options.scope)
   revision.file('systemdokumentation.json', JSON.stringify(systemDoc, null, 2))
@@ -348,8 +349,7 @@ async function buildBaseDataArchive(
   await writeMasterData(zip, supabase, companyId)
 
   const revision = zip.folder('revision')
-  const auditEntries = await fetchAllAuditEntries(supabase, companyId, {})
-  revision.file('behandlingshistorik.json', JSON.stringify(auditEntries, null, 2))
+  revision.file('behandlingshistorik.json', await fetchAllAuditJson(supabase, companyId))
   const systemDoc = await buildSystemDoc(supabase, companyId, periods, 'all')
   revision.file('systemdokumentation.json', JSON.stringify(systemDoc, null, 2))
 
@@ -1933,11 +1933,17 @@ async function fetchPeriodAuditEntries(
   companyId: string,
   period: FiscalPeriodRow,
   budget?: AuditBudget
-): Promise<AuditLogEntry[]> {
-  const windowed = await fetchAllAuditEntries(supabase, companyId, {
+): Promise<Uint8Array[]> {
+  // Each row as when it was logged and its text, made as its page arrives,
+  // so the rows themselves are let go page by page (fetchAllAuditJson).
+  const byId = new Map<string, { created_at: string; element: Uint8Array }>()
+  const keep = (row: AuditLogEntry) => {
+    byId.set(row.id, { created_at: row.created_at, element: jsonArrayElement(row) })
+  }
+  await forEachAuditPage(supabase, companyId, {
     from_date: period.period_start,
     to_date: `${period.period_end}T23:59:59.999Z`,
-  }, budget)
+  }, budget, (rows) => rows.forEach(keep))
 
   const entryIds = (
     await fetchAllRows<{ id: string }>(({ from, to }) =>
@@ -1952,7 +1958,7 @@ async function fetchPeriodAuditEntries(
         .range(from, to)
     )
   ).map((r) => r.id)
-  if (entryIds.length === 0) return windowed
+  if (entryIds.length === 0) return jsonArray([...byId.values()].map((row) => row.element))
 
   // journal_entry_lines has no company_id column; tenant scoping comes from
   // the entry ids fetched above.
@@ -1969,9 +1975,6 @@ async function fetchPeriodAuditEntries(
     )
     lineIds.push(...lines.map((r) => r.id))
   }
-
-  const byId = new Map<string, AuditLogEntry>()
-  for (const row of windowed) byId.set(row.id, row)
 
   // write_audit_log derives company_id from the audited row, and
   // journal_entry_lines has no such column, so line audit rows carry
@@ -1994,20 +1997,40 @@ async function fetchPeriodAuditEntries(
         .range(from, to)
     )
     budget?.charge(rows.filter((row) => !byId.has(row.id)))
-    for (const row of rows) byId.set(row.id, row)
+    rows.forEach(keep)
   }
 
   // Newest first, matching getAuditLog's output order.
-  return [...byId.values()].sort((a, b) => b.created_at.localeCompare(a.created_at))
+  return jsonArray(
+    [...byId.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).map((row) => row.element)
+  )
 }
 
-async function fetchAllAuditEntries(
+/**
+ * The whole behandlingshistorik, newest first, as the parts of its JSON: each
+ * row becomes text as its page arrives, so the rows are let go page by page
+ * and the text is never one string. For a company with years of history both
+ * run to hundreds of MB, more than a backup run has to spare.
+ */
+async function fetchAllAuditJson(
+  supabase: SupabaseClient,
+  companyId: string,
+  budget?: AuditBudget
+): Promise<Uint8Array[]> {
+  const elements: Uint8Array[] = []
+  await forEachAuditPage(supabase, companyId, {}, budget, (rows) => {
+    for (const row of rows) elements.push(jsonArrayElement(row))
+  })
+  return jsonArray(elements)
+}
+
+async function forEachAuditPage(
   supabase: SupabaseClient,
   companyId: string,
   filters: { from_date?: string; to_date?: string },
-  budget?: AuditBudget
-): Promise<AuditLogEntry[]> {
-  const all: AuditLogEntry[] = []
+  budget: AuditBudget | undefined,
+  onPage: (rows: AuditLogEntry[]) => void
+): Promise<void> {
   const pageSize = 500
   // Keyset, not page numbers: each page starts after the last row of the one
   // before, so page 400 costs what page 1 does (getAuditLog's `after`).
@@ -2021,14 +2044,13 @@ async function fetchAllAuditEntries(
       ...(after ? { after } : {}),
     })
     budget?.charge(result.data)
-    all.push(...result.data)
+    onPage(result.data)
     if (result.data.length < pageSize) {
       break
     }
     const last = result.data[result.data.length - 1]
     after = { created_at: last.created_at, id: last.id }
   }
-  return all
 }
 
 async function buildSystemDoc(

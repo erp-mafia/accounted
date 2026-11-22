@@ -1,7 +1,7 @@
-import { writeZip, type ZipWriterOptions } from './zip-writer'
+import { writeZip, type ZipEntry, type ZipWriterOptions } from './zip-writer'
 
-/** What a file in the archive holds: text (written as UTF-8) or bytes. */
-export type ArchiveContent = string | Uint8Array | ArrayBuffer
+/** What a file in the archive holds: text (written as UTF-8), bytes, or bytes in parts written in order. */
+export type ArchiveContent = string | Uint8Array | ArrayBuffer | readonly Uint8Array[]
 
 /**
  * A file read when the writer reaches it rather than when it is added, which
@@ -13,9 +13,34 @@ export type ArchiveRead = () => Promise<ArchiveContent | null>
 
 const utf8 = new TextEncoder()
 
-function toBytes(content: ArchiveContent): Uint8Array {
+function toBytes(content: ArchiveContent): Uint8Array | readonly Uint8Array[] {
   if (typeof content === 'string') return utf8.encode(content)
-  return content instanceof Uint8Array ? content : new Uint8Array(content)
+  if (Array.isArray(content)) return content
+  return content instanceof Uint8Array ? content : new Uint8Array(content as ArrayBuffer)
+}
+
+const JSON_OPEN = utf8.encode('[\n')
+const JSON_COMMA = utf8.encode(',\n')
+const JSON_CLOSE = utf8.encode('\n]')
+
+/**
+ * One element of `JSON.stringify(array, null, 2)` as UTF-8: the value's text
+ * indented one level, as the array holds it. With jsonArray it writes a long
+ * array as the same bytes while neither its objects nor its text are held
+ * whole: a busy company's behandlingshistorik runs to hundreds of MB as
+ * either, and as one string it was what ran the cloud backup out of memory.
+ */
+export function jsonArrayElement(value: unknown): Uint8Array {
+  return utf8.encode(`  ${(JSON.stringify(value, null, 2) ?? 'null').replace(/\n/g, '\n  ')}`)
+}
+
+/** `JSON.stringify(array, null, 2)` in parts, from the array's elements made by jsonArrayElement. */
+export function jsonArray(elements: readonly Uint8Array[]): Uint8Array[] {
+  if (elements.length === 0) return [utf8.encode('[]')]
+  const parts: Uint8Array[] = [JSON_OPEN]
+  for (const element of elements) parts.push(element, JSON_COMMA)
+  parts[parts.length - 1] = JSON_CLOSE
+  return parts
 }
 
 /**
@@ -43,15 +68,16 @@ export class ArchiveFolder {
 
   /**
    * The whole archive as ZIP bytes, produced as they are read: a deferred
-   * file is read when the writer reaches it. Read it once; deferred reads do
-   * not repeat.
+   * file is read when the writer reaches it. Read it once: deferred reads do
+   * not repeat, and each file is let go once it is written.
    */
   zip(options?: ZipWriterOptions): AsyncGenerator<Uint8Array> {
     return writeZip(this.entries(), options)
   }
 
-  private async *entries(): AsyncGenerator<{ name: string; data: Uint8Array }> {
+  private async *entries(): AsyncGenerator<ZipEntry> {
     for (const [name, content] of this.files) {
+      this.files.delete(name)
       const data = typeof content === 'function' ? await content() : content
       if (data !== null) yield { name, data: toBytes(data) }
     }

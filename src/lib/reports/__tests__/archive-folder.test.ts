@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
-import { ArchiveFolder, ArchiveTooLargeError, collectBytes, readAhead, type ArchiveContent } from '../archive-folder'
+import {
+  ArchiveFolder,
+  ArchiveTooLargeError,
+  collectBytes,
+  jsonArray,
+  jsonArrayElement,
+  readAhead,
+  type ArchiveContent,
+} from '../archive-folder'
 
 function deferred() {
   let resolve!: (value: ArchiveContent | null) => void
@@ -41,6 +49,22 @@ describe('ArchiveFolder', () => {
     await zip.next() // a's data
     await zip.next() // b's header
     expect(read).toEqual(['a', 'b'])
+  })
+})
+
+describe('jsonArray', () => {
+  it('writes the bytes JSON.stringify(array, null, 2) writes, one element at a time', () => {
+    const row = {
+      id: 'a-1',
+      company_id: null,
+      old_state: { amount: -12.5, list: [1, 'två', null, true, { deep: [] }], empty: {} },
+      new_state: { text: 'rad\nbrytning "citat" \\ € 🧾 \u2028 åäö', left_out: undefined, fn: () => 1 },
+      created_at: '2026-11-20T04:00:00.000Z',
+    }
+    for (const array of [[row, null, 0, 'text', [], {}, [[1, [2]], { a: [] }]], [row], [], [undefined]]) {
+      const bytes = Buffer.concat(jsonArray(array.map(jsonArrayElement)))
+      expect(bytes.toString('utf8')).toBe(JSON.stringify(array, null, 2))
+    }
   })
 })
 
