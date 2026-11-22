@@ -109,9 +109,23 @@ interface CompanyContextValue {
    * person, as it was. POST /api/support/ask stays the real enforcement.
    */
   supportAssistant?: boolean
+  /**
+   * Whether manual booking opens the booking screen (/bokfor) instead of the
+   * booking dialogs, as the layout read BOOKING_SCREEN_COMPANY_IDS
+   * (lib/env/booking-screen-switch.ts). Absent reads as no: the dialogs stay.
+   */
+  bookingScreen?: boolean
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)
+
+/**
+ * Whether manual booking opens the booking screen for the active company.
+ * Off outside a CompanyProvider and while the layout did not say on.
+ */
+export function useBookingScreenEnabled(): boolean {
+  return useContext(CompanyContext)?.bookingScreen === true
+}
 
 export function CompanyProvider({
   children,

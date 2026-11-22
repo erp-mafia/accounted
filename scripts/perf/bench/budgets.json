@@ -6,7 +6,7 @@
     "mixed: twice the worst mixed p95, at least 20 ms, rounded up to 10 ms. Mixed has no absolute target: it catches calls that slow down under concurrent postings and builds.",
     "The 100 ms DB target: 200 ms p95 end to end, less the auth proxy and route wrapper (50-90 ms).",
     "A change that makes a call legitimately slower raises its budget in the same merge request, with before and after numbers.",
-    "Raised on 2026-11-22, after CI moved to GitHub-hosted runners on 2026-11-19, from eight runs there (three scheduled, 2026-11-20 to 2026-11-22, and five started by hand on 2026-11-22). Every budget under the rule's value for the worst p95 of those runs was raised to that value; none was lowered. page.invoices.deduction_lines was left alone, as its note asks."
+    "Raised on 2026-11-22, after CI moved to GitHub-hosted runners on 2026-11-19, from eight runs there (three scheduled, 2026-11-20 to 2026-11-22, and five started by hand on 2026-11-22). Every budget under the rule's value for the worst p95 of those runs was raised to that value; none was lowered. page.invoices.deduction_lines followed the same day from ten runs, once its plan had been looked at as its note asked."
   ],
   "targetMs": 100,
   "cases": {
@@ -60,9 +60,9 @@
       "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 0.5 ms, mixed 0.7 ms."
     },
     "page.invoices.deduction_lines": {
-      "warm": 100,
-      "mixed": 200,
-      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 59.3 ms, mixed 96.4 ms, for an empty answer: with the partial index on (company_id, deduction_total) the same read takes 5 to 9 ms, so the fixture's plan differs. Look at that plan before raising this."
+      "warm": 170,
+      "mixed": 390,
+      "note": "Over the 100 ms DB target for an empty answer. The plan was looked at on 2026-11-22, as this note used to ask. Under row level security the planner may not use column statistics for deduction_total > 0 (numeric comparison is not leakproof), so it falls back to defaults and expects 13 511 of the company's 36 000 invoices to match, where none does. The join cost that follows makes the partial index and a sequential scan cost the same within one percent, and the scan of every company's invoices wins (257 040 rows, 80 ms on a 2 CPU container). The fixture's company with 5 040 invoices gets idx_invoices_deduction_total, and without row level security the read takes 0.1 ms. Worst 107.7 ms warm, 191.4 ms mixed over ten runs on the GitHub-hosted runner, 2026-11-20 to 2026-11-22. Not yet made faster."
     },
     "page.supplier_invoices.list": {
       "warm": 100,

@@ -15,7 +15,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { minimisePayload } from '@/lib/webhooks/handler'
-import { PAYROLL_EVENT_PREFIXES, isPayrollEvent } from '@/lib/webhooks/public-events'
+import {
+  closedEventFamilies,
+  refusedEventFamily,
+  type ScopedEventFamily,
+} from '@/lib/webhooks/public-events'
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
 import { createLogger } from '@/lib/logger'
 import { roleAllowsScope } from '@/lib/auth/invoicer-role'
@@ -87,10 +91,12 @@ export async function GET(request: Request) {
   // events whenever the user's active_company_id happened to point elsewhere.
   let keyCompanyId: string | null = null
   let keyMode: ApiKeyMode = 'live'
-  // Payroll events (salary_run.*, agi.*) need payroll:read on an API key, the
-  // same gate webhook registration applies: the pull feed must never hand out
-  // what the push surface withholds. A session user reads them as in the app.
-  let canReadPayroll = true
+  // The scoped event families (SCOPED_EVENT_FAMILIES: payroll:read for
+  // salary_run.* and agi.*, agent:read for company_question.*) need their
+  // scope on an API key, the same gate webhook registration applies: the pull
+  // feed must never hand out what the push surface withholds. A session user
+  // reads them as in the app.
+  let holdsFamilyScope: (scope: ScopedEventFamily['scope']) => boolean = () => true
 
   const token = extractBearerToken(request)
   if (token?.startsWith('gnubok_sk_')) {
@@ -115,7 +121,8 @@ export async function GET(request: Request) {
 
     userId = authResult.userId
     keyCompanyId = authResult.companyId
-    canReadPayroll = hasScope(authResult.scopes, 'payroll:read')
+    const keyScopes = authResult.scopes
+    holdsFamilyScope = (scope) => hasScope(keyScopes, scope)
     // Guard 3: test keys. A test key is simulation-only for WRITES (the v1
     // wrapper forces dry-run and blocks non-simulatable mutations with
     // TEST_KEY_WRITE_BLOCKED). This endpoint has no write path at all, so the
@@ -208,14 +215,14 @@ export async function GET(request: Request) {
   if (!result.success) return result.response
   const { after, types, limit } = result.data
 
-  // Asking for a payroll type by name without the scope is refused rather
-  // than answered with an empty page the caller would poll forever.
-  const deniedPayrollTypes = canReadPayroll ? [] : (types ?? []).filter(isPayrollEvent)
-  if (deniedPayrollTypes.length > 0) {
+  // Asking for a type of a scoped family by name without its scope is refused
+  // rather than answered with an empty page the caller would poll forever.
+  const refused = refusedEventFamily(types ?? [], holdsFamilyScope)
+  if (refused) {
     return errorResponseFromCode('INSUFFICIENT_SCOPE', log, {
       details: {
-        required_scope: 'payroll:read',
-        reason: `Reading ${deniedPayrollTypes.join(', ')} requires payroll:read in addition to ${REQUIRED_SCOPE}.`,
+        required_scope: refused.scope,
+        reason: `Reading ${refused.eventTypes.join(', ')} requires ${refused.scope} in addition to ${REQUIRED_SCOPE}.`,
       },
     })
   }
@@ -236,8 +243,8 @@ export async function GET(request: Request) {
     query = query.in('event_type', types)
   }
 
-  if (!canReadPayroll) {
-    for (const prefix of PAYROLL_EVENT_PREFIXES) {
+  for (const family of closedEventFamilies(holdsFamilyScope)) {
+    for (const prefix of family.prefixes) {
       query = query.not('event_type', 'like', `${prefix}%`)
     }
   }
