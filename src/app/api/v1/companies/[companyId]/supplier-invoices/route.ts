@@ -28,10 +28,12 @@ import { z } from 'zod'
 import { created, paginated } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import {
-  decodeDefaultCursor,
-  encodeDefaultCursor,
-  parsePaginationParams,
+  applyListPage,
+  nextListCursor,
   PaginationQueryShape,
+  parsePaginationParams,
+  parseUpdatedSince,
+  UpdatedSinceQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -104,6 +106,8 @@ const SupplierInvoiceSummary = z.object({
   // Cleared when a payment lands; books nothing.
   bank_entered_at: z.string().nullable(),
   created_at: z.string(),
+  /** Last change to the row; the watermark for ?updated_since. */
+  updated_at: z.string(),
   open_payment: OpenPayment.nullable(),
 })
 
@@ -111,7 +115,7 @@ const SupplierInvoicesListResponse = listEnvelope(SupplierInvoiceSummary)
 
 // Explicit projection.
 const SI_SUMMARY_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, is_self_billed, self_billing_number, self_billing_agreement_ref, paid_at, approved_at, bank_entered_at, created_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, is_self_billed, self_billing_number, self_billing_agreement_ref, paid_at, approved_at, bank_entered_at, created_at, updated_at'
 
 const SUPPLIER_NAME_ONLY_COLUMNS = 'id, name'
 
@@ -137,7 +141,7 @@ const ListFilters = z.object({
     .describe('YYYY-MM-DD. Invoices with invoice_date on or before this date.'),
 })
 
-const ListQuery = ListFilters.extend(PaginationQueryShape)
+const ListQuery = ListFilters.extend({ ...PaginationQueryShape, ...UpdatedSinceQueryShape })
 
 registerEndpoint({
   operation: 'supplier-invoices.list',
@@ -151,6 +155,7 @@ registerEndpoint({
   doNotUseFor:
     'Fetching a single supplier invoice: use GET /supplier-invoices/{id}. Listing customer invoices (different resource).',
   pitfalls: [
+    '?updated_since returns supplier invoices whose own row changed: attest, payment, crediting and header edits move updated_at. Three things do not: the reported status turning overdue as the due date passes (compare due_date yourself), supplier_name (follow the supplier list\'s own ?updated_since), and open_payment, which is read from the bank payment and payment file records.',
     'Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.',
     'remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.',
     'status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there), or filter ?status=approved, which returns every attested invoice nothing is paid on, the overdue ones included. ?status=overdue also returns a part-paid invoice past its due date. bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.',
@@ -202,7 +207,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   async (request, ctx) => {
     const url = new URL(request.url)
     const { limit, cursor } = parsePaginationParams(url)
-    const decoded = decodeDefaultCursor(cursor)
+    const since = parseUpdatedSince(url)
+    if (!since.ok) return v1ValidationError(ctx, since.error)
 
     const filtersResult = ListFilters.safeParse({
       status: url.searchParams.get('status') ?? undefined,
@@ -227,8 +233,6 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .from('supplier_invoices')
       .select(`${SI_SUMMARY_COLUMNS}, supplier:suppliers(${SUPPLIER_NAME_ONLY_COLUMNS})`)
       .eq('company_id', ctx.companyId!)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: true })
       .limit(limit + 1)
 
     // approved and overdue are read from the attest mark and the due date,
@@ -239,13 +243,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (filters.date_from) query = query.gte('invoice_date', filters.date_from)
     if (filters.date_to) query = query.lte('invoice_date', filters.date_to)
 
-    if (decoded) {
-      // Keyset on (created_at DESC, id ASC): created_at moves backward,
-      // id breaks ties within the same timestamp.
-      query = query.or(
-        `created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
-      )
-    }
+
+    query = applyListPage(query, { updatedSince: since.value, cursor, createdAscending: false })
 
     const { data, error } = await query
     if (error) {
@@ -275,6 +274,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       approved_at: string | null
       bank_entered_at: string | null
       created_at: string
+      updated_at: string
       supplier: SupplierObj | SupplierObj[] | null
     } & Record<string, unknown>
 
@@ -325,13 +325,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         approved_at: r.approved_at,
         bank_entered_at: r.bank_entered_at,
         created_at: r.created_at,
+        updated_at: r.updated_at,
         open_payment: openPayments.get(r.id) ?? null,
       }
     })
 
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
+      ? nextListCursor(last, since.value)
       : null
 
     return paginated(supplier_invoices, {

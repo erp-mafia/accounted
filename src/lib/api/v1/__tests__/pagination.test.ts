@@ -4,8 +4,11 @@ import {
   MAX_LIMIT,
   decodeDefaultCursor,
   encodeDefaultCursor,
+  decodeChangeCursor,
+  encodeChangeCursor,
   nextCursorFromPage,
   parsePaginationParams,
+  parseUpdatedSince,
 } from '../pagination'
 
 describe('parsePaginationParams', () => {
@@ -128,5 +131,45 @@ describe('decodeDefaultCursor: strict format validation', () => {
     const ts = '2026-05-12T16:00:00.123+02:00'
     const cur = cursorFor({ ts, id: validId })
     expect(decodeDefaultCursor(cur)).toEqual({ ts, id: validId })
+  })
+})
+
+describe('parseUpdatedSince', () => {
+  it('is null when absent or empty', () => {
+    expect(parseUpdatedSince(new URL('https://example.com/v1/x'))).toEqual({ ok: true, value: null })
+    expect(parseUpdatedSince(new URL('https://example.com/v1/x?updated_since='))).toEqual({ ok: true, value: null })
+  })
+
+  it('accepts an ISO 8601 timestamp with Z or an offset', () => {
+    const z = parseUpdatedSince(new URL('https://example.com/v1/x?updated_since=2026-11-22T10:00:00Z'))
+    expect(z).toEqual({ ok: true, value: '2026-11-22T10:00:00Z' })
+    const offset = new URL('https://example.com/v1/x')
+    offset.searchParams.set('updated_since', '2026-11-22T11:00:00.123456+01:00')
+    expect(parseUpdatedSince(offset)).toEqual({ ok: true, value: '2026-11-22T11:00:00.123456+01:00' })
+  })
+
+  it('rejects a date without a time and free text, rather than falling back to the default order', () => {
+    expect(parseUpdatedSince(new URL('https://example.com/v1/x?updated_since=2026-11-22')).ok).toBe(false)
+    expect(parseUpdatedSince(new URL('https://example.com/v1/x?updated_since=yesterday')).ok).toBe(false)
+  })
+})
+
+describe('change cursor encode/decode', () => {
+  const row = { id: '8fd5b1f4-1234-1234-1234-1234567890ab', updated_at: '2026-11-22T10:00:00.123456+00:00' }
+
+  it('round-trips a row', () => {
+    expect(decodeChangeCursor(encodeChangeCursor(row))).toEqual({ ts: row.updated_at, id: row.id })
+  })
+
+  it('returns null for null input and malformed cursors', () => {
+    expect(encodeChangeCursor(null)).toBeNull()
+    expect(decodeChangeCursor('not-a-cursor')).toBeNull()
+    expect(decodeChangeCursor(null)).toBeNull()
+  })
+
+  it('never reads one cursor kind as the other', () => {
+    const created = encodeDefaultCursor({ id: row.id, created_at: '2026-05-12T16:00:00Z' })
+    expect(decodeChangeCursor(created)).toBeNull()
+    expect(decodeDefaultCursor(encodeChangeCursor(row))).toBeNull()
   })
 })
