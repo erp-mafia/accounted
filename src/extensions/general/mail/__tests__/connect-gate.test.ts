@@ -51,6 +51,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
   vi.stubEnv('MAIL_TOKEN_ENCRYPTION_KEY', '00'.repeat(32))
+  // The requests below arrive on the app's own host, so the start route
+  // seals it without a brands lookup.
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example')
   ;(listConnections as Mock).mockResolvedValue([])
 })
 
