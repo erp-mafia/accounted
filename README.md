@@ -55,6 +55,7 @@ The [Accounted plugin](packages/claude-plugin/README.md) bundles the MCP connect
 | Skill | What it does |
 | --- | --- |
 | `start` | Connect, orient, and surface what needs attention |
+| `start-company` | Start a new aktiebolag: interview, documents, verksamt.se, setup after registration |
 | `bookkeep` | Clear unbooked bank transactions and receipts |
 | `check` | Read-only health check with a prioritized fix list |
 | `month-close` | Close the month against the product's checklist |
