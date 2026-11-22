@@ -6808,7 +6808,9 @@
     "doc_label_quote": "Offert",
     "doc_label_delivery_note": "Följesedel",
     "validation_description_required": "Beskrivning krävs",
-    "validation_quantity_min": "Minst 0.01",
+    "validation_quantity_number": "Ange antal",
+    "validation_quantity_deduction": "Rader med skattereduktion behöver ett positivt antal",
+    "validation_quantity_order_line": "Antalet på en orderrad kan inte vara negativt",
     "validation_unit_required": "Enhet krävs",
     "validation_customer_required": "Välj en kund",
     "validation_invoice_date_required": "Fakturadatum krävs",
@@ -11246,6 +11248,7 @@
     "created_description": "Självfaktura {number} har bokförts som försäljning",
     "create_failed_title": "Kunde inte registrera självfakturan",
     "validation_external_number_required": "Fakturanummer krävs",
+    "validation_quantity_positive": "Antalet måste vara större än 0",
     "validation_received_date_required": "Ankomstdatum krävs"
   },
   "invoices": {

@@ -17,6 +17,12 @@ export interface StripeConnection {
   livemode: boolean
   status: 'pending' | 'active' | 'revoked' | 'error'
   oauth_state: string | null
+  /**
+   * Allowlisted origin (the app or a brand domain) the Connect flow started
+   * on; null means the canonical app URL. Optional: absent until migration
+   * 20261121140000 has run.
+   */
+  return_origin?: string | null
   display_name: string | null
   last_event_created_at: string | null
   last_event_id: string | null

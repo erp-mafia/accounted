@@ -2,6 +2,7 @@ import { differenceInCalendarDays, format, isValid, parseISO } from 'date-fns'
 import { foldText } from '@/lib/bookkeeping/account-search'
 import { gronTeknikWorkType } from '@/lib/bookkeeping/rot-rut-rules'
 import { invoiceDueDate } from '@/lib/dates/iso'
+import { lineQuantityIssue } from '@/lib/invoices/line-quantity'
 
 /**
  * Pure derivations behind the invoice editor's snabbflöde shell:
@@ -26,6 +27,8 @@ export interface NextStepItem {
   quantity?: number | null
   unit?: string
   unit_price?: number | null
+  deduction_type?: string | null
+  sales_order_item_id?: string | null
 }
 
 export type NextStepRowField = 'description' | 'quantity' | 'unit' | 'unit_price'
@@ -118,8 +121,9 @@ export function deriveNextStep(input: NextStepInput): NextStep {
   if (productRows.length === 0) return { kind: 'rows_empty' }
   for (const { item, index } of productRows) {
     if (!item.description?.trim()) return { kind: 'row_incomplete', index, field: 'description' }
-    // Mirrors the schema: quantity >= 0.01 (NaN fails the comparison too).
-    if (!((item.quantity ?? 0) >= 0.01)) return { kind: 'row_incomplete', index, field: 'quantity' }
+    // The schema's rule: any number, but positive on a skattereduktion row
+    // and not negative on a sales order row (lib/invoices/line-quantity.ts).
+    if (lineQuantityIssue(item)) return { kind: 'row_incomplete', index, field: 'quantity' }
     if (!item.unit?.trim()) return { kind: 'row_incomplete', index, field: 'unit' }
     // Negative prices are lawful discount lines; only a non-number blocks.
     if (!Number.isFinite(item.unit_price ?? 0)) {

@@ -254,6 +254,8 @@ describe('runOpenPaymentsSync', () => {
     // The PSU is the connection's owner, whoever pressed Synka nu.
     expect(mocks.party).toHaveBeenCalledWith(supabase, expect.objectContaining({ bic: 'SWEDSESS', affiliatedAspspId: null, psuType: 'business', userId: 'owner-1', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' } }))
     expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: 'conn-1', fromDate: '2026-10-05', toDate: '2026-10-12', options: {} }))
+    // The bank reaches the account sync, which reads Nordea's card holds by it (crm#2076).
+    expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ bankName: 'Swedbank' }))
     expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: 'conn-1', sessionId: 'consent-1', initialSync: undefined }))
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
   })

@@ -171,6 +171,43 @@ describe('generatePeppolBisBillingInvoice', () => {
     expect(result.xml).toContain('<cbc:InvoicedQuantity unitCode="HUR">2</cbc:InvoicedQuantity>')
   })
 
+  it('carries a deduction as a negative quantity and an information row as 0 x 0 (#3553)', () => {
+    const input = makeValidInput()
+    input.items = [
+      makeItem({ quantity: 4, unit_price: 1000, line_total: 4000, vat_amount: 1000 }),
+      makeItem({
+        id: 'item-2', sort_order: 1, description: 'Återförda timmar',
+        quantity: -2, unit_price: 1000, line_total: -2000, vat_amount: -500,
+      }),
+      makeItem({
+        id: 'item-3', sort_order: 2, description: 'Period: oktober 2026',
+        quantity: 0, unit_price: 0, line_total: 0, vat_amount: 0,
+      }),
+    ]
+    input.invoice = makeInvoice({ ...input.invoice, subtotal: 2000, vat_amount: 500, total: 2500, remaining_amount: 2500 })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:InvoicedQuantity unitCode="HUR">-2</cbc:InvoicedQuantity>')
+    expect(result.xml).toContain('<cbc:LineExtensionAmount currencyID="SEK">-2000.00</cbc:LineExtensionAmount>')
+    expect(result.xml).toContain('<cbc:InvoicedQuantity unitCode="HUR">0</cbc:InvoicedQuantity>')
+    expect(result.xml).toContain('<cbc:PayableAmount currencyID="SEK">2500.00</cbc:PayableAmount>')
+  })
+
+  it('still refuses a negative item price, which BR-27 forbids', () => {
+    const input = makeValidInput()
+    input.items = [makeItem({ quantity: 1, unit_price: -100, line_total: -100, vat_amount: -25 })]
+    input.invoice = makeInvoice({ ...input.invoice, subtotal: -100, vat_amount: -25, total: -125, remaining_amount: -125 })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toContain('INVOICE_LINE_INVALID')
+  })
+
   it('escapes user-controlled XML values without damaging Swedish text', () => {
     const result = generatePeppolBisBillingInvoice(makeValidInput())
 

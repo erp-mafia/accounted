@@ -124,6 +124,7 @@ import {
   PERIOD_PLACEHOLDER_REQUIRES_START_MESSAGE,
 } from '@/lib/invoices/recurring-placeholders'
 import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
+import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
 
 export const SIECreateAccountsSchema = z.object({
   accounts: z.array(z.object({ number: accountNumberSchema, name: z.string().max(500) })).min(1).max(10_000),
@@ -715,8 +716,11 @@ export const CreateInvoiceItemSchema = z
     if (item.description.trim().length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: 'Item description is required' })
     }
-    if (item.quantity <= 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: 'Quantity must be positive' })
+    // Zero and negative quantities are allowed, except on a skattereduktion
+    // row or (negative) a sales order row: lib/invoices/line-quantity.ts.
+    const quantityIssue = lineQuantityIssue(item)
+    if (quantityIssue) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: LINE_QUANTITY_MESSAGES[quantityIssue] })
     }
     if (item.unit.length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: 'Unit is required' })

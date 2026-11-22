@@ -726,7 +726,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         expect.any(String),
         expect.any(String),
         undefined,
-        { strategy: 'longest' }
+        { strategy: 'longest', bankName: 'Test bank' }
       )
 
       // Configuration is written once; results go through the shared RPC.
@@ -829,7 +829,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         expect.any(String),
         expect.any(String),
         undefined,
-        { skipAutoCategorization: true, strategy: 'longest' }
+        { skipAutoCategorization: true, strategy: 'longest', bankName: 'Test bank' }
       )
 
       // One sweep over the synced ledger accounts only, each in its own
@@ -888,7 +888,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         expect.any(String),
         expect.any(String),
         undefined,
-        { strategy: 'longest' }
+        { strategy: 'longest', bankName: 'Test bank' }
       )
       expect(mockSweep).not.toHaveBeenCalled()
       expect(body.initial_sync.auto_matched).toBe(0)
@@ -933,7 +933,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         expect.any(String),
         expect.any(String),
         undefined,
-        { skipAutoCategorization: true, rawInsertOnly: true, strategy: 'longest' }
+        { skipAutoCategorization: true, rawInsertOnly: true, strategy: 'longest', bankName: 'Test bank' }
       )
       expect(mockSweep).not.toHaveBeenCalled()
     })

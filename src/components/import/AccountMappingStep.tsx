@@ -31,7 +31,7 @@ import {
   XCircleIcon,
 } from '@/components/icons'
 import type { AccountMapping } from '@/lib/import/types'
-import { isValidBASRange, resolveAccountMatch, type AccountMatchKind } from '@/lib/import/account-mapper'
+import { isLowConfidenceMapping, isValidBASRange, resolveAccountMatch, type AccountMatchKind } from '@/lib/import/account-mapper'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
 import { ImportNotices } from '@/components/import/ImportNotices'
@@ -93,7 +93,7 @@ function matchesFilter(m: AccountMapping, filter: FilterType, knownTargets: Read
     case 'new_account':
       return !!m.targetAccount && !knownTargets.has(m.targetAccount)
     case 'low_confidence':
-      return !!m.targetAccount && m.confidence < 0.7
+      return isLowConfidenceMapping(m)
     case 'vat_review':
       return !!m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
     case 'manual':
@@ -274,7 +274,7 @@ export default function AccountMappingStep({
   const stats = useMemo(() => {
     const unmapped = mappings.filter((m) => !m.targetAccount).length
     const newAccounts = mappings.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount)).length
-    const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
+    const lowConfidence = mappings.filter(isLowConfidenceMapping).length
     const manual = mappings.filter((m) => m.isOverride).length
     const vatReview = mappings.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed).length
     return { unmapped, newAccounts, lowConfidence, manual, vatReview }
