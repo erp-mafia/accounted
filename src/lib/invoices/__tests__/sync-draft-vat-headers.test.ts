@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { syncDraftVatHeadersForCustomer } from '../sync-draft-vat-headers'
+import { syncDraftVatHeadersForChangedCustomers, syncDraftVatHeadersForCustomer } from '../sync-draft-vat-headers'
 import {
   deriveInvoiceVatHeader as derive,
   getVatRules,
@@ -222,5 +222,132 @@ describe('syncDraftVatHeadersForCustomer', () => {
       },
     } as unknown as SupabaseClient
     expect(await syncDraftVatHeadersForCustomer(broken, 'company-1', 'customer-1')).toBe(0)
+  })
+})
+
+describe('syncDraftVatHeadersForChangedCustomers', () => {
+  const mock = createQueuedMockSupabase()
+  const supabase = mock.supabase as unknown as SupabaseClient
+
+  const typeChange = (id: string) => ({ id, before: { customer_type: 'eu_business' } })
+  // A Swedish card the import made a validated EU business: its 25 % draft
+  // moves to reverse charge.
+  const nowReverseCharge = (id: string) => [
+    { data: { ...validatedFr, id, vat_number: 'FR12345678901' } },
+    {
+      data: [{
+        id: `draft-${id}`,
+        vat_treatment: 'standard_25',
+        moms_ruta: '05',
+        reverse_charge_text: null,
+        vat_treatment_override: null,
+        delivery_country: null,
+        items: [{ vat_rate: 0, line_type: 'service' }],
+      }],
+    },
+    { data: { vat_registered: true } },
+    { data: null, error: null },
+  ]
+  const syncedCustomers = () =>
+    mock.findCalls('customers', 'eq').filter((args) => args[0] === 'id').map((args) => args[1])
+
+  beforeEach(() => {
+    mock.reset()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('looks the drafts up once per slice of ids and syncs only the customers that have one', async () => {
+    const changes = Array.from({ length: 450 }, (_, i) => typeChange(`c${i}`))
+    mock.enqueueMany([
+      { data: [{ customer_id: 'c5' }] },
+      { data: [] },
+      // Two drafts of one customer: it is synced once.
+      { data: [{ customer_id: 'c420' }, { customer_id: 'c420' }] },
+      ...nowReverseCharge('c5'),
+      ...nowReverseCharge('c420'),
+    ])
+
+    const result = await syncDraftVatHeadersForChangedCustomers(supabase, 'company-1', changes)
+
+    expect(result).toEqual({ updated: 2, unsynced: [] })
+    const lookups = mock.findCalls('invoices', 'in')
+    expect(lookups.map(([column, ids]) => [column, (ids as string[]).length])).toEqual([
+      ['customer_id', 200],
+      ['customer_id', 200],
+      ['customer_id', 50],
+    ])
+    // The lookup asks for the drafts the sync re-derives: open, no credit
+    // note, not self-billed.
+    expect(mock.calls.slice(0, 5).map((c) => [c.table, c.method, ...c.args])).toEqual([
+      ['invoices', 'select', 'customer_id'],
+      ['invoices', 'eq', 'company_id', 'company-1'],
+      ['invoices', 'eq', 'status', 'draft'],
+      ['invoices', 'is', 'credited_invoice_id', null],
+      ['invoices', 'eq', 'is_self_billed', false],
+    ])
+    expect(syncedCustomers()).toEqual(['c5', 'c420'])
+  })
+
+  it('reads nothing for a change that touched no field the header is derived from', async () => {
+    const result = await syncDraftVatHeadersForChangedCustomers(supabase, 'company-1', [
+      { id: 'c1', before: { phone: null, name: 'Old name' } },
+    ])
+
+    expect(result).toEqual({ updated: 0, unsynced: [] })
+    expect(mock.calls).toEqual([])
+  })
+
+  it('starts nothing once the deadline has passed and hands back what it did not do', async () => {
+    const result = await syncDraftVatHeadersForChangedCustomers(
+      supabase,
+      'company-1',
+      [typeChange('c1'), { id: 'c2', before: { phone: null } }, typeChange('c3')],
+      { deadline: Date.now() - 1 },
+    )
+
+    expect(result).toEqual({ updated: 0, unsynced: [typeChange('c1'), typeChange('c3')] })
+    expect(mock.calls).toEqual([])
+  })
+
+  it('stops between two customers when the deadline passes, and the rest syncs when passed again', async () => {
+    // Before the lookup and before the first customer: in time. Every check after: past.
+    vi.spyOn(Date, 'now').mockReturnValue(2_000).mockReturnValueOnce(0).mockReturnValueOnce(0)
+    mock.enqueueMany([
+      { data: [{ customer_id: 'c1' }, { customer_id: 'c2' }] },
+      ...nowReverseCharge('c1'),
+    ])
+
+    const first = await syncDraftVatHeadersForChangedCustomers(
+      supabase,
+      'company-1',
+      [typeChange('c1'), typeChange('c2')],
+      { deadline: 1_000 },
+    )
+
+    expect(first).toEqual({ updated: 1, unsynced: [typeChange('c2')] })
+    expect(syncedCustomers()).toEqual(['c1'])
+
+    mock.reset()
+    mock.enqueueMany([{ data: [{ customer_id: 'c2' }] }, ...nowReverseCharge('c2')])
+    expect(await syncDraftVatHeadersForChangedCustomers(supabase, 'company-1', first.unsynced))
+      .toEqual({ updated: 1, unsynced: [] })
+    expect(syncedCustomers()).toEqual(['c2'])
+  })
+
+  it('syncs every customer of a slice whose lookup failed: each reads its own drafts', async () => {
+    mock.enqueueMany([
+      { error: { message: 'boom' } },
+      ...nowReverseCharge('c1'),
+      // c2 has no draft: its own read finds none and writes nothing.
+      { data: { ...validatedFr, id: 'c2', vat_number: 'FR12345678901' } },
+      { data: [] },
+    ])
+
+    const result = await syncDraftVatHeadersForChangedCustomers(supabase, 'company-1', [typeChange('c1'), typeChange('c2')])
+
+    expect(result).toEqual({ updated: 1, unsynced: [] })
+    expect(syncedCustomers()).toEqual(['c1', 'c2'])
   })
 })
