@@ -444,6 +444,7 @@ describe('roles', () => {
         },
       },
     })
+    enqueue({ data: null, count: 0 }) // company_signatory_rules count
     enqueue({ data: null }) // settings upsert
     enqueue({ data: [{ company_id: 'company-1' }] }) // claim
     enqueue({ data: [] }) // person by name
@@ -484,6 +485,7 @@ describe('roles', () => {
     // The registry answered: a lay auditor is no role of this register.
     enqueue({ data: null, count: 0 })
     enqueue({ data: { tic_snapshot: { representatives: [{ name: 'Bo Lind', positionDescription: 'Lekmannarevisor' }], signatory } } })
+    enqueue({ data: null, count: 0 }) // company_signatory_rules count
     enqueue({ data: null }) // settings upsert
     enqueue({ data: [{ company_id: 'company-1' }] }) // claim
     enqueue({ data: null }) // company_signatory_rules insert
@@ -505,6 +507,7 @@ describe('roles', () => {
         },
       },
     })
+    enqueue({ data: null, count: 0 }) // company_signatory_rules count
     enqueue({ data: null }) // settings upsert
     enqueue({ data: [{ company_id: 'company-1' }] }) // claim
     enqueue({ data: [] }) // person by name
@@ -514,9 +517,24 @@ describe('roles', () => {
     expect(findCall('company_roles', 'insert')?.[0]).toEqual(expect.objectContaining({ party_id: ANNA, role: 'vd' }))
   })
 
+  it('keeps a firmateckning entered by hand while the seed waited', async () => {
+    enqueue({ data: null, count: 0 }) // company_roles count
+    enqueue({ data: { tic_snapshot: { representatives: [{ name: 'Anna Ek', positionDescription: 'VD' }], signatory } } })
+    enqueue({ data: null, count: 1 }) // company_signatory_rules count: one entered by hand
+    enqueue({ data: null }) // settings upsert
+    enqueue({ data: [{ company_id: 'company-1' }] }) // claim
+    enqueue({ data: [] }) // person by name
+    enqueue({ data: ANNA }) // ensure_party
+    enqueue({ data: null }) // company_roles insert
+    expect(await seedRolesFromSnapshot(ctx)).toBe(1)
+    expect(findCall('company_roles', 'insert')?.[0]).toEqual(expect.objectContaining({ party_id: ANNA, role: 'vd' }))
+    expect(findCalls('company_signatory_rules', 'insert')).toEqual([])
+  })
+
   it('does not seed when another read already claimed it', async () => {
     enqueue({ data: null, count: 0 })
     enqueue({ data: { tic_snapshot: { representatives: [{ name: 'Anna', positionDescription: 'VD' }] } } })
+    enqueue({ data: null, count: 0 }) // company_signatory_rules count
     enqueue({ data: null })
     enqueue({ data: [] }) // claim lost
     expect(await seedRolesFromSnapshot(ctx)).toBe(0)

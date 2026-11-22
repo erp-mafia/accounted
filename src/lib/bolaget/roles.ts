@@ -12,7 +12,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { ensureRegisterParty, loadRegisterParties, PartyRefError, checkPartyRef, type PartyRef } from './people'
-import { namesRepresentatives, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from './tic-seed'
+import { listsRepresentatives, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from './tic-seed'
 import {
   BOARD_MEMBER_ROLES,
   ROLE_LABELS_SV,
@@ -37,10 +37,11 @@ export function dayBefore(iso: string): string {
 /**
  * Seed company_roles and company_signatory_rules from companies.tic_snapshot
  * when the company has no roles yet. Service role (a viewer's read may be
- * the first); best-effort: a failure leaves the company unseeded and the
- * next read tries again. A snapshot that names no representative is no
- * answer about the board: nothing is claimed until one does. Returns how many
- * roles were written.
+ * the first); best-effort: a failure before the claim leaves the company
+ * unseeded and the next read tries again. The claim is permanent, so nothing
+ * is claimed until the snapshot lists the representatives, and a
+ * firmateckning entered by hand meanwhile is kept, not seeded beside.
+ * Returns how many roles were written.
  */
 export async function seedRolesFromSnapshot(ctx: OperationContext): Promise<number> {
   const { companyId } = ctx
@@ -58,13 +59,19 @@ export async function seedRolesFromSnapshot(ctx: OperationContext): Promise<numb
     .maybeSingle()
   if (companyError || !company) return 0
   const snapshot = (company as { tic_snapshot: unknown }).tic_snapshot
-  // No representative named means "could not ask", not "no board": the call
+  // An empty or missing list is nothing to seed the board from: the call
   // failed (incompleteSections), the registry has no board for the firm yet,
-  // or the snapshot predates the marking of failed calls. The claim would
-  // then seed the firmateckning alone, and the board never.
-  if (!namesRepresentatives(snapshot)) return 0
+  // or the snapshot predates the marking of failed calls. Claiming now would
+  // seed the firmateckning alone, and the board never.
+  if (!listsRepresentatives(snapshot)) return 0
   const roles = rolesFromTicSnapshot(snapshot)
-  const rules = signatoryRulesFromTicSnapshot(snapshot)
+  // A firmateckning entered by hand while the seed waited stands.
+  const { count: ruleCount, error: ruleCountError } = await service
+    .from('company_signatory_rules')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+  if (ruleCountError) return 0
+  const rules = (ruleCount ?? 0) > 0 ? [] : signatoryRulesFromTicSnapshot(snapshot)
   if (roles.length === 0 && rules.length === 0) return 0
 
   // The claim: exactly one read seeds.

@@ -6,7 +6,7 @@ import { reconcileWithSettings } from '../reconcile'
 import { replayShareRegister, summarizeHoldings } from '../register-state'
 import type { RolesView } from '../roles'
 import type { ShareRegisterData } from '../share-register'
-import { namesRepresentatives, roleFromPosition, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from '../tic-seed'
+import { listsRepresentatives, roleFromPosition, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from '../tic-seed'
 import type { RegisterParty, ShareClass, ShareEvent } from '../types'
 import { bolagetRollout, isBolagetEnabled } from '@/lib/env/bolaget-switch'
 
@@ -101,10 +101,12 @@ describe('tic seed', () => {
     expect(rolesFromTicSnapshot({ representatives: 'x' })).toEqual([])
   })
 
-  it('takes only a list that names someone as an answer about the board', () => {
-    expect(namesRepresentatives({ representatives: [{ name: 'Anna Ek' }] })).toBe(true)
+  it('takes only a list with someone on it as an answer about the board', () => {
+    expect(listsRepresentatives({ representatives: [{ name: 'Anna Ek' }] })).toBe(true)
+    // A role a company holds comes without a person's name: still an answer.
+    expect(listsRepresentatives({ representatives: [{ name: null, positionDescription: 'Revisor' }] })).toBe(true)
     for (const snapshot of [null, 'x', {}, { representatives: [] }, { representatives: 'x' }, { representatives: [], incompleteSections: ['representatives'] }]) {
-      expect(namesRepresentatives(snapshot)).toBe(false)
+      expect(listsRepresentatives(snapshot)).toBe(false)
     }
   })
 
