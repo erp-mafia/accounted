@@ -888,8 +888,9 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     expect(postedVatSettlements(before.existing_entries).map((e) => e.id).sort()).toEqual([settled.id, rest.id].sort())
     // The refusal names both too, the latest first as journal_entry_id.
     const refused = await bookVatSettlement(ctxOf(both), { period_type: 'quarterly', year: 2026, period: 3 }, { dryRun: true })
-    expect(refused).toMatchObject({ ok: false, code: 'VAT_SETTLEMENT_ALREADY_BOOKED' })
-    const details = (refused as { details: { journal_entry_id: string; posted_settlements: Array<{ journal_entry_id: string; voucher_number: number }> } }).details
+    if (refused.ok) throw new Error('booking a period with posted momsredovisningar was not refused')
+    expect(refused.code).toBe('VAT_SETTLEMENT_ALREADY_BOOKED')
+    const details = refused.details as { journal_entry_id: string; posted_settlements: Array<{ journal_entry_id: string; voucher_number: number | null }> }
     expect(details.posted_settlements.map((e) => e.journal_entry_id).sort()).toEqual([settled.id, rest.id].sort())
     expect(details.journal_entry_id).toBe(details.posted_settlements[0].journal_entry_id)
     expect(details.posted_settlements.map((e) => e.voucher_number).sort()).toEqual([settled.voucher_number, rest.voucher_number].sort())
