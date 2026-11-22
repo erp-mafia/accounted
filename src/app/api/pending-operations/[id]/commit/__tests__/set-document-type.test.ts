@@ -166,7 +166,9 @@ describe('POST /api/pending-operations/:id/commit: set_document_type', () => {
 
     expect(status).toBe(403)
     expect((body.error as { code: string }).code).toBe('FORBIDDEN')
-    expect(writes.filter((w) => w.table !== 'pending_operations')).toEqual([])
+    // The service role is never reached: no table, no function.
+    expect(service.supabase.from).not.toHaveBeenCalled()
+    expect(service.supabase.rpc).not.toHaveBeenCalled()
     // An authorization refusal keeps the proposal for someone who may approve it.
     expect(session.payloads('pending_operations', 'update').at(-1)).toEqual({ status: 'pending' })
   })
@@ -179,7 +181,8 @@ describe('POST /api/pending-operations/:id/commit: set_document_type', () => {
     const { status } = await approve()
 
     expect(status).toBe(403)
-    expect(writes).toEqual([])
+    expect(service.supabase.from).not.toHaveBeenCalled()
+    expect(service.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('answers 404 for a document of another company, writing nothing through the service role', async () => {
@@ -190,6 +193,12 @@ describe('POST /api/pending-operations/:id/commit: set_document_type', () => {
 
     expect(status).toBe(404)
     expect((body.error as { code: string }).code).toBe('DOC_NOT_FOUND')
+    // The service role read the document in the approver's company and stopped there.
+    expect(service.tables()).toEqual(['document_attachments'])
+    expect(service.findCalls('document_attachments', 'eq')).toEqual(
+      expect.arrayContaining([['id', DOC], ['company_id', 'company-1']]),
+    )
+    expect(service.supabase.rpc).not.toHaveBeenCalled()
     expect(writes).toEqual([])
   })
 })
