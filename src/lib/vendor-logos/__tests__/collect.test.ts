@@ -132,10 +132,20 @@ describe('collectCandidateDomains', () => {
         expect(String(from?.[1]) > addDaysIso(TODAY, -COLLECT_BANK_WINDOW_DAYS)).toBe(true)
       }
     }
-    // Each window is read for the texts and for the merchant names.
-    const columns = bankReads.map((read) => read.find((call) => call.method === 'ilikeAnyOf')?.args[0])
-    expect(new Set(columns)).toEqual(new Set(['description', 'merchant_name']))
-    expect(bankReads).toHaveLength(2 * bankWindows(SINCE, TODAY).length)
+    // The windows read are exactly bankWindows from the year's first day, each
+    // read for the texts and for the merchant names.
+    const readWindows = bankReads.map((read) => ({
+      from: read.find((call) => call.method === 'gte')?.args[1],
+      to: read.find((call) => call.method === 'lt')?.args[1] ?? null,
+      column: read.find((call) => call.method === 'ilikeAnyOf')?.args[0],
+    }))
+    expect(readWindows).toEqual(
+      bankWindows(SINCE, TODAY).flatMap((w) => [
+        { ...w, column: 'description' },
+        { ...w, column: 'merchant_name' },
+      ]),
+    )
+    expect(readWindows[0]!.from).toBe(SINCE)
   })
 })
 
