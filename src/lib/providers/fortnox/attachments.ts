@@ -1,5 +1,8 @@
 import { FortnoxApiError, type FortnoxClient } from './client';
-import { fortnoxSupplierInvoiceBookingParts } from './supplier-invoice-voucher';
+import {
+  fortnoxSupplierInvoiceBookingParts,
+  fortnoxSupplierInvoiceCashBookingParts,
+} from './supplier-invoice-voucher';
 
 /**
  * Fortnox attachment resource config + fetchers.
@@ -172,9 +175,10 @@ export interface FortnoxBookingVoucher {
 
 /**
  * What the supplier-invoice register says about one invoice's booking.
- *  - `booked`: one booking voucher named exactly.
+ *  - `booked`: one booking voucher named exactly; under kontantmetoden the
+ *    one payment that booked it (fortnoxSupplierInvoiceCashBookingParts).
  *  - `unbooked`: Fortnox says the invoice was never booked or was cancelled,
- *    so no verifikat exists to carry its file.
+ *    and no single payment booked it, so no verifikat exists to carry its file.
  *  - `unknown`: the list form named no single booking voucher; only the
  *    detail form can tell (fetchFortnoxSupplierInvoiceBookingVoucher).
  */
@@ -193,6 +197,19 @@ function bookingVoucherFrom(
   const financialYearId = finiteInteger(year);
   if (!seriesText || voucherNumber == null || financialYearId == null) return null;
   return { series: seriesText, number: voucherNumber, financialYearId };
+}
+
+/** The one payment that booked a kontantmetod invoice, parsed. */
+function cashBookingVoucher(raw: Record<string, unknown>): FortnoxBookingVoucher | null {
+  const parts = fortnoxSupplierInvoiceCashBookingParts(raw);
+  return parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
+}
+
+/** The verifikat a supplier invoice's file goes on: its booking, else the payment that booked it. */
+function supplierInvoiceFileVoucher(raw: Record<string, unknown>): FortnoxBookingVoucher | null {
+  const parts = fortnoxSupplierInvoiceBookingParts(raw);
+  const booking = parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
+  return booking ?? cashBookingVoucher(raw);
 }
 
 function givenNumberOf(value: unknown): string {
@@ -234,9 +251,10 @@ export async function fetchFortnoxSupplierInvoiceFileConnections(
 
 /**
  * The booking voucher of every supplier invoice, read from the register's
- * list form (paid invoices included), by fortnoxSupplierInvoiceBookingParts.
- * An invoice it names no single booking for is `unknown`, never a guess: the
- * caller asks the detail form. Scope: supplierinvoice.
+ * list form (paid invoices included), by fortnoxSupplierInvoiceBookingParts,
+ * or for a kontantmetod invoice the one payment that booked it. An invoice it
+ * names no single booking for is `unknown`, never a guess: the caller asks
+ * the detail form. Scope: supplierinvoice.
  */
 export async function fetchFortnoxSupplierInvoiceBookings(
   client: FortnoxClient,
@@ -255,22 +273,31 @@ export async function fetchFortnoxSupplierInvoiceBookings(
     if (!givenNumber) continue;
 
     // The list form spells cancellation `Cancel`, the detail form `Cancelled`.
-    if (raw.Cancel === true || raw.Cancelled === true || raw.Booked === false) {
+    if (raw.Cancel === true || raw.Cancelled === true) {
       bookings.set(givenNumber, { state: 'unbooked' });
       continue;
     }
 
-    const parts = fortnoxSupplierInvoiceBookingParts(raw);
-    const booking = parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
-    bookings.set(givenNumber, booking ? { state: 'booked', voucher: booking } : { state: 'unknown' });
+    // Never booked at registration. Under kontantmetoden its payment booked
+    // it; otherwise no verifikat carries it. A kontantmetod run used to drop
+    // every supplier-invoice file here, uncounted.
+    if (raw.Booked === false) {
+      const payment = cashBookingVoucher(raw);
+      bookings.set(givenNumber, payment ? { state: 'booked', voucher: payment } : { state: 'unbooked' });
+      continue;
+    }
+
+    const voucher = supplierInvoiceFileVoucher(raw);
+    bookings.set(givenNumber, voucher ? { state: 'booked', voucher } : { state: 'unknown' });
   }
   return bookings;
 }
 
 /**
- * The booking voucher from one supplier invoice's detail form, or null when
- * Fortnox names none (no booking reference: never booked; cancelled; an
- * invoice the register no longer has).
+ * The booking voucher from one supplier invoice's detail form (for a
+ * kontantmetod invoice the one payment that booked it), or null when Fortnox
+ * names none (no booking reference: never booked; cancelled; an invoice the
+ * register no longer has).
  */
 export async function fetchFortnoxSupplierInvoiceBookingVoucher(
   client: FortnoxClient,
@@ -289,8 +316,7 @@ export async function fetchFortnoxSupplierInvoiceBookingVoucher(
   }
   const invoice = (response?.SupplierInvoice ?? {}) as Record<string, unknown>;
   if (invoice.Cancelled === true || invoice.Cancel === true) return null;
-  const parts = fortnoxSupplierInvoiceBookingParts(invoice);
-  return parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
+  return supplierInvoiceFileVoucher(invoice);
 }
 
 /**

@@ -46,3 +46,40 @@ export function fortnoxSupplierInvoiceBookingParts(
   if (raw['VoucherNumber'] == null) return null;
   return { series: raw['VoucherSeries'], number: raw['VoucherNumber'], year: raw['VoucherYear'] };
 }
+
+/** The ReferenceType Fortnox gives a voucher that pays a supplier invoice. */
+const SUPPLIER_INVOICE_PAYMENT_REFERENCE = 'SUPPLIERPAYMENT';
+
+/**
+ * The payment that booked a kontantmetod supplier invoice, for its file only.
+ *
+ * Under kontantmetoden (BFL 5 kap 2 § tredje stycket) Fortnox books a
+ * supplier invoice when it is paid: cost, VAT and bank go on the payment
+ * voucher, and the invoice names no SUPPLIERINVOICE voucher at all. That
+ * payment verifikat records the purchase, and the received invoice is its
+ * verifikation (BFL 5 kap 6 §), so the invoice's file belongs on it.
+ *
+ * Null when the invoice names any SUPPLIERINVOICE voucher (a booking that
+ * fortnoxSupplierInvoiceBookingParts could not single out is never replaced
+ * by a payment), and when it names no payment or several: an invoice paid in
+ * parts has one verifikat per part, and none is guessed.
+ *
+ * Never the invoice's registration: the migration's registration link reads
+ * the booking alone.
+ */
+export function fortnoxSupplierInvoiceCashBookingParts(
+  raw: Record<string, unknown>,
+): FortnoxSupplierInvoiceVoucherParts | null {
+  const vouchers = Array.isArray(raw['Vouchers'])
+    ? (raw['Vouchers'] as Array<Record<string, unknown> | null>)
+    : [];
+  if (vouchers.some((voucher) => voucher?.['ReferenceType'] === SUPPLIER_INVOICE_BOOKING_REFERENCE)) {
+    return null;
+  }
+  const payments = vouchers.filter(
+    (voucher) => voucher?.['ReferenceType'] === SUPPLIER_INVOICE_PAYMENT_REFERENCE,
+  );
+  const payment = payments.length === 1 ? payments[0] : null;
+  if (!payment) return null;
+  return { series: payment['Series'], number: payment['Number'], year: payment['Year'] };
+}

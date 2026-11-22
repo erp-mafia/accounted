@@ -280,6 +280,36 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
     expect(requested()).not.toContain(`/archive/${FILE_SI_115}`)
   })
 
+  it('links a kontantmetod invoice\'s file to the payment verifikat that booked it', async () => {
+    const FILE_SI_130 = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
+    const { requested } = stubFortnox({
+      '/voucherfileconnections?financialyear=5&page=1&limit=500': { json: NO_VOUCHER_FILES },
+      '/supplierinvoicefileconnections?page=1&limit=500': {
+        json: {
+          MetaInformation: meta(1),
+          SupplierInvoiceFileConnections: [
+            { FileId: FILE_SI_130, Name: 'faktura-telefoni.pdf', SupplierInvoiceNumber: '130', SupplierName: 'Leverantören AB' },
+          ],
+        },
+      },
+      // Kontantmetoden: no SUPPLIERINVOICE voucher, the purchase is booked at payment (E9).
+      '/supplierinvoices?page=1&limit=100': {
+        json: {
+          MetaInformation: meta(1),
+          SupplierInvoices: [listItem('130', { Booked: false, Vouchers: [{ Number: 9, Series: 'E', ReferenceType: 'SUPPLIERPAYMENT', Year: 5 }] })],
+        },
+      },
+      [`/archive/${FILE_SI_130}`]: { bytes: 'PDF-SI-130' },
+    })
+    const supabase = supabaseWith({ entries: [...ENTRIES, entry('je-e9-2024', 'fp-2024', '2024-04-15', 'E', 9)] })
+
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+    expect(result).toMatchObject({ total: 1, linked: 1, unmatched: 0, failed: 0 })
+    expect(linkedEntries()).toEqual(['je-e9-2024'])
+    expect(requested().some((path) => path.startsWith('/supplierinvoices/'))).toBe(false)
+  })
+
   it('previews without downloads or detail reads: the list-resolved file counts, the pending one is found', async () => {
     const { requested } = stubFortnox()
 

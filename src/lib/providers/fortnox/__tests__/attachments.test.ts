@@ -268,6 +268,53 @@ describe('Fortnox attachments', () => {
     });
   });
 
+  it('takes the one payment as the booking of a kontantmetod invoice, never past a named booking', async () => {
+    const payment = (Number: number) => ({ Number, Series: 'E', ReferenceType: 'SUPPLIERPAYMENT', Year: 5 });
+    const getPaginated = vi.fn().mockResolvedValue([
+      // Kontantmetoden: Fortnox books the purchase on the payment voucher alone.
+      { GivenNumber: '120', Booked: false, Vouchers: [payment(9)] },
+      { GivenNumber: '121', Booked: true, Vouchers: [payment(10)] },
+      // Paid in two parts: two verifikat, neither is guessed.
+      { GivenNumber: '122', Booked: false, Vouchers: [payment(11), payment(12)] },
+      { GivenNumber: '123', Booked: true, Vouchers: [payment(13), payment(14)] },
+      // A booking Fortnox names but cannot single out never falls back to the payment.
+      { GivenNumber: '124', Booked: true, Vouchers: [{ Number: 0, Series: 'D', ReferenceType: 'SUPPLIERINVOICE', Year: 5 }, payment(15)] },
+      { GivenNumber: '125', Booked: false, Cancel: true, Vouchers: [payment(16)] },
+    ]);
+    const client = clientWith({ getPaginated } as Partial<FortnoxClient>);
+
+    const bookings = await fetchFortnoxSupplierInvoiceBookings(client, 'token');
+
+    expect(Object.fromEntries(bookings)).toEqual({
+      '120': { state: 'booked', voucher: { series: 'E', number: 9, financialYearId: 5 } },
+      '121': { state: 'booked', voucher: { series: 'E', number: 10, financialYearId: 5 } },
+      '122': { state: 'unbooked' },
+      '123': { state: 'unknown' },
+      '124': { state: 'unknown' },
+      '125': { state: 'unbooked' },
+    });
+  });
+
+  it('reads the one payment from the detail form of a kontantmetod invoice', async () => {
+    const get = vi.fn().mockResolvedValueOnce({
+      SupplierInvoice: {
+        GivenNumber: '120',
+        Booked: false,
+        VoucherSeries: 'D',
+        VoucherNumber: 0,
+        VoucherYear: 6,
+        Vouchers: [{ Number: 9, Series: 'E', Year: 6, ReferenceType: 'SUPPLIERPAYMENT' }],
+      },
+    });
+    const client = clientWith({ get } as Partial<FortnoxClient>);
+
+    await expect(fetchFortnoxSupplierInvoiceBookingVoucher(client, 'token', '120')).resolves.toEqual({
+      series: 'E',
+      number: 9,
+      financialYearId: 6,
+    });
+  });
+
   it('propagates a refused detail form so the caller can name the scope', async () => {
     const forbidden = new FortnoxApiError('forbidden', 403);
     const client = clientWith({ get: vi.fn().mockRejectedValue(forbidden) } as Partial<FortnoxClient>);

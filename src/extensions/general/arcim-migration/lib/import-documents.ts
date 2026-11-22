@@ -53,7 +53,9 @@
  * by default) without its invoice (crm#1146, PH 176). A supplier-invoice file
  * is linked to the verifikat that booked the invoice, which Fortnox names on
  * the invoice (series, number, financial year) and the SIE import preserved
- * as the source ref: the same resolution as a voucher file. That source is
+ * as the source ref: the same resolution as a voucher file. Under
+ * kontantmetoden Fortnox books the invoice only when it is paid, so that
+ * verifikat is its one payment (crm#2112). That source is
  * additive: a refusal on it (scope or licence) is reported in
  * `unreachableSources` and never stops the voucher files.
  *
