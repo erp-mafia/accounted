@@ -6,6 +6,8 @@ import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 import { cleanProviderPayload } from '../provider-text';
 import { fortnoxRetryAfter } from './oauth-error';
 
+// Per attempt, sized for one record. The migration worker passes its own for
+// whole register pages (MIGRATION_LIST_TIMEOUT_MS in provider-data-fetcher.ts).
 const FETCH_TIMEOUT_MS = 15_000;
 
 export class FortnoxApiError extends Error {
@@ -150,7 +152,7 @@ export class FortnoxClient {
     this.rateLimiter = new TokenBucketRateLimiter(FORTNOX_RATE_LIMIT, 'ratelimit:fortnox');
   }
 
-  async get<T>(accessToken: string, path: string): Promise<T> {
+  async get<T>(accessToken: string, path: string, options: { timeoutMs?: number } = {}): Promise<T> {
     return withRetry(
       async () => {
         await this.rateLimiter.acquire(connectionRateKey(accessToken));
@@ -161,7 +163,7 @@ export class FortnoxClient {
             Accept: 'application/json',
             'Content-Type': 'application/json',
           },
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          signal: AbortSignal.timeout(options.timeoutMs ?? FETCH_TIMEOUT_MS),
         });
 
         if (!response.ok) {
@@ -307,7 +309,7 @@ export class FortnoxClient {
     accessToken: string,
     path: string,
     listKey: string,
-    options?: { page?: number; pageSize?: number; lastModified?: string },
+    options?: { page?: number; pageSize?: number; lastModified?: string; timeoutMs?: number },
   ): Promise<{ items: T[]; page: number; totalPages: number; totalCount: number }> {
     const params = new URLSearchParams();
     params.set('page', String(options?.page ?? 1));
@@ -321,7 +323,7 @@ export class FortnoxClient {
     const separator = path.includes('?') ? '&' : '?';
     const fullPath = `${path}${separator}${params.toString()}`;
 
-    const response = await this.get<Record<string, unknown>>(accessToken, fullPath);
+    const response = await this.get<Record<string, unknown>>(accessToken, fullPath, { timeoutMs: options?.timeoutMs });
 
     const meta = response['MetaInformation'] as
       | { '@TotalPages': number; '@CurrentPage': number; '@TotalResources': number }
