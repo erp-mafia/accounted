@@ -3,41 +3,71 @@
  * posthog-js rather than a mock: the SDK turns the thrown value into its own
  * $exception event, and that event is what must arrive redacted.
  *
- * The real SDK starts in node with a minimal window. posthog.init is wrapped
- * only to put a recorder after the hooks initAnalytics() configures: the
- * recorder keeps what would be sent and drops it, so nothing goes anywhere.
+ * The real SDK starts in node with one minimal window for the whole file:
+ * posthog-js and its exception autocapture extension (which a browser loads
+ * lazily, and which is loaded up front here, fetching nothing) keep the window
+ * they found when they were first loaded, so every test shares that window and
+ * one SDK instance, started by the first initAnalytics() with its real config.
+ * posthog.init is wrapped only to put a recorder after the hooks that config
+ * sets: the recorder keeps what would be sent and drops it, so nothing goes
+ * anywhere. client.ts and early-errors.ts are fresh per test.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 
 interface SentEvent {
   event: string
   properties: Record<string, unknown>
 }
 
+interface SentException {
+  type?: string
+  value?: string
+  mechanism?: { type?: string; handled?: boolean }
+  stacktrace?: { frames?: Array<{ lineno?: unknown; colno?: unknown }> }
+}
+
 const sent = vi.hoisted(() => [] as SentEvent[])
+const sdk = vi.hoisted(() => ({ instance: undefined as unknown }))
+
+// A variable, so the type checker does not try to resolve the untyped bundle.
+const AUTOCAPTURE_EXTENSION = 'posthog-js/dist/exception-autocapture.js'
 
 vi.mock('posthog-js', async (importOriginal) => {
-  const real = (await importOriginal<typeof import('posthog-js')>()).default
-  const init = real.init.bind(real)
-  const record = (event: unknown) => {
-    if (event) sent.push(event as SentEvent)
-    return null
+  if (!sdk.instance) {
+    const { PostHog } = await importOriginal<typeof import('posthog-js')>()
+    await import(/* @vite-ignore */ AUTOCAPTURE_EXTENSION)
+    const real = new PostHog()
+    const init = real.init.bind(real)
+    const record = (event: unknown) => {
+      if (event) sent.push(event as SentEvent)
+      return null
+    }
+    real.init = ((token: string, config: { before_send?: unknown; error_tracking?: object }) =>
+      (real as unknown as { __loaded?: boolean }).__loaded
+        ? real
+        : init(token, {
+            ...config,
+            // Test transport only: no remote config or extension scripts in
+            // node, and room for every exception this file raises.
+            advanced_disable_flags: true,
+            disable_external_dependency_loading: true,
+            error_tracking: { ...config.error_tracking, __exceptionRateLimiterBucketSize: 100 },
+            before_send: [config.before_send, record].flat().filter(Boolean),
+          } as never)) as typeof real.init
+    sdk.instance = real
   }
-  real.init = ((token: string, config: { before_send?: unknown }) =>
-    init(token, {
-      ...config,
-      // Test transport only: no remote config or extension scripts in node.
-      advanced_disable_flags: true,
-      disable_external_dependency_loading: true,
-      before_send: [config.before_send, record].flat().filter(Boolean),
-    } as never)) as typeof real.init
-  return { default: real }
+  return { default: sdk.instance }
 })
 
 const PAGE = 'https://app.example.test/bookkeeping'
 
+type FakeWindow = EventTarget & {
+  onerror?: (...args: unknown[]) => unknown
+  onunhandledrejection?: (event: unknown) => unknown
+}
+
 /** Enough of a browser for posthog-js to start: a window that can dispatch events. */
-function fakeBrowser(): EventTarget {
+function fakeBrowser(): FakeWindow {
   const noop = () => {}
   const events = new EventTarget()
   const location = {
@@ -91,7 +121,7 @@ function fakeBrowser(): EventTarget {
   vi.stubGlobal('document', document)
   vi.stubGlobal('navigator', navigator)
   vi.stubGlobal('location', location)
-  return window as unknown as EventTarget
+  return window as unknown as FakeWindow
 }
 
 /** A fresh module graph per test: client.ts keeps the "started" flag per tab. */
@@ -109,13 +139,35 @@ async function start(client: Awaited<ReturnType<typeof load>>) {
   return posthog
 }
 
-function exceptionValues(): string[] {
-  return sent
-    .filter((e) => e.event === '$exception')
-    .flatMap((e) => (e.properties.$exception_list as Array<{ value?: string }>).map((x) => String(x.value)))
+function exceptionEvents(): SentEvent[] {
+  return sent.filter((e) => e.event === '$exception')
+}
+
+function exceptions(): SentException[] {
+  return exceptionEvents().flatMap((e) => e.properties.$exception_list as SentException[])
+}
+
+/** What Error Tracking needs to group and locate an error, which redaction must leave. */
+function expectStillLocatable(exception: SentException) {
+  expect(exception.type).toBe('Error')
+  expect(exception.mechanism).toBeDefined()
+  const frames = exception.stacktrace?.frames ?? []
+  expect(frames.length).toBeGreaterThan(0)
+  expect(typeof frames[0].lineno).toBe('number')
+  expect(typeof frames[0].colno).toBe('number')
 }
 
 describe('exception events leave the browser redacted', () => {
+  let window: FakeWindow
+
+  beforeAll(() => {
+    window = fakeBrowser()
+  })
+
+  afterAll(() => {
+    vi.unstubAllGlobals()
+  })
+
   beforeEach(() => {
     sent.length = 0
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
@@ -123,12 +175,10 @@ describe('exception events leave the browser redacted', () => {
   })
 
   afterEach(() => {
-    vi.unstubAllGlobals()
     vi.unstubAllEnvs()
   })
 
   it('an error raised before analytics started (early-errors.ts)', async () => {
-    const window = fakeBrowser()
     const client = await load()
     client.bufferEarlyErrors(window as never)
     const raised = Object.assign(new Event('error'), { error: new Error('no company for 800101-1234') })
@@ -136,36 +186,73 @@ describe('exception events leave the browser redacted', () => {
 
     await start(client)
 
-    await vi.waitFor(() => expect(exceptionValues()).toHaveLength(1))
-    expect(exceptionValues()[0]).not.toContain('800101-1234')
-    const [held] = sent.filter((e) => e.event === '$exception')
-    expect(held.properties.before_analytics_start).toBe(true)
+    await vi.waitFor(() => expect(exceptions()).toHaveLength(1))
+    expect(exceptions()[0].value).not.toContain('800101-1234')
+    expectStillLocatable(exceptions()[0])
+    expect(exceptionEvents()[0].properties.before_analytics_start).toBe(true)
+  })
+
+  it('an uncaught error the SDK catches itself (window.onerror)', async () => {
+    const client = await load()
+    await start(client)
+    expect(typeof window.onerror).toBe('function')
+
+    const thrown = new Error('no company for 800101-1234')
+    window.onerror!(`Uncaught ${thrown}`, `${PAGE}.js`, 1, 1, thrown)
+
+    await vi.waitFor(() => expect(exceptions()).toHaveLength(1))
+    expect(exceptions()[0].value).not.toContain('800101-1234')
+    expectStillLocatable(exceptions()[0])
+  })
+
+  it('an unhandled rejection the SDK catches itself (window.onunhandledrejection)', async () => {
+    const client = await load()
+    await start(client)
+    expect(typeof window.onunhandledrejection).toBe('function')
+
+    window.onunhandledrejection!({ reason: new Error('Invite to person@example.se failed') })
+
+    await vi.waitFor(() => expect(exceptions()).toHaveLength(1))
+    expect(exceptions()[0].value).toBe('Invite to [REDACTED_EMAIL] failed')
   })
 
   it('an error captured through the SDK keeps the rest of its message and says what was removed', async () => {
-    fakeBrowser()
     const client = await load()
     const posthog = await start(client)
 
     posthog.captureException(new Error('Invite to person@example.se failed'))
 
-    await vi.waitFor(() => expect(exceptionValues()).toHaveLength(1))
-    expect(exceptionValues()[0]).toBe('Invite to [REDACTED_EMAIL] failed')
+    await vi.waitFor(() => expect(exceptions()).toHaveLength(1))
+    expect(exceptions()[0].value).toBe('Invite to [REDACTED_EMAIL] failed')
+    expectStillLocatable(exceptions()[0])
   })
 
-  it('an error an error boundary caught (captureBoundaryError)', async () => {
-    fakeBrowser()
+  it('an error an error boundary caught (captureBoundaryError), with its frames', async () => {
     const client = await load()
     await start(client)
 
-    client.captureBoundaryError(new Error('Payout to SE45 5000 0000 0583 9825 7466 refused'), 'dashboard')
+    client.captureBoundaryError(new Error('no company for 800101-1234'), 'dashboard')
 
-    await vi.waitFor(() => expect(exceptionValues()).toHaveLength(1))
-    expect(exceptionValues()[0]).toBe('Payout to [REDACTED_IBAN] refused')
+    await vi.waitFor(() => expect(exceptions()).toHaveLength(1))
+    expect(exceptions()[0].value).not.toContain('800101-1234')
+    expectStillLocatable(exceptions()[0])
+    expect(exceptionEvents()[0].properties.error_boundary).toBe('dashboard')
+  })
+
+  it('the steps the SDK recorded before an error', async () => {
+    const client = await load()
+    const posthog = await start(client)
+
+    posthog.addExceptionStep('Opened the customer person@example.se', { customer: 'other@example.se' })
+    posthog.captureException(new Error('boom'))
+
+    await vi.waitFor(() => expect(exceptionEvents()).toHaveLength(1))
+    const steps = JSON.stringify(exceptionEvents()[0].properties.$exception_steps)
+    expect(steps).toContain('[REDACTED_EMAIL]')
+    expect(steps).not.toContain('@example.se')
   })
 
   it('leaves every other event as it is', async () => {
-    fakeBrowser()
     const client = await load()
     const posthog = await start(client)
 

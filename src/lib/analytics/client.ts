@@ -1,5 +1,5 @@
 import type { CaptureResult, PostHog } from 'posthog-js'
-import { redact, redactedError } from '@/lib/observability/redact'
+import { redact } from '@/lib/observability/redact'
 import { drainEarlyErrors } from './early-errors'
 import { isAnalyticsEnabled } from './enabled'
 import { replayMaskText } from './replay-masking'
@@ -230,8 +230,11 @@ export function captureAnalyticsEvent(event: string, properties?: Record<string,
  * in next/dist/client/react-client-callbacks), and capture_exceptions above
  * captures uncaught errors and rejections, not console output.
  *
- * Redacted first (lib/observability/redact.ts), as on the server paths into
- * the vendor (onRequestError, the logger's sink). An error with a digest is
+ * The error itself goes to the SDK, which parses its frames, and before_send
+ * (redactExceptionEvent below) redacts the message and the frames, as for
+ * every exception from the browser. Redacting it here first replaced the
+ * whole stack with [REDACTED] whenever the message held a number shaped like
+ * a personnummer, an organisationsnummer included. An error with a digest is
  * left out: it was thrown in a server render, onRequestError
  * (instrumentation.ts) already captured it on the server with its real
  * message, and the browser holds only a generic copy.
@@ -243,18 +246,16 @@ export function captureAnalyticsEvent(event: string, properties?: Record<string,
  */
 export function captureBoundaryError(error: unknown, boundary: string, autoReload = false): void {
   if (!isAnalyticsActive()) return
-  let redacted: Error
   try {
     if (hasServerDigest(error)) return
-    redacted = redactedError(error)
   } catch {
-    // A value whose properties throw when read cannot be described safely,
-    // so it is not sent; the boundary has already logged it to the console.
+    // A value whose digest cannot be read is not sent; the boundary has
+    // already logged it to the console.
     return
   }
   void analyticsReady().then((posthog) => {
     try {
-      posthog?.captureException(redacted, { error_boundary: boundary, auto_reload: autoReload })
+      posthog?.captureException(error, { error_boundary: boundary, auto_reload: autoReload })
     } catch {
       // Telemetry must never affect the boundary that reported it.
     }

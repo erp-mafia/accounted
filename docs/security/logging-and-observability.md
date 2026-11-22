@@ -39,8 +39,9 @@ Structural guarantees, verified in the code:
 - `redact()` is idempotent, so double-redaction on records the logger already
   cleaned is safe and is intentionally not "optimised away".
 - In the browser, PostHog's `before_send` (`redactExceptionEvent` in
-  `src/lib/analytics/client.ts`) runs `redact()` over every exception event,
-  whichever path raised it: the SDK's capture of uncaught errors and
+  `src/lib/analytics/client.ts`) runs `redact()` over the error payload of
+  every exception event (`$exception_list`, `$exception_steps`,
+  `$exception_message`), whichever path raised it: the SDK's capture of uncaught errors and
   rejections, the errors held before PostHog starts, and the errors an error
   boundary caught. An exception that cannot be redacted is dropped, not sent.
 
