@@ -2791,13 +2791,15 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   // ensureManualCashAccount: the kassakonto already on the row's ledger
   // account is in another currency, and a ledger holds one (cash_accounts is
   // UNIQUE on company and ledger). details: ledger_account, account_currency,
-  // currency.
+  // currency. The sentence names only the cause: the bank-file import and the
+  // Stripe sync read it through getErrorMessage too, and each caller says its
+  // own next step (the create_transactions approval in commit.ts).
   CASH_ACCOUNT_CURRENCY_MISMATCH: {
     httpStatus: 409,
     message_sv:
-      'Bankkontot på det bokföringskontot har en annan valuta än transaktionen, och ett bankkonto har bara en valuta. Inget sparades. Lägg transaktionen på ett bankkonto i samma valuta som den.',
+      'Bankkontot på det bokföringskontot har en annan valuta än transaktionen, och ett bankkonto har bara en valuta.',
     message_en:
-      'The bank account on that ledger account is in another currency than the transaction, and a bank account holds one currency. Nothing was stored. Put the transaction on a bank account in its own currency.',
+      'The bank account on that ledger account is in another currency than the transaction, and a bank account holds one currency.',
     remediation: {
       description:
         'Retrying does not help. Send the row again with ledger_account set to the bank account in its currency (gnubok_list_cash_accounts), or to a free BAS 19xx account: a missing kassakonto is created in the row\'s currency.',

@@ -1104,9 +1104,10 @@ export type CashAccountCurrencyMismatch = Error & {
  * A ledger holds one currency: (company_id, ledger_account) is UNIQUE, so a
  * row in another currency can never be bound to the kassakonto already on
  * its ledger. The refusal for that (CASH_ACCOUNT_CURRENCY_MISMATCH), or null
- * when the account is in the row's currency or has none recorded. One
- * definition for ensureManualCashAccount and for a door that checks before
- * it stages (findCashAccountCurrencyMismatch).
+ * when the account is in the row's currency or has none recorded. The one
+ * definition (scripts/checks/one-definition/cash-account-one-currency.mjs):
+ * ensureManualCashAccount refuses with it, and a door asks it before it
+ * stages (findCashAccountCurrencyMismatch).
  */
 export function cashAccountCurrencyMismatch(
   ledgerAccount: string,

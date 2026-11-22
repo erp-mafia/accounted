@@ -116,7 +116,37 @@ describe('gnubok_create_transactions', () => {
 
     expect(error).toMatchObject({ code: 'CASH_ACCOUNT_CURRENCY_MISMATCH' })
     expect(String((error as Error).message)).toMatch(/transactions\[1\].*1948 is in EUR, not GBP/)
-    expect(findCalls('cash_accounts', 'eq')).toContainEqual(['ledger_account', '1948'])
+    // The company's own account on that ledger, nobody else's.
+    expect(findCalls('cash_accounts', 'eq')).toEqual(
+      expect.arrayContaining([['company_id', 'company-1'], ['ledger_account', '1948']]),
+    )
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+  })
+
+  // No account on the ledger yet: approving the first row creates it in that
+  // row's currency, and the approval then refuses the other.
+  it('refuses two currencies on one ledger_account in the same call, staging nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // row 0: no kassakonto on 1949 yet
+    enqueue({ data: null, error: null }) // row 1: still none
+
+    const error = await tool
+      .execute(
+        {
+          transactions: [
+            { date: '2026-11-20', amount: -10, description: 'Kortköp Paris', currency: 'EUR', ledger_account: '1949' },
+            { date: '2026-11-20', amount: -42.5, description: 'Kortköp London', currency: 'GBP', ledger_account: '1949' },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      )
+      .catch((err: unknown) => err)
+
+    expect(error).toMatchObject({ code: 'CASH_ACCOUNT_CURRENCY_MISMATCH' })
+    expect(String((error as Error).message)).toMatch(/transactions\[1\] is in GBP and transactions\[0\] in EUR, both on ledger_account 1949/)
     expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
   })
 
