@@ -214,8 +214,6 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU Affero General Public License for more details.
 ```
 
-Earlier versions carried an extension exception in LICENSE. An extension published under that exception before it was removed keeps the permission it gave, with later versions of Accounted too. If you rely on it, write to [support@accounted.se](mailto:support@accounted.se).
-
 If the AGPL's obligations don't work for you, for example because you want to embed Accounted in a closed product, contact us at [support@accounted.se](mailto:support@accounted.se) for a commercial license from Arcim Technology AB.
 
 The name Accounted and the Accounted logo are trademarks of Arcim Technology AB and are not covered by the AGPL: a modified version you offer to others needs its own name. See [TRADEMARK.md](TRADEMARK.md).
