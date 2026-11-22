@@ -135,7 +135,9 @@ function toView(record: VerificationRecord | null, now: Date): CompanyVerificati
 
 function providerFailure(error: unknown): Extract<OperationOutcome<never>, { ok: false }> {
   const retryable = error instanceof PaymentProviderError && error.retryable
-  return { ok: false, code: retryable ? 'PAYMENT_PROVIDER_UNAVAILABLE' : 'PAYMENT_PROVIDER_REFUSED' }
+  // The provider's own code, as on the signing doors: the log line names it.
+  const providerCode = error instanceof PaymentProviderError ? error.code : 'UNEXPECTED_ERROR'
+  return { ok: false, code: retryable ? 'PAYMENT_PROVIDER_UNAVAILABLE' : 'PAYMENT_PROVIDER_REFUSED', details: { provider_code: providerCode } }
 }
 
 /**
