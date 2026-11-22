@@ -84,6 +84,9 @@ describe('konteringAmountValue', () => {
     ['-2,675', ','],
     ['-2.675', '.'],
     ['−2,675', ','],
+    ['\u{2013}2.675', '.'],
+    ['\u{2014}2,675', ','],
+    ['\u{2010}2.675', '.'],
   ])('rounds the minus figure %j as the same figure on the other side', (typed, decimal) => {
     const value = konteringAmountValue(typed, decimal as ',' | '.')
     expect(value).toBe('-2.68')

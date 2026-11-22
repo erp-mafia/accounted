@@ -31,12 +31,13 @@ export type KonteringAmountSide = 'debit_amount' | 'credit_amount'
  * A minus figure is the same figure on the other side (negativeAmountMove),
  * so it is read and rounded without its sign: roundOre rounds a negative
  * half öre toward zero, and "-2,675" would move as 2.67 where "2,675" typed
- * on the other side is 2.68.
+ * on the other side is 2.68. The sign is a hyphen, a Unicode minus or a
+ * dash lookalike, the signs parseSwedishAmount reads.
  */
 export function konteringAmountValue(text: string, decimal: ',' | '.'): string {
   const trimmed = text.trim()
   if (!trimmed) return ''
-  const minus = /^[-−]/.test(trimmed)
+  const minus = /^[-−‐-—]/.test(trimmed)
   const n = readKonteringAmount(minus ? trimmed.slice(1) : trimmed, decimal)
   if (n === null || (minus && n < 0)) return ''
   return String(minus && n !== 0 ? -n : n)
