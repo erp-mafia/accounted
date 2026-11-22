@@ -2,9 +2,11 @@
  * The short Bolaget block of the agent briefing: owners with their share of
  * capital and votes, the board, the VD and the firmateckning. Names only,
  * never a personnummer. Best-effort and fail-open: null when the company is
- * outside the rollout, has nothing registered, or a read fails (a table
- * not yet migrated included), so the briefing never breaks on it.
+ * outside the rollout, has a legal form that keeps no aktiebok, has nothing
+ * registered, or a read fails (a table not yet migrated included), so the
+ * briefing never breaks on it.
  */
+import { keepsShareRegister, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { isBolagetRegistersEnabled } from '@/lib/env/bolaget-switch'
 import type { OperationContext } from '@/lib/operations/types'
 import { loadRoles } from './roles'
@@ -24,6 +26,10 @@ const MAX_OWNERS = 10
 export async function briefBolaget(ctx: OperationContext): Promise<BolagetBriefing | null> {
   if (!isBolagetRegistersEnabled(ctx.companyId)) return null
   try {
+    // The registers are an aktiebolag's (gate.ts). For any other legal form
+    // nothing is read, and no roles are seeded from the registry snapshot:
+    // the first read of the roles does that.
+    if (!keepsShareRegister(await resolveCompanyEntityType(ctx.supabase, ctx.companyId))) return null
     const [register, roles] = await Promise.all([loadShareRegisterData(ctx), loadRoles(ctx)])
     if (register.summary.total_shares === 0 && roles.roles.length === 0) return null
     return {
