@@ -372,9 +372,10 @@ function VatBookingCard({
         </p>
 
         {booked && proposal?.partly_settled && (
-          // The posted momsredovisning cleared only part of the period (a
-          // verifikat added to it afterwards, or a settlement that came with
-          // an import): the proposal's lines are what is left. "Already
+          // The posted momsredovisning no longer clears the period (a
+          // verifikat added to it afterwards, a credit note after it, or a
+          // settlement that came with an import): the proposal's lines are
+          // what is left. "Already
           // booked" alone hid that the momskonton are not at zero and that
           // 2650/1650 no longer matches ruta 49 (#3570).
           <div className="flex items-start gap-2 text-[13px] leading-6 text-attn">
@@ -591,8 +592,8 @@ function VatStepper({
    */
   bookedVoucher?: string | null
   /**
-   * The posted momsredovisning cleared only part of the period (the
-   * proposal's partly_settled): step 3 is not done while VAT is left (#3570).
+   * The posted momsredovisning no longer clears the period (the proposal's
+   * partly_settled): step 3 is not done while VAT is left (#3570).
    */
   partlySettled: boolean
   /** The period has a filing record (Skatteverket kvittens or marked by hand). */

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
+import { accountRutaFor } from '@/lib/bookkeeping/import-vat-base'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
@@ -133,13 +134,17 @@ export interface VatSettlementProposal {
   filed_net: number
   /** Signed öre gap balanced on 3740 (positive = credited, negative = debited). */
   rounding_amount: number
-  /** True when the period has no VAT activity to clear. */
+  /**
+   * True when `lines` is empty: the period has no VAT activity to clear, and
+   * its posted momsredovisningar left nothing on the accounts either.
+   */
   is_empty: boolean
   /**
    * True when the momsredovisningar already posted for the period (the
    * posted ones in existing_entries) cleared only part of its VAT
-   * (crm#1855): `lines` then clears what is left, never again what they
-   * moved. They still gate booking (#984).
+   * (crm#1855), or cleared an account past the balance a later verifikat of
+   * the period left on it (#3624): `lines` then clears what is left, never
+   * again what they moved. They still gate booking (#984).
    */
   partly_settled: boolean
   existing_entries: VatSettlementExistingEntry[]
@@ -384,29 +389,57 @@ function settlementLines(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicV
 }
 
 /**
- * What is left of each period balance after the period's own posted
- * momsredovisningar (crm#1855). `cleared` is what they moved on the account,
- * debit minus credit as clearedByAccount sums it. A momsredovisning that
- * clears more than the period put on an account (it also took a balance
- * carried in from before the period) leaves nothing there, never a balance
- * on the other side; one that moves an account the wrong way (no clearing at
- * all) leaves the period's balance as it is. Pure.
+ * Whether the momsredovisningar cleared an account past zero by a krona or
+ * more: more than the period's balance on it, anything where the period has
+ * none, or a clearing the usual way of a balance a later verifikat turned to
+ * the other side (`natural` is the side the account's ruta reads it on: 1
+ * credit, output VAT; -1 debit, ruta 48; 0 unknown). Öre past zero is left
+ * alone: it is the öre of an earlier period a momsredovisning swept. Pure.
  */
-export function balanceLeftToClear(balance: number, cleared: number): number {
+function clearedPastBalance(balance: number, cleared: number, natural: number): boolean {
   const after = roundOre(balance - cleared)
-  if (balance > 0) return Math.min(balance, Math.max(after, 0))
-  if (balance < 0) return Math.max(balance, Math.min(after, 0))
-  return 0
+  if (Math.abs(after) < FILED_ROUNDING) return false
+  if (balance > 0 ? after < 0 : balance < 0 ? after > 0 : after !== 0) return true
+  return natural * balance < 0 && natural * cleared > 0
+}
+
+/**
+ * What is left of each period balance after the period's own posted
+ * momsredovisningar (crm#1855). `balance` is the period's (credit minus
+ * debit), `cleared` what they moved on the account (debit minus credit, as
+ * clearedByAccount sums it), `carried` what else stands on the account at
+ * the period's end (credit minus debit): balances carried in, an opening
+ * balance the declaration leaves out, other periods' momsredovisningar
+ * dated inside it. `natural` as clearedPastBalance reads it.
+ *
+ * What they cleared off the balance is taken off it, and a move the wrong
+ * way leaves the balance as it is. One cleared past zero (clearedPastBalance)
+ * may also have taken a balance the books carry on that side, and the
+ * amounts cannot say whether it did: then it stays as that, never past zero.
+ * With none there (öre aside), what it cleared past the period's balance was
+ * the period's own and is no longer there: a verifikat dated in the period
+ * lowered the account after it (a credit note, #3624), so the rest takes it
+ * back, a balance on the other side. Pure.
+ */
+export function balanceLeftToClear(balance: number, cleared: number, carried: number, natural = 0): number {
+  const after = roundOre(balance - cleared)
+  const capped = balance > 0 ? Math.min(balance, Math.max(after, 0)) : balance < 0 ? Math.max(balance, Math.min(after, 0)) : 0
+  if (!clearedPastBalance(balance, cleared, natural)) return capped
+  const carriedOnItsSide = after < 0 ? carried : -carried
+  return carriedOnItsSide >= FILED_ROUNDING ? capped : after
 }
 
 /**
  * The lines for what is still left of the period's VAT when the period's own
- * posted momsredovisningar cleared only part of it (crm#1855): a settlement
- * that came with an import mid-period, a verifikat added after the period
- * was settled, a quarter settled month by month and not finished. The full
- * period's lines would clear a second time what those verifikat already
- * moved. Each account keeps what the settlements left on it
- * (balanceLeftToClear), and the net is the filed net less the net they
+ * posted momsredovisningar no longer clear it exactly (crm#1855): a
+ * settlement that came with an import mid-period, a verifikat added after the
+ * period was settled, a credit note that lowered an account after they
+ * cleared it (#3624), a quarter settled month by month and not finished. The
+ * full period's lines would clear a second time what those verifikat already
+ * moved. Each account the declaration reads, with a period balance or moved
+ * by them, keeps what the settlements left on it (balanceLeftToClear; what
+ * else stands on an account is read only when they cleared it past zero),
+ * and the net is the filed net less the net they
  * placed for the period's own balances. netLines puts it on 2650 and moves
  * over the claim they left on 1650 when 1650 still holds exactly that.
  *
@@ -422,6 +455,7 @@ async function remainingSettlementLines(
   filedNet: number,
   settlements: ReadonlyArray<Pick<VatSettlementExistingEntry, 'id' | 'entry_date'>>,
   entryDate: string,
+  periodEnd: string,
 ): Promise<{ lines: VatSettlementProposalLine[]; rounding_amount: number } | null> {
   if (settlements.length === 0) return null
   const settlementIds = settlements.map((e) => e.id)
@@ -439,18 +473,44 @@ async function remainingSettlementLines(
       else cleared.set(account, roundOre((cleared.get(account) ?? 0) + amount))
     }
   }
-  const balances = clearingBalances(ledger)
-  const left = balances.map(([account, balance]) => [account, balanceLeftToClear(balance, cleared.get(account) ?? 0)] as const)
+  // An account the period has no balance on is read too when they moved it:
+  // a credit note that cancelled the sale they cleared leaves it at zero.
+  const own = new Map(clearingBalances(ledger))
+  const balances = vatClearingAccounts(ledger.dynamicVatAccounts)
+    .filter((account) => own.has(account) || cleared.has(account))
+    .map((account) => [account, own.get(account) ?? 0] as const)
+  // What else stands on an account at the period's end, read only for one
+  // they cleared past zero: what accountBalanceThrough reads there, less the
+  // period's own balance, plus what its own momsredovisningar dated in it
+  // moved (credit minus debit).
+  const datedIn = settlements.filter((e) => e.entry_date <= periodEnd).map((e) => e.id)
+  const carriedOn = async (account: string, balance: number): Promise<number> => {
+    const standing = await accountBalanceThrough(supabase, companyId, account, periodEnd)
+    if (standing === null) throw new Error(`moms account ${account} balance read failed`)
+    const movedByOwn = datedIn.reduce((sum, id) => sum + (moved.get(id)?.get(account) ?? 0), 0)
+    return roundOre(-standing - balance + movedByOwn)
+  }
+  // The side each account's ruta reads it on, as the declaration resolves it.
+  const rutaOf = accountRutaFor(ledger.dynamicVatAccounts)
+  const left: Array<readonly [string, number]> = []
+  for (const [account, balance] of balances) {
+    const amount = cleared.get(account) ?? 0
+    const box = rutaOf(account)
+    const natural = box === 'ruta48' ? -1 : box ? 1 : 0
+    const carried = clearedPastBalance(balance, amount, natural) ? await carriedOn(account, balance) : 0
+    left.push([account, balanceLeftToClear(balance, amount, carried, natural)])
+  }
   if (left.every(([, rest]) => Math.abs(rest) < FILED_ROUNDING)) return null
   if (left.every(([, rest], i) => rest === balances[i][1])) return null
   const coveredOn = new Map(balances.map(([account, balance], i) => [account, roundOre(balance - left[i][1])]))
   const covered = roundOre([...coveredOn.values()].reduce((sum, amount) => sum + amount, 0))
   // The net they placed for the period's own balances. A settlement in whole
   // kronor put the öre of what it covered on 3740 (a credit there is öre it
-  // did not place as net), so that is the öre sum less its 3740. One that
-  // moved more than the period's own balances (a balance carried in, or an
-  // account a credit note lowered after it) may owe its öre to that part:
-  // then it is the whole-krona net the declaration files for what they
+  // did not place as net), so that is the öre sum less its 3740. What they
+  // cleared past a balance a credit note lowered is the period's own (the
+  // rest takes it back), so it is part of that sum. One that moved more than
+  // the period's own balances (a balance carried in) may owe its öre to that
+  // part: then it is the whole-krona net the declaration files for what they
   // covered. Either way the rest carries no öre to 2650 a second time.
   const beyond = [...cleared].some(([account, amount]) => roundOre(amount - (coveredOn.get(account) ?? 0)) !== 0)
   const placed = beyond ? filedNetOf(coveredOn, ledger) : roundOre(covered + onRounding)
@@ -861,7 +921,8 @@ export async function buildVatSettlementProposal(
   ].filter((e) => !earlier.has(e.id) && !carriedOver.has(e.id))
 
   // The period's own posted momsredovisningar may have cleared only part of
-  // it: the lines shown are then what is left, not the full period again.
+  // it, or an account past what a later credit note left: the lines shown are
+  // then what is left, not the full period again.
   const remaining = await remainingSettlementLines(
     supabase,
     companyId,
@@ -869,6 +930,7 @@ export async function buildVatSettlementProposal(
     filedNet,
     existing.filter((e) => e.status === 'posted'),
     entryDate.entry_date,
+    end,
   )
 
   // No posted momsredovisning for the period yet: one dated after it may
@@ -895,16 +957,19 @@ export async function buildVatSettlementProposal(
     .sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : 0))
     .filter((e) => e.status === 'posted' || drafts++ < 5)
 
+  // A rest can be left on a period with no VAT of its own: a credit note that
+  // cancelled the sale its momsredovisning cleared.
+  const proposedLines = remaining?.lines ?? lines
   return {
     period: { type: periodType, year, period, start, end },
     period_label: periodLabel,
     entry_date: entryDate.entry_date,
     entry_date_reason: entryDate.entry_date_reason,
     description,
-    lines: remaining?.lines ?? lines,
+    lines: proposedLines,
     filed_net: filedNet,
     rounding_amount: remaining?.rounding_amount ?? roundingAmount,
-    is_empty: lines.length === 0,
+    is_empty: proposedLines.length === 0,
     partly_settled: remaining !== null,
     existing_entries: existingEntries,
   }
