@@ -134,4 +134,71 @@ describe('computeFiscalPeriod', () => {
     expect(result.startStr).toBe('2026-01-01')
     expect(result.endStr).toBe('2026-12-31')
   })
+
+  // A company past its first räkenskapsår is onboarded into the year that is
+  // running today, never one that has not started (crm#2129).
+  describe('the running year of a broken fiscal year', () => {
+    it('starts last calendar year when today is before the start month', () => {
+      vi.setSystemTime(new Date('2027-01-15T12:00:00'))
+      const result = computeFiscalPeriod({ fiscal_year_start_month: 7, entity_type: 'aktiebolag' })
+      expect(result.error).toBeNull()
+      expect(result.startStr).toBe('2026-07-01')
+      expect(result.endStr).toBe('2027-06-30')
+      expect(result.periodName).toBe('Räkenskapsår 2026/2027')
+    })
+
+    it('still holds on the last day of that year', () => {
+      vi.setSystemTime(new Date('2027-06-30T12:00:00'))
+      const result = computeFiscalPeriod({ fiscal_year_start_month: 7, entity_type: 'aktiebolag' })
+      expect(result.startStr).toBe('2026-07-01')
+      expect(result.endStr).toBe('2027-06-30')
+    })
+
+    it('moves to the new year on its first day', () => {
+      vi.setSystemTime(new Date('2027-07-01T12:00:00'))
+      const result = computeFiscalPeriod({ fiscal_year_start_month: 7, entity_type: 'aktiebolag' })
+      expect(result.startStr).toBe('2027-07-01')
+      expect(result.endStr).toBe('2028-06-30')
+      expect(result.periodName).toBe('Räkenskapsår 2027/2028')
+    })
+
+    it('reads the date in Stockholm, not UTC, on the night the year turns', () => {
+      // 22:30 UTC on 30 June is already 1 July in Stockholm.
+      vi.setSystemTime(new Date('2027-06-30T22:30:00Z'))
+      const result = computeFiscalPeriod({ fiscal_year_start_month: 7, entity_type: 'aktiebolag' })
+      expect(result.startStr).toBe('2027-07-01')
+      expect(result.endStr).toBe('2028-06-30')
+    })
+
+    it('gives a December start the year that began last December', () => {
+      vi.setSystemTime(new Date('2026-11-22T12:00:00'))
+      const result = computeFiscalPeriod({ fiscal_year_start_month: 12, entity_type: 'aktiebolag' })
+      expect(result.startStr).toBe('2025-12-01')
+      expect(result.endStr).toBe('2026-11-30')
+      expect(result.periodName).toBe('Räkenskapsår 2025/2026')
+    })
+
+    it('ends a year that starts in March on 29 February in a leap year', () => {
+      vi.setSystemTime(new Date('2028-01-15T12:00:00'))
+      const result = computeFiscalPeriod({ fiscal_year_start_month: 3, entity_type: 'aktiebolag' })
+      expect(result.startStr).toBe('2027-03-01')
+      expect(result.endStr).toBe('2028-02-29')
+    })
+
+    it('keeps an enskild firma on the running calendar year before July', () => {
+      vi.setSystemTime(new Date('2027-01-15T12:00:00'))
+      const result = computeFiscalPeriod({ fiscal_year_start_month: 7, entity_type: 'enskild_firma' })
+      expect(result.error).toBeNull()
+      expect(result.startStr).toBe('2027-01-01')
+      expect(result.endStr).toBe('2027-12-31')
+    })
+
+    it('keeps the calendar year for a January start', () => {
+      vi.setSystemTime(new Date('2027-01-15T12:00:00'))
+      const result = computeFiscalPeriod({ fiscal_year_start_month: 1, entity_type: 'aktiebolag' })
+      expect(result.startStr).toBe('2027-01-01')
+      expect(result.endStr).toBe('2027-12-31')
+      expect(result.periodName).toBe('Räkenskapsår 2027')
+    })
+  })
 })

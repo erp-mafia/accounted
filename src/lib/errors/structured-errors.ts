@@ -12509,8 +12509,11 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Banken kräver signering på sin egen webbsida, vilket inte stöds här ännu. Betala fakturorna med en betalfil i stället.',
     message_en: 'The bank requires signing on its own website, which is not supported here yet. Pay the invoices with a payment file instead.',
   },
+  // A 4xx, as BANK_PROVIDER_REFUSED: the bank answers the same refusal on
+  // every try (one that may pass on a retry is PAYMENT_PROVIDER_UNAVAILABLE).
+  // As a 502 it was logged at error and counted as an outage.
   PAYMENT_PROVIDER_REFUSED: {
-    httpStatus: 502,
+    httpStatus: 422,
     message_sv: 'Banken tog inte emot betalningen. Kontrollera uppgifterna och försök igen.',
     message_en: 'The bank did not accept the payment. Check the details and try again.',
   },

@@ -188,6 +188,23 @@ describe('planCompanySetup', () => {
     expect(plan.ok).toBe(false)
   })
 
+  it('gives a broken-year company the year running today, not the next one', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2027-01-15T12:00:00'))
+      const plan = planCompanySetup(CompanySetupSchema.parse({ ...base, fiscal_year_start_month: 7 }))
+      expect(plan.ok).toBe(true)
+      if (!plan.ok) return
+      expect(plan.fiscalPeriod).toMatchObject({
+        startDate: '2026-07-01',
+        endDate: '2027-06-30',
+        name: 'Räkenskapsår 2026/2027',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('leaves vat_number null and moms_period null for a non-VAT company', () => {
     const plan = planCompanySetup(
       CompanySetupSchema.parse({ ...base, vat_registered: false, moms_period: undefined })

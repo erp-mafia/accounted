@@ -37,8 +37,9 @@ const PRISBASBELOPP_HALVES: Record<number, number> = {
   2024: 28650,  // PBB 57,300
   2025: 29400,  // PBB 58,800
   2026: 29600,  // PBB 59,200
+  2027: 29800,  // PBB 59,600 (regeringen.se, 2026-09-24)
 }
-const LATEST_KNOWN_YEAR = 2026
+const LATEST_KNOWN_YEAR = 2027
 
 /**
  * The years with a known threshold. A year missing here silently uses
