@@ -35,7 +35,9 @@ export async function register() {
  *
  * Next.js calls this for every uncaught error in a route handler, server
  * component or server action. Client-side exceptions are handled separately
- * by `capture_exceptions` in instrumentation-client.ts.
+ * in lib/analytics/client.ts: `capture_exceptions` for uncaught ones, and
+ * captureBoundaryError for what an error boundary caught (it skips an error
+ * with a digest, which this hook has already captured).
  *
  * posthog-node is imported lazily inside the handler rather than at module
  * scope: `register()` runs in every runtime Next.js boots, and pulling a
@@ -45,7 +47,7 @@ export async function register() {
  *
  * The distinct id comes from the `X-POSTHOG-DISTINCT-ID` header that
  * posthog-js attaches to same-origin fetches (see `tracing_headers` in
- * instrumentation-client.ts), which is what links a server error back to the
+ * lib/analytics/client.ts), which is what links a server error back to the
  * user's session replay. Absent that header the error is still captured, just
  * unattributed.
  *

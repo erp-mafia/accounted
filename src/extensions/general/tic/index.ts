@@ -1334,8 +1334,8 @@ export const ticExtension: Extension = {
       // Requires a Supabase session but NOT a company: a user who just
       // signed up (or hasn't finished onboarding) must be able to manage
       // their BankID connection from /settings/account. Without this flag
-      // the dispatcher's requireCompanyId() throws 'No company context'
-      // for zero-company users. skipCompanyContext dispatches without ctx,
+      // the dispatcher answers zero-company users COMPANY_CONTEXT_MISSING
+      // (400). skipCompanyContext dispatches without ctx,
       // so the handler resolves the caller itself via requireAuth() (same
       // MFA/AAL2 enforcement the dispatcher applies).
       skipCompanyContext: true,

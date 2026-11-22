@@ -30,6 +30,19 @@ describe('durable provider listing', () => {
     expect(MIGRATION_LIST_TIMEOUT_MS).toBe(60_000)
     expect(result).toMatchObject({ nextPage: 4, total: 23001, items: [{ id: 'customer-1' }] })
   })
+  it.each(['fortnox', 'briox', 'bokio', 'bjornlunden', 'wint'] as const)('gives a %s register page the list timeout, not the 15 s record timeout (#3136)', async provider => {
+    page.mockResolvedValue({ items: [], page: 1, totalPages: 1, totalCount: 0, totalItems: 0, pageSize: 200 })
+    await fetchMigrationPage(provider, 'token', 'tenant', 'customers', 1)
+    expect(page).toHaveBeenCalledOnce()
+    expect(page.mock.calls[0].at(-1)).toEqual({ page: 1, timeoutMs: MIGRATION_LIST_TIMEOUT_MS })
+  })
+  it('gives the Bokio credit notes read on sales page 1 the list timeout too', async () => {
+    page.mockResolvedValue({ items: [], page: 1, totalPages: 1, totalCount: 0 })
+    await fetchMigrationPage('bokio', 'token', 'tenant', 'salesInvoices', 1)
+    expect(page.mock.calls.map(call => [call[2], call[3].timeoutMs])).toEqual([
+      ['/invoices', MIGRATION_LIST_TIMEOUT_MS], ['/credit-notes', MIGRATION_LIST_TIMEOUT_MS],
+    ])
+  })
   it.each(['fortnox', 'briox', 'bjornlunden'] as const)('honors %s final-page metadata without starting another page', async provider => {
     page.mockResolvedValue({ items: [], page: 7, totalPages: 7, totalCount: 600 })
     await expect(fetchMigrationPage(provider, 'token', 'tenant', 'customers', 7)).resolves.toMatchObject({ nextPage: null })

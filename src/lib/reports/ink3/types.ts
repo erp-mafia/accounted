@@ -80,9 +80,10 @@ export interface Ink3Underlag {
     end: string
     isClosed: boolean
   }
-  /** E.g. '2026P4': the beskattningsperiod whose Skatteverket field table the figures follow. */
+  /** E.g. '2027P1': the beskattningsperiod the räkenskapsår belongs to. */
   beskattningsperiod: string
   fieldTable: {
+    /** E.g. '2026P4': the SKV269 edition whose field codes the figures follow. */
     beskattningsperiod: string
     files: string[]
   }

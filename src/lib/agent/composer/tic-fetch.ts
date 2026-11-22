@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { registrationNumberKey } from '@/lib/invariants/org-number'
+import { sameRegistration } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
 import type { TicCallPurpose } from '@/lib/tic-budget/budget'
 
@@ -88,10 +88,16 @@ function hasContent(value: unknown): boolean {
 // and the gate refuses.
 const NEVER_CARRIED = new Set(['financialReports', 'financialReportsComplete'])
 
-/** Whether two snapshots describe the same firm, by their registration number. */
+/**
+ * Whether two snapshots describe the same firm, by their registration number:
+ * for an enskild firma the registration, not only the personnummer
+ * (sameRegistration).
+ */
 function sameFirm(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
-  const key = registrationNumberKey(typeof a.orgNumber === 'string' ? a.orgNumber : null)
-  return key !== null && key === registrationNumberKey(typeof b.orgNumber === 'string' ? b.orgNumber : null)
+  return sameRegistration(
+    typeof a.orgNumber === 'string' ? a.orgNumber : null,
+    typeof b.orgNumber === 'string' ? b.orgNumber : null,
+  )
 }
 
 /**
@@ -100,7 +106,8 @@ function sameFirm(a: Record<string, unknown>, b: Record<string, unknown>): boole
  * refetch while the budget is spent must not replace a known board with an
  * empty one. Sections with nothing to keep stay listed as incomplete, and so
  * does the annual report list (NEVER_CARRIED). A previous snapshot of another
- * number (the number was corrected since) describes another firm: nothing is
+ * number (the number was corrected since, or the search now picks another
+ * registration of the same sole trader) describes another firm: nothing is
  * taken from it.
  */
 export function keepLastKnownSections(
