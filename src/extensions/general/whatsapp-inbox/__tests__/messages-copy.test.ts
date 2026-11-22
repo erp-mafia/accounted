@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { botCopy } from '@/extensions/general/whatsapp-inbox/lib/messages'
+import { botCopy, TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 
 /**
  * Copy contracts that a rewrite must not quietly break. These assert the
@@ -131,5 +131,31 @@ describe('list question wording', () => {
     expect(botCopy('sv').m23ListDontKnow()).toBe('Vet inte')
     expect(botCopy('sv').m25ListEnded()).toMatch(/redan/)
     expect(botCopy('sv').m25ListEnded()).toMatch(/inget nytt svar/)
+  })
+})
+
+describe('replies that leave a list question open', () => {
+  it('has its own message ids for "later" and for a question back', () => {
+    expect(TEMPLATE.m27ListLater).toBe('m27_list_later')
+    expect(TEMPLATE.m28ListQuestionBack).toBe('m28_list_question_back')
+    const ids = Object.values(TEMPLATE)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('says the question stays and that an answer is welcome here, in one line without a dash', () => {
+    expect(botCopy('sv').m27ListLater()).toBe('Okej, frågan ligger kvar. Svara här när du vet.')
+    expect(botCopy('en').m27ListLater()).toBe('Okay, the question stays open. Answer here when you know.')
+    for (const locale of ['sv', 'en'] as const) {
+      const line = botCopy(locale).m27ListLater()
+      expect(line).not.toMatch(/\n/)
+      expect(line).not.toMatch(/[–—]/)
+      expect(line.length).toBeLessThanOrEqual(120)
+    }
+  })
+
+  it('sends a question back in the words it was given, in either locale', () => {
+    for (const locale of ['sv', 'en'] as const) {
+      expect(botCopy(locale).m28ListQuestionBack({ reply: 'Menar du kontoret på Storgatan?' })).toBe('Menar du kontoret på Storgatan?')
+    }
   })
 })

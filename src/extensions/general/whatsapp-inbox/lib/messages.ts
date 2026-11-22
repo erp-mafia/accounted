@@ -66,6 +66,8 @@ export const TEMPLATE = {
   m24ListClosed: 'm24_list_closed',
   m25ListEnded: 'm25_list_ended',
   m26ListAnswerTooLong: 'm26_list_answer_too_long',
+  m27ListLater: 'm27_list_later',
+  m28ListQuestionBack: 'm28_list_question_back',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
@@ -282,6 +284,15 @@ const SV = {
 
   m26ListAnswerTooLong: ({ max }: { max: number }) =>
     `Svaret blev för långt. Skriv det gärna kortare, högst ${max} tecken.`,
+
+  // A written reply the reply reader (lib/questions/reply-reader.ts) read as
+  // "later": the question stays open and in flight.
+  m27ListLater: () => 'Okej, frågan ligger kvar. Svara här när du vet.',
+
+  // A written reply the reply reader read as a question back: its own reply
+  // goes out as it came, already cleaned and cut (readReply). The question
+  // stays open and in flight.
+  m28ListQuestionBack: ({ reply }: { reply: string }) => reply,
 }
 
 const EN: typeof SV = {
@@ -436,6 +447,10 @@ const EN: typeof SV = {
 
   m26ListAnswerTooLong: ({ max }: { max: number }) =>
     `That answer is too long. Please write it shorter, at most ${max} characters.`,
+
+  m27ListLater: () => 'Okay, the question stays open. Answer here when you know.',
+
+  m28ListQuestionBack: ({ reply }: { reply: string }) => reply,
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }

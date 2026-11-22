@@ -1900,3 +1900,428 @@ describe('an answer through another door', () => {
     expect(untouched.supabase.from).not.toHaveBeenCalled()
   })
 })
+
+describe('a written reply when the company has a reply reader', () => {
+  const question = { questionId: QUESTION_ID, companyId: COMPANY }
+  const READER_URL = 'https://reader.example.test/read'
+  const QUESTION_TEXT = 'Gäller hyran på 12 000 kr kontoret eller lagret?'
+  const WHY_TEXT = 'Svaret avgör vilket konto hyran bokförs på.'
+  const LATER_BODY = 'Okej, frågan ligger kvar. Svara här när du vet.'
+  const openRow = {
+    id: QUESTION_ID,
+    status: 'open',
+    close_reason: null,
+    question: QUESTION_TEXT,
+    why: WHY_TEXT,
+    options: [
+      { id: 'office', label: 'Kontoret' },
+      { id: 'storage', label: 'Lagret' },
+    ],
+    evidence: [],
+    actor_label: null,
+    client: null,
+    answer_option: null,
+    answer_text: null,
+    answered_at: null,
+    answered_via: null,
+    fact_id: null,
+    created_at: '2026-11-19T08:00:00.000Z',
+  }
+  const fetchMock = vi.fn<typeof fetch>()
+
+  /** The reader answers every request with this body. */
+  const reads = (body: unknown, status = 200): void => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(body), { status })))
+  }
+
+  /** The reader never answers: the request ends when it is aborted. */
+  const hangs = (): void => {
+    fetchMock.mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')))
+        }),
+    )
+  }
+
+  /** The JSON body of the one request the reader got. */
+  const handedOver = (): { raw: string; body: unknown } => {
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const raw = String(fetchMock.mock.calls[0][1]?.body)
+    const body: unknown = JSON.parse(raw)
+    return { raw, body }
+  }
+
+  const textArgs = (
+    text: string,
+    overrides: { announceEnded?: boolean; conversation?: WhatsAppConversation } = {},
+  ) => ({
+    link: makeLink(),
+    conversation: overrides.conversation ?? makeConversation({ context: pendingContext() }),
+    question,
+    text,
+    to: PHONE,
+    replyBase,
+    announceEnded: overrides.announceEnded ?? true,
+  })
+
+  const sentTemplates = (): string[] => sendTextMock.mock.calls.map((call) => call[1].template)
+
+  /** The day's questions are used up in a conversation that still has the list question in flight. */
+  const atDailyLimit = (budget: 'budget' | 'list_question_budget'): WhatsAppConversation =>
+    makeConversation({
+      context: { ...pendingContext(), [budget]: { day_key: todayIsoStockholm(), count: MAX_QUESTIONS_PER_DAY } },
+    })
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('QUESTION_REPLY_READER_URL', READER_URL)
+    vi.stubEnv('QUESTION_REPLY_READER_SECRET', 'test-secret')
+    vi.stubEnv('QUESTION_REPLY_READER_COMPANY_IDS', COMPANY)
+    readRowMock.mockResolvedValue(openRow)
+    // Another open question waits: it shows whether a next question is offered.
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
+    reads({ kind: 'answer' })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('hands the reader the question and the reply, signed, and nothing about the person or the conversation', async () => {
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('  Det är nog kontoret  '))
+
+    const { raw, body } = handedOver()
+    expect(String(fetchMock.mock.calls[0][0])).toBe(READER_URL)
+    expect(body).toEqual({
+      version: 1,
+      company_id: COMPANY,
+      question: {
+        id: QUESTION_ID,
+        text: QUESTION_TEXT,
+        why: WHY_TEXT,
+        options: [
+          { id: 'office', label: 'Kontoret' },
+          { id: 'storage', label: 'Lagret' },
+        ],
+      },
+      reply: { text: 'Det är nog kontoret' },
+      locale: 'sv',
+    })
+    for (const personal of [USER, PHONE, 'conv-1', 'link-1', 'hash-1']) expect(raw).not.toContain(personal)
+    const headers = fetchMock.mock.calls[0][1]?.headers as Record<string, string>
+    expect(headers['X-Accounted-Signature']).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/)
+    expect(readRowMock).toHaveBeenCalledWith(supabase, COMPANY, QUESTION_ID)
+  })
+
+  it('answer: saves the reply as written, acknowledges it and offers the next question, as without a reader', async () => {
+    reads({ kind: 'answer', reply: 'Kontoret.' })
+    const { supabase, writes } = db()
+
+    await applyListQuestionText(supabase, textArgs('  Det är nog kontoret, hela året  '))
+
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(answerMock).toHaveBeenCalledWith(supabase, supabase, {
+      companyId: COMPANY,
+      questionId: QUESTION_ID,
+      optionId: null,
+      text: 'Det är nog kontoret, hela året',
+      userId: USER,
+      locale: 'sv',
+      door: 'whatsapp',
+    })
+    expect(closeMock).not.toHaveBeenCalled()
+    expect(conversationWrites(writes)[0].context?.pending_question).toBeUndefined()
+    expect(sentTemplates()).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${OTHER_QUESTION_ID}:o:office`)
+  })
+
+  it('dont_know: closes the question as the typed "vet inte" does, with the same acknowledgement', async () => {
+    reads({ kind: 'dont_know' })
+    const { supabase, writes } = db()
+
+    await applyListQuestionText(supabase, textArgs('Ingen aning faktiskt'))
+
+    expect(closeMock).toHaveBeenCalledTimes(1)
+    expect(closeMock).toHaveBeenCalledWith(supabase, { companyId: COMPANY, questionId: QUESTION_ID, reason: 'dont_know', userId: USER, door: 'whatsapp' })
+    expect(answerMock).not.toHaveBeenCalled()
+    expect(conversationWrites(writes)[0].context?.pending_question).toBeUndefined()
+    expect(sentTemplates()).toEqual([TEMPLATE.m24ListClosed])
+    expect(sendTextMock.mock.calls[0][1].body).toBe('Okej, då släpper jag den frågan.')
+  })
+
+  it('later: leaves the question open and in flight, sends m27 and offers no next question', async () => {
+    reads({ kind: 'later' })
+    const { supabase, writes } = db()
+
+    await applyListQuestionText(supabase, textArgs('Jag kollar med hyresvärden och återkommer'))
+
+    expect(answerMock).not.toHaveBeenCalled()
+    expect(closeMock).not.toHaveBeenCalled()
+    // Nothing is written: the question stays in the conversation's slot.
+    expect(writes).toEqual([])
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1]).toMatchObject({ to: PHONE, template: 'm27_list_later', body: LATER_BODY, ...replyBase })
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(listMock).not.toHaveBeenCalled()
+    expect(historyMock).not.toHaveBeenCalled()
+  })
+
+  it('question_back: sends the reader\'s cleaned reply as m28, and the question stays open and in flight', async () => {
+    reads({ kind: 'question_back', reply: '  Menar du\u0000 kontoret\n\n på   Storgatan\t eller lagret i hamnen?\u0007 ' })
+    const { supabase, writes } = db()
+
+    await applyListQuestionText(supabase, textArgs('Vilken hyra menar du?'))
+
+    expect(answerMock).not.toHaveBeenCalled()
+    expect(closeMock).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1]).toMatchObject({
+      to: PHONE,
+      template: 'm28_list_question_back',
+      body: 'Menar du kontoret på Storgatan eller lagret i hamnen?',
+      ...replyBase,
+    })
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(listMock).not.toHaveBeenCalled()
+  })
+
+  it('question_back: sends at most 600 characters of the reader\'s reply', async () => {
+    reads({ kind: 'question_back', reply: 'a'.repeat(900) })
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('Vilken hyra menar du?'))
+
+    expect(sendTextMock.mock.calls[0][1].body).toBe('a'.repeat(600))
+  })
+
+  it('other: sends the fallback reply, and the question stays open and in flight', async () => {
+    reads({ kind: 'other' })
+    const { supabase, writes } = db()
+
+    await applyListQuestionText(supabase, textArgs('Kan du boka en taxi åt mig?'))
+
+    expect(answerMock).not.toHaveBeenCalled()
+    expect(closeMock).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1]).toMatchObject({ to: PHONE, template: TEMPLATE.m16Fallback, ...replyBase })
+    expect(sendTextMock.mock.calls[0][1].body).toContain('automatisk dokumentmottagning')
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(listMock).not.toHaveBeenCalled()
+  })
+
+  it('saves the reply as written when the reader has not answered within its 8 seconds', async () => {
+    hangs()
+    const { supabase } = db()
+
+    const applied = applyListQuestionText(supabase, textArgs('Det är kontoret'))
+    await vi.advanceTimersByTimeAsync(7_999)
+    expect(answerMock).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await applied
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(answerMock.mock.calls[0][2]).toMatchObject({ text: 'Det är kontoret', optionId: null })
+    expect(sentTemplates()).toEqual([TEMPLATE.m24ListAnswered])
+  })
+
+  const noReading: Array<[string, () => void]> = [
+    ['answers with an error status', () => reads({ kind: 'later' }, 500)],
+    ['answers with a kind it does not have', () => reads({ kind: 'maybe' })],
+    ['asks back without a reply', () => reads({ kind: 'question_back' })],
+    ['answers with something that is not JSON', () => fetchMock.mockImplementation(() => Promise.resolve(new Response('<html></html>', { status: 200 })))],
+    ['cannot be reached', () => fetchMock.mockImplementation(() => Promise.reject(new TypeError('fetch failed')))],
+  ]
+
+  it.each(noReading)('saves the reply as written when the reader %s', async (_name, arrange) => {
+    arrange()
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('Det är kontoret'))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(answerMock.mock.calls[0][2]).toMatchObject({ text: 'Det är kontoret' })
+    expect(sentTemplates()).toEqual([TEMPLATE.m24ListAnswered])
+  })
+
+  const noReader: Array<[string, () => void]> = [
+    ['the company is not in the reader list', () => vi.stubEnv('QUESTION_REPLY_READER_COMPANY_IDS', OTHER_COMPANY)],
+    ['the reader list is empty', () => vi.stubEnv('QUESTION_REPLY_READER_COMPANY_IDS', '')],
+    ['no reader url is set', () => vi.stubEnv('QUESTION_REPLY_READER_URL', '')],
+    ['no reader secret is set', () => vi.stubEnv('QUESTION_REPLY_READER_SECRET', '')],
+  ]
+
+  it.each(noReader)('saves the reply as written, with no call and no extra read, when %s', async (_name, arrange) => {
+    arrange()
+    reads({ kind: 'later' })
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('Jag återkommer'))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(readRowMock).not.toHaveBeenCalled()
+    expect(answerMock.mock.calls[0][2]).toMatchObject({ text: 'Jag återkommer' })
+    expect(sentTemplates()).toEqual([TEMPLATE.m24ListAnswered])
+  })
+
+  it.each([
+    ['later', { kind: 'later' }],
+    ['question_back', { kind: 'question_back', reply: 'Menar du kontoret?' }],
+  ])('sends nothing for %s once the day\'s questions are used up, and the question stays open and in flight', async (_kind, reading) => {
+    reads(reading)
+    for (const budget of ['budget', 'list_question_budget'] as const) {
+      const { supabase, writes } = db()
+
+      await applyListQuestionText(supabase, textArgs('Jag återkommer', { conversation: atDailyLimit(budget) }))
+
+      expect(writes).toEqual([])
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(answerMock).not.toHaveBeenCalled()
+    expect(closeMock).not.toHaveBeenCalled()
+  })
+
+  it('sends m27 and m28 one question below the daily limit, and counts neither as a question', async () => {
+    const below = (): WhatsAppConversation =>
+      makeConversation({
+        context: { ...pendingContext(), list_question_budget: { day_key: todayIsoStockholm(), count: MAX_QUESTIONS_PER_DAY - 1 } },
+      })
+    reads({ kind: 'later' })
+    const first = db()
+    await applyListQuestionText(first.supabase, textArgs('Jag återkommer', { conversation: below() }))
+    reads({ kind: 'question_back', reply: 'Menar du kontoret?' })
+    const second = db()
+    await applyListQuestionText(second.supabase, textArgs('Vilken hyra?', { conversation: below() }))
+
+    expect(sentTemplates()).toEqual(['m27_list_later', 'm28_list_question_back'])
+    expect(first.writes).toEqual([])
+    expect(second.writes).toEqual([])
+  })
+
+  it('still acknowledges an answer and still sends the fallback at the daily limit', async () => {
+    reads({ kind: 'other' })
+    const other = db()
+    await applyListQuestionText(other.supabase, textArgs('Kan du boka en taxi?', { conversation: atDailyLimit('list_question_budget') }))
+    reads({ kind: 'answer' })
+    const answered = db()
+    await applyListQuestionText(answered.supabase, textArgs('Kontoret', { conversation: atDailyLimit('list_question_budget') }))
+
+    expect(sentTemplates()).toEqual([TEMPLATE.m16Fallback, TEMPLATE.m24ListAnswered])
+  })
+
+  it('sends neither m27 nor m28 outside the service window', async () => {
+    const closed = (): WhatsAppConversation =>
+      makeConversation({ context: pendingContext(), service_window_expires_at: new Date(NOW.getTime() - 1000).toISOString() })
+    reads({ kind: 'later' })
+    await applyListQuestionText(db().supabase, textArgs('Jag återkommer', { conversation: closed() }))
+    reads({ kind: 'question_back', reply: 'Menar du kontoret?' })
+    await applyListQuestionText(db().supabase, textArgs('Vilken hyra?', { conversation: closed() }))
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['later', { kind: 'later' }],
+    ['question_back', { kind: 'question_back', reply: 'Menar du kontoret?' }],
+    ['other', { kind: 'other' }],
+  ])('sends nothing again for %s on a retry of the same message', async (_kind, reading) => {
+    reads(reading)
+    const { supabase, writes } = db()
+
+    await applyListQuestionText(supabase, textArgs('Jag återkommer', { announceEnded: false }))
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+  })
+
+  it('applies an answer on a retry of the same message', async () => {
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('Kontoret', { announceEnded: false }))
+
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(sentTemplates()).toEqual([TEMPLATE.m24ListAnswered])
+  })
+
+  it('never hands over the exact "vet inte": it closes the question as before', async () => {
+    reads({ kind: 'later' })
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('  Vet inte '))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(readRowMock).not.toHaveBeenCalled()
+    expect(closeMock).toHaveBeenCalledTimes(1)
+    expect(sentTemplates()).toEqual([TEMPLATE.m24ListClosed])
+  })
+
+  it('never hands over a reply that is too long: it asks for a shorter one as before', async () => {
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('x'.repeat(1001)))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(sentTemplates()).toEqual([TEMPLATE.m26ListAnswerTooLong])
+  })
+
+  it('never hands over a reply from a person who no longer keeps the books of the company', async () => {
+    const { supabase, writes } = db({ role: 'viewer' })
+
+    await applyListQuestionText(supabase, textArgs('Kontoret'))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(conversationWrites(writes)[0].context?.pending_question).toBeUndefined()
+  })
+
+  it('never hands over a reply to a question that is no longer open: it is told as ended, as before', async () => {
+    readRowMock.mockResolvedValue({ ...openRow, status: 'answered', answer_text: 'Kontoret', answered_at: '2026-11-20T09:00:00.000Z', answered_via: 'app' })
+    answerMock.mockRejectedValue(codedRefusal('COMPANY_QUESTION_ALREADY_ENDED', 'Question is already answered; a question ends once.'))
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('Lagret'))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(sentTemplates()).toEqual([TEMPLATE.m25ListEnded])
+  })
+
+  it('saves the reply as written when the question cannot be read for the reader', async () => {
+    readRowMock.mockRejectedValue(new Error('statement timeout'))
+    const { supabase } = db()
+
+    await applyListQuestionText(supabase, textArgs('Kontoret'))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(answerMock.mock.calls[0][2]).toMatchObject({ text: 'Kontoret' })
+    expect(sentTemplates()).toEqual([TEMPLATE.m24ListAnswered])
+  })
+
+  it('a tap on a button never reaches the reader', async () => {
+    reads({ kind: 'later' })
+    const tapRow = { id: QUESTION_ID, company_id: COMPANY, status: 'open', close_reason: null, answer_option: null, answered_by: null, answered_via: null }
+    const taps: QuestionTap[] = [
+      { companyId: COMPANY, questionId: QUESTION_ID, kind: 'option', optionId: 'office' },
+      { companyId: COMPANY, questionId: QUESTION_ID, kind: 'dont_know' },
+    ]
+
+    for (const tap of taps) {
+      const { supabase } = db({ questions: [tapRow] })
+      await applyListQuestionTap(supabase, { link: makeLink(), conversation: makeConversation({ context: pendingContext() }), tap, to: PHONE, replyBase })
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(closeMock).toHaveBeenCalledTimes(1)
+  })
+})
+

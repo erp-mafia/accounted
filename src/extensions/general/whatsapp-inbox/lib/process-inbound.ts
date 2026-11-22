@@ -1132,9 +1132,10 @@ async function processAnswerMessage(
     const raw = row.raw_payload as { context?: { id?: unknown } } | null
     const quotedWamid = typeof raw?.context?.id === 'string' ? raw.context.id : null
 
-    // A row the webhook marked as the reply to a list question is that
-    // question's answer, as written. A reply that quotes a receipt's message
-    // is about that receipt and goes on below.
+    // A row the webhook marked as the reply to a list question goes to that
+    // question's reply path: the answer as written, or what the company's
+    // reply reader makes of it (applyListQuestionText). A reply that quotes
+    // a receipt's message is about that receipt and goes on below.
     const listQuestion = parseListQuestionReplyMarker(row.error_message)
     if (listQuestion && !(await quotesReceipt(supabase, quotedWamid))) {
       await applyListQuestionText(supabase, {

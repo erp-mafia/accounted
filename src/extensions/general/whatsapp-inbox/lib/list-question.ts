@@ -54,7 +54,13 @@
  * A written reply: the webhook marks the inbound row with the question it
  * answers (listQuestionReplyMarker, in error_message while the row waits),
  * and the worker answers that question from the marker, whatever happened to
- * the conversation in between.
+ * the conversation in between. When a reply reader is configured for the
+ * question's company (src/lib/questions/reply-reader.ts), the worker hands
+ * it the question and the reply first (readWrittenReply): "answer" saves the
+ * reply as written, "dont_know" closes the question, and "later",
+ * "question_back" and "other" leave it open and in flight with one reply to
+ * the person and no next question (replyToOpenQuestion). Without a reader,
+ * and without a usable reading, the reply is the answer as written.
  *
  * The plaintext phone is never stored: it is decrypted from the link for the
  * send only. Asked, answered and expired go to processing_history.
@@ -68,6 +74,7 @@ import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { APP_ANSWER_MAX, WHATSAPP_DOOR, answerAsPerson, closeAsPerson } from '@/lib/questions/app-answer'
 import { listOpenQuestionsAcross, type OpenQuestionOfCompany } from '@/lib/questions/list'
+import { hasReplyReader, readReply, type ReplyReading } from '@/lib/questions/reply-reader'
 import { readQuestionRow, toQuestion } from '@/lib/questions/rows'
 import type { CompanyQuestion } from '@/lib/questions/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -946,12 +953,84 @@ export async function applyListQuestionTap(
 }
 
 /**
+ * What the company's reply reader makes of a written reply to an open
+ * question. Null when the reply is taken as written: no reader for the
+ * company, a question that is no longer open or cannot be read, or no usable
+ * reading. Never throws.
+ */
+async function readWrittenReply(
+  supabase: SupabaseClient,
+  question: ListQuestionRef,
+  text: string,
+): Promise<ReplyReading | null> {
+  if (!hasReplyReader(question.companyId)) return null
+  try {
+    const asked = toQuestion(await readQuestionRow(supabase, question.companyId, question.questionId))
+    if (asked.status !== 'open') return null
+    return await readReply({
+      companyId: question.companyId,
+      question: { id: asked.question_id, text: asked.question, why: asked.why, options: asked.options },
+      replyText: text,
+      locale: 'sv',
+    })
+  } catch (error: unknown) {
+    log.warn('a written reply was not handed to the reply reader', {
+      companyId: question.companyId,
+      questionId: question.questionId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  }
+}
+
+/**
+ * The one reply to a written reply that leaves its question open and in
+ * flight. Nothing about the question or the conversation is written, and no
+ * next question follows.
+ *   - later: m27, fixed copy.
+ *   - question_back: m28, the reader's own reply as readReply cleaned it.
+ *   - other: the fallback reply a text gets when no question is in flight.
+ * m27 and m28 go out only while the service window is open and fewer than
+ * MAX_QUESTIONS_PER_DAY questions were asked in the conversation today;
+ * neither is counted as one. A retry of the same message sends nothing.
+ */
+async function replyToOpenQuestion(
+  supabase: SupabaseClient,
+  args: { conversation: WhatsAppConversation; to: string; replyBase: ReplyBase; firstAttempt: boolean },
+  reading: ReplyReading,
+): Promise<void> {
+  if (!args.firstAttempt) return
+  const copy = botCopy('sv')
+  if (reading.kind !== 'later' && reading.kind !== 'question_back') {
+    await sendText(supabase, { to: args.to, body: copy.m16Fallback(), template: TEMPLATE.m16Fallback, ...args.replyBase })
+    return
+  }
+  const now = new Date()
+  if (!serviceWindowOpen(args.conversation, now)) return
+  if (askedToday(getContext(args.conversation), now) >= MAX_QUESTIONS_PER_DAY) return
+  if (reading.kind === 'question_back') {
+    await sendText(supabase, {
+      to: args.to,
+      body: copy.m28ListQuestionBack({ reply: reading.reply }),
+      template: TEMPLATE.m28ListQuestionBack,
+      ...args.replyBase,
+    })
+    return
+  }
+  await sendText(supabase, { to: args.to, body: copy.m27ListLater(), template: TEMPLATE.m27ListLater, ...args.replyBase })
+}
+
+/**
  * A written reply to a list question (the one the webhook marked the row
- * with): the text is the answer as written, with no model call. A reply that
- * is exactly "vet inte" closes the question as dont_know. A text over
- * APP_ANSWER_MAX characters is not saved: one line asks for a shorter one
- * and the question stays in flight. Throws what the core path throws beyond
- * its refusals, and when the person's membership cannot be read.
+ * with). A text over APP_ANSWER_MAX characters is not saved: one line asks
+ * for a shorter one and the question stays in flight. A reply that is
+ * exactly "vet inte" closes the question as dont_know. Any other reply goes
+ * to the company's reply reader when it has one (readWrittenReply): what it
+ * reads as an answer is saved as written, "dont_know" closes the question,
+ * and the other kinds leave it open with one reply (replyToOpenQuestion).
+ * With no reader or no reading the text is the answer as written, with no
+ * outside call. Throws what the core path throws beyond its refusals, and
+ * when the person's membership cannot be read.
  */
 export async function applyListQuestionText(
   supabase: SupabaseClient,
@@ -962,7 +1041,11 @@ export async function applyListQuestionText(
     text: string
     to: string
     replyBase: ReplyBase
-    /** False on a retry of the same message: a question found ended is then not told again. */
+    /**
+     * False on a retry of the same message: a question found ended is then
+     * not told again, and a reply that leaves the question open is not sent
+     * again.
+     */
     announceEnded: boolean
   },
 ): Promise<void> {
@@ -986,6 +1069,17 @@ export async function applyListQuestionText(
     return
   }
 
+  const typedDontKnow = text.toLowerCase() === DONT_KNOW_REPLY
+  const reading = typedDontKnow ? null : await readWrittenReply(supabase, question, text)
+  if (reading && reading.kind !== 'answer' && reading.kind !== 'dont_know') {
+    await replyToOpenQuestion(
+      supabase,
+      { conversation, to: args.to, replyBase: args.replyBase, firstAttempt: args.announceEnded },
+      reading,
+    )
+    return
+  }
+
   await answerListQuestion(supabase, {
     link,
     conversation,
@@ -993,7 +1087,7 @@ export async function applyListQuestionText(
     replyBase: args.replyBase,
     companyId: question.companyId,
     questionId: question.questionId,
-    answer: text.toLowerCase() === DONT_KNOW_REPLY ? { dontKnow: true } : { text },
+    answer: typedDontKnow || reading?.kind === 'dont_know' ? { dontKnow: true } : { text },
     announceEnded: args.announceEnded,
   })
 }

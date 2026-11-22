@@ -273,6 +273,18 @@ describe('POST /webhook: replies to a list question', () => {
     expect(sendTextMock).not.toHaveBeenCalled()
   })
 
+  it('hands a written reply to the worker once: a second delivery of the same message is dropped', async () => {
+    const mock = mockSupabase()
+    mock.enqueue({ data: makeLink() })
+    mock.enqueue({ data: conversationWithListQuestion() })
+    mock.enqueue({ error: { code: '23505', message: 'duplicate key value' } }) // message insert: seen before
+
+    await route.handler(signedRequest(textMessage('Kontoret på Storgatan')))
+
+    expect(kickMock).toHaveBeenCalledWith([])
+    expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
   it('does not take a written reply as the answer once the 48 hours have passed', async () => {
     const mock = mockSupabase()
     mock.enqueue({ data: makeLink() })
