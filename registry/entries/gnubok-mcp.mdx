@@ -89,7 +89,7 @@ verktyg den får exponera.
 2. Server URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?auth=required`. Authentication: OAuth 2.0, Dynamic discovery. Klicka Create.
 3. Create a new connection, logga in och godkänn anslutningen. Välj Add to agent.
 4. Med API-nyckel i stället: Authentication API key, Type Header, namnet `Authorization`, och som värde `Bearer ` följt av nyckeln.
-5. Ställ verktyget på User authentication i dess inställningar, så loggar var och en som chattar med agenten in med sitt eget konto. Med Agent author authentication använder alla din inloggning eller nyckel.
+5. Ställ verktyget på User authentication i dess inställningar. Med OAuth loggar då var och en som chattar med agenten in med sitt eget konto, med API-nyckel anger var och en sin egen nyckel. Med Agent author authentication använder alla din inloggning eller nyckel. Alla kanaler stöder inte User authentication för verktyg, och Teams kräver SSO för det: se Microsofts [kanallista](https://learn.microsoft.com/en-us/microsoft-copilot-studio/configure-enduser-authentication#supported-channels).
 
 ## Installera i Claude Desktop
 
