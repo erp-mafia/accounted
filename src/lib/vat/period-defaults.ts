@@ -50,6 +50,22 @@ function previousMonth(year: number, month: number, monthsBack: number): VatPeri
   return { year: date.getFullYear(), period: date.getMonth() + 1 }
 }
 
+/**
+ * The calendar month or quarter that ended most recently. A declaration that
+ * is filed after its period, such as the periodisk sammanställning (due the
+ * 25th of the month after the period), is open for this one; the running
+ * period cannot be filed yet.
+ */
+export function lastEndedCalendarPeriod(
+  periodType: 'monthly' | 'quarterly',
+  today: Date = new Date(),
+): VatPeriodDefault {
+  const { year, month } = stockholmYearMonth(today)
+  if (periodType === 'monthly') return previousMonth(year, month, 1)
+  const quarter = Math.ceil(month / 3)
+  return quarter === 1 ? { year: year - 1, period: 4 } : { year, period: quarter - 1 }
+}
+
 /** Select the latest ended VAT period that is currently relevant for filing. */
 export function mostRecentEndedVatPeriod(
   periodType: VatPeriodType,
@@ -63,7 +79,7 @@ export function mostRecentEndedVatPeriod(
   }
 
   if (periodType === 'monthly') {
-    const mostRecentEnded = previousMonth(year, month, 1)
+    const mostRecentEnded = lastEndedCalendarPeriod('monthly', today)
     if (opts.over40m) return mostRecentEnded
 
     const periodDueThisMonth = previousMonth(year, month, 2)
@@ -82,8 +98,7 @@ export function mostRecentEndedVatPeriod(
       : mostRecentEnded
   }
 
-  const quarter = Math.ceil(month / 3)
-  return quarter === 1 ? { year: year - 1, period: 4 } : { year, period: quarter - 1 }
+  return lastEndedCalendarPeriod('quarterly', today)
 }
 
 /** The period that is running today: the first one that cannot be filed yet. */
