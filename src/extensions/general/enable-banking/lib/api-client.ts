@@ -974,6 +974,7 @@ function envelopeErrorCode(body: string): string | null {
     const { error } = (JSON.parse(body) ?? {}) as { error?: unknown }
     return typeof error === 'string' ? error : null
   } catch {
+    // Not JSON, so no envelope and no code: deleteSession logs the raw body.
     return null
   }
 }
