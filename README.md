@@ -197,7 +197,24 @@ Your first pull request asks you to accept the [Contributor License Agreement](C
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE) with an **extension exception**: third-party extensions that interact solely through the documented Extension API may be licensed under any terms, including proprietary. See [LICENSE](LICENSE) for details and [NOTICE](NOTICE) for third-party attributions.
+[AGPL-3.0-or-later](LICENSE). See [NOTICE](NOTICE) for third-party attributions.
+
+```text
+gnubok - Swedish bookkeeping software
+Copyright (C) 2025-2026 Jakob Wennberg
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+```
+
+Earlier versions carried an extension exception in LICENSE. An extension published under that exception before it was removed keeps the permission it gave, with later versions of Accounted too. If you rely on it, write to [support@accounted.se](mailto:support@accounted.se).
 
 If the AGPL's obligations don't work for you, for example because you want to embed Accounted in a closed product, contact us at [support@accounted.se](mailto:support@accounted.se) for a commercial license from Arcim Technology AB.
 

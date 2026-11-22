@@ -112,10 +112,8 @@ The boundary is strict and CI-enforced:
   files that name a provider API host directly and fails when a new file
   names one.
 
-Licensing follows the same boundary: the project is AGPL-3.0, with an
-extension exception that allows third-party extensions using only the
-documented Extension API to be licensed under any terms. See
-[LICENSE](../LICENSE) and [docs/EXTENSIONS.md](EXTENSIONS.md).
+The project, extensions included, is licensed under AGPL-3.0-or-later. See
+[LICENSE](../LICENSE).
 
 ## Agent surface (MCP)
 
