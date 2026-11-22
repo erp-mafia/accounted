@@ -87,6 +87,18 @@ describe('syncAccountTransactions in connector mode', () => {
     expect(result).toMatchObject({ imported: 2, returnedMinBookingDate: '2026-09-01', returnedMaxBookingDate: '2026-09-01' })
   })
 
+  it("keeps Nordea's card holds out on the connector path too (crm#2076)", async () => {
+    const hold = { ...remote.transactions[0], booking_date: '2026-11-21', value_date: '2026-11-21', description: 'Reservation Kortköp FACEBK *7K4XZ2PQ9M' }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ...remote, transactions: [...remote.transactions, hold] }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const ingest = vi.fn().mockResolvedValue({ imported: 2, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: [] })
+
+    const result = await syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', { ...account }, '2026-08-01', '2026-11-21', ingest, { bankName: 'Nordea' })
+
+    expect((ingest.mock.calls[0][3] as RawTransaction[]).map((r) => r.description)).toEqual(['Kortköp ICA', 'Kortköp ICA'])
+    // The service's pending entry and the hold: both not booked.
+    expect(result).toMatchObject({ notBooked: 2, returnedMaxBookingDate: '2026-09-01' })
+  })
+
   it('carries every contract field to ingest and links each row to the raw page it came in', async () => {
     // Required<> makes a new contract field fail the type check until it is
     // set here, and `lands` until it names the ingest field it must reach.

@@ -66,12 +66,19 @@ describe('deriveNextStep priority order', () => {
       field: 'description',
     })
     items[2].description = 'Rad'
+    // #3553: 0 and negative quantities are complete rows, except on a
+    // skattereduktion row.
     items[2].quantity = 0
+    expect(deriveNextStep(stepInput({ items }))).not.toMatchObject({ kind: 'row_incomplete' })
+    items[2].quantity = -2
+    expect(deriveNextStep(stepInput({ items }))).not.toMatchObject({ kind: 'row_incomplete' })
+    items[2].deduction_type = 'rot'
     expect(deriveNextStep(stepInput({ items }))).toEqual({
       kind: 'row_incomplete',
       index: 2,
       field: 'quantity',
     })
+    items[2].deduction_type = null
     items[2].quantity = NaN
     expect(deriveNextStep(stepInput({ items }))).toEqual({
       kind: 'row_incomplete',

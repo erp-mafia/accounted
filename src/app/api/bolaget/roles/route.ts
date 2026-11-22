@@ -11,7 +11,7 @@ import { readAsOf } from '../as-of'
 
 /** GET /api/bolaget/roles?as_of=: roles over time and the firmateckning (operation company-roles.list). */
 export const GET = withRouteContext('bolaget.roles', async (request, ctx) => {
-  const gate = await bolagetGateResponse(ctx)
+  const gate = await bolagetGateResponse(ctx, 'registers')
   if (gate) return gate
   const asOf = readAsOf(request)
   if (asOf === null) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, details: { field: 'as_of' } })
@@ -23,7 +23,7 @@ export const GET = withRouteContext('bolaget.roles', async (request, ctx) => {
 export const POST = withRouteContext(
   'bolaget.role_create',
   async (request, ctx) => {
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, companyRolesCreate.input)
     if (!validation.success) return validation.response

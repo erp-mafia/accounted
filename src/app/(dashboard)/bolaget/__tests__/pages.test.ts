@@ -60,7 +60,7 @@ describe('/bolaget, the overview', () => {
   it('renders for an aktiebolag in the rollout, with every half open', async () => {
     vi.stubEnv('BOLAGET_COMPANY_IDS', COMPANY)
     const page = (await OverviewPage()) as { props: { access: unknown } }
-    expect(page.props.access).toEqual({ registers: true, agreements: true })
+    expect(page.props.access).toEqual({ registers: true, money: true, agreements: true })
     expect(notFound).not.toHaveBeenCalled()
   })
 
@@ -68,7 +68,7 @@ describe('/bolaget, the overview', () => {
     vi.stubEnv('BOLAGET_COMPANY_IDS', '*')
     entityType = 'enskild_firma'
     const page = (await OverviewPage()) as { props: { access: unknown } }
-    expect(page.props.access).toEqual({ registers: false, agreements: true })
+    expect(page.props.access).toEqual({ registers: false, money: false, agreements: true })
   })
 })
 

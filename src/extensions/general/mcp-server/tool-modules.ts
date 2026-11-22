@@ -28,6 +28,7 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_feedback',
     'gnubok_list_companies',
     'gnubok_create_company',
+    'gnubok_formation',
     'gnubok_list_service_accounts',
     'gnubok_revoke_service_account',
   ],

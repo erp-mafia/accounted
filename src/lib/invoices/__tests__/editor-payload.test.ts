@@ -6,6 +6,7 @@ import {
   hasDimensionValues,
   pruneItemDimensions,
   sanitizeDeductionItems,
+  selfBilledQuantityRefusals,
   stripSelfBillingFields,
 } from '@/lib/invoices/editor-payload'
 
@@ -591,5 +592,23 @@ describe('buildSelfBilledPayload parity and semantics', () => {
     for (const key of ['document_type', 'payment_link_url', 'payment_link_auto', 'ore_rounding', 'deduction_personnummer']) {
       expect(body).not.toHaveProperty(key)
     }
+  })
+})
+
+describe('selfBilledQuantityRefusals (#3553)', () => {
+  it('names the rows the self-billed endpoint refuses: zero, negative and non-numbers', () => {
+    expect(
+      selfBilledQuantityRefusals([
+        { quantity: 2 },
+        { quantity: 0 },
+        { quantity: -2 },
+        { quantity: 0.5 },
+        { quantity: Number.NaN },
+      ]),
+    ).toEqual([1, 2, 4])
+  })
+
+  it('refuses nothing when every quantity is positive', () => {
+    expect(selfBilledQuantityRefusals([{ quantity: 1 }, { quantity: 0.01 }])).toEqual([])
   })
 })

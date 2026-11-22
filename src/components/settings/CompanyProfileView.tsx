@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { formatDate } from '@/lib/utils'
+import { statusesInForce } from '@/lib/company/snapshot-statuses'
 import { SettingsRow, SettingsRowNote } from '@/components/settings/SettingsRows'
 
 // Read-only "Bolagsuppgifter" view of the cached TIC company profile
@@ -23,6 +24,8 @@ interface SnapshotShape {
   bankAccounts?: { type: string; accountNumber: string; bic?: string | null }[] | null
   purpose?: string | null
   employeeRange?: string | null
+  /** Lens's current state, folded by the TIC extension ('ceased' when struck off). */
+  activityStatus?: string | null
   financials?: {
     periodStart?: number
     periodEnd?: number
@@ -100,11 +103,11 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
       ? `${snapshot.fiscalYear.startMonthDay} till ${snapshot.fiscalYear.endMonthDay}`
       : null
 
-  // Only show dated status entries: Bolagsverket emits informational
-  // flags like "Har aldrig varit verksam" with no date that read as
-  // noise next to the real ones. Plain text, no colour: per the
-  // design system, semantic colour is data-only and never chrome.
-  const datedStatuses = (snapshot.statuses ?? []).filter((s) => s.statusDate)
+  // The dated statuses that still describe the firm: a strike-off the firm
+  // has restarted past is history, not its status (lib/company/snapshot-statuses).
+  // Plain text, no colour: per the design system, semantic colour is
+  // data-only and never chrome.
+  const datedStatuses = statusesInForce(snapshot)
 
   // Flatten every signatory row, clean ">" markers, split run-on
   // clauses, and dedupe: the source repeats "Firman tecknas av

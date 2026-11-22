@@ -50,6 +50,8 @@ export const MCP_TOOL_DOORS: Readonly<Record<string, DoorSpec | OutsideDoor>> = 
   gnubok_withdraw_pending_operation: OUTSIDE.approval,
   // A new company, which the person will own: no membership exists yet.
   gnubok_create_company: OUTSIDE.newCompany,
+  // Forms a new aktiebolag the person will own; the company comes at setup.
+  gnubok_formation: OUTSIDE.newCompany,
   // Feedback to the product team: anyone who reads the books may send it.
   gnubok_feedback: D.READER_HOUSE,
   // Periods and bokslut.

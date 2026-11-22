@@ -332,13 +332,20 @@ function pairByBankId(
  * rows take the stored row's id; the rest are new and keep their id, or take
  * the lowest index no stored or paired row holds. Ids outside the stable
  * format, and families with no stored rows, pass through unchanged.
+ *
+ * A stored row marked `notBooked` (the feed reads it as not booked,
+ * IngestOptions.isNotBooked: a card hold stored before the feed left holds
+ * out, crm#2076) pairs with no incoming row, by any of these. It still holds
+ * its index, so an incoming row on its day and amount takes a fresh one
+ * instead of being skipped as its duplicate.
  */
 export function reconcileStableExternalIds(
   incoming: Array<{ external_id: string; description: string } & BankEntryRef>,
-  stored: Array<{ externalId: string | null; desc: string } & BankEntryRef>
+  stored: Array<{ externalId: string | null; desc: string; notBooked?: boolean } & BankEntryRef>
 ): string[] {
   const ids = incoming.map((tx) => tx.external_id)
-  const bankPairs = pairByBankId(incoming, stored)
+  const notBookedStored = new Set(stored.filter((row) => row.notBooked && row.externalId).map((row) => row.externalId))
+  const bankPairs = pairByBankId(incoming, stored.filter((row) => !row.notBooked))
   for (const [i, storedId] of bankPairs) ids[i] = storedId
   const bankPairedStored = new Set(bankPairs.values())
 
@@ -360,9 +367,11 @@ export function reconcileStableExternalIds(
 
   for (const [family, members] of incomingByFamily) {
     const storedDesc = storedByFamily.get(family)!
-    // A stored row the bank id paired is accounted for; it still holds its
-    // index, so no fresh id below can take it.
-    const unpaired = new Set([...storedDesc.keys()].filter((storedId) => !bankPairedStored.has(storedId)))
+    // A stored row the bank id paired is accounted for, and one the feed
+    // reads as not booked is no incoming row's; both still hold their index,
+    // so no fresh id below can take it.
+    const unpaired = new Set([...storedDesc.keys()].filter((storedId) =>
+      !bankPairedStored.has(storedId) && !notBookedStored.has(storedId)))
     const tryPair = (i: number, storedId: string | null): boolean => {
       if (storedId === null || !unpaired.has(storedId)) return false
       ids[i] = storedId

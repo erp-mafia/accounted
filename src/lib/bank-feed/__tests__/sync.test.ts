@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedBankTransaction } from '@accounted/connect-contract'
 import { buildStableExternalIds } from '@/lib/transactions/external-id'
-import type { BankIngestRoute } from '@/types'
+import type { BankIngestRoute, IngestOptions } from '@/types'
 
 const mocks = vi.hoisted(() => ({ upload: vi.fn(), ingest: vi.fn(), arrival: vi.fn(), log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => mocks.log }))
@@ -144,6 +144,42 @@ describe('syncOpenPaymentsAccount', () => {
     expect(connect.balances).toHaveBeenCalledWith('co-1', { party: PARTY, consentId: 'consent-1', accountUid: 'ACC003' })
     expect(acc).toMatchObject({ dedup_scope: 'SE8050000000052131234567', balance: 1000, available_balance: 900, balance_updated_at: '2026-10-12T10:00:00.000Z' })
     expect(result).toMatchObject({ imported: 1, duplicates: 0, errors: 0, transactionIds: ['tx-1'], returnedMinBookingDate: '2026-10-01', requestedFromDate: '2026-09-01', historyNarrowed: false, truncated: false })
+  })
+
+  it("leaves Nordea's card holds out before the ids are built, should Connect let one through (crm#2076)", async () => {
+    const hold = row({ amount: -129, description: 'Reservation Kortköp FACEBK *7K4XZ2PQ9M' })
+    const purchase = row({ amount: -129, description: 'Kortköp 261119 KAFFEROSTERIET' })
+    const readAt = async (bankName: string) => {
+      mocks.ingest.mockClear()
+      await syncOpenPaymentsAccount({} as never, {
+        companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12',
+        bankRoute: ROUTE, party: PARTY, bankName, connect: fakeConnect({ syncTransactions: vi.fn().mockResolvedValue(page([hold, purchase])) }),
+      })
+      return mocks.ingest.mock.calls[0][3] as Array<{ description: string; external_id: string }>
+    }
+
+    const nordea = await readAt('Nordea')
+    expect(nordea.map((r) => r.description)).toEqual(['Kortköp 261119 KAFFEROSTERIET'])
+    // The purchase takes the index the hold would have taken.
+    expect(nordea[0].external_id).toMatch(/_0$/)
+    expect((await readAt('Swedbank')).map((r) => r.description)).toEqual(['Reservation Kortköp FACEBK *7K4XZ2PQ9M', 'Kortköp 261119 KAFFEROSTERIET'])
+  })
+
+  it("tells ingest how the bank's card holds read, so a hold stored before never takes a purchase (crm#2076)", async () => {
+    const isNotBookedAt = async (bankName?: string) => {
+      mocks.ingest.mockClear()
+      await syncOpenPaymentsAccount({} as never, {
+        companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12',
+        bankRoute: ROUTE, party: PARTY, connect: fakeConnect(), ...(bankName === undefined ? {} : { bankName }),
+      })
+      return (mocks.ingest.mock.calls[0][4] as IngestOptions).isNotBooked
+    }
+
+    const nordea = await isNotBookedAt('Nordea')
+    expect(nordea?.('Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(true)
+    expect(nordea?.('Kortköp 261119 KAFFEROSTERIET')).toBe(false)
+    expect((await isNotBookedAt('Swedbank'))?.('Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(false)
+    expect(await isNotBookedAt()).toBeUndefined()
   })
 
   it('records each archived page as a bank_feed arrival, and none for a page the archive lost', async () => {
