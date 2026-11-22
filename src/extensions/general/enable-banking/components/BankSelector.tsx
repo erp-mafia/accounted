@@ -10,7 +10,7 @@ import {
 } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
-import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
+import { bankMatchesQuery, banksFoundElsewhere, searchAliasHint } from '@/lib/bank-sync/bank-search'
 import { cn } from '@/lib/utils'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { matchBankByName } from '../lib/bank-match'
@@ -215,6 +215,15 @@ export function BankSelector({
   const offeredBanks = offered ? banks.filter(offered) : banks
   const filteredBanks = offeredBanks.filter((bank) => bankMatchesQuery(bank, searchQuery))
   const aliasHint = searchAliasHint(filteredBanks, searchQuery)
+  // A bank the search finds but this list leaves out is connected through
+  // the BankID connection: one muted line says where, instead of "no match".
+  const elsewhere = banksFoundElsewhere(banks, offered, searchQuery)
+  const elsewhereHint =
+    elsewhere.length === 0
+      ? null
+      : elsewhere.length === 1
+        ? t('eb_bank_elsewhere_one', { bank: elsewhere[0].name, button: t('op_connect_button'), group: t('op_group') })
+        : t('eb_bank_elsewhere_many', { button: t('op_connect_button'), group: t('op_group') })
 
   const showPopular = !isSandbox && !searchQuery
   const popularBanks = showPopular
@@ -274,7 +283,7 @@ export function BankSelector({
                   ? `Inga banker matchar "${searchQuery}"`
                   : 'Inga banker tillgängliga'}
               </p>
-              {searchQuery && (
+              {searchQuery && !elsewhereHint && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   Försök med ett annat sökord
                 </p>
@@ -316,6 +325,9 @@ export function BankSelector({
             <p className="px-1 text-xs leading-relaxed text-muted-foreground">
               {t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}
             </p>
+          )}
+          {elsewhereHint && (
+            <p className="px-1 text-xs leading-relaxed text-muted-foreground">{elsewhereHint}</p>
           )}
         </>
       )}

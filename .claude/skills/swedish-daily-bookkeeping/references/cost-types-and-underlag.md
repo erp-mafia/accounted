@@ -68,7 +68,7 @@ Do not collapse these into one "not allowed". They fail independently:
 
 1. **Bookkeeping.** The affärshändelse still happened and must still be booked (BFL 5 kap 1-2 §§). A bank transaction is never left unbooked because the receipt is missing. Leaving it out is the actual bokföringsbrott risk, not booking it without a receipt.
 2. **Income tax.** The company carries the burden of proving the cost is a business cost. Without an underlag the deduction can be denied on revision, but a well-documented egen verifikation with a plausible business purpose is frequently accepted for small amounts.
-3. **VAT.** Hard rule, no judgement: **ML 13 kap 31 §**: "Avdragsrätten ska styrkas genom faktura eller motsvarande handling enligt 17 kap." No invoice, no input VAT. Ever.
+3. **VAT.** **ML 13 kap 31 §**: input VAT may be deducted only when the deduction can be proven. **32 §**: for a purchase of goods or services, and for an unionsinternt förvärv of goods, it must be proven by a faktura. A purchase where the seller charged Swedish VAT: no invoice, no input VAT (the one other route is 36 §, certain acquisitions of fastighet, hyresrätt or bostadsrätt, proven by a handling from the överlåtare). Other documentation than a faktura proves the deduction only in these cases: **33 §**, VAT the buyer itself owes on an unionsinternt förvärv of goods or under omvänd betalningsskyldighet (16 kap 6 § or 8-16 §§), and only when there are särskilda skäl and the deduction can be proven by that other documentation; **34 §**, transfers of own goods treated as unionsinterna förvärv (5 kap 23-25 §§); **35 §**, import, by an importdokument that states the VAT or lets it be computed, and a document showing the company is importer or recipient. ML does not define särskilda skäl, so the agent never claims a deduction under 33 § on its own: it asks for the supplier's faktura and escalates with the documentation it has (B16). These paragraphs govern only the deduction: they do not remove the buyer's own liability for the output VAT under 16 kap.
 
 So the default treatment of a missing receipt is: **book the gross amount as cost, claim no VAT, document why.**
 
@@ -83,25 +83,28 @@ An egen verifikation must contain the 5 kap 7 § fields **plus**:
 - what secondary evidence exists (bank line, order confirmation, email, calendar entry, photo of the goods);
 - the business purpose, stated concretely: not "kostnad".
 
-**It does not create a VAT deduction.** An egen verifikation is not a faktura under ML 17 kap, so ML 13 kap 31 § is not satisfied. Book the full amount including the VAT you cannot deduct as cost on the ordinary cost account. Do not post anything to **2641**.
+**It does not create a VAT deduction.** An egen verifikation is not a faktura under ML 17 kap, so ML 13 kap 32 § is not satisfied (the 33 § case for VAT the buyer itself owes is in A2). Book the full amount including the VAT you cannot deduct as cost on the ordinary cost account. Do not post anything to **2641**.
 
 Never reconstruct or re-type a supplier invoice and present it as the original. If the supplier can still issue or re-send the invoice, get it: that restores the VAT deduction; an egen verifikation does not.
 
 ## A4. What the VAT deduction actually requires
 
+Every row but the last is the 32 § faktura test; the last row is the 33 § case (A2).
+
 | Document | Gives VAT deduction? | Rule |
 |---|---|---|
-| Fullständig faktura with the ML 17 kap 24 § fields | Yes | ML 13 kap 31 §; fields in `swedish-invoice-compliance` |
+| Fullständig faktura with the ML 17 kap 24 § fields | Yes | ML 13 kap 31-32 §§; fields in `swedish-invoice-compliance` |
 | Förenklad faktura / kassakvitto, total **≤ 4 000 kr incl. moms** | Yes | ML 17 kap 26-28 §§. Content: date, seller's VAT/org number, type of goods or services, VAT amount or the data to compute it |
 | Förenklad faktura, total **> 4 000 kr incl. moms** | **No** | Skatteverket is explicit: there is no right to deduct VAT in a förenklad faktura when the total exceeds 4 000 kr incl. moms. Request a full invoice |
 | Kortslip / terminal receipt only (no VAT amount, no seller VAT number) | No | Not a faktura. It proves payment, not the supply |
 | Bank statement line | No | Same |
 | Egen verifikation | No | A3 |
 | Order confirmation, kvitto på betalning from a payment provider | No, unless it carries the 17 kap fields | Name on the document is irrelevant: content decides |
+| No faktura, VAT the buyer itself owes (unionsinternt förvärv, or omvänd betalningsskyldighet under 16 kap 6 § or 8-16 §§) | Only if there are särskilda skäl and other documentation proves the deduction | ML 13 kap 33 §. Never claimed by the agent on its own: escalate (A2, B16) |
 
 A förenklad faktura does not need the buyer's name and address, so a shop receipt in the company's hands is fine up to the threshold. Above the threshold, the buyer's details are exactly what is usually missing.
 
-**Card slip only:** ask the supplier for the kassakvitto or an invoice. Until it arrives, book gross cost, no VAT. If the user insists on claiming VAT off a card slip, refuse and explain ML 13 kap 31 §.
+**Card slip only:** ask the supplier for the kassakvitto or an invoice. Until it arrives, book gross cost, no VAT. If the user insists on claiming Swedish VAT off a card slip, refuse and explain ML 13 kap 32 §.
 
 ## A5. Digital receipts: photograph it, then bin the paper
 

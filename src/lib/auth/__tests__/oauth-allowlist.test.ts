@@ -39,6 +39,21 @@ describe('isBuiltInRedirectUri', () => {
     ['https://oauth-redirect.googleusercontent.com.evil.com/r/user_bound_custom-mcp-1-x', false],
     ['https://evil.googleusercontent.com/r/user_bound_custom-mcp-1-x', false],
     ['http://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1-x', false],
+    // Copilot Studio: Power Platform's consent callback, shared or per connector.
+    ['https://global.consent.azure-apim.net/redirect', true],
+    ['https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda', true],
+    ['https://global.consent.azure-apim.net/redirect/', false],
+    ['https://global.consent.azure-apim.net/redirect/a/b', false],
+    ['https://global.consent.azure-apim.net/redirect/a.b', false],
+    ['https://global.consent.azure-apim.net/redirect/a_b', false],
+    ['https://global.consent.azure-apim.net/redirect/a%2Fb', false],
+    ['https://global.consent.azure-apim.net/redirect/abc?next=x', false],
+    ['https://global.consent.azure-apim.net/redirect/abc#x', false],
+    ['https://global.consent.azure-apim.net/redirectx', false],
+    ['https://global.consent.azure-apim.net/other', false],
+    ['https://evil.consent.azure-apim.net/redirect/abc', false],
+    ['https://global.consent.azure-apim.net.evil.com/redirect/abc', false],
+    ['http://global.consent.azure-apim.net/redirect/abc', false],
     ['cursor://anysphere.cursor-mcp/oauth/callback', true],
     ['cursor://anysphere.cursor-mcp/oauth/callback/', false],
     ['cursor://anysphere.cursor-mcp/oauth/callback?x=1', false],
@@ -128,6 +143,9 @@ describe('builtInRedirectProvider', () => {
     ['https://grok.com/connectors-oauth-exchange-code/extra', null],
     ['https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se', 'gemini'],
     ['https://oauth-redirect.googleusercontent.com/r/some-cloud-project', null],
+    ['https://global.consent.azure-apim.net/redirect', 'copilot'],
+    ['https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda', 'copilot'],
+    ['https://global.consent.azure-apim.net/redirect/a/b', null],
     ['cursor://anysphere.cursor-mcp/oauth/callback', 'cursor_deeplink'],
     ['https://www.cursor.com/agents/mcp/oauth/callback', 'cursor'],
     ['https://squidler.io/api/oauth/callback/accounted', 'squidler'],
@@ -233,6 +251,43 @@ describe('resolveRedirectUri', () => {
       allowed: true,
       kind: 'built_in',
       provider: 'local',
+    })
+  })
+
+  describe('partner rows (oauth_partner_clients)', () => {
+    const PARTNERS: Row[] = [
+      { id: 'p-1', slug: 'gateway', name: 'Gateway', host: 'gateway.example.com', path: '/upstream', match: 'prefix', created_at: '2026-11-19T10:00:00Z', revoked_at: null },
+      { id: 'p-2', slug: 'gone', name: 'Gone', host: 'gone.example.com', path: '/cb', match: 'exact', created_at: '2026-11-19T10:00:00Z', revoked_at: '2026-11-19T11:00:00Z' },
+    ]
+    const WITH_PARTNERS = {
+      ...DB,
+      oauth_partner_clients: PARTNERS,
+      // A member also registered a URI under the partner's prefix: the
+      // partner answers first.
+      oauth_client_registrations: [
+        ...REGISTRATIONS,
+        { id: 'reg-x', user_id: 'user-1', client_name: 'Egen', redirect_uri: 'https://gateway.example.com/upstream/a/callback', revoked_at: null },
+      ],
+    }
+
+    it('resolves a URI under an active partner row for any user, before the member registrations', async () => {
+      const partner = { allowed: true, kind: 'partner', partnerId: 'p-1', slug: 'gateway', name: 'Gateway' }
+      const sb = fakeClient(WITH_PARTNERS)
+      expect(await resolveRedirectUri('https://gateway.example.com/upstream/a/callback', sb, { consentingUserId: 'user-9' })).toEqual(partner)
+      expect(await resolveRedirectUri('https://gateway.example.com/upstream/a/callback', sb)).toEqual(partner)
+      expect(sb.from).not.toHaveBeenCalledWith('oauth_client_registrations')
+    })
+
+    it('refuses a revoked partner row and a URI that leaves the prefix', async () => {
+      const sb = fakeClient(WITH_PARTNERS)
+      expect(await resolveRedirectUri('https://gone.example.com/cb', sb)).toEqual({ allowed: false })
+      expect(await resolveRedirectUri('https://gateway.example.com/upstream/../evil', sb)).toEqual({ allowed: false })
+    })
+
+    it('fails closed for partners when the table cannot be read, and the registrations still answer', async () => {
+      const sb = fakeClient(WITH_PARTNERS, 'oauth_partner_clients')
+      expect(await resolveRedirectUri('https://gateway.example.com/upstream/b/callback', sb)).toEqual({ allowed: false })
+      expect(await resolveRedirectUri('https://mine.example/cb', sb, { consentingUserId: 'user-1' })).toMatchObject({ allowed: true, kind: 'registered', registrationId: 'reg-3' })
     })
   })
 
@@ -438,9 +493,19 @@ describe('lookupCompanyRole', () => {
 })
 
 describe('builtInOnwardOrigins', () => {
-  it("names cursor.com for Cursor's web callback, which forwards there", async () => {
+  it("names cursor.com and the local client's loopback for Cursor's web callback, which forwards to both", async () => {
     const { builtInOnwardOrigins } = await import('../oauth-allowlist')
-    expect(builtInOnwardOrigins('https://www.cursor.com/agents/mcp/oauth/callback')).toEqual(['https://cursor.com'])
+    expect(builtInOnwardOrigins('https://www.cursor.com/agents/mcp/oauth/callback')).toEqual([
+      'https://cursor.com',
+      'http://localhost:8787',
+    ])
+  })
+
+  it("names the regional consent servers for Copilot Studio's callback, which the global host forwards to", async () => {
+    const { builtInOnwardOrigins } = await import('../oauth-allowlist')
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp')).toEqual(['https://*.consent.azure-apim.net'])
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/redirect')).toEqual(['https://*.consent.azure-apim.net'])
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/other')).toEqual([])
   })
 
   it('names nothing for other callbacks, or for a www.cursor.com path that is not allowlisted', async () => {

@@ -13,6 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { rpcClientForBulkDelete } from '@/lib/supabase/bulk-delete-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { syncDraftVatHeadersForChangedCustomers } from '@/lib/invoices/sync-draft-vat-headers'
 
 export type RegisterKind = 'customers' | 'suppliers' | 'articles'
 
@@ -204,7 +205,12 @@ export type UndoRegisterImportFailure =
   | 'REG_IMPORT_UNDO_FAILED'
 
 export type UndoRegisterImportOutcome =
-  | { ok: true; result: RegisterUndoResult }
+  | {
+      ok: true
+      result: RegisterUndoResult
+      /** Restored customers whose open drafts the deadline left on the imported VAT header. */
+      draftsNotSynced?: string[]
+    }
   | { ok: false; code: UndoRegisterImportFailure; error?: unknown }
 
 /** The RPC's documented errcodes, mapped to the route's error codes. */
@@ -219,27 +225,32 @@ const RPC_ERROR_CODES: Record<string, UndoRegisterImportFailure> = {
  * so a run of another company stops here as not found; only then does the
  * RPC run on the service client (rpcClientForBulkDelete: no 8s statement
  * timeout), passing the caller as the actor the RPC checks write access for.
+ *
+ * `draftSyncDeadline` (epoch ms) bounds the draft sync that follows the RPC,
+ * so the caller can still answer: the run is undone by then either way.
  */
 export async function undoRegisterImport(
   supabase: SupabaseClient,
   companyId: string,
   runId: string,
   userId: string,
+  options: { draftSyncDeadline?: number } = {},
 ): Promise<UndoRegisterImportOutcome> {
-  const { data: run, error: lookupError } = await supabase
+  const { data, error: lookupError } = await supabase
     .from('register_import_runs')
-    .select('id, undone_at')
+    .select('id, undone_at, kind, updated_rows')
     .eq('id', runId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (lookupError) return { ok: false, code: 'REG_IMPORT_UNDO_FAILED', error: lookupError }
+  const run = data as { undone_at: string | null; kind: RegisterKind; updated_rows: RegisterUpdatedRow[] | null } | null
   if (!run) return { ok: false, code: 'REG_IMPORT_UNDO_NOT_FOUND' }
-  if ((run as { undone_at: string | null }).undone_at) {
+  if (run.undone_at) {
     return { ok: false, code: 'REG_IMPORT_UNDO_ALREADY_UNDONE' }
   }
 
   const rpcClient = await rpcClientForBulkDelete(supabase)
-  const { data, error } = await rpcClient.rpc('undo_register_import', {
+  const { data: undone, error } = await rpcClient.rpc('undo_register_import', {
     p_company_id: companyId,
     p_run_id: runId,
     p_user_id: userId,
@@ -248,5 +259,22 @@ export async function undoRegisterImport(
     const code = RPC_ERROR_CODES[(error as { code?: string }).code ?? ''] ?? 'REG_IMPORT_UNDO_FAILED'
     return { ok: false, code, error }
   }
-  return { ok: true, result: data as RegisterUndoResult }
+  const result = undone as RegisterUndoResult
+
+  // A customer the undo put back on its old type, country or VAT number
+  // moves the header of its open drafts back with it, as the import moved
+  // it forward. A kept row was not restored, so it is left alone.
+  if (run.kind === 'customers') {
+    const kept = new Set((result.kept ?? []).map((row) => row.id))
+    const sync = await syncDraftVatHeadersForChangedCustomers(
+      supabase,
+      companyId,
+      (run.updated_rows ?? []).filter((row) => !kept.has(row.id)),
+      { deadline: options.draftSyncDeadline },
+    )
+    if (sync.unsynced.length > 0) {
+      return { ok: true, result, draftsNotSynced: sync.unsynced.map((change) => change.id) }
+    }
+  }
+  return { ok: true, result }
 }

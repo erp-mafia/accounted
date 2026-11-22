@@ -3,6 +3,7 @@ import { createServiceClientNoCookies } from './api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { scopeKind, type ApiKeyScope } from './scope-catalog'
 import { INVOICER_API_SCOPES, isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { findPartnerClient } from './oauth-partner-clients'
 
 /**
  * What an OAuth consent may grant: which redirect URIs a code may be sent
@@ -15,14 +16,15 @@ import { INVOICER_API_SCOPES, isInvoicerRole } from '@/lib/auth/invoicer-role'
 /**
  * Identity of a built-in client, derived from the redirect URI pattern that
  * matched. Rendered on the consent page so the user can tell a real Claude /
- * ChatGPT / Grok / Gemini / Cursor / Squidler / Celemine connector from a
- * look-alike registration.
+ * ChatGPT / Grok / Gemini / Copilot Studio / Cursor / Squidler / Celemine
+ * connector from a look-alike registration.
  */
 export type BuiltInProvider =
   | 'claude'
   | 'chatgpt'
   | 'grok'
   | 'gemini'
+  | 'copilot'
   | 'cursor'
   | 'cursor_deeplink'
   | 'squidler'
@@ -31,8 +33,10 @@ export type BuiltInProvider =
   | 'local'
 
 /**
- * Built-in redirect URI patterns. These bypass the DB lookup entirely so
- * the Claude, ChatGPT, Grok, Gemini, Cursor, Squidler and Celemine connectors keep working without seeded rows, and so
+ * Built-in redirect URI patterns. A new partner platform is not added here:
+ * it is a row in oauth_partner_clients (src/lib/auth/oauth-partner-clients.ts),
+ * which needs no deploy. These bypass the DB lookup entirely so
+ * the Claude, ChatGPT, Grok, Gemini, Copilot Studio, Cursor, Squidler and Celemine connectors keep working without seeded rows, and so
  * local development never depends on having a registration.
  *
  * ChatGPT uses a per-connector-instance callback path
@@ -59,6 +63,23 @@ export type BuiltInProvider =
  * project receive codes and show up here as Gemini. Only the
  * `user_bound_custom-mcp-` form is matched: project ids cannot contain
  * underscores, so no project can claim it.
+ *
+ * Microsoft Copilot Studio adds an MCP server as a Power Platform connector,
+ * and the connector signs in through Power Platform's consent service with
+ * one callback per connector:
+ * https://global.consent.azure-apim.net/redirect/<connector id>, for example
+ * .../redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda
+ * (developer.monday.com, "Integrating monday MCP with Copilot Studio"; the
+ * Copilot Studio MCP wizard at learn.microsoft.com/microsoft-copilot-studio/
+ * mcp-add-existing-server-to-agent shows it as the callback URL). Older
+ * connectors use the shared form without an id,
+ * https://global.consent.azure-apim.net/redirect (developer.celonis.com and
+ * Collibra's Copilot Studio guide). The service is shared by every Power
+ * Platform connector, so the consent page names the platform, not one
+ * tenant's agent. Matched on the exact host and the /redirect path only; the
+ * connector id is one segment of letters, digits and `-` (Power Platform
+ * writes `_` and spaces as -5f and -20), so no `.`, `/`, `%`, query or
+ * fragment can follow.
  *
  * Cursor (IDE and CLI) registers through /register with three redirect URIs
  * in one request: the legacy custom-scheme deeplink
@@ -107,6 +128,7 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/chatgpt\.com\/connector_platform_oauth_redirect$/, provider: 'chatgpt' },
   { pattern: /^https:\/\/grok\.com\/connectors-oauth-exchange-code\/?$/, provider: 'grok' },
   { pattern: /^https:\/\/oauth-redirect\.googleusercontent\.com\/r\/user_bound_custom-mcp-[A-Za-z0-9_-]+$/, provider: 'gemini' },
+  { pattern: /^https:\/\/global\.consent\.azure-apim\.net\/redirect(\/[A-Za-z0-9-]+)?$/, provider: 'copilot' },
   { pattern: /^cursor:\/\/anysphere\.cursor-mcp\/oauth\/callback$/, provider: 'cursor_deeplink' },
   { pattern: /^https:\/\/www\.cursor\.com\/agents\/mcp\/oauth\/callback$/, provider: 'cursor' },
   { pattern: /^https:\/\/squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
@@ -136,11 +158,24 @@ export function isBuiltInRedirectUri(uri: string): boolean {
  *
  * Cursor's web callback https://www.cursor.com/agents/mcp/oauth/callback
  * answers 308 to the same path on https://cursor.com (observed 2026-11-14,
- * crm#1720). The code is still only ever sent to the exact allowlisted URI;
- * this names where that host forwards it, nothing else.
+ * crm#1720), and for a sign-in a local Cursor client started, cursor.com
+ * answers 302 to that client's RFC 8252 loopback http://localhost:8787/callback
+ * (observed 2026-11-22, crm#1720; the port the comment above names). Chromium
+ * stops the chain at that hop unless it is named; Firefox does not re-check
+ * form-action on redirects, so a Firefox test never shows it. The code is still only ever
+ * sent to the exact allowlisted URI; this names where that host forwards it,
+ * nothing else.
+ *
+ * Power Platform's global consent host (Copilot Studio) routes a callback on
+ * to the consent server of the connector's region, which it reads from the
+ * state: for a state that names none it answers 302 "No consent server
+ * information was associated with this request" (probed 2026-11-20 and
+ * 2026-11-22). The regional servers are subdomains of consent.azure-apim.net,
+ * so that one wildcard is named.
  */
 const BUILT_IN_ONWARD_ORIGINS: Readonly<Record<string, readonly string[]>> = {
-  'https://www.cursor.com': ['https://cursor.com'],
+  'https://www.cursor.com': ['https://cursor.com', 'http://localhost:8787'],
+  'https://global.consent.azure-apim.net': ['https://*.consent.azure-apim.net'],
 }
 
 /** Onward origins the consent page's form-action must also allow for a built-in callback. */
@@ -155,6 +190,16 @@ export function builtInOnwardOrigins(uri: string): readonly string[] {
 
 export type RedirectUriResolution =
   | { allowed: true; kind: 'built_in'; provider: BuiltInProvider }
+  | {
+      allowed: true
+      kind: 'partner'
+      /** The oauth_partner_clients row the URI matched. */
+      partnerId: string
+      /** The partner's slug: keys minted through it carry the client `partner:<slug>`. */
+      slug: string
+      /** The partner's name, shown on the consent page as a verified client. */
+      name: string
+    }
   | {
       allowed: true
       kind: 'registered'
@@ -197,7 +242,9 @@ function registered(row: RegistrationRow, byConsentingUser: boolean): RedirectUr
 
 /**
  * Resolve a redirect URI to the client behind it. Built-in patterns
- * short-circuit; otherwise we look for a non-revoked registration in
+ * short-circuit; then an active partner row in oauth_partner_clients
+ * (src/lib/auth/oauth-partner-clients.ts), which serves every user like a
+ * built-in; otherwise we look for a non-revoked registration in
  * oauth_client_registrations and, when a consenting user is given, take
  * the one they made themselves, else one a colleague made. Several users may
  * each register the same URI (crm#1654): a tool with one fixed callback for
@@ -231,6 +278,14 @@ export async function resolveRedirectUri(
     client = supabase ?? createServiceClientNoCookies()
   } catch {
     return { allowed: false }
+  }
+
+  try {
+    const partner = await findPartnerClient(uri, client)
+    if (partner) return { allowed: true, kind: 'partner', partnerId: partner.id, slug: partner.slug, name: partner.name }
+  } catch {
+    // An unreadable partner list denies every partner URI (fail closed) and
+    // leaves the member registrations below to answer for theirs.
   }
 
   let registrations: RegistrationRow[]

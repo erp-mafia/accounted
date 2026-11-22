@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CustomerType } from '@/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   deriveInvoiceVatHeader,
   resolveInvoiceVatRules,
@@ -14,6 +15,28 @@ interface DraftRow {
   vat_treatment_override: InvoiceVatTreatmentOverride | null
   delivery_country: string | null
   items: { vat_rate: number | null; line_type: string | null }[] | null
+}
+
+/**
+ * The customer fields an invoice's VAT header is derived from
+ * (resolveInvoiceVatRules). A write that changes one of them moves the
+ * header of that customer's open drafts.
+ */
+export const DRAFT_VAT_CUSTOMER_FIELDS = ['customer_type', 'vat_number', 'vat_number_validated', 'country'] as const
+
+/**
+ * The invoices whose VAT header follows their customer: open drafts that are
+ * neither a credit note (it follows the invoice it credits) nor self-billed
+ * (the counterparty's document). The caller adds the customer filter.
+ */
+function followingDrafts<Columns extends string>(supabase: SupabaseClient, companyId: string, columns: Columns) {
+  return supabase
+    .from('invoices')
+    .select(columns)
+    .eq('company_id', companyId)
+    .eq('status', 'draft')
+    .is('credited_invoice_id', null)
+    .eq('is_self_billed', false)
 }
 
 /**
@@ -53,20 +76,17 @@ export async function syncDraftVatHeadersForCustomer(
   try {
     const { data: customer } = await supabase
       .from('customers')
-      .select('id, customer_type, vat_number, vat_number_validated, country')
+      .select(`id, ${DRAFT_VAT_CUSTOMER_FIELDS.join(', ')}`)
       .eq('id', customerId)
       .eq('company_id', companyId)
       .maybeSingle()
     if (!customer) return 0
 
-    const { data: drafts } = await supabase
-      .from('invoices')
-      .select('id, vat_treatment, moms_ruta, reverse_charge_text, vat_treatment_override, delivery_country, items:invoice_items(vat_rate, line_type)')
-      .eq('company_id', companyId)
-      .eq('customer_id', customerId)
-      .eq('status', 'draft')
-      .is('credited_invoice_id', null)
-      .eq('is_self_billed', false)
+    const { data: drafts } = await followingDrafts(
+      supabase,
+      companyId,
+      'id, vat_treatment, moms_ruta, reverse_charge_text, vat_treatment_override, delivery_country, items:invoice_items(vat_rate, line_type)',
+    ).eq('customer_id', customerId)
     if (!drafts || drafts.length === 0) return 0
 
     const { data: settings } = await supabase
@@ -76,7 +96,9 @@ export async function syncDraftVatHeadersForCustomer(
       .maybeSingle()
     const vatRegistered = settings?.vat_registered !== false
 
-    const current = customer as {
+    // The select is built from DRAFT_VAT_CUSTOMER_FIELDS, so its row type is
+    // not inferred from a literal: the fields are named here instead.
+    const current = customer as unknown as {
       id: string
       customer_type: CustomerType
       vat_number: string | null
@@ -128,4 +150,91 @@ export async function syncDraftVatHeadersForCustomer(
   } catch {
     return 0
   }
+}
+
+/** Customer ids per drafts lookup: 200 uuids is about 7.5 kB of query string. */
+const DRAFT_LOOKUP_ID_SLICE = 200
+
+/**
+ * Of `customerIds`, the ones with at least one draft that follows its
+ * customer. On a failed read, all of them.
+ */
+async function customersWithFollowingDrafts(
+  supabase: SupabaseClient,
+  companyId: string,
+  customerIds: string[],
+): Promise<Set<string>> {
+  try {
+    const rows = await fetchAllRows<{ customer_id: string }>(({ from, to }) =>
+      followingDrafts(supabase, companyId, 'customer_id')
+        .in('customer_id', customerIds)
+        .order('id')
+        .range(from, to),
+    )
+    return new Set(rows.map((row) => row.customer_id))
+  } catch {
+    // Safe to ignore: not knowing which customers have a draft only costs
+    // reads, as each customer's own sync then reads its drafts.
+    return new Set(customerIds)
+  }
+}
+
+/** A customer a bulk write changed: the fields it changed, as they were before. */
+export interface ChangedCustomer {
+  id: string
+  before: Record<string, unknown>
+}
+
+export interface ChangedCustomersDraftSync {
+  /** Drafts whose header was re-derived. */
+  updated: number
+  /**
+   * The changes the deadline stopped before: nothing was written for them,
+   * and passing them again (with no deadline) finishes the sync.
+   */
+  unsynced: ChangedCustomer[]
+}
+
+/**
+ * syncDraftVatHeadersForCustomer for every customer a bulk write changed,
+ * given the fields it changed on each (`before`: the register import's
+ * record of a merge-update, or the same record read back by its undo). For
+ * the writers that do not pass through updateCustomer, which syncs on its
+ * own. Best effort, like the single sync.
+ *
+ * A customer whose change touched none of DRAFT_VAT_CUSTOMER_FIELDS is
+ * skipped without a read. For the rest, one drafts lookup per slice of ids
+ * finds the customers that have a draft at all, and only those are synced:
+ * an import that changes a thousand cards costs a few reads, not a thousand
+ * syncs.
+ *
+ * With `deadline` (epoch ms), nothing new is started once it has passed: the
+ * changes not done yet come back in `unsynced`, so the caller can first do
+ * what must not wait for the sync and then finish it.
+ */
+export async function syncDraftVatHeadersForChangedCustomers(
+  supabase: SupabaseClient,
+  companyId: string,
+  changes: ReadonlyArray<ChangedCustomer>,
+  options: { deadline?: number } = {},
+): Promise<ChangedCustomersDraftSync> {
+  const pastDeadline = () => options.deadline !== undefined && Date.now() >= options.deadline
+  const vatChanges = changes.filter((change) =>
+    DRAFT_VAT_CUSTOMER_FIELDS.some((field) => field in change.before),
+  )
+
+  const withDrafts: ChangedCustomer[] = []
+  for (let i = 0; i < vatChanges.length; i += DRAFT_LOOKUP_ID_SLICE) {
+    if (pastDeadline()) return { updated: 0, unsynced: [...withDrafts, ...vatChanges.slice(i)] }
+    const slice = vatChanges.slice(i, i + DRAFT_LOOKUP_ID_SLICE)
+    const ids = await customersWithFollowingDrafts(supabase, companyId, slice.map((change) => change.id))
+    withDrafts.push(...slice.filter((change) => ids.has(change.id)))
+  }
+
+  let updated = 0
+  for (let i = 0; i < withDrafts.length; i++) {
+    if (pastDeadline()) return { updated, unsynced: withDrafts.slice(i) }
+    updated += await syncDraftVatHeadersForCustomer(supabase, companyId, withDrafts[i].id)
+  }
+  return { updated, unsynced: [] }
 }

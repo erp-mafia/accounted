@@ -112,10 +112,8 @@ The boundary is strict and CI-enforced:
   files that name a provider API host directly and fails when a new file
   names one.
 
-Licensing follows the same boundary: the project is AGPL-3.0, with an
-extension exception that allows third-party extensions using only the
-documented Extension API to be licensed under any terms. See
-[LICENSE](../LICENSE) and [docs/EXTENSIONS.md](EXTENSIONS.md).
+The project, extensions included, is licensed under AGPL-3.0-or-later. See
+[LICENSE](../LICENSE).
 
 ## Agent surface (MCP)
 
@@ -125,7 +123,7 @@ transactions, draft vouchers, reconcile periods, generate reports and
 declarations.
 
 - Authentication uses scoped API keys (stored as SHA-256 hashes, rate limited
-  per key). Claude, ChatGPT, Grok and Gemini connectors instead authenticate with OAuth 2.1
+  per key). Claude, ChatGPT, Grok, Gemini and Copilot Studio connectors instead authenticate with OAuth 2.1
   (PKCE; `src/app/api/mcp-oauth/{authorize,register,token}` plus the
   `.well-known` discovery documents), which mints a scoped API key behind the
   scenes. Authentication is lazy: a client can connect, list tools, and call a

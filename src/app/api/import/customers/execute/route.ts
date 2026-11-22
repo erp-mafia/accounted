@@ -5,7 +5,8 @@ import { CustomerImportExecuteSchema } from '@/lib/api/schemas'
 import { createRegisterMatcher, customerMatchRow } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
+import { diffUpdatedRows, recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
+import { syncDraftVatHeadersForChangedCustomers } from '@/lib/invoices/sync-draft-vat-headers'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
@@ -17,6 +18,26 @@ import {
 } from '@/lib/invariants/personal-number-shape'
 import { invoiceTermsFor } from '@/lib/invoices/due-date'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
+
+/**
+ * A large register goes in as several requests (lib/import/register-import-flow.ts
+ * executeBatches); one batch's merges and the drafts they move fit well
+ * inside this, as on the article import.
+ */
+export const maxDuration = 300
+
+/**
+ * How far into the request the draft sync may run ahead of the run record,
+ * and how far at all. Past the first the run is recorded first, so a slow
+ * sync can never cost the import its undo; the customers the sync had not
+ * reached are synced after the record, and the undo keeps those as used since
+ * the import. Past the second nothing new is started, so the answer goes out
+ * before the platform ends the request (a 504 would make the wizard send the
+ * batch again, and that attempt changes nothing and so syncs nothing); the
+ * customers still left are logged.
+ */
+const DRAFT_SYNC_BEFORE_RECORD_MS = (maxDuration - 60) * 1000
+const DRAFT_SYNC_END_MS = (maxDuration - 10) * 1000
 
 interface ExistingCustomer {
   id: string
@@ -55,6 +76,7 @@ interface ExistingCustomer {
 export const POST = withRouteContext(
   'register_import.customers.execute',
   async (request, ctx) => {
+    const startedAt = Date.now()
     const { user, supabase, companyId, log, requestId } = ctx
 
     const result = await validateBody(request, CustomerImportExecuteSchema, {
@@ -226,7 +248,35 @@ export const POST = withRouteContext(
         }
       }
 
-      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
+      // A merge that changed a field the VAT header is derived from moves the
+      // header of that customer's open drafts, as the customer form does
+      // (updateCustomer). Before the run is recorded: the undo reads a draft
+      // written after the run as the customer used since the import. Within
+      // DRAFT_SYNC_BEFORE_RECORD_MS, so the run is always recorded.
+      const draftSync = await syncDraftVatHeadersForChangedCustomers(
+        supabase,
+        companyId,
+        diffUpdatedRows(beforeImport, new Set(created.map((c) => c.id)), updated),
+        { deadline: startedAt + DRAFT_SYNC_BEFORE_RECORD_MS },
+      )
+
+      const runId = await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
+
+      if (draftSync.unsynced.length > 0) {
+        const late = await syncDraftVatHeadersForChangedCustomers(
+          supabase,
+          companyId,
+          draftSync.unsynced,
+          { deadline: startedAt + DRAFT_SYNC_END_MS },
+        )
+        opLog.warn('draft VAT sync ran past the import run record', {
+          registerImportRunId: runId,
+          // Their customers' undo keeps them, as used since the import.
+          draftsUpdatedAfterRecord: late.updated,
+          // Their open drafts keep the header they had before the import.
+          customersNotSynced: late.unsynced.map((change) => change.id),
+        })
+      }
 
       const response: CustomerImportExecuteResult = {
         success: errors.length === 0,

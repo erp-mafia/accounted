@@ -19,6 +19,7 @@ Run scripts from the repository root. Prefer the named commands in [package.json
 | Directory | Purpose |
 | --- | --- |
 | `self-host/` | Backup, restore, and access-control helpers; `smoke-boot.sh` boots an image under `docker-compose.yml` (run by `docker-publish.yml` before `latest` moves) |
+| `ci/` | Helpers the CI workflows run; `replay-migrations.sh` applies migration files over one database connection, the session reset (`DISCARD ALL`) between files |
 | `ops/` | Read-only database snapshots; `background-freshness.sql` shows when each background path last did real work per company |
 | `perf/` | Performance analysis; [usage](perf/README.md) |
 | `peppol/`, `scb/` | Integration probes and discovery |

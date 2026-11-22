@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { registrationNumberKey } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
 import type { TicCallPurpose } from '@/lib/tic-budget/budget'
 
@@ -19,7 +20,10 @@ const log = createLogger('agent.composer.tic-fetch')
 //
 // Stale-cache policy: anything cached within the last 7 days is reused
 // verbatim. TIC data is slow-changing (sniCodes, registration, address
-// rarely flip) so this avoids re-hitting TIC on every page load.
+// rarely flip) so this avoids re-hitting TIC on every page load. A snapshot
+// with incomplete sections (a detail call failed) is reused for an hour, and
+// a refetch keeps the last answered value of the sections it cannot fill
+// (never the annual report list: see keepLastKnownSections).
 //
 // Rate budget: the /profile endpoint fans out to ~13 TIC (Lens) calls and
 // the account has a ~3000/mo ceiling. So we DON'T eagerly re-fetch every
@@ -29,6 +33,13 @@ const log = createLogger('agent.composer.tic-fetch')
 // does today: the assistant's build did, and it is removed).
 
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+
+// A snapshot some detail calls could not fill (its `incompleteSections`) is
+// asked again after an hour instead of a week. A retry while the budget is
+// spent costs nothing (a refused reservation is not counted), and once it is
+// back the calls that did answer come from the 24 h shared response cache, so
+// a retry pays only for the sections that were missing.
+const INCOMPLETE_RETRY_AFTER_MS = 60 * 60 * 1000 // 1 hour
 
 /** The TIC extension's profile service (services.fetchCompanyProfile). */
 export const FETCH_COMPANY_PROFILE_SERVICE = 'fetchCompanyProfile'
@@ -43,6 +54,12 @@ const FETCH_TIMEOUT_MS = 5_000
 export interface TicSnapshotResult {
   snapshot: Record<string, unknown> | null
   source: 'cached' | 'fetched' | 'fallback'
+  /**
+   * Why a fallback has no fresh profile: TIC has no company under the number
+   * ('not_found'), or it could not be asked ('unavailable': TIC off, budget
+   * spent, timeout, upstream error, no org number).
+   */
+  reason?: 'not_found' | 'unavailable'
 }
 
 // A snapshot written before the TIC v2 migration lacks the v2-only
@@ -50,6 +67,57 @@ export interface TicSnapshotResult {
 // array), so its absence is a reliable "this is a v1 snapshot" signal.
 function isV1Snapshot(snapshot: Record<string, unknown> | null): boolean {
   return snapshot != null && !('statuses' in snapshot)
+}
+
+/** The snapshot keys a failed detail call left empty (TICCompanyProfile.incompleteSections). */
+export function incompleteSectionsOf(snapshot: Record<string, unknown> | null | undefined): string[] {
+  const keys = snapshot?.incompleteSections
+  return Array.isArray(keys) ? keys.filter((k): k is string => typeof k === 'string') : []
+}
+
+function hasContent(value: unknown): boolean {
+  if (value === null || value === undefined) return false
+  return !Array.isArray(value) || value.length > 0
+}
+
+// Never taken from the previous snapshot: the annual report list. The
+// closed-year reopen gate (fiscal_year_reopen_snapshot, the keys in
+// FISCAL_YEAR_REOPEN_REGISTRY_KEYS) reads it as of tic_snapshot_fetched_at,
+// so a list carried into a fresh snapshot would pass as fetched now and miss
+// a report registered since. A failed documents call leaves it incomplete,
+// and the gate refuses.
+const NEVER_CARRIED = new Set(['financialReports', 'financialReportsComplete'])
+
+/** Whether two snapshots describe the same firm, by their registration number. */
+function sameFirm(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const key = registrationNumberKey(typeof a.orgNumber === 'string' ? a.orgNumber : null)
+  return key !== null && key === registrationNumberKey(typeof b.orgNumber === 'string' ? b.orgNumber : null)
+}
+
+/**
+ * A fresh profile with the sections it could not fetch taken from the
+ * previous snapshot, where that snapshot had them answered and non-empty: a
+ * refetch while the budget is spent must not replace a known board with an
+ * empty one. Sections with nothing to keep stay listed as incomplete, and so
+ * does the annual report list (NEVER_CARRIED). A previous snapshot of another
+ * number (the number was corrected since) describes another firm: nothing is
+ * taken from it.
+ */
+export function keepLastKnownSections(
+  fresh: Record<string, unknown>,
+  previous: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const missing = incompleteSectionsOf(fresh)
+  if (missing.length === 0 || !previous || !sameFirm(fresh, previous)) return fresh
+  const previousMissing = new Set(incompleteSectionsOf(previous))
+  const merged: Record<string, unknown> = { ...fresh }
+  const stillMissing: string[] = []
+  for (const key of missing) {
+    if (!NEVER_CARRIED.has(key) && !previousMissing.has(key) && hasContent(previous[key])) merged[key] = previous[key]
+    else stillMissing.push(key)
+  }
+  merged.incompleteSections = stillMissing
+  return merged
 }
 
 export async function ensureTicSnapshot(opts: {
@@ -90,18 +158,21 @@ export async function ensureTicSnapshot(opts: {
     .eq('id', companyId)
     .single()
 
-  if (!companyRow) return { snapshot: null, source: 'fallback' }
+  if (!companyRow) return { snapshot: null, source: 'fallback', reason: 'unavailable' }
 
   const cachedSnapshot = companyRow.tic_snapshot as Record<string, unknown> | null
+  const fetchedAt = companyRow.tic_snapshot_fetched_at as string | null
   const needsV2Upgrade = upgradeV1 && isV1Snapshot(cachedSnapshot)
   const lacksRequiredKey =
     cachedSnapshot != null && requireKeys.some((key) => !(key in cachedSnapshot))
+  const maxAgeMs =
+    incompleteSectionsOf(cachedSnapshot).length > 0 ? INCOMPLETE_RETRY_AFTER_MS : STALE_AFTER_MS
 
   // Fresh cache hit: nothing to do. (Unless the caller needs v2 fields and
   // the cache is still v1, in which case we fall through to a refetch.)
   if (
     cachedSnapshot &&
-    !isStale(companyRow.tic_snapshot_fetched_at as string | null) &&
+    !isOlderThan(fetchedAt, maxAgeMs) &&
     !needsV2Upgrade &&
     !lacksRequiredKey
   ) {
@@ -122,17 +193,15 @@ export async function ensureTicSnapshot(opts: {
     orgNumber = (settingsRow?.org_number as string | null) ?? null
   }
   if (!orgNumber) {
-    return { snapshot: (companyRow.tic_snapshot as Record<string, unknown> | null) ?? null, source: 'fallback' }
+    return { snapshot: cachedSnapshot ?? null, source: 'fallback', reason: 'unavailable' }
   }
 
-  const profile = await fetchTicProfile(orgNumber, timeoutMs, purpose)
-  if (!profile) {
+  const outcome = await fetchTicProfile(orgNumber, timeoutMs, purpose)
+  if (outcome.kind !== 'found') {
     // Fall through with whatever (possibly stale) snapshot we already have.
-    return {
-      snapshot: (companyRow.tic_snapshot as Record<string, unknown> | null) ?? null,
-      source: 'fallback',
-    }
+    return { snapshot: cachedSnapshot ?? null, source: 'fallback', reason: outcome.kind }
   }
+  const profile = keepLastKnownSections(outcome.profile, cachedSnapshot)
 
   // Persist. Best-effort: if the update fails, we still return the profile
   // we just fetched so the current request can use it.
@@ -153,18 +222,23 @@ export async function ensureTicSnapshot(opts: {
   return { snapshot: profile, source: 'fetched' }
 }
 
-function isStale(fetchedAt: string | null): boolean {
+function isOlderThan(fetchedAt: string | null, maxAgeMs: number): boolean {
   if (!fetchedAt) return true
   const ts = Date.parse(fetchedAt)
   if (Number.isNaN(ts)) return true
-  return Date.now() - ts > STALE_AFTER_MS
+  return Date.now() - ts > maxAgeMs
 }
+
+type ProfileOutcome =
+  | { kind: 'found'; profile: Record<string, unknown> }
+  | { kind: 'not_found' }
+  | { kind: 'unavailable' }
 
 async function fetchTicProfile(
   orgNumber: string,
   timeoutMs: number,
   purpose: TicCallPurpose,
-): Promise<Record<string, unknown> | null> {
+): Promise<ProfileOutcome> {
   // Loaded on use, not statically: the settings panel's refresh action reaches
   // this module from a client component, and a static registry import would
   // pull lib/init toward the browser build (check:guards static-init-import).
@@ -172,7 +246,7 @@ async function fetchTicProfile(
   const provider = (await extensionRegistry.getAll()).find(
     (ext) => typeof ext.services?.[FETCH_COMPANY_PROFILE_SERVICE] === 'function',
   )
-  if (!provider) return null
+  if (!provider) return { kind: 'unavailable' }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -188,14 +262,14 @@ async function fetchTicProfile(
     ])
     if (result === 'timeout') {
       log.warn('tic profile timed out', { timeoutMs })
-      return null
+      return { kind: 'unavailable' }
     }
-    return result ?? null
+    return result ? { kind: 'found', profile: result } : { kind: 'not_found' }
   } catch (err) {
     // TIC not configured, quota hit, upstream outage: a normal fallback, so
     // the caller degrades to whatever snapshot it already has.
     log.warn('tic profile fetch failed', { error: err instanceof Error ? err.message : String(err) })
-    return null
+    return { kind: 'unavailable' }
   } finally {
     clearTimeout(timer)
   }

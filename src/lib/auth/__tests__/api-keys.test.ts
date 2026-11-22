@@ -598,6 +598,26 @@ describe('validateApiKey', () => {
       expect(from).toHaveBeenCalledWith('oauth_client_registrations')
     })
 
+    it("names a partner's key by the partner, without the registered-client suffix", async () => {
+      const chain: Record<string, unknown> = {}
+      for (const method of ['select', 'in', 'order', 'limit']) chain[method] = vi.fn(() => chain)
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: [{ slug: 'acme', name: 'Acme' }], error: null })
+      const from = vi.fn(() => chain)
+      const rpc = vi.fn().mockResolvedValue({
+        data: [{ user_id: 'user-123', company_id: 'company-456', api_key_name: OAUTH_MCP_KEY_NAME, rate_limited: false, client: 'partner:acme' }],
+        error: null,
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc, from } as any)
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+
+      expect(result).toMatchObject({ client: 'partner:acme', clientName: 'Acme' })
+      expect(from).toHaveBeenCalledWith('oauth_partner_clients')
+      expect(chain.in).toHaveBeenCalledWith('slug', ['acme'])
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'partner:acme', clientName: 'Acme', serviceAccount: null }).label).toBe('Acme')
+    })
+
     it('does not look a built-in client up', async () => {
       const from = vi.fn()
       const rpc = vi.fn().mockResolvedValue({

@@ -38,6 +38,7 @@ The connection works without the plugin: add the server URL from [CONNECTORS.md]
 |---|---|
 | `/accounted:setup` | First run: connect (create the account if needed) and set up the company from the conversation |
 | `/accounted:start` | Connect, orient, and surface what needs attention |
+| `/accounted:start-company` | Start a new aktiebolag: interview, documents, verksamt.se, setup after registration |
 | `/accounted:bookkeep` | Clear unbooked bank transactions and receipts (daily) |
 | `/accounted:check` | Read-only health check with a prioritized fix list |
 | `/accounted:month-close` | Close the month against the product's checklist |
@@ -47,7 +48,7 @@ The connection works without the plugin: add the server URL from [CONNECTORS.md]
 | `/accounted:clients` | Every company on the connection in one table, urgency first; run one task for all of them |
 | `/accounted:use` | Pin the current folder to one company (writes `.accounted.json`) |
 
-The `/accounted:` prefix is how Claude Code spells them. In Codex and Cursor the same skills are named `start`, `bookkeep`, `check`, `month-close`, `vat`, `payroll`, `year-end` and `clients`. `setup` and `use` are commands, which Claude Code and Cursor load from `commands/`; in Codex, `start` covers the first run, and a `.accounted.json` file with `{ "company_id": "...", "name": "..." }` in a folder pins it the same way `/accounted:use` does.
+The `/accounted:` prefix is how Claude Code spells them. In Codex and Cursor the same skills are named `start`, `start-company`, `bookkeep`, `check`, `month-close`, `vat`, `payroll`, `year-end` and `clients`. `setup` and `use` are commands, which Claude Code and Cursor load from `commands/`; in Codex, `start` covers the first run, and a `.accounted.json` file with `{ "company_id": "...", "name": "..." }` in a folder pins it the same way `/accounted:use` does.
 
 The skills are deliberately thin: the deep procedural and regulatory content (month-end checklist, VAT rutor, payroll rules, bokslut law) lives server-side in Accounted and is loaded at need via `accounted_load_skill`, so it is always in sync with the product and tailored to your company. `accounted_list_skills` shows everything available.
 

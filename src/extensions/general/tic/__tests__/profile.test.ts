@@ -210,6 +210,8 @@ describe('TIC company profile (fetchCompanyProfile service)', () => {
     expect(data.bankAccounts).toEqual([
       { type: 'bankgiro', accountNumber: '1234567', bic: null },
     ])
+    // Every detail call answered.
+    expect(data.incompleteSections).toEqual([])
     expect(data.fetchedAt).toBeDefined()
   })
 
@@ -311,6 +313,32 @@ describe('TIC company profile (fetchCompanyProfile service)', () => {
     expect(data.representatives).toEqual([])
     expect(data.payrolls).toEqual([])
     expect(data.statuses).toEqual([])
+    // ...and the profile names every key that is empty because a call failed.
+    expect(data.incompleteSections).toEqual([
+      'financialReports',
+      'financialReportsComplete',
+      'fiscalYear',
+      'fiscalYearHistory',
+      'payrolls',
+      'board',
+      'representatives',
+      'statuses',
+      'beneficialOwners',
+    ])
+  })
+
+  it('lists only the sections whose call failed', async () => {
+    // What a spent budget looks like: the search document comes from the
+    // shared cache, a detail call is refused with the rate-limit error.
+    mockSearch.mockResolvedValue(mockDoc)
+    mockKeptSupplementary()
+    mockRepresentatives.mockRejectedValue(new Error('TIC call budget exhausted (total)'))
+    mockStatus.mockRejectedValue(new Error('TIC call budget exhausted (total)'))
+
+    const data = await fetchProfile('556036-0793')
+
+    expect(data.incompleteSections).toEqual(['board', 'representatives', 'statuses'])
+    expect(data.fiscalYear).not.toBeNull()
   })
 
   it('exposes fiscal year, payroll history, signatory, board, representatives and status', async () => {
@@ -394,5 +422,7 @@ describe('TIC company profile (fetchCompanyProfile service)', () => {
     expect(data.representatives).toEqual([])
     expect(data.payrolls).toEqual([])
     expect(data.statuses).toEqual([])
+    // Calls that answered "nothing" are complete answers, not failures.
+    expect(data.incompleteSections).toEqual([])
   })
 })

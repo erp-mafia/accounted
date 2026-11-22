@@ -1,14 +1,18 @@
 // Browser-safe on purpose: Settings → API & MCP renders from this in a
 // client component. Pure so the readout can be pinned in tests.
 
+import { partnerSlugOf } from '@/lib/auth/oauth-partner-clients'
+
 /**
  * Who is behind a connection row, as the Settings list labels it. The
  * built-in OAuth clients come from api_keys.client (migration
- * 20260913120000): claude, chatgpt, grok, gemini, cursor, cursor_deeplink,
+ * 20260913120000): claude, chatgpt, grok, gemini, copilot, cursor, cursor_deeplink,
  * squidler, celemine and local. `local` is any loopback sign-in (Claude Code,
  * Codex, ...), so it is named as a local client, never guessed as Claude Code.
+ * `partner` is a key minted through a partner row (client 'partner:<slug>',
+ * migration 20261122153300); the list names it by the partner's name.
  */
-export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'cursor' | 'squidler' | 'celemine' | 'local' | 'mcp' | 'key'
+export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'copilot' | 'cursor' | 'squidler' | 'celemine' | 'partner' | 'local' | 'mcp' | 'key'
 
 export interface ConnectionRow {
   source?: 'signin' | 'manual'
@@ -20,11 +24,13 @@ export interface ConnectionRow {
 /** Map a key row to the label/logo family it is shown with. */
 export function connectionKind(row: Pick<ConnectionRow, 'source' | 'client'>): ConnectionKind {
   if (row.source !== 'signin') return 'key'
+  if (partnerSlugOf(row.client)) return 'partner'
   switch (row.client) {
     case 'claude':
     case 'chatgpt':
     case 'grok':
     case 'gemini':
+    case 'copilot':
     case 'squidler':
     case 'celemine':
     case 'local':

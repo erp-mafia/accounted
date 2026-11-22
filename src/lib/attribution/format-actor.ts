@@ -31,7 +31,7 @@ export const RESERVED_OAUTH_KEY_NAME = 'MCP-klient (OAuth)'
  * the provider is noise beside the agent's own name. Pinned by the test
  * against oauthActorLabel's outputs. A manual key's own parentheses are kept.
  */
-const CONNECTOR_SUFFIX = /\s+\((?:Anthropic|OpenAI|xAI|registered client)\)$/
+const CONNECTOR_SUFFIX = /\s+\((?:Anthropic|OpenAI|xAI|Microsoft|registered client)\)$/
 
 /**
  * Product names for the MCP client labels the server stores (`client` on
