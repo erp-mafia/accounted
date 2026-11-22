@@ -19,6 +19,7 @@
  * A rolling-window cumulative limit is the primitive that actually bounds
  * exposure; it is deliberately a separate change.
  */
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 
 /**
  * Every operation type that posts money, with the preview_data field carrying
@@ -34,7 +35,7 @@
  *   link_transaction_journal_entry    transaction_amount  1369 rows
  *   bulk_book_transactions            tx_sum               273 rows
  *   link_supplier_invoice_voucher     payment_amount        55 rows
- *   match_batch_allocate              total_allocated       24 rows
+ *   match_batch_allocate              total_allocated       24 rows (a floor: batchAllocationPrice)
  *   mark_invoice_paid                 total                  3 rows
  *
  * The staged preview already carries the amount the operation intends to post,
@@ -64,7 +65,7 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   link_transaction_journal_entry: ['transaction_amount'],
   bulk_book_transactions: ['tx_sum'],
   link_supplier_invoice_voucher: ['payment_amount'],
-  // match_batch_allocate: PRICED_ON_LARGEST below.
+  // match_batch_allocate: PRICED_BY_PREVIEW below.
   mark_invoice_paid: ['total'],
   // Operation registry, wave 2. Dotted paths read a nested preview field.
   book_invoice: ['journal_entry.total_debit'],
@@ -97,19 +98,50 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
 }
 
 /**
- * Operation types priced on the LARGEST of several preview fields, where no
- * single field carries the whole posting.
- *
- * match_batch_allocate posts one samlingsverifikation. On a supplier payment
- * its debit side is the whole bank amount: allocations + fee rows + supplier
- * debt rows (244x, no invoice) = |transaction_amount|, and a debt row may be
- * larger than the invoices. On a customer payment it is the invoices' total:
- * allocations = |transaction_amount| + fee rows. total_allocated alone leaves
- * a supplier payment's fee and debt rows out, so the price is the larger of
- * the two. A row without transaction_amount is priced on total_allocated.
+ * Operation types priced by a function of the whole preview, where no single
+ * field carries the amount that posts.
  */
-const PRICED_ON_LARGEST: Readonly<Record<string, readonly string[]>> = {
-  match_batch_allocate: ['total_allocated', 'transaction_amount'],
+const PRICED_BY_PREVIEW: Readonly<Record<string, (record: Record<string, unknown>) => number | null>> = {
+  match_batch_allocate: batchAllocationPrice,
+}
+
+/**
+ * match_batch_allocate posts one samlingsverifikation, and its staged preview
+ * carries the lines approval posts (expected_lines). The price is that
+ * verifikat's debit side, as the engine prices any verifikat
+ * (lib/bookkeeping/unattended-ceiling.ts): the invoices, a fee row, a supplier
+ * debt row (244x, no invoice), a kursdifferens on a foreign invoice,
+ * öresavrundning and a kontantmetoden invoice's moms all count.
+ *
+ * The two sums the lines are built from are the floor, and the whole price of
+ * a row staged without lines: on a supplier payment the bank amount
+ * (allocations + fees + supplier debts = |transaction_amount|), on a customer
+ * payment the invoices (allocations = |transaction_amount| + fees).
+ * total_allocated alone left a supplier payment's fee and debt rows out.
+ */
+function batchAllocationPrice(record: Record<string, unknown>): number | null {
+  const amounts = [
+    linesDebitSide(record.expected_lines),
+    readAmount(record, 'total_allocated'),
+    readAmount(record, 'transaction_amount'),
+  ].filter((amount): amount is number => amount !== null)
+  return amounts.length > 0 ? Math.max(...amounts) : null
+}
+
+/**
+ * The debit side of a preview's lines ({ debit, credit } each) as the
+ * verifikat stores them, or null when no line carries a readable debit.
+ */
+function linesDebitSide(lines: unknown): number | null {
+  if (!Array.isArray(lines)) return null
+  const { totalDebit } = lineBalance(
+    lines
+      .filter((line): line is Record<string, unknown> => line !== null && typeof line === 'object')
+      .map((line) => ({
+        debit_amount: typeof line.debit === 'number' || typeof line.debit === 'string' ? line.debit : 0,
+      })),
+  )
+  return Number.isFinite(totalDebit) && totalDebit > 0 ? totalDebit : null
 }
 
 /**
@@ -139,20 +171,12 @@ export function priceOperation(
   operationType: string,
   previewData: unknown,
 ): number | null {
-  const largest = PRICED_ON_LARGEST[operationType]
-  const fields = PRICEABLE_OPERATIONS[operationType]
-  if (!largest && !fields) return null
   if (previewData === null || typeof previewData !== 'object') return null
-
   const record = previewData as Record<string, unknown>
-  if (largest) {
-    const amounts = largest
-      .map((field) => readAmount(record, field))
-      .filter((amount): amount is number => amount !== null)
-    return amounts.length > 0 ? Math.max(...amounts) : null
-  }
-  if (!fields) return null
-  for (const field of fields) {
+
+  const priceByPreview = PRICED_BY_PREVIEW[operationType]
+  if (priceByPreview) return priceByPreview(record)
+  for (const field of PRICEABLE_OPERATIONS[operationType] ?? []) {
     const amount = readAmount(record, field)
     if (amount !== null) return amount
   }
