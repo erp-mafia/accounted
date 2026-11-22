@@ -242,10 +242,12 @@ const SV = {
     'Jag kunde inte ta emot ditt meddelande just nu. Skicka det igen om en liten stund.',
 
   // A question from the company's question list (lib/list-question.ts): the
-  // question as it was filed, then why it is asked on a line of its own. Its
-  // options go out as reply buttons beside it.
+  // question as it was filed, why it is asked on a line of its own, then a
+  // closing line saying a written answer is welcome. Its options go out as
+  // reply buttons beside it. listQuestionBody (lib/list-question.ts) keeps
+  // the whole within the length an interactive body holds.
   m23ListQuestion: ({ question, why }: { question: string; why?: string | null }) =>
-    why ? `${question}\n${why}` : question,
+    `${why ? `${question}\n${why}` : question}\n\nDu kan också svara med egna ord.`,
 
   // The reply button that closes a list question without an answer. A button
   // title holds at most 20 characters.
@@ -403,7 +405,7 @@ const EN: typeof SV = {
     'I could not receive your message just now. Please send it again in a moment.',
 
   m23ListQuestion: ({ question, why }: { question: string; why?: string | null }) =>
-    why ? `${question}\n${why}` : question,
+    `${why ? `${question}\n${why}` : question}\n\nYou can also answer in your own words.`,
 
   m23ListDontKnow: () => 'Do not know',
 

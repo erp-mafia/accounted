@@ -4,11 +4,16 @@ import { createTableMockSupabase } from '@/tests/helpers'
 const mocks = vi.hoisted(() => ({
   client: null as unknown,
   ensureTicSnapshot: vi.fn(),
+  readTicPurposeSpent: vi.fn(),
 }))
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => mocks.client }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
-vi.mock('@/lib/agent/composer/tic-fetch', () => ({ ensureTicSnapshot: mocks.ensureTicSnapshot }))
+vi.mock('@/lib/agent/composer/tic-fetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/agent/composer/tic-fetch')>()),
+  ensureTicSnapshot: mocks.ensureTicSnapshot,
+}))
+vi.mock('@/lib/tic-budget/status', () => ({ readTicPurposeSpent: mocks.readTicPurposeSpent }))
 
 import { refreshCompanyProfileAction } from '../tic-refresh'
 
@@ -31,6 +36,7 @@ describe('refreshCompanyProfileAction', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.ensureTicSnapshot.mockResolvedValue({ snapshot: { name: 'Bolaget' }, source: 'fetched' })
+    mocks.readTicPurposeSpent.mockResolvedValue({ spent: false, resumesOn: '2026-11-22' })
   })
 
   it('refuses another number when the company has a valid one, and writes nothing', async () => {
@@ -89,5 +95,62 @@ describe('refreshCompanyProfileAction', () => {
     stored(null, null, 'enskild_firma')
     expect(await refreshCompanyProfileAction('co-1', '556012-5790')).toEqual({ error: 'org_number_personnummer_required' })
     expect(mocks.ensureTicSnapshot).not.toHaveBeenCalled()
+  })
+})
+
+// Why a fetch gave no fresh profile decides what the panel says: only a real
+// miss is "not found".
+describe('refreshCompanyProfileAction: fetch outcomes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.readTicPurposeSpent.mockResolvedValue({ spent: false, resumesOn: '2026-11-22' })
+  })
+
+  it('says not found only when TIC has no company under the number', async () => {
+    stored('556012-5790', '5560125790')
+    mocks.ensureTicSnapshot.mockResolvedValue({ snapshot: null, source: 'fallback', reason: 'not_found' })
+
+    expect(await refreshCompanyProfileAction('co-1', '5560125790')).toEqual({ error: 'not_found' })
+    expect(mocks.readTicPurposeSpent).not.toHaveBeenCalled()
+  })
+
+  it('says when fetching works again when the budget is spent', async () => {
+    stored('556012-5790', '5560125790')
+    mocks.ensureTicSnapshot.mockResolvedValue({ snapshot: { name: 'Gammal' }, source: 'fallback', reason: 'unavailable' })
+    mocks.readTicPurposeSpent.mockResolvedValue({ spent: true, resumesOn: '2026-11-22' })
+
+    expect(await refreshCompanyProfileAction('co-1', '5560125790')).toEqual({ error: 'paused', resumesOn: '2026-11-22' })
+    expect(mocks.readTicPurposeSpent).toHaveBeenCalledWith('refresh')
+  })
+
+  it('says TIC is not answering when the budget is not the reason, or cannot be read', async () => {
+    stored('556012-5790', '5560125790')
+    mocks.ensureTicSnapshot.mockResolvedValue({ snapshot: null, source: 'fallback', reason: 'unavailable' })
+
+    expect(await refreshCompanyProfileAction('co-1', '5560125790')).toEqual({ error: 'unavailable' })
+    mocks.readTicPurposeSpent.mockResolvedValue(null)
+    expect(await refreshCompanyProfileAction('co-1', '5560125790')).toEqual({ error: 'unavailable' })
+  })
+
+  it('returns a partial profile with the date the missing parts can be fetched', async () => {
+    stored('556012-5790', '5560125790')
+    const snapshot = { companyName: 'Bolaget', statuses: [], incompleteSections: ['statuses'] }
+    mocks.ensureTicSnapshot.mockResolvedValue({ snapshot, source: 'fetched' })
+    mocks.readTicPurposeSpent.mockResolvedValue({ spent: true, resumesOn: '2026-11-22' })
+
+    const result = await refreshCompanyProfileAction('co-1', '5560125790')
+
+    expect(result).toMatchObject({ ok: true, snapshot, resumesOn: '2026-11-22' })
+  })
+
+  it('does not read the budget for a complete profile', async () => {
+    stored('556012-5790', '5560125790')
+    mocks.ensureTicSnapshot.mockResolvedValue({ snapshot: { companyName: 'Bolaget', incompleteSections: [] }, source: 'fetched' })
+
+    const result = await refreshCompanyProfileAction('co-1', '5560125790')
+
+    expect(result.ok).toBe(true)
+    expect(result).not.toHaveProperty('resumesOn')
+    expect(mocks.readTicPurposeSpent).not.toHaveBeenCalled()
   })
 })

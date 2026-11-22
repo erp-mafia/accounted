@@ -84,7 +84,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'api_key.revoke',
   async (_request, ctx, { params }) => {
     const { id } = await params
-    const { user, supabase, companyId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
 
     const { key, error: lookupError } = await findManageableKey(supabase, id, companyId, user.id)
     if (lookupError) {
@@ -94,15 +94,27 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     // missing or already revoked key always gave.
     if (!key) return NextResponse.json({ success: true })
 
-    const { error } = await supabase
+    const { data: revoked, error } = await supabase
       .from('api_keys')
       .update({ revoked_at: new Date().toISOString() })
       .eq('id', id)
       .eq('company_id', key.company_id)
       .is('revoked_at', null)
+      .select('id')
+      .maybeSingle()
 
     if (error) {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    }
+    // The api_keys update policy takes an owner or admin role in the key's
+    // own company, and refuses by changing no row, not with an error. The
+    // caller's own key listed from another company (or by a member) lands
+    // here: the key is still live, so the answer must not say it is gone.
+    if (!revoked) {
+      return errorResponseFromCode('FORBIDDEN', log, {
+        requestId,
+        details: { reason: 'key_company_admin_required', company_id: key.company_id },
+      })
     }
 
     return NextResponse.json({ success: true })

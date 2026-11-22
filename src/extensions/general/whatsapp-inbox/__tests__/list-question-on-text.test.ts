@@ -1,8 +1,8 @@
 /**
- * A text from a linked person that nothing else takes, through the real
- * webhook, the real list-question module and the real answer path, on a
- * database that answers from rows. Only the Graph API, the deferred kick and
- * the processing history are mocked.
+ * A text from a linked person that nothing else takes, and the answer that
+ * follows it, through the real webhook, the real list-question module and
+ * the real answer path, on a database that answers from rows. Only the Graph
+ * API, the deferred kick and the processing history are mocked.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import crypto from 'crypto'
@@ -92,29 +92,30 @@ interface Write {
 
 const route = testRoutes(whatsappInboxExtension).find((r) => r.method === 'POST' && r.path === '/webhook')!
 
-function signedText(body: string, wamid = 'wamid.TXT1'): Request {
+function signed(message: Row): Request {
   const raw = JSON.stringify({
     object: 'whatsapp_business_account',
-    entry: [
-      {
-        id: 'waba-1',
-        changes: [
-          {
-            field: 'messages',
-            value: {
-              messaging_product: 'whatsapp',
-              messages: [{ from: PHONE, id: wamid, timestamp: '1754000000', type: 'text', text: { body } }],
-            },
-          },
-        ],
-      },
-    ],
+    entry: [{ id: 'waba-1', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', messages: [message] } }] }],
   })
   const signature = 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw, 'utf8').digest('hex')
   return new Request('http://localhost:3000/api/extensions/ext/whatsapp-inbox/webhook', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': signature },
     body: raw,
+  })
+}
+
+function signedText(body: string, wamid = 'wamid.TXT1'): Request {
+  return signed({ from: PHONE, id: wamid, timestamp: '1754000000', type: 'text', text: { body } })
+}
+
+function signedTap(buttonId: string, wamid = 'wamid.TAP1'): Request {
+  return signed({
+    from: PHONE,
+    id: wamid,
+    timestamp: '1754000000',
+    type: 'interactive',
+    interactive: { type: 'button_reply', button_reply: { id: buttonId, title: 'Kontoret' } },
   })
 }
 
@@ -160,7 +161,9 @@ interface Seed {
  * A linked owner of COMPANY with an idle conversation whose service window
  * closed an hour ago, and the webhook's client answering from these rows. The
  * conversation row takes its own updates, so a read after the text sees the
- * window the text opened.
+ * window the text opened; an update to a question lands on the question the
+ * conversation holds at that moment, so an answered question is no longer
+ * open to the read that follows.
  */
 function world(seed: Seed = {}) {
   const conversation: Row = {
@@ -175,13 +178,22 @@ function world(seed: Seed = {}) {
     updated_at: '2026-11-20T09:00:00.000Z',
     ...seed.conversation,
   }
+  const questions: Row[] = seed.questions ?? twoOpenQuestions()
+  const apply = (row: Row | undefined, patch: Row): void => {
+    if (!row) return
+    for (const [column, value] of Object.entries(patch)) {
+      if (value !== undefined) row[column] = value
+    }
+  }
   const writes: Write[] = []
   const record = writes.push.bind(writes)
   writes.push = (...items: Write[]): number => {
     for (const item of items) {
-      if (item.table !== 'whatsapp_conversations' || item.method !== 'update') continue
-      for (const [column, value] of Object.entries(item.row as Row)) {
-        if (value !== undefined) conversation[column] = value
+      if (item.method !== 'update') continue
+      if (item.table === 'whatsapp_conversations') apply(conversation, item.row as Row)
+      if (item.table === 'company_questions') {
+        const inSlot = (conversation.context as ConversationContext).pending_question?.question_id
+        apply(questions.find((question) => question.id === inSlot), item.row as Row)
       }
     }
     return record(...items)
@@ -205,12 +217,12 @@ function world(seed: Seed = {}) {
     whatsapp_conversations: [conversation],
     whatsapp_messages: messages,
     company_members: seed.memberships ?? [{ user_id: USER, company_id: COMPANY, role: 'owner' }],
-    company_questions: seed.questions ?? twoOpenQuestions(),
+    company_questions: questions,
     agent_memory: [],
   }
   const mock = createRowsMockSupabase(tables, writes)
   createClientMock.mockReturnValue(mock.supabase as never)
-  return { writes, messages, supabase: mock.supabase as unknown as SupabaseClient }
+  return { writes, messages, conversation, supabase: mock.supabase as unknown as SupabaseClient }
 }
 
 /** The conversation writes that carry a context, in order. */
@@ -253,7 +265,7 @@ describe('a text from a linked person that nothing else takes', () => {
     const message = sendButtonsMock.mock.calls[0][1]
     expect(message.to).toBe(PHONE)
     expect(message.template).toBe(TEMPLATE.m23ListQuestion)
-    expect(message.body).toBe(`${OLDER_TEXT}\n${OLDER_WHY}`)
+    expect(message.body).toBe(`${OLDER_TEXT}\n${OLDER_WHY}\n\nDu kan också svara med egna ord.`)
     expect(message.buttons).toEqual([
       { id: `cq:${COMPANY}:${OLDER_QUESTION}:o:office`, title: 'Kontoret' },
       { id: `cq:${COMPANY}:${OLDER_QUESTION}:o:storage`, title: 'Lagret' },
@@ -423,5 +435,67 @@ describe('a text from a linked person that nothing else takes', () => {
     expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m24ListAnswered)
     // The text that brought the question out is in neither.
     expect(JSON.stringify([fact, answered])).not.toContain('Hey')
+
+    // The other open question follows the acknowledgement, and the conversation holds it.
+    expect(sendButtonsMock).toHaveBeenCalledTimes(2)
+    const next = sendButtonsMock.mock.calls[1][1]
+    expect(next.body).toBe('Är kortköpet på 499 kr privat?\n\nDu kan också svara med egna ord.')
+    expect(next.buttons).toEqual([{ id: `cq:${COMPANY}:${NEWER_QUESTION}:k`, title: 'Vet inte' }])
+    expect(sendButtonsMock.mock.invocationCallOrder[1]).toBeGreaterThan(sendTextMock.mock.invocationCallOrder[0])
+    const context = second.conversation.context as ConversationContext
+    expect(context.pending_question).toMatchObject({ type: 'list_question', question_id: NEWER_QUESTION, company_id: COMPANY })
+    expect(context.list_question_slots).toBeUndefined()
+  })
+
+  it('answers by a tap, acknowledges, and sends the other open question with no burst slot', async () => {
+    const first = world()
+    await route.handler(signedText('Hey', 'wamid.TXT1'))
+    const [held] = contextWrites(first.writes)
+
+    const second = world({ conversation: { context: held as Row } })
+    const response = await route.handler(signedTap(`cq:${COMPANY}:${OLDER_QUESTION}:o:office`))
+
+    expect(response.status).toBe(200)
+    const [answered] = writesTo(second.writes, 'company_questions')
+    expect(answered).toMatchObject({ status: 'answered', answer_option: 'office', answer_text: null, answered_by: USER, answered_via: 'whatsapp' })
+    expect(writesTo(second.writes, 'agent_memory')[0]).toMatchObject({ content: `${OLDER_TEXT} Svar: Kontoret`, created_by_user_id: USER })
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(2)
+    expect(sendButtonsMock.mock.calls[1][1].buttons).toEqual([{ id: `cq:${COMPANY}:${NEWER_QUESTION}:k`, title: 'Vet inte' }])
+    expect(sendButtonsMock.mock.invocationCallOrder[1]).toBeGreaterThan(sendTextMock.mock.invocationCallOrder[0])
+    const context = second.conversation.context as ConversationContext
+    expect(context.pending_question?.question_id).toBe(NEWER_QUESTION)
+    expect(context.list_question_budget?.count).toBe(2)
+    // The tap is persisted as handled.
+    expect(second.messages[0]).toMatchObject({ message_type: 'interactive', processing_status: 'done' })
+  })
+
+  it('closes on a "Vet inte" tap, acknowledges, and sends the other open question', async () => {
+    const first = world()
+    await route.handler(signedText('Hey', 'wamid.TXT1'))
+    const [held] = contextWrites(first.writes)
+
+    const second = world({ conversation: { context: held as Row } })
+    await route.handler(signedTap(`cq:${COMPANY}:${OLDER_QUESTION}:k`))
+
+    expect(writesTo(second.writes, 'company_questions')[0]).toMatchObject({ status: 'closed', close_reason: 'dont_know', answered_by: USER, answered_via: 'whatsapp' })
+    expect(writesTo(second.writes, 'agent_memory')).toEqual([])
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListClosed])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(2)
+    expect(sendButtonsMock.mock.calls[1][1].buttons).toEqual([{ id: `cq:${COMPANY}:${NEWER_QUESTION}:k`, title: 'Vet inte' }])
+  })
+
+  it('sends nothing after the acknowledgement when the answered question was the last one open', async () => {
+    const only = [questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z')]
+    const first = world({ questions: only })
+    await route.handler(signedText('Hey', 'wamid.TXT1'))
+    const [held] = contextWrites(first.writes)
+
+    const second = world({ conversation: { context: held as Row }, questions: [questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z')] })
+    await route.handler(signedTap(`cq:${COMPANY}:${OLDER_QUESTION}:o:office`))
+
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect((second.conversation.context as ConversationContext).pending_question).toBeUndefined()
   })
 })

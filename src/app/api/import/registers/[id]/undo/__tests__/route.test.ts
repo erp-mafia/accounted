@@ -4,7 +4,7 @@
  * (404 / 409 / 403), and the success report passthrough. The rules
  * themselves are the RPC's (tests/pg/register-import-undo.pg.test.ts).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
   createQueuedMockSupabase,
@@ -134,6 +134,37 @@ describe('DELETE /api/import/registers/[id]/undo', () => {
 
     expect(status).toBe(200)
     expect(body.data).toEqual(result)
-    expect(undoRegisterImportMock).toHaveBeenCalledWith(supabase, 'company-1', RUN_ID, 'user-1')
+    expect(undoRegisterImportMock).toHaveBeenCalledWith(supabase, 'company-1', RUN_ID, 'user-1', {
+      draftSyncDeadline: expect.any(Number),
+    })
+  })
+
+  describe('the draft sync after the undo', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    // The run is undone once the RPC returns: a request the platform ends
+    // after that answers 504 and a second undo is refused.
+    it('gets a deadline ten seconds short of maxDuration, from the request start', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-22T10:00:00Z'))
+      undoRegisterImportMock.mockResolvedValue({ ok: true, result: { deleted: 0, restored: 1, kept: [] } })
+
+      await call()
+
+      const options = undoRegisterImportMock.mock.calls[0][4] as { draftSyncDeadline: number }
+      expect(options.draftSyncDeadline).toBe(new Date('2026-11-22T10:04:50Z').getTime())
+    })
+
+    it('still answers with the report when the deadline left drafts unsynced', async () => {
+      const result = { deleted: 0, restored: 1, kept: [] }
+      undoRegisterImportMock.mockResolvedValue({ ok: true, result, draftsNotSynced: ['c1'] })
+
+      const { status, body } = await parseJsonResponse<{ data: typeof result }>(await call())
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual(result)
+    })
   })
 })
