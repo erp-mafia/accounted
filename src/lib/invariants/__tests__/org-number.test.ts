@@ -232,6 +232,8 @@ describe('sameRegistration', () => {
     expect(sameRegistration('2002010112360001', '2002010112360002')).toBe(false)
     expect(sameRegistration('2002010112360002', '2002010112360002')).toBe(true)
     expect(sameRegistration('200201011236 0002', '2002010112360002')).toBe(true)
+    // A century apart: two people with the same ten digits.
+    expect(sameRegistration('1902010112360001', '2002010112360001')).toBe(false)
   })
 
   it('does not take a number without the serial for one with it', () => {

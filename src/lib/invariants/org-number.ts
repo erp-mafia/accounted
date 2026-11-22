@@ -125,20 +125,22 @@ export function registrationNumberKey(raw: string | null | undefined): string | 
 /**
  * Whether two registration numbers as TIC returns them name one registration:
  * the same {@link registrationNumberKey} and, for an enskild firma, the same
- * serial. A person can register a firm more than once, and Lens holds each
- * registration (`...0001`, `...0002`) as its own company, with its own status,
- * fiscal years and payroll, all under the one personnummer the key reduces
- * them to. A number without a serial is not the same as one with it. A side
- * with nothing readable on it is not the same as anything.
+ * whole number (century, personnummer and serial). A person can register a
+ * firm more than once, and Lens holds each registration (`...0001`,
+ * `...0002`) as its own company, with its own status, fiscal years and
+ * payroll, all under the one personnummer the key reduces them to. A number
+ * without a serial is not the same as one with it. A side with nothing
+ * readable on it is not the same as anything.
  */
 export function sameRegistration(a: string | null | undefined, b: string | null | undefined): boolean {
   const key = registrationNumberKey(a)
-  return key !== null && key === registrationNumberKey(b) && registrationSerial(a) === registrationSerial(b)
+  return key !== null && key === registrationNumberKey(b) && soleTraderRegistration(a) === soleTraderRegistration(b)
 }
 
-function registrationSerial(raw: string | null | undefined): string | null {
+/** An enskild firma's whole registration number, separators stripped, or null for any other shape. */
+function soleTraderRegistration(raw: string | null | undefined): string | null {
   const cleaned = raw ? stripOrgNumberFormatting(raw) : ''
-  return SOLE_TRADER_REGISTRATION.test(cleaned) ? cleaned.slice(12) : null
+  return SOLE_TRADER_REGISTRATION.test(cleaned) ? cleaned : null
 }
 
 /**
