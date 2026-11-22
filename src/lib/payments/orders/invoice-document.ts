@@ -118,25 +118,39 @@ function check(paid: string | null | undefined, stated: string | null): Document
 
 /**
  * The reference check also takes the stated reference as the giro message
- * carries it (giroMessage): a long invoice number goes out cut to the message
- * field, and that is still the reference the document states.
+ * carries it (giroMessage) when the payment sends a message: a long invoice
+ * number goes out cut to the message field, and that is still the reference
+ * the document states. An OCR is never cut, so it is compared whole: two
+ * OCR numbers that share a start are two references.
  */
-function checkReference(paid: string | null | undefined, stated: string | null): DocumentCheck {
+function checkReference(
+  paid: string | null | undefined,
+  stated: string | null,
+  type: 'ocr' | 'message' | undefined,
+): DocumentCheck {
   const result = check(paid, stated)
-  if (result !== 'differs' || !paid || !stated || !comparable(paid)) return result
+  if (result !== 'differs' || type !== 'message' || !paid || !stated || !comparable(paid)) return result
   return comparable(paid) === comparable(giroMessage(stated)) ? 'same' : 'differs'
 }
 
 /**
  * Whether a payment pays the account and the reference the document states.
  * `paid.payee` is the payment's account label, `paid.reference` the value the
- * bank gets (the OCR digits, or the invoice number as a message).
+ * bank gets (the OCR digits, or the invoice number as a message), and
+ * `paid.referenceType` which of the two it is.
  */
 export function checkAgainstDocument(
-  paid: { payee: string | null | undefined; reference: string | null | undefined },
+  paid: {
+    payee: string | null | undefined
+    reference: string | null | undefined
+    referenceType?: 'ocr' | 'message'
+  },
   facts: Pick<InvoiceDocumentFacts, 'payee' | 'reference'>,
 ): DocumentChecks {
-  return { payee: check(paid.payee, facts.payee), reference: checkReference(paid.reference, facts.reference) }
+  return {
+    payee: check(paid.payee, facts.payee),
+    reference: checkReference(paid.reference, facts.reference, paid.referenceType),
+  }
 }
 
 /**
@@ -173,6 +187,7 @@ export function withInvoiceDocument(
   const facts = documents.get(String(line.supplier_invoice_id))
   if (!facts) return line
   const payee = (line.payee as { label?: string } | null | undefined)?.label
-  const reference = (line.reference as { value?: string } | null | undefined)?.value
-  return { ...line, document: { ...facts, checks: checkAgainstDocument({ payee, reference }, facts) } }
+  const lineReference = line.reference as { type?: 'ocr' | 'message'; value?: string } | null | undefined
+  const checks = checkAgainstDocument({ payee, reference: lineReference?.value, referenceType: lineReference?.type }, facts)
+  return { ...line, document: { ...facts, checks } }
 }

@@ -91,9 +91,17 @@ describe('checkAgainstDocument', () => {
 
   it('same: a long invoice number the document states, sent cut to the giro message field', () => {
     const stated = { payee: 'BG 5050-1055', reference: 'ABC/26/123456-7890/1/123456' }
-    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: 'ABC/26/123456-7890/1/1234' }, stated).reference).toBe('same')
+    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: 'ABC/26/123456-7890/1/1234', referenceType: 'message' }, stated).reference).toBe('same')
     // Another number with the same start is still another reference.
-    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: 'ABC/26/123456-7890/1/9999' }, stated).reference).toBe('differs')
+    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: 'ABC/26/123456-7890/1/9999', referenceType: 'message' }, stated).reference).toBe('differs')
+  })
+
+  it('differs: an OCR is never cut, so one that matches only the start of the stated OCR is another reference', () => {
+    const stated = { payee: 'BG 5050-1055', reference: '1234 1234 1234 1234 1234 1230' }
+    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: '12341234123412341234', referenceType: 'ocr' }, stated).reference).toBe('differs')
+    // Without the type the check stays exact.
+    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: '12341234123412341234' }, stated).reference).toBe('differs')
+    expect(checkAgainstDocument({ payee: 'BG 5050-1055', reference: '123412341234123412341230', referenceType: 'ocr' }, stated).reference).toBe('same')
   })
 
   it('missing: the document states nothing to compare with', () => {
@@ -118,6 +126,15 @@ describe('withInvoiceDocument', () => {
 
   it('leaves a line whose invoice was not read untouched', () => {
     expect(withInvoiceDocument(line, new Map())).toBe(line)
+  })
+
+  it('passes the reference type on, so only a message is compared as the giro field cuts it', () => {
+    const stated = 'ABC/26/123456-7890/1/123456'
+    const documents = new Map([['a', invoiceDocumentFacts({ document_id: DOC, payee_bankgiro: '5050-1055', payment_reference: stated })]])
+    const message = { ...line, reference: { type: 'message', value: 'ABC/26/123456-7890/1/1234' } }
+    expect(withInvoiceDocument(message, documents).document).toMatchObject({ checks: { reference: 'same' } })
+    const ocr = { ...line, reference: { type: 'ocr', value: 'ABC/26/123456-7890/1/1234' } }
+    expect(withInvoiceDocument(ocr, documents).document).toMatchObject({ checks: { reference: 'differs' } })
   })
 })
 
