@@ -1,4 +1,5 @@
 import { FortnoxApiError, type FortnoxClient } from './client';
+import { fortnoxSupplierInvoiceBookingParts } from './supplier-invoice-voucher';
 
 /**
  * Fortnox attachment resource config + fetchers.
@@ -182,9 +183,6 @@ export type FortnoxSupplierInvoiceBooking =
   | { state: 'unbooked' }
   | { state: 'unknown' };
 
-/** The ReferenceType Fortnox gives the voucher that books a supplier invoice. */
-const SUPPLIER_INVOICE_BOOKING_REFERENCE = 'SUPPLIERINVOICE';
-
 function bookingVoucherFrom(
   series: unknown,
   number: unknown,
@@ -236,12 +234,9 @@ export async function fetchFortnoxSupplierInvoiceFileConnections(
 
 /**
  * The booking voucher of every supplier invoice, read from the register's
- * list form (paid invoices included). A list item names its vouchers in
- * `Vouchers` with a ReferenceType; exactly one SUPPLIERINVOICE voucher is the
- * booking. Anything else (no Vouchers on the list form, several bookings, a
- * ReferenceType spelled otherwise) is `unknown`, never a guess: the caller
- * asks the detail form, whose VoucherSeries/VoucherNumber/VoucherYear name
- * the booking voucher by definition. Scope: supplierinvoice.
+ * list form (paid invoices included), by fortnoxSupplierInvoiceBookingParts.
+ * An invoice it names no single booking for is `unknown`, never a guess: the
+ * caller asks the detail form. Scope: supplierinvoice.
  */
 export async function fetchFortnoxSupplierInvoiceBookings(
   client: FortnoxClient,
@@ -265,23 +260,16 @@ export async function fetchFortnoxSupplierInvoiceBookings(
       continue;
     }
 
-    const vouchers = Array.isArray(raw.Vouchers) ? (raw.Vouchers as Record<string, unknown>[]) : [];
-    const booking = vouchers
-      .filter((voucher) => voucher?.ReferenceType === SUPPLIER_INVOICE_BOOKING_REFERENCE)
-      .map((voucher) => bookingVoucherFrom(voucher.Series, voucher.Number, voucher.Year));
-    bookings.set(
-      givenNumber,
-      booking.length === 1 && booking[0]
-        ? { state: 'booked', voucher: booking[0] }
-        : { state: 'unknown' },
-    );
+    const parts = fortnoxSupplierInvoiceBookingParts(raw);
+    const booking = parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
+    bookings.set(givenNumber, booking ? { state: 'booked', voucher: booking } : { state: 'unknown' });
   }
   return bookings;
 }
 
 /**
  * The booking voucher from one supplier invoice's detail form, or null when
- * Fortnox names none (VoucherNumber 0 or absent: never booked; cancelled; an
+ * Fortnox names none (no booking reference: never booked; cancelled; an
  * invoice the register no longer has).
  */
 export async function fetchFortnoxSupplierInvoiceBookingVoucher(
@@ -301,14 +289,15 @@ export async function fetchFortnoxSupplierInvoiceBookingVoucher(
   }
   const invoice = (response?.SupplierInvoice ?? {}) as Record<string, unknown>;
   if (invoice.Cancelled === true || invoice.Cancel === true) return null;
-  return bookingVoucherFrom(invoice.VoucherSeries, invoice.VoucherNumber, invoice.VoucherYear);
+  const parts = fortnoxSupplierInvoiceBookingParts(invoice);
+  return parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
 }
 
 /**
  * The verifikat that booked one customer invoice, from its detail form
  * (`/invoices/{DocumentNumber}`): VoucherSeries, VoucherNumber and
- * VoucherYear, read as on the supplier-invoice detail form (VoucherYear is
- * Fortnox's financial-year ID). Null when Fortnox names none: never booked
+ * VoucherYear (Fortnox's financial-year ID, as Year is in a supplier
+ * invoice's Vouchers). Null when Fortnox names none: never booked
  * (VoucherNumber 0 or absent), cancelled, or an invoice the register no
  * longer has. Scope: invoice.
  */
