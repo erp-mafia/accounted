@@ -39,7 +39,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **Digital mailboxes**: Kivra and Billo: read incoming mail into the Inkorg, send invoices and payslips
 - **Document signing**: Send a PDF for signing with BankID; every signature gets a signeringsbevis
 - **SIE import/export**: Standard Swedish accounting interchange format
-- **Agent access (MCP)**: 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini and Cursor over OAuth 2.1
+- **Agent access (MCP)**: 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini, Microsoft Copilot Studio and Cursor over OAuth 2.1
 - **Claude connector and plugin**: Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md); the same plugin installs in Codex and Cursor
 - **Command line**: `npm install -g accounted` runs every tool from a terminal, a script or a coding agent's shell, with the same permissions and staged approvals
 - **Extension system**: Opt-in plugins for AI document extraction, bank sync, email, calendar, and more

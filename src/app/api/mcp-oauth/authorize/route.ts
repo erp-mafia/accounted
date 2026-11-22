@@ -1439,6 +1439,8 @@ function describeClient(
         return { name: 'Grok (xAI)', shortName: 'Grok', tag: 'Verifierad', verified: true }
       case 'gemini':
         return { name: 'Gemini (Google)', shortName: 'Gemini', tag: 'Verifierad', verified: true }
+      case 'copilot':
+        return { name: 'Copilot Studio (Microsoft)', shortName: 'Copilot', tag: 'Verifierad', verified: true }
       case 'cursor':
         return { name: 'Cursor (Anysphere)', shortName: 'Cursor', tag: 'Verifierad', verified: true }
       case 'cursor_deeplink':

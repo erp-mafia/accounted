@@ -84,6 +84,8 @@ const ICON = {
   local: CommandLineIcon,
   cursor: CursorMark,
   gemini: GeminiMark,
+  // No vendor mark for Copilot Studio: the generic MCP mark.
+  copilot: McpMark,
   mcp: McpMark,
   other: McpMark,
   key: KeyIcon,
@@ -252,7 +254,7 @@ export function McpConnectionsPanel({
   function rowName(key: ApiKeyRow): string {
     const kind = connectionKind(key)
     if (kind === 'key') return key.name
-    if (kind === 'claude' || kind === 'chatgpt' || kind === 'grok' || kind === 'gemini') return targetName(kind)
+    if (kind === 'claude' || kind === 'chatgpt' || kind === 'grok' || kind === 'gemini' || kind === 'copilot') return targetName(kind)
     return t(`kind_${kind}`)
   }
 
