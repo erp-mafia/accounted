@@ -737,8 +737,10 @@ export async function buildVatSettlementProposal(
     .in('status', ['draft', 'posted'])
     .gte('entry_date', start)
     .lte('entry_date', entryDate.entry_date > end ? entryDate.entry_date : end)
+    // No limit: every posted one gates booking and is named (#3646), and a
+    // limit could leave one out behind drafts or other periods' settlements
+    // moved to the same first open day. Only the drafts shown are capped.
     .order('entry_date', { ascending: false })
-    .limit(20)
 
   // The existing-settlement lookup gates the UI's "already booked" warning
   // and its create button; a swallowed error here would silently re-enable

@@ -921,6 +921,24 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     expect(proposal.partly_settled).toBe(false)
     expect(proposal.existing_entries.map((e) => e.id).sort()).toEqual([settled.id, rest.id].sort())
   })
+
+  it('still sees a posted momsredovisning behind more than twenty later drafts', async () => {
+    const early = entry('2026-09-01', [{ account_number: '2611', debit: 250 }, { account_number: '2650', credit: 250 }], {
+      description: 'Momsredovisning Kvartal 3 2026',
+      source_type: 'vat_settlement',
+    })
+    const drafts = Array.from({ length: 21 }, (_, i) =>
+      entry(`2026-09-${String(i + 2).padStart(2, '0')}`, [{ account_number: '2611', debit: 250 }, { account_number: '2650', credit: 250 }], {
+        description: 'Momsredovisning Kvartal 3 2026',
+        source_type: 'vat_settlement',
+        status: 'draft',
+      }),
+    )
+    const proposal = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [sale, early, ...drafts], shaped: [] }), CO, 'quarterly', 2026, 3)
+    expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+    expect(postedVatSettlements(proposal.existing_entries).map((e) => e.id)).toEqual([early.id])
+    expect(proposal.existing_entries.filter((e) => e.status === 'draft')).toHaveLength(5)
+  })
 })
 
 describe('balanceLeftToClear', () => {
