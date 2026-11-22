@@ -77,3 +77,22 @@ describe('responsive table headers', () => {
   })
 
 })
+
+describe('complex responsive table headers', () => {
+  it.each([{ colSpan: 2 }, { rowSpan: 2 }])('keeps spanning headers native without misleading mobile labels: %o', span => {
+    const html = renderToStaticMarkup(h(ResponsiveTable, { children: h('table', null,
+      h('thead', null, h('tr', null, h('th', span, 'Period'), h('th', null, 'Amount'))),
+    ) }))
+    expect(html).not.toContain('--table-column-')
+    expect(html).not.toContain('data-primary-column')
+    expect(html).toContain('Period')
+    expect(html).toContain('Amount')
+  })
+  it('keeps multi-row headers native rather than choosing the first header row', () => {
+    const html = renderToStaticMarkup(h(ResponsiveTable, { children: h('table', null,
+      h('thead', null, h('tr', null, h('th', null, 'Period')), h('tr', null, h('th', null, 'Month'))),
+    ) }))
+    expect(html).not.toContain('--table-column-')
+    expect(html).toContain('Month')
+  })
+})

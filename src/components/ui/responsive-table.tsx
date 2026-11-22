@@ -22,9 +22,15 @@ function headerColumns(children: React.ReactNode): { label: string; primary: boo
       if (columns.length || !React.isValidElement<{ children?: React.ReactNode }>(node)) return
       const name = typeof node.type === 'string' ? node.type : (node.type as { displayName?: string }).displayName
       if (name === 'thead' || name === 'TableHeader') {
-        const row = React.Children.toArray(node.props.children).find(React.isValidElement)
-        if (row && React.isValidElement<{ children?: React.ReactNode }>(row)) {
-          columns = cells(row.props.children).map(cell => ({
+        const rows = cells(node.props.children).filter(React.isValidElement)
+        // Complex headers keep native layout; do not publish misleading card labels.
+        if (rows.length !== 1) return
+        const row = rows[0]
+        if (React.isValidElement<{ children?: React.ReactNode }>(row)) {
+          const headers = cells(row.props.children)
+          if (headers.some(cell => React.isValidElement<{ colSpan?: number; rowSpan?: number }>(cell) &&
+            ((cell.props.colSpan ?? 1) !== 1 || (cell.props.rowSpan ?? 1) !== 1))) return
+          columns = headers.map(cell => ({
             label: text(cell),
             primary: React.isValidElement<{ className?: string }>(cell) && !!cell.props.className?.split(/\s+/).includes('w-full'),
             selection: hasSelection(cell),
