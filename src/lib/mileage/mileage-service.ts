@@ -12,6 +12,7 @@ import { payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { roundOre } from '@/lib/money'
+import { storedDistanceKm } from './stored-distance'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import {
   isOwnerDeposit,
@@ -158,7 +159,7 @@ export async function createTrip(
       odometer_start: input.odometer_start ?? null,
       odometer_end: input.odometer_end ?? null,
       // The column is numeric(10,1): round to what will actually be stored.
-      distance_km: Math.round(input.distance_km * 10) / 10,
+      distance_km: storedDistanceKm(input.distance_km),
       from_location: input.from_location.trim(),
       to_location: input.to_location.trim(),
       purpose: input.purpose.trim(),

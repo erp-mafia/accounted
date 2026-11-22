@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 475 endpoints.
+  pagination, scopes), and all 477 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -225,7 +225,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 475 operations. Paths are shown without
+API version `2026-05-12`, 477 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.accounted.se/api/v1`).
 
 ### Core (24)
@@ -637,7 +637,7 @@ POST /companies/{companyId}/webshop-orders/book-day : Book a store's orders and 
 GET /companies/{companyId}/webshop-orders/oss-underlag : Underlag for the OSS declaration (unionsordningen): a quarter's webshop sales to consumers in other EU countries, per country and VAT rate, in euro [scope:reports:read risk:low idempotent]
 ```
 
-### Employees (32)
+### Employees (34)
 
 Full detail: [references/employees.md](references/employees.md)
 
@@ -665,6 +665,8 @@ GET /companies/{companyId}/employees/{id}/worked-days : List worked days (hours 
 PUT /companies/{companyId}/employees/{id}/worked-days : Register worked hours per day for an employee (bulk upsert) [scope:payroll:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/employees/{id}/worked-days : Delete worked days for an employee in a date range [scope:payroll:write risk:low idempotent dry-run]
 PUT /companies/{companyId}/employees/opening-balances : Bulk-set payroll cutover opening balances (atomic) [scope:payroll:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/mileage-trips : List körjournal trips (mileage log) with total and unbooked distance [scope:payroll:read risk:low idempotent]
+POST /companies/{companyId}/mileage-trips : Log a körjournal trip (mileage log entry) [scope:payroll:write risk:low idempotent dry-run]
 GET /companies/{companyId}/salary/fora-report : The Fora monthly report for a payment month: each coded worker, their FOK code and the pay Fora is told about [scope:payroll:read risk:low idempotent]
 GET /companies/{companyId}/salary/premium-rules : List OB and overtime premium rules [scope:payroll:read risk:low idempotent]
 POST /companies/{companyId}/salary/premium-rules : Create an OB or overtime premium rule [scope:payroll:write risk:low idempotent dry-run reversible]

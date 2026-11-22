@@ -298,6 +298,9 @@ export const OPERATION_DOORS: Readonly<Record<string, DoorSpec>> = Object.freeze
   'employees.recurring-lines.update': PAYROLL_RECORD,
   'employees.recurring-lines.delete': PAYROLL_RECORD,
   'employees.worked-days.upsert': PAYROLL_RECORD,
+  // The körjournal: logging a trip records underlag, like the session route
+  // and log_mileage_trip.
+  'mileage-trips.create': PAYROLL_RECORD,
   'employees.worked-days.delete': PAYROLL_RECORD,
   // Filings and moms.
   'agi-filings.mark': TAX,
