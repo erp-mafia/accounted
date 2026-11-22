@@ -56,7 +56,10 @@ async function readAfterId<T extends { id: string }>(
     const batch = data ?? []
     rows.push(...batch)
     if (batch.length < COLLECT_PAGE) return rows
-    afterId = batch[batch.length - 1]!.id
+    const last = batch[batch.length - 1]?.id
+    // A full page with no id to continue after would ask for the same page for ever.
+    if (!last || last === afterId) throw new Error('vendor logos collect: a full page gave no id to continue after')
+    afterId = last
   }
 }
 

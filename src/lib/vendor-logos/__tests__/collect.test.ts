@@ -139,6 +139,20 @@ describe('collectCandidateDomains', () => {
   })
 })
 
+describe('collectCandidateDomains on a failed read', () => {
+  it('rejects with the database error instead of collecting part of the year', async () => {
+    const c = world({ documents: 10 })
+    c.setTable('invoice_inbox_items', { error: { message: 'canceling statement due to statement timeout', code: '57014' } })
+    await expect(collectCandidateDomains(c.service, NOW)).rejects.toMatchObject({ message: 'canceling statement due to statement timeout', code: '57014' })
+  })
+
+  it('stops, rather than reading the same page for ever, when a full page carries no id', async () => {
+    const c = world({})
+    c.setTable('suppliers', { data: Array.from({ length: COLLECT_PAGE }, () => ({ name: 'x', email: 'a@b.se' })) })
+    await expect(collectCandidateDomains(c.service, NOW)).rejects.toThrow('no id to continue after')
+  })
+})
+
 describe('bankWindows', () => {
   it('covers the year from its first day in contiguous two-week windows, the last one open', () => {
     const windows = bankWindows(SINCE, TODAY)
