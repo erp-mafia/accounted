@@ -31,8 +31,12 @@ import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 /** The page this list is, for the booking screen's way back. */
 const LIST_PATH = '/att-bokfora'
 
-/** How many inbox items the list asks Inkommande's read for: the newest, which hold every open one of an ordinary inbox. */
-const INBOX_READ_LIMIT = 200
+/**
+ * The inbox rows, as Inkommande reads them (components/inkorg/use-inkorg-data.ts):
+ * scope=inbox reads every item and answers the ones still in the inbox, so an
+ * old open document is never cut off behind newer booked ones.
+ */
+const INBOX_ITEMS_URL = '/api/extensions/ext/invoice-inbox/items?scope=inbox'
 
 /** The open bank rows: the read Bankrader's Att bokföra tab makes (open_bank_rows). */
 async function readBankRows(): Promise<ToBookBankRow[]> {
@@ -48,7 +52,7 @@ async function readBankRows(): Promise<ToBookBankRow[]> {
  * list then holds the bank rows only.
  */
 async function readDocuments(): Promise<ToBookDocument[]> {
-  const res = await fetch(`/api/extensions/ext/invoice-inbox/items?limit=${INBOX_READ_LIMIT}`)
+  const res = await fetch(INBOX_ITEMS_URL)
   if (res.status === 402 || res.status === 403 || res.status === 404) return []
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const json = (await res.json()) as { data?: { items?: InkorgItem[] } }
