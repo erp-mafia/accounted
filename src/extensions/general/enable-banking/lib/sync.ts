@@ -20,6 +20,7 @@ import { resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { aggregatorOf } from '@/lib/bank-sync/aggregator'
+import { isNordeaCardHold } from '@/lib/bank-sync/card-hold'
 import { bankBookingDay } from '@/lib/dates/iso'
 import { ConsentOverError, ProviderUnavailableError, RateLimitedError } from '@/lib/bank-feed/connect'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from '@/lib/bank-feed/party'
@@ -269,22 +270,6 @@ const NOT_BOOKED_STATUSES = new Set(['PDNG', 'HOLD', 'SCHD', 'CNCL', 'RJCT'])
 
 function isNotBookedStatus(status: string | undefined): boolean {
   return typeof status === 'string' && NOT_BOOKED_STATUSES.has(status.trim().toUpperCase())
-}
-
-/**
- * A card hold in Nordea's booked list (crm#2076). Since 2026-11-20 Nordea
- * lists a card purchase that has not settled among its booked entries, as
- * status BOOK dated on the day it was made, its text starting "Reservation "
- * ("Reservation Kortköp FACEBK *7K4XZ2PQ9M"). The purchase itself arrives
- * later as its own entry ("Kortköp 261119 KAFFEROSTERIET"), so the hold taken as
- * booked is the same purchase twice. Not booked whatever status it carries.
- * Nordea only, and only at the start of the text: a settled purchase can
- * carry the word ("Kortköp 260824 Hotel Reservation"), and no other bank's
- * row in production has ever started with it. Connect skips the same rows on
- * the Open Payments path, where its booked filter lives.
- */
-export function isNordeaCardHold(bankName: string | null | undefined, description: string): boolean {
-  return /^nordea\b/i.test(bankName?.trim() ?? '') && description.trimStart().startsWith('Reservation ')
 }
 
 /** The rows ingest set aside as another currency than the account's (IngestResult.other_currency). */
@@ -680,6 +665,11 @@ export async function syncAccountTransactions(
   const ingestOptions: IngestOptions = { bankRoute, settlementAccount: bankRoute.ledgerAccount }
   if (syncOptions?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (syncOptions?.rawInsertOnly) ingestOptions.rawInsertOnly = true
+  // A card hold stored before the holds were left out above still holds its
+  // index: ingest must not hand it the purchase booked on its day for its
+  // amount (isNordeaCardHold, crm#2076).
+  const bankName = syncOptions?.bankName
+  if (bankName) ingestOptions.isNotBooked = (text) => isNordeaCardHold(bankName, text)
   // Per-account ledger routing: the mapping engine consumes settlementAccount
   // for the bank-side leg. The verified route also guards the database insert.
 
@@ -799,6 +789,7 @@ async function syncOpenPaymentsAccountAsEnableBanking(
   try {
     const result = await syncOpenPaymentsAccount(supabase, {
       companyId, userId, connectionId, account, fromDate, toDate, bankRoute, party: party.party, ingest,
+      ...(syncOptions?.bankName ? { bankName: syncOptions.bankName } : {}),
       options: {
         ...(syncOptions?.skipAutoCategorization ? { skipAutoCategorization: true } : {}),
         ...(syncOptions?.rawInsertOnly ? { rawInsertOnly: true } : {}),

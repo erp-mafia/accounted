@@ -30,7 +30,7 @@ vi.mock('@/lib/bank-feed/page-arrival', () => ({
 // Mock ingest
 const mockIngest = vi.fn()
 
-import { bookedDateOf, isNordeaCardHold, notBookedReasons, syncAccountTransactions } from '../sync'
+import { bookedDateOf, notBookedReasons, syncAccountTransactions } from '../sync'
 import type { StoredAccount } from '../../types'
 
 const USER_ID = 'user-1'
@@ -520,6 +520,24 @@ describe('syncAccountTransactions', () => {
       '2026-08-01', '2026-11-21', mockIngest, { bankName: 'Handelsbanken' },
     )
     expect(mockIngest.mock.calls[0][3]).toHaveLength(3)
+  })
+
+  it("tells ingest how the bank's card holds read, so a hold stored before never takes a purchase (crm#2076)", async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    const isNotBookedAt = async (bankName?: string) => {
+      mockIngest.mockClear()
+      await syncAccountTransactions(
+        {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+        '2026-11-13', '2026-11-21', mockIngest, bankName === undefined ? undefined : { bankName },
+      )
+      return (mockIngest.mock.calls[0][4] as { isNotBooked?: (text: string) => boolean }).isNotBooked
+    }
+
+    const nordea = await isNotBookedAt('Nordea')
+    expect(nordea?.('Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(true)
+    expect(nordea?.('Kortköp 261119 KAFFEROSTERIET')).toBe(false)
+    expect((await isNotBookedAt('Handelsbanken'))?.('Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(false)
+    expect(await isNotBookedAt()).toBeUndefined()
   })
 
   it('reports the rows ingest set aside as another currency, and the rest of the sync stands (crm#1767)', async () => {
@@ -1302,24 +1320,6 @@ describe('bookedDateOf (crm#1767)', () => {
     expect(bookedDateOf({ value_date: '2026-11-04' })).toBeNull()
     expect(bookedDateOf({ status: 'OTHR', transaction_date: '2026-11-03' })).toBeNull()
     expect(bookedDateOf({ booking_date: null, value_date: null, transaction_date: null })).toBeNull()
-  })
-})
-
-describe('isNordeaCardHold (crm#2076)', () => {
-  it("is a Nordea row whose text starts with 'Reservation '", () => {
-    expect(isNordeaCardHold('Nordea', 'Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(true)
-    expect(isNordeaCardHold(' nordea corporate ', '  Reservation Kortköp SKOAFFAREN')).toBe(true)
-    expect(isNordeaCardHold('Nordea First Card', 'Reservation Kortköp TIDNINGSBUTIKEN')).toBe(true)
-  })
-
-  it('is never a settled purchase that carries the word, nor another bank, nor an unknown one', () => {
-    expect(isNordeaCardHold('Nordea', 'Kortköp 260824 Hotel Reservation')).toBe(false)
-    expect(isNordeaCardHold('Nordea', 'Invoice no: 12 Reservation no: 1000001')).toBe(false)
-    expect(isNordeaCardHold('Nordea', 'Reservationsavgift')).toBe(false)
-    expect(isNordeaCardHold('Handelsbanken', 'Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(false)
-    expect(isNordeaCardHold('Nordeax Bank', 'Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(false)
-    expect(isNordeaCardHold(null, 'Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(false)
-    expect(isNordeaCardHold(undefined, 'Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(false)
   })
 })
 

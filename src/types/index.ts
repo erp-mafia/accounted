@@ -4719,6 +4719,17 @@ export interface IngestOptions {
    * new id scheme takes a new label.
    */
   stableExternalIds?: boolean
+  /**
+   * The feed's reading of a bank text it lists as booked but does not take
+   * as booked: a Nordea card hold (crm#2076, isNordeaCardHold). The feed
+   * leaves such rows out of the batch. One stored before it did, by this feed
+   * or the other one, ignored or not, still holds its occurrence index.
+   * Re-keying never gives it an incoming row (reconcileStableExternalIds) and
+   * it is no cross-channel mirror twin (decideIngestRow), so a purchase booked
+   * on its day for its amount takes a fresh id instead of being skipped as its
+   * duplicate. Read from the stored row's original_description.
+   */
+  isNotBooked?: (text: string) => boolean
 }
 
 /**
