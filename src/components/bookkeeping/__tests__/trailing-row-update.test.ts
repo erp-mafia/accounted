@@ -4,13 +4,14 @@ import path from 'node:path'
 
 const FORM_SRC = fs.readFileSync(path.resolve(__dirname, '../JournalEntryForm.tsx'), 'utf8')
 
-/** The effect that keeps one blank row last in the konteringsrader. */
+/** The effect that keeps one blank row last in the konteringsrader, code only. */
 function trailingRowEffect(): string {
   const end = FORM_SRC.indexOf('}, [lines, makeBlankLine])')
   const start = FORM_SRC.lastIndexOf('useEffect(() => {', end)
   expect(end).toBeGreaterThan(-1)
   expect(start).toBeGreaterThan(-1)
-  return FORM_SRC.slice(start, end)
+  // A guard that is only in a comment does not count.
+  return FORM_SRC.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 }
 
 describe('the trailing blank row in JournalEntryForm', () => {
