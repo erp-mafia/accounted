@@ -797,6 +797,34 @@ describe('GET /api/settings/api-keys', () => {
     expect(service.find('profiles', 'in')).toEqual(['id', ['user-2', 'user-3']])
   })
 
+  it("names a partner's key by the partner, read with the service role, and no other key", async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    setupFrom({
+      listResult: {
+        data: [
+          { id: 'ak-p', key_prefix: 'gnubok_sk_p', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-11-19T12:00:00Z', user_id: 'user-1', client: 'partner:acme' },
+          { id: 'ak-gone', key_prefix: 'gnubok_sk_g', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-11-18T12:00:00Z', user_id: 'user-1', client: 'partner:unknown' },
+          { id: 'ak-c', key_prefix: 'gnubok_sk_c', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-11-17T12:00:00Z', user_id: 'user-1', client: 'claude' },
+        ],
+      },
+    })
+    const service = setupServiceFrom({
+      api_key_companies: { data: [] },
+      oauth_partner_clients: { data: [{ slug: 'acme', name: 'Acme' }] },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual([
+      expect.objectContaining({ id: 'ak-p', client: 'partner:acme', client_label: 'Acme' }),
+      expect.objectContaining({ id: 'ak-gone', client: 'partner:unknown', client_label: null }),
+      expect.objectContaining({ id: 'ak-c', client: 'claude', client_label: null }),
+    ])
+    expect(service.find('oauth_partner_clients', 'in')).toEqual(['slug', ['acme', 'unknown']])
+  })
+
   it("reads no profiles when every key is the caller's own", async () => {
     getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
     listUserCompaniesForPickerMock.mockResolvedValue(memberships)
@@ -880,6 +908,117 @@ describe('GET /api/settings/api-keys', () => {
   it('returns 500 when the list read fails', async () => {
     setupList({ error: { message: 'boom', code: 'XX000' } })
     const res = await GET(createMockRequest('/api/settings/api-keys'), { params: Promise.resolve({}) })
+    expect(res.status).toBe(500)
+  })
+})
+
+describe('GET /api/settings/api-keys: own keys homed in another company', () => {
+  // A sign-in made while one company was open reaches every company it was
+  // given, so the open company's list shows it too, not only the company
+  // where it was made.
+  function setupBySource(sources: {
+    company: { data?: unknown; error?: unknown }
+    own: { data?: unknown; error?: unknown }
+  }) {
+    const eqSpy = vi.fn()
+    mockSupabase.from.mockImplementation(() => {
+      let source: 'company' | 'own' = 'company'
+      const chain: Record<string, unknown> = {
+        select: () => chain,
+        eq: (column: string, value: unknown) => {
+          eqSpy(column, value)
+          source = column === 'user_id' ? 'own' : 'company'
+          return chain
+        },
+        order: () => {
+          const result = sources[source]
+          return Promise.resolve({ data: result.data ?? null, error: result.error ?? null })
+        },
+      }
+      return chain
+    })
+    return { eqSpy }
+  }
+
+  const key = (id: string, companyId: string, createdAt: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    key_prefix: `gnubok_sk_${id}`,
+    name: 'MCP-klient (OAuth)',
+    scopes: ['reports:read'],
+    revoked_at: null,
+    created_at: createdAt,
+    user_id: 'user-1',
+    service_account_id: null,
+    company_id: companyId,
+    ...extra,
+  })
+
+  beforeEach(() => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+  })
+
+  it('lists an own key that reaches the active company, newest first, and leaves out the ones that do not', async () => {
+    const homedHere = key('k-here', ACTIVE, '2026-11-10T10:00:00Z', { user_id: 'user-2' })
+    const { eqSpy } = setupBySource({
+      company: { data: [homedHere] },
+      own: {
+        data: [
+          key('k-open', OTHER, '2026-11-19T13:37:00Z'),
+          key('k-picked', THIRD, '2026-11-05T10:00:00Z'),
+          key('k-not-here', OTHER, '2026-11-04T10:00:00Z'),
+          key('k-left', FOREIGN, '2026-11-03T10:00:00Z'),
+          key('k-sa', OTHER, '2026-11-02T10:00:00Z', { service_account_id: '5b6c1d2e-0000-4000-8000-0000000000a3' }),
+        ],
+      },
+    })
+    const service = setupServiceFrom({
+      api_key_companies: {
+        data: [
+          { api_key_id: 'k-picked', company_id: THIRD, access: 'write' },
+          { api_key_id: 'k-picked', company_id: ACTIVE, access: 'read' },
+          { api_key_id: 'k-not-here', company_id: OTHER, access: 'write' },
+        ],
+      },
+      profiles: { data: [{ id: 'user-2', full_name: 'Anna Andersson', email: 'anna@example.se' }] },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(eqSpy).toHaveBeenCalledWith('company_id', ACTIVE)
+    expect(eqSpy).toHaveBeenCalledWith('user_id', 'user-1')
+    // Unrestricted (k-open) and allowlisted here (k-picked) join; an allowlist
+    // without the active company, a company left and a service account do not.
+    expect(body.data.map((row) => row.id)).toEqual(['k-open', 'k-here', 'k-picked'])
+    expect(body.data[0]).toEqual(expect.objectContaining({ id: 'k-open', is_own: true, company_ids: null, source: 'signin' }))
+    expect(body.data[2]).toEqual(
+      expect.objectContaining({ id: 'k-picked', company_ids: [THIRD, ACTIVE], read_only_company_ids: [ACTIVE] }),
+    )
+    expect(body.data.every((row) => !('company_id' in row) && !('user_id' in row))).toBe(true)
+    // One allowlist read for the homed keys and the member-company candidates.
+    expect(service.find('api_key_companies', 'in')).toEqual(['api_key_id', ['k-here', 'k-open', 'k-picked', 'k-not-here']])
+  })
+
+  it('keeps the list as it was when no own key is homed elsewhere', async () => {
+    setupBySource({
+      company: { data: [key('k-b', ACTIVE, '2026-11-01T10:00:00Z'), key('k-a', ACTIVE, '2026-11-09T10:00:00Z')] },
+      own: { data: [key('k-b', ACTIVE, '2026-11-01T10:00:00Z')] },
+    })
+    setupServiceFrom({ api_key_companies: { data: [] } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    // The company query's own order, no duplicate of the caller's key homed here.
+    expect(body.data.map((row) => row.id)).toEqual(['k-b', 'k-a'])
+  })
+
+  it('returns 500 when the own keys cannot be read', async () => {
+    setupBySource({
+      company: { data: [key('k-here', ACTIVE, '2026-11-10T10:00:00Z')] },
+      own: { error: { message: 'boom', code: 'XX000' } },
+    })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
     expect(res.status).toBe(500)
   })
 })

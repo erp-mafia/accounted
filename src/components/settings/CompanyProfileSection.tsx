@@ -15,8 +15,19 @@ import {
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
 import { formatDateLong } from '@/lib/utils'
+import { useFormat } from '@/lib/hooks/use-format'
 
 type Snapshot = Parameters<typeof CompanyProfileView>[0]['snapshot']
+
+// The panel rows a failed detail call can leave empty (the snapshot's
+// incompleteSections keys), each named once in the note under the panel. The
+// Företrädare row shows while its people are known, so only they name it: a
+// missing board summary alone leaves the row filled.
+const INCOMPLETE_SECTION_LABELS: ReadonlyArray<[keys: readonly string[], labelKey: string]> = [
+  [['representatives'], 'profile_section_representatives'],
+  [['statuses'], 'profile_section_status'],
+  [['fiscalYear'], 'profile_section_fiscal_year'],
+]
 
 const ERROR_MESSAGES: Record<string, string> = {
   org_number_invalid: 'Ogiltigt organisations- eller personnummer.',
@@ -41,8 +52,10 @@ const RULE_ERROR_KEYS: Record<string, string> = {
 export function CompanyProfileSection() {
   const { company } = useCompany()
   const t = useTranslations('settings_company')
+  const { locale, formatDateLong: formatLocalDate } = useFormat()
   const [snapshot, setSnapshot] = useState<Snapshot>(null)
   const [fetchedAt, setFetchedAt] = useState<string | null>(null)
+  const [resumesOn, setResumesOn] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   const [orgInput, setOrgInput] = useState('')
@@ -76,25 +89,47 @@ export function CompanyProfileSection() {
     setSubmitting(true)
     setError(null)
     const result = await refreshCompanyProfileAction(company.id, orgInput)
+    setResumesOn(result.resumesOn ?? null)
     if (result.ok) {
       setSnapshot((result.snapshot as Snapshot) ?? null)
       setFetchedAt(result.fetchedAt ?? null)
     } else {
       const code = result.error ?? ''
       setError(
-        RULE_ERROR_KEYS[code]
-          ? t(RULE_ERROR_KEYS[code])
-          : (ERROR_MESSAGES[code] ?? ERROR_MESSAGES.persist_failed),
+        code === 'paused' && result.resumesOn
+          ? t('profile_error_paused', { date: formatLocalDate(result.resumesOn) })
+          : code === 'unavailable'
+            ? t('profile_error_unavailable')
+            : RULE_ERROR_KEYS[code]
+              ? t(RULE_ERROR_KEYS[code])
+              : (ERROR_MESSAGES[code] ?? ERROR_MESSAGES.persist_failed),
       )
     }
     setSubmitting(false)
   }
+
+  // Rows Bolagsverket could not fill on the last fetch: they show as missing,
+  // not as "nothing registered".
+  const missing = snapshot?.incompleteSections ?? []
+  const missingLabels = INCOMPLETE_SECTION_LABELS
+    .filter(([keys]) => keys.some((key) => missing.includes(key)))
+    .map(([, labelKey]) => t(labelKey))
+  const missingList = new Intl.ListFormat(locale === 'en' ? 'en' : 'sv', { type: 'conjunction' }).format(missingLabels)
+  const missingSections = missingList.charAt(0).toLocaleUpperCase(locale) + missingList.slice(1)
 
   if (loading) return <Skeleton className="h-48 w-full rounded-lg" />
 
   return (
     <SettingsGroup label="Bolagsuppgifter">
       <CompanyProfileView snapshot={snapshot} />
+
+      {missingLabels.length > 0 && (
+        <p className="border-b-hairline px-1 py-3 text-sm text-muted-foreground">
+          {resumesOn
+            ? t('profile_incomplete_paused', { sections: missingSections, date: formatLocalDate(resumesOn) })
+            : t('profile_incomplete', { sections: missingSections })}
+        </p>
+      )}
 
       <SettingsRow
         label={snapshot ? 'Uppdatera bolagsuppgifter' : 'Hämta bolagsuppgifter'}

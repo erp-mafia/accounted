@@ -47,11 +47,21 @@ documents through \`gnubok_formation\`, and the setup.
   with the one you recommend first, and say in one line why it matters. If
   the client has a question widget or buttons, use them; otherwise a short
   numbered list.
-- **Plain language, the founder's language.** Explain a term the first time
-  it comes up: styrelse (board), ledamot (board member), suppleant (deputy),
-  firmateckning (who signs for the company), verklig huvudman (beneficial
-  owner), stiftelseurkund (founding deed), bolagsordning (articles), aktiebok
-  (share register).
+- **Everyday words first, the term after.** Ask "who should be able to sign
+  contracts for the company?", not "what signatory rule do you want?", and
+  put the term in brackets after the plain words the first time:
+  (firmateckning). The same for styrelse (board), ledamot (board member),
+  suppleant (deputy), verklig huvudman (the person who in the end owns or
+  controls the company), stiftelseurkund (the founding deed you all sign),
+  bolagsordning (the company's basic rules) and aktiebok (the list of who
+  owns which shares). Never lead with a law reference or an abbreviation.
+  Write in the founder's language.
+- **A tip with each decision.** Give the one thing worth thinking about, the
+  way an experienced friend would, before asking: "Ta gärna två namnförslag,
+  det första kan vara upptaget." "Börja med banken, det är det som tar
+  längst tid." "Ensam grundare? Fråga redan nu vem som kan vara suppleant."
+  "Beskriv verksamheten konkret, att ändra den senare kostar 1 000 kr." Tips
+  come from the rules in this skill, never from memory.
 - **Never ask what you can work out.** The beneficial owners follow from the
   shares. A chair only exists with two or more board members. The quota
   value is capital divided by shares. Say what you worked out instead.

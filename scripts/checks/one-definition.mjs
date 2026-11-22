@@ -80,16 +80,45 @@ function listSourceFiles(dir, out = []) {
   return out
 }
 
-/** The lines of one source text that write a rule by hand. */
-export function findRuleLines(source, rule) {
-  const hits = []
+// A rule's regexes without the g flag (a g regex keeps lastIndex between
+// test() calls), compiled once per rule rather than once per line.
+const compiledMatchers = new WeakMap()
+function matchersOf(rule) {
+  let matchers = compiledMatchers.get(rule)
+  if (!matchers) {
+    matchers = rule.match.map((re) => new RegExp(re.source, re.flags.replace('g', '')))
+    compiledMatchers.set(rule, matchers)
+  }
+  return matchers
+}
+
+/** The lines of a source text that are not comments, with their 0-based index. */
+function codeLines(source) {
+  const lines = []
   source.split('\n').forEach((text, index) => {
-    if (COMMENT_LINE_RE.test(text)) return
-    if (rule.match.some((re) => new RegExp(re.source, re.flags.replace('g', '')).test(text))) {
+    if (!COMMENT_LINE_RE.test(text)) lines.push([index, text])
+  })
+  return lines
+}
+
+function ruleHits(lines, matchers) {
+  const hits = []
+  for (const [index, text] of lines) {
+    if (
+      matchers.some((re) => {
+        re.lastIndex = 0
+        return re.test(text)
+      })
+    ) {
       hits.push({ line: index + 1, text: text.trim() })
     }
-  })
+  }
   return hits
+}
+
+/** The lines of one source text that write a rule by hand. */
+export function findRuleLines(source, rule) {
+  return ruleHits(codeLines(source), matchersOf(rule))
 }
 
 export function findOneDefinitionFindings(sourceRoot, rules) {
@@ -97,13 +126,14 @@ export function findOneDefinitionFindings(sourceRoot, rules) {
   const stale = []
   if (rules.length === 0) return { findings, stale }
 
+  // Every file is read and split into its code lines once, for all rules.
   const sources = new Map()
   for (const scanDir of SCAN_DIRS) {
     const absolute = path.join(sourceRoot, scanDir)
     if (!fs.existsSync(absolute)) continue
     for (const file of listSourceFiles(absolute)) {
       const relative = path.relative(sourceRoot, file).split(path.sep).join('/')
-      sources.set(relative, fs.readFileSync(file, 'utf8'))
+      sources.set(relative, codeLines(fs.readFileSync(file, 'utf8')))
     }
   }
 
@@ -111,9 +141,10 @@ export function findOneDefinitionFindings(sourceRoot, rules) {
     const sanctioned = new Set(rule.sanctioned ?? [])
     const allowed = new Set(Object.keys(rule.allowed ?? {}))
     const matched = new Set()
-    for (const [file, source] of sources) {
+    const matchers = matchersOf(rule)
+    for (const [file, lines] of sources) {
       if (rule.scan && !rule.scan.some((prefix) => file.startsWith(prefix))) continue
-      const hits = findRuleLines(source, rule)
+      const hits = ruleHits(lines, matchers)
       if (hits.length === 0) continue
       matched.add(file)
       if (sanctioned.has(file) || allowed.has(file)) continue

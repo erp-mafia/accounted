@@ -10,8 +10,9 @@ import { truncateIp } from '@/lib/api/v1/with-api-v1'
  *
  * Claude Desktop and self-hosted MCP clients register themselves before
  * starting the auth flow. The redirect URIs they declare are validated
- * against built-in patterns (Claude/localhost) and the user-managed
- * oauth_client_registrations table (self-hosted custom apps).
+ * against built-in patterns (Claude/localhost), the partner rows in
+ * oauth_partner_clients, and the user-managed oauth_client_registrations
+ * table (self-hosted custom apps).
  *
  * Security model:
  *  - Anonymous by design (RFC 7591 §3 allows it); the endpoint does NOT
@@ -36,6 +37,9 @@ const REGISTER_RATE_LIMIT = {
   maxRequests: 10,
   windowMs: 60 * 1000,
 }
+
+/** Redirect URIs one registration may declare. */
+const MAX_REDIRECT_URIS = 20
 
 export async function POST(request: Request) {
   // ── IP-based rate limit ─────────────────────────────────────
@@ -69,6 +73,16 @@ export async function POST(request: Request) {
   }
 
   const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris : []
+  // Each URI that is not built in costs a database read below, and a
+  // partner's callbacks are public (a prefix row matches endless distinct
+  // URIs), so one anonymous request may not hold more than a client needs:
+  // Cursor, the most so far, registers three.
+  if (redirectUris.length > MAX_REDIRECT_URIS) {
+    return NextResponse.json(
+      { error: 'invalid_redirect_uri', error_description: `At most ${MAX_REDIRECT_URIS} redirect URIs` },
+      { status: 400 }
+    )
+  }
   for (const uri of redirectUris) {
     if (typeof uri !== 'string' || !(await isAllowedRedirectUri(uri, allowlistClient))) {
       // Single error shape regardless of whether the URI is malformed,
