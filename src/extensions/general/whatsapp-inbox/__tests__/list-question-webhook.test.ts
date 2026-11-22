@@ -372,9 +372,8 @@ describe('POST /webhook: a text that would get the fallback reply', () => {
 
     expect(response.status).toBe(200)
     expect(onTextMock).toHaveBeenCalledTimes(1)
-    const [, conversationId, link] = onTextMock.mock.calls[0]
-    expect(conversationId).toBe('conv-1')
-    expect(link.id).toBe('link-1')
+    // The offer reads the conversation and its link itself, as they stand now.
+    expect(onTextMock.mock.calls[0].slice(1)).toEqual(['conv-1'])
     expect(rowsBeforeOffer).toBe(1)
     expect(windowWritesBeforeOffer).toBe(1)
     const windowWrite = mock.findCalls('whatsapp_conversations', 'update')[0][0] as { service_window_expires_at: string }

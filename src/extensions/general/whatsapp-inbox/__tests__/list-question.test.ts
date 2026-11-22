@@ -936,7 +936,7 @@ describe('when the conversation\'s questions are done', () => {
 })
 
 describe('a text that would get the fallback reply', () => {
-  const onText = (supabase: SupabaseClient, link: WhatsAppPhoneLink = makeLink()) => offerListQuestionOnText(supabase, 'conv-1', link)
+  const onText = (supabase: SupabaseClient) => offerListQuestionOnText(supabase, 'conv-1')
 
   it('gets the oldest open question of the routed company, without a burst slot', async () => {
     listMock.mockResolvedValue(openOf([makeQuestion(), makeQuestion({ question_id: OTHER_QUESTION_ID })]))
@@ -1031,7 +1031,7 @@ describe('a text that would get the fallback reply', () => {
     listMock.mockResolvedValue(openOf(open ?? [makeQuestion()]))
     const { supabase, writes } = db({ conversation, link, role })
 
-    expect(await onText(supabase, link)).toBe('not_sent')
+    expect(await onText(supabase)).toBe('not_sent')
 
     expect(sendButtonsMock).not.toHaveBeenCalled()
     expect(sendTextMock).not.toHaveBeenCalled()
@@ -1130,7 +1130,7 @@ describe('a text that would get the fallback reply', () => {
 })
 
 describe('which question a person who keeps the books of several companies gets', () => {
-  const onText = (supabase: SupabaseClient, link: WhatsAppPhoneLink = makeLink()) => offerListQuestionOnText(supabase, 'conv-1', link)
+  const onText = (supabase: SupabaseClient) => offerListQuestionOnText(supabase, 'conv-1')
   const THIRD_COMPANY_NAME = 'Bolag C AB'
   const three = () => [
     membership(COMPANY, COMPANY_NAME),
@@ -1448,6 +1448,14 @@ const nothingFollows: Array<[string, () => { conversation?: WhatsAppConversation
   })],
 ]
 
+/** A stop lands while the answer is saved: from then on the database holds the link paused. */
+function stopWhileAnswerIsSaved(mock: ReturnType<typeof db>['mock']): void {
+  answerMock.mockImplementation(async () => {
+    mock.setTable('whatsapp_phone_links', { data: makeLink({ muted_at: NOW.toISOString() }) })
+    return { question: makeQuestion({ status: 'answered' }), fact_id: 'fact-1', fact: 'Kontoret.' }
+  })
+}
+
 describe('a tap on a button', () => {
   const optionTap = { companyId: COMPANY, questionId: QUESTION_ID, kind: 'option', optionId: 'office' } satisfies QuestionTap
   const dontKnowTap = { companyId: COMPANY, questionId: QUESTION_ID, kind: 'dont_know' } satisfies QuestionTap
@@ -1532,6 +1540,7 @@ describe('a tap on a button', () => {
   })
 
   it('confirms again, and writes nothing, when the same tap is delivered a second time', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const own = { ...openRow, status: 'answered', answer_option: 'office', answered_by: USER, answered_via: 'whatsapp' }
     const { supabase } = db({ questions: [own] })
 
@@ -1539,9 +1548,12 @@ describe('a tap on a button', () => {
 
     expect(sendTextMock.mock.calls[0][1]).toMatchObject({ template: TEMPLATE.m24ListAnswered })
     expect(answerMock).not.toHaveBeenCalled()
+    // The other open question does not follow a redelivered tap.
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
   it('says the question ended when another answer lands between the read and the write', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     answerMock.mockRejectedValue(codedRefusal('COMPANY_QUESTION_ALREADY_ENDED', 'Question is already answered; a question ends once.'))
     const { supabase } = db({ questions: [openRow] })
 
@@ -1550,6 +1562,7 @@ describe('a tap on a button', () => {
     expect(sendTextMock).toHaveBeenCalledTimes(1)
     expect(sendTextMock.mock.calls[0][1]).toMatchObject({ template: TEMPLATE.m25ListEnded })
     expect(historyMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
   const dropped: Array<[string, { role: string | null; questions: Record<string, unknown>[] }]> = [
@@ -1583,20 +1596,24 @@ describe('a tap on a button', () => {
   })
 
   it('drops a tap that names an option the question does not have, and leaves the question in flight', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     answerMock.mockRejectedValue(Object.assign(new Error('option_id "x" is not an option of this question'), { code: 'VALIDATION_ERROR' }))
     const { supabase, writes } = db({ questions: [openRow] })
     await applyListQuestionTap(supabase, tapArgs({ ...optionTap, optionId: 'x' }))
     expect(sendTextMock).not.toHaveBeenCalled()
     expect(historyMock).not.toHaveBeenCalled()
     expect(writes).toEqual([])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
   it('takes the question out of the conversation, without a reply, when the core says it is gone', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     answerMock.mockRejectedValue(codedRefusal('COMPANY_QUESTION_NOT_FOUND', 'No question in this company.'))
     const { supabase, writes } = db({ questions: [openRow] })
     await applyListQuestionTap(supabase, tapArgs(optionTap))
     expect(sendTextMock).not.toHaveBeenCalled()
     expect(conversationWrites(writes)[0].context?.pending_question).toBeUndefined()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
   it('sends the next open question after the acknowledgement, with no burst slot', async () => {
@@ -1671,6 +1688,19 @@ describe('a tap on a button', () => {
     expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
     expect(sendButtonsMock).not.toHaveBeenCalled()
   })
+
+  it('reads the link again before the next question: nothing follows a stop that came in while the answer was saved', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
+    const { supabase, mock } = db({ questions: [openRow] })
+    // The tap carries the link as it was read before the stop.
+    stopWhileAnswerIsSaved(mock)
+
+    await applyListQuestionTap(supabase, tapArgs(optionTap))
+
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  })
 })
 
 describe('a written reply to a list question', () => {
@@ -1736,14 +1766,17 @@ describe('a written reply to a list question', () => {
   })
 
   it('drops the reply and frees the slot when the person no longer keeps the books of the company', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     const { supabase, writes } = db({ role: 'viewer' })
     await applyListQuestionText(supabase, textArgs('Kontoret'))
     expect(answerMock).not.toHaveBeenCalled()
     expect(sendTextMock).not.toHaveBeenCalled()
     expect(conversationWrites(writes)[0].context?.pending_question).toBeUndefined()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
   it('says the question ended when it was answered elsewhere in between, once', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
     answerMock.mockRejectedValue(codedRefusal('COMPANY_QUESTION_ALREADY_ENDED', 'Question is already answered; a question ends once.'))
     const first = db()
     await applyListQuestionText(first.supabase, textArgs('Kontoret'))
@@ -1752,6 +1785,20 @@ describe('a written reply to a list question', () => {
     const retry = db()
     await applyListQuestionText(retry.supabase, textArgs('Kontoret', false))
     expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  })
+
+  it('reads the link again before the next question: nothing follows a stop that came in while the answer was saved', async () => {
+    listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
+    const { supabase, mock } = db()
+    // The reply carries the link as it was read before the stop.
+    stopWhileAnswerIsSaved(mock)
+
+    await applyListQuestionText(supabase, textArgs('Kontoret på Storgatan'))
+
+    expect(answerMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
   it('passes on a failure that is not a refusal', async () => {
