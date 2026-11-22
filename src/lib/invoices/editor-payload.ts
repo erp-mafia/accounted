@@ -11,6 +11,7 @@
  */
 
 import type { DeductionType } from '@/types'
+import { SelfBillingInvoiceItemSchema } from '@/lib/api/schemas'
 
 /** True when a dimensions bag ({sie_dim_no: code}) carries at least one value. */
 export function hasDimensionValues(
@@ -185,6 +186,18 @@ export interface SelfBilledFormShape {
     unit_price: number
     vat_rate: number
   }>
+}
+
+/**
+ * The rows of a mottagen självfaktura whose quantity POST
+ * /api/invoices/self-billed refuses, read from its own item schema (a
+ * positive quantity). The editor's form schema takes 0 and negative for an
+ * invoice (lib/invoices/line-quantity.ts), so self-billed mode marks these
+ * rows inline instead of meeting a 400 after the click.
+ */
+export function selfBilledQuantityRefusals(items: ReadonlyArray<{ quantity: number }>): number[] {
+  const quantity = SelfBillingInvoiceItemSchema.shape.quantity
+  return items.flatMap((item, index) => (quantity.safeParse(item.quantity).success ? [] : [index]))
 }
 
 /**

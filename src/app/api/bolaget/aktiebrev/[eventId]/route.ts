@@ -17,7 +17,7 @@ import { loadShareRegisterData } from '@/lib/bolaget/share-register'
  */
 export const GET = withRouteContext<{ params: Promise<{ eventId: string }> }>('bolaget.aktiebrev_pdf', async (_request, ctx, { params }) => {
   const { eventId } = await params
-  const gate = await bolagetGateResponse(ctx)
+  const gate = await bolagetGateResponse(ctx, 'registers')
   if (gate) return gate
   const op = operationContext(ctx)
   const [data, roles, company, isAdmin] = await Promise.all([

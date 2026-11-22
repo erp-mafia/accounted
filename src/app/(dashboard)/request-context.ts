@@ -94,7 +94,7 @@ export const getDashboardCompanyMemberships = cache(async () => {
 
   return supabase
     .from('company_members')
-    .select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, jurisdiction, ledger_currency, created_by, team_id, archived_at, created_at, updated_at)')
+    .select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, jurisdiction, ledger_currency, created_by, team_id, archived_at, created_at, updated_at, bolaget_registers_enabled)')
     .eq('user_id', user.id)
 })
 

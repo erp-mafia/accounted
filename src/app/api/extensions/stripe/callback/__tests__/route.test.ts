@@ -23,6 +23,13 @@ vi.mock('@/lib/supabase/server', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
+// Only this host resolves in the brands table: a registered white-label domain.
+const BRAND_ORIGIN = 'https://books.partner.example'
+const { mockBrandLookup } = vi.hoisted(() => ({ mockBrandLookup: vi.fn() }))
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => mockBrandLookup(...args),
+}))
+
 const registryGet = vi.fn((..._args: unknown[]) => ({ id: 'stripe' }) as unknown)
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
@@ -70,6 +77,10 @@ describe('GET /api/extensions/stripe/callback', () => {
       livemode: false,
     })
     mockFetchAccountDisplayName.mockResolvedValue('Test Shop')
+    mockBrandLookup.mockImplementation(async (host: string) => ({
+      brand: host === new URL(BRAND_ORIGIN).hostname ? { domain: host } : null,
+      lookupFailed: false,
+    }))
   })
 
   it('activates the connection and turns the transaction feed on by default', async () => {
@@ -266,6 +277,125 @@ describe('GET /api/extensions/stripe/callback', () => {
       await GET(makeRequest({ code: 'ac_123', state: 'unknown-state' }))
 
       expect(mockGetUser).not.toHaveBeenCalled()
+    })
+  })
+  // Stripe redirects every consent to the one canonical callback URL while
+  // the session cookie is host-only, so a user who started on a white-label
+  // domain arrives here signed out. The pending row carries the origin the
+  // flow started on, and every exit of the callback goes back there.
+  describe('white-label origin', () => {
+    const BRAND_ROW = {
+      id: CONNECTION_ID,
+      user_id: 'user-1',
+      company_id: 'company-1',
+      return_origin: BRAND_ORIGIN,
+    }
+
+    it('reads the recorded origin with the pending row', async () => {
+      const findChain = mockChain({ data: BRAND_ROW })
+      mockFrom.mockReturnValue(findChain)
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: null })
+
+      await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+      const columns = String((findChain.select as ReturnType<typeof vi.fn>).mock.calls[0][0])
+      expect(columns).toContain('return_origin')
+    })
+
+    it('sends a signed-out callback to the login on the brand host, consuming nothing', async () => {
+      const findChain = mockChain({ data: BRAND_ROW })
+      mockFrom.mockReturnValue(findChain)
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: null })
+
+      const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+      expect(response.status).toBe(307)
+      const location = new URL(response.headers.get('location') || '')
+      expect(location.origin).toBe(BRAND_ORIGIN)
+      expect(location.pathname).toBe('/login')
+      expect(location.searchParams.get('next')).toBe(
+        `/api/extensions/stripe/callback?code=ac_123&state=${OAUTH_STATE}`,
+      )
+      expect(mockFrom).toHaveBeenCalledTimes(1)
+      expect(findChain.insert).not.toHaveBeenCalled()
+      expect(findChain.update).not.toHaveBeenCalled()
+      expect(mockExchangeCodeForAccount).not.toHaveBeenCalled()
+    })
+
+    it('returns a completed connection to the brand host it started on', async () => {
+      mockFrom
+        .mockReturnValueOnce(mockChain({ data: BRAND_ROW }))
+        .mockReturnValueOnce(mockChain({ error: null }))
+        .mockReturnValueOnce(
+          mockChain({
+            data: {
+              id: CONNECTION_ID,
+              company_id: 'company-1',
+              user_id: 'user-1',
+              stripe_account_id: 'acct_123',
+              livemode: false,
+            },
+          }),
+        )
+
+      const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+      expect(response.headers.get('location')).toBe(
+        `${BRAND_ORIGIN}/import?mode=stripe&stripe_connected=true`,
+      )
+    })
+
+    it('returns a denial at Stripe to the brand host', async () => {
+      mockFrom.mockReturnValueOnce(mockChain({ data: BRAND_ROW }))
+
+      const response = await GET(
+        makeRequest({ error: 'access_denied', error_description: 'nej', state: OAUTH_STATE }),
+      )
+
+      expect(response.headers.get('location')).toBe(
+        `${BRAND_ORIGIN}/import?mode=stripe&stripe_error=nej`,
+      )
+    })
+
+    it('keeps the canonical host for an origin that is not a registered brand', async () => {
+      const findChain = mockChain({
+        data: { ...BRAND_ROW, return_origin: 'https://evil.example' },
+      })
+      mockFrom.mockReturnValue(findChain)
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: null })
+
+      const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+      const location = new URL(response.headers.get('location') || '')
+      expect(location.origin).toBe('http://localhost:3000')
+      expect(location.pathname).toBe('/login')
+    })
+
+    // The login bounce re-checks the origin on its own; the success, denial
+    // and error redirects rely on the route's check alone.
+    it('never sends a completed connection to a tampered return_origin', async () => {
+      mockFrom
+        .mockReturnValueOnce(
+          mockChain({ data: { ...BRAND_ROW, return_origin: 'https://evil.example' } }),
+        )
+        .mockReturnValueOnce(mockChain({ error: null }))
+        .mockReturnValueOnce(
+          mockChain({
+            data: {
+              id: CONNECTION_ID,
+              company_id: 'company-1',
+              user_id: 'user-1',
+              stripe_account_id: 'acct_123',
+              livemode: false,
+            },
+          }),
+        )
+
+      const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+      expect(response.headers.get('location')).toBe(
+        'http://localhost:3000/import?mode=stripe&stripe_connected=true',
+      )
     })
   })
 })

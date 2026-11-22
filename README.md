@@ -83,6 +83,7 @@ For building against Accounted, or driving it from a shell. They live in [`skill
 | `accounted-api` | Build against the REST API: auth, conventions and every endpoint |
 | `accounted-cli` | Work in the books from a shell with the `accounted` command |
 | `accounted-gather` | Find and upload the documents the archive says are missing |
+| `accounted-start-company` | Start a Swedish aktiebolag: the verksamt.se steps, the board and naming rules, and what to file after registration |
 | `openapi-to-skill` | Turn any OpenAPI spec into an agent skill |
 
 ```bash

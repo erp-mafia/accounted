@@ -13,7 +13,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bolaget.share_class_update',
   async (request, ctx, { params }) => {
     const { id } = await params
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, PatchSchema)
     if (!validation.success) return validation.response

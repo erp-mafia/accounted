@@ -1,6 +1,7 @@
 /**
  * Supplier-invoice actions through the v1 door of the operation registry
- * (src/lib/operations/supplier-invoice-actions.ts via lib/operations/v1.ts):
+ * (src/lib/operations/supplier-invoice-actions.ts via lib/operations/v1.ts),
+ * and the published shape of GET /supplier-invoices/:id:
  *   DELETE /api/v1/companies/:companyId/supplier-invoices/:id
  *   POST   /api/v1/companies/:companyId/supplier-invoices/:id/uncredit
  *   PATCH  /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
@@ -51,7 +52,8 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { DELETE as deleteInvoice } from '../route'
+import { DELETE as deleteInvoice, GET as getInvoice } from '../route'
+import { generateOpenApiSpec } from '@/lib/api/v1/registry'
 import { POST as uncredit } from '../uncredit/route'
 import { PATCH as moveItem } from '../items/[itemId]/route'
 import { POST as bankEntered } from '../bank-entered/route'
@@ -587,5 +589,38 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered',
     expect(res.status).toBe(200)
     expect((await res.json()).data.preview).toMatchObject({ changed: true, entered: true })
     expect(wrote(client)).toBe(false)
+  })
+})
+
+describe('GET /api/v1/companies/:companyId/supplier-invoices/:id', () => {
+  // The handler returns the selected row as it is, so a column it selects but
+  // the schema leaves out is in every answer and missing from openapi.json:
+  // an integration reading the spec cannot know document_id is there.
+  it('declares in the published spec every column it returns (GET and PATCH share the schema)', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['suppliers:read'],
+      mode: 'live',
+    })
+    const client = makeClient({ company_members: OWNER, supplier_invoices: { data: invoice() } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await getInvoice(request(BASE, { method: 'GET' }), params())
+    expect(res.status).toBe(200)
+
+    const select = client.calls.find((c) => c.table === 'supplier_invoices' && c.method === 'select')
+    const returned = String(select?.args[0]).split(',').map((c) => c.trim())
+    expect(returned).toContain('document_id')
+
+    const path = generateOpenApiSpec('https://x.test').paths['/api/v1/companies/{companyId}/supplier-invoices/{id}'] as Record<
+      string,
+      { responses: Record<string, { content: Record<string, { schema: { properties: { data: { properties: Record<string, unknown> } } } }> }> }
+    >
+    for (const method of ['get', 'patch']) {
+      const declared = Object.keys(path[method].responses['200'].content['application/json'].schema.properties.data.properties)
+      expect(returned.filter((column) => !declared.includes(column)), method).toEqual([])
+    }
   })
 })

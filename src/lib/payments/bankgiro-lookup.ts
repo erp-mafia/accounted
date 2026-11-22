@@ -33,6 +33,7 @@ import { callConnectorOperation } from '@/lib/connect/instance/connector-fetch'
 import { paymentsConnectorMode } from '@/lib/connect/instance/upstreams'
 import type { OperationContext } from '@/lib/operations/types'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
+import { giroMessage } from '@/lib/payments/supplier-payee'
 
 /** The environment flag that switches the premium lookups on: exactly 'true'. */
 export const BANKGIRO_LOOKUP_FLAG = 'OPENPAYMENTS_BANKGIRO_LOOKUP'
@@ -135,11 +136,9 @@ function ocrForWire(ocr: string | null | undefined): string | null {
   return /^\d{2,25}$/.test(cleaned) ? cleaned : null
 }
 
-/** The free reference as the contract takes it: at most 25 characters, or null when empty. */
+/** The free reference as the contract takes it: the giro message (giroMessage), or null when empty. */
 function invoiceRefForWire(ref: string | null | undefined): string | null {
-  const trimmed = (ref ?? '').trim()
-  if (!trimmed) return null
-  return [...trimmed].slice(0, 25).join('')
+  return giroMessage(ref ?? '') || null
 }
 
 async function lookupParty(ctx: OperationContext): Promise<{ orgNumber: string; signerPersonalNumber: string | null } | null> {
