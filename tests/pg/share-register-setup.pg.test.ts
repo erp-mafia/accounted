@@ -1,5 +1,5 @@
 /**
- * pg-real tests for 20261122160000_share_register_setup_and_holder_history.sql:
+ * pg-real tests for 20261122201347_share_register_setup_and_holder_history.sql:
  * a holding carried over from an earlier register is entered while the
  * aktiebok is set up and never after; completing the setup needs shares,
  * happens once, is the owner's or an admin's and is entered in the register;
