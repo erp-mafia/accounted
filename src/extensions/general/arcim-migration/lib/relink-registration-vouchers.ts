@@ -5,8 +5,10 @@
  *
  * The imported invoice rows do not store the provider's voucher ref, so the
  * only way to recover it is to ask the provider again: the registers are
- * re-fetched (hydrated, so Fortnox detail payloads carry VoucherSeries /
- * VoucherNumber), joined to the invoices that are still unlinked, and handed
+ * re-fetched (hydrated, so a Fortnox customer invoice's detail payload carries
+ * VoucherSeries / VoucherNumber; a supplier invoice names its booking in
+ * Vouchers, see providers/fortnox/supplier-invoice-voucher.ts), joined to the
+ * invoices that are still unlinked, and handed
  * to the core linker, which decides and writes with the same guarantees the
  * migration itself uses. Nothing is inserted: an invoice the provider knows
  * but this company does not is skipped, not imported.
