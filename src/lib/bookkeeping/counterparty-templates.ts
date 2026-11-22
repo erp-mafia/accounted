@@ -1980,6 +1980,11 @@ function replayedFiktivMomsKey(entries: readonly LinePatternEntry[]): string {
   return [...new Set(accounts)].sort().join(',')
 }
 
+/** Whether an account occurs on more than one of the entries. */
+function repeatsAccount(entries: readonly Pick<LinePatternEntry, 'account'>[]): boolean {
+  return new Set(entries.map((e) => e.account)).size !== entries.length
+}
+
 /**
  * A shape the simple builder books from the legacy fields: one business line,
  * at most one VAT line, no tax line. Any other is stored as a line_pattern.
@@ -2129,16 +2134,21 @@ function templateFieldsFromVoucherPatterns(
   // basis in ruta 21 instead of 24, 12 % as 25 %, and a pattern with an import
   // pair (4545) lost its moms. Judged on the averaged pattern, which is what
   // is stored and replayed. Averaging keeps one line per account, so a line
-  // pattern whose voucher books an account twice (two basis pairs on one
-  // 4598, one per sats) replays another split of the sats and teaches nothing
-  // either. A categorize booking whose replay would land in another ruta
-  // teaches nothing too (crm#1028).
+  // pattern whose voucher books a basis or offset account twice (two basis
+  // pairs on one 4598, one per sats) replays another split of the sats and
+  // teaches nothing either; a cost account booked on several lines merges as
+  // it does without reverse charge. A categorize booking whose replay would
+  // land in another ruta teaches nothing too (crm#1028).
   if (voucherPatterns.some((vp) => vp.fiktivMoms !== '')) {
     const replayed = replayedFiktivMomsKey(avgPattern)
-    const simple = isSimpleShape(avgPattern)
+    const rcPair = isSimpleShape(avgPattern) ? null : patternReplayPlan(avgPattern).rcPair
+    const isPairLeg = (account: string) =>
+      reverseChargeKindForBasisAccount(account) !== null ||
+      account === rcPair?.basis.account ||
+      account === rcPair?.offset.account
     if (voucherPatterns.some((vp) =>
       vp.fiktivMoms !== replayed ||
-      (!simple && new Set(vp.entries.map((e) => e.account)).size !== vp.entries.length),
+      (rcPair !== null && repeatsAccount(vp.entries.filter((e) => isPairLeg(e.account)))),
     )) return null
   }
   const { settlementAccount, settlementSide } = voucherPatterns[0]
@@ -2285,9 +2295,12 @@ export async function populateTemplatesFromSieVouchers(
     const linePattern = extractVoucherLinePattern(voucher.lines)
     if (!linePattern) continue
 
-    // Group key: sorted set of non-settlement accounts
+    // Group key: sorted set of non-settlement accounts, and the fiktiv-moms
+    // accounts, which the pattern leaves out: import VAT and EU reverse
+    // charge on the same cost account are two shapes, and the dominant one
+    // decides (#997).
     const accountSet = patternAccountSet(linePattern.entries)
-    const groupKey = `${normalized}|${accountSet}`
+    const groupKey = `${normalized}|${accountSet}|${linePattern.fiktivMoms}`
 
     let group = groups.get(normalized)
     if (!group) {

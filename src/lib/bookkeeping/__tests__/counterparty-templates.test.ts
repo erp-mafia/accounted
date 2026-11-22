@@ -2827,6 +2827,76 @@ describe('learning-loop repair (issue #865)', () => {
       expect(await populateTemplatesFromSieVouchers(supabase as never, 'company-1', [...imports, ...others])).toBe(0)
     })
 
+    async function learnedFromMix(groups: { count: number; lines: SIETransactionLine[] }[]) {
+      let number = 0
+      const vouchers = groups.flatMap(({ count, lines }) =>
+        Array.from({ length: count }, () => makeSIEVoucher({ description: 'Leverantor AB', number: ++number, lines })),
+      )
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] },
+        { data: null },
+      ])
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      return { count, row: count > 0 ? capturedTemplateRow(inserts) : null }
+    }
+
+    it('still learns the plain booking when one voucher of ten carries fiktiv moms (#997)', async () => {
+      const { count, row } = await learnedFromMix([
+        { count: 9, lines: [{ account: '1930', amount: -1000 }, { account: '6540', amount: 1000 }] },
+        {
+          count: 1,
+          lines: [
+            { account: '1930', amount: -1000 },
+            { account: '6540', amount: 1000 },
+            { account: '2645', amount: 250 },
+            { account: '2614', amount: -250 },
+          ],
+        },
+      ])
+      expect(count).toBe(1)
+      expect(row).toMatchObject({ debit_account: '6540', vat_treatment: null, vat_account: null, line_pattern: null })
+    })
+
+    it('still learns EU reverse charge when one voucher of ten booked 12 % (#997)', async () => {
+      const { count, row } = await learnedFromMix([
+        {
+          count: 9,
+          lines: [
+            { account: '1930', amount: -1000 },
+            { account: '6540', amount: 1000 },
+            { account: '2645', amount: 250 },
+            { account: '2614', amount: -250 },
+          ],
+        },
+        {
+          count: 1,
+          lines: [
+            { account: '1930', amount: -1000 },
+            { account: '6540', amount: 1000 },
+            { account: '2645', amount: 120 },
+            { account: '2624', amount: -120 },
+          ],
+        },
+      ])
+      expect(count).toBe(1)
+      expect(row).toMatchObject({ debit_account: '6540', vat_treatment: 'reverse_charge', vat_account: '2645' })
+    })
+
+    it('still teaches the bank-link door a cost account booked on two lines beside its basis pair (#997)', () => {
+      const shape = verifikatTemplateShape([
+        { account: '1930', amount: -1000 },
+        { account: '6540', amount: 600 },
+        { account: '6540', amount: 400 },
+        { account: '4535', amount: 1000 },
+        { account: '4598', amount: -1000 },
+        { account: '2645', amount: 250 },
+        { account: '2614', amount: -250 },
+      ])
+      const learned = shape?.linePattern as LinePatternEntry[]
+      expect(learned.map((e) => e.account).sort()).toEqual(['4535', '4598', '6540', '6540'])
+      expect(patternReplayPlan(learned).rcPair).toMatchObject({ kind: 'eu_services', rate: 0.25 })
+    })
+
     it('learns reverse_charge for counterparties booked with fiktiv moms', async () => {
       const vouchers = Array.from({ length: 3 }, (_, i) =>
         makeSIEVoucher({
