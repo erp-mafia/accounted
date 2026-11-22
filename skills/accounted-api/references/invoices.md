@@ -323,6 +323,7 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 **Do not use for:** Fetching a single invoice you already know the id of: use GET /api/v1/companies/{companyId}/invoices/{id}. Supplier invoices are a different resource (supplier-invoices).
 
 **Pitfalls:**
+- ?updated_since returns invoices whose own row changed: payment, crediting, sending and draft edits (line items included) all move updated_at. Three things do not: the reported status turning overdue as the due date passes (compare due_date yourself), the embedded customer fields (follow the customer list's own ?updated_since), and an unnumbered draft deleted outright, which leaves no row behind (a numbered draft is makulerad and does appear).
 - Draft invoices have invoice_number=null until they are sent.
 - payment_reference is the reference the invoice asks the payer to quote, the one its PDF prints; payment_reference_type says how it is built. ocr: the digits of invoice_number followed by a Luhn (10-modulen) check digit, 2 to 25 digits, never a length digit (invoice 2026-0042 gives 202600425). It fits a Bankgirot OCR control of the check digit, soft or hard, not one that also checks the length. invoice_number: the invoice number as it is, written as the message of the payment. An invoice carries ocr when it is printed in Swedish with a bankgiro or plusgiro and the company has not turned the OCR reference off, otherwise invoice_number; the value follows those settings, as the PDF does. Both are null when the document asks for no payment under a reference: no number yet (a draft), a credit note, a quote, a proforma, a delivery note, an invoice debited by Autogiro. An incoming payment is matched under either form.
 - remaining_amount is the unpaid portion (total − paid_amount); use status=paid or remaining_amount=0 to filter for closed invoices. Crediting an invoice sets its remaining_amount to 0: the credit note settles it.
@@ -344,12 +345,13 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 | `date_to` | query | `string` | no | YYYY-MM-DD. Invoices with invoice_date on or before this date. |
 | `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
 | `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
+| `updated_since` | query | `string` | no | ISO 8601 timestamp. Return only rows created or changed at or after it, ordered by updated_at then id (oldest change first) instead of the default order. Store the updated_at of the last row you received and pass it back, minus a safety margin of a few minutes, then drop rows you already hold with the same id and updated_at. |
 | `expand` | query | `string` | no | Comma-separated related records to embed: customer, items. An unknown key returns 400 VALIDATION_ERROR. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, invoice_number: string | null, external_invoice_number: string | null, is_self_billed: boolean, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited" | "written_off", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, amount_to_pay: number, ore_rounding_amount: number, remaining_amount: number, payment_reference: string | null, payment_reference_type: "ocr" | "invoice_number" | null, paid_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, invoice_number: string | null, external_invoice_number: string | null, is_self_billed: boolean, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited" | "written_off", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, amount_to_pay: number, ore_rounding_amount: number, remaining_amount: number, payment_reference: string | null, payment_reference_type: "ocr" | "invoice_number" | null, paid_at: string | null, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,

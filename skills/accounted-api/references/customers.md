@@ -93,6 +93,7 @@ Returns active customers in created-first order. Pass ?include_archived=true to 
 **Do not use for:** Fetching a single customer you already know the id of: use GET /api/v1/companies/{companyId}/customers/{id}. Suppliers are a separate resource.
 
 **Pitfalls:**
+- ?updated_since includes archived customers only with include_archived=true: archiving is a change to the row (archived_at set), and the default filter hides archived rows from the feed too.
 - Archived customers are hidden by default; the dashboard makes the same choice.
 - org_number is included so callers can match against external CRM identifiers, except where it is a natural person's identity number: a sole trader (enskild firma) has no org number of its own, so its org_number and vat_number come back null in the list. Read the record with GET /customers/{id} for the full value.
 
@@ -104,11 +105,12 @@ Returns active customers in created-first order. Pass ?include_archived=true to 
 | `include_archived` | query | `"true" \| "false"` | no | true also returns archived customers. Default: false. |
 | `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
 | `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
+| `updated_since` | query | `string` | no | ISO 8601 timestamp. Return only rows created or changed at or after it, ordered by updated_at then id (oldest change first) instead of the default order. Store the updated_at of the last row you received and pass it back, minus a safety margin of a few minutes, then drop rows you already hold with the same id and updated_at. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, party_id?: string | null, archived_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, party_id?: string | null, archived_at: string | null, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,

@@ -1537,6 +1537,7 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 **Do not use for:** Fetching a single supplier invoice: use GET /supplier-invoices/{id}. Listing customer invoices (different resource).
 
 **Pitfalls:**
+- ?updated_since returns supplier invoices whose own row changed: attest, payment, crediting and header edits move updated_at. Three things do not: the reported status turning overdue as the due date passes (compare due_date yourself), supplier_name (follow the supplier list's own ?updated_since), and open_payment, which is read from the bank payment and payment file records.
 - Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.
 - remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.
 - status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there), or filter ?status=approved, which returns every attested invoice nothing is paid on, the overdue ones included. ?status=overdue also returns a part-paid invoice past its due date. bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.
@@ -1555,11 +1556,12 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 | `date_to` | query | `string` | no | YYYY-MM-DD. Invoices with invoice_date on or before this date. |
 | `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
 | `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
+| `updated_since` | query | `string` | no | ISO 8601 timestamp. Return only rows created or changed at or after it, ordered by updated_at then id (oldest change first) instead of the default order. Store the updated_at of the last row you received and pass it back, minus a safety margin of a few minutes, then drop rows you already hold with the same id and updated_at. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, is_self_billed: boolean, self_billing_number: number | null, self_billing_agreement_ref: string | null, paid_at: string | null, approved_at: string | null, bank_entered_at: string | null, created_at: string, open_payment: { batch: { id: string, created_at: string } | null, payment_order: { id: string, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", created_at: string, provider_status: string | null, provider_error_code: string | null } | null } | null }[],
+  data: { id: string, handle?: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, is_self_billed: boolean, self_billing_number: number | null, self_billing_agreement_ref: string | null, paid_at: string | null, approved_at: string | null, bank_entered_at: string | null, created_at: string, updated_at: string, open_payment: { batch: { id: string, created_at: string } | null, payment_order: { id: string, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", created_at: string, provider_status: string | null, provider_error_code: string | null } | null } | null }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -3635,6 +3637,7 @@ Returns active suppliers in created-first order. Pass ?include_archived=true to 
 **Do not use for:** Fetching a single supplier you already know the id of: use GET /api/v1/companies/{companyId}/suppliers/{id}. Customers are a separate resource.
 
 **Pitfalls:**
+- ?updated_since includes archived suppliers only with include_archived=true: archiving is a change to the row (archived_at set), and the default filter hides archived rows from the feed too.
 - Archived suppliers are hidden by default; the dashboard makes the same choice.
 - org_number identifies legal entities only: suppliers currently have no `individual` type, so the field is Bolagsverket public-record data when present.
 - vat_number is stored as supplied; unlike customers, suppliers are not auto-validated against VIES on create. Validate externally if the integration requires it.
@@ -3647,11 +3650,12 @@ Returns active suppliers in created-first order. Pass ?include_archived=true to 
 | `include_archived` | query | `"true" \| "false"` | no | true also returns archived suppliers. Default: false. |
 | `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
 | `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
+| `updated_since` | query | `string` | no | ISO 8601 timestamp. Return only rows created or changed at or after it, ordered by updated_at then id (oldest change first) instead of the default order. Store the updated_at of the last row you received and pass it back, minus a safety margin of a few minutes, then drop rows you already hold with the same id and updated_at. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, default_currency: string, party_id?: string | null, archived_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, default_currency: string, party_id?: string | null, archived_at: string | null, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,

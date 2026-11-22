@@ -18,6 +18,7 @@ Returns active employees in created-first order. Pass ?include_inactive=true to 
 **Do not use for:** Fetching a single employee you already know the id of: use GET /api/v1/companies/{companyId}/employees/{id}. Salary calculations live on /salary-runs/{id}.
 
 **Pitfalls:**
+- ?updated_since sees removals only with include_inactive=true: removing an employee is a soft delete (is_active set to false), and the default filter hides inactive employees from the feed too.
 - Inactive employees are hidden by default; soft-delete via DELETE sets is_active=false (BFL 7 kap retention).
 - personnummer is masked in the list response (GDPR Art.5(1)(c) data minimisation). The detail endpoint returns the full value.
 - salary_type drives which field is meaningful: monthly_salary for monthly, hourly_rate for hourly. The other is null.
@@ -32,11 +33,12 @@ Returns active employees in created-first order. Pass ?include_inactive=true to 
 | `include_inactive` | query | `"true" \| "false"` | no | true also returns inactive employees. Default: active only. |
 | `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
 | `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
+| `updated_since` | query | `string` | no | ISO 8601 timestamp. Return only rows created or changed at or after it, ordered by updated_at then id (oldest change first) instead of the default order. Store the updated_at of the last row you received and pass it back, minus a safety margin of a few minutes, then drop rows you already hold with the same id and updated_at. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, first_name: string, last_name: string, personnummer_masked: string, employment_type: "employee" | "company_owner" | "board_member", personnel_category: "arbetare" | "tjansteman", employment_start: string, employment_end: string | null, salary_type: "monthly" | "hourly", monthly_salary: number | null, hourly_rate: number | null, f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified", is_active: boolean, created_at: string }[],
+  data: { id: string, handle?: string, first_name: string, last_name: string, personnummer_masked: string, employment_type: "employee" | "company_owner" | "board_member", personnel_category: "arbetare" | "tjansteman", employment_start: string, employment_end: string | null, salary_type: "monthly" | "hourly", monthly_salary: number | null, hourly_rate: number | null, f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified", is_active: boolean, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
