@@ -78,6 +78,11 @@ describe('the signatory payments api', () => {
     expect(await createSignatoryPaymentsApi(base).probe()).toEqual({ offered: true, verification: null })
   })
 
+  it('keeps the offer without a status when the provider refuses to read it (a 422, as it was as a 502)', async () => {
+    vi.stubGlobal('fetch', answering(422, { error: { code: 'PAYMENT_PROVIDER_REFUSED', message: 'x', details: { provider_code: 'KYC_REFUSED' } } }))
+    expect(await createSignatoryPaymentsApi(base).probe()).toEqual({ offered: true, verification: null })
+  })
+
   it('polls with refresh and starts the form through the token door, never as a hand-off', async () => {
     const started = { url: 'https://verify.example/form', expires_at: '2026-10-15T09:00:00.000Z', state: 'form_open' }
     const fetchMock = answering(200, { data: started })

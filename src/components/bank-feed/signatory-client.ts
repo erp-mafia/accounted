@@ -36,8 +36,9 @@ export interface SignatoryPaymentsApi {
 /**
  * The payments verification through the token door. The probe reads the
  * company's verification status: a refusal (payments not switched on for the
- * company, no provider) means no offer; a provider hiccup keeps the offer
- * with an unknown status, as the dialog does.
+ * company, no provider) means no offer; a provider hiccup, or the provider's
+ * refusal to read the status (PAYMENT_PROVIDER_REFUSED, a 422), keeps the
+ * offer with an unknown status, as the dialog does.
  */
 export function createSignatoryPaymentsApi(base: string): SignatoryPaymentsApi {
   const fetchVerification = (options: { refresh?: boolean } = {}) =>
@@ -48,7 +49,8 @@ export function createSignatoryPaymentsApi(base: string): SignatoryPaymentsApi {
         const verification = await fetchVerification()
         return { offered: verification.status !== 'valid', verification }
       } catch (error) {
-        if (error instanceof PaymentsClientError && error.status !== 503 && error.status !== 502) {
+        if (error instanceof PaymentsClientError && error.status !== 503 && error.status !== 502
+          && error.code !== 'PAYMENT_PROVIDER_REFUSED') {
           return { offered: false, verification: null }
         }
         return { offered: true, verification: null }

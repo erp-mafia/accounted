@@ -451,6 +451,45 @@ describe('the operations', () => {
     expect(error.retryable).toBe(false)
     expect(error.httpStatus).toBe(200)
   })
+
+  // The doors answer a final failure as PAYMENT_PROVIDER_REFUSED, a 4xx logged
+  // at warn: right for the bank's refusal, and it would leave an outage of the
+  // integration (a key, a scope, a contract) at warn. Only error lines reach
+  // the console in tests.
+  describe('a failure on our side of the bank is logged at error, the bank answering is not', () => {
+    let consoleError: { mock: { calls: unknown[][] }; mockRestore: () => void }
+    beforeEach(() => {
+      consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    })
+    afterEach(() => consoleError.mockRestore())
+    const logged = () => consoleError.mock.calls.map((args) => args.map(String).join(' ')).join('\n')
+
+    it.each([
+      ['CONNECTOR_KEY_INVALID', 401],
+      ['CONNECTOR_SCOPE_MISSING', 403],
+      ['CONNECTOR_PAYMENTS_PROVIDER_UNAVAILABLE', 503],
+    ])('%s', async (code, status) => {
+      const error = await failure(provider(fetchAnswering(status, { error: 'no', code, retryable: false })).startSigning(CTX, { kind: 'payment', providerPaymentId: 'pay-1', product: 'domestic' }, 'qr'))
+      expect(error).toMatchObject({ code, retryable: false })
+      expect(logged()).toContain('payments connector call failed; a person or an operator must act')
+      expect(logged()).toContain(code)
+    })
+
+    it('a contract break in the answer', async () => {
+      await failure(provider(fetchAnswering(200, { nope: 1 })).getPaymentState(CTX, 'pay-1', 'domestic'))
+      expect(logged()).toContain('CONNECTOR_PROTOCOL_ERROR')
+    })
+
+    it.each([
+      ["the bank's refusal", 422, { error: 'refused', code: 'CONNECTOR_PAYMENTS_REFUSED', retryable: false, providerCode: 'RESOURCE_BLOCKED' }],
+      ["the bank's not-found", 404, { error: 'gone', code: 'CONNECTOR_PAYMENTS_NOT_FOUND', retryable: false }],
+      ['a provider failure a retry may pass', 502, { error: 'down', code: 'CONNECTOR_PAYMENTS_PROVIDER_FAILED', retryable: true }],
+      ['a lost write', 502, { error: 'lost', code: 'CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN', retryable: false }],
+    ])('not %s', async (_name, status, body) => {
+      await failure(provider(fetchAnswering(status, body)).startSigning(CTX, { kind: 'payment', providerPaymentId: 'pay-1', product: 'domestic' }, 'qr'))
+      expect(logged()).toBe('')
+    })
+  })
 })
 
 describe('toPaymentProviderError', () => {
