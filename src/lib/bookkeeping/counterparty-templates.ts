@@ -7,6 +7,7 @@ import {
   bankRowVatLines,
   generateReverseChargePurchaseLines,
   DEFAULT_REVERSE_CHARGE_KIND,
+  isImportBasisAccount,
   isReverseChargeBasisAccount,
   isReverseChargeVatAccount,
   outputVatTreatmentOfAccount,
@@ -32,7 +33,6 @@ import {
 import { DimensionValidationError, type DimensionValidationIssue } from './dimension-errors'
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
-import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
 import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { bankSideOf, isMoneyLedger, learnableBankPair, settleBankLeg, type BankSide } from './bank-leg'
@@ -1983,7 +1983,7 @@ function replayedFiktivMomsKey(
       .map((e) => ({ account: e.account, amount: roundOre(REPLAY_PROBE_AMOUNT * (e.ratio ?? 0) * ratioScale) }))
     purchase = { base: REPLAY_PROBE_AMOUNT, rate: rcPair.rate, kind: rcPair.kind }
   }
-  if (costLines.some((line) => VAT_ACCOUNT_TABLE[line.account]?.basis?.kind === 'import')) return null
+  if (costLines.some((line) => isImportBasisAccount(line.account))) return null
   const accounts = reverseChargePurchasesOn(purchase, costLines, new Map())
     .flatMap(generateReverseChargePurchaseLines)
     .map((line) => line.account_number)
