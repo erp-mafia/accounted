@@ -66,14 +66,29 @@ describe('konteringAmountValue', () => {
     expect(konteringAmountValue(typed, '.')).toBe(value)
   })
 
-  it.each(['', '  ', '-', ',', 'abc', '12abc', '1.2.3', '1e3'])('reads %j as no figure in either language', (typed) => {
+  it.each(['', '  ', '-', '--5', ',', 'abc', '12abc', '1.2.3', '1e3'])('reads %j as no figure in either language', (typed) => {
     expect(konteringAmountValue(typed, ',')).toBe('')
     expect(konteringAmountValue(typed, '.')).toBe('')
   })
 
-  it('refuses in English what only a decimal comma could mean, rather than guess', () => {
-    expect(konteringAmountValue('100,50', '.')).toBe('')
-    expect(konteringAmountValue('1.234,56', '.')).toBe('')
+  it.each([
+    ['100,50', '100.5'],
+    ['0,5', '0.5'],
+    ['1.234,56', '1234.56'],
+  ])('reads %j in English, a comma that cannot group thousands, as the decimal %j', (typed, value) => {
+    // A phone set to a Swedish region offers only a comma on its decimal keypad.
+    expect(konteringAmountValue(typed, '.')).toBe(value)
+  })
+
+  it.each([
+    ['-2,675', ','],
+    ['-2.675', '.'],
+    ['−2,675', ','],
+  ])('rounds the minus figure %j as the same figure on the other side', (typed, decimal) => {
+    const value = konteringAmountValue(typed, decimal as ',' | '.')
+    expect(value).toBe('-2.68')
+    expect(negativeAmountMove('debit_amount', value)).toEqual({ side: 'credit_amount', value: '2.68' })
+    expect(konteringAmountValue(typed.slice(1), decimal as ',' | '.')).toBe('2.68')
   })
 
   it('hands every reader what a number field handed it: parseFloat reads the value as the typed amount', () => {

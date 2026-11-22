@@ -23,14 +23,28 @@ export type KonteringAmountSide = 'debit_amount' | 'credit_amount'
  * - Swedish (','): as parseAmountInput reads it, a comma or a dot decimal and
  *   space-grouped thousands, so "10,000" is ten kronor.
  * - English ('.'): a dot decimal and comma-grouped thousands, so "10,000" is
- *   ten thousand, as an English Chrome's number field read it; "100,50" is
- *   refused rather than guessed.
+ *   ten thousand, as an English Chrome's number field read it. A comma that
+ *   cannot group thousands ("100,50", "1.234,56") is a decimal comma, the
+ *   only decimal key a phone set to a Swedish region offers.
  * Text that is not one amount is no figure ('').
+ *
+ * A minus figure is the same figure on the other side (negativeAmountMove),
+ * so it is read and rounded without its sign: roundOre rounds a negative
+ * half öre toward zero, and "-2,675" would move as 2.67 where "2,675" typed
+ * on the other side is 2.68.
  */
 export function konteringAmountValue(text: string, decimal: ',' | '.'): string {
-  if (!text.trim()) return ''
-  const n = decimal === ',' ? parseAmountInput(text) : parseSwedishAmount(text, '.')
-  return n === null ? '' : String(n)
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+  const minus = /^[-−]/.test(trimmed)
+  const n = readKonteringAmount(minus ? trimmed.slice(1) : trimmed, decimal)
+  if (n === null || (minus && n < 0)) return ''
+  return String(minus && n !== 0 ? -n : n)
+}
+
+function readKonteringAmount(text: string, decimal: ',' | '.'): number | null {
+  if (decimal === ',') return parseAmountInput(text)
+  return parseSwedishAmount(text, '.') ?? parseAmountInput(text)
 }
 
 /**
