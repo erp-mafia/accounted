@@ -990,9 +990,10 @@ async function readWrittenReply(
  *   - later: m27, fixed copy.
  *   - question_back: m28, the reader's own reply as readReply cleaned it.
  *   - other: the fallback reply a text gets when no question is in flight.
- * m27 and m28 go out only while the service window is open and fewer than
- * MAX_QUESTIONS_PER_DAY questions were asked in the conversation today;
- * neither is counted as one. A retry of the same message sends nothing.
+ * m27 and m28 go out only while the service window is open. They answer the
+ * person's own message: the day's limit on questions does not hold them
+ * back, and neither is counted as a question. A retry of the same message
+ * sends nothing.
  */
 async function replyToOpenQuestion(
   supabase: SupabaseClient,
@@ -1007,7 +1008,6 @@ async function replyToOpenQuestion(
   }
   const now = new Date()
   if (!serviceWindowOpen(args.conversation, now)) return
-  if (askedToday(getContext(args.conversation), now) >= MAX_QUESTIONS_PER_DAY) return
   if (reading.kind === 'question_back') {
     await sendText(supabase, {
       to: args.to,

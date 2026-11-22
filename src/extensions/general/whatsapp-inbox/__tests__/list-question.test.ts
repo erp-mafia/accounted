@@ -2171,9 +2171,9 @@ describe('a written reply when the company has a reply reader', () => {
   })
 
   it.each([
-    ['later', { kind: 'later' }],
-    ['question_back', { kind: 'question_back', reply: 'Menar du kontoret?' }],
-  ])('sends nothing for %s once the day\'s questions are used up, and the question stays open and in flight', async (_kind, reading) => {
+    ['later', { kind: 'later' }, TEMPLATE.m27ListLater],
+    ['question_back', { kind: 'question_back', reply: 'Menar du kontoret?' }, TEMPLATE.m28ListQuestionBack],
+  ])('still replies for %s once the day\'s questions are used up, and the question stays open and in flight', async (_kind, reading, template) => {
     reads(reading)
     for (const budget of ['budget', 'list_question_budget'] as const) {
       const { supabase, writes } = db()
@@ -2183,7 +2183,7 @@ describe('a written reply when the company has a reply reader', () => {
       expect(writes).toEqual([])
     }
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sentTemplates()).toEqual([template, template])
     expect(sendButtonsMock).not.toHaveBeenCalled()
     expect(answerMock).not.toHaveBeenCalled()
     expect(closeMock).not.toHaveBeenCalled()
