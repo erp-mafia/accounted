@@ -7,6 +7,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { createCompanyFromOnboarding } from '@/lib/company/actions'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
+import { getCurrentFiscalYearStart } from '@/lib/company/fiscal-year'
 import { deriveFirstYearDefaults } from '@/lib/company/first-year-defaults'
 import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
 import {
@@ -1471,7 +1472,10 @@ function FyMonthStep({
   const [sel, setSel] = useState(0)
   const [hover, setHover] = useState(0)
   const m = hover || sel
-  const year0 = stockholmYearMonth().year
+  // The band starts on the year computeFiscalPeriod creates: the one running today.
+  const year0 = m
+    ? Number(getCurrentFiscalYearStart({ fiscal_year_start_month: (m % 12) + 1 }).slice(0, 4))
+    : stockholmYearMonth().year
   const span: [number, number] | null = m ? (m === 12 ? [0, 11] : [m, m + 11]) : null
   const label = m
     ? m === 12
