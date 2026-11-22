@@ -74,13 +74,15 @@ function horizonEndFor(type: TaxDeadlineType, today: Date): Date {
 
 /**
  * The years the generator dates and detection expects, as of `fromDate`:
- * last year, this year and the next. The configs are keyed by the year of the
- * period (generateDates), and a December or Q4 period falls due in the next
- * calendar year (AGI and moms for December in January and February). Without
- * last year, every regeneration from 1 January leaves them out of the set,
- * and replace_system_tax_deadlines deletes their pending rows while they are
- * still ahead. Rows already past are skipped, so last year adds only what is
- * still due.
+ * last year, this year and the next. The monthly and quarterly configs are
+ * keyed by the year of the period (generateDates), and a December or Q4
+ * period falls due in the next calendar year (AGI and moms for December in
+ * January and February). Without last year, every regeneration from 1 January
+ * leaves them out of the set, and replace_system_tax_deadlines deletes their
+ * pending rows while they are still ahead. The configs keyed by the year a
+ * deadline falls due add nothing from last year but a notice's kvarskatt,
+ * which is kept past its date as in any year; every other row already past
+ * is skipped.
  */
 export function deadlineWindowYears(fromDate: Date = new Date()): number[] {
   const year = stockholmYearMonth(fromDate).year
@@ -1225,9 +1227,9 @@ export async function backfillMissingTaxDeadlines(
   // Window starts a year back, not today: completed rows with a superseded
   // (already passed) due date must still count as satisfied, otherwise the
   // repair loop flags the company forever while the generator (correctly)
-  // refuses to recreate a filed obligation. The start of last year is enough:
-  // no period of the window (deadlineWindowYears) falls due before it.
-  const pastFloor = `${stockholmYearMonth().year - 1}-01-01`
+  // refuses to recreate a filed obligation. Matches the generator's own
+  // completed-row floor for the window regeneration uses.
+  const pastFloor = `${Math.min(...deadlineWindowYears()) - 1}-01-01`
   const [rawSettings, upcomingDeadlineRows] = await Promise.all([
     fetchAllDeadlineSettings(supabase),
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
