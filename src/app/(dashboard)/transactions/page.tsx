@@ -197,6 +197,9 @@ const TransactionAttachDocumentDialog = dynamic(
   { loading: DialogLoadingSkeleton },
 )
 const QuickReviewDialog = dynamic(() => import('@/components/transactions/QuickReviewDialog'), { loading: DialogLoadingSkeleton })
+
+/** How long the ledger-twin probe may hold a row's Bokför before it counts as failed (askTwinFirst). */
+const TWIN_PROBE_TIMEOUT_MS = 8000
 const EditTransactionTitleDialog = dynamic(
   () => import('@/components/transactions/EditTransactionTitleDialog'),
   { loading: DialogLoadingSkeleton },
@@ -703,6 +706,13 @@ export default function TransactionsPage() {
     candidate: BookedDuplicateCandidate
   } | null>(null)
   const [duplicateProcessing, setDuplicateProcessing] = useState(false)
+  // A twin the user already answered "Bokför ändå" to when the row opened
+  // (askTwinFirst): the one booking that follows carries force bound to it,
+  // so the same question is not asked twice. Consumed by that booking and
+  // cleared by the next attempt, so it never outlives its own flow.
+  const acknowledgedTwinRef = useRef<{ transactionId: string; journalEntryId: string } | null>(null)
+  // The row whose twin probe is in flight (askTwinFirst); null when none.
+  const twinProbeOwnerRef = useRef<string | null>(null)
   // TX_CATEGORIZE_VAT_PERIOD_FILED: the row is dated in a filed momsperiod and
   // its booking changes the underlag for that declaration. The person reads
   // the warning and books anyway (retry sends confirm_filed_vat_period) or
@@ -4466,7 +4476,58 @@ export default function TransactionsPage() {
     setMatchDialogOpen(true)
   }
 
+  // Before a row opens any booking flow, ask the booking guard whether the
+  // affärshändelse is already in the ledger (a salary payout the run booked,
+  // an invoice marked paid). Asked only at submit, the answer came after a
+  // template proposal and a missing-underlag warning had both invited a
+  // second verifikat. A twin opens the duplicate dialog instead: Koppla links
+  // the row, Bokför ändå continues into the flow with the twin acknowledged.
+  // A failed or slow probe leaves the ordinary flow; the server still guards.
+  //
+  // One probe at a time for the page: the dialog is a single slot, so a
+  // second row's answer landing late would re-point an open dialog (and its
+  // Koppla) at another row. A click while a probe runs is dropped. Every
+  // attempt also starts without an acknowledgement, so a "Bokför ändå" from
+  // an attempt that was abandoned can never ride on a later one.
+  async function askTwinFirst(transaction: TransactionWithInvoice, proceed: () => void) {
+    if (twinProbeOwnerRef.current) return
+    twinProbeOwnerRef.current = transaction.id
+    acknowledgedTwinRef.current = null
+    setProcessingId(transaction.id)
+    let candidate: BookedDuplicateCandidate | null = null
+    try {
+      const res = await fetch(`/api/transactions/${transaction.id}/booking-duplicate-check`, {
+        signal: AbortSignal.timeout(TWIN_PROBE_TIMEOUT_MS),
+      })
+      if (res.ok) candidate = ((await res.json()) as { candidate: BookedDuplicateCandidate | null }).candidate
+    } catch {
+      // Timed out or offline: the ordinary flow, guarded at submit.
+    } finally {
+      twinProbeOwnerRef.current = null
+      setProcessingId((prev) => (prev === transaction.id ? null : prev))
+    }
+    if (!candidate) return proceed()
+    const twin = candidate
+    // A dialog another row's booking opened while this probe ran keeps the
+    // slot: this answer must not re-point it (and its Koppla) at this row.
+    // The person clicks Bokför here again once that one is answered.
+    setDuplicateWarning((prev) =>
+      prev ?? {
+        transactionId: transaction.id,
+        candidate: twin,
+        retry: async () => {
+          acknowledgedTwinRef.current = { transactionId: transaction.id, journalEntryId: twin.journal_entry_id }
+          proceed()
+        },
+      },
+    )
+  }
+
   function openCategoryDialog(transaction: TransactionWithInvoice, anchor?: HTMLElement) {
+    void askTwinFirst(transaction, () => openCategoryDialogUnchecked(transaction, anchor))
+  }
+
+  function openCategoryDialogUnchecked(transaction: TransactionWithInvoice, anchor?: HTMLElement) {
     setTemplatePickerTransaction(transaction)
     setTemplatePickerAnchor(anchor ?? null)
     // Opened from the row, not by "Byt": no review's underlag to carry.
@@ -4497,8 +4558,12 @@ export default function TransactionsPage() {
   // Bokför on a row that carries a proposal goes straight to the
   // review with that template set; no picker in between.
   function bookProposal(transaction: TransactionWithInvoice) {
+    void askTwinFirst(transaction, () => bookProposalUnchecked(transaction))
+  }
+
+  function bookProposalUnchecked(transaction: TransactionWithInvoice) {
     const s = rowProposalFor(transaction)
-    if (!s) return openCategoryDialog(transaction)
+    if (!s) return openCategoryDialogUnchecked(transaction)
     // A decision the company already made (a rule, a settled counterpart, a
     // sure read of a receipt) books from the row; Ångra sits on the toast.
     // The company's switch and the rule's own say come first
@@ -4521,7 +4586,11 @@ export default function TransactionsPage() {
     },
   ): Promise<{ ok: boolean; journalEntryId: string | null }> {
     const body = categorizeBodyFor(proposal, { dimensions: extras.dimensions, vatAmount: extras.vatAmount })
+    const ack = acknowledgedTwinRef.current
+    acknowledgedTwinRef.current = null
+    const acknowledgedTwin = ack?.transactionId === transaction.id ? ack.journalEntryId : undefined
     return runCategorize({
+      ...(acknowledgedTwin ? { force: true, expectedDuplicateJournalEntryId: acknowledgedTwin } : {}),
       id: transaction.id,
       isBusiness: true,
       category: body.category,
@@ -4532,7 +4601,15 @@ export default function TransactionsPage() {
       counterpartyTemplateId: body.counterparty_template_id,
       proposalId: body.proposal_id,
       reviewShown: extras.reviewShown,
-      onReviewRequired: extras.onReviewRequired,
+      onReviewRequired: extras.onReviewRequired
+        ? () => {
+            // The server asked for the review instead of booking: the answer
+            // to the twin holds for the booking the review makes, so the
+            // person is not asked it twice.
+            if (acknowledgedTwin) acknowledgedTwinRef.current = ack
+            extras.onReviewRequired?.()
+          }
+        : undefined,
       dimensions: body.dimensions,
       vatAmount: body.vat_amount,
       confirmNoMatch: false,
@@ -5695,6 +5772,7 @@ export default function TransactionsPage() {
       />}
 
       {duplicateWarning && <DuplicateBookingDialog
+        key={`${duplicateWarning.transactionId}:${duplicateWarning.candidate.journal_entry_id}`}
         candidate={duplicateWarning.candidate}
         processing={duplicateProcessing}
         onCancel={() => setDuplicateWarning(null)}
