@@ -20,14 +20,17 @@
  *     its ack;
  *   - fewer than MAX_QUESTIONS_PER_DAY questions were asked there today,
  *     receipt questions and list questions together;
- *   - after a burst: the burst has a question left of its
- *     MAX_QUESTIONS_PER_BURST (context.list_question_slots).
+ *   - after a burst and after the last receipt question of one: the burst
+ *     has a question left of its MAX_QUESTIONS_PER_BURST
+ *     (context.list_question_slots).
  *
- * Three moments: a question is filed (offerFiledListQuestion), a burst of
+ * Four moments: a question is filed (offerFiledListQuestion); a burst of
  * receipts has its ack and its own questions are done
- * (offerListQuestionAfterBurst, offerListQuestionWhenDone), and the person
+ * (offerListQuestionAfterBurst, offerListQuestionWhenDone); the person
  * writes a text that nothing else takes, in place of the fallback reply
- * (offerListQuestionOnText).
+ * (offerListQuestionOnText); and a list question is answered or closed in
+ * the chat, after its acknowledgement (answerListQuestion). The last two
+ * need no burst slot.
  *
  * State: the question in flight is context.pending_question with type
  * 'list_question', on a conversation that stays idle. A receipt question or
@@ -59,8 +62,14 @@ import { listQuestions } from '@/lib/questions/list'
 import { readQuestionRow, toQuestion } from '@/lib/questions/rows'
 import { QUESTION_LIMITS, type CompanyQuestion } from '@/lib/questions/types'
 import type { WhatsAppConversation, WhatsAppPhoneLink } from '@/types'
-import { sendReplyButtons, sendText, type ChoiceOption, type SendMessageBase } from './graph-api'
-import { botCopy, TEMPLATE } from './messages'
+import {
+  INTERACTIVE_BODY_MAX,
+  sendReplyButtons,
+  sendText,
+  type ChoiceOption,
+  type SendMessageBase,
+} from './graph-api'
+import { botCopy, TEMPLATE, type BotLocale } from './messages'
 import {
   LIST_QUESTION,
   MAX_QUESTIONS_PER_BURST,
@@ -255,6 +264,20 @@ async function appendListQuestionHistory(args: {
 
 // ── Sending ──────────────────────────────────────────────────
 
+/**
+ * The body of a list question's message: the question, why it is asked on a
+ * line of its own, then the closing line saying a written answer is welcome.
+ * When all of it is longer than an interactive body holds, the why is left
+ * out first, then the closing line. The question is never cut.
+ */
+export function listQuestionBody(question: Pick<CompanyQuestion, 'question' | 'why'>, locale: BotLocale = 'sv'): string {
+  const copy = botCopy(locale)
+  const whole = copy.m23ListQuestion({ question: question.question, why: question.why })
+  if (whole.length <= INTERACTIVE_BODY_MAX) return whole
+  const withoutWhy = copy.m23ListQuestion({ question: question.question, why: null })
+  return withoutWhy.length <= INTERACTIVE_BODY_MAX ? withoutWhy : question.question
+}
+
 /** The question's options in order, then "Vet inte" when a button is left for it. */
 function questionButtons(companyId: string, question: CompanyQuestion): ChoiceOption[] {
   const buttons: ChoiceOption[] = question.options.map((option) => ({
@@ -332,7 +355,7 @@ export async function sendListQuestion(supabase: SupabaseClient, args: SendListQ
   const sent = await sendReplyButtons(supabase, {
     to,
     template: TEMPLATE.m23ListQuestion,
-    body: botCopy('sv').m23ListQuestion({ question: question.question, why: question.why }),
+    body: listQuestionBody(question),
     buttons: questionButtons(companyId, question),
     senderPhoneHash: link.phone_hash,
     phoneLinkId: link.id,
@@ -457,10 +480,10 @@ export async function offerListQuestionAfterBurst(
 }
 
 /**
- * The conversation's questions are done: a receipt question was answered and
- * none waits, or a list question was answered here. The next open list
- * question is sent when the latest burst has a slot left. Reads nothing
- * unless the list is switched on for some company. Never throws.
+ * The conversation's receipt questions are done: one was answered and none
+ * waits. The next open list question is sent when the latest burst has a
+ * slot left. Reads nothing unless the list is switched on for some company.
+ * Never throws.
  */
 export async function offerListQuestionWhenDone(supabase: SupabaseClient, conversationId: string): Promise<void> {
   try {
@@ -477,18 +500,17 @@ export async function offerListQuestionWhenDone(supabase: SupabaseClient, conver
 }
 
 /**
- * The person wrote a text that nothing else takes (no keyword, no answer to
- * a question): the fallback reply would be next. The oldest open list
- * question of the routed company is sent in its place when every condition
- * in the file header holds, read off the conversation as it stands after
- * that text. No burst slot is used, and the text itself answers nothing.
- * Says how it ended; a read that fails ends as not_sent. Reads nothing
- * unless the list is switched on for some company. Never throws.
+ * Sends the next open list question of the routed company with no burst
+ * slot, when every other condition in the file header holds, read off the
+ * conversation as it stands now. Says how it ended; a read that fails ends
+ * as not_sent. Reads nothing unless the list is switched on for some
+ * company. Never throws.
  */
-export async function offerListQuestionOnText(
+async function offerNextWithoutSlot(
   supabase: SupabaseClient,
   conversationId: string,
   link: WhatsAppPhoneLink,
+  moment: 'text' | 'answer',
 ): Promise<ListQuestionOffer> {
   try {
     if (listIsOnForNobody()) return 'not_sent'
@@ -496,12 +518,28 @@ export async function offerListQuestionOnText(
     if (!conversation) return 'not_sent'
     return await offerNextListQuestion(supabase, conversation, link, false)
   } catch (err: unknown) {
-    log.warn('list question on a text failed', {
+    log.warn('the next list question was not sent', {
+      moment,
       conversationId,
       error: err instanceof Error ? err.message : String(err),
     })
     return 'not_sent'
   }
+}
+
+/**
+ * The person wrote a text that nothing else takes (no keyword, no answer to
+ * a question): the fallback reply would be next. The oldest open list
+ * question of the routed company is sent in its place, with no burst slot,
+ * read off the conversation as it stands after that text. The text itself
+ * answers nothing. Says how it ended. Never throws.
+ */
+export function offerListQuestionOnText(
+  supabase: SupabaseClient,
+  conversationId: string,
+  link: WhatsAppPhoneLink,
+): Promise<ListQuestionOffer> {
+  return offerNextWithoutSlot(supabase, conversationId, link, 'text')
 }
 
 /** The active, unpaused links of the company's members with a bookkeeping role. */
@@ -659,8 +697,9 @@ interface AnswerListQuestionArgs {
 
 /**
  * Answers or closes the question as the linked person, through the path the
- * app uses, and replies with one line. A question that had already ended is
- * told in one line and nothing is written. Throws what the core path throws
+ * app uses, replies with one line, and then sends the next open list
+ * question when one may be sent. A question that had already ended is told
+ * in one line and nothing is written. Throws what the core path throws
  * beyond its refusals.
  */
 async function answerListQuestion(supabase: SupabaseClient, args: AnswerListQuestionArgs): Promise<void> {
@@ -723,7 +762,10 @@ async function answerListQuestion(supabase: SupabaseClient, args: AnswerListQues
     template: closed ? TEMPLATE.m24ListClosed : TEMPLATE.m24ListAnswered,
     ...args.replyBase,
   })
-  if (conversation) await offerListQuestionWhenDone(supabase, conversation.id)
+  // The next open list question follows the acknowledgement, with no burst
+  // slot. A receipt question in flight or in the queue stays first: nothing
+  // is sent then.
+  if (conversation) await offerNextWithoutSlot(supabase, conversation.id, link, 'answer')
 }
 
 interface EndedQuestionRow {

@@ -38,7 +38,13 @@ const unitProject = {
       '**/.claude/**',
       '**/.next/**',
     ],
-    setupFiles: ['tests/unit/setup.ts'],
+    // A worker process runs many files in turn; isolate-modules.ts resets
+    // the modules, mocks, globals and environment before each one (see
+    // there). `npm test` also shuffles the files (Vitest prints the seed), so
+    // state one file leaves behind for another shows up; a project cannot
+    // set that itself, and pg-real and tool-pg must not be shuffled.
+    isolate: false,
+    setupFiles: ['tests/unit/isolate-modules.ts', 'tests/unit/setup.ts'],
   },
 }
 

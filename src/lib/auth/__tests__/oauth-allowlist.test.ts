@@ -39,6 +39,21 @@ describe('isBuiltInRedirectUri', () => {
     ['https://oauth-redirect.googleusercontent.com.evil.com/r/user_bound_custom-mcp-1-x', false],
     ['https://evil.googleusercontent.com/r/user_bound_custom-mcp-1-x', false],
     ['http://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1-x', false],
+    // Copilot Studio: Power Platform's consent callback, shared or per connector.
+    ['https://global.consent.azure-apim.net/redirect', true],
+    ['https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda', true],
+    ['https://global.consent.azure-apim.net/redirect/', false],
+    ['https://global.consent.azure-apim.net/redirect/a/b', false],
+    ['https://global.consent.azure-apim.net/redirect/a.b', false],
+    ['https://global.consent.azure-apim.net/redirect/a_b', false],
+    ['https://global.consent.azure-apim.net/redirect/a%2Fb', false],
+    ['https://global.consent.azure-apim.net/redirect/abc?next=x', false],
+    ['https://global.consent.azure-apim.net/redirect/abc#x', false],
+    ['https://global.consent.azure-apim.net/redirectx', false],
+    ['https://global.consent.azure-apim.net/other', false],
+    ['https://evil.consent.azure-apim.net/redirect/abc', false],
+    ['https://global.consent.azure-apim.net.evil.com/redirect/abc', false],
+    ['http://global.consent.azure-apim.net/redirect/abc', false],
     ['cursor://anysphere.cursor-mcp/oauth/callback', true],
     ['cursor://anysphere.cursor-mcp/oauth/callback/', false],
     ['cursor://anysphere.cursor-mcp/oauth/callback?x=1', false],
@@ -128,6 +143,9 @@ describe('builtInRedirectProvider', () => {
     ['https://grok.com/connectors-oauth-exchange-code/extra', null],
     ['https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se', 'gemini'],
     ['https://oauth-redirect.googleusercontent.com/r/some-cloud-project', null],
+    ['https://global.consent.azure-apim.net/redirect', 'copilot'],
+    ['https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda', 'copilot'],
+    ['https://global.consent.azure-apim.net/redirect/a/b', null],
     ['cursor://anysphere.cursor-mcp/oauth/callback', 'cursor_deeplink'],
     ['https://www.cursor.com/agents/mcp/oauth/callback', 'cursor'],
     ['https://squidler.io/api/oauth/callback/accounted', 'squidler'],
@@ -481,6 +499,13 @@ describe('builtInOnwardOrigins', () => {
       'https://cursor.com',
       'http://localhost:8787',
     ])
+  })
+
+  it("names the regional consent servers for Copilot Studio's callback, which the global host forwards to", async () => {
+    const { builtInOnwardOrigins } = await import('../oauth-allowlist')
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp')).toEqual(['https://*.consent.azure-apim.net'])
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/redirect')).toEqual(['https://*.consent.azure-apim.net'])
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/other')).toEqual([])
   })
 
   it('names nothing for other callbacks, or for a www.cursor.com path that is not allowlisted', async () => {

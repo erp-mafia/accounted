@@ -197,9 +197,11 @@ export interface ChoiceOption {
   title: string
 }
 
-/** WhatsApp hard limits: button titles 20 chars, list row titles 24. */
+/** WhatsApp hard limits: button titles 20 chars, list row titles 24, the
+ *  body text of an interactive message 1024. */
 export const BUTTON_TITLE_MAX = 20
 export const LIST_ROW_TITLE_MAX = 24
+export const INTERACTIVE_BODY_MAX = 1024
 export const MAX_REPLY_BUTTONS = 3
 export const MAX_LIST_ROWS = 10
 

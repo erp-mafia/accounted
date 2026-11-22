@@ -231,6 +231,7 @@ const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
   claude: 'Claude (Anthropic)',
   chatgpt: 'ChatGPT (OpenAI)',
   grok: 'Grok (xAI)',
+  copilot: 'Copilot Studio (Microsoft)',
   cursor: 'Cursor',
   squidler: 'Squidler',
   celemine: 'Celemine',

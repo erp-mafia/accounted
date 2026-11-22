@@ -9,7 +9,7 @@ An extension is an opt-in module under `src/extensions/general/<id>/` that is co
 
 Run `npx tsx scripts/generate-extension-registry.ts --list` to print every available extension and the env vars it requires.
 
-Licensing: the project is AGPL-3.0 with an extension exception. An extension that interacts only through the documented Extension API (`src/lib/extensions/types.ts`, `src/lib/events/types.ts` and `src/app/api/extensions/ext/[...path]/route.ts`) may be licensed on any terms, under the conditions stated in [LICENSE](../LICENSE).
+Licensing: an extension is compiled into the application and is covered by the project's license, AGPL-3.0-or-later, like the rest of the code. See [LICENSE](../LICENSE); the [README](../README.md#license) says how to ask about a commercial license.
 
 ## The core boundary
 

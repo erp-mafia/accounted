@@ -116,6 +116,11 @@ export function ticCycleStart(now: Date = new Date(), resetDay = ticBudgetCaps()
   return day >= resetDay ? thisMonthReset : addMonthsIso(thisMonthReset, -1)
 }
 
+/** The total a purpose may spend up to: the whole cycle for a priority purpose, the rest stop short of the reserve. */
+export function ticTotalCapFor(purpose: TicCallPurpose, caps: TicBudgetCaps = ticBudgetCaps()): number {
+  return PRIORITY_PURPOSES.has(purpose) ? caps.total : caps.total - caps.onboardingReserve
+}
+
 export type TicReservation =
   | { ok: true; failedOpen?: boolean }
   | { ok: false; scope: 'total' | 'purpose' | 'subject' }
@@ -137,7 +142,7 @@ export async function reserveTicCall(
 
   const purpose = toTicCallPurpose(ctx.purpose)
   const caps = ticBudgetCaps()
-  const totalCap = PRIORITY_PURPOSES.has(purpose) ? caps.total : caps.total - caps.onboardingReserve
+  const totalCap = ticTotalCapFor(purpose, caps)
   const subjectCap = purpose === 'mcp_lookup' && ctx.subject ? caps.mcpLookupPerKeyDaily : null
 
   try {
