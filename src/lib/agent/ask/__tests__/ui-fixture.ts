@@ -40,6 +40,7 @@ export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateCon
     commitmentsEnabled: true,
     agentsEnabled: true,
     inkorgV2Enabled: false,
+    bookingScreenEnabled: true,
     autogiroEnabled: true,
     bolagetEnabled: true,
     bolagetMoneyEnabled: true,

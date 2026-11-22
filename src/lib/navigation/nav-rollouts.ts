@@ -9,6 +9,7 @@ import { isCompanyQuestionsEnabled } from '@/lib/env/company-questions-switch'
 import { assistantChatRowShown } from '@/lib/env/assistant-chat-switch'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { NavGateContext } from '@/lib/navigation/nav-gates'
+import { isBookingScreenEnabled } from '@/lib/env/booking-screen-switch'
 
 /**
  * The per-company page rollouts the menu reads, resolved in one place: the
@@ -21,7 +22,7 @@ import type { NavGateContext } from '@/lib/navigation/nav-gates'
  * stays in the block that owns its page; this composition layer only
  * gathers them.
  */
-export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'arkivBrainEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'bolagetMoneyEnabled' | 'commitmentsEnabled' | 'companyQuestionsEnabled' | 'assistantChatEnabled'>
+export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'arkivBrainEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'bookingScreenEnabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'bolagetMoneyEnabled' | 'commitmentsEnabled' | 'companyQuestionsEnabled' | 'assistantChatEnabled'>
 
 /**
  * `bolagetRegisters`: the company row's `bolaget_registers_enabled` (a
@@ -35,6 +36,8 @@ export function navRollouts(companyId: string | null | undefined, company: { bol
     arkivBrainEnabled: !!companyId && isArkivBrainEnabled(companyId),
     agentsEnabled: isAgentsPageEnabled(companyId),
     inkorgV2Enabled: isInkorgV2Enabled(companyId),
+    // Att bokföra and the booking screen (BOOKING_SCREEN_COMPANY_IDS).
+    bookingScreenEnabled: isBookingScreenEnabled(companyId),
     autogiroEnabled: isAutogiroEnabled(companyId),
     // Synchronous (the rollout and the BankID flag); the provider and the
     // plan are resolved per request by GET /api/signing/availability, which the

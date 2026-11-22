@@ -24,7 +24,7 @@ function first(value: QueryValue): string | null {
 }
 
 /** The pages the screen returns to, with the list's own query (filters, search, page) kept. */
-const RETURN_PATHS = ['/bookkeeping', '/transactions'] as const
+const RETURN_PATHS = ['/bookkeeping', '/transactions', '/att-bokfora'] as const
 
 /**
  * A return address the screen may follow: a same-origin path, normalised by

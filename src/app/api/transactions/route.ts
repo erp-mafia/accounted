@@ -9,7 +9,7 @@ import { resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 
 const MAX_ROWS = 500
 const LIST_COLUMNS =
-  'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id'
+  'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, document_id'
 
 // withRouteContext enforces auth (MFA on hosted) and resolves companyId; the
 // previous hand-rolled session lookup in this handler skipped the MFA gate.
