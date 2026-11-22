@@ -1,5 +1,5 @@
-import type { PostHog } from 'posthog-js'
-import { redactedError } from '@/lib/observability/redact'
+import type { CaptureResult, PostHog } from 'posthog-js'
+import { redact, redactedError } from '@/lib/observability/redact'
 import { drainEarlyErrors } from './early-errors'
 import { isAnalyticsEnabled } from './enabled'
 import { replayMaskText } from './replay-masking'
@@ -132,6 +132,9 @@ export function initAnalytics(): boolean {
           person_profiles: 'identified_only',
           persistence: 'memory',
           capture_exceptions: true,
+          // Every exception event is redacted before it leaves the browser,
+          // whichever path raised it (redactExceptionEvent below).
+          before_send: redactExceptionEvent,
           // Masks these query parameters in $current_url and the initial-URL person
           // properties: a sole trader's org number is the owner's personnummer
           // (#58). The flag also masks ad click ids (gclid, fbclid, ...).
@@ -261,6 +264,39 @@ export function captureBoundaryError(error: unknown, boundary: string, autoReloa
 /** Next.js sets `digest` on an error from a server render, which the server has captured. */
 function hasServerDigest(error: unknown): boolean {
   return typeof error === 'object' && error !== null && typeof (error as { digest?: unknown }).digest === 'string'
+}
+
+/**
+ * The properties of an exception event that carry what the error said: each
+ * error's type, message, frames and mechanism ($exception_list), the steps
+ * the SDK may record before it ($exception_steps), and the message copy some
+ * capture paths add ($exception_message).
+ */
+const EXCEPTION_PAYLOAD_PROPERTIES = ['$exception_list', '$exception_steps', '$exception_message'] as const
+
+/**
+ * posthog.init's before_send. An exception event leaves the browser only
+ * redacted with lib/observability/redact.ts, whichever path raised it: the
+ * SDK's own capture of uncaught errors and rejections (capture_exceptions),
+ * the errors held before the start (early-errors.ts) and captureBoundaryError.
+ * All three end in the SDK's capture('$exception') after it has turned the
+ * thrown value into $exception_list, so this hook is the one place each of
+ * them passes. redact() is idempotent, so an error captureBoundaryError has
+ * already redacted comes out the same. An exception that cannot be redacted
+ * is dropped rather than sent; every other event passes unchanged.
+ */
+export function redactExceptionEvent(event: CaptureResult | null): CaptureResult | null {
+  if (!event || event.event !== '$exception') return event
+  try {
+    const properties = { ...event.properties }
+    for (const key of EXCEPTION_PAYLOAD_PROPERTIES) {
+      if (properties[key] !== undefined) properties[key] = redact(properties[key])
+    }
+    return { ...event, properties }
+  } catch {
+    // Nothing of an exception that could not be redacted leaves the browser.
+    return null
+  }
 }
 
 /**
