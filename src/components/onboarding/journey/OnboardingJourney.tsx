@@ -1,9 +1,11 @@
 'use client'
 
+import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { createCompanyFromOnboarding } from '@/lib/company/actions'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { deriveFirstYearDefaults } from '@/lib/company/first-year-defaults'
 import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
@@ -23,6 +25,7 @@ import {
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { FORMATION_PATH } from '@/lib/company/no-company-routes'
 import { useBranding } from '@/lib/branding/brand-context'
 import { BOOKS_PATH } from '@/lib/onboarding/books-gate'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
@@ -236,6 +239,10 @@ export default function OnboardingJourney({
   // Säte as the register gave it at creation (SCB Säteskommun). The postal
   // town in settings.city is never shown as säte.
   const [registeredOffice, setRegisteredOffice] = useState<string | null>(null)
+  // The server's own sentence for a failed company creation (a refused role,
+  // a legal form it does not take), shown on the attn line in place of the
+  // generic one; only read while serverError is 'generic', so it needs no reset.
+  const [submitErrorText, setSubmitErrorText] = useState<string | null>(null)
   // The companies the user already has under the org number being set up
   // (oldest first), and the org number they explicitly chose a separate copy
   // for. Together they drive the duplicate stop (shouldGateDuplicate).
@@ -570,6 +577,19 @@ export default function OnboardingJourney({
         submitRan.current = false
         if (result.error || !result.companyId) {
           logError('journey create company failed', { error: result.error })
+          // An expired session cannot create anything: sign in again and come
+          // back here (the journey's answers are kept as a draft).
+          if (result.error === 'Unauthorized') {
+            const url = new URL('/login', window.location.origin)
+            url.searchParams.set('next', window.location.pathname + window.location.search)
+            window.location.assign(url.toString())
+            return
+          }
+          setSubmitErrorText(
+            result.error
+              ? getErrorMessage(result.error, { locale: locale as ErrorLocale, fallback: t('journey_err_generic') })
+              : null,
+          )
           dispatch({
             type: 'SUBMIT_FAILED',
             code:
@@ -593,9 +613,10 @@ export default function OnboardingJourney({
         logError('journey create company threw', {
           error: err instanceof Error ? err.message : String(err),
         })
+        setSubmitErrorText(getErrorMessage(err, { locale: locale as ErrorLocale, fallback: t('journey_err_generic') }))
         dispatch({ type: 'SUBMIT_FAILED', code: 'generic' })
       })
-  }, [state, t, teamId])
+  }, [state, t, teamId, locale])
 
   /* ── derived display ──────────────────────────────────────────── */
 
@@ -751,8 +772,8 @@ export default function OnboardingJourney({
             attn={
               state.serverError === 'org_number_invalid'
                 ? t('journey_err_org_invalid')
-                : state.lookupNote === 'error'
-                  ? t('journey_lookup_error')
+                : state.lookupNote === 'searcherror'
+                  ? t('journey_search_error')
                   : state.lookupNote === 'nomatch'
                     ? t('journey_search_nomatch')
                     : state.serverError === 'vat_needs_org_number'
@@ -898,6 +919,14 @@ export default function OnboardingJourney({
                 .
               </p>
             )}
+            {/* Someone who has not formed the company yet: the formation
+                flow prepares it and sets it up here once registered. */}
+            <p className="jny-more">
+              {t('journey_start_ab_pre')}{' '}
+              <Link className="jny-link" href={FORMATION_PATH}>
+                {t('journey_start_ab_link')}
+              </Link>
+            </p>
           </Question>
         )
 
@@ -968,11 +997,19 @@ export default function OnboardingJourney({
           t('journey_form_info_tail'),
         ].join(' ')
         const plannedLabel = plannedFormLabel(state.plannedForm)
+        // A failed orgnr lookup is why the picker is asked at all: its note
+        // shows here, on the manual path the lookup handed over to.
         return (
           <Question
             title={t('journey_form_title')}
             info={info}
-            attn={plannedLabel ? t('journey_planned_attn', { form: plannedLabel }) : undefined}
+            attn={
+              plannedLabel
+                ? t('journey_planned_attn', { form: plannedLabel })
+                : state.lookupNote === 'error'
+                  ? t('journey_lookup_error')
+                  : undefined
+            }
           >
             <ChipRow
               options={chips.map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}
@@ -1249,7 +1286,7 @@ export default function OnboardingJourney({
           <Question
             title={personOwned ? t('journey_method_ef_title') : t('journey_method_ab_title')}
             info={t('journey_method_info')}
-            attn={state.serverError === 'generic' ? t('journey_err_generic') : undefined}
+            attn={state.serverError === 'generic' ? (submitErrorText ?? t('journey_err_generic')) : undefined}
           >
             <ChipRow
               options={[

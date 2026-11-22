@@ -15,7 +15,6 @@ export default {
     'lib/payments/pain001-supplier.ts': 'As initiating-party.ts: the snapshot decides.',
     'lib/payments/batch-service.ts': 'The message id of a new batch, from the snapshot resolveBatchDebtor wrote as the key.',
     'lib/payments/initiation/connect.ts': 'Reduces nothing: companyOrgNumber already gave the key, and the contract wants digits.',
-    'lib/salary/payment/pain001-generator.ts': 'Reduces nothing: buildSalaryPaymentFile hands it the key, and an empty one is refused here.',
     'lib/reports/owner-identity-mask.ts': 'Spells one number the ways it may appear in stored text, so masking misses none: it reads no identity.',
     'lib/clients/aggregate.ts': 'A search box: the digits typed against the digits shown.',
     'lib/reports/ne-bilaga/sru-generator.ts': 'The name of the downloaded zip, as it has always been: no identity is read from it.',

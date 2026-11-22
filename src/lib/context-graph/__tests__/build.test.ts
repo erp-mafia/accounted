@@ -13,7 +13,6 @@ const supplier = (name: string, account: string, seen: number, extra: Record<str
 /** A briefing as gnubok_get_agent_briefing answers (the keys the context view reads). */
 const BRIEFING = {
   company: { company_id: 'c1', name: 'Exempelbolaget AB', org_number: '559000-0000' },
-  profile_summary: 'Konsultbolag inom IT.',
   atoms: [
     { atom_id: 'horizontal/swedish-vat', title: 'Swedish VAT', description: 'Moms.' },
     { atom_id: 'horizontal/swedish-accounting-compliance', title: 'Swedish Accounting Compliance', description: 'BAS.' },
@@ -46,7 +45,7 @@ describe('buildContextGraph', () => {
   it('puts the agent first and draws every kind of thing the briefing holds', () => {
     expect(model.nodes[0]).toMatchObject({ id: 'agent', family: 'agent' })
     expect(ids(model)).toEqual(
-      expect.arrayContaining(['fact:f1', 'counterparty:0', 'account:5010', 'account:1930', 'bank', 'skatteverket', 'inbox', 'profile', 'check:0', 'suggestion:0', 'skill:horizontal/swedish-vat', 'workflows']),
+      expect.arrayContaining(['fact:f1', 'counterparty:0', 'account:5010', 'account:1930', 'bank', 'skatteverket', 'inbox', 'check:0', 'suggestion:0', 'skill:horizontal/swedish-vat', 'workflows']),
     )
     expect(model.empty).toBe(false)
     expect(model.hidden).toBe(0)
@@ -69,7 +68,6 @@ describe('buildContextGraph', () => {
     expect(linked(model, 'check:0', 'bank')).toBe(true)
     expect(linked(model, moln, 'skill:horizontal/swedish-vat')).toBe(true)
     expect(linked(model, 'skill:horizontal/swedish-vat', 'skatteverket')).toBe(true)
-    expect(linked(model, 'skill:vertical/konsult-it', 'profile')).toBe(true)
   })
 
   it('stores each link once and only between dots that exist', () => {
@@ -87,8 +85,8 @@ describe('buildContextGraph', () => {
   })
 
   it('counts each chip family as the briefing holds it', () => {
-    // taught: 3 facts. read: profile, bank, Skatteverket, inbox and 3 counterparties. wait: 1 check and 1 suggestion. instructions: 3 skills and the workflows.
-    expect(model.counts).toEqual({ taught: 3, read: 7, wait: 2, instructions: 4 })
+    // taught: 3 facts. read: bank, Skatteverket, inbox and 3 counterparties. wait: 1 check and 1 suggestion. instructions: 3 skills and the workflows.
+    expect(model.counts).toEqual({ taught: 3, read: 6, wait: 2, instructions: 4 })
     expect(chipFamily('ref')).toBeNull()
     expect(chipFamily('agent')).toBeNull()
     expect(chipFamily('wait')).toBe('wait')
@@ -130,10 +128,10 @@ describe('buildContextGraph', () => {
   })
 
   it('still draws a company with almost nothing', () => {
-    const m = buildContextGraph({ profile_summary: 'Nystartat.', atoms: [{ atom_id: 'horizontal/swedish-vat', title: 'Swedish VAT' }] })
+    const m = buildContextGraph({ atoms: [{ atom_id: 'horizontal/swedish-vat', title: 'Swedish VAT' }] })
     expect(m.empty).toBe(false)
-    expect(ids(m)).toEqual(['agent', 'skill:horizontal/swedish-vat', 'profile'])
-    expect(m.edges).toHaveLength(2)
+    expect(ids(m)).toEqual(['agent', 'skill:horizontal/swedish-vat'])
+    expect(m.edges).toHaveLength(1)
   })
 
   it('caps each kind and folds the rest into one "+N" dot, with the chips keeping the full counts', () => {
@@ -184,7 +182,22 @@ describe('buildContextGraph', () => {
     expect(linked(m, 'question:0', 'bank')).toBe(true)
     expect(node(m, 'deadline:0')).toMatchObject({ family: 'wait', amount: 40362, date: '2026-11-12', detail: 'Förberedd.' })
     expect(node(m, 'permissions').count).toBe(2)
-    expect(m.counts).toEqual({ taught: 4, read: 7, wait: 5, instructions: 5 })
+    expect(m.counts).toEqual({ taught: 4, read: 6, wait: 5, instructions: 5 })
+  })
+
+  it('draws an open question as the briefing carries it, with why as its detail', () => {
+    const m = buildContextGraph({
+      ...BRIEFING,
+      open_questions: [{ question_id: 'q1', question: 'Vad gäller köpet hos Molntjänst Inc?', why: 'Det avgör hur raden bokförs.', asked_at: '2026-11-19T08:00:00Z' }],
+    })
+    expect(node(m, 'question:0')).toMatchObject({
+      family: 'wait',
+      kind: 'question',
+      text: 'Vad gäller köpet hos Molntjänst Inc?',
+      detail: 'Det avgör hur raden bokförs.',
+      date: '2026-11-19T08:00:00Z',
+    })
+    expect(linked(m, 'agent', 'question:0')).toBe(true)
   })
 
   it('reads nothing into malformed keys', () => {

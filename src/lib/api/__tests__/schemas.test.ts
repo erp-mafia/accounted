@@ -502,18 +502,20 @@ describe('CreateInvoiceSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('rejects item with zero quantity', () => {
+  // #3553: a 0 x 0 information row and a deduction as a negative quantity
+  // ride beside a billable row.
+  it('accepts an item with zero quantity beside a billable one', () => {
     const result = CreateInvoiceSchema.safeParse(validInvoice({
-      items: [validInvoiceItem({ quantity: 0 })],
+      items: [validInvoiceItem(), validInvoiceItem({ quantity: 0, unit_price: 0 })],
     }))
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
   })
 
-  it('rejects item with negative quantity', () => {
+  it('accepts an item with negative quantity beside a billable one', () => {
     const result = CreateInvoiceSchema.safeParse(validInvoice({
-      items: [validInvoiceItem({ quantity: -5 })],
+      items: [validInvoiceItem({ quantity: 10 }), validInvoiceItem({ quantity: -5 })],
     }))
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
   })
 
   it('rejects vat_rate > 100', () => {
@@ -650,8 +652,35 @@ describe('CreateInvoiceItemSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('rejects a product row with non-positive quantity', () => {
-    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: 0 }))
+  // #3553: a 0 x 0 information row (Peppol carries no text rows) and a
+  // deduction as a negative quantity at a positive price.
+  it('accepts a product row with zero quantity and price', () => {
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: 0, unit_price: 0 }))
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts a product row with a negative quantity', () => {
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: -2, unit_price: 1000 }))
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects a negative quantity on a sales order line', () => {
+    const result = CreateInvoiceItemSchema.safeParse(
+      validInvoiceItem({ quantity: -1, sales_order_item_id: '00000000-0000-4000-8000-000000000001' }),
+    )
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects a negative quantity on a ROT row: the claim sums positive rows only', () => {
+    const result = CreateInvoiceItemSchema.safeParse(
+      validInvoiceItem({ quantity: -2, unit_price: 500, deduction_type: 'rot', work_type: 'bygg', labor_hours: 2 }),
+    )
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues.map((i) => i.path.join('.'))).toContain('quantity')
+  })
+
+  it('rejects a product row whose quantity is not a number', () => {
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: Number.NaN }))
     expect(result.success).toBe(false)
   })
 
@@ -2920,6 +2949,54 @@ describe('MatchBatchSchema', () => {
       expect(result.success).toBe(false)
       expect(result.error?.issues[0].path).toEqual(['fees'])
       expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee('6570', 199.99)] }).success).toBe(true)
+    })
+  })
+
+  // crm#1954: the rest of a supplier payment pays invoices registered in the
+  // bookkeeping kept before, so it is booked against the 2440 balance.
+  describe('supplier_debts', () => {
+    const supplierAllocations = (n: number) =>
+      Array.from({ length: n }, () => ({ kind: 'supplier_invoice' as const, supplier_invoice_id: crypto.randomUUID(), amount: 100 }))
+    const debt = (account: string, amount: number, description?: string) => ({ account, amount, ...(description ? { description } : {}) })
+
+    it('takes 244x rows on a supplier batch, larger than the invoices, with an optional text', () => {
+      const result = MatchBatchSchema.safeParse({
+        allocations: supplierAllocations(2),
+        supplier_debts: [debt('2440', 12546.5, 'Faktura 4411'), debt('2448', 1)],
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('refuses debt rows on a customer batch', () => {
+      const result = MatchBatchSchema.safeParse({ allocations: allocations(2), supplier_debts: [debt('2440', 50)] })
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].path).toEqual(['supplier_debts'])
+    })
+
+    it('refuses an account outside 244x, a number account, a zero or negative amount and a long text', () => {
+      for (const account of ['2450', '2640', '6570', '244']) {
+        expect(MatchBatchSchema.safeParse({ allocations: supplierAllocations(1), supplier_debts: [debt(account, 1)] }).success).toBe(false)
+      }
+      const refused = [
+        [{ account: 2440, amount: 1 }],
+        [debt('2440', 0)],
+        [debt('2440', -5)],
+        [{ account: '2440', amount: 1, description: 'x'.repeat(101) }],
+      ]
+      for (const supplier_debts of refused) {
+        expect(MatchBatchSchema.safeParse({ allocations: supplierAllocations(1), supplier_debts }).success).toBe(false)
+      }
+    })
+
+    it('refuses a sixth extra row, fee and debt rows together', () => {
+      const fees = Array.from({ length: 3 }, () => ({ account: '6570', amount: 1 }))
+      const threeDebts = Array.from({ length: 3 }, () => debt('2440', 1))
+      const result = MatchBatchSchema.safeParse({ allocations: supplierAllocations(2), fees, supplier_debts: threeDebts })
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].path).toEqual(['supplier_debts'])
+      expect(
+        MatchBatchSchema.safeParse({ allocations: supplierAllocations(2), fees, supplier_debts: threeDebts.slice(1) }).success,
+      ).toBe(true)
     })
   })
 })

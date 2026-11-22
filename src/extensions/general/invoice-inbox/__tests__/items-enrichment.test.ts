@@ -280,6 +280,25 @@ describe('GET /items', () => {
     expect(findCalls('invoice_inbox_items', 'order').map((a) => a[0]).slice(0, 2)).toEqual(['created_at', 'id'])
   })
 
+  it('answers ?scope=inbox with what the Inkorg shows, and the doors the handled items came through', async () => {
+    const { supabase } = createPagedMockSupabase({
+      invoice_inbox_items: [
+        makeInvoiceInboxItem({ id: 'open', source: 'upload', extracted_data: {} as never }),
+        ...manyRows(30, (i) => makeInvoiceInboxItem({ id: `booked-${i}`, source: 'peppol', created_journal_entry_id: `je-${i}`, extracted_data: {} as never })),
+      ],
+    })
+
+    const { status, body } = await parseJsonResponse<{ data: { items: EnrichedItem[]; count: number; doors: string[] } }>(
+      await route.handler(createMockRequest('/items', { method: 'GET', searchParams: { scope: 'inbox' } }), buildCtx(supabase)),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.items.map((i) => i.id)).toEqual(['open'])
+    expect(body.data.count).toBe(1)
+    // The Peppol door stays listed although everything that came through it is booked.
+    expect(body.data.doors).toEqual(expect.arrayContaining(['upload', 'peppol']))
+  })
+
   it('still answers a small explicit limit with the newest items only', async () => {
     const { supabase } = createPagedMockSupabase({
       invoice_inbox_items: manyRows(300, (i) => makeInvoiceInboxItem({ id: `item-${i}`, extracted_data: {} as never })),

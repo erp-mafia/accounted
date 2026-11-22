@@ -71,18 +71,17 @@ describe('SupportLink as the docked panel', () => {
 })
 
 describe('SupportDock', () => {
-  const dock = (props: { pill: boolean; pillHidden?: boolean }) => renderInLocale(createElement(SupportDock, props), 'sv')
+  const dock = (props: { pillHidden?: boolean } = {}) => renderInLocale(createElement(SupportDock, props), 'sv')
 
-  it('closed: the floating button for a person who had one, nothing for anyone else', () => {
-    expect(visibleText(dock({ pill: true }))).toContain(sv.support_link.ask_fab)
-    expect(dock({ pill: false })).toBe('')
-    expect(dock({ pill: true, pillHidden: true })).toBe('')
+  it('closed: the floating button for everyone, and nothing for a person who hid it', () => {
+    expect(visibleText(dock())).toContain(sv.support_link.ask_fab)
+    expect(dock({ pillHidden: true })).toBe('')
   })
 
-  it('open: the panel in the place of the button, with or without one', () => {
+  it('open: the panel in the place of the button, also for a person who hid the button', () => {
     openSupportDock({}, true)
-    for (const pill of [true, false]) {
-      const text = visibleText(dock({ pill }))
+    for (const pillHidden of [false, true]) {
+      const text = visibleText(dock({ pillHidden }))
       expect(text).toContain(sv.support_link.dialog_title)
       expect(text).not.toContain(sv.support_link.ask_fab)
     }

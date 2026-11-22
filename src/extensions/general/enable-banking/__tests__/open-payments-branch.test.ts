@@ -61,6 +61,15 @@ describe('syncAccountTransactions on an Open Payments route', () => {
     expect(mocks.upload).not.toHaveBeenCalled()
   })
 
+  it("hands the connection's bank to the core sync, which reads Nordea's card holds by it (crm#2076)", async () => {
+    await syncAccountTransactions(supabase, 'co-1', 'user-1', 'conn-1', { ...account }, '2026-09-01', '2026-10-12', ingest, { bankName: 'Nordea' })
+    expect(mocks.syncOp).toHaveBeenCalledWith(supabase, expect.objectContaining({ bankName: 'Nordea' }))
+
+    mocks.syncOp.mockClear()
+    await syncAccountTransactions(supabase, 'co-1', 'user-1', 'conn-1', { ...account }, '2026-09-01', '2026-10-12', ingest)
+    expect(mocks.syncOp.mock.calls[0][1]).not.toHaveProperty('bankName')
+  })
+
   it('still refuses a changed ledger before anything is fetched', async () => {
     await expect(syncAccountTransactions(supabase, 'co-1', 'user-1', 'conn-1', { ...account, ledger_account: '1931' }, '2026-09-01', '2026-10-12', ingest))
       .rejects.toMatchObject({ code: 'PT409' })

@@ -63,6 +63,7 @@ import {
   treatmentDeductsInputVat,
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { allocateDocumentVat, type DocumentRateVat } from '@/lib/vat/document-vat'
+import { rateForStoredRowVat } from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -636,6 +637,7 @@ export async function createSupplierInvoice(
   }
   documentVat.lineVat.forEach((lineVat, index) => {
     items[index].vat_amount = lineVat
+    items[index].vat_rate = rateForStoredRowVat(items[index].line_total, items[index].vat_rate, lineVat)
   })
 
   const subtotal = roundOre(items.reduce((sum, i) => sum + i.line_total, 0))

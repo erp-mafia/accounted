@@ -456,9 +456,12 @@ describe('lookupCompanyRole', () => {
 })
 
 describe('builtInOnwardOrigins', () => {
-  it("names cursor.com for Cursor's web callback, which forwards there", async () => {
+  it("names cursor.com and the local client's loopback for Cursor's web callback, which forwards to both", async () => {
     const { builtInOnwardOrigins } = await import('../oauth-allowlist')
-    expect(builtInOnwardOrigins('https://www.cursor.com/agents/mcp/oauth/callback')).toEqual(['https://cursor.com'])
+    expect(builtInOnwardOrigins('https://www.cursor.com/agents/mcp/oauth/callback')).toEqual([
+      'https://cursor.com',
+      'http://localhost:8787',
+    ])
   })
 
   it("names the regional consent servers for Copilot Studio's callback, which the global host forwards to", async () => {

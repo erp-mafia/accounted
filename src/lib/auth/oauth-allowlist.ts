@@ -155,17 +155,23 @@ export function isBuiltInRedirectUri(uri: string): boolean {
  *
  * Cursor's web callback https://www.cursor.com/agents/mcp/oauth/callback
  * answers 308 to the same path on https://cursor.com (observed 2026-11-14,
- * crm#1720). The code is still only ever sent to the exact allowlisted URI;
- * this names where that host forwards it, nothing else.
+ * crm#1720), and for a sign-in a local Cursor client started, cursor.com
+ * answers 302 to that client's RFC 8252 loopback http://localhost:8787/callback
+ * (observed 2026-11-22, crm#1720; the port the comment above names). Chromium
+ * stops the chain at that hop unless it is named; Firefox does not re-check
+ * form-action on redirects, so a Firefox test never shows it. The code is still only ever
+ * sent to the exact allowlisted URI; this names where that host forwards it,
+ * nothing else.
  *
  * Power Platform's global consent host (Copilot Studio) routes a callback on
- * to the consent server of the connector's region: without a state it names
- * that server, it answers 302 "No consent server information was associated
- * with this request" (probed 2026-11-20). The regional servers are
- * subdomains of consent.azure-apim.net, so that one wildcard is named.
+ * to the consent server of the connector's region, which it reads from the
+ * state: for a state that names none it answers 302 "No consent server
+ * information was associated with this request" (probed 2026-11-20 and
+ * 2026-11-22). The regional servers are subdomains of consent.azure-apim.net,
+ * so that one wildcard is named.
  */
 const BUILT_IN_ONWARD_ORIGINS: Readonly<Record<string, readonly string[]>> = {
-  'https://www.cursor.com': ['https://cursor.com'],
+  'https://www.cursor.com': ['https://cursor.com', 'http://localhost:8787'],
   'https://global.consent.azure-apim.net': ['https://*.consent.azure-apim.net'],
 }
 

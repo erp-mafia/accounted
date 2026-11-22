@@ -559,12 +559,18 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   )
 
   // Replace the line set with a booking template's computed rows. The picker
-  // hands back JournalEntryForm-shaped lines; we keep only the three fields
-  // book-direct posts. A meaningful supplier description is preserved: the
-  // template name only fills an empty field.
+  // hands back JournalEntryForm-shaped lines; we keep only what book-direct
+  // posts: account, amounts and the dimensions the template set on a line. A
+  // meaningful supplier description is preserved: the template name only
+  // fills an empty field.
   const handleTemplateApply = useCallback(
     (
-      templateLines: Array<{ account_number: string; debit_amount: string; credit_amount: string }>,
+      templateLines: Array<{
+        account_number: string
+        debit_amount: string
+        credit_amount: string
+        dimensions?: Record<string, string>
+      }>,
       templateDescription: string,
     ) => {
       // Untagged manual rows: the next prefill refresh must not reinterpret

@@ -162,6 +162,11 @@ export default function ChartOfAccountsManager() {
   // opens that tab, so they never block the default "Mina konton" view.
   const [referenceLoaded, setReferenceLoaded] = useState(false)
   const [referenceLoading, setReferenceLoading] = useState(false)
+  // The last BAS-katalog read failed: with no catalog on screen the tab says
+  // so with a retry, never "Inga konton matchar sökningen".
+  const [referenceFailed, setReferenceFailed] = useState(false)
+  // The usage read failed: the Verifikat column filter stays off and says why.
+  const [usageFailed, setUsageFailed] = useState(false)
 
   // Dialog state
   const [addDialogOpen, setAddDialogOpen] = useState(false)
@@ -206,27 +211,38 @@ export default function ChartOfAccountsManager() {
   // The server sends only the company's per-account activation status; the BAS
   // catalog is static and already bundled here, so we merge client-side rather
   // than re-download ~1,300 catalog rows on every load.
-  const fetchReference = useCallback(async () => {
-    const res = await fetch('/api/bookkeeping/accounts/reference')
-    const { data } = await res.json()
-    const userMap = new Map<string, { account_number: string; is_active: boolean; is_system_account: boolean }>(
-      (data || []).map(
-        (a: { account_number: string; is_active: boolean; is_system_account: boolean }) => [a.account_number, a],
-      ),
-    )
-    // The full chart is a lazily loaded chunk: only the BAS-katalog tab pays
-    // for it, not every route that renders this component's parent.
-    const BAS_REFERENCE = await ensureBasLoaded()
-    const merged: ReferenceAccount[] = BAS_REFERENCE.map((ref) => {
-      const userAccount = userMap.get(ref.account_number)
-      return {
-        ...ref,
-        is_activated: !!userAccount,
-        is_active: userAccount?.is_active ?? false,
-        is_system_account: userAccount?.is_system_account ?? false,
+  const fetchReference = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/bookkeeping/accounts/reference')
+      if (!res.ok) {
+        setReferenceFailed(true)
+        return false
       }
-    })
-    setReferenceAccounts(merged)
+      const { data } = await res.json()
+      const userMap = new Map<string, { account_number: string; is_active: boolean; is_system_account: boolean }>(
+        (data || []).map(
+          (a: { account_number: string; is_active: boolean; is_system_account: boolean }) => [a.account_number, a],
+        ),
+      )
+      // The full chart is a lazily loaded chunk: only the BAS-katalog tab pays
+      // for it, not every route that renders this component's parent.
+      const BAS_REFERENCE = await ensureBasLoaded()
+      const merged: ReferenceAccount[] = BAS_REFERENCE.map((ref) => {
+        const userAccount = userMap.get(ref.account_number)
+        return {
+          ...ref,
+          is_activated: !!userAccount,
+          is_active: userAccount?.is_active ?? false,
+          is_system_account: userAccount?.is_system_account ?? false,
+        }
+      })
+      setReferenceAccounts(merged)
+      setReferenceFailed(false)
+      return true
+    } catch {
+      setReferenceFailed(true)
+      return false
+    }
   }, [])
 
   // Per-account posting counts - drives the "Verifikat" column. Non-fatal:
@@ -234,7 +250,10 @@ export default function ChartOfAccountsManager() {
   const fetchUsage = useCallback(async () => {
     try {
       const res = await fetch('/api/bookkeeping/accounts/usage')
-      if (!res.ok) return
+      if (!res.ok) {
+        setUsageFailed(true)
+        return
+      }
       const { data } = await res.json()
       setUsageCounts(
         new Map(
@@ -245,8 +264,11 @@ export default function ChartOfAccountsManager() {
         ),
       )
       setUsageLoaded(true)
+      setUsageFailed(false)
     } catch {
-      // Leave the map empty - usage display is informational only.
+      // Leave the map empty - usage display is informational only. The
+      // column filter says why it is off.
+      setUsageFailed(true)
     }
   }, [])
 
@@ -287,7 +309,7 @@ export default function ChartOfAccountsManager() {
     if (referenceLoaded || referenceLoading) return
     setReferenceLoading(true)
     try {
-      await Promise.all([
+      const [referenceOk] = await Promise.all([
         fetchReference(),
         (async () => {
           if (hideK2Excluded !== null) return
@@ -297,7 +319,8 @@ export default function ChartOfAccountsManager() {
           setHideK2Excluded(hideNotForK2AccountsByDefault(accountingFramework))
         })(),
       ])
-      setReferenceLoaded(true)
+      // A failed read leaves the tab unloaded, so its retry reads again.
+      if (referenceOk) setReferenceLoaded(true)
     } finally {
       setReferenceLoading(false)
     }
@@ -746,6 +769,7 @@ export default function ChartOfAccountsManager() {
                         <button
                           type="button"
                           disabled={!usageLoaded}
+                          title={usageFailed ? t('usage_load_failed') : undefined}
                           aria-label={t('usage_filter_label')}
                           className={cn(
                             'inline-flex items-center gap-1 transition-colors duration-150 hover:text-foreground disabled:opacity-50',
@@ -904,6 +928,8 @@ export default function ChartOfAccountsManager() {
                 <Skeleton key={i} className="h-8 w-full" />
               ))}
             </LateReveal>
+          ) : referenceFailed && referenceAccounts.length === 0 ? (
+            <LoadError title={t('reference_load_failed')} onRetry={() => void ensureReferenceLoaded()} />
           ) : filteredReference.length === 0 ? (
             // No hits: one muted line with the quiet way back.
             <p className="px-1 py-3 text-[13px] text-muted-foreground">

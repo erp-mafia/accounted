@@ -81,6 +81,15 @@ describe('countRowSpecs: which count rows Att göra has', () => {
     expect(spec(input({ supplier_invoice_approval: 2 }, { personAttestRows: 2 }), 'supplier-approval')).toBeUndefined()
   })
 
+  it('the question list is one row that opens the list, one thing whatever the number of questions', () => {
+    expect(keys(input({}))).toEqual([])
+    expect(keys(input({}, { openQuestions: 0 }))).toEqual([])
+    expect(countRowSpecs(input({}, { openQuestions: 3 }))).toEqual([
+      { key: 'company-questions', group: 'decide', href: '/questions', labelKey: 'row_company_questions', count: 3, things: 1 },
+    ])
+    expect(spec(input({}, { openQuestions: 1 }), 'company-questions')).toMatchObject({ count: 1, things: 1 })
+  })
+
   it('leaves the rows that are not plain counts to the section (pending operations, batches, payments)', () => {
     const all = input(Object.fromEntries(WORKLIST_CATEGORIES.map((c) => [c, 1])) as Record<WorklistCategory, number>)
     const categories = new Set(countRowSpecs(all).map((s) => s.category))

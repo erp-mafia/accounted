@@ -4,15 +4,18 @@ import { bankIdAutostartHref, detectBankIdDevice } from '../autostart'
 const PAGE = 'https://app.accounted.se/settings/connections?tab=bank'
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
 const ANDROID = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36'
+const ANDROID_SAMSUNG = 'Mozilla/5.0 (Linux; Android 14; SAMSUNG SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36'
+const ANDROID_FIREFOX = 'Mozilla/5.0 (Android 14; Mobile; rv:132.0) Gecko/132.0 Firefox/132.0'
+const ANDROID_EDGE = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36 EdgA/130.0.0.0'
 const MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15'
 
 describe('detectBankIdDevice', () => {
   it('tells phones from computers by the user agent and keeps the page to come back to', () => {
-    expect(detectBankIdDevice(IPHONE, PAGE)).toEqual({ mobile: true, ios: true, pageUrl: PAGE })
-    expect(detectBankIdDevice(ANDROID, PAGE)).toEqual({ mobile: true, ios: false, pageUrl: PAGE })
-    expect(detectBankIdDevice(MAC, PAGE)).toEqual({ mobile: false, ios: false, pageUrl: PAGE })
+    expect(detectBankIdDevice(IPHONE, PAGE)).toEqual({ mobile: true, ios: true, appLink: true, pageUrl: PAGE })
+    expect(detectBankIdDevice(ANDROID, PAGE)).toEqual({ mobile: true, ios: false, appLink: true, pageUrl: PAGE })
+    expect(detectBankIdDevice(MAC, PAGE)).toEqual({ mobile: false, ios: false, appLink: false, pageUrl: PAGE })
     // On the server there is neither a user agent nor a page: a desktop link, which the browser never renders anyway.
-    expect(detectBankIdDevice(null, null)).toEqual({ mobile: false, ios: false, pageUrl: null })
+    expect(detectBankIdDevice(null, null)).toEqual({ mobile: false, ios: false, appLink: false, pageUrl: null })
   })
 })
 
@@ -25,11 +28,19 @@ describe('bankIdAutostartHref', () => {
   it('uses the universal link with the current page as the redirect on an iPhone, so the app comes back to the polling page', () => {
     expect(bankIdAutostartHref('tok', detectBankIdDevice(IPHONE, PAGE))).toBe(`https://app.bankid.com/?autostarttoken=tok&redirect=${encodeURIComponent(PAGE)}`)
     // No page known: nothing to come back to, the app returns on its own.
-    expect(bankIdAutostartHref('tok', { mobile: true, ios: true, pageUrl: null })).toBe('https://app.bankid.com/?autostarttoken=tok&redirect=null')
+    expect(bankIdAutostartHref('tok', { mobile: true, ios: true, appLink: true, pageUrl: null })).toBe('https://app.bankid.com/?autostarttoken=tok&redirect=null')
   })
 
   it('uses the universal link with redirect=null on Android, where the app returns through the task stack', () => {
     expect(bankIdAutostartHref('tok', detectBankIdDevice(ANDROID, PAGE))).toBe('https://app.bankid.com/?autostarttoken=tok&redirect=null')
+  })
+
+  it('uses the bankid:/// scheme on Android in Samsung Internet, Firefox and Edge, which load the universal link as a web page', () => {
+    // A tap on https://app.bankid.com in these browsers shows BankID's own
+    // "BankID-appen kunde inte startas" page in the tab instead of the app.
+    for (const ua of [ANDROID_SAMSUNG, ANDROID_FIREFOX, ANDROID_EDGE]) {
+      expect(bankIdAutostartHref('tok', detectBankIdDevice(ua, PAGE))).toBe('bankid:///?autostarttoken=tok&redirect=null')
+    }
   })
 
   it('reads the device itself when none is given (a desktop in this test runtime)', () => {

@@ -207,6 +207,47 @@ export function suggestMappings(
 }
 
 /**
+ * What the mapper did with an account, as the mapping step names it. Null
+ * only when there is no target at all, a state the unmapped filter owns.
+ *
+ * Read from matchType, isOverride and whether source and target are the same
+ * number, never from a threshold on `confidence`: the mapper attaches one
+ * fixed value per case (1 exact, 0.7 bas_range), so grading the number named
+ * an identity mapping "likely".
+ *
+ * `from_file` is deliberately not "the company's own account": bas_range
+ * covers both a source system's invention (a Fortnox 4599) and a standard
+ * sub-account the BAS reference does not carry (1241 Personbilar), and
+ * nothing here can tell them apart.
+ *
+ * `uncertain` is the one suggestion the mapper itself marks for review: a
+ * class 9 account carrying amounts, placed on 2999 OBS-konto with matchType
+ * 'class' (prepareSIEPreviewMappings).
+ */
+export type AccountMatchKind = 'bas' | 'from_file' | 'redirected' | 'uncertain' | 'manual'
+
+export function resolveAccountMatch(mapping: AccountMapping): AccountMatchKind | null {
+  if (!mapping.targetAccount) return null
+  // Before the identity check: remapping an account to itself is still a choice.
+  if (mapping.isOverride) return 'manual'
+  if (mapping.matchType === 'class') return 'uncertain'
+  if (mapping.targetAccount !== mapping.sourceAccount) return 'redirected'
+  if (mapping.matchType === 'bas_range') return 'from_file'
+  return 'bas'
+}
+
+/**
+ * A mapped row the import asks a person to look at: the "osäkra" count on the
+ * preview and mapping steps, the mapping step's filter and the import's
+ * statistics. One threshold, so the steps agree (#2539): the mapping step
+ * counted below 0.7 and the statistics below 0.5, which split on the 2999
+ * OBS suggestion for a used class 9 account (0.5, prepareSIEPreviewMappings).
+ */
+export function isLowConfidenceMapping(mapping: Pick<AccountMapping, 'targetAccount' | 'confidence'>): boolean {
+  return !!mapping.targetAccount && mapping.confidence < 0.7
+}
+
+/**
  * Validate that all accounts are mapped
  */
 export function validateMappings(mappings: AccountMapping[]): {
@@ -215,7 +256,7 @@ export function validateMappings(mappings: AccountMapping[]): {
   lowConfidenceAccounts: string[]
 } {
   const unmapped = mappings.filter((m) => !m.targetAccount)
-  const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.5)
+  const lowConfidence = mappings.filter(isLowConfidenceMapping)
 
   return {
     valid: unmapped.length === 0,
@@ -249,7 +290,7 @@ export function getMappingStats(mappings: AccountMapping[]): {
   const classMatch = mappings.filter((m) => m.matchType === 'class').length
   const manual = mappings.filter((m) => m.matchType === 'manual').length
 
-  const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.5).length
+  const lowConfidence = mappings.filter(isLowConfidenceMapping).length
 
   const confidenceSum = mappings
     .filter((m) => m.targetAccount)

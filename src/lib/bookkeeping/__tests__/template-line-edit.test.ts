@@ -173,4 +173,24 @@ describe('checkTemplateLines', () => {
     expect(check.bookable).toBe(true)
     expect(check.postLines).toHaveLength(2)
   })
+
+  it('posts the dimensions a mall set on its business line, through an edit of the amounts', () => {
+    const mall: BookingTemplateLibraryLine[] = [
+      { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business', ratio: 1, dimensions: { '6': 'P001' } },
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    let lines = applyTemplate(mall, 500)
+    lines = withLineAmount(lines, 0, 'debit_amount', '480')
+    lines = withLineAmount(lines, 1, 'credit_amount', '480')
+    const check = checkTemplateLines(lines)
+    expect(check.bookable).toBe(true)
+    expect(check.postLines[0]).toEqual({
+      account_number: '5410',
+      debit_amount: 480,
+      credit_amount: 0,
+      line_description: 'Förbrukning',
+      dimensions: { '6': 'P001' },
+    })
+    expect(check.postLines[1]).not.toHaveProperty('dimensions')
+  })
 })

@@ -101,4 +101,18 @@ describe('calculateBolagsskatt', () => {
     expect(result.computation?.taxableResultClamped).toBe(100_990)
     expect(result.amount).toBe(20_804)
   })
+
+  it('rounds the corrected result to a whole 10 SEK after excluding skattekonto interest', () => {
+    const result = calculateBolagsskatt({
+      resultBeforeTax: 412_346,
+      manualAdjustments: { nonTaxableIncome: 4 },
+    })
+
+    expect(result.computation).toMatchObject({
+      taxableResult: 412_342,
+      taxableResultClamped: 412_340,
+      taxAmount: 84_942,
+    })
+    expect(result.amount).toBe(84_942)
+  })
 })

@@ -102,7 +102,7 @@ describe('loadKPIPreferences', () => {
       ok: false,
       reason: 'server',
       status: 500,
-      message: 'Ett oväntat serverfel uppstod. Försök igen senare.',
+      message: 'Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.',
     })
   })
 
@@ -143,7 +143,7 @@ describe('loadKPIPreferences', () => {
     expect(result).toEqual({
       ok: false,
       reason: 'network',
-      message: 'Något gick fel. Försök igen.',
+      message: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
     })
   })
 

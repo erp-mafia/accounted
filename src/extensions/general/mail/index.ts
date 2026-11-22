@@ -26,6 +26,7 @@ import {
 import { resolveCallbackOrigin } from '@/lib/auth/callback-origin'
 import { isMailConnectEnabled } from './lib/connect-gate'
 import { requireFlowInitiator } from '@/lib/auth/oauth-flow-binding'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { createClient } from '@/lib/supabase/server'
 
 // Registered as soon as the extension loads, so the receipt hunt can search
@@ -88,7 +89,11 @@ export const mailExtension: Extension = {
         try {
           const url = new URL(request.url)
           const origin = resolveCallbackOrigin(url.origin)
-          const { state, codeChallenge } = createOAuthFlow(ctx.userId, ctx.companyId)
+          // The redirect URI stays canonical (registered with Google); the
+          // host the consent starts on (the app or a brand domain) is sealed
+          // in the state for the callback to send the browser back to.
+          const startedOn = await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' })
+          const { state, codeChallenge } = createOAuthFlow(ctx.userId, ctx.companyId, startedOn)
           const env = getGoogleOAuthEnv(origin)
           return NextResponse.json({ url: buildAuthorizationUrl(env, state, codeChallenge) })
         } catch (err) {
@@ -110,13 +115,16 @@ export const mailExtension: Extension = {
         const code = url.searchParams.get('code')
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
-        const settingsUrl = `${resolveCallbackOrigin(url.origin)}/settings/mail`
+        const verified = state ? verifyOAuthState(state) : null
+        // Google redirects to the canonical host, which carries no session
+        // for someone who started on a brand domain: every outcome lands on
+        // the origin sealed in the state (the app or that brand domain).
+        const settingsUrl = `${verified?.origin ?? resolveCallbackOrigin(url.origin)}/settings/mail`
 
         // The user declining is a normal outcome, not an error to shout about.
         if (error) return NextResponse.redirect(`${settingsUrl}?mail=denied`)
         if (!code || !state) return NextResponse.redirect(`${settingsUrl}?mail=invalid`)
 
-        const verified = verifyOAuthState(state)
         if (!verified) return NextResponse.redirect(`${settingsUrl}?mail=expired`)
 
         // The signed state proves the flow was started by verified.userId for
@@ -128,10 +136,13 @@ export const mailExtension: Extension = {
         // before the code exchange so a refused flow burns nothing.
         const initiator = await requireFlowInitiator(request, verified.userId, {
           flow: 'mail.oauth-callback',
+          returnOrigin: verified.origin,
         })
         if (!initiator.ok) {
           // No session: sign in and the callback re-runs with the same code
-          // and state (the state is stateless and still within its TTL).
+          // and state (the state is stateless and still within its TTL). The
+          // login is on the host the consent started on, where the session
+          // lives, so it forwards straight back into the callback there.
           if (initiator.reason === 'no_session') return initiator.response
           return NextResponse.redirect(`${settingsUrl}?mail=mismatch`)
         }

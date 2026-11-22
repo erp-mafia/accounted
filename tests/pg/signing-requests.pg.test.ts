@@ -94,7 +94,8 @@ function evidence(overrides: Record<string, unknown> = {}): Record<string, unkno
     given_name: 'Anna',
     surname: 'Andersson',
     personnummer_hash: PN_HASH,
-    personnummer_masked: 'XXXXXXXX-1239',
+    // The display form lib/signing/ceremony.ts writes (maskPersonnummer).
+    personnummer_masked: '19900101-XXXX',
     completed_at: new Date().toISOString(),
     user_visible_data: '# Signera dokument\n\nJag signerar *Hyresavtal* för Test AB.',
     signature_xml: Buffer.from('<Signature><SignedInfo/></Signature>').toString('base64'),
@@ -523,9 +524,10 @@ describe('signing_requests.pg: record_signing_signature', () => {
       signature_xml: evidence().signature_xml,
       ocsp_response: evidence().ocsp_response,
       bankid_personnummer_hash: PN_HASH,
-      personnummer_masked: 'XXXXXXXX-1239',
+      personnummer_masked: '19900101-XXXX',
       bankid_session_id: sessions[0],
     })
+    // The form signatures were recorded with before 2026-11-17 is still accepted.
     expect(await privateState(signerIds[1]!)).toMatchObject({ bankid_personnummer_hash: erikHash, personnummer_masked: 'XXXXXXXX-9876', bankid_session_id: sessions[1] })
     expect(await consumed(sessions[0]!)).toBe(1)
     expect(await consumed(sessions[1]!)).toBe(1)
@@ -680,6 +682,24 @@ describe('signing_requests.pg: record_signing_signature', () => {
     await getPool().query(`INSERT INTO public.bankid_consumed_sessions (session_id) VALUES ($1)`, [other.sessions[0]])
     expect(await record(other.signerIds[0]!, other.sessions[0]!)).toEqual({ ok: false, code: 'SIGNING_SESSION_CONSUMED' })
     expect(await signerState(other.signerIds[0]!)).toMatchObject({ status: 'pending' })
+  })
+
+  it('stores the mask in the display form or the earlier one, never a personnummer in clear (signing_masked_personnummer_display_form)', async () => {
+    // Birth date visible and the last four hidden (12 and 10 digits), all
+    // hidden for a value that is neither, and the form stored until now.
+    for (const mask of ['19900101-XXXX', '900101-XXXX', 'XXXXXXXX-XXXX', 'XXXXXXXX-1239', 'XXXXXX-1239']) {
+      const { signerIds, sessions } = await plainRequest(1)
+      expect(await record(signerIds[0]!, sessions[0]!, evidence({ personnummer_masked: mask }))).toMatchObject({ ok: true, completed: true })
+      expect(await privateState(signerIds[0]!)).toMatchObject({ personnummer_masked: mask })
+    }
+    for (const clear of ['199001011239', '19900101-1239', '900101-1239', '19900101-XXX', '19900101-xxxx']) {
+      const { signerIds, sessions } = await plainRequest(1)
+      await expect(record(signerIds[0]!, sessions[0]!, evidence({ personnummer_masked: clear }))).rejects.toThrow(
+        /signing_signer_private_personnummer_masked_check/,
+      )
+      expect(await signerState(signerIds[0]!)).toMatchObject({ status: 'pending' })
+      expect(await privateState(signerIds[0]!)).toBeUndefined()
+    }
   })
 
   it('rolls the session consumption back with everything else when a write after it fails', async () => {

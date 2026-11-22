@@ -101,4 +101,16 @@ describe('inbox convert: VAT as the document states it (crm#1367)', () => {
     expect((outcome.preview.items as PreviewItem[])[0].vat_amount).toBe(125)
     expect(outcome.preview.vat_amount).toBe(125)
   })
+
+  // #3571: a stored 0 reads as "nothing stored" at booking, so a line whose
+  // moms is 0 at a rate above 0 is stored at rate 0.
+  it('stores a line\'s explicit vat_amount of 0 at rate 0', async () => {
+    const outcome = await preview(body({
+      items: [{ description: 'Test', amount: 1000, account_number: '5010', vat_rate: 0.25, vat_amount: 0 }],
+    }))
+
+    if (!outcome.ok || !outcome.dryRun) throw new Error('expected a dry-run preview')
+    expect((outcome.preview.items as Array<{ vat_rate: number; vat_amount: number }>)[0]).toMatchObject({ vat_rate: 0, vat_amount: 0 })
+    expect(outcome.preview).toMatchObject({ vat_amount: 0, total: 1000 })
+  })
 })

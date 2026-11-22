@@ -20,6 +20,7 @@ import { resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { aggregatorOf } from '@/lib/bank-sync/aggregator'
+import { isNordeaCardHold } from '@/lib/bank-sync/card-hold'
 import { bankBookingDay } from '@/lib/dates/iso'
 import { ConsentOverError, ProviderUnavailableError, RateLimitedError } from '@/lib/bank-feed/connect'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from '@/lib/bank-feed/party'
@@ -57,6 +58,8 @@ export interface SyncOptions {
    * hosted connector, whose sync contract has no field for it.
    */
   signer?: BankFeedSignerInput
+  /** The bank (bank_connections.bank_name): Nordea's card holds are not booked (isNordeaCardHold). */
+  bankName?: string | null
 }
 
 /**
@@ -492,6 +495,12 @@ export async function syncAccountTransactions(
     if (skippedRaw.length > 0) skippedReasons = notBookedReasons(skippedRaw)
   }
 
+  // Nordea's card holds come dated and marked BOOK, on either path: not
+  // booked, so they count with the entries skipped above (isNordeaCardHold).
+  const datedEntries = bookedEntries.length
+  bookedEntries = bookedEntries.filter(({ tx }) => !isNordeaCardHold(syncOptions?.bankName, tx.description))
+  const cardHolds = datedEntries - bookedEntries.length
+
   // Log the actual date range returned so we can compare against the requested
   // window. Helps diagnose when an ASPSP truncates history below what we asked for.
   let minBookingDate: string | undefined
@@ -524,6 +533,7 @@ export async function syncAccountTransactions(
       skippedPending,
       total: totalFetched,
       ...(skippedReasons ? { reasons: skippedReasons } : {}),
+      ...(cardHolds > 0 ? { cardHolds } : {}),
     })
   }
 
@@ -655,6 +665,11 @@ export async function syncAccountTransactions(
   const ingestOptions: IngestOptions = { bankRoute, settlementAccount: bankRoute.ledgerAccount }
   if (syncOptions?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (syncOptions?.rawInsertOnly) ingestOptions.rawInsertOnly = true
+  // A card hold stored before the holds were left out above still holds its
+  // index: ingest must not hand it the purchase booked on its day for its
+  // amount (isNordeaCardHold, crm#2076).
+  const bankName = syncOptions?.bankName
+  if (bankName) ingestOptions.isNotBooked = (text) => isNordeaCardHold(bankName, text)
   // Per-account ledger routing: the mapping engine consumes settlementAccount
   // for the bank-side leg. The verified route also guards the database insert.
 
@@ -774,6 +789,7 @@ async function syncOpenPaymentsAccountAsEnableBanking(
   try {
     const result = await syncOpenPaymentsAccount(supabase, {
       companyId, userId, connectionId, account, fromDate, toDate, bankRoute, party: party.party, ingest,
+      ...(syncOptions?.bankName ? { bankName: syncOptions.bankName } : {}),
       options: {
         ...(syncOptions?.skipAutoCategorization ? { skipAutoCategorization: true } : {}),
         ...(syncOptions?.rawInsertOnly ? { rawInsertOnly: true } : {}),

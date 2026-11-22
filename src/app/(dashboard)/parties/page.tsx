@@ -26,6 +26,17 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { CounterpartList as CounterpartListData, CounterpartRow } from '@/lib/parties/list'
 import type { PartyRole, RegisterPeriod } from '@/lib/parties/register'
 import { refreshCounterparts } from '@/lib/parties/refresh'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+
+/** A refused POST, with the route's body so the toast can say why (not only "Det gick inte"). */
+class PostRefused extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: unknown,
+  ) {
+    super(String(status))
+  }
+}
 
 async function post<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -33,7 +44,7 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(String(res.status))
+  if (!res.ok) throw new PostRefused(res.status, await res.json().catch(() => null))
   const json = (await res.json()) as { data: T }
   return json.data
 }
@@ -48,6 +59,7 @@ function CounterpartsPage() {
   const t = useTranslations('parties')
   const tCommon = useTranslations('common')
   const locale = useLocale()
+  const errorLocale = locale as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
@@ -109,7 +121,17 @@ function CounterpartsPage() {
     setDossierReload((k) => k + 1)
   }, [])
 
-  const fail = useCallback(() => toast({ title: t('cp_action_failed'), variant: 'destructive' }), [toast, t])
+  const fail = useCallback(
+    (err?: unknown) =>
+      toast({
+        title:
+          err instanceof PostRefused
+            ? getErrorMessage(err.body, { statusCode: err.status, locale: errorLocale, fallback: t('cp_action_failed') })
+            : getErrorMessage(err, { locale: errorLocale, fallback: t('cp_action_failed') }),
+        variant: 'destructive',
+      }),
+    [toast, t, errorLocale],
+  )
 
   // Read new ledger suggestions and bank strings on the explicit action.
   const refresh = useCallback(
@@ -149,8 +171,8 @@ function CounterpartsPage() {
       await post('/api/parties/promote', { items: [{ partyId, roles }] })
       undoToast(t('promoted_title', { count: 1, detail: roles.includes('supplier') ? t('summary_suppliers', { count: 1 }) : t('summary_customers', { count: 1 }) }), '/api/parties/promote/undo', [partyId])
       reload()
-    } catch {
-      fail()
+    } catch (err) {
+      fail(err)
     } finally {
       setBusy(false)
     }
@@ -162,8 +184,8 @@ function CounterpartsPage() {
       await post('/api/parties/decide', { partyIds: [partyId], kind: 'dismiss' })
       undoToast(t('dismissed_title', { count: 1 }), '/api/parties/decide/undo', [partyId])
       reload()
-    } catch {
-      fail()
+    } catch (err) {
+      fail(err)
     } finally {
       setBusy(false)
     }
@@ -183,8 +205,8 @@ function CounterpartsPage() {
       })
       setMerge(null)
       reload()
-    } catch {
-      fail()
+    } catch (err) {
+      fail(err)
     } finally {
       setBusy(false)
     }
@@ -227,8 +249,8 @@ function CounterpartsPage() {
       toast({ title: t('cp_renamed') })
       setRename(null)
       reload()
-    } catch {
-      fail()
+    } catch (err) {
+      fail(err)
     } finally {
       setBusy(false)
     }
@@ -240,8 +262,8 @@ function CounterpartsPage() {
       await post('/api/parties/aliases', { aliasKeys: row.aliasKeys, action: 'not_same' })
       toast({ title: t('cp_not_same_done') })
       reload()
-    } catch {
-      fail()
+    } catch (err) {
+      fail(err)
     } finally {
       setBusy(false)
     }
@@ -309,6 +331,14 @@ function CounterpartsPage() {
             {tCommon('clear_search')}
           </Button>
         </div>
+      ) : rows.length === 0 && period === '12m' ? (
+        // The default view is the last 12 months: older counterparts may exist.
+        <EmptyState
+          title={t('cp_empty_12m_title')}
+          description={t('cp_empty')}
+          secondaryActionLabel={t('cp_empty_show_all')}
+          onSecondaryAction={() => setPeriod('all')}
+        />
       ) : rows.length === 0 ? (
         <EmptyState title={t('cp_empty_title')} description={t('cp_empty')} />
       ) : (

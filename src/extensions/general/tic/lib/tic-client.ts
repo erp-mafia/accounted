@@ -20,8 +20,7 @@ const TIC_API_TIMEOUT = 15_000
 
 // In-process TTL cache for proxy responses. Onboarding currently fires the
 // same org-number lookup 2-3 times in <2 s (server prefetch + client
-// useEffect + duplicate-check) and the agent build re-fetches /profile data
-// minutes later. The TIC budget (3000/mo Lens calls) can't absorb the
+// useEffect + duplicate-check). The TIC budget (3000/mo Lens calls) can't absorb the
 // duplication. 5 min is long enough to collapse a full onboarding flow into
 // one upstream hit and short enough that stale data never matters (TIC
 // data changes on Bolagsverket filing cycles measured in days).

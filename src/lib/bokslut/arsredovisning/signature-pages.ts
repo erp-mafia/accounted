@@ -83,6 +83,13 @@ export function eSigningCertificateNote(meeting: string): string {
  * 3 §). The same rule as CERTIFICATE_SIGNER_ROLES in workflow-schemas.ts.
  */
 export const CERTIFICATE_SIGNER = 'styrelseledamot eller verkställande direktör'
+
+/**
+ * What a paper filing sends Bolagsverket is a bestyrkt kopia of the signed
+ * årsredovisning (ÅRL 8 kap. 3 § p. 1), so the one who signs the intyg on the
+ * copy also certifies it. Printed only on the version locked for signature.
+ */
+export const PAPER_COPY_CERTIFICATION = 'Jag intygar att denna kopia av årsredovisningen överensstämmer med originalet.'
 export const CERTIFICATE_SIGNER_LINE = 'Styrelseledamot eller verkställande direktör (närvarande vid stämman)'
 
 /** @param meeting "årsstämman" or, for an ekonomisk förening, "föreningsstämman". */

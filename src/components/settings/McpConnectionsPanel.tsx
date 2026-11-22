@@ -10,6 +10,7 @@ import {
   SpinnerIcon,
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { LoadError } from '@/components/ui/empty-state'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -191,6 +192,8 @@ export function McpConnectionsPanel({
   keys,
   companies = [],
   isLoading,
+  loadFailed = false,
+  onRetry,
   onRevoke,
   onKeysChanged,
 }: {
@@ -198,6 +201,9 @@ export function McpConnectionsPanel({
   /** The caller's companies (useApiKeys): with two or more, each row shows and edits its company reach. */
   companies?: PickerCompany[]
   isLoading: boolean
+  /** The keys could not be read: what is connected is unknown. */
+  loadFailed?: boolean
+  onRetry?: () => void
   onRevoke: (id: string, toastTitle: string) => Promise<void>
   /** Re-read the keys after a row's companies were edited. */
   onKeysChanged?: () => void
@@ -298,6 +304,16 @@ export function McpConnectionsPanel({
       <div className="flex items-center justify-center py-12">
         <SpinnerIcon className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
+    )
+  }
+
+  // Unknown is not "nothing connected": the hero and the tiles would invite a
+  // user who is already connected to add a second connection.
+  if (loadFailed) {
+    return (
+      <SettingsGroup>
+        <LoadError title={t('connections_load_failed')} onRetry={() => onRetry?.()} />
+      </SettingsGroup>
     )
   }
 

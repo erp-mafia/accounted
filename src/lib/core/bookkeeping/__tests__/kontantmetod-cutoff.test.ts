@@ -2685,6 +2685,8 @@ describe('postKontantmetodCutoff: correcting payments booked before the cut-off'
     expect(shape(lines)).toEqual([['1510', 0, 1250], ['1930', 1250, 0]])
     // No date override: the storno and the rättelse keep E's date.
     expect(options).toMatchObject({ description: paidBeforePostingCorrectionDescription('A41') })
+    // A right booking moved to its clearing account rejects no learned template (crm#1858).
+    expect(options).toMatchObject({ keepLearnedTemplates: true })
     expect(options).not.toHaveProperty('newEntryDate')
     expect(options?.preloadedOriginal).toMatchObject({ id: 'je-cash', status: 'posted' })
     expect(vi.mocked(createJournalEntry).mock.invocationCallOrder[0])

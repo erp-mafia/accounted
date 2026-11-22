@@ -272,6 +272,10 @@ export interface UserUiState {
   // ISO timestamp of when the user closed it or clicked through. Per user,
   // not per company: it is one community.
   discord_invite_dismissed_at?: string
+  // The floating support button (components/support/SupportAskTrigger)
+  // hidden by this person, with its X or under Inställningar > Ditt konto.
+  // Its own choice: hide_assistant_fab is the built-in assistant's button.
+  support_fab_hidden?: boolean
 }
 
 export type AgentPanelMode = 'docked' | 'floating'
@@ -2722,6 +2726,8 @@ export interface BookingTemplateLibraryLine {
   type: 'business' | 'vat' | 'settlement'
   ratio?: number
   vat_rate?: number
+  /** SIE dimension map on cost/revenue lines only, e.g. {"1":"KS01","6":"P001"}. */
+  dimensions?: Record<string, string>
 }
 
 // Booking template library entry (system, team, or company-scoped)
@@ -3898,7 +3904,12 @@ export interface VatDeclaration {
    */
   kontantmetodCutoff?: KontantmetodCutoffVatFacts
   // Supporting data
+  /**
+   * Verifikat in the period from customer invoices (booking, payment, cash
+   * payment, credit note), not invoices: a paid invoice counts twice.
+   */
   invoiceCount: number
+  /** Verifikat in the period booked from bank transactions. */
   transactionCount: number
   // Breakdown by source
   breakdown: {
@@ -4708,6 +4719,17 @@ export interface IngestOptions {
    * new id scheme takes a new label.
    */
   stableExternalIds?: boolean
+  /**
+   * The feed's reading of a bank text it lists as booked but does not take
+   * as booked: a Nordea card hold (crm#2076, isNordeaCardHold). The feed
+   * leaves such rows out of the batch. One stored before it did, by this feed
+   * or the other one, ignored or not, still holds its occurrence index.
+   * Re-keying never gives it an incoming row (reconcileStableExternalIds) and
+   * it is no cross-channel mirror twin (decideIngestRow), so a purchase booked
+   * on its day for its amount takes a fresh id instead of being skipped as its
+   * duplicate. Read from the stored row's original_description.
+   */
+  isNotBooked?: (text: string) => boolean
 }
 
 /**

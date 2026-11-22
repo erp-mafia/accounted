@@ -212,3 +212,25 @@ export function normalizeReroutedPersonalNumber(orgNumber: string): string {
 export function personalNumberDigits(value: string): string {
   return value.replace(/\D/g, '')
 }
+
+/** What a value that is not a 10- or 12-digit number masks to: nothing shown. */
+export const REDACTED_PERSONNUMMER = 'XXXXXXXX-XXXX'
+
+/**
+ * The one display form of a natural person's personnummer on every read
+ * surface (the payroll pages, payslips, ROT/RUT, the signing certificate, v1,
+ * MCP): the birth date visible, the last four digits (sex and check digit)
+ * hidden, in the written form Skatteverket uses. YYYYMMDD-XXXX for the
+ * 12-digit form, YYMMDD-XXXX for the 10-digit form (an enskild firma's
+ * organisation number). Anything else is redacted whole: slicing an
+ * unexpected length would show digits of the serial number.
+ *
+ * Here in the kernel, not with payroll where it started, so the ledger's own
+ * surfaces (the Signeringsbevis) show the same form without importing a block.
+ */
+export function maskPersonnummer(personnummer: string | null | undefined): string {
+  const digits = (personnummer ?? '').replace(/\D/g, '')
+  if (digits.length === 12) return `${digits.slice(0, 8)}-XXXX`
+  if (digits.length === 10) return `${digits.slice(0, 6)}-XXXX`
+  return REDACTED_PERSONNUMMER
+}

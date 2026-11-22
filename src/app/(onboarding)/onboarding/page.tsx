@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import OnboardingJourney from '@/components/onboarding/journey/OnboardingJourney'
 import {
@@ -13,6 +13,7 @@ import { mapSetupEntityType as mapTicEntityType } from '@/lib/company-lookup/ent
 import { isScbConfigured } from '@/lib/parties/scb/config'
 import { orgNumberKey, registrationNumberKey } from '@/lib/invariants/org-number'
 import { setActiveCompany } from '@/lib/company/context'
+import { NEXT_ACTION_HEADER } from '@/lib/company/tab-guard'
 
 export const dynamic = 'force-dynamic'
 
@@ -156,7 +157,13 @@ export default async function OnboardingPage({
   // to list a sole trader's own firm (its 16-digit TIC number never matched
   // the stored personnummer), and the resulting URL lives on in history and
   // bookmarks, so the guard belongs here and not only in the picker.
-  const existingCompanyId = registrationNumber
+  // Only on arrival: the journey's own createCompanyFromOnboarding sets
+  // cookies, so Next renders this page again inside the action's response,
+  // and by then the company the journey just created answers the pick. A
+  // redirect there reached the browser as React error #441 and threw the
+  // user past the done screen.
+  const isActionRender = (await headers()).has(NEXT_ACTION_HEADER)
+  const existingCompanyId = registrationNumber && !isActionRender
     ? await findOwnCompanyByOrgNumber(supabase, user.id, registrationNumber)
     : null
   if (existingCompanyId) {

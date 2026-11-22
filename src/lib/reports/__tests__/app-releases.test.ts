@@ -112,7 +112,9 @@ describe('fetchAppReleases', () => {
     const { chain, client } = selectClient({ data: page(0, 1000), error: null }, { data: page(1000, 1000), error: null }, { data: page(2000, 7), error: null })
     const out = await fetchAppReleases(client, { fromTs: '2026-01-01T00:00:00.000Z', toTs: '2026-12-31T23:59:59.999Z' })
     expect(out).toHaveLength(2007)
-    expect(chain.range.mock.calls).toEqual([[0, 999], [1000, 1999], [2000, 2999]])
+    // Two pages one by one, then (the read has proven large) the next three
+    // at once: the two past the short page come back empty and are dropped.
+    expect(chain.range.mock.calls).toEqual([[0, 999], [1000, 1999], [2000, 2999], [3000, 3999], [4000, 4999]])
     // Unique tiebreak (version is the key), so no row is skipped or repeated between pages.
     expect(chain.order).toHaveBeenCalledWith('version', { ascending: true })
   })

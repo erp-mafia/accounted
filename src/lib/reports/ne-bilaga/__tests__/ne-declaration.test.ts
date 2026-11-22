@@ -88,10 +88,25 @@ function makeSupabase() {
           }),
         }
       }
+      if (table === 'fiscal_period_tax_adjustments') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: async () => ({ data: savedAdjustments, error: null }),
+            }),
+          }),
+        }
+      }
       throw new Error(`unexpected table ${table}`)
     },
   }
 }
+
+/** The year's saved tax-adjustment rows the stub answers; none unless a test sets them. */
+let savedAdjustments: Array<Record<string, unknown>> = []
+beforeEach(() => {
+  savedAdjustments = []
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -100,6 +115,54 @@ beforeEach(() => {
     totalDebit: 0,
     totalCredit: 0,
     isBalanced: true,
+  })
+})
+
+describe('generateNEDeclaration: sida 2 R12-R14 from the tax adjustments', () => {
+  // Skatteverket, "Skattemässiga justeringar" (NE-bilagan): R13 takes back
+  // representation, föreningsavgifter, böter and the skattekonto's
+  // kostnadsränta; R14 takes out its inkomstränta.
+  const ADJUSTED_ROWS: TrialBalanceRow[] = [
+    ...PRE_CLOSING_ROWS,
+    row('6072', 'Representation, ej avdragsgill', 4_000.6),
+    row('8423', 'Räntekostnader för skatter och avgifter', 120),
+    row('8314', 'Skattefria ränteintäkter', -49),
+  ]
+
+  it('adds back representation and kostnadsränta on R13, takes out the inkomstränta on R14, and files both', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({ rows: ADJUSTED_ROWS, totalDebit: 0, totalCredit: 0, isBalanced: true })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await generateNEDeclaration(makeSupabase() as any, COMPANY_ID, PERIOD_ID)
+
+    // 4 000,60 + 120 kr, öre truncated (SFL 22 kap. 1 §).
+    expect(result.sida2).toEqual({ R12: result.rutor.R11, R13: 4_120, R14: 49 })
+    expect(result.sida2Breakdown.R13.items.map((item) => item.accountNumber)).toEqual(['6072', '8423'])
+    expect(result.sida2Breakdown.R14.items.map((item) => item.accountNumber)).toEqual(['8314'])
+    // The books are read once: the adjustments use R1-R11's own trial balance.
+    expect(vi.mocked(generateTrialBalance)).toHaveBeenCalledTimes(1)
+
+    const { blanketterSru } = generateNESRUSubmission(result)
+    expect(blanketterSru).toContain('#UPPGIFT 7601 4120')
+    expect(blanketterSru).toContain('#UPPGIFT 7700 49')
+  })
+
+  it('leaves out an adjustment the owner unticked for the year', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({ rows: ADJUSTED_ROWS, totalDebit: 0, totalCredit: 0, isBalanced: true })
+    savedAdjustments = [
+      { source_key: 'account:6072', adjustment_type: 'non_deductible_expense', source: 'detected', description: '', account_number: '6072', amount: 4_000.6, included: false },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await generateNEDeclaration(makeSupabase() as any, COMPANY_ID, PERIOD_ID)
+    expect(result.sida2.R13).toBe(120)
+  })
+
+  it('has nothing on R13 or R14 for books without such accounts', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await generateNEDeclaration(makeSupabase() as any, COMPANY_ID, PERIOD_ID)
+    expect(result.sida2).toEqual({ R12: result.rutor.R11, R13: 0, R14: 0 })
+    const { blanketterSru } = generateNESRUSubmission(result)
+    expect(blanketterSru).not.toContain('#UPPGIFT 7601')
+    expect(blanketterSru).not.toContain('#UPPGIFT 7700')
   })
 })
 
@@ -385,6 +448,48 @@ describe('generateNEDeclaration: R11 equals the booked result', () => {
 
     expect(result.rutor.R11).toBe(400_000)
     expect(result.bookedResult).toBe(400_000)
+    expect(result.sruBlockers).toEqual([])
+  })
+})
+
+describe('generateNEDeclaration: balansräkning (B1-B16)', () => {
+  it('reads B1-B16 off the same books, B10 as tillgångar - skulder', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        row('1220', 'Inventarier', 30_000),
+        row('1930', 'Företagskonto', 120_000),
+        row('2010', 'Eget kapital', -90_000),
+        row('2440', 'Leverantörsskulder', -10_000),
+        row('2611', 'Utgående moms', -20_000),
+        row('3001', 'Försäljning', -200_000),
+        row('5010', 'Lokalhyra', 170_000),
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+
+    const result = await generateNEDeclaration(makeSupabase() as never, COMPANY_ID, PERIOD_ID)
+
+    expect(result.balans).toMatchObject({ B4: 30_000, B9: 120_000, B15: 10_000, B16: 20_000, B10: 120_000 })
+    expect(result.rutor.R11).toBe(30_000)
+    expect(result.warnings.join(' ')).not.toMatch(/balansräkning/)
+    const sru = generateNESRUSubmission(result).blanketterSru
+    expect(sru).toContain('#UPPGIFT 7300 120000')
+    expect(sru).toContain('#UPPGIFT 7600 30000')
+  })
+
+  it('warns by name about a balance account the table leaves out', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [row('1930', 'Företagskonto', 10_000), row('2510', 'Skatteskulder', -2_000), row('2010', 'Eget kapital', -8_000)],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+
+    const result = await generateNEDeclaration(makeSupabase() as never, COMPANY_ID, PERIOD_ID)
+
+    expect(result.warnings).toContainEqual(expect.stringContaining('Konto 2510 Skatteskulder'))
     expect(result.sruBlockers).toEqual([])
   })
 })

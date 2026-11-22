@@ -6,6 +6,7 @@ import {
   hasDimensionValues,
   pruneItemDimensions,
   sanitizeDeductionItems,
+  selfBilledQuantityRefusals,
   stripSelfBillingFields,
 } from '@/lib/invoices/editor-payload'
 
@@ -47,7 +48,7 @@ type FormData = {
   due_date: string
   delivery_date?: string
   currency: string
-  document_type: 'invoice' | 'proforma' | 'delivery_note'
+  document_type: 'invoice' | 'proforma' | 'delivery_note' | 'quote'
   your_reference?: string
   our_reference?: string
   notes?: string
@@ -298,25 +299,33 @@ describe('buildInvoiceWritePayload parity with the legacy inline builders', () =
   for (const [itemLabel, items] of itemVariants) {
     for (const [formLabel, formOverrides] of formVariants) {
       const data = form({ ...formOverrides, items })
+      // The one deliberate change since the extraction (#3030): a document
+      // that is not a faktura sends what the legacy recipe sent for the same
+      // form with no line claiming a deduction, since the server refuses a
+      // claim there and the editor hides the Avdrag column on it.
+      const expected =
+        data.document_type === 'invoice'
+          ? data
+          : { ...data, items: data.items.map((item) => ({ ...item, deduction_type: null })) }
       const dimsVariants: Array<Record<string, string>> = [{}, { '1': 'KS01' }]
       for (const oreRounding of [true, false]) {
         for (const defaultDims of dimsVariants) {
           it(`create: ${itemLabel} / ${formLabel} / ore=${oreRounding} / dims=${jsonOf(defaultDims)}`, () => {
             expect(
               jsonOf(buildInvoiceWritePayload(data, { oreRounding, defaultDims })),
-            ).toBe(jsonOf(legacyCreatePayload(data, oreRounding, defaultDims)))
+            ).toBe(jsonOf(legacyCreatePayload(expected, oreRounding, defaultDims)))
           })
           it(`draft: ${itemLabel} / ${formLabel} / ore=${oreRounding} / dims=${jsonOf(defaultDims)}`, () => {
             expect(
               jsonOf(
                 buildInvoiceWritePayload(data, { saveAsDraft: true, oreRounding, defaultDims }),
               ),
-            ).toBe(jsonOf(legacyDraftPayload(data, oreRounding, defaultDims)))
+            ).toBe(jsonOf(legacyDraftPayload(expected, oreRounding, defaultDims)))
           })
           it(`edit: ${itemLabel} / ${formLabel} / ore=${oreRounding} / dims=${jsonOf(defaultDims)}`, () => {
             expect(
               jsonOf(buildInvoiceWritePayload(data, { oreRounding, defaultDims })),
-            ).toBe(jsonOf(legacyEditPayload(data, oreRounding, defaultDims)))
+            ).toBe(jsonOf(legacyEditPayload(expected, oreRounding, defaultDims)))
           })
         }
       }
@@ -325,6 +334,38 @@ describe('buildInvoiceWritePayload parity with the legacy inline builders', () =
 })
 
 describe('buildInvoiceWritePayload semantics', () => {
+  it.each(['quote', 'proforma', 'delivery_note'] as const)(
+    'sends no deduction on a %s, from a row flagged before the type was switched',
+    (documentType) => {
+      const body = JSON.parse(
+        jsonOf(
+          buildInvoiceWritePayload(
+            form({
+              document_type: documentType,
+              deduction_personnummer: '19800101-1234',
+              deduction_housing_designation: 'Berga 2:11',
+              items: [rotItem(), plainItem()],
+            }),
+            { oreRounding: true, defaultDims: {} },
+          ),
+        ),
+      )
+      for (const item of body.items) {
+        for (const key of ['deduction_type', 'labor_hours', 'work_type', 'housing_designation']) {
+          expect(item).not.toHaveProperty(key)
+        }
+      }
+      expect(body).not.toHaveProperty('deduction_personnummer')
+      expect(body).not.toHaveProperty('deduction_housing_designation')
+      expect(body.items[0]).toMatchObject({ description: 'Målning av fasad', unit_price: 1200 })
+    },
+  )
+
+  it('keeps the claim on a faktura', () => {
+    const body = buildInvoiceWritePayload(form({ items: [rotItem()] }), { oreRounding: true, defaultDims: {} })
+    expect(body.items[0]).toMatchObject({ deduction_type: 'rot', labor_hours: 12, work_type: 'malning' })
+  })
+
   it('drops the self-billing carriers from the wire body', () => {
     const body = JSON.parse(
       jsonOf(
@@ -551,5 +592,23 @@ describe('buildSelfBilledPayload parity and semantics', () => {
     for (const key of ['document_type', 'payment_link_url', 'payment_link_auto', 'ore_rounding', 'deduction_personnummer']) {
       expect(body).not.toHaveProperty(key)
     }
+  })
+})
+
+describe('selfBilledQuantityRefusals (#3553)', () => {
+  it('names the rows the self-billed endpoint refuses: zero, negative and non-numbers', () => {
+    expect(
+      selfBilledQuantityRefusals([
+        { quantity: 2 },
+        { quantity: 0 },
+        { quantity: -2 },
+        { quantity: 0.5 },
+        { quantity: Number.NaN },
+      ]),
+    ).toEqual([1, 2, 4])
+  })
+
+  it('refuses nothing when every quantity is positive', () => {
+    expect(selfBilledQuantityRefusals([{ quantity: 1 }, { quantity: 0.01 }])).toEqual([])
   })
 })

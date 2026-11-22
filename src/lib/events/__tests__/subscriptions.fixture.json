@@ -37,6 +37,15 @@
   "company.deleted": [
     "deleted-company-bank-feeds"
   ],
+  "company_question.answered": [
+    "ext:whatsapp-inbox"
+  ],
+  "company_question.closed": [
+    "ext:whatsapp-inbox"
+  ],
+  "company_question.filed": [
+    "ext:whatsapp-inbox"
+  ],
   "credit_note.created": [
     "event-log",
     "webhooks",
@@ -107,6 +116,7 @@
     "webhooks"
   ],
   "journal_entry.corrected": [
+    "unlearn-on-reversal",
     "event-log",
     "webhooks"
   ],

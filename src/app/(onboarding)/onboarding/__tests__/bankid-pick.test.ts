@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 
+// The request's headers: a server action POST carries next-action.
+const { requestHeaders } = vi.hoisted(() => ({ requestHeaders: new Headers() }))
+
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
-vi.mock('next/headers', () => ({ cookies: vi.fn(async () => ({ get: () => undefined })) }))
+vi.mock('next/headers', () => ({
+  cookies: vi.fn(async () => ({ get: () => undefined })),
+  headers: vi.fn(async () => requestHeaders),
+}))
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`NEXT_REDIRECT:${url}`)
@@ -76,6 +82,7 @@ function setup(options: { roles?: EnrichmentCompanyRole[]; memberships?: Array<{
 describe('/onboarding: the BankID pick', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    requestHeaders.delete('next-action')
   })
 
   it('prefills a sole trader from ?pick= with the 10-digit org number the journey looks up', async () => {
@@ -111,6 +118,20 @@ describe('/onboarding: the BankID pick', () => {
 
     await expect(OnboardingPage({ searchParams: Promise.resolve({ pick: '222' }) })).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     expect(setActiveCompany).toHaveBeenCalledWith(expect.anything(), 'user-1', 'ef-1')
+  })
+
+  it('keeps the journey on its done screen when its own company creation renders the page again', async () => {
+    // createCompanyFromOnboarding sets cookies, so Next renders /onboarding?pick=
+    // again inside the action's response. The company it just created now
+    // answers the pick: a redirect there reached the browser as React error
+    // #441 and threw the user past the done screen.
+    setup({ roles: [SOLE_TRADER], memberships: [{ id: 'ef-1', org_number: '8201022343' }] })
+    requestHeaders.set('next-action', 'action-id')
+
+    const element = await OnboardingPage({ searchParams: Promise.resolve({ pick: '222' }) })
+
+    expect(element.props.initialOrgNumber).toBe('8201022343')
+    expect(setActiveCompany).not.toHaveBeenCalled()
   })
 
   it('answers a legacy ?org_number= link with the same pick, minus the number', async () => {

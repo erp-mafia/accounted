@@ -154,6 +154,35 @@ describe('gnubok_import_sie: stage-time validation', () => {
     })
   })
 
+  // crm#1294: with import_opening_balances=false the approval card still said
+  // the import books opening balances, and warned about an IB adjustment entry
+  // the job never books.
+  it('describes an import without its IB as one: no IB in will, no IB warnings', async () => {
+    const unbalancedIb = VALID_SIE.replace('#IB 0 2081 -50000.00', '#IB 0 2081 -49000.00')
+    const stageWith = async (flags: Record<string, unknown>) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { org_number: '5566778899' }, error: null })
+      enqueue({ data: { id: 'op-sie' }, error: null })
+      return (await importSie.execute(
+        { file_content: unbalancedIb, filename: 'bok.se', mappings: COVER_VALID_SIE, ...flags },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      )) as { preview: { will: string; warnings: string[] } }
+    }
+
+    const withIb = await stageWith({})
+    expect(withIb.preview.will).toBe('create fiscal period + opening balances + journal entries from the parsed SIE')
+    expect(withIb.preview.warnings.join(' ')).toContain('Ingående balanser balanserar inte')
+
+    const withoutIb = await stageWith({ import_opening_balances: false })
+    expect(withoutIb.preview.will).toBe(
+      'create fiscal period + journal entries from the parsed SIE; the file\'s opening balances are not imported (import_opening_balances=false)',
+    )
+    expect(withoutIb.preview.warnings.join(' ')).not.toMatch(/Ingående balanser|ingående balanser/)
+  })
+
   it('refuses at staging what the job would refuse after approval: nothing to import', async () => {
     const { supabase, findCall } = createQueuedMockSupabase()
     await expect(

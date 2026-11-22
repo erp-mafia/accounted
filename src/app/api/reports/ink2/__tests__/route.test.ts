@@ -40,7 +40,7 @@ function makeDeclaration() {
   const ink2r: Record<string, number> = {}
   return {
     fiscalYear: { id: PERIOD_ID, name: 'Räkenskapsår 2025', start: '2025-01-01', end: '2025-12-31', isClosed: true },
-    ink2: { '7011': '20250101', '7012': '20251231', '7104': 406_000, '7114': 0 },
+    ink2: { '7011': '20250101', '7012': '20251231', '7104': 406_000, '7114': 0, '7132': 0, '7133': 0 },
     ink2r,
     ink2s: {
       '7011': '20250101',
@@ -48,9 +48,12 @@ function makeDeclaration() {
       '7650': 442_000,
       '7750': 0,
       '7651': 60_000,
+      '7652': 0,
       '7653': 4_000,
+      '7753': 0,
       '7754': 0,
       '7654': 0,
+      '7673': 0,
       '7763': 100_000,
       '7670': 406_000,
       '7770': 0,
@@ -66,6 +69,7 @@ function makeDeclaration() {
       email: null,
     },
     warnings: [],
+    sruBlockers: [],
   }
 }
 
@@ -113,6 +117,16 @@ describe('GET /api/reports/ink2', () => {
     expect(status).toBe(422)
     expect(body.error.code).toBe('FILING_IDENTITY_REFUSED')
     expect(body.error.message).toMatch(/kontakta supporten/)
+  })
+
+  it('422s an SRU download whose form does not tie to the books, with the reason', async () => {
+    const blocker = 'Balansräkningen är inte i balans. Tillgångar: 612000 kr, Eget kapital och skulder: 672000 kr (differens: 60000 kr).'
+    generateMock.mockResolvedValue({ ...makeDeclaration(), sruBlockers: [blocker] })
+    const res = await GET(createMockRequest(`http://localhost/api/reports/ink2?period_id=${PERIOD_ID}&format=sru`), routeCtx)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('TAX_DECL_INK2_SRU_BLOCKED')
+    expect(JSON.stringify(body.error)).toContain('Balansräkningen är inte i balans')
   })
 
   it('500s a generator failure with the typed code and no stack leak', async () => {

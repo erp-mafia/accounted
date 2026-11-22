@@ -216,6 +216,47 @@ describe('Contra accounts have opposite normal_balance', () => {
     expect(account).toBeDefined()
     expect(account!.normal_balance).toBe('debit')
   })
+
+  it('1299 (Ack. avskrivningar övriga materiella) has credit balance', () => {
+    const account = getBASReference('1299')
+    expect(account).toBeDefined()
+    expect(account!.normal_balance).toBe('credit')
+  })
+
+  it('2091 (Balanserad vinst eller förlust) has credit balance', () => {
+    const account = getBASReference('2091')
+    expect(account).toBeDefined()
+    expect(account!.normal_balance).toBe('credit')
+  })
+
+  // The named cases above are examples; the two tests below hold the rule for
+  // every account of the kind and report the account numbers that break it.
+
+  /** Class 1 accounts that reduce an asset: accumulated depreciation and impairment, and write-downs. */
+  const CONTRA_ASSET_NAME = /^(Ackumulerade (av|ned)skrivningar|Nedskrivning(ar)? av|Värdereglering)/i
+
+  it('every contra-asset account in class 1 has credit balance', () => {
+    const contra = BAS_REFERENCE.filter(
+      (a) => a.account_class === 1 && CONTRA_ASSET_NAME.test(a.account_name),
+    )
+    expect(contra.length).toBeGreaterThan(40)
+
+    const wrong = contra.filter((a) => a.normal_balance !== 'credit').map((a) => a.account_number)
+    expect(wrong).toEqual([])
+  })
+
+  it('every equity account has credit balance except the owner-withdrawal accounts', () => {
+    // Egna uttag (enskild firma, handelsbolag) reduce equity.
+    const withdrawals = new Set(['2011', '2013', '2021', '2023', '2031', '2033', '2041', '2043'])
+
+    const equity = BAS_REFERENCE.filter((a) => a.account_type === 'equity')
+    expect(equity.length).toBeGreaterThan(0)
+
+    const wrong = equity
+      .filter((a) => !withdrawals.has(a.account_number) && a.normal_balance !== 'credit')
+      .map((a) => a.account_number)
+    expect(wrong).toEqual([])
+  })
 })
 
 describe('K2-excluded accounts', () => {

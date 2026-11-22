@@ -16,7 +16,7 @@ import { readAsOf } from '../../../as-of'
  */
 export const GET = withRouteContext<{ params: Promise<{ partyId: string }> }>('bolaget.holder_extract', async (request, ctx, { params }) => {
   const { partyId } = await params
-  const gate = await bolagetGateResponse(ctx)
+  const gate = await bolagetGateResponse(ctx, 'registers')
   if (gate) return gate
   const asOf = readAsOf(request)
   if (asOf === null) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, details: { field: 'as_of' } })

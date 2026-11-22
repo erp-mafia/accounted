@@ -26,6 +26,14 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(() => ({ service: true })),
 }))
 
+// Only this host resolves in the brands table: a registered white-label domain.
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: vi.fn(async (host: string) => ({
+    brand: host === 'books.partner.example' ? { domain: host } : null,
+    lookupFailed: false,
+  })),
+}))
+
 import { stripeExtension } from '../index'
 import { requireCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -198,6 +206,46 @@ describe('stripe extension routes', () => {
       expect(url.searchParams.get('redirect_uri')).toBe(
         'http://localhost:3000/api/extensions/stripe/callback',
       )
+    })
+
+    it('records the brand origin the flow started on, keeping the redirect URI canonical', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] }) // no existing connections
+      enqueue({ data: { id: 'conn-new' } }) // insert
+      const request = new Request('https://books.partner.example/api/extensions/ext/stripe/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', host: 'books.partner.example' },
+        body: '{}',
+      })
+      const res = await findRoute('POST', '/connect').handler(request, makeContext(supabase))
+
+      expect(res.status).toBe(200)
+      const inserted = findCall('stripe_connections', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted).toMatchObject({ status: 'pending', return_origin: 'https://books.partner.example' })
+      // Stripe only accepts the registered callback, so the provider leg stays canonical.
+      const url = new URL(((await res.json()) as { url: string }).url)
+      expect(url.searchParams.get('redirect_uri')).toBe(
+        'http://localhost:3000/api/extensions/stripe/callback',
+      )
+    })
+
+    it('records the canonical origin for a host that is not a registered brand', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] })
+      enqueue({ data: { id: 'conn-new' } })
+      const request = new Request('https://evil.example/api/extensions/ext/stripe/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', host: 'evil.example' },
+        body: '{}',
+      })
+      await findRoute('POST', '/connect').handler(request, makeContext(supabase))
+
+      const inserted = findCall('stripe_connections', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.return_origin).toBe('http://localhost:3000')
     })
   })
 

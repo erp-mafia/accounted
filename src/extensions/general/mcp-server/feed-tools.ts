@@ -25,6 +25,7 @@ import { dbError } from '@/lib/errors/db-error'
 import { createLogger } from '@/lib/logger'
 import {
   RATE_LIMIT_BACKFILL,
+  currentConnections,
   runFeedBackfill,
   type FeedBackfillRefusal,
   type FeedConnectorSpec,
@@ -152,15 +153,37 @@ export function createFeedTools(deps: { readOnly: McpToolAnnotations; writeOpenW
         const connections: Array<Record<string, unknown>> = []
         for (const provider of providers) {
           const spec = FEEDS[provider]
-          const { data, error } = await supabase
+          const storeColumn = spec.storeColumn ? `, ${spec.storeColumn}` : ''
+          const columns = `id, status, created_at, connected_at, error_message, transaction_sync_enabled, ${spec.cursorColumn}${storeColumn}`
+          // The newest attempts, and the active rows on their own: a burst of
+          // newer attempts on one store must not push another store's live
+          // connection out of the window.
+          const recent = await supabase
             .from(spec.table)
-            .select(`id, status, connected_at, error_message, transaction_sync_enabled, ${spec.cursorColumn}`)
+            .select(columns)
             .eq('company_id', companyId)
-            .neq('status', 'revoked')
             .order('created_at', { ascending: false })
-            .limit(10)
-          if (error) throw dbError(error, `${provider} connections`)
-          for (const row of (data ?? []) as unknown as Array<Record<string, unknown>>) {
+            .limit(25)
+          if (recent.error) throw dbError(recent.error, `${provider} connections`)
+          const active = await supabase
+            .from(spec.table)
+            .select(columns)
+            .eq('company_id', companyId)
+            .eq('status', 'active')
+            .order('created_at', { ascending: false })
+            .limit(25)
+          if (active.error) throw dbError(active.error, `${provider} connections`)
+          type Row = Record<string, unknown> & { status: string }
+          const byId = new Map<unknown, Row>()
+          for (const row of [...((recent.data ?? []) as unknown as Row[]), ...((active.data ?? []) as unknown as Row[])]) {
+            byId.set(row.id, row)
+          }
+          const attempts = [...byId.values()].sort((a, b) =>
+            String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')),
+          )
+          // Per store the live connection, not every failed attempt before it.
+          const rows = currentConnections(attempts, (row) => (spec.storeColumn ? row[spec.storeColumn] : null))
+          for (const row of rows) {
             connections.push({
               connection_id: row.id,
               provider,

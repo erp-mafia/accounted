@@ -3250,9 +3250,16 @@ export function ResultStep({
         value: results.assets.scopesMissing ? 'Hoppades över' : `${results.assets.imported} importerade`,
         detail: results.assets.scopesMissing
           ? 'Fortnox-anslutningen saknar behörighet till anläggningsregistret (assets-scope). Bokförda värden är ändå med via SIE.'
-          : results.assets.skipped > 0
-            ? formatSkipReasons(results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
-            : undefined,
+          : [
+              results.assets.skipped > 0
+                ? formatSkipReasons(results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
+                : undefined,
+              // Imported, not skipped: on category default accounts because
+              // the source's asset type did not resolve.
+              (results.assets.skipReasons?.typeUnresolved ?? 0) > 0
+                ? t('ext_arcim_assets_type_unresolved', { count: results.assets.skipReasons?.typeUnresolved ?? 0 })
+                : undefined,
+            ].filter(Boolean).join(', ') || undefined,
         failed: !results.assets.scopesMissing &&
           entityRowStatus(results.assets.imported, results.assets.skipReasons) === 'error',
       })

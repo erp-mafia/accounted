@@ -9,7 +9,6 @@
       "accounting_method": "accrual"
     },
     "user_name": "Demo",
-    "profile_summary": "Konsultbolag inom IT med två anställda. Fakturerar timmar månadsvis, köper molntjänster från EU och USA.",
     "atoms": [
       {
         "id": "horizontal/swedish-vat",
@@ -39,7 +38,6 @@
     },
     "where_to_find": [
       "memory: every fact agents were told about this company, newest first; a later fact settles an earlier one.",
-      "profile_summary: what the company does, written at onboarding; may be outdated.",
       "ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier."
     ],
     "data_status": {

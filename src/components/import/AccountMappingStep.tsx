@@ -31,7 +31,7 @@ import {
   XCircleIcon,
 } from '@/components/icons'
 import type { AccountMapping } from '@/lib/import/types'
-import { isValidBASRange } from '@/lib/import/account-mapper'
+import { isLowConfidenceMapping, isValidBASRange, resolveAccountMatch, type AccountMatchKind } from '@/lib/import/account-mapper'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
 import { ImportNotices } from '@/components/import/ImportNotices'
@@ -93,7 +93,7 @@ function matchesFilter(m: AccountMapping, filter: FilterType, knownTargets: Read
     case 'new_account':
       return !!m.targetAccount && !knownTargets.has(m.targetAccount)
     case 'low_confidence':
-      return !!m.targetAccount && m.confidence < 0.7
+      return isLowConfidenceMapping(m)
     case 'vat_review':
       return !!m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
     case 'manual':
@@ -274,7 +274,7 @@ export default function AccountMappingStep({
   const stats = useMemo(() => {
     const unmapped = mappings.filter((m) => !m.targetAccount).length
     const newAccounts = mappings.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount)).length
-    const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
+    const lowConfidence = mappings.filter(isLowConfidenceMapping).length
     const manual = mappings.filter((m) => m.isOverride).length
     const vatReview = mappings.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed).length
     return { unmapped, newAccounts, lowConfidence, manual, vatReview }
@@ -508,20 +508,24 @@ export default function AccountMappingStep({
           {/* Mapping table */}
           <div className="overflow-hidden">
             {/* Under table-fixed the header widths ARE the layout: cells never
-                grow them. The budget is ~990px so the table fits a laptop
-                content column at 100 % zoom (#2125: 1216px overflowed, with
-                144px spent on a four-digit source account); beyond that the
-                wrapper scrolls and the confirm column stays sticky (#1668).
+                grow them. The budget is 960px, inside the 966px content
+                column of a 1440px window, where the sidebar turns wide
+                (#2125: 1216px overflowed, with 144px spent on a four-digit
+                source account). The arrow column is as wide as its icon, and
+                the source name is the column that gives way: it truncates and
+                keeps the whole name in its tooltip. In a narrower column (a
+                window under 1334px) the wrapper scrolls and the confirm
+                column stays sticky (#1668).
                 13px text and px-3 cells match the page-level list density. */}
             <Table className="table-fixed text-[13px] [&_td]:px-3 [&_th]:px-3">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-20">{tStep('col_source_account')}</TableHead>
-                  <TableHead className="w-40">{tStep('col_source_name')}</TableHead>
-                  <TableHead className="w-8 !px-0" aria-hidden="true"></TableHead>
+                  <TableHead className="w-36">{tStep('col_source_name')}</TableHead>
+                  <TableHead className="w-4 !px-0" aria-hidden="true"></TableHead>
                   <TableHead className="w-56">{tStep('col_target_account')}</TableHead>
                   <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
-                  <TableHead className="w-24">{tStep('col_confidence')}</TableHead>
+                  <TableHead className="w-24">{tStep('col_match')}</TableHead>
                   <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l-hairline bg-background text-right">
                     <span className="inline-flex items-center gap-1">
                       {t('vat_treatment_confirm')}
@@ -681,13 +685,7 @@ export default function AccountMappingStep({
                       )}
                     </TableCell>
                     <TableCell>
-                      {mapping.targetAccount && (
-                        <ConfidenceBadge
-                          confidence={mapping.confidence}
-                          matchType={mapping.matchType}
-                          isOverride={mapping.isOverride}
-                        />
-                      )}
+                      <AccountMatchBadge mapping={mapping} />
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -1019,27 +1017,28 @@ function TruncatedSourceName({ sourceName }: { sourceName: string }) {
   )
 }
 
-function ConfidenceBadge({
-  confidence,
-  isOverride,
-}: {
-  confidence: number
-  matchType: string  // Keep for potential future use
-  isOverride: boolean
-}) {
+/**
+ * The match kinds that get a chip, and which one. A recognised account and
+ * one kept from the file are what happens to most rows of a migration, so
+ * they read as muted text; a chip marks the rows where the target is another
+ * number, the mapper asks for a look, or the person chose.
+ */
+const MATCH_CHIP: Partial<Record<AccountMatchKind, 'default' | 'secondary' | 'outline'>> = {
+  redirected: 'secondary',
+  uncertain: 'outline',
+  manual: 'default',
+}
+
+/** What the mapper did with the row (resolveAccountMatch); nothing on an unmapped row. */
+function AccountMatchBadge({ mapping }: { mapping: AccountMapping }) {
   const tStep = useTranslations('chart_of_accounts.mapping_step')
-  if (isOverride) {
-    return <Badge variant="default">{tStep('confidence_manual')}</Badge>
-  }
-
-  if (confidence >= 0.9) {
-    return <span className="text-xs text-muted-foreground">{tStep('confidence_exact')}</span>
-  }
-
-  if (confidence >= 0.7) {
-    return <Badge variant="secondary">{tStep('confidence_likely')}</Badge>
-  }
-
-  return <Badge variant="outline">{tStep('confidence_uncertain')}</Badge>
+  const kind = resolveAccountMatch(mapping)
+  if (!kind) return null
+  const chip = MATCH_CHIP[kind]
+  return chip ? (
+    <Badge variant={chip}>{tStep(`match_${kind}`)}</Badge>
+  ) : (
+    <span className="whitespace-nowrap text-xs text-muted-foreground">{tStep(`match_${kind}`)}</span>
+  )
 }
 

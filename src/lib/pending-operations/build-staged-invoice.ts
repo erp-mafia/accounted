@@ -186,9 +186,12 @@ export function describeInvoiceBuildRefusal(code: string, details?: Record<strin
   const rest = details && errors.length === 0 ? ` Details: ${JSON.stringify(details)}` : ''
   // The personnummer has no field on this surface (it never crosses MCP in
   // plaintext): say where it comes from, or the agent invents a key for it.
+  // A claim on a quote is refused for the document, not for the personnummer.
   const hint =
     code === 'INVOICE_CREATE_ROT_RUT_VALIDATION'
-      ? 'The personnummer cannot be passed through MCP: it is read from the customer card of an individual customer, so add it there first.'
+      ? details?.reason === 'document_type'
+        ? 'Create the document with deduction_type null on every line and set the deduction on an invoice instead (gnubok_convert_invoice turns a quote or proforma into an invoice draft; a delivery note cannot be converted).'
+        : 'The personnummer cannot be passed through MCP: it is read from the customer card of an individual customer, so add it there first.'
       : undefined
   return [`${code}.`, entry?.message_en, ...errors, hint].filter(Boolean).join(' ') + rest
 }

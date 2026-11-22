@@ -54,7 +54,7 @@ import type { OpeningBalanceParseResult, OpeningBalanceExecuteResult, DetectedCo
 import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
 import type { ExistingYearMode } from '@/components/import/SIEExistingYearChoice'
 import type { SIEAppendPlan } from '@/lib/import/sie-append'
-import { applyMappingOverride, getMappingStats, isValidBASRange } from '@/lib/import/account-mapper'
+import { applyMappingOverride, getMappingStats, isLowConfidenceMapping, isValidBASRange } from '@/lib/import/account-mapper'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 import type { FileAccountMatch } from '@/lib/cash-accounts/file-account'
@@ -864,12 +864,14 @@ function SIEImportWizard({
     }
   }, [preview, leavesOutUnused, effectiveMappings])
 
-  // Skip the mapping step when all accounts are already mapped
+  // Skip the mapping step when all accounts are already mapped and none is
+  // uncertain: the preview's "Granska mappningar" leads here for an uncertain
+  // row, such as a used class 9 account suggested to 2999 (#2539).
   const hasUnmapped = effectiveMappings.some((m) => !m.targetAccount)
   const needsVatReview = effectiveMappings.some((m) =>
     m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
   )
-  const showMappingStep = hasUnmapped || needsVatReview
+  const showMappingStep = hasUnmapped || needsVatReview || effectiveMappings.some(isLowConfidenceMapping)
   const sieSteps: ImportWizardStep[] = showMappingStep
     ? ['upload', 'preview', 'mapping', 'review', 'result']
     : ['upload', 'preview', 'review', 'result']
@@ -1035,7 +1037,7 @@ function SIEImportWizard({
       )
       const mapped = updatedMappings.filter((m) => m.targetAccount).length
       const unmapped = updatedMappings.length - mapped
-      const lowConfidence = updatedMappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
+      const lowConfidence = updatedMappings.filter(isLowConfidenceMapping).length
 
       return {
         ...prev,

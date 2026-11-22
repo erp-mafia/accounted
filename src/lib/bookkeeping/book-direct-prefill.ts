@@ -438,14 +438,19 @@ export function applyCostAccountSuggestion(
   return lines.map((line, index) => (index === idx ? { ...line, account_number: trimmed } : line))
 }
 
-/** Template rows are manual: no role, no generated account, no provenance. */
+/**
+ * Template rows are manual: no role, no generated account, no provenance. A
+ * row keeps the dimensions the template set on it; a row without any gets no
+ * bag, since a defined bag opens the line's picker row.
+ */
 export function manualBookDirectLines(
-  rows: ReadonlyArray<Pick<BookDirectFormLine, 'account_number' | 'debit_amount' | 'credit_amount'>>,
+  rows: ReadonlyArray<Pick<BookDirectFormLine, 'account_number' | 'debit_amount' | 'credit_amount' | 'dimensions'>>,
 ): BookDirectFormLine[] {
   return rows.map((row) => ({
     account_number: row.account_number,
     debit_amount: row.debit_amount,
     credit_amount: row.credit_amount,
+    ...(row.dimensions && Object.keys(row.dimensions).length > 0 ? { dimensions: row.dimensions } : {}),
   }))
 }
 

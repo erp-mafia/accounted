@@ -25,7 +25,7 @@ import { checkNeverCheckedInboxItems, neverChecked, neverCheckedToCheck, propose
 import type { InboxPairing } from '@/lib/inkorg/pairs'
 import { nothingRead } from '@/lib/inkorg/decision'
 import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
-import type { InkorgItem, ReadingRetry } from '@/lib/inkorg/items'
+import { inboxScope, type InkorgItem, type ReadingRetry } from '@/lib/inkorg/items'
 import { readingRetryOf } from './lib/provider-retry'
 import { readInboxPairings, type ListedItem } from '@/lib/operations/inbox-pairings'
 import { sameInvoiceItems, type SameInvoiceItem } from '@/lib/inkorg/same-invoice'
@@ -741,7 +741,25 @@ export const invoiceInboxExtension: Extension = {
 
         // arkiv_section: whether the Dokument section is open for this company, so the
         // "routed to the archive" line links there only when the link leads somewhere.
-        return NextResponse.json({ data: { items: withLogos, count: withLogos.length, arkiv_section: isArkivSectionEnabled(ctx.companyId) } })
+        const arkiv_section = isArkivSectionEnabled(ctx.companyId)
+        // ?scope=inbox (the Inkorg): only the rows it shows, cut after every
+        // reading above was worked out on the whole list, with the doors and
+        // the mailbox provider it reads off the rest (lib/inkorg/items.ts
+        // inboxScope). A company with years of booked underlag sent all of
+        // them, with their readings, on every load and every change.
+        if (url.searchParams.get('scope') === 'inbox') {
+          const scoped = inboxScope(withLogos as unknown as InkorgItem[])
+          return NextResponse.json({
+            data: {
+              items: scoped.items,
+              count: scoped.items.length,
+              doors: scoped.doors,
+              mail_provider: scoped.mailProvider,
+              arkiv_section,
+            },
+          })
+        }
+        return NextResponse.json({ data: { items: withLogos, count: withLogos.length, arkiv_section } })
       },
     },
 

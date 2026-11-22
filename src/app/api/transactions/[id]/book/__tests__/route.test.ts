@@ -191,7 +191,8 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(status).toBe(400)
     // Inverted from `toBe('Validation failed')`: the constant was the bug.
     expect(body.error).toMatch(/^Valideringsfel: /)
-    expect(body.error).toContain('entry_date')
+    // The field by the name a person knows, with a Swedish reason.
+    expect(body.error).toContain('Datum: Obligatoriskt fält saknas')
   })
 
   it('returns 404 when transaction not found', async () => {
@@ -881,7 +882,7 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(status).toBe(500)
     expect(body.error).toMatchObject({
       code: 'INTERNAL_ERROR',
-      message: 'Ett oväntat serverfel uppstod. Försök igen senare.',
+      message: 'Ett oväntat fel uppstod. Försök igen om en stund, och kontakta support om det fortsätter.',
     })
     expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
       expect.anything(),

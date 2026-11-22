@@ -29,7 +29,13 @@
  * reversal, a carried opening balance and a momsredovisning-shaped verifikat
  * are left out. Each counted verifikat moves the rutor by the fold the
  * declaration files (rutorChangeOfLines), with the company's own account
- * classification.
+ * classification and the 29xx lines of a verifikat that books a deferred
+ * invoice sale read as that sale (readDeferredSaleLines, crm#1919): the
+ * invoice moves its whole sale, a release nets to nothing.
+ *
+ * Only verifikat move a filed period here. A change to how the declaration
+ * reads verifikat it already holds (crm#1919 read the 29xx line of a
+ * periodiserad invoice into ruta 05) moves its figure without being listed.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
@@ -37,8 +43,15 @@ import type { VatDeclarationRutor } from '@/types'
 import { roundOre } from '@/lib/money'
 import { endOfDayIsoStockholm, todayIsoStockholm } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { mapWithConcurrency } from '@/lib/concurrency'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
+import {
+  fetchInvoiceDeferralShares,
+  readDeferredSaleLines,
+  VAT_ACCOUNTS,
+  VAT_SETTLEMENT_NET_ACCOUNTS,
+  type InvoiceDeferralShares,
+} from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 import { createLogger } from '@/lib/logger'
 import {
@@ -132,13 +145,27 @@ function moved(change: RutorChange): RutorChange {
   return Object.fromEntries(Object.entries(change).filter(([, amount]) => amount !== 0)) as RutorChange
 }
 
-function linesChange(lines: readonly VoucherImpactLine[] | null, accounts: ClassifiedAccounts): RutorChange {
+/**
+ * How one verifikat's lines move the rutor, read as the declaration reads
+ * them: a 29xx line of a deferred invoice sale counts as that sale
+ * (readDeferredSaleLines, crm#1919).
+ */
+function linesChange(
+  entryId: string,
+  lines: readonly VoucherImpactLine[] | null,
+  accounts: ClassifiedAccounts,
+  deferrals: InvoiceDeferralShares,
+): RutorChange {
   return rutorChangeOfLines(
-    (lines ?? []).map((line) => ({
-      account_number: line.account_number,
-      debit_amount: Number(line.debit_amount) || 0,
-      credit_amount: Number(line.credit_amount) || 0,
-    })),
+    readDeferredSaleLines(
+      entryId,
+      (lines ?? []).map((line) => ({
+        account_number: line.account_number,
+        debit_amount: Number(line.debit_amount) || 0,
+        credit_amount: Number(line.credit_amount) || 0,
+      })),
+      deferrals,
+    ),
     accounts,
   )
 }
@@ -228,6 +255,9 @@ export function baselineAfterImports(entries: readonly EntryRow[], after: string
   return batch.map(postedAt).reduce((latest, at) => (instant(at) > instant(latest) ? at : latest))
 }
 
+/** Filing periods read at the same time: bounded, so a long history never fans out unbounded. */
+const FILING_READ_CONCURRENCY = 6
+
 async function chunked<T>(ids: readonly string[], read: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
   const rows: T[] = []
   for (let i = 0; i < ids.length; i += IN_CHUNK) rows.push(...(await read(ids.slice(i, i + IN_CHUNK))))
@@ -247,8 +277,29 @@ export async function withChangesAfterFiling(
   const signings = await connectionSignings(supabase, companyId)
   const baselineOf = (filing: VatFilingRecord) => filingBaseline(filing, signings.get(submissionKey(filing)))
   const earliest = filings.map(baselineOf).reduce((min, at) => (instant(at) < instant(min) ? at : min))
+  // The verifikat posted into each filed period after its baseline, read for
+  // every filing at once (a few at a time): the VAT page waits on this, and a
+  // monthly filer has 60 filings after five years, which read one after
+  // another took over a second. Most periods have none, so the reads below
+  // run only for the few that changed.
+  const lateEntriesRead = mapWithConcurrency(filings, FILING_READ_CONCURRENCY, (filing) =>
+    fetchAllRows<EntryRow>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id, voucher_series, voucher_number, entry_date, source_type, status, committed_at, created_at, import_batch_id')
+        .eq('company_id', companyId)
+        .in('status', ['posted', 'reversed'])
+        .gte('entry_date', filing.period_start)
+        .lte('entry_date', filing.period_end)
+        // Every posted verifikat carries committed_at (set_committed_at
+        // stamps the commit; none is null on seen 2026-10-28).
+        .gt('committed_at', baselineOf(filing))
+        .order('id')
+        .range(from, to),
+    ),
+  )
 
-  const [rattelser, closing] = await Promise.all([
+  const [rattelser, closing, lateEntries] = await Promise.all([
     fetchAllRows<RattelseRow>(({ from, to }) =>
       supabase
         .from('journal_entry_rattelse_log')
@@ -267,6 +318,7 @@ export async function withChangesAfterFiling(
         .order('id')
         .range(from, to),
     ),
+    lateEntriesRead,
   ])
   const closingIds = new Set(closing.map((row) => row.closing_entry_id))
   const rattelseEntries = new Map(
@@ -289,25 +341,13 @@ export async function withChangesAfterFiling(
   )
 
   let accounts: ClassifiedAccounts | null = null
+  let deferrals: InvoiceDeferralShares | null = null
   let taxAccounts: string[] | null = null
   const result: VatFilingRecordWithChange[] = []
 
-  for (const filing of filings) {
+  for (const [index, filing] of filings.entries()) {
     const after = baselineOf(filing)
-    const entries = await fetchAllRows<EntryRow>(({ from, to }) =>
-      supabase
-        .from('journal_entries')
-        .select('id, voucher_series, voucher_number, entry_date, source_type, status, committed_at, created_at, import_batch_id')
-        .eq('company_id', companyId)
-        .in('status', ['posted', 'reversed'])
-        .gte('entry_date', filing.period_start)
-        .lte('entry_date', filing.period_end)
-        // Every posted verifikat carries committed_at (set_committed_at
-        // stamps the commit; none is null on seen 2026-10-28).
-        .gt('committed_at', after)
-        .order('id')
-        .range(from, to),
-    )
+    const entries = lateEntries[index]
     const baseline = baselineAfterImports(entries, after)
     const late = entries.filter((entry) => instant(postedAt(entry)) > instant(baseline))
     const rattelseRows = rattelser.filter((row) => {
@@ -326,6 +366,7 @@ export async function withChangesAfterFiling(
     }
 
     accounts ??= await fetchDynamicVatAccounts(supabase, companyId)
+    deferrals ??= await fetchInvoiceDeferralShares(supabase, companyId)
     const { data: special, error: specialError } = await supabase.rpc('vat_declaration_special_entries', {
       p_company_id: companyId,
       p_start: filing.period_start,
@@ -380,14 +421,14 @@ export async function withChangesAfterFiling(
     }
 
     for (const entry of late) {
-      if (readByRutor(entry)) record(entry, postedAt(entry), 'posted', linesChange(linesOf(entry.id), accounts))
+      if (readByRutor(entry)) record(entry, postedAt(entry), 'posted', linesChange(entry.id, linesOf(entry.id), accounts, deferrals))
     }
     for (const row of rattelseRows) {
       const entry = rattelseEntries.get(row.journal_entry_id) as EntryRow
       if (row.rattelse_type === 'lines') {
         if (!readByRutor(entry)) continue
-        const change = linesChange(row.added_lines, accounts)
-        addInto(change, linesChange(row.struck_lines, accounts), -1)
+        const change = linesChange(entry.id, row.added_lines, accounts, deferrals)
+        addInto(change, linesChange(entry.id, row.struck_lines, accounts, deferrals), -1)
         record(entry, row.created_at, 'rattelse', change)
         continue
       }
@@ -401,7 +442,7 @@ export async function withChangesAfterFiling(
         if (entry.source_type === 'vat_settlement' || closingIds.has(entry.id) || shaped) continue
       }
       const change: RutorChange = {}
-      addInto(change, linesChange(linesOf(entry.id), accounts), movedIn ? 1 : -1)
+      addInto(change, linesChange(entry.id, linesOf(entry.id), accounts, deferrals), movedIn ? 1 : -1)
       record(entry, row.created_at, 'redated', change)
     }
 

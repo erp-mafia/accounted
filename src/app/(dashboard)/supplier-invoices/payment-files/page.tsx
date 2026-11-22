@@ -7,11 +7,12 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { EmptyState, LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   Dialog,
+  DialogConsequence,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -49,6 +50,9 @@ type BatchItemWithInvoice = SupplierPaymentBatchItem & {
 
 type BatchDetail = SupplierPaymentBatch & { items: BatchItemWithInvoice[] }
 
+/** One invoice "Markera alla som betalda" could not book, with the server's reason. */
+type MarkPaidFailure = { id: string; label: string; reason: string }
+
 /** Mirrors the öre epsilon the server derives settled_count with. */
 const SETTLED_EPSILON = 0.005
 
@@ -78,10 +82,19 @@ export default function PaymentFilesPage() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [detail, setDetail] = useState<BatchDetail | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
+  // The detail read failed: 'not_found' (the file is gone) or 'failed' (retry).
+  const [detailError, setDetailError] = useState<'not_found' | 'failed' | null>(null)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
   const [markingAll, setMarkingAll] = useState(false)
+  // The invoices the last "Markera alla som betalda" could not book, each
+  // with the server's reason, shown in the sheet of the file they belong to.
+  const [markAllFailures, setMarkAllFailures] = useState<{
+    batchId: string
+    items: MarkPaidFailure[]
+  } | null>(null)
 
   // Files loaded so far. "Ladda fler" grows it; a refetch after a cancel or
   // a mark-paid reloads the whole grown window in chunks so the list never
@@ -124,13 +137,18 @@ export default function PaymentFilesPage() {
   const openDetail = useCallback(async (id: string) => {
     setDetailId(id)
     setDetail(null)
-    const res = await fetch(`/api/supplier-invoices/payment-batches/${id}`)
-    if (!res.ok) {
-      setDetailId(null)
-      return
+    setDetailError(null)
+    try {
+      const res = await fetch(`/api/supplier-invoices/payment-batches/${id}`)
+      if (!res.ok) {
+        setDetailError(res.status === 404 ? 'not_found' : 'failed')
+        return
+      }
+      const body = await res.json()
+      setDetail(body.data as BatchDetail)
+    } catch {
+      setDetailError('failed')
     }
-    const body = await res.json()
-    setDetail(body.data as BatchDetail)
   }, [])
 
   async function handleDownload(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at' | 'format'>) {
@@ -161,24 +179,27 @@ export default function PaymentFilesPage() {
   async function handleCancel() {
     if (!confirmCancelId || cancelling) return
     setCancelling(true)
+    setCancelError(null)
     try {
       const res = await fetch(
         `/api/supplier-invoices/payment-batches/${confirmCancelId}/cancel`,
         { method: 'POST' },
       )
-      const body = await res.json()
       if (!res.ok) {
-        toast({
-          title: t('cancel_failed_title'),
-          description: getErrorMessage(body, { locale }),
-          variant: 'destructive',
-        })
-      } else {
-        toast({ title: t('cancelled_toast') })
+        // The refusal stays in the dialog, where the action is, with the
+        // server's sentence: the file is not cancelled.
+        const body = await res.json().catch(() => null)
+        setCancelError(
+          getErrorMessage(body, { locale, statusCode: res.status, fallback: t('cancel_failed_title') }),
+        )
+        return
       }
+      toast({ title: t('cancelled_toast') })
       setConfirmCancelId(null)
       setDetailId(null)
       fetchBatches()
+    } catch (err) {
+      setCancelError(getErrorMessage(err, { locale, fallback: t('cancel_failed_title') }))
     } finally {
       setCancelling(false)
     }
@@ -191,10 +212,11 @@ export default function PaymentFilesPage() {
   async function handleMarkAllPaid() {
     if (!detail || markingAll) return
     setMarkingAll(true)
+    setMarkAllFailures(null)
     let booked = 0
     let skippedSettled = 0
     let skippedDuplicate = 0
-    let failed = 0
+    const failures: MarkPaidFailure[] = []
     try {
       for (const item of detail.items) {
         const invoice = item.invoice
@@ -202,6 +224,7 @@ export default function PaymentFilesPage() {
           skippedSettled += 1
           continue
         }
+        const label = `${item.payee_name} · ${invoice.supplier_invoice_number ?? item.reference}`
         try {
           const res = await fetch(`/api/supplier-invoices/${item.supplier_invoice_id}/mark-paid`, {
             method: 'POST',
@@ -215,26 +238,43 @@ export default function PaymentFilesPage() {
             booked += 1
             continue
           }
-          const body = await res.json()
+          const body = await res.json().catch(() => null)
           if (body?.error?.code === 'SI_PAID_LIKELY_DUPLICATE') skippedDuplicate += 1
-          else failed += 1
-        } catch {
-          failed += 1
+          else {
+            failures.push({
+              id: item.id,
+              label,
+              reason: getErrorMessage(body, {
+                locale,
+                statusCode: res.status,
+                context: 'supplier_invoice',
+              }),
+            })
+          }
+        } catch (err) {
+          failures.push({
+            id: item.id,
+            label,
+            reason: getErrorMessage(err, { locale, context: 'supplier_invoice' }),
+          })
         }
       }
 
+      // Every outcome is told, not only the first: duplicates and failures
+      // can happen in the same run. Each failed invoice and its reason stays
+      // listed in the sheet.
+      const failed = failures.length
+      const outcomes = [
+        skippedDuplicate > 0 ? t('mark_all_result_duplicates', { count: skippedDuplicate }) : null,
+        failed > 0 ? t('mark_all_result_failed', { count: failed }) : null,
+        skippedSettled > 0 ? t('mark_all_result_settled', { count: skippedSettled }) : null,
+      ].filter((line): line is string => line !== null)
       toast({
         title: t('mark_all_result_title', { booked }),
-        description:
-          skippedDuplicate > 0
-            ? t('mark_all_result_duplicates', { count: skippedDuplicate })
-            : failed > 0
-              ? t('mark_all_result_failed', { count: failed })
-              : skippedSettled > 0
-                ? t('mark_all_result_settled', { count: skippedSettled })
-                : undefined,
+        description: outcomes.length > 0 ? outcomes.join(' ') : undefined,
         variant: failed > 0 ? 'destructive' : undefined,
       })
+      if (failed > 0) setMarkAllFailures({ batchId: detail.id, items: failures })
       await fetchBatches()
       if (detailId) await openDetail(detailId)
     } finally {
@@ -376,11 +416,33 @@ export default function PaymentFilesPage() {
           if (!open) {
             setDetailId(null)
             setDetail(null)
+            setDetailError(null)
+            setMarkAllFailures(null)
           }
         }}
       >
         <SlideOverContent aria-describedby={undefined}>
-          {detail ? (
+          {detailError ? (
+            <>
+              <SlideOverHeader title={t('history_title')} />
+              <SlideOverBody>
+                {detailError === 'not_found' ? (
+                  <NotFoundState
+                    title={t('detail_not_found')}
+                    backHref="/supplier-invoices"
+                    backLabel={t('empty_action')}
+                  />
+                ) : (
+                  <LoadError
+                    title={t('detail_load_failed')}
+                    onRetry={() => {
+                      if (detailId) void openDetail(detailId)
+                    }}
+                  />
+                )}
+              </SlideOverBody>
+            </>
+          ) : detail ? (
             <>
               <SlideOverHeader
                 kicker={formatDate(detail.created_at)}
@@ -436,6 +498,20 @@ export default function PaymentFilesPage() {
                     {formatCurrency(detail.total_amount)}
                   </span>
                 </div>
+                {markAllFailures?.batchId === detail.id && markAllFailures.items.length > 0 && (
+                  <AttnLine>
+                    <p>{t('mark_all_failures_line', { count: markAllFailures.items.length })}</p>
+                    <ul className="mt-1 space-y-0.5" data-ph-mask="">
+                      {markAllFailures.items.map((failure) => (
+                        <li key={failure.id}>
+                          <span className="tabular-nums text-strong">{failure.label}</span>
+                          {': '}
+                          {failure.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </AttnLine>
+                )}
                 {detail.status === 'created' && detailUnsettled > 0 && (
                   <p className="text-xs text-muted-foreground">{t('mark_all_hint')}</p>
                 )}
@@ -475,7 +551,10 @@ export default function PaymentFilesPage() {
       <Dialog
         open={confirmCancelId != null}
         onOpenChange={(open) => {
-          if (!open && !cancelling) setConfirmCancelId(null)
+          if (!open && !cancelling) {
+            setConfirmCancelId(null)
+            setCancelError(null)
+          }
         }}
       >
         <DialogContent size="confirm">
@@ -484,9 +563,17 @@ export default function PaymentFilesPage() {
             <DialogDescription>{t('cancel_confirm_body')}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
+            {cancelError && (
+              <DialogConsequence role="alert" className="text-destructive">
+                {cancelError}
+              </DialogConsequence>
+            )}
             <Button
               variant="ghost"
-              onClick={() => setConfirmCancelId(null)}
+              onClick={() => {
+                setConfirmCancelId(null)
+                setCancelError(null)
+              }}
               disabled={cancelling}
             >
               {t('cancel_confirm_abort')}

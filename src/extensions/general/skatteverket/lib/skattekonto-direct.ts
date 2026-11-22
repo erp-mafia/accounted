@@ -12,6 +12,7 @@ import {
 } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import type { SkattekontoLedgerTwin } from '@/types/skatteverket'
+import { sameTaxEventAccounts } from '@/lib/transactions/skattekonto-tax-accounts'
 
 /**
  * Is a Skatteverket event already in the ledger WITHOUT the skattekonto
@@ -100,10 +101,17 @@ function monthEnd(month: string): string {
   return addDaysIso(next, -1)
 }
 
+/**
+ * The entry's net on `account` and every account that holds the same event
+ * (2510 and 2518 for F-skatt, sameTaxEventAccounts): a bank line booked to
+ * one before the seed rule moved still holds a row the rule now books to
+ * the other.
+ */
 function netOn(entry: DirectCandidateEntry, account: string): number {
+  const accounts = sameTaxEventAccounts(account)
   let sum = 0
   for (const l of entry.lines) {
-    if (l.account_number === account) sum += ore(l.debit_amount) - ore(l.credit_amount)
+    if (accounts.includes(l.account_number)) sum += ore(l.debit_amount) - ore(l.credit_amount)
   }
   return sum
 }
@@ -213,12 +221,14 @@ async function searchCluster(
   // outside the month (skattekonto-cancelled-entries.ts).
   const from = addDaysIso(monthStart(months[0]), -CANCELLATION_LOOKAROUND_DAYS)
   const to = addDaysIso(monthEnd(months[months.length - 1]), CANCELLATION_LOOKAROUND_DAYS)
-  const accounts = Array.from(new Set(probes.map((p) => p.counter.account)))
+  const accounts = Array.from(new Set(probes.flatMap((p) => sameTaxEventAccounts(p.counter.account))))
   const amountsByAccount = new Map<string, Set<number>>()
   for (const p of probes) {
-    const set = amountsByAccount.get(p.counter.account) ?? new Set<number>()
-    set.add(Math.abs(ore(p.counter.net)))
-    amountsByAccount.set(p.counter.account, set)
+    for (const a of sameTaxEventAccounts(p.counter.account)) {
+      const set = amountsByAccount.get(a) ?? new Set<number>()
+      set.add(Math.abs(ore(p.counter.net)))
+      amountsByAccount.set(a, set)
+    }
   }
 
   let lines: HeadLine[]

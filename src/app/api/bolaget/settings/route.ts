@@ -15,7 +15,7 @@ const SettingsSchema = z.object({ is_avstamningsbolag: z.boolean() }).strict()
 export const PATCH = withRouteContext(
   'bolaget.settings_update',
   async (request, ctx) => {
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, SettingsSchema)
     if (!validation.success) return validation.response

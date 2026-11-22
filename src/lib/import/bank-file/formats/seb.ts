@@ -64,7 +64,12 @@ export const sebFormat: BankFileFormat = {
     const hasBookingDate = /bokf(ö|o)ringsda(g|tum)/.test(firstLine)
     const hasSebSecondary =
       /valuta(dag|datum)/.test(firstLine) || firstLine.includes('verifikationsnummer')
-    if (hasBookingDate && hasSebSecondary) return true
+    // Detecting is a promise that parse() can read the file, so the amount
+    // column has to be there too: Bokföringsdag plus Valutadag is not unique
+    // to SEB. A header with those two and no Belopp is SEB's only when it
+    // passes the Transaktioner test below; any other falls through to the
+    // next detector or the manual column mapping.
+    if (hasBookingDate && hasSebSecondary && firstLine.includes('belopp')) return true
 
     const headers = firstLine.split(';').map((h) => h.trim().replace(/"/g, ''))
     return isTransaktionerHeader(headers)

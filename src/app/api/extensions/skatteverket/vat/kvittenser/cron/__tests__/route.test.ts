@@ -471,7 +471,7 @@ describe('VAT kvittenser cron', () => {
     expect(body.errors).toBe(1)
     expect(body.results[0]).toMatchObject({
       status: 'error',
-      error: 'Något gick fel. Försök igen.',
+      error: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
     })
     // Into the run's report by name, never by message; 08:30 opens no
     // six-hour window, so it is a warning (it was an error every run).

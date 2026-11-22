@@ -61,6 +61,7 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { defaultVatRateForTreatment, normalizeVatRateToDecimal, treatmentDeductsInputVat } from '@/lib/vat/supplier-invoice-line-checks'
 import { allocateDocumentVat } from '@/lib/vat/document-vat'
+import { rateForStoredRowVat } from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 import { suggestExpenseBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { netVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre } from '@/lib/money'
@@ -417,6 +418,7 @@ export async function convertInboxItemToSupplierInvoice(
   if (!documentVat.ok) return { ok: false, code: documentVat.code, details: documentVat.details }
   documentVat.lineVat.forEach((lineVat, index) => {
     pricedItems[index].vat_amount = lineVat
+    pricedItems[index].vat_rate = rateForStoredRowVat(pricedItems[index].line_total, pricedItems[index].vat_rate, lineVat)
   })
 
   // Icke momsregistrerad (feedback seq 708521): amounts arrive excluding VAT

@@ -101,6 +101,16 @@ describe('selectDirectHolders', () => {
     expect(heldBy(result, 'charge')).toEqual(['b172'])
   })
 
+  // The seed rule moved debiterad preliminärskatt from 2510 to 2518 Betald
+  // F-skatt (migration 20261120150000); a bank line booked to 2510 before
+  // the move still holds the row the rule now books to 2518.
+  it('finds a bank line booked to 2510 for a row the rule now books to 2518', () => {
+    const bank = entry('b180', '2026-11-03', [K('1930', 1779), D('2510', 1779)], { source_type: 'bank_transaction' })
+    const result = select([probe('charge', '2026-11-12', '2518', 1779)], [bank])
+    expect(heldBy(result, 'charge')).toEqual(['b180'])
+    expect(heldBy(select([probe('moms', '2026-11-12', '2650', 1779)], [bank]), 'moms')).toEqual([])
+  })
+
   it('never reaches the neighbouring month: a fixed monthly amount recurs', () => {
     // March's arbetsgivaravgifter equal February's to the krona; only the
     // March verifikat may hold the March row.
@@ -236,7 +246,7 @@ describe('findDirectLedgerHolders', () => {
         ]),
       )
       const accounts = recorded.find(([m, a]) => m === 'in' && a[0] === 'account_number')?.[1][1] as string[]
-      expect(accounts.sort()).toEqual(['1930', '2510', '2650', '2710', '2731', '8314'])
+      expect(accounts.sort()).toEqual(['1930', '2510', '2518', '2650', '2710', '2731', '8314'])
       return asHeadLines([FEBRUARY, other], accounts) as never
     })
     vi.mocked(fetchLinesByEntryIds).mockImplementation(async (_s, ids) => {

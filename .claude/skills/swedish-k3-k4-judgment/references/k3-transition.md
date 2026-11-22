@@ -2,6 +2,15 @@
 
 Run a K2→K3 switch as a guided, human-approved workflow. The agent collects data, drafts the ingångsbalansräkning and the disclosures; a human approves the transition date, the component split, the deferred tax and every relief choice.
 
+## Contents
+
+- Version control
+- What changed with BFNAR 2025:3 (decided 16 June 2025)
+- Kapitel 35: first-time application
+- Worked example: fastighetsföretag moving to K3 for 2026 (BFN example)
+- Data to collect in the year before the switch
+- Common switching errors (2026)
+
 ## Version control
 
 BFN maintains several live K3 versions (BFN, "Vilken version av K-regelverken ska jag tillämpa?", 26 Aug 2025):

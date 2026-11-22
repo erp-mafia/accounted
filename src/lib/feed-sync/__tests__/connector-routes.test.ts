@@ -23,6 +23,7 @@ import {
   feedBackfillRoute,
   feedConnectorRoutes,
   feedDisconnectRoute,
+  feedStatusRoute,
   feedSyncRoute,
   feedTransactionSyncRoute,
   type FeedConnectorSpec,
@@ -97,6 +98,36 @@ describe('feedConnectorRoutes', () => {
       'POST /transaction-sync',
       'DELETE /disconnect',
     ])
+  })
+})
+
+describe('GET /status', () => {
+  async function status(rows: unknown[]) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const res = await feedStatusRoute(spec()).handler(request('GET'), context(supabase))
+    return (await res.json()).connection
+  }
+
+  it('shows the active connection over the failed attempts before it', async () => {
+    const connection = await status([
+      { id: 'retry', status: 'error', connected_at: null },
+      { id: 'live', status: 'active', connected_at: '2026-11-01T10:00:00.000Z' },
+    ])
+    expect(connection.id).toBe('live')
+  })
+
+  it('shows a disconnected connection so the panel can say so', async () => {
+    const connection = await status([{ id: 'gone', status: 'revoked', connected_at: '2026-11-01T10:00:00.000Z' }])
+    expect(connection.id).toBe('gone')
+  })
+
+  it('does not bring back a failed attempt the user removed (crm#2056)', async () => {
+    const connection = await status([
+      { id: 'removed', status: 'revoked', connected_at: null },
+      { id: 'older', status: 'error', connected_at: null },
+    ])
+    expect(connection).toBeNull()
   })
 })
 

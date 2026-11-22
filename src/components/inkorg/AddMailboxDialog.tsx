@@ -26,7 +26,7 @@ import type { SyncResult } from '@/lib/digital-mailboxes/receive'
 import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { digitalMailboxRowView, type DigitalMailboxRowView } from '@/lib/inkorg/digital-mailbox-row'
+import { digitalMailboxRowView, type DigitalMailboxRowView, type DigitalMailboxSending } from '@/lib/inkorg/digital-mailbox-row'
 import { mailboxEntries, type MailboxDoor } from '@/lib/inkorg/mailboxes'
 import { formatDateTime } from '@/lib/utils'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
@@ -593,9 +593,14 @@ function useDigitalMailboxActions(provider: DigitalMailboxProviderId, { onConnec
     setBusy(null)
     if (!answer.ok) {
       toast({ title: t('digital_sending_failed'), description: answer.message, variant: 'destructive' })
+      // A declined access request is recorded on the connection: the row says so from now on.
+      if (answer.code === 'DIGITAL_MAILBOX_SENDER_REQUEST_REJECTED') reload()
       return
     }
     onConnection(answer.data.connection)
+    if (on && answer.data.connection?.send_request === 'pending') {
+      toast({ title: t('digital_sending_pending_title', { provider: name }), description: t('digital_sending_pending', { provider: name }) })
+    }
   }
 
   return { t, name, locale, toast, busy, setBusy, sync, disconnect, setSending, dialogProps }
@@ -650,32 +655,46 @@ function DigitalNotes({ provider, view }: { provider: DigitalMailboxProviderId; 
   )
 }
 
-/** The quiet second line: the company as a sender of invoices and payslips through the provider. */
+/**
+ * The quiet second line: the company as a sender of invoices and payslips
+ * through the provider. While the provider has an access request to decide
+ * (the company already sends through another service) the switch stays on,
+ * since that is what was asked for, and says it waits; switching it off
+ * drops the request.
+ */
 function SendingLine({
   provider,
-  on,
+  state,
   busy,
   onChange,
 }: {
   provider: DigitalMailboxProviderId
-  on: boolean
+  state: DigitalMailboxSending
   busy: boolean
   onChange: (on: boolean) => void
 }) {
   const t = useTranslations('inkorg')
   const id = useId()
+  const name = t(`mailbox_${provider}_name`)
+  const note =
+    state === 'pending' ? t('digital_sending_pending', { provider: name })
+    : state === 'rejected' ? t('digital_sending_rejected', { provider: name })
+    : null
   return (
-    <div className="flex items-center justify-between gap-4">
-      <label htmlFor={id} className="text-xs text-muted-foreground">
-        {t('digital_sending')}
-      </label>
-      <Switch
-        id={id}
-        checked={on}
-        disabled={busy}
-        onCheckedChange={onChange}
-        aria-label={t('digital_sending_aria', { provider: t(`mailbox_${provider}_name`) })}
-      />
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-4">
+        <label htmlFor={id} className="text-xs text-muted-foreground">
+          {t('digital_sending')}
+        </label>
+        <Switch
+          id={id}
+          checked={state === 'active' || state === 'pending'}
+          disabled={busy}
+          onCheckedChange={onChange}
+          aria-label={t('digital_sending_aria', { provider: name })}
+        />
+      </div>
+      {note && (state === 'rejected' ? <AttnLine>{note}</AttnLine> : <p className="text-xs text-muted-foreground">{note}</p>)}
     </div>
   )
 }
@@ -747,7 +766,7 @@ export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
   const sending = view.sending ? (
     <SendingLine
       provider="kivra"
-      on={view.sending === 'active'}
+      state={view.sending}
       busy={busy === 'sending'}
       onChange={(on) => void actions.setSending(on)}
     />
@@ -800,7 +819,7 @@ export function BilloRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
   const sending = view.sending ? (
     <SendingLine
       provider="billo"
-      on={view.sending === 'active'}
+      state={view.sending}
       busy={busy === 'sending'}
       onChange={(on) => void actions.setSending(on)}
     />

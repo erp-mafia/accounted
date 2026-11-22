@@ -35,6 +35,14 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Invoices: zero and negative quantities (2026-11)
+
+- **Behaviour change: an invoice line's \`quantity\` may be 0 or negative** (#3553, 2026-11-20), on \`POST /invoices\`, \`PATCH /invoices/{id}\` and the MCP invoice tools, as \`unit_price\` already could be. A 0 x 0 line carries information on a Peppol invoice, where text rows do not travel, and a negative quantity at a positive price is a deduction Peppol accepts (BR-27 refuses only a negative item price). A line with a skattereduktion (\`deduction_type\` rot, rut or gron_teknik) still needs a positive quantity, since the claim counts only positive lines; a line linked to a sales order line still refuses a negative quantity; and \`quantity\` must still be a number. **Before**, a quantity of 0 or less was refused with \`400 VALIDATION_ERROR\`.
+
+### General ledger: a date window (2026-11)
+
+- **New: \`from_date\` and \`to_date\` on \`GET /reports/general-ledger\`** (2026-11-19), both optional, each YYYY-MM-DD inside the fiscal period: the ledger covers that window. Lines before \`from_date\` roll into each account's \`opening_balance\`, lines after \`to_date\` are left out, and \`period\` in the answer is the window. They combine with \`account_from\` / \`account_to\` and with \`dim_no\` + \`dim_code\`. **Behaviour change:** a window outside the fiscal period, a \`from_date\` after \`to_date\` or a value that is not a date answers \`400 VALIDATION_ERROR\` (\`details.fields\` names \`from_date\` and \`to_date\`). **Before**, the two parameters were not applied: the answer was the whole period, with both named in \`X-Ignored-Query-Params\`. The API version date is unchanged.
+
 ### Errors: docs_url links the code's catalogue entry (2026-11)
 
 - **Fix: \`docs_url\` on every error response is the code's entry in the error catalogue** (2026-11-19), \`https://docs.accounted.se/errors#<code>\` with the code in lowercase (\`PERIOD_LOCKED\` is \`#period_locked\`). **Before**, it was \`https://app.accounted.se/docs/api/errors/<CODE>\`, which forwarded to a page per code that does not exist (404). A stored link in the old form now forwards to the same entry. \`code\` and every other field are unchanged. The API version date is unchanged.

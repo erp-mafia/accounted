@@ -12,7 +12,8 @@ function makeDeclaration(opts: {
   rutor?: Partial<NEDeclarationRutor>
   companyInfo?: Partial<NEDeclaration['companyInfo']>
   fiscalYear?: Partial<NEDeclaration['fiscalYear']>
-  extra?: Partial<Pick<NEDeclaration, 'bookedResult' | 'sruBlockers' | 'warnings'>>
+  extra?: Partial<Pick<NEDeclaration, 'bookedResult' | 'sruBlockers' | 'warnings' | 'balans'>>
+  sida2?: { R13?: number; R14?: number }
 } = {}): NEDeclaration {
   const rutor: NEDeclarationRutor = {
     R1: 500000, R2: 0, R3: 0, R4: 1200,
@@ -51,6 +52,13 @@ function makeDeclaration(opts: {
     warnings: [],
     bookedResult: rutor.R11,
     sruBlockers: [],
+    balans: { B1: 0, B2: 0, B3: 0, B4: 0, B5: 0, B6: 0, B7: 0, B8: 0, B9: 0, B10: 0, B11: 0, B12: 0, B13: 0, B14: 0, B15: 0, B16: 0 },
+    balansBreakdown: Object.fromEntries(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15', 'B16'].map((b) => [b, { accounts: [], total: 0 }])) as never,
+    sida2: { R12: rutor.R11, R13: opts.sida2?.R13 ?? 0, R14: opts.sida2?.R14 ?? 0 },
+    sida2Breakdown: {
+      R13: { items: [], total: opts.sida2?.R13 ?? 0 },
+      R14: { items: [], total: opts.sida2?.R14 ?? 0 },
+    },
     ...opts.extra,
   }
 }
@@ -244,5 +252,50 @@ describe('NE-bilaga SRU generator', () => {
         getZipFilename(makeDeclaration({ fiscalYear: { start: '2024-05-01', end: '2025-04-30' } }))
       ).toBe('NE_SRU_199001019802_2025.zip')
     })
+  })
+})
+
+describe('NE-bilaga SRU: balansräkning and R12', () => {
+  const balans = {
+    B1: 0, B2: 0, B3: 0, B4: 48_000, B5: 0, B6: 0, B7: 25_000, B8: 3_000, B9: 81_500,
+    B10: -16_500, B11: 0, B12: 0, B13: 150_000, B14: 0, B15: 9_000, B16: 15_000,
+  }
+
+  it('files B1-B16 before the räkenskapsschema, zero rows left out, a negative B10 with its sign', () => {
+    const { blanketterSru } = generateNESRUSubmission(makeDeclaration({ extra: { balans } }))
+    const uppgifter = blanketterSru.split(/\r?\n/).filter((l) => l.startsWith('#UPPGIFT '))
+    expect(uppgifter).toContain('#UPPGIFT 7212 48000')
+    expect(uppgifter).toContain('#UPPGIFT 7250 25000')
+    expect(uppgifter).toContain('#UPPGIFT 7280 81500')
+    expect(uppgifter).toContain('#UPPGIFT 7300 -16500')
+    expect(uppgifter).toContain('#UPPGIFT 7380 150000')
+    expect(uppgifter).not.toContain('#UPPGIFT 7381 0')
+    expect(blanketterSru).not.toMatch(/#UPPGIFT 7200 /)
+    const index = (code: string) => uppgifter.findIndex((l) => l.startsWith(`#UPPGIFT ${code} `))
+    expect(index('7383')).toBeLessThan(index('7400'))
+    expect(validateNeBlanketterSru(blanketterSru).errors).toEqual([])
+  })
+
+  it('carries the booked result to sida 2 as R12, after R11', () => {
+    const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
+    expect(blanketterSru).toContain('#UPPGIFT 7440 198200')
+    expect(blanketterSru).toContain('#UPPGIFT 7600 198200')
+    expect(blanketterSru.indexOf('#UPPGIFT 7600')).toBeGreaterThan(blanketterSru.indexOf('#UPPGIFT 7440'))
+  })
+
+  it('files R13 and R14 after R12 as positive amounts, and leaves each out at zero', () => {
+    const { blanketterSru } = generateNESRUSubmission(makeDeclaration({ sida2: { R13: 4_120, R14: 49 } }))
+    expect(blanketterSru).toContain('#UPPGIFT 7601 4120')
+    expect(blanketterSru).toContain('#UPPGIFT 7700 49')
+    expect(blanketterSru.indexOf('#UPPGIFT 7601')).toBeGreaterThan(blanketterSru.indexOf('#UPPGIFT 7600'))
+    expect(blanketterSru.indexOf('#UPPGIFT 7700')).toBeGreaterThan(blanketterSru.indexOf('#UPPGIFT 7601'))
+    const none = generateNESRUSubmission(makeDeclaration()).blanketterSru
+    expect(none).not.toContain('#UPPGIFT 7601')
+    expect(none).not.toContain('#UPPGIFT 7700')
+  })
+
+  it('files a loss on R12 with its sign and leaves R12 out at zero', () => {
+    expect(generateNESRUSubmission(makeDeclaration({ rutor: { R1: 0, R4: 0, R11: -5_000 } })).blanketterSru).toContain('#UPPGIFT 7600 -5000')
+    expect(generateNESRUSubmission(makeDeclaration({ rutor: { R1: 0, R4: 0, R5: 0, R6: 0, R8: 0, R10: 0, R11: 0 } })).blanketterSru).not.toContain('#UPPGIFT 7600')
   })
 })

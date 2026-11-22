@@ -17,14 +17,15 @@ import { closeSupportDock, mountSupportDock, openSupportDock, useSupportDock } f
  * since the layout that holds it does not change between them.
  *
  * Every door to the assistant on the page opens this one panel
- * (lib/support/dock.ts). `pill` adds the floating button that opens it, for
- * a person who had the built-in assistant's button in this corner.
+ * (lib/support/dock.ts), and the floating button in the corner is one of
+ * them: for everyone, until a person hides it (`pillHidden`, their own
+ * choice for this button, brought back under Inställningar > Ditt konto).
  *
  * Mounted by the dashboard layout for a company with the support assistant
  * and without the built-in chat: the chat's own button and sheet hold the
  * same corner while a company still has them.
  */
-export function SupportDock({ pill, pillHidden = false }: { pill: boolean; pillHidden?: boolean }) {
+export function SupportDock({ pillHidden = false }: { pillHidden?: boolean }) {
   const dock = useSupportDock()
   const companyId = useCompanyOptional()?.company?.id
 
@@ -32,7 +33,7 @@ export function SupportDock({ pill, pillHidden = false }: { pill: boolean; pillH
 
   return (
     <>
-      {pill && <SupportAskTrigger hidden={pillHidden} open={dock.open} onOpen={() => openSupportDock()} />}
+      <SupportAskTrigger hidden={pillHidden} open={dock.open} onOpen={() => openSupportDock()} />
       {dock.open && (
         <SupportLink
           // A conversation never follows the user into another company.

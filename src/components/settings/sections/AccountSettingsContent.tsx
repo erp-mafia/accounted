@@ -32,7 +32,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 import { PalettePicker } from '@/components/settings/PalettePicker'
 import { usePalette } from '@/components/providers/PaletteProvider'
-import { useAssistantChatEnabled } from '@/contexts/CompanyContext'
+import { useAssistantChatEnabled, useCompanyOptional } from '@/contexts/CompanyContext'
 import type { Palette } from '@/lib/theme/palettes'
 
 export function AccountSettingsContent() {
@@ -43,6 +43,10 @@ export function AccountSettingsContent() {
   const [mounted, setMounted] = useState(false)
   const hasCalendarExtension = ENABLED_EXTENSION_IDS.has('calendar')
   const assistantChatEnabled = useAssistantChatEnabled()
+  // Without the built-in chat the corner holds the support's button, where
+  // the company has the support assistant (the dashboard layout's rule).
+  const companyContext = useCompanyOptional()
+  const supportButton = !assistantChatEnabled && companyContext?.supportAssistant === true
   const { toast } = useToast()
   const activeLocale = useLocale() as Locale
   const tCommon = useTranslations('common')
@@ -327,9 +331,10 @@ export function AccountSettingsContent() {
           />
         </SettingsRow>
 
-        {/* The floating assistant button: shown or hidden for this person.
-            No row where the built-in chat is switched off: there is no button. */}
-        {assistantChatEnabled && <FabVisibilityRow />}
+        {/* The floating button in the corner, shown or hidden for this
+            person: the built-in assistant's, or the support's where the
+            company has no chat. No row where the corner has neither. */}
+        {(assistantChatEnabled || supportButton) && <FabVisibilityRow support={supportButton} />}
 
         {/* Install as app: renders nothing when already running installed */}
         <InstallAppSection />

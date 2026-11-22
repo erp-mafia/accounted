@@ -53,7 +53,7 @@ import {
   listExistingPeriodiseringsfonder,
   SchablonintaktRateNotConfiguredError,
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
-import { buildDispositionsProposal, dividendConfirmationWarning } from '../dispositions-proposal-builder'
+import { bookedTaxCorrection, buildDispositionsProposal, dividendConfirmationWarning } from '../dispositions-proposal-builder'
 import type { TaxAdjustmentItem, TaxAdjustmentSnapshot } from '../types'
 
 function supabaseFor(period: { period_start: string; period_end: string }, entityType = 'aktiebolag') {
@@ -286,6 +286,20 @@ describe('buildDispositionsProposal: the result the declaration reads', () => {
     expect(result.completedDispositions).toEqual([
       expect.objectContaining({ kind: 'bolagsskatt', amount: 20_600, status: 'needs_correction' }),
     ])
+  })
+
+  it('hands the same verdict to a caller that closes the year without the wizard', async () => {
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 60_000, beforeTax: 60_000 })
+    vi.mocked(getBookedBolagsskatt).mockResolvedValue(20_600)
+    vi.mocked(calculateBolagsskatt).mockReturnValue({ ...bolagsskattProposal, amount: 12_360 })
+    const supabase = supabaseFor({ period_start: '2025-01-01', period_end: '2025-12-31' })
+
+    const correction = await bookedTaxCorrection(supabase, 'company-1', 'period-1')
+
+    expect(correction).toMatch(/^Bokförd skatt är 20\s600\skr/)
+
+    vi.mocked(getBookedBolagsskatt).mockResolvedValue(12_360)
+    expect(await bookedTaxCorrection(supabase, 'company-1', 'period-1')).toBeNull()
   })
 })
 

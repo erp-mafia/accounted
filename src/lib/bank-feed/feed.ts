@@ -531,7 +531,7 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
         throw Object.assign(new Error('Bank account configuration changed before sync; reload the connection'), { code: 'PT409' })
       }
       const result = await syncOpenPaymentsAccount(supabase, {
-        companyId, userId, connectionId, account, bankRoute, party: party.party as AisParty,
+        companyId, userId, connectionId, account, bankRoute, party: party.party as AisParty, bankName: connection.bank_name,
         fromDate: accountFrom.get(account.uid) ?? window.fromDate, toDate: window.toDate, ingest: input.ingest, connect, now,
         options: { ...(rawInsertOnly ? { rawInsertOnly: true } : {}), ...(sieOverlap ? { skipAutoCategorization: true } : {}) },
         ...(includeEnrichment ? { includeEnrichment: true } : {}),

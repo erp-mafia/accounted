@@ -293,7 +293,7 @@ describe('mcp.tool_called telemetry', () => {
     const event = await eventPromise
     // Unchanged: the Swedish user-facing message, which for VALIDATION_ERROR
     // is the registry default and says nothing about the cause.
-    expect(event.errorMessage).toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    expect(event.errorMessage).toBe('Några uppgifter stämmer inte. Kontrollera fälten och försök igen.')
     // New: what actually went wrong, enough to fix the caller from the log
     // alone without reading the source.
     expect(event.errorDetail).toContain('totally_not_a_parameter')

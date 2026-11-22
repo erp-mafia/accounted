@@ -509,12 +509,15 @@ function prepareInvoice(input: PeppolInvoiceInput):
   const taxGroups = new Map<number, { taxableAmount: number }>()
   productItems.forEach((item, index) => {
     const lineField = `invoice.items.${index}`
-    if (!hasText(item.description) || !Number.isFinite(item.quantity) || item.quantity <= 0 ||
+    // A zero or negative quantity is valid (#3553): EN 16931 limits only the
+    // item net price (BR-27, never negative), so a deduction is a negative
+    // quantity at a positive price, and a 0 x 0 row carries information.
+    if (!hasText(item.description) || !Number.isFinite(item.quantity) ||
         !Number.isFinite(item.unit_price) || item.unit_price < 0 || !Number.isFinite(item.line_total)) {
       issues.push(validationIssue(
         'INVOICE_LINE_INVALID', lineField,
-        `Fakturarad ${index + 1} måste ha beskrivning, positivt antal och giltiga belopp.`,
-        `Invoice line ${index + 1} must have a description, positive quantity, and valid amounts.`,
+        `Fakturarad ${index + 1} måste ha beskrivning, antal, ett pris som inte är negativt och giltiga belopp.`,
+        `Invoice line ${index + 1} must have a description, a quantity, a price that is not negative, and valid amounts.`,
       ))
     }
     if (!UNIT_CODES[item.unit]) {

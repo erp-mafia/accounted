@@ -59,6 +59,14 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date, orgNumbe
   if (declaration.ink2['7114'] > 0) {
     lines.push(`#UPPGIFT 7114 ${formatAmount(declaration.ink2['7114'])}`)
   }
+  // Underlag för särskild löneskatt på pensionskostnader (1.4) and a
+  // negative underlag (1.5).
+  if (declaration.ink2['7132'] > 0) {
+    lines.push(`#UPPGIFT 7132 ${formatAmount(declaration.ink2['7132'])}`)
+  }
+  if (declaration.ink2['7133'] > 0) {
+    lines.push(`#UPPGIFT 7133 ${formatAmount(declaration.ink2['7133'])}`)
+  }
 
   lines.push('#BLANKETTSLUT')
 
@@ -100,9 +108,12 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date, orgNumbe
     '7650',
     '7750',
     '7651',
+    '7652',
     '7653',
+    '7753',
     '7754',
     '7654',
+    '7673',
     '7666',
     '7765',
     '7763',
@@ -125,9 +136,26 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date, orgNumbe
 }
 
 /**
+ * The declaration has sruBlockers: the books or the mapping must be corrected
+ * before a file can exist, so every door answers it as a 422, not a
+ * generation failure (the NE-bilaga's NESruBlockedError, the same rule).
+ */
+export class Ink2SruBlockedError extends Error {
+  constructor(readonly blockers: string[]) {
+    super(blockers.join(' '))
+    this.name = 'Ink2SruBlockedError'
+  }
+}
+
+/**
  * Generate complete SRU submission (INFO.SRU + BLANKETTER.SRU)
  */
 export function generateSRUSubmission(declaration: INK2Declaration): SRUSubmission {
+  // A form that does not tie to the books would file figures that are not
+  // the company's. Every SRU door builds here, so this refuses them all.
+  if (declaration.sruBlockers.length > 0) {
+    throw new Ink2SruBlockedError(declaration.sruBlockers)
+  }
   const now = new Date()
   const info = declaration.companyInfo
   const identity12 = toRedovisare12(info.orgNumber ?? '', info.entityType)

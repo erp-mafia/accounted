@@ -9,7 +9,7 @@ import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowDownTrayIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatAmount } from '@/lib/utils'
@@ -173,10 +173,8 @@ export function KassaflodesanalysClient() {
           <Skeleton className="h-32" />
         </LateReveal>
       ) : !selectedPeriod ? (
-        <EmptyState
-          title={t('cash_flow_choose_year_title')}
-          description={t('cash_flow_choose_year_description')}
-        />
+        // Ready with no year: the company has no started räkenskapsår to pick.
+        <EmptyNoFiscalYear />
       ) : isLoadingReport ? (
         <LateReveal className="space-y-4">
           <Skeleton className="h-48" />

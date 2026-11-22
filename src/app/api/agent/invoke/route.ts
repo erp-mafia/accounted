@@ -104,12 +104,16 @@ export async function POST(request: Request) {
 
   const intent = getIntent(body.intent_id)
   if (!intent) {
+    // Also the answer for a stored conversation whose intent is retired (the
+    // onboarding interview, 'onboarding.intake'): it still opens and reads on
+    // /chat/[id], and a new turn in it stops here, before anything is read or
+    // written.
     return NextResponse.json({ error: `Unknown intent: ${body.intent_id}` }, { status: 400 })
   }
 
   // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED) with no
   // company keeping it: no turn runs, for any intent, and nothing is read
-  // first. The onboarding interview (onboarding.intake) goes with the rest.
+  // first.
   if (assistantChatOffForEveryone(todayIsoStockholm())) {
     return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
   }
@@ -136,7 +140,7 @@ export async function POST(request: Request) {
   // The chat switched off with some companies keeping it
   // (ASSISTANT_CHAT_COMPANY_IDS): a member of a company that is not one of
   // them gets the same answer as when it is off for everyone, for every
-  // intent, the onboarding interview included.
+  // intent.
   if (!assistantChatEnabledFor(companyId, todayIsoStockholm())) return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
 
   const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
@@ -156,8 +160,8 @@ export async function POST(request: Request) {
     )
   }
 
-  // Resolve the conversation BEFORE any side effect below (the onboarding
-  // intake stamp): a request that is about to be rejected must not write.
+  // Resolve the conversation BEFORE any side effect below: a request that is
+  // about to be rejected must not write.
   let conversationId = body.conversation_id ?? null
   if (conversationId) {
     // A resumed conversation id comes straight from the client, so ownership
@@ -190,30 +194,6 @@ export async function POST(request: Request) {
         { error: 'Konversationen hör till ett annat sammanhang.' },
         { status: 400 },
       )
-    }
-  }
-
-  // onboarding.intake completion signal: once the user has actually
-  // engaged (typed a real reply, not the auto-fired greeting prompt that
-  // mounts the chat), stamp intake_completed_at on the profile so re-entry
-  // logic and opportunistic follow-up logic in other intents can tell the
-  // intake happened. Idempotent: the IS NULL guard ensures we never
-  // overwrite the first engagement timestamp. Best-effort: failure here
-  // doesn't break the chat; the next user turn retries.
-  if (
-    body.intent_id === 'onboarding.intake' &&
-    typeof body.user_message === 'string' &&
-    body.user_message.trim().length > 0 &&
-    body.user_message_hidden !== true
-  ) {
-    try {
-      await supabase
-        .from('agent_profiles')
-        .update({ intake_completed_at: new Date().toISOString() })
-        .eq('company_id', companyId)
-        .is('intake_completed_at', null)
-    } catch {
-      // ignored: see comment above
     }
   }
 
