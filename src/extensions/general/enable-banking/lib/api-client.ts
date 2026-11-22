@@ -317,6 +317,11 @@ const SESSION_DEAD_NEEDLES = [
  */
 export function isSessionExpiredResponse(status: number, body: string): boolean {
   if (status !== 401 && status !== 403) return false
+  return namesDeadSession(body)
+}
+
+/** Whether an error body carries any SESSION_DEAD_NEEDLES signal, whatever the status. */
+function namesDeadSession(body: string): boolean {
   const normalized = body.toUpperCase().replace(/[^A-Z0-9]/g, '')
   return SESSION_DEAD_NEEDLES.some(needle => normalized.includes(needle))
 }
@@ -945,11 +950,13 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
   if (!response.ok) {
     const body = await response.text()
-    // A session Enable Banking has already dropped (404, or a 401/403 naming
-    // an expired/closed session) is the expected answer when we revoke a
-    // connection whose PSD2 consent ran out: every caller catches and carries
-    // on, so it does not belong in the error panel.
+    // A session Enable Banking has already dropped (404, a 401/403 naming
+    // an expired/closed session, or the 400 CLOSED_SESSION it answers a
+    // DELETE of a session that is already closed) is the expected answer
+    // when we revoke a connection whose PSD2 consent ran out: every caller
+    // catches and carries on, so it does not belong in the error panel.
     const alreadyGone = response.status === 404 || isSessionExpiredResponse(response.status, body)
+      || (response.status === 400 && namesDeadSession(body))
     const logLine = {
       status: response.status,
       statusText: response.statusText,
