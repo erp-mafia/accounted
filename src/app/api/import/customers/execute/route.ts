@@ -27,13 +27,17 @@ import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-term
 export const maxDuration = 300
 
 /**
- * How far into the request the draft sync may still run before the import
- * run is recorded. Past it the run is recorded first, so a slow sync can never
- * cost the import its undo; the customers the sync had not reached are synced
- * after the record, and the undo keeps those as used since the import. A
- * minute short of maxDuration leaves the record and that sync their room.
+ * How far into the request the draft sync may run ahead of the run record,
+ * and how far at all. Past the first the run is recorded first, so a slow
+ * sync can never cost the import its undo; the customers the sync had not
+ * reached are synced after the record, and the undo keeps those as used since
+ * the import. Past the second nothing new is started, so the answer goes out
+ * before the platform ends the request (a 504 would make the wizard send the
+ * batch again, and that attempt changes nothing and so syncs nothing); the
+ * customers still left are logged.
  */
 const DRAFT_SYNC_BEFORE_RECORD_MS = (maxDuration - 60) * 1000
+const DRAFT_SYNC_END_MS = (maxDuration - 10) * 1000
 
 interface ExistingCustomer {
   id: string
@@ -256,13 +260,22 @@ export const POST = withRouteContext(
         { deadline: startedAt + DRAFT_SYNC_BEFORE_RECORD_MS },
       )
 
-      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
+      const runId = await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
 
       if (draftSync.unsynced.length > 0) {
-        opLog.warn('draft VAT sync finished after the import run was recorded: its undo keeps these customers', {
-          customers: draftSync.unsynced.length,
+        const late = await syncDraftVatHeadersForChangedCustomers(
+          supabase,
+          companyId,
+          draftSync.unsynced,
+          { deadline: startedAt + DRAFT_SYNC_END_MS },
+        )
+        opLog.warn('draft VAT sync ran past the import run record', {
+          registerImportRunId: runId,
+          // Their customers' undo keeps them, as used since the import.
+          draftsUpdatedAfterRecord: late.updated,
+          // Their open drafts keep the header they had before the import.
+          customersNotSynced: late.unsynced.map((change) => change.id),
         })
-        await syncDraftVatHeadersForChangedCustomers(supabase, companyId, draftSync.unsynced)
       }
 
       const response: CustomerImportExecuteResult = {

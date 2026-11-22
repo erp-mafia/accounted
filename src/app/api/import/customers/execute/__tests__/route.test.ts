@@ -71,6 +71,9 @@ describe('POST /api/import/customers/execute', () => {
     vi.clearAllMocks()
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    // mockReset, not only clearAllMocks: a read queued with mockResolvedValueOnce
+    // that a failing test left unused must not answer the next test's reads.
+    mockFetchAllRows.mockReset()
     mockFetchAllRows.mockResolvedValue([])
   })
 
@@ -405,6 +408,31 @@ describe('POST /api/import/customers/execute', () => {
         moms_ruta: '05',
         reverse_charge_text: null,
       })
+    })
+
+    // A 504 would make the wizard send the batch again, and that attempt
+    // changes nothing and so syncs nothing: better to answer.
+    it('starts no sync at all past the last deadline, and still records the run and answers', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-22T10:00:00Z'))
+      mockFetchAllRows
+        .mockResolvedValueOnce([existingCard])
+        .mockImplementationOnce(async () => {
+          vi.setSystemTime(new Date('2026-11-22T10:04:51Z'))
+          return [existingCard]
+        })
+      enqueue({ data: madeSwedish })
+      enqueue({ data: { id: 'run-1' } })
+
+      const res = await POST(importMadeSwedish(), ROUTE_CTX)
+      const { status, body } = await parseJsonResponse<{ data: { updated: number } }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.updated).toBe(1)
+      expect(findCall('register_import_runs', 'insert')).toBeDefined()
+      // No lookup and no draft read: the snapshot and the register only.
+      expect(mockFetchAllRows).toHaveBeenCalledTimes(2)
+      expect(findCall('invoices', 'select')).toBeUndefined()
     })
   })
 
