@@ -5545,7 +5545,6 @@
     "payment_none": "Ingen bankrad. En bankrad med samma konto, belopp och datum paras ihop med verifikationen, nu eller när den kommer.",
     "underlag_label": "Underlag",
     "kontering_label": "Kontering",
-    "underlag_empty_voucher": "Släpp underlaget var som helst på sidan, eller välj fil i formuläret. Det visas här.",
     "already_booked": "Bankraden är redan bokförd.",
     "open_voucher": "Öppna verifikationen",
     "bank_line_description": "Företagskonto",

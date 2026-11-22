@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn, formatAmount } from '@/lib/utils'
 import { konteringAmountText, konteringAmountValue, negativeAmountMove } from '@/lib/bookkeeping/kontering-amount-entry'
-import { KONTERING_ICON_WIDTH_CLASS, konteringGridColumns } from '@/components/bookkeeping/kontering-grid'
+import { KONTERING_EXTRA_CONTAINER_CLASS, KONTERING_ICON_WIDTH_CLASS, konteringGridColumns } from '@/components/bookkeeping/kontering-grid'
 import { PlusIcon, TrashIcon } from '@/components/icons'
 import type { BASAccount } from '@/types'
 import type { SearchableAccount } from '@/lib/bookkeeping/account-search'
@@ -187,8 +187,14 @@ export function KonteringLinesEditor({
 }: KonteringLinesEditorProps) {
   const withDescription = onDescriptionChange !== undefined
   const columns = konteringGridColumns(withDescription, extraColumn !== undefined, renderRowActions !== undefined)
-  // The cells a sum or a generated row leaves empty after the amounts.
-  const trailingCells = (extraColumn ? 1 : 0) + 1
+  // The cells a sum or a generated row leaves empty after the amounts: the
+  // extra column's only where it has a track (a wide editor, kontering-grid.ts).
+  const trailingCells = (
+    <>
+      {extraColumn && <span className="hidden @3xl:block" />}
+      <span className="hidden sm:block" />
+    </>
+  )
 
   const amountInput = (index: number, field: KonteringAmountField, label: string) => (
     <div className="min-w-0 space-y-1 sm:space-y-0">
@@ -218,6 +224,24 @@ export function KonteringLinesEditor({
     </div>
   )
 
+  // A narrow editor gives the saldo a line of its own under the row, labelled
+  // as on a phone, and none when there is nothing to show (no account yet); a
+  // wide one, its own column, empty or not, so the columns stay aligned.
+  const extraCell = (column: NonNullable<KonteringLinesEditorProps['extraColumn']>, index: number) => {
+    const value = column.render(index)
+    return (
+      <div
+        className={cn(
+          'col-span-2 flex items-baseline justify-end gap-1 text-xs tabular-nums text-muted-foreground sm:order-last sm:col-span-full @3xl:order-none @3xl:col-span-1 @3xl:block @3xl:self-center @3xl:text-right @3xl:text-sm',
+          value == null && 'hidden @3xl:block',
+        )}
+      >
+        {header && <span className="@3xl:hidden">{column.label}</span>}
+        {value}
+      </div>
+    )
+  }
+
   const readOnlyRows = (index: number) => {
     const generated = readOnlyLines?.(index)
     if (!generated || generated.lines.length === 0) return null
@@ -241,9 +265,7 @@ export function KonteringLinesEditor({
             <span className="hidden text-right tabular-nums sm:block">
               {line.credit_amount ? formatAmount(parseFloat(line.credit_amount)) : ''}
             </span>
-            {Array.from({ length: trailingCells }, (_, i) => (
-              <span key={i} className="hidden sm:block" />
-            ))}
+            {trailingCells}
           </div>
         ))}
       </div>
@@ -251,7 +273,7 @@ export function KonteringLinesEditor({
   }
 
   return (
-    <div className={cn('space-y-2', KONTERING_ICON_WIDTH_CLASS)}>
+    <div className={cn('space-y-2', KONTERING_ICON_WIDTH_CLASS, extraColumn && KONTERING_EXTRA_CONTAINER_CLASS)}>
       {header && (
         <div
           aria-hidden="true"
@@ -261,7 +283,7 @@ export function KonteringLinesEditor({
           {withDescription && <span>{labels.description}</span>}
           <span className="text-right">{labels.debit}</span>
           <span className="text-right">{labels.credit}</span>
-          {extraColumn && <span className="text-right">{extraColumn.label}</span>}
+          {extraColumn && <span className="text-right @max-3xl:hidden">{extraColumn.label}</span>}
           <span />
         </div>
       )}
@@ -306,12 +328,7 @@ export function KonteringLinesEditor({
             {amountInput(index, 'debit_amount', labels.debit)}
             {amountInput(index, 'credit_amount', labels.credit)}
           </div>
-          {extraColumn && (
-            <div className="col-span-2 flex items-baseline justify-end gap-1 text-xs tabular-nums text-muted-foreground sm:col-span-1 sm:block sm:self-center sm:text-right sm:text-sm">
-              {header && <span className="sm:hidden">{extraColumn.label}</span>}
-              {extraColumn.render(index)}
-            </div>
-          )}
+          {extraColumn && extraCell(extraColumn, index)}
           <div className="col-start-2 row-start-1 flex items-center justify-end sm:col-start-auto sm:row-start-auto">
             {renderRowActions?.(index)}
             <Button
@@ -346,9 +363,7 @@ export function KonteringLinesEditor({
             <span className="sm:hidden">{labels.credit} </span>
             {totals.credit}
           </span>
-          {Array.from({ length: trailingCells }, (_, i) => (
-            <span key={i} className="hidden sm:block" />
-          ))}
+          {trailingCells}
         </div>
       )}
 
