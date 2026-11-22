@@ -1590,6 +1590,45 @@ describe('importProviderDocuments', () => {
       expect(mockDownloadFortnoxArchiveFile.mock.calls.length).toBeGreaterThan(1)
     })
 
+    describe('when the listing ran past the sweep deadline', () => {
+      // The listing "costs" 1000 ms and ends past the server's 900 ms sweep
+      // deadline: the first file only has the time up to the hard stop.
+      const lateSlice = (supabase: SupabaseClient) => {
+        let clock = 0
+        mockFetchFortnoxFileConnections.mockImplementation(async () => {
+          clock += 1_000
+          return THREE_CONNECTIONS
+        })
+        return importProviderDocuments({
+          supabase,
+          companyId: COMPANY,
+          userId: USER,
+          consentId: 'c1',
+          timeBudgetMs: 1_000_000,
+          sweepDeadline: 900,
+          now: () => clock,
+        })
+      }
+
+      it('ends the slice out of time, without counting the file failed, when the hard stop cuts it', async () => {
+        const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+        mockDownloadFortnoxArchiveFile.mockRejectedValue(new ExecutionBudgetExceeded('underlag-test'))
+
+        // It counted file-a failed and moved the run past it, as a file a
+        // whole sweep could not finish, though it never had one.
+        await expect(lateSlice(supabase)).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
+        expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
+      })
+
+      it('still moves the run by the one file when that file finishes before the hard stop', async () => {
+        const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+
+        const result = await lateSlice(supabase)
+
+        expect(result).toMatchObject({ scanned: 1, linked: 1, failed: 0, partial: true, nextCursor: 'file-a' })
+      })
+    })
+
     it('stops before the next file when the continuation loses the run or connection', async () => {
       const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
       const shouldContinue = vi.fn()
