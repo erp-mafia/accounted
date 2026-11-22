@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { luhnCheckDigit } from '@/lib/bankgiro/luhn'
 import {
   formatPayeeLabel,
+  GIRO_MESSAGE_MAX,
+  giroMessage,
   resolvePaymentReference,
   resolveSupplierPayee,
 } from '@/lib/payments/supplier-payee'
@@ -181,5 +183,40 @@ describe('resolvePaymentReference', () => {
       .toEqual({ reference: null, ocrInvalid: false })
     expect(resolvePaymentReference({ payment_reference: '1234568', supplier_invoice_number: null }))
       .toEqual({ reference: null, ocrInvalid: true })
+  })
+
+  // crm#1875: a 27-character invoice number went to the bankgiro as is, and the
+  // payment provider refused it every time (a giro message is 1 to 25 characters).
+  it('keeps the invoice-number message within the giro message field', () => {
+    const { reference } = resolvePaymentReference({
+      payment_reference: null,
+      supplier_invoice_number: 'ABC/26/123456-7890/1/123456',
+    })
+    expect(reference).toEqual({ type: 'invoice_number', value: 'ABC/26/123456-7890/1/1234' })
+    expect([...reference!.value].length).toBeLessThanOrEqual(GIRO_MESSAGE_MAX)
+  })
+
+  it('cuts the same way after an invalid OCR, and never leaves a trailing space', () => {
+    const { reference, ocrInvalid } = resolvePaymentReference({
+      payment_reference: '1234568',
+      supplier_invoice_number: '  Faktura 2026 nummer 0001 2345  ',
+    })
+    expect(reference).toEqual({ type: 'invoice_number', value: 'Faktura 2026 nummer 0001' })
+    expect(ocrInvalid).toBe(true)
+  })
+
+  it('leaves an invoice number of 25 characters or fewer as it is', () => {
+    const number = 'ÅÄÖ-1234567890123456789/X'
+    expect([...number].length).toBe(GIRO_MESSAGE_MAX)
+    expect(resolvePaymentReference({ payment_reference: null, supplier_invoice_number: number }).reference)
+      .toEqual({ type: 'invoice_number', value: number })
+  })
+})
+
+describe('giroMessage', () => {
+  it('counts characters, not UTF-16 units, and trims both ends', () => {
+    expect(giroMessage('  F-1001  ')).toBe('F-1001')
+    expect(giroMessage('😀'.repeat(30))).toBe('😀'.repeat(GIRO_MESSAGE_MAX))
+    expect(giroMessage('   ')).toBe('')
   })
 })

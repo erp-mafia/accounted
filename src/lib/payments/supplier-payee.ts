@@ -114,6 +114,23 @@ export interface PaymentReferenceSource {
 }
 
 /**
+ * The receiver-side giro message field is 25 positions. The payment file cuts
+ * its unstructured remittance (Ustrd) to it, and Open Payments' swedish-giro
+ * product takes a message (invoiceRef) of 1 to 25 characters and refuses a
+ * longer one before the bank sees it (REFERENCE_INVALID, crm#1875).
+ */
+export const GIRO_MESSAGE_MAX = 25
+
+/**
+ * A free-text payment message as a giro takes it: trimmed, then the first
+ * GIRO_MESSAGE_MAX characters (code points, the unit the provider counts),
+ * without a trailing space left by the cut. Empty when nothing is left.
+ */
+export function giroMessage(value: string): string {
+  return [...value.trim()].slice(0, GIRO_MESSAGE_MAX).join('').trimEnd()
+}
+
+/**
  * The reference the receiver uses to match the payment to the invoice.
  *
  * A Luhn-valid payment_reference is a real OCR number and rides the structured
@@ -122,6 +139,8 @@ export interface PaymentReferenceSource {
  * as text a human can match, whereas a structured SCOR reference that fails
  * the receiver's OCR check can bounce the whole payment. Callers surface the
  * fallback-on-invalid case as a warning (ocrInvalid) so the typo gets fixed.
+ * The message is the invoice number within the giro message field
+ * (giroMessage), so every rail sends, stores and shows the same text.
  *
  * An invoice with neither a valid OCR nor the supplier's number (crm#1039)
  * resolves to no reference at all: there is nothing the receiver could match
@@ -132,7 +151,7 @@ export function resolvePaymentReference(invoice: PaymentReferenceSource): {
   reference: PaymentReference | null
   ocrInvalid: boolean
 } {
-  const number = invoice.supplier_invoice_number?.trim() ? invoice.supplier_invoice_number : null
+  const number = giroMessage(invoice.supplier_invoice_number ?? '')
   const fallback: PaymentReference | null = number ? { type: 'invoice_number', value: number } : null
   const raw = invoice.payment_reference?.trim()
   if (raw) {
