@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { registrationNumberKey } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
 import type { TicCallPurpose } from '@/lib/tic-budget/budget'
 
@@ -21,7 +22,8 @@ const log = createLogger('agent.composer.tic-fetch')
 // verbatim. TIC data is slow-changing (sniCodes, registration, address
 // rarely flip) so this avoids re-hitting TIC on every page load. A snapshot
 // with incomplete sections (a detail call failed) is reused for an hour, and
-// a refetch keeps the last answered value of every section it cannot fill.
+// a refetch keeps the last answered value of the sections it cannot fill
+// (never the annual report list: see keepLastKnownSections).
 //
 // Rate budget: the /profile endpoint fans out to ~13 TIC (Lens) calls and
 // the account has a ~3000/mo ceiling. So we DON'T eagerly re-fetch every
@@ -78,23 +80,40 @@ function hasContent(value: unknown): boolean {
   return !Array.isArray(value) || value.length > 0
 }
 
+// Never taken from the previous snapshot: the annual report list. The
+// closed-year reopen gate (fiscal_year_reopen_snapshot, the keys in
+// FISCAL_YEAR_REOPEN_REGISTRY_KEYS) reads it as of tic_snapshot_fetched_at,
+// so a list carried into a fresh snapshot would pass as fetched now and miss
+// a report registered since. A failed documents call leaves it incomplete,
+// and the gate refuses.
+const NEVER_CARRIED = new Set(['financialReports', 'financialReportsComplete'])
+
+/** Whether two snapshots describe the same firm, by their registration number. */
+function sameFirm(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const key = registrationNumberKey(typeof a.orgNumber === 'string' ? a.orgNumber : null)
+  return key !== null && key === registrationNumberKey(typeof b.orgNumber === 'string' ? b.orgNumber : null)
+}
+
 /**
  * A fresh profile with the sections it could not fetch taken from the
  * previous snapshot, where that snapshot had them answered and non-empty: a
  * refetch while the budget is spent must not replace a known board with an
- * empty one. Sections with nothing to keep stay listed as incomplete.
+ * empty one. Sections with nothing to keep stay listed as incomplete, and so
+ * does the annual report list (NEVER_CARRIED). A previous snapshot of another
+ * number (the number was corrected since) describes another firm: nothing is
+ * taken from it.
  */
 export function keepLastKnownSections(
   fresh: Record<string, unknown>,
   previous: Record<string, unknown> | null,
 ): Record<string, unknown> {
   const missing = incompleteSectionsOf(fresh)
-  if (missing.length === 0 || !previous) return fresh
+  if (missing.length === 0 || !previous || !sameFirm(fresh, previous)) return fresh
   const previousMissing = new Set(incompleteSectionsOf(previous))
   const merged: Record<string, unknown> = { ...fresh }
   const stillMissing: string[] = []
   for (const key of missing) {
-    if (!previousMissing.has(key) && hasContent(previous[key])) merged[key] = previous[key]
+    if (!NEVER_CARRIED.has(key) && !previousMissing.has(key) && hasContent(previous[key])) merged[key] = previous[key]
     else stillMissing.push(key)
   }
   merged.incompleteSections = stillMissing

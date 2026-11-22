@@ -430,7 +430,7 @@ export interface TICCompanyProfile {
    * upstream error), so their empty value means "could not ask", not "nothing
    * registered". Empty when every call answered. The snapshot cache
    * (lib/agent/composer/tic-fetch) keeps the last answered value for these
-   * keys and asks again sooner.
+   * keys, except the annual report list, and asks again sooner.
    */
   incompleteSections: string[]
   fetchedAt: string

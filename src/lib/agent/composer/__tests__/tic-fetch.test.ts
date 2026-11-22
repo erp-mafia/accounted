@@ -13,6 +13,7 @@ vi.mock('@/lib/extensions/registry', () => ({
 }))
 
 import { ensureTicSnapshot } from '../tic-fetch'
+import { FISCAL_YEAR_REOPEN_REGISTRY_KEYS } from '@/lib/core/bookkeeping/fiscal-year-reopen'
 
 // `ensureTicSnapshot` is the single chokepoint between core and the TIC
 // extension's profile service. Every snapshot fetch goes
@@ -407,6 +408,7 @@ describe('ensureTicSnapshot: incomplete sections', () => {
 
   it('keeps the last answered board and statuses when a refetch cannot fetch them', async () => {
     const previous = {
+      orgNumber: '5560125790',
       companyName: 'Old AB',
       statuses: [{ code: 'isActive' }],
       board: { numberOfBoardMembers: 2 },
@@ -415,6 +417,7 @@ describe('ensureTicSnapshot: incomplete sections', () => {
       incompleteSections: [],
     }
     const partial = {
+      orgNumber: '5560125790',
       companyName: 'New AB',
       statuses: [],
       board: null,
@@ -431,6 +434,7 @@ describe('ensureTicSnapshot: incomplete sections', () => {
     const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
 
     const expected = {
+      orgNumber: '5560125790',
       companyName: 'New AB',
       statuses: [{ code: 'isActive' }],
       board: { numberOfBoardMembers: 2 },
@@ -445,8 +449,72 @@ describe('ensureTicSnapshot: incomplete sections', () => {
   })
 
   it('does not keep a section the previous snapshot could not fetch either', async () => {
-    const previous = { statuses: [{ code: 'old' }], incompleteSections: ['statuses'] }
-    const partial = { statuses: [], incompleteSections: ['statuses'] }
+    const previous = { orgNumber: '5560125790', statuses: [{ code: 'old' }], incompleteSections: ['statuses'] }
+    const partial = { orgNumber: '5560125790', statuses: [], incompleteSections: ['statuses'] }
+    profileService.mockResolvedValue(partial)
+    const { supabase } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: previous, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    expect(result.snapshot).toEqual(partial)
+  })
+
+  // The reopen gate reads the report list as of tic_snapshot_fetched_at, which
+  // a refetch sets to now: a list carried from an older fetch would read as
+  // fresh, and an empty one as "no report registered".
+  it.each([
+    ['a known report', [{ periodEnd: '2025-12-31', isInterimReport: false }]],
+    ['no report', []],
+  ])('never carries the annual report list the closed-year reopen gate reads (%s)', async (_label, reports) => {
+    const previous = {
+      orgNumber: '5560125790',
+      financialReports: reports,
+      financialReportsComplete: true,
+      statuses: [{ code: 'isActive' }],
+      incompleteSections: [],
+    }
+    const partial = {
+      orgNumber: '5560125790',
+      financialReports: [],
+      financialReportsComplete: false,
+      statuses: [],
+      incompleteSections: ['financialReports', 'financialReportsComplete', 'statuses'],
+    }
+    profileService.mockResolvedValue(partial)
+    const { supabase, updateCalls } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: previous, tic_snapshot_fetched_at: hoursAgo(24 * 8) },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+    const snapshot = result.snapshot as Record<string, unknown>
+
+    // What the gate will read: the saved row, not just the returned value.
+    expect((updateCalls[0][0] as Record<string, unknown>).tic_snapshot).toEqual(snapshot)
+    for (const key of FISCAL_YEAR_REOPEN_REGISTRY_KEYS) expect(snapshot[key]).toEqual(partial[key])
+    expect(snapshot.incompleteSections).toEqual(['financialReports', 'financialReportsComplete'])
+    // The sections nothing decides on are still kept.
+    expect(snapshot.statuses).toEqual([{ code: 'isActive' }])
+  })
+
+  it('takes nothing from a snapshot of another firm', async () => {
+    // The number was corrected since (tic-refresh): the old snapshot's board
+    // belongs to another company.
+    const previous = {
+      orgNumber: '5566778899',
+      board: { numberOfBoardMembers: 3 },
+      representatives: [{ name: 'Someone Else' }],
+      incompleteSections: [],
+    }
+    const partial = {
+      orgNumber: '5560125790',
+      board: null,
+      representatives: [],
+      incompleteSections: ['board', 'representatives'],
+    }
     profileService.mockResolvedValue(partial)
     const { supabase } = buildSupabase({
       data: { org_number: '5560125790', tic_snapshot: previous, tic_snapshot_fetched_at: null },

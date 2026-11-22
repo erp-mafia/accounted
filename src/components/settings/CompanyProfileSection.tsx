@@ -20,9 +20,11 @@ import { useFormat } from '@/lib/hooks/use-format'
 type Snapshot = Parameters<typeof CompanyProfileView>[0]['snapshot']
 
 // The panel rows a failed detail call can leave empty (the snapshot's
-// incompleteSections keys), each named once in the note under the panel.
+// incompleteSections keys), each named once in the note under the panel. The
+// Företrädare row shows while its people are known, so only they name it: a
+// missing board summary alone leaves the row filled.
 const INCOMPLETE_SECTION_LABELS: ReadonlyArray<[keys: readonly string[], labelKey: string]> = [
-  [['representatives', 'board'], 'profile_section_representatives'],
+  [['representatives'], 'profile_section_representatives'],
   [['statuses'], 'profile_section_status'],
   [['fiscalYear'], 'profile_section_fiscal_year'],
 ]
