@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/reports/full-archive-export', () => ({
-  generateFullArchive: vi.fn(),
-  generateBaseDataArchive: vi.fn(),
+  streamFullArchive: vi.fn(),
+  streamBaseDataArchive: vi.fn(),
   ARCHIVE_OVERHEAD_BYTES: 8 * 1024 * 1024,
 }))
 
@@ -70,8 +70,8 @@ import {
   uploadFile,
 } from '../google-drive'
 import {
-  generateFullArchive,
-  generateBaseDataArchive,
+  streamFullArchive,
+  streamBaseDataArchive,
 } from '@/lib/reports/full-archive-export'
 import type { CloudConnection, CloudLastSync } from '../../types'
 
@@ -80,8 +80,20 @@ const mockEnsureFolder = vi.mocked(ensureFolder)
 const mockGetFileMeta = vi.mocked(getFileMeta)
 const mockUploadFile = vi.mocked(uploadFile)
 const mockUpdateFile = vi.mocked(updateFile)
-const mockGenerateFullArchive = vi.mocked(generateFullArchive)
-const mockGenerateBaseDataArchive = vi.mocked(generateBaseDataArchive)
+const mockStreamFullArchive = vi.mocked(streamFullArchive)
+const mockStreamBaseDataArchive = vi.mocked(streamBaseDataArchive)
+
+/** An archive stream of `size` bytes, as the generators produce it. */
+async function* archiveOf(size: number): AsyncGenerator<Uint8Array> {
+  yield new Uint8Array(size)
+}
+
+/** Read an upload's stream as the providers do, to its end. */
+async function byteLength(open: () => AsyncIterable<Uint8Array>): Promise<number> {
+  let length = 0
+  for await (const chunk of open()) length += chunk.length
+  return length
+}
 
 function makeConnection(
   overrides: Partial<CloudConnection> = {}
@@ -249,18 +261,18 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockGetFileMeta.mockResolvedValue({ id: 'company-1', name: 'Testbolag', trashed: false })
   mockRefreshAccessToken.mockResolvedValue({ access_token: 'fresh-token', expires_in: 3600 })
-  mockGenerateFullArchive.mockResolvedValue(new ArrayBuffer(8))
-  mockGenerateBaseDataArchive.mockResolvedValue(new ArrayBuffer(16))
-  mockUploadFile.mockImplementation(async (_t, _folder, name, data) => ({
+  mockStreamFullArchive.mockImplementation(() => archiveOf(8))
+  mockStreamBaseDataArchive.mockImplementation(() => archiveOf(16))
+  mockUploadFile.mockImplementation(async (_t, _folder, name, open) => ({
     id: `created-${name}`,
     name,
-    size_bytes: (data as ArrayBuffer).byteLength,
+    size_bytes: await byteLength(open),
     web_view_link: `https://drive.google.com/file/d/created-${name}/view`,
   }))
-  mockUpdateFile.mockImplementation(async (_t, fileId, data) => ({
+  mockUpdateFile.mockImplementation(async (_t, fileId, open) => ({
     id: fileId,
     name: 'updated',
-    size_bytes: (data as ArrayBuffer).byteLength,
+    size_bytes: await byteLength(open),
     web_view_link: `https://drive.google.com/file/d/${fileId}/view`,
   }))
 })
@@ -284,7 +296,7 @@ describe('performSync needs_reauth handling', () => {
     expect(payload.value.status).toBe('needs_reauth')
     expect(payload.value.needs_reauth_at).toEqual(expect.any(String))
     expect(payload.value.account_email).toBe('user@example.com')
-    expect(mockGenerateFullArchive).not.toHaveBeenCalled()
+    expect(mockStreamFullArchive).not.toHaveBeenCalled()
     expect(mockUploadFile).not.toHaveBeenCalled()
   })
 
@@ -356,7 +368,7 @@ describe('performSync with a grant that lacks the Drive scope (B12)', () => {
       needs_reauth_at: expect.any(String),
       account_email: 'user@example.com',
     })
-    expect(mockGenerateFullArchive).not.toHaveBeenCalled()
+    expect(mockStreamFullArchive).not.toHaveBeenCalled()
   })
 
   it('flags it when an upload is refused for the scope', async () => {
@@ -433,7 +445,7 @@ describe('performSync startDeadline', () => {
     )
 
     expect(result).toMatchObject({ ok: false, reason: 'deferred' })
-    expect(mockGenerateFullArchive).not.toHaveBeenCalled()
+    expect(mockStreamFullArchive).not.toHaveBeenCalled()
     expect(mockUploadFile).not.toHaveBeenCalled()
     expect(upsert).not.toHaveBeenCalled()
   })
@@ -443,9 +455,9 @@ describe('performSync startDeadline', () => {
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
     try {
       // Building the year archive takes longer than the time left.
-      mockGenerateFullArchive.mockImplementationOnce(async () => {
+      mockStreamFullArchive.mockImplementationOnce(async function* () {
         now += 200_000
-        return new ArrayBuffer(8)
+        yield new Uint8Array(8)
       })
       const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
 
@@ -453,7 +465,7 @@ describe('performSync startDeadline', () => {
 
       expect(result).toMatchObject({ ok: false, reason: 'deferred' })
       expect(mockUploadFile).toHaveBeenCalledTimes(1)
-      expect(mockGenerateBaseDataArchive).not.toHaveBeenCalled()
+      expect(mockStreamBaseDataArchive).not.toHaveBeenCalled()
       // The finished archive is persisted, so the next run skips it.
       const snapshots = upsert.mock.calls.filter(([p]) => p.key === LAST_SYNC_KEY)
       expect(snapshots).toHaveLength(1)
@@ -532,8 +544,8 @@ describe('performSync per-fiscal-year layout', () => {
     if (!result.ok) return
     expect(result.uploadedCount).toBe(0)
     expect(result.skippedCount).toBe(3)
-    expect(mockGenerateFullArchive).not.toHaveBeenCalled()
-    expect(mockGenerateBaseDataArchive).not.toHaveBeenCalled()
+    expect(mockStreamFullArchive).not.toHaveBeenCalled()
+    expect(mockStreamBaseDataArchive).not.toHaveBeenCalled()
     expect(mockUploadFile).not.toHaveBeenCalled()
     expect(mockUpdateFile).not.toHaveBeenCalled()
     // The final snapshot still refreshes `at` so the card shows recency.
@@ -686,13 +698,13 @@ describe('performSync size limits and document fallback', () => {
     )
 
     expect(result.ok).toBe(true)
-    expect(mockGenerateFullArchive).toHaveBeenCalledWith(
+    expect(mockStreamFullArchive).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       expect.objectContaining({ scope: 'period', include_documents: false })
     )
     // Grunddata is unaffected: it still carries its (small) documents.
-    expect(mockGenerateBaseDataArchive).toHaveBeenCalledWith(
+    expect(mockStreamBaseDataArchive).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       expect.objectContaining({ include_documents: true })

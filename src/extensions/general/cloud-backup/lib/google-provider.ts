@@ -142,17 +142,17 @@ export const googleDriveProvider: CloudStorageProvider = {
     target,
     name,
     previousId,
-    data,
+    open,
     contentType,
   }: PutFileParams): Promise<PutFileResult> {
     if (previousId) {
       try {
-        return await updateFile(accessToken, previousId, data, contentType)
+        return await updateFile(accessToken, previousId, open, contentType)
       } catch (err) {
         if (!(err instanceof DriveFileGoneError)) throw err
         // The user deleted the file in Drive: recreate it.
       }
     }
-    return uploadFile(accessToken, target.folderId, name, data, contentType)
+    return uploadFile(accessToken, target.folderId, name, open, contentType)
   },
 }

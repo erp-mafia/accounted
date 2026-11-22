@@ -24,6 +24,7 @@ import {
   revokeDropboxToken,
   DROPBOX_CALLBACK_PATH,
 } from './dropbox-oauth'
+import { collectBytes } from '@/lib/reports/archive-folder'
 import { sanitizeDropboxName, uploadDropboxFile } from './dropbox-client'
 import type {
   CloudStorageProvider,
@@ -133,10 +134,12 @@ export const dropboxProvider: CloudStorageProvider = {
     accessToken,
     target,
     name,
-    data,
+    open,
   }: PutFileParams): Promise<PutFileResult> {
     const path = `${target.folderId}/${sanitizeDropboxName(name)}`
-    const uploaded = await uploadDropboxFile(accessToken, path, data)
+    // Dropbox still takes the file whole, as before the stream: no hosted
+    // company backs up there. Streaming it the way Drive does is a follow-up.
+    const uploaded = await uploadDropboxFile(accessToken, path, await collectBytes(open()))
     return {
       id: uploaded.path,
       name: uploaded.name,

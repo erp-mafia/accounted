@@ -109,6 +109,13 @@ describe('dropboxProvider.prepareTarget', () => {
   })
 })
 
+/** A file of `size` bytes as the sync hands it over: a stream to start. */
+function bytesOf(size: number) {
+  return async function* () {
+    yield new Uint8Array(size)
+  }
+}
+
 describe('dropboxProvider.putFile', () => {
   it('writes under the company folder and returns the path as the handle', async () => {
     mockUpload.mockResolvedValue({
@@ -124,15 +131,17 @@ describe('dropboxProvider.putFile', () => {
         webViewLink: 'https://www.dropbox.com/home/Apps',
       },
       name: 'Arkiv 2024.zip',
-      data: new ArrayBuffer(42),
+      open: bytesOf(42),
       contentType: 'application/zip',
     })
 
+    // Dropbox still takes the file whole: the stream read to its end.
     expect(mockUpload).toHaveBeenCalledWith(
       'token',
       '/Testbolag AB/Arkiv 2024.zip',
       expect.any(ArrayBuffer)
     )
+    expect((mockUpload.mock.calls[0][2] as ArrayBuffer).byteLength).toBe(42)
     expect(result).toEqual({
       id: '/Testbolag AB/Arkiv 2024.zip',
       name: 'Arkiv 2024.zip',
@@ -152,7 +161,7 @@ describe('dropboxProvider.putFile', () => {
       target: { folderId: '/Bolag', webViewLink: 'https://www.dropbox.com/home/Apps' },
       name: 'Grunddata.zip',
       previousId: '/somewhere/else/Grunddata.zip',
-      data: new ArrayBuffer(8),
+      open: bytesOf(8),
       contentType: 'application/zip',
     })
 
@@ -170,7 +179,7 @@ describe('dropboxProvider.putFile', () => {
       accessToken: 'token',
       target: { folderId: '/Bolag', webViewLink: 'https://www.dropbox.com/home/Apps' },
       name: 'LÄSMIG.txt',
-      data: new ArrayBuffer(11),
+      open: bytesOf(11),
       contentType: 'text/plain',
     })
 

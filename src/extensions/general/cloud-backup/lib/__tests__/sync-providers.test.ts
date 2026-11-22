@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { createHash } from 'node:crypto'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/reports/full-archive-export', () => ({
-  generateFullArchive: vi.fn().mockResolvedValue(new ArrayBuffer(8)),
-  generateBaseDataArchive: vi.fn().mockResolvedValue(new ArrayBuffer(16)),
+  streamFullArchive: vi.fn(async function* () { yield new Uint8Array(8) }),
+  streamBaseDataArchive: vi.fn(async function* () { yield new Uint8Array(16) }),
   ARCHIVE_OVERHEAD_BYTES: 8 * 1024 * 1024,
 }))
 
@@ -24,6 +25,7 @@ vi.mock('../crypto', () => ({
 }))
 
 import { performSync } from '../sync'
+import { streamFullArchive } from '@/lib/reports/full-archive-export'
 import { CloudTokenRefreshError, type CloudStorageProvider } from '../cloud-provider'
 import type { CloudConnection, CloudLastSync } from '../../types'
 
@@ -115,11 +117,11 @@ function makeFakeProvider(
       target: { folderId: `folder-${id}`, webViewLink: `https://${id}.test/folder` },
       connectionPatch: null,
     }),
-    putFile: vi.fn().mockImplementation(async ({ name, data }: any) => ({
-      id: `${id}:${name}`,
-      name,
-      size_bytes: (data as ArrayBuffer).byteLength,
-    })),
+    putFile: vi.fn().mockImplementation(async ({ name, open }: any) => {
+      let size = 0
+      for await (const chunk of open()) size += chunk.length
+      return { id: `${id}:${name}`, name, size_bytes: size }
+    }),
     ...overrides,
   } as CloudStorageProvider
 }
@@ -280,5 +282,42 @@ describe('performSync provider routing', () => {
     const call = vi.mocked(provider.putFile).mock.calls[0][0]
     expect(call.name).toBe('Arkiv 2024.zip')
     expect(call.previousId).toBe('dropbox:Arkiv 2024.zip')
+  })
+
+  it('hands the provider the archive while it is produced, never collected whole first', async () => {
+    // A year archive of four 1 MB pieces, counting how far the ZIP writer got.
+    let produced = 0
+    vi.mocked(streamFullArchive).mockImplementationOnce(async function* () {
+      for (let i = 0; i < 4; i++) {
+        produced++
+        yield new Uint8Array(1024 * 1024).fill(i)
+      }
+    })
+    const seen: number[] = []
+    const hash = createHash('sha256')
+    const provider = makeFakeProvider('google_drive', {
+      putFile: vi.fn().mockImplementation(async ({ name, open }: any) => {
+        let size = 0
+        for await (const chunk of open()) {
+          if (name === 'Arkiv 2024.zip') {
+            seen.push(produced)
+            hash.update(chunk)
+          }
+          size += chunk.length
+        }
+        return { id: name, name, size_bytes: size }
+      }),
+    })
+    const { supabase, store } = makeSupabase({ google_drive_connection: makeConnection() })
+
+    await performSync(syncParams(supabase, provider))
+
+    // Each piece reached the provider before the next one was made.
+    expect(seen).toEqual([1, 2, 3, 4])
+    // The recorded digest is of the bytes the provider read.
+    const snapshot = store.get('google_drive_last_sync') as CloudLastSync
+    const period = snapshot.files!.find((f) => f.kind === 'period')!
+    expect(period.sha256).toBe(hash.digest('hex'))
+    expect(period.size_bytes).toBe(4 * 1024 * 1024)
   })
 })

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
-  generateFullArchive,
-  generateBaseDataArchive,
+  streamFullArchive,
+  streamBaseDataArchive,
   ARCHIVE_OVERHEAD_BYTES,
 } from '@/lib/reports/full-archive-export'
 import { buildDriveFolderReadme } from '@/lib/reports/archive-readme'
@@ -34,18 +34,16 @@ export const CONNECTION_KEY = 'google_drive_connection'
 export const LAST_SYNC_KEY = 'google_drive_last_sync'
 /**
  * Per-FILE ceiling, not per-backup: the backup splits into one archive per
- * räkenskapsår plus Grunddata.zip, and uploads are resumable/chunked. The
- * bound left is JSZip building each archive in memory on a serverless
- * function, hence 300 MB rather than "unlimited".
+ * räkenskapsår plus Grunddata.zip, and uploads are resumable/chunked. Past
+ * it a year is archived without its documents (allowDocumentFallback) or the
+ * sync refuses.
  *
- * Memory budget: worst-case transient usage is ~3x this limit (~900 MB):
- * JSZip holds the input blobs while generateAsync accumulates output chunks
- * and then concatenates them into the final ArrayBuffer. The upload path
- * adds no further copies (md5/sha256 hash via zero-copy Buffer views,
- * resumable 8 MB chunk views, no multipart concatenation), and files are
- * generated and uploaded one at a time. That fits the Vercel default
- * function memory (2048 MB) with ~2x headroom; raise this limit only
- * together with an explicit memory bump in vercel.json.
+ * Memory no longer grows with the archive: it goes from the ZIP writer to the
+ * provider a chunk at a time (Dropbox still takes it whole), so a run holds
+ * the file being written (at most the behandlingshistorik, once, as bytes),
+ * the underlag read ahead and one 8 MB chunk. Holding each archive whole, and
+ * its history as rows and text besides, ran a large company's nightly backup
+ * out of the function's memory.
  */
 export const SIZE_LIMIT_BYTES = 300 * 1024 * 1024
 /** Bump to force a re-upload of every file when the archive format changes. */
@@ -118,7 +116,8 @@ interface PlannedFile {
   contentType: string
   fingerprint: string
   includeDocuments: boolean
-  generate: () => Promise<ArrayBuffer>
+  /** Starts the file's bytes; each call produces them again. */
+  generate: () => AsyncIterable<Uint8Array>
 }
 
 interface PeriodRow {
@@ -393,7 +392,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       ].join('|'),
       includeDocuments,
       generate: () =>
-        generateFullArchive(archiveClient, companyId, {
+        streamFullArchive(archiveClient, companyId, {
           scope: 'period',
           period_id: period.id,
           include_documents: includeDocuments,
@@ -426,7 +425,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     ].join('|'),
     includeDocuments: baseDecision.includeDocuments,
     generate: () =>
-      generateBaseDataArchive(archiveClient, companyId, {
+      streamBaseDataArchive(archiveClient, companyId, {
         include_documents: baseDecision.includeDocuments,
       }),
   })
@@ -446,7 +445,9 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     contentType: 'text/plain',
     fingerprint: `v${ARCHIVE_FORMAT_VERSION}|${sha256Hex(textToArrayBuffer(readmeText)).slice(0, 16)}`,
     includeDocuments: true,
-    generate: async () => textToArrayBuffer(readmeText),
+    generate: async function* () {
+      yield new Uint8Array(textToArrayBuffer(readmeText))
+    },
   })
 
   // ---- Execute: regenerate + upload only what changed. ----
@@ -500,7 +501,9 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       }
     }
 
-    const bytes = await plan.generate()
+    // The digest of the bytes the provider kept: an upload that starts over
+    // produces the file again, and the last one read is the one stored.
+    let sha256 = ''
     let uploaded: PutFileResult
     try {
       uploaded = await provider.putFile({
@@ -512,7 +515,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
         // overwrite the file the old name points at.
         previousId:
           prev?.file_id && prev.file_name === plan.name ? prev.file_id : undefined,
-        data: bytes,
+        open: () => withDigest(plan.generate(), (hex) => { sha256 = hex }),
         contentType: plan.contentType,
       })
     } catch (err) {
@@ -527,7 +530,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       file_name: uploaded.name,
       size_bytes: uploaded.size_bytes,
       fingerprint: plan.fingerprint,
-      sha256: sha256Hex(bytes),
+      sha256,
       included_documents: plan.includeDocuments,
       uploaded_at: new Date().toISOString(),
     })
@@ -570,6 +573,19 @@ export function arkivFileName(period: PeriodRow): string {
 
 function sha256Hex(data: ArrayBuffer): string {
   return createHash('sha256').update(Buffer.from(data)).digest('hex')
+}
+
+/** Pass a byte stream on as it is read, and its SHA-256 to `done` once it has been read to the end. */
+async function* withDigest(
+  source: AsyncIterable<Uint8Array>,
+  done: (hex: string) => void
+): AsyncGenerator<Uint8Array> {
+  const hash = createHash('sha256')
+  for await (const chunk of source) {
+    hash.update(chunk)
+    yield chunk
+  }
+  done(hash.digest('hex'))
 }
 
 function textToArrayBuffer(text: string): ArrayBuffer {

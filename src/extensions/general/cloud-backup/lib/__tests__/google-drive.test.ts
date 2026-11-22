@@ -95,6 +95,40 @@ function md5Of(data: ArrayBuffer): string {
   return createHash('md5').update(Buffer.from(data)).digest('hex')
 }
 
+/** The bytes as the sync hands them over: a stream, started again on each call. */
+function streamOf(data: ArrayBuffer) {
+  return async function* () {
+    yield new Uint8Array(data)
+  }
+}
+
+const MB = 1024 * 1024
+
+/**
+ * A Drive upload session that keeps what it is sent (or the part `keep`
+ * says): 308 until the request that states the total, then the file with the
+ * md5 of everything it kept.
+ */
+function driveSession(keep?: (range: string, body: Uint8Array) => number | undefined) {
+  const ranges: string[] = []
+  const md5 = createHash('md5')
+  let received = 0
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    if (String(url).includes('uploadType=resumable')) return initResponse()
+    const range = ((init as RequestInit).headers as Record<string, string>)['Content-Range']
+    const body = (init as RequestInit).body as Uint8Array
+    ranges.push(range)
+    const kept = keep?.(range, body) ?? body.length
+    md5.update(body.subarray(0, kept))
+    received += kept
+    if (kept === body.length && !range.endsWith('/*')) {
+      return fileResponse({ id: 'f-1', name: 'big.zip', size: String(received), md5Checksum: md5.digest('hex') })
+    }
+    return new Response(null, { status: 308, headers: { Range: `bytes=0-${received - 1}` } })
+  })
+  return { ranges }
+}
+
 describe('uploadFile (resumable)', () => {
   it('initiates a resumable session with metadata, then uploads the bytes', async () => {
     const data = new Uint8Array([1, 2, 3, 4, 5]).buffer
@@ -111,7 +145,7 @@ describe('uploadFile (resumable)', () => {
         })
       )
 
-    const result = await uploadFile('access-tok', 'folder-1', 'arkiv.zip', data)
+    const result = await uploadFile('access-tok', 'folder-1', 'arkiv.zip', streamOf(data))
 
     expect(result.id).toBe('file-123')
     expect(result.size_bytes).toBe(2048)
@@ -122,7 +156,8 @@ describe('uploadFile (resumable)', () => {
     expect((initInit as RequestInit).method).toBe('POST')
     const initHeaders = (initInit as RequestInit).headers as Record<string, string>
     expect(initHeaders.Authorization).toBe('Bearer access-tok')
-    expect(initHeaders['X-Upload-Content-Length']).toBe('5')
+    // The length is not known when the session starts: the file is produced while it is sent.
+    expect(initHeaders['X-Upload-Content-Length']).toBeUndefined()
     const metadata = JSON.parse(String((initInit as RequestInit).body))
     expect(metadata.name).toBe('arkiv.zip')
     expect(metadata.parents).toEqual(['folder-1'])
@@ -150,12 +185,12 @@ describe('uploadFile (resumable)', () => {
         fileResponse({ id: 'f-1', name: 'big.zip', md5Checksum: md5Of(data) })
       )
 
-    const result = await uploadFile('at', 'folder', 'big.zip', data)
+    const result = await uploadFile('at', 'folder', 'big.zip', streamOf(data))
     expect(result.id).toBe('f-1')
     expect(fetchMock).toHaveBeenCalledTimes(3)
     const firstRange = (fetchMock.mock.calls[1][1] as RequestInit)
       .headers as Record<string, string>
-    expect(firstRange['Content-Range']).toBe(`bytes 0-${CHUNK - 1}/${CHUNK + 10}`)
+    expect(firstRange['Content-Range']).toBe(`bytes 0-${CHUNK - 1}/*`)
     const secondRange = (fetchMock.mock.calls[2][1] as RequestInit)
       .headers as Record<string, string>
     expect(secondRange['Content-Range']).toBe(`bytes ${CHUNK}-${CHUNK + 9}/${CHUNK + 10}`)
@@ -171,7 +206,7 @@ describe('uploadFile (resumable)', () => {
         fileResponse({ id: 'f-1', name: 'a.zip', md5Checksum: md5Of(data) })
       )
 
-    const result = await uploadFile('at', 'folder', 'a.zip', data)
+    const result = await uploadFile('at', 'folder', 'a.zip', streamOf(data))
     expect(result.id).toBe('f-1')
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
@@ -181,7 +216,7 @@ describe('uploadFile (resumable)', () => {
       new Response('quota exceeded', { status: 403 })
     )
     await expect(
-      uploadFile('at', 'folder', 'a.zip', new Uint8Array(1).buffer)
+      uploadFile('at', 'folder', 'a.zip', streamOf(new Uint8Array(1).buffer))
     ).rejects.toThrow(/403/)
   })
 
@@ -198,9 +233,12 @@ describe('uploadFile (resumable)', () => {
         fileResponse({ id: 'f-2', name: 'a.zip', md5Checksum: md5Of(data) })
       )
 
-    const result = await uploadFile('at', 'folder', 'a.zip', data)
+    const open = vi.fn(streamOf(data))
+    const result = await uploadFile('at', 'folder', 'a.zip', open)
     expect(result.id).toBe('f-2')
     expect(fetchMock).toHaveBeenCalledTimes(4)
+    // The retry produces the file again rather than keeping the first copy.
+    expect(open).toHaveBeenCalledTimes(2)
   })
 
   it('throws after two checksum mismatches', async () => {
@@ -212,15 +250,80 @@ describe('uploadFile (resumable)', () => {
         : fileResponse({ id: 'f-1', name: 'a.zip', md5Checksum: 'corrupted' })
     })
     await expect(
-      uploadFile('at', 'folder', 'a.zip', new Uint8Array([9]).buffer)
+      uploadFile('at', 'folder', 'a.zip', streamOf(new Uint8Array([9]).buffer))
     ).rejects.toThrow(/checksum mismatch/)
+  })
+
+  it('sends each chunk as it is produced, holding no more than a chunk and the piece it was cut from', async () => {
+    // 21 MB in 3 MB pieces, the way the ZIP writer hands over large files.
+    let produced = 0
+    async function* source() {
+      for (let i = 0; i < 7; i++) {
+        produced += 3 * MB
+        yield new Uint8Array(3 * MB).fill(i)
+      }
+    }
+    const held: number[] = []
+    const { ranges } = driveSession((range) => {
+      const end = Number(range.match(/-(\d+)\//)![1]) + 1
+      held.push(produced - end)
+      return undefined
+    })
+
+    const result = await uploadFile('at', 'folder', 'big.zip', source)
+
+    expect(ranges).toEqual([
+      `bytes 0-${8 * MB - 1}/*`,
+      `bytes ${8 * MB}-${16 * MB - 1}/*`,
+      `bytes ${16 * MB}-${21 * MB - 1}/${21 * MB}`,
+    ])
+    expect(Math.max(...held)).toBeLessThanOrEqual(3 * MB)
+    // Drive's md5 of what it received matched the md5 of what was produced.
+    expect(result.size_bytes).toBe(21 * MB)
+  })
+
+  it('states the total on the last chunk when the file ends on a chunk boundary', async () => {
+    const { ranges } = driveSession()
+
+    await uploadFile('at', 'folder', 'big.zip', streamOf(new Uint8Array(16 * MB).fill(1).buffer))
+
+    expect(ranges).toEqual([`bytes 0-${8 * MB - 1}/*`, `bytes ${8 * MB}-${16 * MB - 1}/${16 * MB}`])
+  })
+
+  it('sends again the part of a chunk Drive did not keep', async () => {
+    let first = true
+    const { ranges } = driveSession(() => {
+      if (!first) return undefined
+      first = false
+      // Drive kept only the first 4 MB of the first chunk.
+      return 4 * MB
+    })
+    const data = new Uint8Array(9 * MB)
+    for (let i = 0; i < data.length; i += 4096) data[i] = i % 251
+
+    const result = await uploadFile('at', 'folder', 'big.zip', streamOf(data.buffer))
+
+    expect(ranges).toEqual([
+      `bytes 0-${8 * MB - 1}/*`,
+      `bytes ${4 * MB}-${8 * MB - 1}/*`,
+      `bytes ${8 * MB}-${9 * MB - 1}/${9 * MB}`,
+    ])
+    expect(result.id).toBe('f-1')
+  })
+
+  it('finishes an empty file with its total alone', async () => {
+    const { ranges } = driveSession()
+
+    await uploadFile('at', 'folder', 'a.txt', streamOf(new ArrayBuffer(0)))
+
+    expect(ranges).toEqual(['bytes */0'])
   })
 
   it('trusts the upload when Drive omits md5Checksum', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(initResponse())
       .mockResolvedValueOnce(fileResponse({ id: 'f-1', name: 'a.zip' }))
-    const result = await uploadFile('at', 'folder', 'a.zip', new Uint8Array([9]).buffer)
+    const result = await uploadFile('at', 'folder', 'a.zip', streamOf(new Uint8Array([9]).buffer))
     expect(result.id).toBe('f-1')
     expect(result.md5_checksum).toBeUndefined()
   })
@@ -236,7 +339,7 @@ describe('updateFile (resumable, in place)', () => {
         fileResponse({ id: 'file-9', name: 'Arkiv 2024.zip', md5Checksum: md5Of(data) })
       )
 
-    const result = await updateFile('at', 'file-9', data)
+    const result = await updateFile('at', 'file-9', streamOf(data))
     expect(result.id).toBe('file-9')
 
     const [initUrl, initInit] = fetchMock.mock.calls[0]
@@ -251,7 +354,7 @@ describe('updateFile (resumable, in place)', () => {
       new Response('not found', { status: 404 })
     )
     await expect(
-      updateFile('at', 'gone-id', new Uint8Array([1]).buffer)
+      updateFile('at', 'gone-id', streamOf(new Uint8Array([1]).buffer))
     ).rejects.toBeInstanceOf(DriveFileGoneError)
   })
 })
@@ -347,7 +450,7 @@ describe('a grant without the Drive scope', () => {
   it('fails an upload at session init with CloudScopeMissingError', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(insufficientScopeResponse())
     await expect(
-      uploadFile('at', 'folder-1', 'Arkiv 2024.zip', new ArrayBuffer(4))
+      uploadFile('at', 'folder-1', 'Arkiv 2024.zip', streamOf(new ArrayBuffer(4)))
     ).rejects.toBeInstanceOf(CloudScopeMissingError)
   })
 

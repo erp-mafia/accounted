@@ -8,14 +8,15 @@
  * Queries by name return only app-created folders with that name.
  *
  * Uploads use Drive's resumable protocol in 8 MB chunks (a multiple of the
- * required 256 KiB): no multipart body concatenation (which doubles memory
- * for large archives), per-chunk retries on transient failures, and every
- * upload is verified against the md5Checksum Drive reports. A silently
+ * required 256 KiB), cut from the file as it is produced, so memory holds a
+ * chunk rather than the archive: per-chunk retries on transient failures, and
+ * every upload is verified against the md5Checksum Drive reports. A silently
  * corrupted backup is worse than a failed one.
  */
 
 import { createHash } from 'node:crypto'
 import { CloudScopeMissingError } from './cloud-provider'
+import { uploadChunks } from './upload-chunks'
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const DRIVE_UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3/files'
@@ -178,11 +179,11 @@ export async function uploadFile(
   accessToken: string,
   folderId: string,
   fileName: string,
-  data: ArrayBuffer,
+  open: () => AsyncIterable<Uint8Array>,
   contentType = 'application/zip'
 ): Promise<UploadResult> {
-  return verifiedUpload(data, () =>
-    resumableUpload(accessToken, data, contentType, {
+  return verifiedUpload(() =>
+    resumableUpload(accessToken, open, contentType, {
       method: 'POST',
       url: `${DRIVE_UPLOAD_API}?uploadType=resumable&fields=${RESULT_FIELDS}`,
       metadata: { name: fileName, parents: [folderId] },
@@ -199,11 +200,11 @@ export async function uploadFile(
 export async function updateFile(
   accessToken: string,
   fileId: string,
-  data: ArrayBuffer,
+  open: () => AsyncIterable<Uint8Array>,
   contentType = 'application/zip'
 ): Promise<UploadResult> {
-  return verifiedUpload(data, () =>
-    resumableUpload(accessToken, data, contentType, {
+  return verifiedUpload(() =>
+    resumableUpload(accessToken, open, contentType, {
       method: 'PATCH',
       url: `${DRIVE_UPLOAD_API}/${encodeURIComponent(fileId)}?uploadType=resumable&fields=${RESULT_FIELDS}`,
       fileId,
@@ -211,19 +212,21 @@ export async function updateFile(
   )
 }
 
-async function verifiedUpload(
-  data: ArrayBuffer,
-  run: () => Promise<UploadResult>
-): Promise<UploadResult> {
-  const expectedMd5 = createHash('md5').update(Buffer.from(data)).digest('hex')
+/** What Drive answered, and the md5 of the bytes that were sent. */
+interface SentUpload {
+  result: UploadResult
+  md5: string
+}
+
+async function verifiedUpload(run: () => Promise<SentUpload>): Promise<UploadResult> {
   let lastError: Error | null = null
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await run()
-    if (!result.md5_checksum || result.md5_checksum === expectedMd5) {
+    const { result, md5 } = await run()
+    if (!result.md5_checksum || result.md5_checksum === md5) {
       return result
     }
     lastError = new Error(
-      `Drive upload checksum mismatch: expected ${expectedMd5}, got ${result.md5_checksum}`
+      `Drive upload checksum mismatch: expected ${md5}, got ${result.md5_checksum}`
     )
   }
   throw lastError
@@ -238,19 +241,20 @@ interface ResumableTarget {
 
 async function resumableUpload(
   accessToken: string,
-  data: ArrayBuffer,
+  open: () => AsyncIterable<Uint8Array>,
   contentType: string,
   target: ResumableTarget
-): Promise<UploadResult> {
+): Promise<SentUpload> {
   // 1) Initiate the session. Metadata (name/parents) rides on the initiation
-  //    request; the byte chunks follow against the returned session URL.
+  //    request; the byte chunks follow against the returned session URL. No
+  //    length: the file is produced while it is sent, so its last chunk is
+  //    what states the total.
   const initRes = await fetch(target.url, {
     method: target.method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json; charset=UTF-8',
       'X-Upload-Content-Type': contentType,
-      'X-Upload-Content-Length': String(data.byteLength),
     },
     body: target.metadata ? JSON.stringify(target.metadata) : undefined,
   })
@@ -265,14 +269,27 @@ async function resumableUpload(
     throw new Error('Drive upload init returned no session URL')
   }
 
-  // 2) Send the bytes in chunks. 308 = chunk accepted, keep going;
-  //    200/201 = upload complete with the file resource as body.
-  const total = data.byteLength
-  const buffer = Buffer.from(data)
+  // 2) Send the bytes in chunks as they are produced. 308 = chunk accepted,
+  //    keep going; 200/201 = upload complete with the file resource as body.
+  //    Until the last chunk the total is `*`, the protocol's "not known yet".
+  const chunks = uploadChunks(open(), UPLOAD_CHUNK_BYTES)
+  const md5 = createHash('md5')
+  // The chunk in hand, from byte `start` on: the only bytes that can be sent again.
+  let held = { bytes: new Uint8Array(0), last: false, start: 0 }
   let offset = 0
   while (true) {
-    const end = Math.min(offset + UPLOAD_CHUNK_BYTES, total)
-    const chunk = buffer.subarray(offset, end)
+    if (offset >= held.start + held.bytes.length) {
+      const next = await chunks.next()
+      if (next.done) throw new Error('Drive upload ended without Drive completing the file')
+      held = { bytes: next.value.chunk, last: next.value.last, start: offset }
+      md5.update(held.bytes)
+    }
+    if (offset < held.start) {
+      throw new Error(`Drive upload session lost sent bytes: it has ${offset} of ${held.start}`)
+    }
+    const end = held.start + held.bytes.length
+    const total = held.last ? String(end) : '*'
+    const chunk = held.bytes.subarray(offset - held.start)
 
     let res: Response | null = null
     let lastErr: unknown = null
@@ -282,7 +299,8 @@ async function resumableUpload(
           method: 'PUT',
           headers: {
             'Content-Length': String(chunk.length),
-            'Content-Range': `bytes ${offset}-${end - 1}/${total}`,
+            // An empty file has no byte range, only its total.
+            'Content-Range': chunk.length > 0 ? `bytes ${offset}-${end - 1}/${total}` : `bytes */${total}`,
           },
           body: chunk,
         })
@@ -307,7 +325,7 @@ async function resumableUpload(
       // Advance to wherever the session says it is (defensive: usually `end`).
       const range = res.headers.get('range')
       const match = range?.match(/bytes=0-(\d+)/)
-      offset = match ? Number(match[1]) + 1 : end
+      offset = Math.min(match ? Number(match[1]) + 1 : end, end)
       continue
     }
     if (res.ok) {
@@ -318,14 +336,15 @@ async function resumableUpload(
         webViewLink?: string
         md5Checksum?: string
       }
-      return {
+      const result: UploadResult = {
         id: json.id,
         name: json.name,
-        size_bytes: json.size ? Number(json.size) : total,
+        size_bytes: json.size ? Number(json.size) : end,
         web_view_link:
           json.webViewLink || `https://drive.google.com/file/d/${json.id}/view`,
         md5_checksum: json.md5Checksum,
       }
+      return { result, md5: md5.digest('hex') }
     }
     const body = await res.text()
     throw new Error(`Drive upload failed: ${res.status} ${body.slice(0, 200)}`)

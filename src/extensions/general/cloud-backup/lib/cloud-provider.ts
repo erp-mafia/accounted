@@ -95,7 +95,13 @@ export interface PutFileParams {
    * the user deleted the file); path-addressed providers ignore it.
    */
   previousId?: string
-  data: ArrayBuffer
+  /**
+   * Starts the file's bytes, produced while they are uploaded: an archive
+   * goes from the ZIP writer to the provider a chunk at a time and is never
+   * held whole. An upload that has to start over (a checksum mismatch) calls
+   * it again.
+   */
+  open: () => AsyncIterable<Uint8Array>
   contentType: string
 }
 
