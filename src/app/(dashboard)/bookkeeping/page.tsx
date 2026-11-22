@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { useAssistantAvailable, useAssistantChatEnabled, useBookingScreenEnabled } from '@/contexts/CompanyContext'
-import { BOOKING_SCREEN_PATH } from '@/lib/bookkeeping/booking-screen'
+import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -67,15 +67,13 @@ export default function BookkeepingPage() {
   // and the bokslut preflight) lives in the same query and is the list's to
   // read and write (lib/bookkeeping/verifikat-list-query.ts). The deep links
   // below consume only their own key, so that view survives them (crm#1998).
-  const replaceWithout = useCallback(
-    (key: string) => {
-      const rest = new URLSearchParams(window.location.search)
-      rest.delete(key)
-      const qs = rest.toString()
-      router.replace(qs ? `/bookkeeping?${qs}` : '/bookkeeping')
-    },
-    [router],
-  )
+  const hrefWithout = useCallback((key: string) => {
+    const rest = new URLSearchParams(window.location.search)
+    rest.delete(key)
+    const qs = rest.toString()
+    return qs ? `/bookkeeping?${qs}` : '/bookkeeping'
+  }, [])
+  const replaceWithout = useCallback((key: string) => router.replace(hrefWithout(key)), [router, hrefWithout])
 
   const [refreshKey, setRefreshKey] = useState(0)
   const [showNewEntry, setShowNewEntry] = useState(false)
@@ -187,22 +185,23 @@ export default function BookkeepingPage() {
   const wantsNew = canWrite && searchParams.has('new')
   useEffect(() => {
     if (!wantsNew || copyFromId || searchParams.get('skv_tx')) return
-    // With the booking screen switched on, the empty verifikat is booked there.
+    // With the booking screen switched on, the empty verifikat is booked
+    // there, and the screen returns to this list with its view kept.
     if (bookingScreen) {
-      router.replace(BOOKING_SCREEN_PATH)
+      router.replace(bookingScreenHref({ kind: 'voucher' }, hrefWithout('new')))
       return
     }
     replaceWithout('new')
     setCopyPrefill(null)
     setSkvLink(null)
     setShowNewEntry(true)
-  }, [wantsNew, copyFromId, searchParams, replaceWithout, bookingScreen, router])
+  }, [wantsNew, copyFromId, searchParams, replaceWithout, hrefWithout, bookingScreen, router])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // "Tomt verifikat": the booking screen when it is switched on, else the dialog.
   const openEmptyVoucher = () => {
     if (bookingScreen) {
-      router.push(BOOKING_SCREEN_PATH)
+      router.push(bookingScreenHref({ kind: 'voucher' }, `/bookkeeping${window.location.search}`))
       return
     }
     setCopyPrefill(null)

@@ -4586,7 +4586,7 @@ export default function TransactionsPage() {
     // there (betalning, underlag and kontering on one page) instead of the
     // dialog.
     if (templatePickerTransaction && bookingScreen) {
-      router.push(bookingScreenHref({ kind: 'transaction', transactionId: templatePickerTransaction.id, account: null }))
+      router.push(bookingScreenHref({ kind: 'transaction', transactionId: templatePickerTransaction.id, account: null }, `/transactions${window.location.search}`))
       return
     }
     if (templatePickerTransaction) {
@@ -4624,7 +4624,7 @@ export default function TransactionsPage() {
     if (!templatePickerTransaction) return
     if (bookingScreen) {
       setTemplatePickerOpen(false)
-      router.push(bookingScreenHref({ kind: 'transaction', transactionId: templatePickerTransaction.id, account: accountNumber }))
+      router.push(bookingScreenHref({ kind: 'transaction', transactionId: templatePickerTransaction.id, account: accountNumber }, `/transactions${window.location.search}`))
       return
     }
     setBookingDialogTransaction(templatePickerTransaction)

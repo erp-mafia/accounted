@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BOOKING_SCREEN_PATH, bookingScreenHref, parseBookingScreenSubject } from '../booking-screen'
+import { BOOKING_SCREEN_PATH, bookingScreenHref, parseBookingScreenBack, parseBookingScreenSubject, safeReturnPath } from '../booking-screen'
 
 const TX = '3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f'
 
@@ -42,5 +42,37 @@ describe('parseBookingScreenSubject', () => {
     expect(parseBookingScreenSubject({ transaktion: TX, konto: '1930' })).toMatchObject({ account: '1930' })
     expect(parseBookingScreenSubject({ transaktion: TX, konto: '193' })).toMatchObject({ account: null })
     expect(parseBookingScreenSubject({ transaktion: TX, konto: 'abcd' })).toMatchObject({ account: null })
+  })
+})
+
+describe('safeReturnPath', () => {
+  it('keeps the list pages with their own query', () => {
+    expect(safeReturnPath('/bookkeeping')).toBe('/bookkeeping')
+    expect(safeReturnPath('/bookkeeping?status=draft&sida=2')).toBe('/bookkeeping?status=draft&sida=2')
+    expect(safeReturnPath('/transactions?flik=alla')).toBe('/transactions?flik=alla')
+  })
+
+  it('drops another host, another page and backslash tricks', () => {
+    expect(safeReturnPath('https://evil.example/bookkeeping')).toBeNull()
+    expect(safeReturnPath('//evil.example/bookkeeping')).toBeNull()
+    expect(safeReturnPath('/\\evil.example')).toBeNull()
+    expect(safeReturnPath('/bookkeepingx')).toBeNull()
+    expect(safeReturnPath('/settings')).toBeNull()
+    expect(safeReturnPath('')).toBeNull()
+    expect(safeReturnPath(null)).toBeNull()
+  })
+})
+
+describe('the return address', () => {
+  it('rides along in the address and is read back', () => {
+    const href = bookingScreenHref({ kind: 'voucher' }, '/bookkeeping?status=draft')
+    expect(href).toBe('/bokfor?tillbaka=%2Fbookkeeping%3Fstatus%3Ddraft')
+    const query = Object.fromEntries(new URL(`https://x${href}`).searchParams)
+    expect(parseBookingScreenBack(query)).toBe('/bookkeeping?status=draft')
+  })
+
+  it('is left out when it is not one the screen may return to', () => {
+    expect(bookingScreenHref({ kind: 'voucher' }, '//evil.example')).toBe(BOOKING_SCREEN_PATH)
+    expect(parseBookingScreenBack({ tillbaka: 'https://evil.example' })).toBeNull()
   })
 })

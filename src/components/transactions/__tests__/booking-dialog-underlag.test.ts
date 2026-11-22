@@ -231,7 +231,7 @@ describe('underlag survives closing a booking dialog', () => {
 
   it('useHeldUnderlag links everything attached, the pinned document included, once nothing is on its way, minus what was let go', () => {
     const settled = HELD_SRC.indexOf('const ownUnderlag = await settled()')
-    const targets = HELD_SRC.indexOf('underlagLinkTargets(attached, transactionId).filter((target) => !isLetGo(target.documentId))')
+    const targets = HELD_SRC.indexOf('underlagLinkTargets(latest.current, transactionId).filter((target) => !isLetGo(target.documentId))')
     expect(settled).toBeGreaterThan(-1)
     expect(targets).toBeGreaterThan(settled)
     expect(HELD_SRC).toMatch(/linkDocuments\(targets, journalEntryId\)/)

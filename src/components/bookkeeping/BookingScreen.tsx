@@ -42,14 +42,16 @@ export interface BookingScreenProps {
   transaction: Transaction | null
   /** A counter account the person already picked before opening the screen. */
   account: string | null
+  /** The page to return to (the list with its filters), checked by safeReturnPath. */
+  back: string | null
 }
 
-export function BookingScreen({ transaction, account }: BookingScreenProps) {
+export function BookingScreen({ transaction, account, back }: BookingScreenProps) {
   const t = useTranslations('booking_screen')
   const router = useRouter()
   const { canWrite, lockedTitle } = useViewerLock()
 
-  const backHref = transaction ? '/transactions' : '/bookkeeping'
+  const backHref = back ?? (transaction ? '/transactions' : '/bookkeeping')
   const backLabel = transaction ? t('back_transactions') : t('back_vouchers')
 
   const amountLabel = transaction
@@ -309,7 +311,9 @@ function TransactionBooking({
 function VoucherBooking({ onDone }: { onDone: () => void }) {
   const t = useTranslations('booking_screen')
   // The form keeps its own upload zone and links the files after posting
-  // (as in NewJournalEntryDialog); the screen shows the first one beside it.
+  // (as in NewJournalEntryDialog); the screen shows the first one beside it
+  // and lets a file dropped anywhere on it reach that zone.
+  const dropSurfaceRef = useRef<HTMLDivElement>(null)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const shown = uploadedFiles.find((f) => f.status === 'uploaded' && f.id)
 
@@ -321,6 +325,7 @@ function VoucherBooking({ onDone }: { onDone: () => void }) {
       </section>
 
       <BookingColumns
+        dropSurfaceRef={dropSurfaceRef}
         underlag={
           shown?.id ? (
             <DocumentViewerPane
@@ -333,7 +338,14 @@ function VoucherBooking({ onDone }: { onDone: () => void }) {
             <p className="text-sm text-muted-foreground">{t('underlag_empty_voucher')}</p>
           )
         }
-        kontering={<JournalEntryForm bare onEntryCreated={() => onDone()} onUploadedFilesChange={setUploadedFiles} />}
+        kontering={
+          <JournalEntryForm
+            bare
+            onEntryCreated={() => onDone()}
+            onUploadedFilesChange={setUploadedFiles}
+            uploadDropSurfaceRef={dropSurfaceRef}
+          />
+        }
       />
     </>
   )

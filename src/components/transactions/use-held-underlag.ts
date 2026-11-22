@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFilesUpdate } from '@/components/bookkeeping/upload-list'
 import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
@@ -66,6 +66,12 @@ export function useHeldUnderlag(options: {
   const underlag = useTransactionUnderlag(options)
   const { claim, withdraw, settled, isLetGo } = underlag
   const [attached, setAttached] = useState<ReviewUnderlag>(NOTHING_ATTACHED)
+  // The latest list, for a link that first waits for a pin or a take-off:
+  // an upload that finishes during the wait is linked too.
+  const latest = useRef(attached)
+  useEffect(() => {
+    latest.current = attached
+  }, [attached])
 
   const claimUpload = useCallback(
     (file: UploadedFile) => {
@@ -109,7 +115,7 @@ export function useHeldUnderlag(options: {
 
   const link = async (journalEntryId: string, transactionId: string) => {
     const ownUnderlag = await settled()
-    const targets = underlagLinkTargets(attached, transactionId).filter((target) => !isLetGo(target.documentId))
+    const targets = underlagLinkTargets(latest.current, transactionId).filter((target) => !isLetGo(target.documentId))
     const result = await linkDocuments(targets, journalEntryId)
     return { ...result, ownUnderlag }
   }

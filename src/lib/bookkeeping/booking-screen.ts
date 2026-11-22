@@ -22,12 +22,35 @@ function first(value: QueryValue): string | null {
   return trimmed ? trimmed : null
 }
 
-/** The screen's address for a subject. */
-export function bookingScreenHref(subject: BookingScreenSubject): string {
-  if (subject.kind === 'voucher') return BOOKING_SCREEN_PATH
-  const params = new URLSearchParams({ transaktion: subject.transactionId })
-  if (subject.account) params.set('konto', subject.account)
-  return `${BOOKING_SCREEN_PATH}?${params.toString()}`
+/** The pages the screen returns to, with the list's own query (filters, search, page) kept. */
+const RETURN_PATHS = ['/bookkeeping', '/transactions'] as const
+
+/**
+ * A return address the screen may follow: a path on one of the pages it
+ * returns to, never another host (`//x`), another page or a backslash
+ * trick. Anything else is dropped.
+ */
+export function safeReturnPath(raw: string | null | undefined): string | null {
+  const path = raw?.trim()
+  if (!path || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return null
+  const known = RETURN_PATHS.some((p) => path === p || path.startsWith(`${p}?`) || path.startsWith(`${p}/`))
+  return known ? path : null
+}
+
+/**
+ * The screen's address for a subject, with the page to return to after
+ * booking when it is one the screen may return to (`tillbaka`).
+ */
+export function bookingScreenHref(subject: BookingScreenSubject, back?: string | null): string {
+  const params = new URLSearchParams()
+  if (subject.kind === 'transaction') {
+    params.set('transaktion', subject.transactionId)
+    if (subject.account) params.set('konto', subject.account)
+  }
+  const returnTo = safeReturnPath(back)
+  if (returnTo) params.set('tillbaka', returnTo)
+  const qs = params.toString()
+  return qs ? `${BOOKING_SCREEN_PATH}?${qs}` : BOOKING_SCREEN_PATH
 }
 
 /**
@@ -40,4 +63,9 @@ export function parseBookingScreenSubject(query: { transaktion?: QueryValue; kon
   if (!transactionId || !isUuid(transactionId)) return { kind: 'voucher' }
   const account = first(query.konto)
   return { kind: 'transaction', transactionId: transactionId.toLowerCase(), account: account && ACCOUNT_NUMBER_RE.test(account) ? account : null }
+}
+
+/** The page to return to after booking, when the address names a safe one. */
+export function parseBookingScreenBack(query: { tillbaka?: QueryValue }): string | null {
+  return safeReturnPath(first(query.tillbaka))
 }
