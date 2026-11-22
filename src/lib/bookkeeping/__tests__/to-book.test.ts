@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { buildToBookRows, inToBookFilter, toBookCounts, type ToBookBankRow, type ToBookDocument } from '../to-book'
+import {
+  bookingWalk,
+  buildToBookRows,
+  inToBookFilter,
+  opensInBookingScreen,
+  toBookCounts,
+  toBookFilterFromSlug,
+  toBookFilterOfBack,
+  toBookListHref,
+  TO_BOOK_FILTERS,
+  type ToBookBankRow,
+  type ToBookDocument,
+} from '../to-book'
 
 const bank = (over: Partial<ToBookBankRow> = {}): ToBookBankRow => ({
   id: 'tx-1',
@@ -75,5 +87,38 @@ describe('filters and counts', () => {
     expect(inToBookFilter(found, 'found')).toBe(true)
     expect(inToBookFilter(found, 'missing')).toBe(false)
     expect(inToBookFilter(found, 'all')).toBe(true)
+  })
+})
+
+describe('the walk on the booking screen', () => {
+  const rows = buildToBookRows(
+    [bank({ id: 'a', date: '2026-11-20' }), bank({ id: 'b', date: '2026-11-19', document_id: 'd' }), bank({ id: 'c', date: '2026-11-18' })],
+    [doc({ id: 'x', bankMatchTransactionId: 'c' }), doc({ id: 'y', date: '2026-11-21' })],
+  )
+
+  it('steps through the bank rows the screen opens, in the list order, skipping found pairs and documents', () => {
+    expect(rows.filter(opensInBookingScreen).map((r) => r.transactionId)).toEqual(['a', 'b'])
+    expect(bookingWalk(rows, 'all')).toEqual(['a', 'b'])
+  })
+
+  it('keeps the list filter', () => {
+    expect(bookingWalk(rows, 'missing')).toEqual(['a'])
+    expect(bookingWalk(rows, 'no_bank')).toEqual([])
+  })
+})
+
+describe('the filter in the address', () => {
+  it('round-trips every filter, Alla without a query', () => {
+    for (const f of TO_BOOK_FILTERS) expect(toBookFilterOfBack(toBookListHref(f))).toBe(f)
+    expect(toBookListHref('all')).toBe('/att-bokfora')
+    expect(toBookListHref('missing')).toBe('/att-bokfora?visa=saknar-underlag')
+  })
+
+  it('reads an unknown filter as Alla, and another page as no list at all', () => {
+    expect(toBookFilterFromSlug('nonsense')).toBe('all')
+    expect(toBookFilterOfBack('/att-bokfora?visa=nonsense')).toBe('all')
+    expect(toBookFilterOfBack('/transactions?visa=saknar-underlag')).toBeNull()
+    expect(toBookFilterOfBack('/att-bokforax')).toBeNull()
+    expect(toBookFilterOfBack(null)).toBeNull()
   })
 })

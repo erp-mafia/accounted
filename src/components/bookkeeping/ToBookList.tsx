@@ -1,8 +1,8 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import Link from 'next/link'
-import useSWR from 'swr'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -12,64 +12,22 @@ import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table-classes'
 import { ChevronRightIcon } from '@/components/icons'
 import { inboxFocusHref } from '@/components/dashboard/StepItems'
-import { itemHeadline, queueFor, type InkorgItem } from '@/lib/inkorg/items'
 import { INKORG_HREF, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
 import {
-  buildToBookRows,
   inToBookFilter,
+  opensInBookingScreen,
   toBookCounts,
+  toBookFilterFromSlug,
+  toBookListHref,
+  TO_BOOK_FILTER_PARAM,
   TO_BOOK_FILTERS,
-  type ToBookBankRow,
-  type ToBookDocument,
   type ToBookFilter,
   type ToBookRow,
 } from '@/lib/bookkeeping/to-book'
+import { useToBookRows } from './use-to-book-rows'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { cn, formatDate, formatRowAmount } from '@/lib/utils'
-
-/** The page this list is, for the booking screen's way back. */
-const LIST_PATH = '/att-bokfora'
-
-/**
- * The inbox rows, as Inkommande reads them (components/inkorg/use-inkorg-data.ts):
- * scope=inbox reads every item and answers the ones still in the inbox, so an
- * old open document is never cut off behind newer booked ones.
- */
-const INBOX_ITEMS_URL = '/api/extensions/ext/invoice-inbox/items?scope=inbox'
-
-/** The open bank rows: the read Bankrader's Att bokföra tab makes (open_bank_rows). */
-async function readBankRows(): Promise<ToBookBankRow[]> {
-  const res = await fetch('/api/transactions?unmatched=true')
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const json = (await res.json()) as { data?: ToBookBankRow[] }
-  return json.data ?? []
-}
-
-/**
- * The documents Inkommande asks a person about, in its Behöver dig queue. A
- * company without the inbox (no extension, no capability) has none: the
- * list then holds the bank rows only.
- */
-async function readDocuments(): Promise<ToBookDocument[]> {
-  const res = await fetch(INBOX_ITEMS_URL)
-  if (res.status === 402 || res.status === 403 || res.status === 404) return []
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const json = (await res.json()) as { data?: { items?: InkorgItem[] } }
-  return queueFor(json.data?.items ?? [], { kind: 'need' })
-    .filter((item) => !item.matched_transaction_id)
-    .map((item) => {
-      const head = itemHeadline(item)
-      return {
-        id: item.id,
-        name: head.name ?? item.email_from?.trim() ?? '',
-        date: head.documentDate ?? item.created_at.slice(0, 10),
-        amount: head.amount,
-        currency: head.amount == null ? null : head.currency,
-        bankMatchTransactionId: item.bank_match?.transaction_id ?? null,
-      }
-    })
-}
 
 /**
  * Att bokföra (/att-bokfora): everything that waits to be booked, as one
@@ -80,13 +38,15 @@ async function readDocuments(): Promise<ToBookDocument[]> {
  */
 export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
   const t = useTranslations('to_book_list')
-  const [filter, setFilter] = useState<ToBookFilter>('all')
-  const bank = useSWR('to-book:bank-rows', readBankRows)
-  const docs = useSWR('to-book:documents', readDocuments)
+  const router = useRouter()
+  // The filter lives in the address (?visa=), so the booking screen's way back
+  // and its next row keep it.
+  const filter = toBookFilterFromSlug(useSearchParams().get(TO_BOOK_FILTER_PARAM))
+  const setFilter = (next: ToBookFilter) => router.replace(toBookListHref(next), { scroll: false })
+  const { rows, loading, failed, retry } = useToBookRows()
   const { cashAccounts } = useCashAccounts()
   const inboxBase = inkorgV2Enabled ? INKORG_HREF : LEGACY_INBOX_HREF
 
-  const rows = useMemo(() => buildToBookRows(bank.data ?? [], docs.data ?? []), [bank.data, docs.data])
   const counts = useMemo(() => toBookCounts(rows), [rows])
   const shown = rows.filter((r) => inToBookFilter(r, filter))
   const filterLabel: Record<ToBookFilter, string> = {
@@ -98,12 +58,9 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
   const accountName = (id: string | null) => cashAccounts.find((a) => a.id === id)?.name ?? null
 
   const hrefOf = (row: ToBookRow): string =>
-    row.inboxItemId && (row.kind === 'document' || row.underlag === 'found')
-      ? inboxFocusHref(inboxBase, row.inboxItemId)
-      : bookingScreenHref({ kind: 'transaction', transactionId: row.transactionId as string, account: null }, LIST_PATH)
-
-  const loading = (!bank.data && !bank.error) || (!docs.data && !docs.error)
-  const failed = bank.error || docs.error
+    opensInBookingScreen(row)
+      ? bookingScreenHref({ kind: 'transaction', transactionId: row.transactionId as string, account: null }, toBookListHref(filter))
+      : inboxFocusHref(inboxBase, row.inboxItemId as string)
 
   return (
     <div className="space-y-4">
@@ -117,7 +74,7 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
       />
 
       {failed ? (
-        <LoadError title={t('load_error')} onRetry={() => void Promise.all([bank.mutate(), docs.mutate()])} />
+        <LoadError title={t('load_error')} onRetry={() => void retry()} />
       ) : loading ? (
         <LateReveal>
           <div className="space-y-1">

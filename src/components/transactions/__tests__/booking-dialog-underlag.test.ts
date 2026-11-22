@@ -34,6 +34,7 @@ const PICKER_SRC = read('../TemplatePicker.tsx')
 const HOOK_SRC = read('../use-transaction-underlag.ts')
 const HELD_SRC = read('../use-held-underlag.ts')
 const SCREEN_SRC = read('../../bookkeeping/BookingScreen.tsx')
+const HELD_ROWS_SRC = read('../HeldUnderlagRows.tsx')
 const ZONE_SRC = read('../../bookkeeping/DocumentUploadZone.tsx')
 const ATTACH_SRC = read('../TransactionAttachDocumentDialog.tsx')
 const CATALOG_HOOK_SRC = read('../../../lib/hooks/use-bas-catalog.ts')
@@ -245,17 +246,24 @@ describe('underlag survives closing a booking dialog', () => {
       expect(src).toMatch(new RegExp(`useHeldUnderlag\\(\\{\\s*transactionId: transaction\\??\\.id(?: \\?\\? null)?,\\s*rowDocumentId: transaction\\??\\.document_id \\?\\? null,\\s*${open}\\s*\\}\\)`))
       expect(src).toContain('onUploaded={claimUpload}')
       expect(src).toContain('onSelect={attachments.pickInboxDoc}')
-      expect(src).toContain('onRemove={() => void letGo(doc.document_id)}')
-      expect(src).toContain('onRemove={() => void detachEarlierUnderlag()}')
+      // The picked documents and the earlier underlag are taken off in the shared rows (HeldUnderlagRows).
+      expect(src).toContain('onDetachEarlier={() => void detachEarlierUnderlag()}')
       expect(src).toContain('<DestructiveConfirmDialog {...underlag.confirmProps} />')
       expect(src).toContain(`await attachments.link(journalEntryId, ${txId})`)
     })
   }
 
   it('both hosts hand every change from their upload zones to the hook', () => {
+    // Each host's own zone (before a document shows), and the shared rows'
+    // compact zone (once one does).
     expect(BOOKING_SRC).toContain('const handleFilesChange = attachments.onFilesChange')
-    expect(BOOKING_SRC.match(/onFilesChange=\{handleFilesChange\}/g)?.length).toBe(2)
-    expect(SCREEN_SRC.match(/onFilesChange=\{attachments\.onFilesChange\}/g)?.length).toBe(2)
+    expect(BOOKING_SRC.match(/onFilesChange=\{handleFilesChange\}/g)?.length).toBe(1)
+    expect(SCREEN_SRC.match(/onFilesChange=\{attachments\.onFilesChange\}/g)?.length).toBe(1)
+    expect(HELD_ROWS_SRC).toContain('onFilesChange={attachments.onFilesChange}')
+    expect(HELD_ROWS_SRC).toContain('onUploaded={attachments.claimUpload}')
+    expect(HELD_ROWS_SRC).toContain('onRemove={() => void attachments.letGo(doc.document_id)}')
+    expect(HELD_ROWS_SRC).toContain('onRemove={onDetachEarlier}')
+    for (const host of [BOOKING_SRC, SCREEN_SRC]) expect(host).toContain('<HeldUnderlagRows')
   })
 
   it('TransactionBookingDialog keeps the confirm inside its content, so the confirm never dismisses it', () => {

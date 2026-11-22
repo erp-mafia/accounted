@@ -130,3 +130,55 @@ export function toBookCounts(rows: readonly ToBookRow[]): Record<ToBookFilter, n
     number
   >
 }
+
+/** The list's page. */
+export const TO_BOOK_PATH = '/att-bokfora'
+
+/**
+ * Whether a row opens on the booking screen: a bank row without a document
+ * found for it. A found pair and a document open in Inkommande, where the
+ * pair is confirmed or the document is booked.
+ */
+export function opensInBookingScreen(row: ToBookRow): boolean {
+  return row.kind === 'bank' && row.underlag !== 'found' && row.transactionId !== null
+}
+
+/**
+ * The bank rows the booking screen steps through (J, K, and the next row
+ * after Bokför): the list's rows under its filter, in its order, that open
+ * there.
+ */
+export function bookingWalk(rows: readonly ToBookRow[], filter: ToBookFilter): string[] {
+  return rows.filter((r) => inToBookFilter(r, filter) && opensInBookingScreen(r)).map((r) => r.transactionId as string)
+}
+
+/** The list's filter in its address (?visa=), so the way back and the walk keep it. Alla has none. */
+export const TO_BOOK_FILTER_PARAM = 'visa'
+const FILTER_SLUGS: Record<Exclude<ToBookFilter, 'all'>, string> = {
+  missing: 'saknar-underlag',
+  found: 'kvitto-hittat',
+  no_bank: 'utan-bankrad',
+}
+
+/** The filter an address names; an unknown or missing one is Alla. */
+export function toBookFilterFromSlug(slug: string | null | undefined): ToBookFilter {
+  const hit = (Object.keys(FILTER_SLUGS) as Exclude<ToBookFilter, 'all'>[]).find((f) => FILTER_SLUGS[f] === slug)
+  return hit ?? 'all'
+}
+
+/** The list's address under a filter. */
+export function toBookListHref(filter: ToBookFilter): string {
+  return filter === 'all' ? TO_BOOK_PATH : `${TO_BOOK_PATH}?${TO_BOOK_FILTER_PARAM}=${FILTER_SLUGS[filter]}`
+}
+
+/**
+ * The filter a return address to the list carries, or null when the address
+ * is not the list: the booking screen then has no rows to step through.
+ */
+export function toBookFilterOfBack(back: string | null): ToBookFilter | null {
+  if (!back) return null
+  const at = back.indexOf('?')
+  const path = at === -1 ? back : back.slice(0, at)
+  if (path !== TO_BOOK_PATH) return null
+  return toBookFilterFromSlug(new URLSearchParams(at === -1 ? '' : back.slice(at + 1)).get(TO_BOOK_FILTER_PARAM))
+}

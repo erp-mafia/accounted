@@ -15,7 +15,7 @@ import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { useHeldUnderlag } from './use-held-underlag'
 import { bankRowInitialLines } from './bank-row-lines'
-import UnderlagFileRow from './UnderlagFileRow'
+import { HeldUnderlagRows } from './HeldUnderlagRows'
 import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { bankSideOf, templateBankLeg } from '@/lib/bookkeeping/bank-leg'
@@ -105,8 +105,6 @@ export default function TransactionBookingDialog({
   onUnderlagChange,
 }: TransactionBookingDialogProps) {
   const t = useTranslations('tx_booking_dialog')
-  const tUnderlag = useTranslations('tx_booking_underlag')
-  const tDetach = useTranslations('tx_detach')
   const { toast } = useToast()
   // The whole dialog takes a dropped file, not only the dashed box.
   const dropSurfaceRef = useRef<HTMLDivElement>(null)
@@ -120,9 +118,8 @@ export default function TransactionBookingDialog({
     open,
     onChange: onUnderlagChange,
   })
-  const { underlag, held, claimUpload, letGo } = attachments
+  const { underlag, held, claimUpload } = attachments
   const uploadedFiles = attachments.attached.files
-  const pickedInboxDocs = attachments.attached.inboxDocs
   // Settlement account for the bank line: resolved from the session-cached
   // cash accounts (seeded by the dashboard layout), so the form below mounts
   // on the first paint instead of after a /api/cash-accounts round trip on
@@ -198,10 +195,6 @@ export default function TransactionBookingDialog({
   // this dialog, or the first document attached in it), else the first one
   // held here, as soon as it is available (shownUnderlag).
   const { documentId: viewerDocId, mime: viewerMime, fileName: viewerName } = attachments.shown
-  // The row's underlag from before this dialog is in neither list: it gets a
-  // row (and an x) of its own.
-  const ownFromBefore = attachments.ownFromBefore
-
   // Every change from the upload zones goes through the hook: the x on a
   // finished upload lets it go, every other change lands on the latest list.
   const handleFilesChange = attachments.onFilesChange
@@ -323,32 +316,13 @@ export default function TransactionBookingDialog({
             )}
 
             {viewerDocId ? (
-              <div className="flex shrink-0 flex-col gap-2">
-                {ownFromBefore && (
-                  <UnderlagFileRow
-                    name={underlag.fileName ?? tUnderlag('file_fallback')}
-                    removeLabel={tDetach('menu_item')}
-                    disabled={underlag.busy}
-                    onRemove={() => void detachEarlierUnderlag()}
-                  />
-                )}
-                <DocumentUploadZone
-                  files={uploadedFiles}
-                  onFilesChange={handleFilesChange}
-                  onUploaded={claimUpload}
-                  compact
-                  dropSurfaceRef={dropSurfaceRef}
-                />
-                {pickedInboxDocs.map((doc) => (
-                  <UnderlagFileRow
-                    key={doc.document_id}
-                    name={doc.supplier_name ?? doc.file_name}
-                    removeLabel={t('doc_picked_remove')}
-                    onRemove={() => void letGo(doc.document_id)}
-                  />
-                ))}
+              <HeldUnderlagRows
+                attachments={attachments}
+                onDetachEarlier={() => void detachEarlierUnderlag()}
+                dropSurfaceRef={dropSurfaceRef}
+              >
                 {pickFromInbox}
-              </div>
+              </HeldUnderlagRows>
             ) : (
               pickFromInbox
             )}
