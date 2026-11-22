@@ -27,8 +27,8 @@
 -- years: 66 515 buffers instead of 135 507).
 --
 -- The answer for p_limit > 0 is unchanged (the pg test compares it with the
--- shipped query), and for p_limit <= 0 it is the named keys' rows of that
--- answer.
+-- shipped function, with and without keys named), and for p_limit <= 0 it is
+-- the named keys' rows of that answer.
 
 CREATE OR REPLACE FUNCTION public.get_observed_parties(
   p_company_id uuid,

@@ -388,6 +388,12 @@ describe('get_observed_parties ranking nothing (20261123005000)', () => {
           // And they are the named keys' rows of today's ranked answer.
           const ranked = (await client.query('SELECT public.get_observed_parties($1, $2, $3, $4) AS r', [...args, 1000, keys])).rows[0].r as Array<{ key: string }>
           expect(after, `${fromDate}/${JSON.stringify(keys)} ranked`).toEqual(ranked.filter((row) => named.has(row.key)))
+          // A call that ranks gets what the shipped function gave it, keys named or not.
+          for (const limit of [1, 2, 1000]) {
+            const shippedRanked = (await client.query(`SELECT (${shipped}) AS r`, [...args, limit, keys])).rows[0].r
+            const newRanked = (await client.query('SELECT public.get_observed_parties($1, $2, $3, $4) AS r', [...args, limit, keys])).rows[0].r
+            expect(newRanked, `${fromDate}/${JSON.stringify(keys)}/${limit}`).toEqual(shippedRanked)
+          }
         }
       }
       // The seed reaches the cases: a named key has rows, the bank-owned voucher stays out.
