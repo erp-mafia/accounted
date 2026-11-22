@@ -1429,6 +1429,12 @@ function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'):
 function describeClient(
   resolution: Exclude<RedirectUriResolution, { allowed: false }>,
 ): { name: string; shortName: string; tag: string; verified: boolean } {
+  if (resolution.kind === 'partner') {
+    // A partner row is added by a maintainer for the partner's own https
+    // host, so only that partner can receive the code there: verified, like
+    // a built-in.
+    return { name: resolution.name, shortName: resolution.name, tag: 'Verifierad', verified: true }
+  }
   if (resolution.kind === 'built_in') {
     switch (resolution.provider) {
       case 'claude':
@@ -1439,6 +1445,8 @@ function describeClient(
         return { name: 'Grok (xAI)', shortName: 'Grok', tag: 'Verifierad', verified: true }
       case 'gemini':
         return { name: 'Gemini (Google)', shortName: 'Gemini', tag: 'Verifierad', verified: true }
+      case 'copilot':
+        return { name: 'Copilot Studio (Microsoft)', shortName: 'Copilot', tag: 'Verifierad', verified: true }
       case 'cursor':
         return { name: 'Cursor (Anysphere)', shortName: 'Cursor', tag: 'Verifierad', verified: true }
       case 'cursor_deeplink':

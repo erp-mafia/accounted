@@ -22,6 +22,7 @@ describe('agentDisplayName', () => {
     expect(agentDisplayName('api_key', 'Claude (Anthropic)')).toBe('Claude')
     expect(agentDisplayName('api_key', 'ChatGPT (OpenAI)')).toBe('ChatGPT')
     expect(agentDisplayName('mcp_oauth', 'Grok (xAI)')).toBe('Grok')
+    expect(agentDisplayName('mcp_oauth', 'Copilot Studio (Microsoft)')).toBe('Copilot Studio')
     expect(agentDisplayName('api_key', 'Cursor')).toBe('Cursor')
   })
 

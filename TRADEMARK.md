@@ -1,6 +1,10 @@
 # Accounted trademarks
 
-The Accounted source code is licensed under the GNU AGPL-3.0-or-later. The name **Accounted**, the Accounted logo and the former name **gnubok** are trademarks of Arcim Technology AB, and the AGPL does not license them (AGPL section 7(e), see [LICENSE](LICENSE)). This page explains how you may use them.
+The Accounted source code is licensed under the GNU AGPL-3.0-or-later. The name **Accounted**, the Accounted logo and the former name **gnubok** are trademarks of Arcim Technology AB, and the AGPL does not license them (see the additional term below). This page explains how you may use them.
+
+## Additional term under GNU AGPL version 3 section 7(e)
+
+The License (the GNU AGPL, see [LICENSE](LICENSE)) does not grant any rights under trademark law to the names "Accounted" and "gnubok" or to the Accounted logo, which are trademarks of Arcim Technology AB. How you may use them is described on this page.
 
 In short: use the code freely, use the name honestly, and never make people think something comes from us when it does not. Renaming a fork changes nothing about your AGPL duties: if you modify Accounted and let others use it over a network, you still offer them your source.
 

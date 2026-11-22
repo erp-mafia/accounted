@@ -1,6 +1,6 @@
 ---
 title: "accounted MCP-server"
-description: "MCP-server för svensk dubbel bokföring. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter. OAuth 2.1 med PKCE och dynamisk klientregistrering. Installeras som connector i Claude.ai, ChatGPT, Grok, Gemini, Claude Desktop, Cursor och Continue."
+description: "MCP-server för svensk dubbel bokföring. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter. OAuth 2.1 med PKCE och dynamisk klientregistrering. Installeras som connector i Claude.ai, ChatGPT, Grok, Gemini, Microsoft Copilot Studio, Claude Desktop, Cursor och Continue."
 slug: "gnubok-mcp"
 kind: "mcp"
 author: "gnubok"
@@ -31,7 +31,7 @@ faq:
   - q: "Hur funkar OAuth-flödet?"
     a: "MCP-klienten upptäcker accounteds autentiseringsserver via `.well-known/oauth-protected-resource`. Klienten registrerar sig dynamiskt (RFC 7591) på `/api/mcp-oauth/register`, öppnar `/api/mcp-oauth/authorize` i webbläsaren, du loggar in på accounted och godkänner anslutningen, klienten utbyter authorization code mot en access token via `/api/mcp-oauth/token` med PKCE S256."
   - q: "Vilka klienter funkar?"
-    a: "Allt som följer MCP-spec 2026-02 och stödjer HTTP-transport med OAuth: Claude.ai (connectors), ChatGPT (Developer mode), Grok (custom connectors), Gemini (custom apps), Claude Desktop (HTTP), Cursor, Continue, Codex. För stdio-bara klienter finns en lokal bro: `npx gnubok-mcp` med API-nyckel."
+    a: "Allt som följer MCP-spec 2026-02 och stödjer HTTP-transport med OAuth: Claude.ai (connectors), ChatGPT (Developer mode), Grok (custom connectors), Gemini (custom apps), Microsoft Copilot Studio (MCP-verktyg i en agent), Claude Desktop (HTTP), Cursor, Continue, Codex. För stdio-bara klienter finns en lokal bro: `npx gnubok-mcp` med API-nyckel."
   - q: "Vilka scopes ger jag bort?"
     a: "OAuth-flödet ger en enskild `mcp`-scope: 'denna agent får använda accounteds MCP'. Inom det är agentens åtkomst begränsad till samma rättigheter som ditt eget accounted-konto har. Du kan när som helst återkalla anslutningen i app.gnubok.se → Inställningar."
   - q: "Får agenten skriva direkt till huvudboken?"
@@ -82,6 +82,14 @@ verktyg den får exponera.
 2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?auth=required`. Lämna Advanced features tomt: ingen API-nyckel behövs.
 3. Gemini registrerar sig själv och öppnar accounted-OAuth. Logga in. Godkänn anslutningen.
 4. Starta en ny chatt, skriv `@` och välj appen så att Gemini använder den.
+
+## Installera i Microsoft Copilot Studio
+
+1. Öppna agenten i Copilot Studio: Tools → Add a tool → New tool → Model Context Protocol.
+2. Server URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?auth=required`. Authentication: OAuth 2.0, Dynamic discovery. Klicka Create.
+3. Create a new connection, logga in och godkänn anslutningen. Välj Add to agent.
+4. Med API-nyckel i stället: Authentication API key, Type Header, namnet `Authorization`, och som värde `Bearer ` följt av nyckeln.
+5. Ställ verktyget på User authentication i dess inställningar. Med OAuth loggar då var och en som chattar med agenten in med sitt eget konto, med API-nyckel anger var och en sin egen nyckel. Med Agent author authentication använder alla din inloggning eller nyckel. Alla kanaler stöder inte User authentication för verktyg, och Teams kräver SSO för det: se Microsofts [kanallista](https://learn.microsoft.com/en-us/microsoft-copilot-studio/configure-enduser-authentication#supported-channels).
 
 ## Installera i Claude Desktop
 

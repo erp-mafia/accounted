@@ -1,0 +1,48 @@
+name: Wait for Postgres
+description: >-
+  Waits until the Postgres that start-postgres began on localhost:5432 answers
+  (the job sets DATABASE_URL and PGPASSWORD). Covers the image download as well
+  as the start; fails with the start log and the container log when the
+  download or the start failed or Postgres never answered.
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for Postgres
+      shell: bash
+      run: |
+        # The 300 s count from before the psql install a runner without psql
+        # needs, so an install that stalls fails this step with a reason
+        # instead of running into the job's timeout.
+        started=$(date +%s)
+        if ! command -v psql >/dev/null; then
+          if ! timeout 300 bash -c 'sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null'; then
+            echo "::error::Could not install psql (postgresql-client) within 300 s"
+            exit 1
+          fi
+        fi
+        explain() {
+          echo "::group::docker run output"; cat "$RUNNER_TEMP/postgres-start.log" 2>/dev/null || true; echo "::endgroup::"
+          echo "::group::container log"; docker logs --tail 200 ci-postgres 2>&1 || true; echo "::endgroup::"
+        }
+        # The image initialises and restarts once, and it can answer during
+        # the first start: wait until it answers twice over TCP.
+        while :; do
+          if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
+            sleep 3
+            psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
+          fi
+          if ! pgrep -f 'docker run -d --name ci-postgres' >/dev/null && ! docker container inspect ci-postgres >/dev/null 2>&1; then
+            echo "::error::Postgres did not start: docker run exited without a container"
+            explain
+            exit 1
+          fi
+          if [ $(( $(date +%s) - started )) -ge 300 ]; then
+            echo "::error::Postgres did not answer within 300 s"
+            explain
+            exit 1
+          fi
+          sleep 2
+        done
+        psql "$DATABASE_URL" -tAc 'select version()'
+        echo "Postgres answered $(( $(date +%s) - started )) s after this step started"

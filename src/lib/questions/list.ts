@@ -1,6 +1,8 @@
 /**
  * A company's question list: the open questions first (the oldest first),
- * then those answered or closed in the last 90 days (the latest first).
+ * then those answered or closed in the last 90 days (the latest first). And
+ * the open questions of several companies as one list, for a door that
+ * serves a person rather than one company.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
@@ -91,4 +93,43 @@ export async function listOpenQuestionsForBriefing(supabase: SupabaseClient, com
     log.warn('open questions could not be read', { companyId, error: error instanceof Error ? error.message : String(error) })
     return []
   }
+}
+
+/** An open question with the company whose list it is on. */
+export interface OpenQuestionOfCompany {
+  companyId: string
+  question: CompanyQuestion
+}
+
+/** Company ids per `in` filter when the questions of several companies are read. */
+const COMPANY_ID_CHUNK = 50
+
+/**
+ * The open questions of several companies as one list, the oldest first. A
+ * company the list is not switched on for contributes none, and is not read.
+ * Throws when a read fails.
+ */
+export async function listOpenQuestionsAcross(
+  supabase: SupabaseClient,
+  companyIds: readonly string[],
+): Promise<OpenQuestionOfCompany[]> {
+  const enabled = [...new Set(companyIds)].filter((companyId) => isCompanyQuestionsEnabled(companyId))
+  const found: OpenQuestionOfCompany[] = []
+  for (let at = 0; at < enabled.length; at += COMPANY_ID_CHUNK) {
+    const chunk = enabled.slice(at, at + COMPANY_ID_CHUNK)
+    const { data, error } = await supabase
+      .from('company_questions')
+      .select(
+        'id, company_id, status, close_reason, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
+      )
+      .in('company_id', chunk)
+      .eq('status', 'open')
+      .order('created_at', { ascending: true })
+      .limit(chunk.length * QUESTION_LIMITS.maxOpen)
+    if (error) throw dbError(error)
+    for (const row of (data ?? []) as Array<QuestionRow & { company_id: string }>) {
+      found.push({ companyId: row.company_id, question: toQuestion(row) })
+    }
+  }
+  return found.sort((a, b) => new Date(a.question.created_at).getTime() - new Date(b.question.created_at).getTime())
 }

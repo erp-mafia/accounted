@@ -16,6 +16,7 @@ exports[`every dashboard route belongs to an area > places each route as the cov
   "/articles/x-id": "sales > /articles",
   "/assets": "ledger > /assets",
   "/assets/x-id/dispose": "ledger > /assets",
+  "/bokfor": "ledger > /bookkeeping",
   "/bolaget": "company > /bolaget",
   "/bolaget/agarskatt": "company > /bolaget/agarskatt",
   "/bolaget/aktiebok": "company > /bolaget/aktiebok",

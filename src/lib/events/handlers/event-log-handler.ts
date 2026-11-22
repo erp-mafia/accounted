@@ -110,12 +110,13 @@ function extractEntityId(payload: Record<string, unknown>): string | null {
   // Flat-string ID fields on events that don't carry a full entity object.
   // Bank connection events fall into this category: the connection lives in
   // an extension table, so we record its id directly. invoice.draft_deleted
-  // carries only invoiceId because the row is already gone. The payroll and
-  // reconciliation events carry ids only. event_log.entity_id is a uuid
-  // column, so a value that is not one is skipped instead of failing the
-  // whole insert (the event matters more than its index column).
+  // carries only invoiceId because the row is already gone. The payroll,
+  // reconciliation and question list events carry ids only.
+  // event_log.entity_id is a uuid column, so a value that is not one is
+  // skipped instead of failing the whole insert (the event matters more than
+  // its index column).
   const flatIdKeys = [
-    'connectionId', 'invoiceId', 'articleId', 'salaryRunId', 'agiId', 'signoffId', 'externalId',
+    'connectionId', 'invoiceId', 'articleId', 'salaryRunId', 'agiId', 'signoffId', 'externalId', 'questionId',
   ] as const
   for (const key of flatIdKeys) {
     const id = payload[key]

@@ -159,6 +159,9 @@ interface Props {
    *  finished upload, a removal, the reset after a save), so a host dialog
    *  can show the underlag beside the rows. The form keeps the list. */
   onUploadedFilesChange?: (files: UploadedFile[]) => void
+  /** A wider surface that also takes a dropped file for the form's own
+   *  upload zone (the booking screen: a drop anywhere on the page). */
+  uploadDropSurfaceRef?: React.RefObject<HTMLElement | null>
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
@@ -188,6 +191,7 @@ export default function JournalEntryForm({
   onDuplicateMatched,
   onHasContentChange,
   onUploadedFilesChange,
+  uploadDropSurfaceRef,
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -1969,6 +1973,7 @@ export default function JournalEntryForm({
           <DocumentUploadZone
             files={uploadedFiles}
             onFilesChange={setUploadedFiles}
+            dropSurfaceRef={uploadDropSurfaceRef}
           />
         </div>
       )}

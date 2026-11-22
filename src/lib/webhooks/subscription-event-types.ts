@@ -10,7 +10,7 @@
  * listed) expects.
  */
 import { z } from 'zod'
-import { PUBLIC_WEBHOOK_EVENTS, isPayrollEvent, type PublicWebhookEventType } from './public-events'
+import { PUBLIC_WEBHOOK_EVENTS, type PublicWebhookEventType } from './public-events'
 
 /** One deliverable event type, from the public catalogue. */
 export const WebhookEventTypeSchema = z.enum(PUBLIC_WEBHOOK_EVENTS)
@@ -48,9 +48,4 @@ export function resolveWebhookEventTypes(value: WebhookEventTypeFields): PublicW
   if (value.event_types && value.event_types.length > 0) return [...new Set(value.event_types)]
   if (value.event_type) return [value.event_type]
   return null
-}
-
-/** The payroll-grade types in a list (they need payroll:read to subscribe). */
-export function payrollEventTypesIn(types: ReadonlyArray<string>): string[] {
-  return types.filter(isPayrollEvent)
 }

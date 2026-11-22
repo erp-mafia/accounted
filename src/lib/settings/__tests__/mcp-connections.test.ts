@@ -13,8 +13,12 @@ describe('connectionKind', () => {
     expect(connectionKind({ source: 'signin', client: 'chatgpt' })).toBe('chatgpt')
     expect(connectionKind({ source: 'signin', client: 'grok' })).toBe('grok')
     expect(connectionKind({ source: 'signin', client: 'gemini' })).toBe('gemini')
+    expect(connectionKind({ source: 'signin', client: 'copilot' })).toBe('copilot')
     expect(connectionKind({ source: 'signin', client: 'squidler' })).toBe('squidler')
     expect(connectionKind({ source: 'signin', client: 'celemine' })).toBe('celemine')
+    expect(connectionKind({ source: 'signin', client: 'partner:acme' })).toBe('partner')
+    expect(connectionKind({ source: 'signin', client: 'partner:' })).toBe('mcp')
+    expect(connectionKind({ source: 'manual', client: 'partner:acme' })).toBe('key')
     expect(connectionKind({ source: 'signin', client: 'local' })).toBe('local')
   })
 

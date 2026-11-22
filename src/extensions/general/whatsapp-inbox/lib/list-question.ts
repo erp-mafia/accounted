@@ -10,24 +10,36 @@
  * company a receipt belongs to.
  *
  * A list question is sent only when all of this holds (sendListQuestion):
- *   - the question list is switched on for the company, and the question is open;
- *   - the person is a member of that company with a bookkeeping role;
+ *   - the question list is switched on for the question's company, the
+ *     company is not archived, and the question is open;
+ *   - the person is owner, admin or member of that company;
  *   - their phone link is active and not paused;
  *   - the 24 hour service window is open;
- *   - the conversation is routed to that company (routing.ts);
  *   - nothing else is in flight in the conversation: no receipt question, none
  *     queued, no company choice, no other list question, no burst waiting for
  *     its ack;
  *   - fewer than MAX_QUESTIONS_PER_DAY questions were asked there today,
  *     receipt questions and list questions together;
- *   - after a burst: the burst has a question left of its
- *     MAX_QUESTIONS_PER_BURST (context.list_question_slots).
+ *   - after a burst and after the last receipt question of one: the burst
+ *     has a question left of its MAX_QUESTIONS_PER_BURST
+ *     (context.list_question_slots).
+ * The conversation does not have to be routed to the question's company.
  *
- * Three moments: a question is filed (offerFiledListQuestion), a burst of
+ * Which question (nextQuestionFor): the open questions of every company the
+ * person keeps the books of, those of the company the conversation is routed
+ * to (routing.ts) first when there is one, then the rest, the oldest first,
+ * leaving out what expired in this conversation. A person who keeps the
+ * books of more than one company gets the company's name on the first line
+ * of the message.
+ *
+ * Four moments: a question is filed (offerFiledListQuestion); a burst of
  * receipts has its ack and its own questions are done
- * (offerListQuestionAfterBurst, offerListQuestionWhenDone), and the person
+ * (offerListQuestionAfterBurst, offerListQuestionWhenDone); the person
  * writes a text that nothing else takes, in place of the fallback reply
- * (offerListQuestionOnText).
+ * (offerListQuestionOnText); and a list question is answered or closed in
+ * the chat, after its acknowledgement (answerListQuestion). The two burst
+ * moments stay with the company the conversation is routed to, the one the
+ * receipts went to. The last two need no burst slot.
  *
  * State: the question in flight is context.pending_question with type
  * 'list_question', on a conversation that stays idle. A receipt question or
@@ -55,12 +67,19 @@ import { isUuid } from '@/lib/invariants/uuid'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { APP_ANSWER_MAX, WHATSAPP_DOOR, answerAsPerson, closeAsPerson } from '@/lib/questions/app-answer'
-import { listQuestions } from '@/lib/questions/list'
+import { listOpenQuestionsAcross, type OpenQuestionOfCompany } from '@/lib/questions/list'
 import { readQuestionRow, toQuestion } from '@/lib/questions/rows'
-import { QUESTION_LIMITS, type CompanyQuestion } from '@/lib/questions/types'
+import type { CompanyQuestion } from '@/lib/questions/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { WhatsAppConversation, WhatsAppPhoneLink } from '@/types'
-import { sendReplyButtons, sendText, type ChoiceOption, type SendMessageBase } from './graph-api'
-import { botCopy, TEMPLATE } from './messages'
+import {
+  INTERACTIVE_BODY_MAX,
+  sendReplyButtons,
+  sendText,
+  type ChoiceOption,
+  type SendMessageBase,
+} from './graph-api'
+import { botCopy, TEMPLATE, type BotLocale } from './messages'
 import {
   LIST_QUESTION,
   MAX_QUESTIONS_PER_BURST,
@@ -229,6 +248,46 @@ async function keepsTheBooks(supabase: SupabaseClient, userId: string, companyId
   return isBookkeepingWriterRole((data as { role?: string | null } | null)?.role)
 }
 
+/** A company the person keeps the books of. */
+interface BookkeptCompany {
+  id: string
+  /** Null when the company has no name on record. */
+  name: string | null
+}
+
+/**
+ * The companies the person keeps the books of: owner, admin or member of a
+ * company that is not archived. Throws when the read fails.
+ */
+async function bookkeptCompanies(supabase: SupabaseClient, userId: string): Promise<BookkeptCompany[]> {
+  type Named = { name: string | null }
+  const rows = await fetchAllRows<{ company_id: string; role: string | null; companies: Named | Named[] | null }>(({ from, to }) =>
+    supabase
+      .from('company_members')
+      .select('company_id, role, companies!inner(name, archived_at)')
+      .eq('user_id', userId)
+      .is('companies.archived_at', null)
+      .order('company_id', { ascending: true })
+      .range(from, to),
+  )
+  const companies = new Map<string, BookkeptCompany>()
+  for (const row of rows) {
+    if (!isBookkeepingWriterRole(row.role)) continue
+    const company = Array.isArray(row.companies) ? row.companies[0] : row.companies
+    companies.set(row.company_id, { id: row.company_id, name: company?.name?.trim() || null })
+  }
+  return [...companies.values()]
+}
+
+/**
+ * The company's name as the question message shows it: only for a person who
+ * keeps the books of more than one company.
+ */
+function companyNameFor(companies: readonly BookkeptCompany[], companyId: string): string | null {
+  if (companies.length <= 1) return null
+  return companies.find((company) => company.id === companyId)?.name ?? null
+}
+
 // ── History ──────────────────────────────────────────────────
 
 async function appendListQuestionHistory(args: {
@@ -254,6 +313,27 @@ async function appendListQuestionHistory(args: {
 }
 
 // ── Sending ──────────────────────────────────────────────────
+
+/**
+ * The body of a list question's message: the company's name in bold on the
+ * first line when one is given, the question, why it is asked on a line of
+ * its own, then the closing line saying a written answer is welcome. When
+ * all of it is longer than an interactive body holds, the why is left out
+ * first, then the closing line. The question and the company's name are
+ * never cut or left out.
+ */
+export function listQuestionBody(
+  question: Pick<CompanyQuestion, 'question' | 'why'>,
+  opts: { company?: string | null; locale?: BotLocale } = {},
+): string {
+  const copy = botCopy(opts.locale ?? 'sv')
+  const kept = { question: question.question, company: opts.company ?? null }
+  const whole = copy.m23ListQuestion({ ...kept, why: question.why })
+  if (whole.length <= INTERACTIVE_BODY_MAX) return whole
+  const withoutWhy = copy.m23ListQuestion({ ...kept, why: null })
+  if (withoutWhy.length <= INTERACTIVE_BODY_MAX) return withoutWhy
+  return copy.m23ListQuestion({ ...kept, why: null, closing: false })
+}
 
 /** The question's options in order, then "Vet inte" when a button is left for it. */
 function questionButtons(companyId: string, question: CompanyQuestion): ChoiceOption[] {
@@ -283,8 +363,8 @@ interface SendListQuestionArgs {
   question: CompanyQuestion
   /** The company whose list the question is on. */
   companyId: string
-  /** The company the conversation is routed to right now (resolveRoutedCompany). */
-  routedCompanyId: string
+  /** The company's name for the first line of the message; null leaves the line out (companyNameFor). */
+  companyName: string | null
   /** After a burst: the question takes one of the burst's slots. */
   usesBurstSlot: boolean
   now: Date
@@ -298,7 +378,6 @@ interface SendListQuestionArgs {
 export async function sendListQuestion(supabase: SupabaseClient, args: SendListQuestionArgs): Promise<ListQuestionOffer> {
   const { conversation, link, question, companyId, usesBurstSlot, now } = args
   if (!isCompanyQuestionsEnabled(companyId) || question.status !== 'open') return 'not_sent'
-  if (args.routedCompanyId !== companyId) return 'not_sent'
   if (!conversationTakesListQuestion(conversation, link, { usesBurstSlot, now })) return 'not_sent'
   if ((await keepsTheBooks(supabase, link.user_id, companyId)) !== true) return 'not_sent'
   const to = linkRecipient(link)
@@ -332,7 +411,7 @@ export async function sendListQuestion(supabase: SupabaseClient, args: SendListQ
   const sent = await sendReplyButtons(supabase, {
     to,
     template: TEMPLATE.m23ListQuestion,
-    body: botCopy('sv').m23ListQuestion({ question: question.question, why: question.why }),
+    body: listQuestionBody(question, { company: args.companyName }),
     buttons: questionButtons(companyId, question),
     senderPhoneHash: link.phone_hash,
     phoneLinkId: link.id,
@@ -385,23 +464,63 @@ async function loadConversationWithLink(
   return link ? { conversation, link } : null
 }
 
-/** The oldest open question of the company that has not expired in this conversation. */
-async function nextOpenQuestion(
-  supabase: SupabaseClient,
-  companyId: string,
-  context: ConversationContext,
-): Promise<CompanyQuestion | null> {
-  const open = await listQuestions(supabase, companyId, { status: 'open', limit: QUESTION_LIMITS.maxOpen })
-  const expiredHere = new Set(context.list_questions_expired ?? [])
-  const inSlot = listQuestionOf(context)
-  if (inSlot) expiredHere.add(inSlot.questionId)
-  return open.find((question) => !expiredHere.has(question.question_id)) ?? null
+/** A question to send, with the name its message starts with. */
+interface NextQuestion {
+  companyId: string
+  question: CompanyQuestion
+  companyName: string | null
+}
+
+/** The questions of the routed company first, then the rest; each part keeps its order, the oldest first. */
+function routedFirst(open: readonly OpenQuestionOfCompany[], routedCompanyId: string | null): OpenQuestionOfCompany[] {
+  return [
+    ...open.filter((entry) => entry.companyId === routedCompanyId),
+    ...open.filter((entry) => entry.companyId !== routedCompanyId),
+  ]
 }
 
 /**
- * Sends the next open list question of the routed company: the oldest one
- * that has not expired in this conversation. After a burst it goes against
- * one of the burst's slots.
+ * The next question for the person, or null when there is none. Taken from
+ * the companies they keep the books of that have the question list switched
+ * on: with `scope` 'all' from every one of them, the routed company's first,
+ * with 'routed' from the routed company alone. A question that expired in
+ * this conversation, or sits expired in its slot, is passed by.
+ */
+async function nextQuestionFor(
+  supabase: SupabaseClient,
+  conversation: WhatsAppConversation,
+  link: WhatsAppPhoneLink,
+  scope: 'all' | 'routed',
+  now: Date,
+): Promise<NextQuestion | null> {
+  const companies = await bookkeptCompanies(supabase, link.user_id)
+  const withList = companies.filter((company) => isCompanyQuestionsEnabled(company.id))
+  if (withList.length === 0) return null
+
+  // With one company to choose from and no restriction to the routed one, the routing decides nothing.
+  let routedCompanyId: string | null = null
+  if (scope === 'routed' || withList.length > 1) {
+    const routed = await resolveRoutedCompany(supabase, link, conversation, now)
+    routedCompanyId = routed === 'transient_error' || routed === null ? null : routed.companyId
+  }
+  const from = scope === 'routed' ? withList.filter((company) => company.id === routedCompanyId) : withList
+  if (from.length === 0) return null
+
+  const open = await listOpenQuestionsAcross(
+    supabase,
+    from.map((company) => company.id),
+  )
+  const context = getContext(conversation)
+  const expiredHere = new Set(context.list_questions_expired ?? [])
+  const inSlot = listQuestionOf(context)
+  if (inSlot) expiredHere.add(inSlot.questionId)
+  const next = routedFirst(open, routedCompanyId).find((entry) => !expiredHere.has(entry.question.question_id))
+  return next ? { ...next, companyName: companyNameFor(companies, next.companyId) } : null
+}
+
+/**
+ * Sends the next question for the person (nextQuestionFor). After a burst it
+ * goes against one of the burst's slots and stays with the routed company.
  */
 async function offerNextListQuestion(
   supabase: SupabaseClient,
@@ -411,17 +530,14 @@ async function offerNextListQuestion(
 ): Promise<ListQuestionOffer> {
   const now = new Date()
   if (!conversationTakesListQuestion(conversation, link, { usesBurstSlot, now })) return 'not_sent'
-  const routed = await resolveRoutedCompany(supabase, link, conversation, now)
-  if (routed === 'transient_error' || routed === null) return 'not_sent'
-  if (!isCompanyQuestionsEnabled(routed.companyId)) return 'not_sent'
-  const question = await nextOpenQuestion(supabase, routed.companyId, getContext(conversation))
-  if (!question) return 'not_sent'
+  const next = await nextQuestionFor(supabase, conversation, link, usesBurstSlot ? 'routed' : 'all', now)
+  if (!next) return 'not_sent'
   return sendListQuestion(supabase, {
     conversation,
     link,
-    question,
-    companyId: routed.companyId,
-    routedCompanyId: routed.companyId,
+    question: next.question,
+    companyId: next.companyId,
+    companyName: next.companyName,
     usesBurstSlot,
     now,
   })
@@ -430,9 +546,9 @@ async function offerNextListQuestion(
 /**
  * A burst of receipts has its ack. The conversation records how many list
  * questions the burst leaves room for (MAX_QUESTIONS_PER_BURST less the
- * receipt questions it admitted), and the oldest open one is sent when
- * nothing else is in flight. Reads nothing unless the list is switched on
- * for a company the burst filed into. Never throws.
+ * receipt questions it admitted), and the oldest open one of the routed
+ * company is sent when nothing else is in flight. Reads nothing unless the
+ * list is switched on for a company the burst filed into. Never throws.
  */
 export async function offerListQuestionAfterBurst(
   supabase: SupabaseClient,
@@ -457,10 +573,10 @@ export async function offerListQuestionAfterBurst(
 }
 
 /**
- * The conversation's questions are done: a receipt question was answered and
- * none waits, or a list question was answered here. The next open list
- * question is sent when the latest burst has a slot left. Reads nothing
- * unless the list is switched on for some company. Never throws.
+ * The conversation's receipt questions are done: one was answered and none
+ * waits. The next open list question of the routed company is sent when the
+ * latest burst has a slot left. Reads nothing unless the list is switched on
+ * for some company. Never throws.
  */
 export async function offerListQuestionWhenDone(supabase: SupabaseClient, conversationId: string): Promise<void> {
   try {
@@ -477,18 +593,17 @@ export async function offerListQuestionWhenDone(supabase: SupabaseClient, conver
 }
 
 /**
- * The person wrote a text that nothing else takes (no keyword, no answer to
- * a question): the fallback reply would be next. The oldest open list
- * question of the routed company is sent in its place when every condition
- * in the file header holds, read off the conversation as it stands after
- * that text. No burst slot is used, and the text itself answers nothing.
- * Says how it ended; a read that fails ends as not_sent. Reads nothing
- * unless the list is switched on for some company. Never throws.
+ * Sends the next open list question of any company the person keeps the
+ * books of, with no burst slot, when every other condition in the file
+ * header holds, read off the conversation as it stands now. Says how it
+ * ended; a read that fails ends as not_sent. Reads nothing unless the list
+ * is switched on for some company. Never throws.
  */
-export async function offerListQuestionOnText(
+async function offerNextWithoutSlot(
   supabase: SupabaseClient,
   conversationId: string,
   link: WhatsAppPhoneLink,
+  moment: 'text' | 'answer',
 ): Promise<ListQuestionOffer> {
   try {
     if (listIsOnForNobody()) return 'not_sent'
@@ -496,12 +611,28 @@ export async function offerListQuestionOnText(
     if (!conversation) return 'not_sent'
     return await offerNextListQuestion(supabase, conversation, link, false)
   } catch (err: unknown) {
-    log.warn('list question on a text failed', {
+    log.warn('the next list question was not sent', {
+      moment,
       conversationId,
       error: err instanceof Error ? err.message : String(err),
     })
     return 'not_sent'
   }
+}
+
+/**
+ * The person wrote a text that nothing else takes (no keyword, no answer to
+ * a question): the fallback reply would be next. The next open list question
+ * of a company they keep the books of is sent in its place, with no burst
+ * slot, read off the conversation as it stands after that text. The text
+ * itself answers nothing. Says how it ended. Never throws.
+ */
+export function offerListQuestionOnText(
+  supabase: SupabaseClient,
+  conversationId: string,
+  link: WhatsAppPhoneLink,
+): Promise<ListQuestionOffer> {
+  return offerNextWithoutSlot(supabase, conversationId, link, 'text')
 }
 
 /** The active, unpaused links of the company's members with a bookkeeping role. */
@@ -535,8 +666,8 @@ async function bookkeeperLinks(supabase: SupabaseClient, companyId: string): Pro
 
 /**
  * A question was filed for the company. It is sent to every member the
- * conditions hold for; whoever answers first ends it for the others. Never
- * throws.
+ * conditions hold for, whatever company their conversation is routed to;
+ * whoever answers first ends it for the others. Never throws.
  */
 export async function offerFiledListQuestion(
   supabase: SupabaseClient,
@@ -572,17 +703,24 @@ export async function offerFiledListQuestion(
 
     const question = toQuestion(await readQuestionRow(supabase, filed.companyId, filed.questionId))
     for (const { link, conversation } of open) {
-      const routed = await resolveRoutedCompany(supabase, link, conversation, now)
-      if (routed === 'transient_error' || routed === null) continue
-      await sendListQuestion(supabase, {
-        conversation,
-        link,
-        question,
-        companyId: filed.companyId,
-        routedCompanyId: routed.companyId,
-        usesBurstSlot: false,
-        now,
-      })
+      try {
+        const companies = await bookkeptCompanies(supabase, link.user_id)
+        await sendListQuestion(supabase, {
+          conversation,
+          link,
+          question,
+          companyId: filed.companyId,
+          companyName: companyNameFor(companies, filed.companyId),
+          usesBurstSlot: false,
+          now,
+        })
+      } catch (err: unknown) {
+        log.warn('a filed question was not sent to one of the members', {
+          companyId: filed.companyId,
+          questionId: filed.questionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
   } catch (err: unknown) {
     log.warn('a filed question was not sent', {
@@ -659,8 +797,9 @@ interface AnswerListQuestionArgs {
 
 /**
  * Answers or closes the question as the linked person, through the path the
- * app uses, and replies with one line. A question that had already ended is
- * told in one line and nothing is written. Throws what the core path throws
+ * app uses, replies with one line, and then sends the next open list
+ * question when one may be sent. A question that had already ended is told
+ * in one line and nothing is written. Throws what the core path throws
  * beyond its refusals.
  */
 async function answerListQuestion(supabase: SupabaseClient, args: AnswerListQuestionArgs): Promise<void> {
@@ -723,7 +862,10 @@ async function answerListQuestion(supabase: SupabaseClient, args: AnswerListQues
     template: closed ? TEMPLATE.m24ListClosed : TEMPLATE.m24ListAnswered,
     ...args.replyBase,
   })
-  if (conversation) await offerListQuestionWhenDone(supabase, conversation.id)
+  // The next open list question follows the acknowledgement, with no burst
+  // slot. A receipt question in flight or in the queue stays first: nothing
+  // is sent then.
+  if (conversation) await offerNextWithoutSlot(supabase, conversation.id, link, 'answer')
 }
 
 interface EndedQuestionRow {

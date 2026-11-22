@@ -77,10 +77,12 @@ const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provid
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
 const SQUIDLER: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'squidler' }
 const CELEMINE: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'celemine' }
+const PARTNER: RedirectUriResolution = { allowed: true, kind: 'partner', partnerId: 'p-1', slug: 'acme', name: 'Acme <Gateway>' }
 const FLYTT_EXTENSION: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'flytt_extension' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
 const GEMINI: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'gemini' }
+const COPILOT: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'copilot' }
 const REGISTERED: RedirectUriResolution = {
   allowed: true,
   kind: 'registered',
@@ -591,6 +593,25 @@ describe('client identity on the consent page', () => {
     expect(html).not.toContain('En extern applikation')
   })
 
+  it('names a partner row by its name as a verified client, escaped', async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(PARTNER)
+    const html = await (
+      await GET(
+        new Request(
+          buildAuthorizeUrl({
+            ...params,
+            redirect_uri: 'https://gateway.example.com/upstream/a/callback',
+          }),
+        ),
+      )
+    ).text()
+
+    expect(html).toContain('Acme &lt;Gateway&gt;')
+    expect(html).not.toContain('Acme <Gateway>')
+    expect(html).toContain('Verifierad')
+    expect(html).not.toContain('En extern applikation')
+  })
+
   it('names Celemine as a verified client for a callback under /upstream/', async () => {
     mocks.resolveRedirectUri.mockResolvedValue(CELEMINE)
     const html = await (
@@ -809,6 +830,7 @@ describe('approve is never pre-ticked (issue #3408, product decision 2026-10-03,
     ['ChatGPT', CHATGPT],
     ['Grok', GROK],
     ['Gemini', GEMINI],
+    ['Copilot Studio', COPILOT],
     ['Cursor', CURSOR],
     ['Cursor deeplink', CURSOR_DEEPLINK],
   ])('%s, owner: pre-ticks every scope in the ceiling except pending_operations:approve', async (_name, resolution) => {
@@ -1131,6 +1153,33 @@ describe('role cap on consent', () => {
     expect(location.searchParams.get('error')).toBe('server_error')
     expect(location.searchParams.get('code')).toBeNull()
     expect(mocks.createAuthCode).not.toHaveBeenCalled()
+  })
+})
+
+describe('Copilot Studio connectors', () => {
+  const params = {
+    response_type: 'code',
+    redirect_uri: 'https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    state: 'xyz',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
+    mocks.resolveRedirectUri.mockResolvedValue(COPILOT)
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
+  })
+
+  it("names Copilot Studio as a verified client and shows Power Platform's consent host", async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+
+    expect(html).toContain('Copilot Studio (Microsoft)')
+    expect(html).toContain('Verifierad')
+    expect(html).toContain('global.consent.azure-apim.net')
   })
 })
 
