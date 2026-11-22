@@ -86,7 +86,7 @@ function captureSetup(event: string, properties?: Record<string, unknown>) {
 /**
  * First-run getting-started block on Hem, in the chosen stepped
  * shape: a numbered thread (get the books in, connect the bank, connect
- * Skatteverket, get receipts flowing, build the assistant) on a hairline
+ * Skatteverket, get receipts flowing, connect Claude) on a hairline
  * spine.
  * Only the step you are on argues its case: it carries the description and
  * the partner marks next to a filled action. Steps you have not reached yet
@@ -320,8 +320,7 @@ export default function NewUserChecklist({
     captureSetup('onboarding_setup_step_started', { step: 'receipts' })
     router.push(hasAi ? '/e/general/invoice-inbox' : '/settings/billing')
   }
-  // Product call 2026-08-27: the closing CTA is "Anslut till Claude", not the
-  // in-app assistant calibration (still reachable from the assistant page).
+  // Product call 2026-08-27: the closing CTA is "Anslut till Claude".
   // A user who finishes the hosted onboarding lands in Claude with everything
   // already connected, where the MCP onboarding skill opens with findings and
   // the Att göra-list instead of setup. The connector URL is built from the

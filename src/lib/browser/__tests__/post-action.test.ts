@@ -71,7 +71,7 @@ describe('postAction', () => {
       status: 404,
       // The route's own Swedish sentence is shown as-is (issue #2086): it
       // used to be dropped for lacking one of getErrorMessage's keywords and
-      // replaced by the status map's "Resursen kunde inte hittas.".
+      // replaced by the status map's "Det gick inte att hitta. Det kan ha tagits bort: ladda om sidan.".
       message: 'Ingen AGI för perioden 2026-04.',
     })
   })
@@ -128,7 +128,7 @@ describe('postAction', () => {
     expect(result).toEqual({
       ok: false,
       reason: 'network',
-      message: 'Något gick fel. Försök igen.',
+      message: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
     })
   })
 

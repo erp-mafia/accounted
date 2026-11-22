@@ -45,7 +45,7 @@ export default async function ByraKpiPage({
     <div className="space-y-8">
       <PageHeader title={t('kpi_title')} />
       {overview.allClients.length === 0 ? (
-        <EmptyByraClients />
+        <EmptyByraClients canCreate={overview.role === 'owner' || overview.role === 'admin'} />
       ) : (
         <ByraKpiView
           preset={overview.preset}

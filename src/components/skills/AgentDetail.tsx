@@ -30,6 +30,7 @@ import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, ty
 import { formatDateLong } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AgentCard } from './AgentCard'
@@ -120,12 +121,27 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   // The failed-save notice shows the first time the knowledge opens, not every time after.
   const [knowledgeNotice, setKnowledgeNotice] = useState(knowledgeFailed)
 
+  // An own flow lives in the catalog: a catalog that could not be read says
+  // so, with a retry, instead of a page with no name and no steps.
+  if (!curated && catalog.error && !catalog.data) {
+    return (
+      <div className={styles.apage}>
+        <PageHeader title={tNav('v3_skills')} parent={{ label: tNav('v3_skills'), href: backHref }} />
+        <LoadError title={t('load_failed')} onRetry={() => void catalog.mutate()} />
+      </div>
+    )
+  }
+
   // Gone only once a fresh catalog says so: a cached list can predate the item.
   if (!curated && catalog.data && !catalog.isValidating && !own) {
     return (
       <div className={styles.apage}>
         <PageHeader title={tNav('v3_skills')} />
-        <p className={styles.muted}>{t('not_found')}</p>
+        <NotFoundState
+          title={t('not_found')}
+          backHref={backHref}
+          backLabel={t('back_to_catalog', { name: tNav('v3_skills') })}
+        />
       </div>
     )
   }

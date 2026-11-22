@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -142,7 +142,7 @@ export function StockCountRegister() {
   const { canWrite } = useCanWrite()
 
   // The fiscal year is app-wide context (the sidebar); the count belongs to one started year.
-  const { periodId, period } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const { periodId, period, ready: scopeReady } = useFiscalScope({ allowAll: false, hideFuture: true })
   const [loading, setLoading] = useState(true)
   // A failed load says so in the page with "Försök igen" (Stil v3 states), never a toast.
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -188,7 +188,11 @@ export function StockCountRegister() {
   }, [])
 
   const loadCounts = useCallback(async () => {
-    if (!periodId) return
+    // No started year: nothing to load (the page says so), not a skeleton forever.
+    if (!periodId) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const res = await fetch(`/api/bookkeeping/inventory-counts?fiscal_period_id=${periodId}`)
@@ -407,12 +411,13 @@ export function StockCountRegister() {
   const statusLabel = (c: { status: Status; signing_request_id: string | null }) =>
     c.status === 'draft' && c.signing_request_id ? t('status_signing') : t(`status_${c.status}`)
 
-  const headerAction = !canWrite || form ? null : count?.status === 'signed' ? (
+  // Without a started year the page shows the way to one, not a grey button.
+  const headerAction = !canWrite || form || !period ? null : count?.status === 'signed' ? (
     <Button size="toolbar" onClick={() => setConfirmBook(true)}>{t('book')}</Button>
   ) : count?.status === 'draft' && !pendingSigning ? (
     <Button size="toolbar" onClick={() => setSignOpen(true)} disabled={count.rows.length === 0}>{t('sign')}</Button>
   ) : (
-    <Button size="toolbar" variant="outline" onClick={startNew} disabled={!period}><PlusIcon className="h-4 w-4" aria-hidden />{t('new')}</Button>
+    <Button size="toolbar" variant="outline" onClick={startNew}><PlusIcon className="h-4 w-4" aria-hidden />{t('new')}</Button>
   )
 
   return (
@@ -550,7 +555,9 @@ export function StockCountRegister() {
             <Button onClick={saveForm} loading={saving}>{t('save')}</Button>
           </div>
         </section>
-      ) : loading ? (
+      ) : scopeReady && !periodId ? (
+        <EmptyNoFiscalYear />
+      ) : loading || !periodId ? (
         <LateReveal className="space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />

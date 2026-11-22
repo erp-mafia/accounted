@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useLocale } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { LoadError } from '@/components/ui/empty-state'
@@ -16,12 +16,19 @@ import {
   formatWholeKronor,
 } from '@/components/reports/DeclarationRutaRow'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
+import {
+  NE_ASSET_RUTOR,
+  NE_BALANS_LABELS,
+  NE_LIABILITY_RUTOR,
+  NE_SIDA2_LABELS,
+  type NEDeclaration,
+} from '@/lib/reports/ne-bilaga/types'
 import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 export function NEDeclarationView({ periodId }: { periodId: string }) {
   const errorLocale = useLocale() as ErrorLocale
+  const t = useTranslations('reports')
   // Fetch outcome tagged with the key it was requested under: switching
   // fiscal year discards stale responses instead of leaving last year's
   // declaration on screen (same pattern as the momsdeklaration view).
@@ -243,6 +250,62 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
                 </td>
               </tr>
             </tfoot>
+          </Table>
+        </div>
+      </section>
+
+      {/* Balansräkning B1-B16: assets, then B10 and the liabilities. */}
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">{t('ne_balance_sheet')}</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
+          <Table>
+            <TableBody>
+              {[...NE_ASSET_RUTOR, 'B10' as const, ...NE_LIABILITY_RUTOR].map((ruta) => (
+                <DeclarationRutaRow
+                  key={ruta}
+                  code={ruta}
+                  label={NE_BALANS_LABELS[ruta]}
+                  amount={data.balans[ruta]}
+                  accounts={data.balansBreakdown[ruta]?.accounts ?? []}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </section>
+
+      {/* Sida 2, the rows the books give: R12 carried from R11, R13 and R14
+          the year's tax adjustments. The SRU file carries them; the owner
+          completes R15 onwards in the e-tjänst. */}
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">{t('ne_sida2_from_books')}</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
+          <Table>
+            <TableBody>
+              {(['R12', 'R13', 'R14'] as const).map((ruta) => (
+                <DeclarationRutaRow
+                  key={ruta}
+                  code={ruta}
+                  label={NE_SIDA2_LABELS[ruta]}
+                  amount={data.sida2[ruta]}
+                  accounts={
+                    ruta === 'R12'
+                      ? []
+                      : data.sida2Breakdown[ruta].items.flatMap((item) =>
+                          item.accountNumber
+                            ? [{ accountNumber: item.accountNumber, accountName: item.description, amount: item.amount }]
+                            : [],
+                        )
+                  }
+                />
+              ))}
+            </TableBody>
           </Table>
         </div>
       </section>

@@ -22,8 +22,9 @@ interface DeletedCompanyExport {
 /**
  * Du → Säkerhet: deleted companies whose full archive can still be
  * downloaded, read only, for 18 months after the deletion (terms 9.3,
- * lib/company/deleted-company-export). Renders nothing when there are none,
- * or when the list cannot be read: it is an offer, not a wall.
+ * lib/company/deleted-company-export). Renders nothing when there are none.
+ * A list that cannot be read says so in one row with a retry: silence there
+ * would read as "nothing to fetch" right before the account is deleted.
  *
  * It sits on the delete-account page on purpose: a person who deleted their
  * last company is sent here, and this is the last place to fetch the
@@ -31,24 +32,53 @@ interface DeletedCompanyExport {
  */
 export function DeletedCompaniesExport() {
   const t = useTranslations('settings_deleted_companies')
+  const tCommon = useTranslations('common')
   const [companies, setCompanies] = useState<DeletedCompanyExport[]>([])
+  const [failed, setFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         const res = await fetch('/api/account/deleted-companies')
-        if (!res.ok) return
+        if (!res.ok) {
+          if (!cancelled) setFailed(true)
+          return
+        }
         const body = (await res.json()) as { data?: DeletedCompanyExport[] }
-        if (!cancelled) setCompanies(body.data ?? [])
+        if (!cancelled) {
+          setCompanies(body.data ?? [])
+          setFailed(false)
+        }
       } catch {
-        // Nothing to offer; the rest of the page works without it.
+        if (!cancelled) setFailed(true)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reloadKey])
+
+  if (failed && companies.length === 0) {
+    return (
+      <SettingsGroup label={t('heading')} help={t('help')}>
+        <SettingsRow label={t('load_failed')}>
+          <SettingsRowEnd>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setFailed(false)
+                setReloadKey((key) => key + 1)
+              }}
+            >
+              {tCommon('retry')}
+            </Button>
+          </SettingsRowEnd>
+        </SettingsRow>
+      </SettingsGroup>
+    )
+  }
 
   if (companies.length === 0) return null
 

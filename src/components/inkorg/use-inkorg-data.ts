@@ -3,12 +3,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
-import type { InkorgItem } from '@/lib/inkorg/items'
+import type { InboxMailProvider, InkorgItem } from '@/lib/inkorg/items'
+import type { IntakeSourceId } from '@/lib/intake/sources'
 import type { MissingPurchase } from '@/lib/inkorg/missing'
 
 export type { MissingPurchase }
 
-const ITEMS_URL = '/api/extensions/ext/invoice-inbox/items'
+// scope=inbox: only the rows the Inkorg shows, with the doors and the mailbox
+// provider read off the rest on the server (lib/inkorg/items.ts inboxScope).
+const ITEMS_URL = '/api/extensions/ext/invoice-inbox/items?scope=inbox'
 /**
  * Changes that land within this span are read as one: a check of several
  * items (the bank check after a list read) writes one row each, and each
@@ -21,6 +24,10 @@ export type LoadState = 'loading' | 'ready' | 'failed'
 
 export interface InkorgData {
   items: InkorgItem[]
+  /** Every door the company's items came through, handled ones included. */
+  doorsUsed: IntakeSourceId[]
+  /** The connected mailbox's provider as its items say, or null. */
+  mailProvider: InboxMailProvider | null
   itemsState: LoadState
   purchases: MissingPurchase[]
   purchasesState: LoadState
@@ -37,6 +44,8 @@ export interface InkorgData {
  */
 export function useInkorgData(companyId: string | null): InkorgData {
   const [items, setItems] = useState<InkorgItem[]>([])
+  const [doorsUsed, setDoorsUsed] = useState<IntakeSourceId[]>([])
+  const [mailProvider, setMailProvider] = useState<InboxMailProvider | null>(null)
   const [itemsState, setItemsState] = useState<LoadState>('loading')
   const [purchases, setPurchases] = useState<MissingPurchase[]>([])
   const [purchasesState, setPurchasesState] = useState<LoadState>('loading')
@@ -45,8 +54,12 @@ export function useInkorgData(companyId: string | null): InkorgData {
     try {
       const res = await fetch(ITEMS_URL)
       if (!res.ok) throw new Error(`items ${res.status}`)
-      const json = (await res.json()) as { data?: { items?: InkorgItem[] } }
+      const json = (await res.json()) as {
+        data?: { items?: InkorgItem[]; doors?: IntakeSourceId[]; mail_provider?: InboxMailProvider | null }
+      }
       setItems(json.data?.items ?? [])
+      setDoorsUsed(json.data?.doors ?? [])
+      setMailProvider(json.data?.mail_provider ?? null)
       setItemsState('ready')
     } catch {
       // Keep what is on screen: a failed refetch is not an empty inbox.
@@ -111,5 +124,5 @@ export function useInkorgData(companyId: string | null): InkorgData {
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [fetchPurchases])
 
-  return { items, itemsState, purchases, purchasesState, refresh }
+  return { items, doorsUsed, mailProvider, itemsState, purchases, purchasesState, refresh }
 }

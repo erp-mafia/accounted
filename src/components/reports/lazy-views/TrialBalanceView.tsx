@@ -66,7 +66,7 @@ export default function TrialBalanceView({
     return (
       <ReportEmptyState
         title="Inga verifikationer i perioden"
-        description="Det finns inga bokförda verifikationer i den valda perioden."
+        description="Välj ett annat räkenskapsår eller datumintervall."
       />
     )
   }

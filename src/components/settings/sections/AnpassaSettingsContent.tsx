@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
@@ -42,7 +43,11 @@ interface AnpassaSettingsContentProps {
   focusPackageId?: string | null
 }
 
-type OffPreview = { state: 'loading' } | { state: 'ready'; obligations: string[] } | { state: 'failed' }
+// failed: the check could not be made; message is the server's sentence when it gave one.
+type OffPreview =
+  | { state: 'loading' }
+  | { state: 'ready'; obligations: string[] }
+  | { state: 'failed'; message: string | null }
 
 /**
  * Företag → Anpassa: which parts of Accounted the company uses. Bokföring is
@@ -55,6 +60,7 @@ type OffPreview = { state: 'loading' } | { state: 'ready'; obligations: string[]
  */
 export function AnpassaSettingsContent({ profileNameSv, profileName, packages, focusPackageId = null }: AnpassaSettingsContentProps) {
   const t = useTranslations('settings_anpassa')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const router = useRouter()
   const { toast } = useToast()
@@ -132,13 +138,16 @@ export function AnpassaSettingsContent({ profileNameSv, profileName, packages, f
       })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
-        setOffPreview({ state: 'failed' })
+        setOffPreview({
+          state: 'failed',
+          message: body?.error ? getErrorMessage(body, { statusCode: res.status, locale }) : null,
+        })
         return
       }
       const obligations = Array.isArray(body?.data?.open_obligations) ? (body.data.open_obligations as string[]) : []
       setOffPreview({ state: 'ready', obligations })
     } catch {
-      setOffPreview({ state: 'failed' })
+      setOffPreview({ state: 'failed', message: null })
     }
   }
 
@@ -221,7 +230,10 @@ export function AnpassaSettingsContent({ profileNameSv, profileName, packages, f
             ? t('off_dialog_winding', { name: offName })
             : offPreview.state === 'loading'
               ? t('off_dialog_loading', { name: offName })
-              : t('off_dialog_clean', { name: offName })
+              : offPreview.state === 'failed'
+                ? // Not the clean text: what is still open is not known.
+                  t('off_dialog_check_failed', { name: offName })
+                : t('off_dialog_clean', { name: offName })
         }
       >
         {offPreview.state === 'loading' ? (
@@ -237,6 +249,18 @@ export function AnpassaSettingsContent({ profileNameSv, profileName, packages, f
               ))}
             </ul>
             <p className="text-muted-foreground">{t('off_dialog_after', { name: offName })}</p>
+          </div>
+        ) : offPreview.state === 'failed' ? (
+          <div className="space-y-3 text-[13px]">
+            {offPreview.message && <p role="alert">{offPreview.message}</p>}
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (offTarget) void openOffDialog(offTarget)
+              }}
+            >
+              {tCommon('retry')}
+            </Button>
           </div>
         ) : null}
       </ConfirmDialog>

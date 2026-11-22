@@ -521,7 +521,7 @@ export const ticExtension: Extension = {
   sector: 'general',
 
   // Core-callable services, resolved via the extension registry (core never
-  // imports extension code). The agent onboarding snapshot
+  // imports extension code). The company snapshot
   // (lib/agent/composer/tic-fetch) reads the company profile here. The BankID
   // signing ceremony (lib/signing/bankid-provider) starts and polls sign
   // sessions here.

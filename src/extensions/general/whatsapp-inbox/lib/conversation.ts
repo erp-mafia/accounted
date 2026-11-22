@@ -11,6 +11,9 @@
  *   - question_queue        questions admitted for later (burst budget of 2)
  *   - recent_questions      asked-question log for late answers (<= 7 days)
  *   - budget                daily content-question counter (Europe/Stockholm)
+ *   - list_question_budget  daily list-question counter, counted beside it
+ *   - list_question_slots   list questions the latest burst still allows
+ *   - list_questions_expired list questions that expired here unanswered
  *
  * Concurrency note: context is read-modify-write via PostgREST, and the
  * writers (burst-ack winner, answer worker, company-choice handler, sweep)
@@ -144,13 +147,21 @@ export const STAGED_MEDIA_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 export const NO_COMPANY_OPTIONS = 'no_company_options'
 
 export type QuestionType = 'representation' | 'context' | 'resend'
-export type ConversationQuestionType = QuestionType | 'company'
+/** A question from the company's question list (company_questions), put in
+ *  the chat by list-question.ts. Its pending_question rides on a conversation
+ *  that stays idle. */
+export const LIST_QUESTION = 'list_question'
+export type ConversationQuestionType = QuestionType | 'company' | typeof LIST_QUESTION
 
 export interface PendingQuestion {
   type: ConversationQuestionType
-  /** Null for company questions (no item exists before the answer). */
+  /** Null for company questions and list questions (neither has an item). */
   inbox_item_id: string | null
   asked_at: string
+  /** A list question only: the question on the company's list. */
+  question_id?: string
+  /** A list question only: the company whose list it is on. */
+  company_id?: string
 }
 
 export interface QueuedQuestion {
@@ -173,6 +184,9 @@ export interface ConversationContext {
   question_queue?: QueuedQuestion[]
   recent_questions?: RecentQuestion[]
   budget?: { day_key: string; count: number }
+  list_question_budget?: { day_key: string; count: number }
+  list_question_slots?: number
+  list_questions_expired?: string[]
 }
 
 export function getContext(conversation: WhatsAppConversation): ConversationContext {
@@ -297,9 +311,16 @@ export async function claimAck(
   return Array.isArray(data) && data.length > 0
 }
 
+/** The conversation's daily counters: receipt questions (`budget`) and list questions. */
+export type DailyCounter = 'budget' | 'list_question_budget'
+
 /** Content questions already asked today (rolls over at Stockholm midnight). */
-export function questionsAskedToday(context: ConversationContext, now: Date = new Date()): number {
-  const budget = context.budget
+export function questionsAskedToday(
+  context: ConversationContext,
+  now: Date = new Date(),
+  counter: DailyCounter = 'budget',
+): number {
+  const budget = context[counter]
   if (!budget || budget.day_key !== todayIsoStockholm(now)) return 0
   return budget.count
 }
@@ -308,9 +329,11 @@ export function bumpBudget(
   context: ConversationContext,
   asked: number,
   now: Date = new Date(),
+  counter: DailyCounter = 'budget',
 ): ConversationContext['budget'] {
   const dayKey = todayIsoStockholm(now)
-  const current = context.budget?.day_key === dayKey ? context.budget.count : 0
+  const budget = context[counter]
+  const current = budget?.day_key === dayKey ? budget.count : 0
   // Negative `asked` refunds a question whose send failed; never below zero.
   return { day_key: dayKey, count: Math.max(0, current + asked) }
 }
@@ -484,8 +507,12 @@ export function resolveRecipient(
   row: WhatsAppMessage,
   link: { phone_enc?: string | null } | null,
 ): string | null {
-  const legacy = extractRecipient(row)
-  if (legacy) return legacy
+  return extractRecipient(row) ?? linkRecipient(link)
+}
+
+/** The recipient phone (E.164 digits) from the link's encrypted copy, or null
+ *  when the link has none left to decrypt. */
+export function linkRecipient(link: { phone_enc?: string | null } | null): string | null {
   if (!link?.phone_enc) return null
   try {
     const phone = decryptPhone(link.phone_enc)

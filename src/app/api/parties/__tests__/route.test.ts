@@ -112,7 +112,16 @@ describe('GET /api/parties/[id]', () => {
     )
     expect(status).toBe(200)
     expect(body.data.party.displayName).toBe('Loopia AB')
-    expect(getDossier).toHaveBeenCalledWith(mockSupabase, 'company-1', PARTY)
+    // No period named: the whole history, as before.
+    expect(getDossier).toHaveBeenCalledWith(mockSupabase, 'company-1', PARTY, 0, 'all')
+  })
+
+  it('reads the stats for the period the list shows: 12m, and the whole history for anything else', async () => {
+    getDossier.mockResolvedValue({ party: { id: PARTY }, facts: [], identities: [], decisions: [], vouchers: [], similar: [] })
+    await dossierGet(createMockRequest(`/api/parties/${PARTY}`, { searchParams: { period: '12m' } }), { params: Promise.resolve({ id: PARTY }) })
+    expect(getDossier).toHaveBeenLastCalledWith(mockSupabase, 'company-1', PARTY, 0, '12m')
+    await dossierGet(createMockRequest(`/api/parties/${PARTY}`, { searchParams: { period: 'forever' } }), { params: Promise.resolve({ id: PARTY }) })
+    expect(getDossier).toHaveBeenLastCalledWith(mockSupabase, 'company-1', PARTY, 0, 'all')
   })
 })
 

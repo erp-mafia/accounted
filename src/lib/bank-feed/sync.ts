@@ -35,6 +35,7 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
+import { isNordeaCardHold } from '@/lib/bank-sync/card-hold'
 import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 import type { BankIngestRoute, IngestOptions, IngestResult, RawTransaction } from '@/types'
 import { ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
@@ -84,6 +85,11 @@ export interface BankFeedAccountSyncInput {
   bankRoute: BankIngestRoute
   party: AisParty
   ingest?: BankFeedIngestFn
+  /**
+   * The connection's bank (bank_connections.bank_name): a Nordea card hold is
+   * not booked, in the read or stored before (isNordeaCardHold).
+   */
+  bankName?: string | null
   options?: Pick<IngestOptions, 'skipAutoCategorization' | 'rawInsertOnly'>
   /**
    * Ask the service for the account's enrichment facts (one extra details
@@ -261,7 +267,15 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
     }
   }
 
-  const mapped = mapBankFeedRows({ rows: remote.transactions, account, connectionId, archivedPageIds })
+  // Connect leaves Nordea's card holds out of the read. One that still comes
+  // through is not booked either, so it is left out here too, before the ids
+  // are built, as the Enable Banking sync does (isNordeaCardHold, crm#2076).
+  const bankName = input.bankName
+  const booked = bankName ? remote.transactions.filter((tx) => !isNordeaCardHold(bankName, tx.description)) : remote.transactions
+  if (booked.length < remote.transactions.length) {
+    archiveLog.info('card holds left out of the read', { connectionId, accountUid: account.uid, cardHolds: remote.transactions.length - booked.length })
+  }
+  const mapped = mapBankFeedRows({ rows: booked, account, connectionId, archivedPageIds })
   if (!account.dedup_scope) account.dedup_scope = mapped.scope
   if (mapped.rowsWithoutPage > 0) {
     // The contract keeps raw_page_index optional so an older service still
@@ -289,6 +303,10 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
   const ingestOptions: IngestOptions = { bankRoute, settlementAccount: bankRoute.ledgerAccount }
   if (input.options?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (input.options?.rawInsertOnly) ingestOptions.rawInsertOnly = true
+  // A hold stored before the holds were left out (by either feed) still
+  // holds its index: ingest must not hand it the purchase booked on its day
+  // for its amount (crm#2076).
+  if (bankName) ingestOptions.isNotBooked = (text) => isNordeaCardHold(bankName, text)
   const result = await ingest(supabase, companyId, userId, mapped.rows, ingestOptions)
   input.onStored?.(result.transaction_ids ?? [])
   // Rows in another currency than the account's are set aside by ingest, not

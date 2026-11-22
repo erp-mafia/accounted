@@ -13,6 +13,7 @@ import type {
   SupplierInvoice,
 } from '@/types'
 import type { ReopenedVatPeriod } from '@/lib/vat/filed-periods-reopened'
+import type { QuestionCloseReason } from '@/lib/questions/types'
 
 /**
  * The door a lock date change came through: the settings page ('app'), a
@@ -496,6 +497,16 @@ export type CoreEvent =
       companyId: string
       userId: string
     }}
+  // The question list (lib/questions): a question filed for a company,
+  // answered, closed without an answer, and opened again by an undo. Ids
+  // only: the text of a question or of an answer never travels on the bus.
+  // userId is the person behind the write, null when there is none; `via` is
+  // the door the answer or the close came through, as the question records
+  // it. Internal: not persisted to event_log and not a public webhook.
+  | { type: 'company_question.filed'; payload: { questionId: string; userId: string | null; companyId: string } }
+  | { type: 'company_question.answered'; payload: { questionId: string; via: string | null; userId: string | null; companyId: string } }
+  | { type: 'company_question.closed'; payload: { questionId: string; reason: QuestionCloseReason; via: string | null; userId: string | null; companyId: string } }
+  | { type: 'company_question.reopened'; payload: { questionId: string; userId: string | null; companyId: string } }
   // Agent self-reported feedback (gnubok_feedback tool). The product team
   // queries event_log for `agent.feedback` and routes to a backlog.
   | { type: 'agent.feedback'; payload: {

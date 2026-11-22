@@ -772,6 +772,10 @@ describe('generateSIEExport', () => {
       // Ensure a final short page so fetchAllRows terminates when the data is
       // an exact multiple of PAGE_SIZE.
       if (rows.length % PAGE === 0) pages.push({ data: [], error: null })
+      // Past two full pages fetchAllRows reads three pages at once, so the
+      // last window asks for up to two pages past the end; this queue
+      // answers in call order, not by range, so those get empty pages too.
+      if (rows.length > 2 * PAGE) pages.push({ data: [], error: null }, { data: [], error: null })
       return pages
     }
 

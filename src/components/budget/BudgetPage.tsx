@@ -6,7 +6,7 @@ import { EllipsisHorizontalIcon, PlusIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
-import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, EmptyState, LoadError } from '@/components/ui/empty-state'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
@@ -47,12 +47,13 @@ const NO_TAG: Record<string, string> = {}
  */
 export function BudgetPage() {
   const t = useTranslations('budget')
+  const tEmpty = useTranslations('empty')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { confirm, dialogProps } = useDestructiveConfirm()
   // The fiscal year is app-wide context (the sidebar); a budget belongs to
   // one year, a coming one included.
-  const { periodId } = useFiscalScope({ allowAll: false })
+  const { periodId, ready: fyReady } = useFiscalScope({ allowAll: false })
   // The budget the user picked; budgetId below is the one shown.
   const [pickedBudgetId, setPickedBudgetId] = useState<string | null>(null)
   const [view, setView] = useState<View | null>(null)
@@ -189,7 +190,12 @@ export function BudgetPage() {
         }
         action={
           <div className="flex items-center gap-2">
-            <Button size="toolbar" onClick={() => setDialog('new')} disabled={!canWrite || !periodId} title={lockedTitle}>
+            <Button
+              size="toolbar"
+              onClick={() => setDialog('new')}
+              disabled={!canWrite || !periodId}
+              title={lockedTitle ?? (fyReady && !periodId ? tEmpty('preset_no_year_title') : undefined)}
+            >
               <PlusIcon className="h-4 w-4" />
               {t('new')}
             </Button>
@@ -197,7 +203,10 @@ export function BudgetPage() {
         }
       />
 
-      {periodId && !budgets.loading && budgets.error && list.length === 0 ? (
+      {fyReady && !periodId ? (
+        // No räkenskapsår at all: a budget belongs to one, so lay it out first.
+        <EmptyNoFiscalYear started={false} />
+      ) : periodId && !budgets.loading && budgets.error && list.length === 0 ? (
         <LoadError title={budgets.error} onRetry={budgets.refetch} />
       ) : periodId && !budgets.loading && list.length === 0 ? (
         <EmptyState

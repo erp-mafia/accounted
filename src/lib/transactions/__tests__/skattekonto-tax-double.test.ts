@@ -128,6 +128,19 @@ describe('pickSkattekontoTaxTwin', () => {
     expect(pickSkattekontoTaxTwin('2026-07-10', probes, pair)).toBeNull()
   })
 
+  // Debiterad preliminärskatt moved from 2510 to 2518 Betald F-skatt
+  // (migration 20261120150000): a skattekonto row booked on 2510 before the
+  // move still holds the F-skatt a bank line now booked to 2518 would clear
+  // again, and the other way round.
+  it('treats 2510 and 2518 as the same F-skatt, whichever side was booked first', () => {
+    const before = entry('je-fskatt', '2026-11-12')
+    const on2510 = lines(before, [['2510', 1779, 0], ['1630', 0, 1779]])
+    expect(pickSkattekontoTaxTwin('2026-11-12', [{ account_number: '2518', net: 1779 }], on2510)?.entry.id).toBe('je-fskatt')
+    const on2518 = lines(before, [['2518', 1779, 0], ['1630', 0, 1779]])
+    expect(pickSkattekontoTaxTwin('2026-11-12', [{ account_number: '2510', net: 1779 }], on2518)?.entry.id).toBe('je-fskatt')
+    expect(pickSkattekontoTaxTwin('2026-11-12', [{ account_number: '2650', net: 1779 }], on2510)).toBeNull()
+  })
+
   it('picks the nearest date, then the lowest id', () => {
     const early = entry('je-b', '2026-07-01')
     const near = entry('je-c', '2026-07-12')

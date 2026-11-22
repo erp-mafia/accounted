@@ -55,7 +55,7 @@ describe('skattekonto_rules.pg: penalty ahead of the tax rules (20261027190100)'
     expect(await firstSeedAccount('Skönsbeskattning moms sept 2026')).toBe('2650')
     expect(await firstSeedAccount('Arbetsgivaravgift sept 2026')).toBe('2731')
     expect(await firstSeedAccount('Avdragen skatt sept 2026')).toBe('2710')
-    expect(await firstSeedAccount('Debiterad preliminärskatt')).toBe('2510')
+    expect(await firstSeedAccount('Debiterad preliminärskatt')).toBe('2518')
     expect(await firstSeedAccount('Inbetalning bokförd 260912')).toBe('__PRIMARY_SEK__')
     expect(await firstSeedAccount('Kvittning av utbetalning för rot- och rutarbeten')).toBe('1513')
     expect(await firstSeedAccount('Kostnadsränta')).toBe('8423')

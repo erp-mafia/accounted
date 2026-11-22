@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -9,7 +9,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { LoadError } from '@/components/ui/empty-state'
+import { EmptyNoFiscalYear, LoadError } from '@/components/ui/empty-state'
 import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
@@ -44,7 +44,7 @@ export function ReconciliationWorkspace() {
   const [accounts, setAccounts] = useState<ReconciliationAccount[] | null>(null)
   const [loadError, setLoadError] = useState(false)
   // The year is app-wide context (the sidebar); reconciling needs one started year.
-  const { periodId, period } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const { periodId, period, ready: fyReady } = useFiscalScope({ allowAll: false, hideFuture: true })
   const periodBounds = useMemo(
     () => (period ? { start: period.period_start, end: period.period_end } : null),
     [period],
@@ -69,20 +69,29 @@ export function ReconciliationWorkspace() {
     }
   }, [periodBounds, dateRange])
 
+  // Only the newest read may land: the full period is read first and the
+  // resolved date range right after, and a slower full-year answer must not
+  // overwrite the narrower one (or its error flag).
+  const loadGen = useRef(0)
   const load = useCallback(async () => {
     if (!window) return
+    const gen = ++loadGen.current
     try {
-      const qs = new URLSearchParams({ date_from: window.from, date_to: window.to })
+      // with_status=false: nothing here reads account.status (the overview
+      // reads its own status), so the route skips the per-account status RPCs.
+      const qs = new URLSearchParams({ date_from: window.from, date_to: window.to, with_status: 'false' })
       const res = await fetch(`/api/reconciliation/accounts?${qs.toString()}`)
+      if (gen !== loadGen.current) return
       setLoadError(false)
       if (!res.ok) {
         setLoadError(true)
         return
       }
       const json = await res.json()
+      if (gen !== loadGen.current) return
       setAccounts((json.data?.accounts ?? []) as ReconciliationAccount[])
     } catch {
-      setLoadError(true)
+      if (gen === loadGen.current) setLoadError(true)
     }
   }, [window])
 
@@ -164,6 +173,16 @@ export function ReconciliationWorkspace() {
       <div className="space-y-6">
         {header}
         <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
+      </div>
+    )
+  }
+
+  // No started year: nothing to reconcile against, and no window to load.
+  if (fyReady && !period) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <EmptyNoFiscalYear />
       </div>
     )
   }

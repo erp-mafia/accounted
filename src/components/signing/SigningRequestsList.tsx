@@ -40,8 +40,9 @@ interface SigningRequestsListProps {
 export function SigningRequestsList({ reloadSignal = 0, notice = null, emptyOffer }: SigningRequestsListProps) {
   const t = useTranslations('signing')
   const tCommon = useTranslations('common')
+  const signing = useSigningAvailability()
   // Chasing a request already sent needs the feature, not the plan (only sending a new one does).
-  const available = useSigningAvailability().offered
+  const available = signing.offered
   const [filter, setFilter] = useState<Filter>('all')
   const [requests, setRequests] = useState<SigningRequestView[] | null>(null)
   const [failed, setFailed] = useState(false)
@@ -99,10 +100,23 @@ export function SigningRequestsList({ reloadSignal = 0, notice = null, emptyOffe
     )
   else if (requests.length === 0) {
     const title = filter === 'all' ? t('list_empty_title') : t('list_empty_filtered_title')
+    // Begär signering only shows where sending is in the plan: without it,
+    // the empty list says what is missing instead of pointing at a button
+    // the archive does not draw.
     body = emptyOffer ? (
       <EmptyState icon={PencilSquareIcon} title={title} description={emptyOffer.description}>
         {emptyOffer.action}
       </EmptyState>
+    ) : signing.known && !signing.offered ? (
+      <EmptyState icon={PencilSquareIcon} title={title} description={t('list_empty_not_offered')} />
+    ) : signing.known && !signing.available ? (
+      <EmptyState
+        icon={PencilSquareIcon}
+        title={title}
+        description={t('list_empty_needs_plan')}
+        actionLabel={t('list_empty_plan_action')}
+        actionHref="/settings/billing"
+      />
     ) : (
       <EmptyState icon={PencilSquareIcon} title={title} description={t('list_empty_body')} actionLabel={t('list_empty_action')} actionHref="/arkiv" />
     )

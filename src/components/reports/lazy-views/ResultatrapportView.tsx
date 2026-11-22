@@ -60,8 +60,8 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
   if (!data || data.groups.length === 0) {
     return (
       <ReportEmptyState
-        title="Inga intäkter eller kostnader"
-        description="Det finns inga bokförda intäkter eller kostnader i den valda perioden."
+        title="Inga intäkter eller kostnader i perioden"
+        description="Välj ett annat räkenskapsår eller datumintervall."
       />
     )
   }

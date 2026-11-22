@@ -247,7 +247,7 @@ exports[`annual report over a ledger: aktiebolag > builds the canonical model, i
       },
       {
         "code": "AR-K2-LISTED-UNKNOWN",
-        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "message": "Om värdepapper som bolaget självt har gett ut är upptagna till handel på en reglerad marknad är inte besvarad.",
         "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
         "section": "scope",
         "severity": "error",
@@ -284,7 +284,7 @@ exports[`annual report over a ledger: aktiebolag > builds the canonical model, i
       },
       {
         "code": "AR-K2-LISTED-UNKNOWN",
-        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "message": "Om värdepapper som bolaget självt har gett ut är upptagna till handel på en reglerad marknad är inte besvarad.",
         "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
         "section": "scope",
         "severity": "error",
@@ -1522,7 +1522,7 @@ exports[`annual report over a ledger: aktiebolag > builds the canonical model, i
       },
       {
         "code": "AR-K2-LISTED-UNKNOWN",
-        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "message": "Om värdepapper som bolaget självt har gett ut är upptagna till handel på en reglerad marknad är inte besvarad.",
         "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
         "section": "scope",
         "severity": "error",
@@ -2487,7 +2487,7 @@ exports[`annual report over a ledger: enskild_firma > builds the canonical model
       },
       {
         "code": "AR-K2-LISTED-UNKNOWN",
-        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "message": "Om värdepapper som bolaget självt har gett ut är upptagna till handel på en reglerad marknad är inte besvarad.",
         "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
         "section": "scope",
         "severity": "error",
@@ -2531,7 +2531,7 @@ exports[`annual report over a ledger: enskild_firma > builds the canonical model
       },
       {
         "code": "AR-K2-LISTED-UNKNOWN",
-        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "message": "Om värdepapper som bolaget självt har gett ut är upptagna till handel på en reglerad marknad är inte besvarad.",
         "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
         "section": "scope",
         "severity": "error",
@@ -3704,7 +3704,7 @@ exports[`annual report over a ledger: enskild_firma > builds the canonical model
       },
       {
         "code": "AR-K2-LISTED-UNKNOWN",
-        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "message": "Om värdepapper som bolaget självt har gett ut är upptagna till handel på en reglerad marknad är inte besvarad.",
         "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
         "section": "scope",
         "severity": "error",

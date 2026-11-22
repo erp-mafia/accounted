@@ -71,7 +71,7 @@ describe('gnubok_get_task', () => {
       workflow: { slug: 'quarterly-vat-review', version: 4, body: '# Moms' },
       knowledge: [{ id: 'horizontal/swedish-vat', tier: 'horizontal', source: 'default', title: 'Moms', summary: '', version: 7, reviewed_at: null, body: '# VAT' }],
       industry_sections: [], references: [], company: [], connections: [],
-      company_knowledge: { name: 'Arcim', org_number: null, onboarding_summary: null, facts: [], remembered: [], documents: { total: 0, look_up: [] } },
+      company_knowledge: { name: 'Arcim', org_number: null, facts: [], remembered: [], documents: { total: 0, look_up: [] } },
     })
     await tool.execute({ kind: 'agent:quarterly-vat-review', client: 'claude' }, 'company-a', 'user-1', db() as never, actor)
     const events = emit.mock.calls.map(([event]) => event as { type: string; payload: { slug: string; companyId: string } })

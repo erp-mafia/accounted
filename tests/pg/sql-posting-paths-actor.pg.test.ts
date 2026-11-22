@@ -251,7 +251,7 @@ describe('create_expense_payout_batch: the reimbursement verifikat records the a
 
 describe('signatures, grants and comments', () => {
   it.each([
-    ['match_batch_allocate', 'match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,jsonb,uuid[],text)', 'samlingsverifikat'],
+    ['match_batch_allocate', 'match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,jsonb,jsonb,uuid[],text)', 'samlingsverifikat'],
     ['create_expense_payout_batch', 'create_expense_payout_batch(uuid,uuid[],date,text,text,uuid,uuid,text,text,uuid[],text)', 'reimbursement transfer'],
     ['link_invoice_to_voucher', 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'customer invoice as its payment'],
     ['link_supplier_invoice_to_voucher', 'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text,text)', 'OPEN supplier invoice'],

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { isInboxItemTaken, isInboxItemUnbooked, isOpenInboxItem, itemStage, whereInboxItemFree, whereInboxItemOpen, withDocumentHold } from '@/lib/documents/inbox-item-state'
-import { DEFAULT_VIEW, companionOf, doorOf, doorsInUse, itemHeadline, isCompanionReceipt, mailSenderOf, needCount, needsYou, orderByArrival, parseViewKey, queueFor, recentlyRoutedAway, ROUTED_AWAY_NOTICE_MS, stillInInbox, viewKey } from '../items'
+import { DEFAULT_VIEW, companionOf, doorOf, doorsInUse, inboxScope, itemHeadline, isCompanionReceipt, mailProviderOf, mailSenderOf, needCount, needsYou, orderByArrival, parseViewKey, queueFor, recentlyRoutedAway, ROUTED_AWAY_NOTICE_MS, stillInInbox, viewKey } from '../items'
+import { INTAKE_SOURCE_IDS } from '@/lib/intake/sources'
 import { makeItem, reading } from './fixtures'
 
 describe('itemStage: where an item stands, by the workspace precedence', () => {
@@ -320,5 +321,55 @@ describe('withDocumentHold', () => {
     ['the array shape of a to-one embed', [{ journal_entry_id: 'je-1', entry: [{ status: 'posted' }] }], 'je-1'],
   ])('%s', (_label, hold, expected) => {
     expect(withDocumentHold({ id: 'item-1', document_hold: hold as never })).toEqual({ id: 'item-1', document_journal_entry_id: expected })
+  })
+})
+
+describe('inboxScope: the cut GET /items?scope=inbox answers reads the same as the whole list', () => {
+  const NOW = Date.parse('2026-11-20T12:00:00.000Z')
+  const daysAgo = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString()
+  const open = (over: Partial<Parameters<typeof makeItem>[0]>) =>
+    makeItem({ status: 'received', extracted_data: reading({ supplier: { name: 'Telia' } }), ...over })
+  const whole = [
+    open({ id: 'open-upload' }),
+    // An invoice still in the inbox and its receipt (one purchase).
+    open({ id: 'inv-open', pairing: { role: 'invoice', receipt_item_id: 'rcpt-open', basis: 'invoice_number' } }),
+    open({ id: 'rcpt-open', pairing: { role: 'receipt', invoice_item_id: 'inv-open', basis: 'invoice_number' } }),
+    // A registered (booked) invoice whose receipt is still open: kept as the receipt's other half.
+    makeItem({ id: 'inv-registered', created_supplier_invoice_id: 'si-1', pairing: { role: 'invoice', receipt_item_id: 'rcpt-of-registered', basis: 'invoice_number' } }),
+    open({ id: 'rcpt-of-registered', pairing: { role: 'receipt', invoice_item_id: 'inv-registered', basis: 'invoice_number' } }),
+    // An open half of a purchase already booked.
+    open({ id: 'half-open', pairing: { role: 'booked_companion', booked_item_id: 'half-booked', booked_kind: 'invoice', basis: 'supplier_amount_date' } }),
+    makeItem({ id: 'half-booked', created_journal_entry_id: 'je-1' }),
+    // Years of booked underlag, through doors that have nothing waiting now.
+    ...Array.from({ length: 40 }, (_, i) => makeItem({ id: `booked-${i}`, source: 'peppol', created_journal_entry_id: `je-b${i}` })),
+    makeItem({ id: 'mail-booked', source: 'email', channel_context: { intake_source: 'mailbox', mail_provider: 'microsoft' } as never, created_supplier_invoice_id: 'si-2' }),
+    // Taken by Arkiv: three days ago (still named) and a month ago (not).
+    makeItem({ id: 'routed-recent', routed_to_arkiv_at: daysAgo(3) }),
+    makeItem({ id: 'routed-old', routed_to_arkiv_at: daysAgo(30) }),
+  ]
+
+  it('keeps what is in the inbox, the recently routed, and the other half of every kept pair', () => {
+    const { items } = inboxScope(whole, NOW)
+    expect(items.map((i) => i.id).sort()).toEqual(
+      ['half-booked', 'half-open', 'inv-open', 'inv-registered', 'open-upload', 'rcpt-of-registered', 'rcpt-open', 'routed-recent'].sort(),
+    )
+  })
+
+  it('gives every view the page derives the same answer as the whole list', () => {
+    const scoped = inboxScope(whole, NOW)
+    // Not a vacuous comparison: the whole list has decisions waiting.
+    expect(queueFor(whole, { kind: 'need' }).length).toBeGreaterThan(0)
+    const views = [{ kind: 'need' as const }, ...INTAKE_SOURCE_IDS.map((door) => ({ kind: 'door' as const, door }))]
+    for (const view of views) {
+      expect(queueFor(scoped.items, view).map((i) => i.id), JSON.stringify(view)).toEqual(queueFor(whole, view).map((i) => i.id))
+      expect(recentlyRoutedAway(scoped.items, view, NOW).map((i) => i.id)).toEqual(recentlyRoutedAway(whole, view, NOW).map((i) => i.id))
+    }
+    expect(needCount(scoped.items)).toBe(needCount(whole))
+    expect(doorsInUse(scoped.items, scoped.doors)).toEqual(doorsInUse(whole))
+    for (const item of queueFor(whole, { kind: 'need' })) {
+      expect(companionOf(item, scoped.items)?.id ?? null).toBe(companionOf(item, whole)?.id ?? null)
+    }
+    expect(scoped.mailProvider).toBe(mailProviderOf(whole))
+    expect(scoped.mailProvider).toBe('microsoft')
   })
 })

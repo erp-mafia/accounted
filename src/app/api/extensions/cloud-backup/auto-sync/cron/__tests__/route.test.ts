@@ -351,7 +351,7 @@ describe('cloud-backup auto-sync cron', () => {
         companyId: 'c-1',
         kind: 'repeated_failures',
         consecutiveFailures: 3,
-        errorMessage: 'Något gick fel. Försök igen.',
+        errorMessage: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
       })
     )
     const { value } = outcomes()[0]
@@ -570,7 +570,7 @@ describe('cloud-backup auto-sync cron', () => {
         sync_started_at: null,
         last_auto_sync_at: '2026-07-12T12:29:40.000Z',
         last_auto_sync_status: 'error',
-        last_auto_sync_error: 'Något gick fel. Försök igen.',
+        last_auto_sync_error: 'Något gick fel. Försök igen, och kontakta support om det fortsätter.',
         consecutive_failures: 3,
         last_alert_at: '2026-07-12T12:29:40.000Z',
       }
@@ -927,7 +927,7 @@ describe('cloud-backup auto-sync cron', () => {
     )
     const { value } = outcomes()[0]
     expect((value as any).last_auto_sync_status).toBe('error')
-    expect((value as any).last_auto_sync_error).toBe('Något gick fel. Försök igen.')
+    expect((value as any).last_auto_sync_error).toBe('Något gick fel. Försök igen, och kontakta support om det fortsätter.')
     expect((value as any).consecutive_failures).toBe(3)
   })
 

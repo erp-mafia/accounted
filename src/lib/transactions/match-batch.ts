@@ -42,7 +42,7 @@
  *      sent without its verifikat gets its sale booked first by the Bokför
  *      step, right before the RPC (lib/invoices/sale-first.ts); its dry run
  *      runs here, so a refusal refuses the batch before anything is written;
- *   4. the RPC: tenant scope, direction, sums, fee rows, periods, locks.
+ *   4. the RPC: tenant scope, direction, sums, fee and debt rows, periods, locks.
  *
  * A batch is all customer or all supplier invoices (the RPC refuses a mix),
  * so at most one of 3b and 3s books anything; both run, registrations first.
@@ -51,6 +51,12 @@
  * service's fee on the row, a debit on a class 6 cost account with no VAT.
  * The invoices less the fees (customer) or plus the fees (supplier) equal
  * the row; every invoice still settles for what it owed.
+ *
+ * Supplier debt rows (input.supplier_debts,
+ * lib/bookkeeping/supplier-debt-lines.ts, crm#1954): a supplier payment that
+ * also pays invoices registered before the company kept its books here,
+ * which are only in the 2440 balance. A debit on a 244x account with no VAT,
+ * not a fee; the invoices plus the fees plus the debt rows equal the row.
  *
  * A dry run runs 1-3s, then reads the transaction, the invoices and what the
  * ledger carries for a foreign one and projects the verifikat the RPC would
@@ -99,6 +105,7 @@ import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
 import { payoutBankAmount, payoutFeeLines, payoutFeeTotal } from '@/lib/bookkeeping/payout-fee-lines'
+import { supplierDebtLines, supplierDebtTotal } from '@/lib/bookkeeping/supplier-debt-lines'
 import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { invoiceDocumentRefusal, type InvoiceDocumentFields } from '@/lib/transactions/invoice-document-refusal'
 import { bankRowRefusalCode, decideBankRowRebookingById } from '@/lib/transactions/is-booked'
@@ -139,6 +146,8 @@ export interface MatchBatchResult {
   leftover: number
   /** The fee rows booked on the verifikat together; absent without fee rows. */
   total_fees?: number
+  /** The supplier debt rows booked on the verifikat together; absent without debt rows. */
+  total_debts?: number
   /**
    * Supplier invoice id to the registration verifikat the batch booked first
    * (defer_invoice_booking); absent when it booked none.
@@ -166,10 +175,11 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 /**
  * The one supplier allocation a kontantmetoden batch hands to the single bank
- * match (PH 243): one supplier invoice, no fee rows. Null for any other shape.
+ * match (PH 243): one supplier invoice, no fee or debt rows. Null for any
+ * other shape.
  */
 export function singleSupplierAllocation(input: MatchBatchInput): SupplierAllocation | null {
-  if (input.allocations.length !== 1 || (input.fees?.length ?? 0) > 0) return null
+  if (input.allocations.length !== 1 || (input.fees?.length ?? 0) > 0 || (input.supplier_debts?.length ?? 0) > 0) return null
   const [allocation] = input.allocations
   if (allocation?.kind !== 'supplier_invoice' || !allocation.supplier_invoice_id) return null
   return allocation as SupplierAllocation
@@ -428,6 +438,7 @@ export async function matchTransactionBatch(
   // the posting port) that also announces its verifikat with
   // journal_entry.committed.
   const feeLines = payoutFeeLines(input.fees)
+  const debtLines = supplierDebtLines(input.supplier_debts)
   const { data, error } = await postingPort.commitSqlPosting({
     supabase,
     companyId,
@@ -439,6 +450,7 @@ export async function matchTransactionBatch(
         allocations,
         ...(feeLines.length > 0 ? { feeLines } : {}),
         ...(cashLines ? { cashLines } : {}),
+        ...(debtLines.length > 0 ? { debtLines } : {}),
         ...(businessEvents ? { businessEvents } : {}),
       },
     ],
@@ -496,6 +508,7 @@ export async function matchTransactionBatch(
       total_allocated: result.total_allocated,
       leftover: result.leftover,
       ...(feeLines.length > 0 ? { total_fees: result.total_fees ?? payoutFeeTotal(feeLines) } : {}),
+      ...(debtLines.length > 0 ? { total_debts: result.total_debts ?? supplierDebtTotal(debtLines) } : {}),
       ...(Object.keys(booked.journalEntryIds).length > 0
         ? { registration_journal_entry_ids: booked.journalEntryIds }
         : {}),
@@ -709,26 +722,40 @@ async function previewMatchBatch(
 
   const totalAllocated = roundOre(allocations.reduce((sum, a) => sum + a.amount, 0))
   const txAbs = Math.abs(transaction.amount)
+  // A supplier debt from before belongs to an outgoing payment, as the RPC
+  // refuses it on a customer batch (BATCH_DEBT_SUPPLIER_ONLY).
+  if (isCustomer && (input.supplier_debts?.length ?? 0) > 0) return { ok: false, code: 'BATCH_DEBT_SUPPLIER_ONLY' }
   const totalFees = payoutFeeTotal(input.fees)
-  const settled = payoutBankAmount(allocations[0]!.kind, totalAllocated, totalFees)
-  const sums = { total_allocated: totalAllocated, ...(totalFees > 0 ? { total_fees: totalFees } : {}), transaction_amount: txAbs }
+  const totalDebts = supplierDebtTotal(input.supplier_debts)
+  const settled = payoutBankAmount(allocations[0]!.kind, totalAllocated, totalFees, totalDebts)
+  const sums = {
+    total_allocated: totalAllocated,
+    ...(totalFees > 0 ? { total_fees: totalFees } : {}),
+    ...(totalDebts > 0 ? { total_debts: totalDebts } : {}),
+    transaction_amount: txAbs,
+  }
   if (settled - txAbs > 0.005) return { ok: false, code: 'BATCH_AMOUNT_EXCEEDS_TX', details: sums }
   if (txAbs - settled > 0.005) return { ok: false, code: 'BATCH_AMOUNT_BELOW_TX', details: sums }
 
-  // A fee books on an active account of the company's chart, as the RPC
-  // checks at commit (BATCH_FEE_ACCOUNT_INVALID).
+  // A fee or a debt row books on an active account of the company's chart,
+  // as the RPC checks at commit (BATCH_FEE_ACCOUNT_INVALID,
+  // BATCH_DEBT_ACCOUNT_INVALID). One read for both.
   const feeAccounts = Array.from(new Set((input.fees ?? []).map((fee) => fee.account)))
-  if (feeAccounts.length > 0) {
+  const debtAccounts = Array.from(new Set((input.supplier_debts ?? []).map((debt) => debt.account)))
+  const extraAccounts = Array.from(new Set([...feeAccounts, ...debtAccounts]))
+  if (extraAccounts.length > 0) {
     const { data: chartRows, error: chartError } = await supabase
       .from('chart_of_accounts')
       .select('account_number')
       .eq('company_id', companyId)
       .eq('is_active', true)
-      .in('account_number', feeAccounts)
+      .in('account_number', extraAccounts)
     if (chartError) return failed(chartError)
     const active = new Set(((chartRows ?? []) as { account_number: string }[]).map((row) => row.account_number))
-    const inactive = feeAccounts.find((account) => !active.has(account))
-    if (inactive) return { ok: false, code: 'BATCH_FEE_ACCOUNT_INVALID', details: { account: inactive } }
+    const inactiveFee = feeAccounts.find((account) => !active.has(account))
+    if (inactiveFee) return { ok: false, code: 'BATCH_FEE_ACCOUNT_INVALID', details: { account: inactiveFee } }
+    const inactiveDebt = debtAccounts.find((account) => !active.has(account))
+    if (inactiveDebt) return { ok: false, code: 'BATCH_DEBT_ACCOUNT_INVALID', details: { account: inactiveDebt } }
   }
 
   // The bank leg the RPC posts: capture_bank_booking_context's account for
@@ -747,6 +774,7 @@ async function previewMatchBatch(
     invoices,
     fees: input.fees,
     cashLines: guard.cashLines,
+    supplierDebts: input.supplier_debts,
   })
 
   return {
@@ -762,6 +790,7 @@ async function previewMatchBatch(
       allocations_kind: isCustomer ? 'customer_invoice' : 'supplier_invoice',
       total_allocated: totalAllocated,
       ...(totalFees > 0 ? { total_fees: totalFees } : {}),
+      ...(totalDebts > 0 ? { total_debts: totalDebts } : {}),
       expected_entry_date: expected.entry_date,
       expected_description: expected.description,
       expected_lines: expected.lines,

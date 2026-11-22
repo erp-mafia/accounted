@@ -48,6 +48,26 @@ describe('getDossier', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'parties')
   })
 
+  it('reads the ledger stats for the period it is given, the whole history by default', async () => {
+    const dossierReads = () => {
+      enqueue({ data: row({}) }) // the party
+      for (let i = 0; i < 5; i++) enqueue({ data: [] }) // facts, identities, decisions, customer, supplier
+      enqueue({ data: [] }) // get_observed_parties
+    }
+    dossierReads()
+    await getDossier(supabase as never, 'company-1', PARTY, 0, '12m')
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'get_observed_parties',
+      expect.objectContaining({ p_from_date: periodStart('12m'), p_keys: ['loopia'] }),
+    )
+
+    vi.clearAllMocks()
+    reset()
+    dossierReads()
+    await getDossier(supabase as never, 'company-1', PARTY)
+    expect(supabase.rpc).toHaveBeenCalledWith('get_observed_parties', expect.objectContaining({ p_from_date: null }))
+  })
+
   it('returns null for an unknown id without touching anything else', async () => {
     enqueue({ data: null })
     expect(await getDossier(supabase as never, 'company-1', PARTY)).toBeNull()

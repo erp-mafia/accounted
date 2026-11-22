@@ -2,10 +2,11 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import type { ArkivQuestion, QuestionFinding } from '@/lib/arkiv/questions'
@@ -29,9 +30,20 @@ type DismissNote = 'not_exists' | 'not_applicable'
 /** The answered card's fade (duration-150), after which it leaves the list. */
 const FADE_MS = 150
 
+/** A refused answer, with the server's body and status, so the card can say why. */
+class SendError extends Error {
+  constructor(
+    readonly body: unknown,
+    readonly status: number,
+  ) {
+    super(String(status))
+    this.name = 'SendError'
+  }
+}
+
 async function send(method: 'POST' | 'PUT', url: string, body: unknown): Promise<void> {
   const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  if (!res.ok) throw new Error(String(res.status))
+  if (!res.ok) throw new SendError(await res.json().catch(() => null), res.status)
 }
 
 const asText = (value: string | number | null): string => (value == null ? '' : String(value))
@@ -77,6 +89,7 @@ export function QuestionCard({
   compact?: boolean
 }) {
   const t = useTranslations('arkiv')
+  const locale = useLocale() as ErrorLocale
   const fieldLabel = useFieldLabel()
   const { toast } = useToast()
   // useCanWrite's rule; outside a provider (the sandbox) the server decides.
@@ -86,14 +99,16 @@ export function QuestionCard({
   // Answered: the card fades (leaving), then leaves the list (gone).
   const [leaving, setLeaving] = useState(false)
   const [gone, setGone] = useState(false)
-  const [failed, setFailed] = useState(false)
+  // Why the last answer did not save: the server's sentence (a locked
+  // period, a document already handled), not only that it failed.
+  const [failed, setFailed] = useState<string | null>(null)
 
   const typeLabel = (type: string | null) => (type && (DOC_TYPES as readonly string[]).includes(type) ? t(`types.${type}` as never) : t('type_unknown'))
   const readingLabel = (r: Reading) => `${shortValue(r.value)}${r.page != null ? ` · ${t('source_page_short_only', { page: r.page })}` : ''}`
 
   const act = async (work: () => Promise<void>, consequence: string) => {
     setBusy(true)
-    setFailed(false)
+    setFailed(null)
     try {
       await work()
       toast({ title: consequence })
@@ -102,8 +117,12 @@ export function QuestionCard({
         setGone(true)
         onAnswered?.(question)
       }, FADE_MS)
-    } catch {
-      setFailed(true)
+    } catch (error) {
+      setFailed(
+        error instanceof SendError
+          ? getErrorMessage(error.body, { statusCode: error.status, locale, fallback: t('action_failed') })
+          : getErrorMessage(error, { locale, fallback: t('action_failed') }),
+      )
     } finally {
       setBusy(false)
     }
@@ -215,7 +234,7 @@ export function QuestionCard({
           </fieldset>
         )}
       </div>
-      {failed ? <div className="mt-1 text-xs text-destructive">{t('action_failed')}</div> : null}
+      {failed ? <div role="alert" className="mt-1 text-xs text-destructive">{failed}</div> : null}
     </div>
   )
 }
@@ -244,7 +263,8 @@ function FindingQuestion({
   compact: boolean
   busy: boolean
   leaving: boolean
-  failed: boolean
+  /** Why the last answer did not save, or null. */
+  failed: string | null
   onClose: (resolution: 'applied' | 'dismissed', note?: DismissNote) => void
 }) {
   const t = useTranslations('arkiv')
@@ -333,7 +353,7 @@ function FindingQuestion({
           </>
         )}
       </div>
-      {failed ? <div className="mt-1 text-xs text-destructive">{t('action_failed')}</div> : null}
+      {failed ? <div role="alert" className="mt-1 text-xs text-destructive">{failed}</div> : null}
     </div>
   )
 }

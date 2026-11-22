@@ -16,7 +16,13 @@ import {
   formatWholeKronor,
 } from '@/components/reports/DeclarationRutaRow'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { ink2sBuildingRows, ink2sSchablonintaktRows, type INK2Declaration } from '@/lib/reports/ink2/types'
+import {
+  ink2PensionTaxRows,
+  ink2sBuildingRows,
+  ink2sSchablonintaktRows,
+  ink2sSplitAdjustmentRows,
+  type INK2Declaration,
+} from '@/lib/reports/ink2/types'
 import {
   INK2R_RUTA_LABELS,
   INK2R_ASSET_CODES,
@@ -116,9 +122,15 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
           the other reports' exports. The page title, year picker and the
           "?" with the filing steps (Ink2FilingHelp) live in the top bar, so
           no second title block here; company and org.nr print on paper via
-          ReportPrintHeader. */}
+          ReportPrintHeader. A declaration that does not tie to the books has
+          no file: the reasons are the first warnings below. */}
       <ReportExportMenu>
-        <Button variant="outline" onClick={downloadSRU} loading={downloading}>
+        <Button
+          variant="outline"
+          onClick={downloadSRU}
+          loading={downloading}
+          disabled={data.sruBlockers.length > 0}
+        >
           {!downloading && <ArrowDownTrayIcon className="h-4 w-4" />}
           Ladda ner SRU-filer
         </Button>
@@ -280,11 +292,13 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
         <div className="px-1 pt-2">
           <p className="text-sm text-muted-foreground mb-4">
             Här fylls bara de punkter som visas nedan i: årets resultat, de
-            justeringar som sparats i bokslutet och schablonintäkten på
-            periodiseringsfonder (punkt 4.6a). Den räknas på fonderna vid
-            årets ingång, även för brutet, förkortat och förlängt
-            räkenskapsår. Börjar eller slutar året mitt i en månad räknas den
-            inte ut: då står det som en varning ovan. Punkt 4.14a är det underskott som angetts i
+            justeringar som sparats i bokslutet (nedskrivningar av finansiella
+            tillgångar på 4.3b och utdelningar på 4.5b), schablonintäkten på
+            periodiseringsfonder (punkt 4.6a) och uppräkningen av återförda
+            fonder som sattes av före 2021 (punkt 4.6d). Schablonintäkten räknas
+            på fonderna vid årets ingång, även för brutet, förkortat och förlängt
+            räkenskapsår. När en av dem inte kan räknas ut står det som en
+            varning ovan. Punkt 4.14a är det underskott som angetts i
             bokslutet, det hämtas inte från förra årets deklaration. Övriga
             punkter på INK2S och upplysningarna om årsredovisningen (biträde av
             uppdragstagare, revision) ingår inte i SRU-filen: fyll i dem i
@@ -318,11 +332,17 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 label="Skatt på årets resultat (ej avdragsgill)"
                 amount={data.ink2s['7651']}
               />
+              {ink2sSplitAdjustmentRows(data.ink2s).filter((row) => row.code === '4.3b').map((row) => (
+                <DeclarationRutaRow key={row.field} code={row.code} label={row.label} amount={row.amount} />
+              ))}
               <DeclarationRutaRow
                 code="4.3c"
                 label="Andra ej avdragsgilla kostnader"
                 amount={data.ink2s['7653']}
               />
+              {ink2sSplitAdjustmentRows(data.ink2s).filter((row) => row.code === '4.5b').map((row) => (
+                <DeclarationRutaRow key={row.field} code={row.code} label={row.label} amount={row.amount} />
+              ))}
               <DeclarationRutaRow
                 code="4.5c"
                 label="Andra ej skattepliktiga intäkter"
@@ -330,6 +350,9 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
               />
               {ink2sSchablonintaktRows(data.ink2s).map((row) => (
                 <DeclarationRutaRow key={row.field} code="4.6a" label={row.label} amount={row.amount} />
+              ))}
+              {ink2sSplitAdjustmentRows(data.ink2s).filter((row) => row.code === '4.6d').map((row) => (
+                <DeclarationRutaRow key={row.field} code={row.code} label={row.label} amount={row.amount} />
               ))}
               {ink2sBuildingRows(data.ink2s).map((row) => (
                 <DeclarationRutaRow key={row.field} code="4.9" label={row.label} amount={row.amount} />
@@ -357,6 +380,15 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
               </tr>
             </tfoot>
           </Table>
+          {ink2PensionTaxRows(data.ink2).length > 0 && (
+            <Table className="mt-4">
+              <TableBody>
+                {ink2PensionTaxRows(data.ink2).map((row) => (
+                  <DeclarationRutaRow key={row.field} code={row.code} label={row.label} amount={row.amount} />
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </div>
       </section>
     </div>

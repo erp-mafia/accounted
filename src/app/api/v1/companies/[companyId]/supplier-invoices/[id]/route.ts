@@ -63,14 +63,20 @@ const SupplierInvoiceDetail = z.object({
   status: z.string(),
   currency: z.string(),
   exchange_rate: z.number().nullable(),
+  exchange_rate_date: z.string().nullable(),
   subtotal: z.number(),
+  subtotal_sek: z.number().nullable(),
   vat_amount: z.number(),
+  vat_amount_sek: z.number().nullable(),
   total: z.number(),
+  total_sek: z.number().nullable(),
   vat_treatment: z.string(),
   reverse_charge: z.boolean(),
   // Under reverse charge from an EU supplier: eu_goods (ruta 20) or
   // eu_services (ruta 21); null books services.
   reverse_charge_kind: z.enum(SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS).nullable(),
+  payment_reference: z.string().nullable(),
+  paid_at: z.string().nullable(),
   paid_amount: z.number(),
   remaining_amount: z.number(),
   is_credit_note: z.boolean(),
@@ -82,7 +88,13 @@ const SupplierInvoiceDetail = z.object({
   self_billing_agreement_ref: z.string().nullable(),
   registration_journal_entry_id: z.string().uuid().nullable(),
   payment_journal_entry_id: z.string().uuid().nullable(),
+  transaction_id: z.string().uuid().nullable(),
+  // The invoice's own file (GET /documents/{id}); null when none is attached
+  // to the invoice itself, e.g. one imported or registered without a file.
+  document_id: z.string().uuid().nullable(),
   notes: z.string().nullable(),
+  default_dimensions: z.record(z.string(), z.string()),
+  reversed_at: z.string().nullable(),
   // Attest time: an attested invoice past its due date reads 'overdue', like
   // one nobody attested, so the status alone cannot tell (crm#1229).
   approved_at: z.string().nullable(),

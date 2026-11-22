@@ -67,6 +67,9 @@ export default function DeadlinesPage() {
   // The last load failed: said in the page, never a toast (Stil v3 states).
   const [loadFailed, setLoadFailed] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  // Generera nu created nothing: the tax settings are incomplete, and the
+  // attn line says so with the way there instead of a toast that vanishes.
+  const [generatedNone, setGeneratedNone] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editingDeadline, setEditingDeadline] = useState<Deadline | null>(null)
   // The shared customer cache; a deadline pointing at an archived customer
@@ -198,13 +201,11 @@ export default function DeadlinesPage() {
 
       if ((result.created ?? 0) === 0) {
         // Nothing was generated: the tax settings are genuinely incomplete.
-        // Point the user to fill them in (the banner's settings link stays visible).
-        toast({
-          title: t('generate_none_title'),
-          description: t('generate_none_description'),
-        })
+        // The attn line turns into the pointer to them.
+        setGeneratedNone(true)
         return
       }
+      setGeneratedNone(false)
 
       toast({
         title: t('generate_success_title'),
@@ -522,6 +523,10 @@ export default function DeadlinesPage() {
             {tCommon('refresh_failed')}
           </AttnLine>
         ) : null
+      ) : !hasSystemDeadlines && generatedNone ? (
+        <AttnLine action={{ label: t('generate_open_settings'), href: '/settings/tax' }}>
+          {t('generate_none_line')}
+        </AttnLine>
       ) : !hasSystemDeadlines ? (
         <AttnLine
           action={canWrite ? {

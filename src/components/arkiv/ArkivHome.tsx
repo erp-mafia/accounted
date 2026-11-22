@@ -76,7 +76,7 @@ function ArkivHomeInner() {
         filters={searching ? undefined : <ArkivYearPicker year={year} onYear={setYear} />}
       />
       {uploading && canWrite && <UploadDrop onLanded={refresh.trigger} />}
-      {!searching && <ArkivTree refreshKey={refreshKey} year={year} />}
+      {!searching && <ArkivTree refreshKey={refreshKey} year={year} onShowAllYears={() => setYear('all')} />}
     </div>
   )
 }

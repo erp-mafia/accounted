@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { ArrowTrendingUpIcon, ExclamationTriangleIcon, UsersIcon, type Icon as AppIcon } from '@/components/icons'
+import { ArrowTrendingUpIcon, CalendarIcon, ExclamationTriangleIcon, UsersIcon, type Icon as AppIcon } from '@/components/icons'
 import { SupportLink } from '@/components/ui/support-link'
 
 type StateTone = 'empty' | 'done' | 'error'
@@ -196,14 +196,36 @@ export function EmptyCustomers({ onAction }: { onAction: () => void }) {
 }
 
 /**
- * Byrå cockpit: no client companies yet. A preset, not a bare <EmptyState
- * icon={ArrowTrendingUpIcon} />, because the only caller is a Server
- * Component: an icon from @/components/icons is a plain function that cannot
- * cross the RSC boundary as a prop, while a reference to this client
- * component can. The copy lives in the
- * byra namespace, where the byrå surfaces already keep it.
+ * A page that needs a räkenskapsår when the company has none to show: the
+ * way to Inställningar, Räkenskapsår, where a year is laid out. `started`
+ * (the default) is for the pages that read only a year that has begun
+ * (reports, nyckeltal, avstämning); a page that takes a coming year too
+ * (budget) passes false.
  */
-export function EmptyByraClients() {
+export function EmptyNoFiscalYear({ started = true }: { started?: boolean }) {
+  const t = useTranslations('empty')
+  return (
+    <EmptyState
+      icon={CalendarIcon}
+      title={started ? t('preset_no_started_year_title') : t('preset_no_year_title')}
+      description={t('preset_no_year_description')}
+      actionLabel={t('preset_no_year_action')}
+      actionHref="/settings/fiscal-years"
+    />
+  )
+}
+
+/**
+ * Byrå cockpit: no client companies yet. A preset, not a bare <EmptyState
+ * icon={ArrowTrendingUpIcon} />, because the callers are Server Components:
+ * an icon from @/components/icons is a plain function that cannot cross the
+ * RSC boundary as a prop, while a reference to this client component can.
+ * The copy lives in the byra namespace, where the byrå surfaces already keep
+ * it. Owners and admins (`canCreate`) get the way to Klienter, where Nytt
+ * klientbolag is; a member reads who adds them. `description` is the
+ * surface's own sentence (Nyckeltal by default).
+ */
+export function EmptyByraClients({ canCreate = false, description }: { canCreate?: boolean; description?: string }) {
   // Named tByra, not t: this is the only preset here that reads from a
   // namespace other than `empty`, and i18n/__tests__/message-keys.test.ts maps
   // one variable name to one namespace per file. Reusing `t` would silently
@@ -213,7 +235,8 @@ export function EmptyByraClients() {
     <EmptyState
       icon={ArrowTrendingUpIcon}
       title={tByra('kpi_empty_title')}
-      description={tByra('kpi_empty_description')}
+      description={canCreate ? (description ?? tByra('kpi_empty_description')) : tByra('empty_clients_member')}
+      {...(canCreate ? { actionLabel: tByra('empty_clients_action'), actionHref: '/clients' } : {})}
     />
   )
 }

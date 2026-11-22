@@ -481,6 +481,65 @@ describe('syncAccountTransactions', () => {
     expect(result.returnedMaxBookingDate).toBe('2026-11-04')
   })
 
+  it("skips Nordea's card holds from its booked list, and only those (crm#2076)", async () => {
+    // Since 2026-11-20 Nordea lists a card purchase that has not settled among
+    // its booked rows: status BOOK, booked on the day it was made, its text
+    // starting "Reservation ". The purchase itself arrives later as its own
+    // row, so the hold imported as booked is the same purchase twice.
+    const { convertTransaction } = await vi.importActual<typeof import('../api-client')>('../api-client')
+    mockConvertTransaction.mockImplementation(convertTransaction)
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    const row = (amount: string, text: string, day: string) => ({
+      status: 'BOOK', credit_debit_indicator: 'DBIT', transaction_amount: { amount, currency: 'SEK' },
+      booking_date: day, value_date: day, remittance_information: [text],
+    })
+    const nordeaFeed = [
+      row('272.00', 'Reservation Kortköp FACEBK *7K4XZ2PQ9M', '2026-11-21'),
+      row('341.64', 'Kortköp 261119 KAFFEROSTERIET', '2026-11-20'),
+      // A settled purchase at a merchant whose name carries the word.
+      row('24.50', 'Kortköp 260824 Hotel Reservation', '2026-08-25'),
+    ]
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: nordeaFeed, rawPages: ['{}'] })
+
+    const nordea = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-08-01', '2026-11-21', mockIngest, { bankName: 'Nordea' },
+    )
+
+    expect(mockIngest.mock.calls[0][3].map((r: { description: string }) => r.description)).toEqual([
+      'Kortköp 261119 KAFFEROSTERIET',
+      'Kortköp 260824 Hotel Reservation',
+    ])
+    expect(nordea.notBooked).toBe(1)
+    expect(nordea.returnedMaxBookingDate).toBe('2026-11-20')
+
+    // Another bank's row with the same text is its own booked row.
+    mockIngest.mockClear()
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-08-01', '2026-11-21', mockIngest, { bankName: 'Handelsbanken' },
+    )
+    expect(mockIngest.mock.calls[0][3]).toHaveLength(3)
+  })
+
+  it("tells ingest how the bank's card holds read, so a hold stored before never takes a purchase (crm#2076)", async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    const isNotBookedAt = async (bankName?: string) => {
+      mockIngest.mockClear()
+      await syncAccountTransactions(
+        {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+        '2026-11-13', '2026-11-21', mockIngest, bankName === undefined ? undefined : { bankName },
+      )
+      return (mockIngest.mock.calls[0][4] as { isNotBooked?: (text: string) => boolean }).isNotBooked
+    }
+
+    const nordea = await isNotBookedAt('Nordea')
+    expect(nordea?.('Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(true)
+    expect(nordea?.('Kortköp 261119 KAFFEROSTERIET')).toBe(false)
+    expect((await isNotBookedAt('Handelsbanken'))?.('Reservation Kortköp FACEBK *7K4XZ2PQ9M')).toBe(false)
+    expect(await isNotBookedAt()).toBeUndefined()
+  })
+
   it('reports the rows ingest set aside as another currency, and the rest of the sync stands (crm#1767)', async () => {
     mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string, currency: string } }) => ({
       id: 'x',

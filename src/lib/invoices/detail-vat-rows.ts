@@ -1,0 +1,58 @@
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
+import { roundOre } from '@/lib/money'
+
+/**
+ * One VAT row of the totals block on an invoice's own page. rate null: the
+ * plain "Moms" label.
+ */
+export interface DetailVatRow {
+  key: string
+  rate: number | null
+  amount: number
+}
+
+/**
+ * The VAT rows of the totals block on an invoice's own page, per rate.
+ *
+ * A rate is shown when its VAT is not zero, whatever the sign: a
+ * kreditfaktura stores its moms negated (buildCreditNoteItem), and its page
+ * must show "Moms 25 % -250 kr" as its PDF does (pdf-template), not drop
+ * every rate and print "Moms 0 kr" under a total that includes the moms.
+ *
+ * Pure: the page renders what this returns.
+ */
+export function buildDetailVatRows(input: {
+  items: ReadonlyArray<{ vat_rate?: number | null; vat_amount?: number | null; line_total: number }>
+  headerVatAmount: number
+  headerVatRate: number | null | undefined
+  vatRegistered: boolean
+}): DetailVatRow[] {
+  // An invoice whose header holds no VAT states none: a row that carries no
+  // VAT of its own is then zero, not recomputed into moms the total lacks.
+  const recomputeLegacyRows = input.headerVatAmount !== 0
+  const vatByRate = new Map<number, number>()
+  for (const item of input.items) {
+    const rate = item.vat_rate ?? 0
+    // The stored line VAT is what the invoice states and booked (the PDF
+    // prints the same); a legacy row that carries none is recomputed with
+    // the rule the builder stores (crm#1343).
+    const lineVat =
+      item.vat_amount || (recomputeLegacyRows ? computeLineVat(item.line_total, rate) : 0)
+    vatByRate.set(rate, roundOre((vatByRate.get(rate) || 0) + lineVat))
+  }
+  const entries = Array.from(vatByRate.entries())
+    .filter(([, vat]) => vat !== 0)
+    .sort(([a], [b]) => b - a)
+  if (entries.length > 0) {
+    return entries.map(([rate, vat]) => ({ key: String(rate), rate, amount: vat }))
+  }
+  // An invoice without lines has nothing to sum: a registration from the
+  // books (crm#1131) and a kreditfaktura of one, issued without lines. Its
+  // header holds the VAT its verifikat booked, at one rate, as the PDF prints
+  // it. Summing nothing printed "Moms 0" under a total that includes it.
+  if (input.items.length === 0 && input.headerVatAmount !== 0) {
+    return [{ key: 'header', rate: input.headerVatRate || null, amount: input.headerVatAmount }]
+  }
+  if (!input.vatRegistered && input.headerVatAmount === 0) return []
+  return [{ key: 'zero', rate: null, amount: 0 }]
+}
