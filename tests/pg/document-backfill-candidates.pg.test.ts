@@ -291,6 +291,10 @@ describe('document_backfill_candidates and document_retry_candidates', () => {
  * 3 000 held jobs, 0.5 s of a 0.55 s call). The answer must not move: the
  * shipped body of 20261112152731 runs next to the new function on the same
  * rows, in one statement so both see the same snapshot and the same now().
+ *
+ * The documents, their jobs (some due an hour ago), the locks and the reset
+ * are seeded inside a transaction that is rolled back: no other suite's
+ * backfill or claim_document_jobs call ever sees them.
  */
 describe('document_backfill_candidates reads each check once per call (20261123004000)', () => {
   const shipped = readFileSync(
@@ -298,43 +302,49 @@ describe('document_backfill_candidates reads each check once per call (202611230
   ).split('CREATE OR REPLACE FUNCTION public.document_backfill_candidates')[1]!.split('AS $$')[1]!.split('$$;')[0]!
     .replaceAll('p_limit', '$1::int')
 
-  // Two days ahead, a second apart: these lead every other suite's rows, and no two tie on created_at, so the
-  // order and the cut at the limit are the same whichever plan reads them.
-  const base = Date.now() + 2 * 86_400_000
-  let n = 0
-  const at = () => new Date(base - 1000 * n++).toISOString()
-  const mine: string[] = []
-
-  async function doc(p: { userId: string; companyId: string; mime?: string | null; entryId?: string; readAt?: string | null; retryAfter?: string }): Promise<string> {
-    const id = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.document_attachments
-         (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, journal_entry_id, pages_read_at, read_retry_after, created_at)
-       VALUES ($1, $2, $3, 'underlag.pdf', $4, 1024, $5, $6, 'file_upload', $7, $8, $9, $10)`,
-      [id, p.userId, p.companyId, p.mime === undefined ? 'application/pdf' : p.mime, `documents/${p.companyId}/${id}.pdf`, randomUUID().replace(/-/g, '').padEnd(64, '0'), p.entryId ?? null, p.readAt ?? null, p.retryAfter ?? null, at()],
-    )
-    mine.push(id)
-    return id
-  }
-
-  async function job(companyId: string, documentId: string, p: { kind?: string; status: string; attempts?: number; ago?: string }): Promise<void> {
-    // run_after and locked_at an interval ago (59 or 61 minutes: either side of the hour), or tomorrow.
-    const when = p.ago ? `now() - interval '${p.ago}'` : `now() + interval '1 day'`
-    await getPool().query(
-      `INSERT INTO public.document_jobs (company_id, document_id, kind, status, attempts, locked_at, run_after)
-       VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'running' THEN ${when} END, ${when})`,
-      [companyId, documentId, p.kind ?? 'read', p.status, p.attempts ?? (p.status === 'queued' ? 0 : 1)],
-    )
-  }
+  type Company = { userId: string; companyId: string; fiscalPeriodId: string }
+  let open: Company, locked: Company, closed: Company, source: Company
+  let openEntry: string, lockedEntry: string, closedEntry: string, replacement: string
 
   beforeAll(async () => {
-    const open = await seedCompany()
-    const openEntry = await insertPostedJournalEntry({ userId: open.userId, companyId: open.companyId, fiscalPeriodId: open.fiscalPeriodId })
-    const locked = await seedCompany()
-    const lockedEntry = await insertPostedJournalEntry({ userId: locked.userId, companyId: locked.companyId, fiscalPeriodId: locked.fiscalPeriodId })
-    const closed = await seedCompany()
-    const closedEntry = await insertPostedJournalEntry({ userId: closed.userId, companyId: closed.companyId, fiscalPeriodId: closed.fiscalPeriodId })
-    const source = await seedCompany()
+    open = await seedCompany()
+    openEntry = await insertPostedJournalEntry({ userId: open.userId, companyId: open.companyId, fiscalPeriodId: open.fiscalPeriodId })
+    locked = await seedCompany()
+    lockedEntry = await insertPostedJournalEntry({ userId: locked.userId, companyId: locked.companyId, fiscalPeriodId: locked.fiscalPeriodId })
+    closed = await seedCompany()
+    closedEntry = await insertPostedJournalEntry({ userId: closed.userId, companyId: closed.companyId, fiscalPeriodId: closed.fiscalPeriodId })
+    source = await seedCompany()
+    replacement = await insertCompany({ createdBy: source.userId })
+  })
+
+  /**
+   * Seeds every branch on one client in an open transaction and returns the ids, newest first. Two days ahead and
+   * a second apart: the rows lead every other row, and no two tie on created_at, so the order and the cut at the
+   * limit are the same whichever plan reads them. The caller rolls back.
+   */
+  async function seed(client: PoolClient): Promise<string[]> {
+    const base = Date.now() + 2 * 86_400_000
+    const mine: string[] = []
+    const doc = async (p: Company & { mime?: string | null; entryId?: string; readAt?: string | null; retryAfter?: string }) => {
+      const id = randomUUID()
+      await client.query(
+        `INSERT INTO public.document_attachments
+           (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, journal_entry_id, pages_read_at, read_retry_after, created_at)
+         VALUES ($1, $2, $3, 'underlag.pdf', $4, 1024, $5, $6, 'file_upload', $7, $8, $9, $10)`,
+        [id, p.userId, p.companyId, p.mime === undefined ? 'application/pdf' : p.mime, `documents/${p.companyId}/${id}.pdf`, randomUUID().replace(/-/g, '').padEnd(64, '0'), p.entryId ?? null, p.readAt ?? null, p.retryAfter ?? null, new Date(base - 1000 * mine.length).toISOString()],
+      )
+      mine.push(id)
+      return id
+    }
+    // run_after and locked_at an interval ago (59 or 61 minutes: either side of the hour), or tomorrow.
+    const job = async (companyId: string, documentId: string, p: { kind?: string; status: string; attempts?: number; ago?: string }) => {
+      const when = p.ago ? `now() - interval '${p.ago}'` : `now() + interval '1 day'`
+      await client.query(
+        `INSERT INTO public.document_jobs (company_id, document_id, kind, status, attempts, locked_at, run_after)
+         VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'running' THEN ${when} END, ${when})`,
+        [companyId, documentId, p.kind ?? 'read', p.status, p.attempts ?? (p.status === 'queued' ? 0 : 1)],
+      )
+    }
 
     for (let round = 0; round < 3; round++) {
       await doc(open)
@@ -362,19 +372,36 @@ describe('document_backfill_candidates reads each check once per call (202611230
       await job(locked.companyId, heldOnLocked, { status: 'queued' })
     }
 
-    await getPool().query(`UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`, [locked.fiscalPeriodId])
-    await getPool().query(`UPDATE public.fiscal_periods SET is_closed = true, closed_at = now() WHERE id = $1`, [closed.fiscalPeriodId])
-    const replacement = await insertCompany({ createdBy: source.userId })
-    await getPool().query(
+    // After the documents: the triggers refuse a document on a locked period or a reset company.
+    await client.query(`UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`, [locked.fiscalPeriodId])
+    await client.query(`UPDATE public.fiscal_periods SET is_closed = true, closed_at = now() WHERE id = $1`, [closed.fiscalPeriodId])
+    await client.query(
       `INSERT INTO public.company_migration_resets (source_company_id, replacement_company_id, reason, confirmation_snapshot, source_counts)
        VALUES ($1, $2, 'owner confirmed archive and replace for the test', '{}', '{}')`,
       [source.companyId, replacement],
     )
-  })
+    return mine
+  }
+
+  /** Seeds, then runs fn as the service role in the same transaction, which is rolled back. `before` runs first, as the superuser. */
+  async function seeded<T>(fn: (client: PoolClient, mine: string[]) => Promise<T>, before: string[] = []): Promise<T> {
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      for (const statement of before) await client.query(statement)
+      const mine = await seed(client)
+      await client.query(`SELECT set_config('request.jwt.claims', '{"role":"service_role"}', true)`)
+      await client.query('SET LOCAL ROLE service_role')
+      return await fn(client, mine)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  }
 
   it('answers as the shipped body did, row for row and in order, at every limit', async () => {
-    const compared = await runAsServiceRole(async (client) => {
-      const out: Array<{ limit: number | null; before: string[]; after: string[] }> = []
+    const { compared, mine } = await seeded(async (client, mine) => {
+      const compared: Array<{ limit: number | null; before: string[]; after: string[] }> = []
       for (const limit of [null, -1, 0, 1, 2, 5, 9, 17, 40, 500, 501]) {
         const { rows } = await client.query<{ before: string[]; after: string[] }>(
           `SELECT
@@ -382,9 +409,9 @@ describe('document_backfill_candidates reads each check once per call (202611230
              (SELECT coalesce(array_agg(f.id ORDER BY f.created_at DESC), '{}') FROM public.document_backfill_candidates($1) f) AS after`,
           [limit],
         )
-        out.push({ limit, before: rows[0]!.before.filter((id) => mine.includes(id)), after: rows[0]!.after.filter((id) => mine.includes(id)) })
+        compared.push({ limit, before: rows[0]!.before.filter((id) => mine.includes(id)), after: rows[0]!.after.filter((id) => mine.includes(id)) })
       }
-      return out
+      return { compared, mine }
     })
     for (const { limit, before, after } of compared) expect(after, `limit ${limit}`).toEqual(before)
     // The seed reaches every branch: some rows come back, and the limit cuts.
@@ -395,26 +422,22 @@ describe('document_backfill_candidates reads each check once per call (202611230
 
   it('reads the held jobs, the reset companies and the closed periods once per call, the voucher once per document it tests', async () => {
     interface Node { 'Relation Name'?: string; 'Parent Relationship'?: string; 'Actual Loops'?: number; Plans?: Node[] }
-    const client = await getClient()
     const notices: string[] = []
     const onNotice = (notice: { message?: string }) => {
       if (notice.message) notices.push(notice.message)
     }
-    client.on('notice', onNotice)
-    try {
-      await client.query('BEGIN')
+    await seeded(
+      async (client) => {
+        client.on('notice', onNotice)
+        try {
+          await client.query('SELECT count(*) FROM public.document_backfill_candidates(500)')
+        } finally {
+          client.off('notice', onNotice)
+        }
+      },
       // auto_explain's settings are the superuser's to set: before the role changes.
-      for (const setting of ['log_min_duration = 0', 'log_nested_statements = on', 'log_analyze = on', 'log_format = json', 'log_level = notice']) {
-        await client.query(`SET LOCAL auto_explain.${setting}`)
-      }
-      await client.query(`SELECT set_config('request.jwt.claims', '{"role":"service_role"}', true)`)
-      await client.query('SET LOCAL ROLE service_role')
-      await client.query('SELECT count(*) FROM public.document_backfill_candidates(500)')
-    } finally {
-      await client.query('ROLLBACK').catch(() => {})
-      client.off('notice', onNotice)
-      client.release()
-    }
+      ['log_min_duration = 0', 'log_nested_statements = on', 'log_analyze = on', 'log_format = json', 'log_level = notice'].map((s) => `SET LOCAL auto_explain.${s}`),
+    )
     const plan = notices.filter((m) => m.includes('"Plan"') && m.includes('document_jobs')).map((m) => (JSON.parse(m.slice(m.indexOf('{'))) as { Plan: Node }).Plan)[0]!
     const scans: Node[] = []
     const walk = (node: Node) => {
