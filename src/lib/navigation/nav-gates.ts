@@ -45,6 +45,8 @@ export interface NavGateContext {
   arkivBrainEnabled?: boolean
   /** The company is in the new Inkorg page's rollout (lib/inkorg/flag.ts). */
   inkorgV2Enabled: boolean
+  /** The company is in the booking screen's rollout (lib/env/booking-screen-switch.ts). Absent reads as off. */
+  bookingScreenEnabled?: boolean
   /** The company is in the Autogiro rollout (lib/invoices/autogiro/flag.ts). */
   autogiroEnabled: boolean
   /**
@@ -147,6 +149,7 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   // The new Inkorg page rolls out per company, and Underlag under Inköp
   // hides for the same companies: the inbox has one place either way.
   if (item.requiresInkorgV2 && !ctx.inkorgV2Enabled) return false
+  if (item.requiresBookingScreen && !ctx.bookingScreenEnabled) return false
   if (item.hiddenWithInkorgV2 && ctx.inkorgV2Enabled) return false
   // Autogiro rolls out per company; outside it the page shows only what the
   // company already holds, so the menu does not advertise it.
