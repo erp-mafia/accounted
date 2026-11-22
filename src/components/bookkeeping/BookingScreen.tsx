@@ -74,8 +74,10 @@ export function BookingScreen({ transaction, account, back }: BookingScreenProps
       <PageHeader
         title={t('title')}
         parent={{ label: backLabel, href: backHref }}
+        // The bank row is named once: in the Betalning strip while it is
+        // being booked, here when the page shows it booked or read-only.
         meta={
-          transaction ? (
+          transaction && (transaction.journal_entry_id || !canWrite) ? (
             <span data-ph-mask="">
               {[transaction.description, formatDate(transaction.date), amountLabel].filter(Boolean).join(' · ')}
             </span>
@@ -120,26 +122,36 @@ function BookingColumns({
   underlag,
   kontering,
   dropSurfaceRef,
+  split = true,
 }: {
   underlag: React.ReactNode
   kontering: React.ReactNode
   dropSurfaceRef?: React.RefObject<HTMLDivElement | null>
+  /**
+   * The underlag column beside the kontering. Off, the kontering takes the
+   * width (a new verifikation before a file is added). The kontering keeps
+   * its place in the tree either way, so splitting never remounts the form
+   * and loses what was typed.
+   */
+  split?: boolean
 }) {
   const t = useTranslations('booking_screen')
   return (
     <div
       ref={dropSurfaceRef}
-      className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+      className={split ? 'grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]' : 'grid grid-cols-1 gap-8'}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => e.preventDefault()}
     >
-      <section
-        aria-labelledby="booking-screen-underlag"
-        className="flex min-w-0 flex-col gap-3 lg:sticky lg:top-16 lg:h-[calc(100dvh-11rem)] lg:self-start"
-      >
-        <SectionLabel id="booking-screen-underlag">{t('underlag_label')}</SectionLabel>
-        {underlag}
-      </section>
+      {split ? (
+        <section
+          aria-labelledby="booking-screen-underlag"
+          className="flex min-w-0 flex-col gap-3 lg:sticky lg:top-16 lg:h-[calc(100dvh-11rem)] lg:self-start"
+        >
+          <SectionLabel id="booking-screen-underlag">{t('underlag_label')}</SectionLabel>
+          {underlag}
+        </section>
+      ) : null}
       <section aria-labelledby="booking-screen-kontering" className="min-w-0 space-y-3">
         <SectionLabel id="booking-screen-kontering">{t('kontering_label')}</SectionLabel>
         {kontering}
@@ -289,6 +301,7 @@ function TransactionBooking({
             <JournalEntryForm
               key={`${transaction.id}-${bankAccount}-${account ?? 'none'}`}
               embedded
+              onPage
               initialLines={bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)}
               initialDate={transaction.date}
               initialDescription={transaction.description}
@@ -337,6 +350,7 @@ function VoucherBooking({ onDone }: { onDone: () => void }) {
 
       <BookingColumns
         dropSurfaceRef={dropSurfaceRef}
+        split={!!shown?.id}
         underlag={
           shown?.id ? (
             <DocumentViewerPane
@@ -345,13 +359,12 @@ function VoucherBooking({ onDone }: { onDone: () => void }) {
               fileName={shown.fileName}
               className="h-[60vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1"
             />
-          ) : (
-            <p className="text-sm text-muted-foreground">{t('underlag_empty_voucher')}</p>
-          )
+          ) : null
         }
         kontering={
           <JournalEntryForm
             bare
+            onPage
             onEntryCreated={() => onDone()}
             onUploadedFilesChange={setUploadedFiles}
             uploadDropSurfaceRef={dropSurfaceRef}
