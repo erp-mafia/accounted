@@ -6,7 +6,8 @@ import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
-import { useAssistantAvailable, useAssistantChatEnabled } from '@/contexts/CompanyContext'
+import { useAssistantAvailable, useAssistantChatEnabled, useBookingScreenEnabled } from '@/contexts/CompanyContext'
+import { BOOKING_SCREEN_PATH } from '@/lib/bookkeeping/booking-screen'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -56,6 +57,7 @@ export default function BookkeepingPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { canWrite, lockedTitle } = useViewerLock()
+  const bookingScreen = useBookingScreenEnabled()
   // A read-only member gets no create dialog from a deep link either.
   const copyFromId = useMemo<string | null>(() => {
     const raw = searchParams.get('copy_from')
@@ -185,12 +187,28 @@ export default function BookkeepingPage() {
   const wantsNew = canWrite && searchParams.has('new')
   useEffect(() => {
     if (!wantsNew || copyFromId || searchParams.get('skv_tx')) return
+    // With the booking screen switched on, the empty verifikat is booked there.
+    if (bookingScreen) {
+      router.replace(BOOKING_SCREEN_PATH)
+      return
+    }
     replaceWithout('new')
     setCopyPrefill(null)
     setSkvLink(null)
     setShowNewEntry(true)
-  }, [wantsNew, copyFromId, searchParams, replaceWithout])
+  }, [wantsNew, copyFromId, searchParams, replaceWithout, bookingScreen, router])
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  // "Tomt verifikat": the booking screen when it is switched on, else the dialog.
+  const openEmptyVoucher = () => {
+    if (bookingScreen) {
+      router.push(BOOKING_SCREEN_PATH)
+      return
+    }
+    setCopyPrefill(null)
+    setSkvLink(null)
+    setShowNewEntry(true)
+  }
 
   const skvPrefill = useMemo<SkvLinkPrefill | null>(() => {
     if (!skvLink) return null
@@ -284,11 +302,7 @@ export default function BookkeepingPage() {
                 description: t('create_tomt_desc'),
                 disabled: !canWrite,
                 disabledTitle: lockedTitle,
-                onSelect: () => {
-                  setCopyPrefill(null)
-                  setSkvLink(null)
-                  setShowNewEntry(true)
-                },
+                onSelect: openEmptyVoucher,
               },
               {
                 key: 'mall',
@@ -342,14 +356,7 @@ export default function BookkeepingPage() {
                     'assistent',
                     () => openAgentSheet({ intentId: 'verifikation.draft', contextRef: 'verifikation:new' }),
                   ],
-                  [
-                    'tomt',
-                    () => {
-                      setCopyPrefill(null)
-                      setSkvLink(null)
-                      setShowNewEntry(true)
-                    },
-                  ],
+                  ['tomt', openEmptyVoucher],
                 ] as const
               )
                 .filter(([mode]) => createModes.includes(mode))

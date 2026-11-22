@@ -32,6 +32,8 @@ const CARD_SRC = read('../../bookkeeping/PaymentPreviewLinesCard.tsx')
 const SUPPLIER_PAY_SRC = read('../../supplier-invoices/SupplierPaymentDialog.tsx')
 const PICKER_SRC = read('../TemplatePicker.tsx')
 const HOOK_SRC = read('../use-transaction-underlag.ts')
+const HELD_SRC = read('../use-held-underlag.ts')
+const SCREEN_SRC = read('../../bookkeeping/BookingScreen.tsx')
 const ZONE_SRC = read('../../bookkeeping/DocumentUploadZone.tsx')
 const ATTACH_SRC = read('../TransactionAttachDocumentDialog.tsx')
 const CATALOG_HOOK_SRC = read('../../../lib/hooks/use-bas-catalog.ts')
@@ -154,7 +156,6 @@ describe('underlag survives closing a booking dialog', () => {
 
   for (const [name, src, hook] of [
     ['QuickReviewDialog', REVIEW_SRC, 'underlagState'],
-    ['TransactionBookingDialog', BOOKING_SRC, 'underlag'],
   ] as const) {
     it(`${name} reads and writes the row's underlag through the shared hook`, () => {
       expect(src).toMatch(/useTransactionUnderlag\(\{\s*transactionId: transaction\?\.id \?\? null,\s*rowDocumentId: transaction\?\.document_id \?\? null,\s*open,\s*onChange: onUnderlagChange,\s*\}\)/)
@@ -201,6 +202,61 @@ describe('underlag survives closing a booking dialog', () => {
       expect(src).not.toContain('`/api/documents/${file.id}/link`')
     })
   }
+
+  // The manual booking dialog and the booking screen hold the row's underlag
+  // through one hook (use-held-underlag.ts); the decisions above run there.
+  it('useHeldUnderlag reads and writes the row\'s underlag through the shared hook', () => {
+    expect(HELD_SRC).toContain('const underlag = useTransactionUnderlag(options)')
+  })
+
+  it('useHeldUnderlag offers every finished upload and every pick to the row', () => {
+    expect(HELD_SRC).toContain('if (file.id) void claim(file.id, file.fileName)')
+    expect(HELD_SRC).toContain('void claim(doc.document_id, doc.supplier_name ?? doc.file_name)')
+  })
+
+  it('useHeldUnderlag lets a removed document go through the controller, listed until the row has let it go', () => {
+    expect(HELD_SRC).toContain('const gone = removedUpload(attached.files, update(attached.files))')
+    expect(HELD_SRC).toContain('void letGo(gone.id)')
+    expect(HELD_SRC).toContain('if (!(await withdraw(documentId))) return')
+    expect(HELD_SRC).toContain('setAttached((current) => withoutDocument(current, documentId))')
+  })
+
+  it('useHeldUnderlag applies every other change from the upload zone to its latest list', () => {
+    expect(HELD_SRC).toContain('setAttached((current) => ({ files: update(current.files), inboxDocs: current.inboxDocs }))')
+  })
+
+  it('useHeldUnderlag confirms before taking off the underlag the row had before', () => {
+    expect(HELD_SRC).toContain('const released = await underlag.detachEarlier(row)')
+  })
+
+  it('useHeldUnderlag links everything attached, the pinned document included, once nothing is on its way, minus what was let go', () => {
+    const settled = HELD_SRC.indexOf('const ownUnderlag = await settled()')
+    const targets = HELD_SRC.indexOf('underlagLinkTargets(attached, transactionId).filter((target) => !isLetGo(target.documentId))')
+    expect(settled).toBeGreaterThan(-1)
+    expect(targets).toBeGreaterThan(settled)
+    expect(HELD_SRC).toMatch(/linkDocuments\(targets, journalEntryId\)/)
+  })
+
+  for (const [name, src, open, txId] of [
+    ['TransactionBookingDialog', BOOKING_SRC, 'open,\\s*onChange: onUnderlagChange,', 'transactionId'],
+    ['BookingScreen', SCREEN_SRC, 'open: true,', 'transaction.id'],
+  ] as const) {
+    it(`${name} holds the row's underlag through useHeldUnderlag and wires every door to it`, () => {
+      expect(src).toMatch(new RegExp(`useHeldUnderlag\\(\\{\\s*transactionId: transaction\\??\\.id(?: \\?\\? null)?,\\s*rowDocumentId: transaction\\??\\.document_id \\?\\? null,\\s*${open}\\s*\\}\\)`))
+      expect(src).toContain('onUploaded={claimUpload}')
+      expect(src).toContain('onSelect={attachments.pickInboxDoc}')
+      expect(src).toContain('onRemove={() => void letGo(doc.document_id)}')
+      expect(src).toContain('onRemove={() => void detachEarlierUnderlag()}')
+      expect(src).toContain('<DestructiveConfirmDialog {...underlag.confirmProps} />')
+      expect(src).toContain(`await attachments.link(journalEntryId, ${txId})`)
+    })
+  }
+
+  it('TransactionBookingDialog keeps the confirm inside its content, so the confirm never dismisses it', () => {
+    const confirm = BOOKING_SRC.indexOf('<DestructiveConfirmDialog {...underlag.confirmProps} />')
+    expect(confirm).toBeGreaterThan(-1)
+    expect(BOOKING_SRC.indexOf('</DialogContent>')).toBeGreaterThan(confirm)
+  })
 
   it('the upload zone hands every host updates of its latest list, never a list built at the drop', () => {
     expect(ZONE_SRC).toContain('onFilesChange: (update: UploadedFilesUpdate) => void')

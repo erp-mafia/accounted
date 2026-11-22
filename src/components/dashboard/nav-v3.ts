@@ -281,7 +281,8 @@ export const NAV_V3_AREAS: NavV3Area[] = [
     groups: [
       {
         items: [
-          { href: '/bookkeeping', module: 'ledger', labelKey: 'v3_vouchers', icon: BookOpenIcon, match: ['/dimensions/tagging'] },
+          // The booking screen (/bokfor) sits under Verifikat: it makes one.
+          { href: '/bookkeeping', module: 'ledger', labelKey: 'v3_vouchers', icon: BookOpenIcon, match: ['/dimensions/tagging', '/bokfor'] },
           { href: '/chart-of-accounts', module: 'ledger', labelKey: 'chart_of_accounts', icon: QueueListIcon },
           { href: '/dimensions', module: 'ledger', labelKey: 'dimensions', icon: HashtagIcon, requiresDimensions: true },
           { href: '/bookkeeping/periodiseringar', module: 'ledger', labelKey: 'periodiseringar', icon: CalendarDateRangeIcon },

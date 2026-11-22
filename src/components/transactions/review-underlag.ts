@@ -59,6 +59,41 @@ export function readAfterUnpin(): TransactionUnderlag {
   return { source: null, document: null, inbox_item_id: null, facts: null }
 }
 
+/** What is attached without one document: the x on it, once the row has let it go. */
+export function withoutDocument(attached: ReviewUnderlag, documentId: string): ReviewUnderlag {
+  return {
+    files: attached.files.filter((f) => f.id !== documentId),
+    inboxDocs: attached.inboxDocs.filter((d) => d.document_id !== documentId),
+  }
+}
+
+/** What is attached with an inkorg pick added: a document already picked is not added twice. */
+export function withInboxDoc(attached: ReviewUnderlag, doc: AvailableInboxDoc): ReviewUnderlag {
+  if (attached.inboxDocs.some((d) => d.document_id === doc.document_id)) return attached
+  return { files: attached.files, inboxDocs: [...attached.inboxDocs, doc] }
+}
+
+/**
+ * The document shown beside the kontering: the transaction's own underlag,
+ * else the first finished upload held here, else the first inkorg pick. A
+ * file uploaded here still knows its type and name (no metadata round trip);
+ * a pick knows its name; the row's own underlag has the name the route read.
+ */
+export function shownUnderlag(
+  attached: ReviewUnderlag,
+  own: { documentId: string | null; fileName: string | null },
+): { documentId: string | null; mime: string | null; fileName: string | null } {
+  const held = heldUnderlag(attached, own.documentId)
+  const upload = held.files.find((f) => f.status === 'uploaded' && f.id)
+  const documentId = own.documentId ?? upload?.id ?? held.inboxDocs[0]?.document_id ?? null
+  const file = attached.files.find((f) => f.id === documentId)
+  return {
+    documentId,
+    mime: file?.file.type || null,
+    fileName: file?.fileName ?? attached.inboxDocs.find((d) => d.document_id === documentId)?.file_name ?? own.fileName,
+  }
+}
+
 /**
  * What only the dialog holds: everything attached in it except the
  * transaction's own underlag, which the row keeps when the dialog closes.

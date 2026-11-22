@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps 
 import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
@@ -117,7 +117,8 @@ import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/bookkeeping/matchable-statuses'
-import { useAssistantReadsAvailable, useCompany } from '@/contexts/CompanyContext'
+import { useAssistantReadsAvailable, useBookingScreenEnabled, useCompany } from '@/contexts/CompanyContext'
+import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { collectPages } from '@/lib/lists/collect-pages'
@@ -477,6 +478,8 @@ export default function TransactionsPage() {
   const { company } = useCompany()
   const companyId = company?.id ?? null
   const canAskAssistant = useAssistantReadsAvailable()
+  const bookingScreen = useBookingScreenEnabled()
+  const router = useRouter()
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
   const errorLocale = useLocale() as ErrorLocale
@@ -4579,6 +4582,13 @@ export default function TransactionsPage() {
 
   function handleManualBooking() {
     setTemplatePickerOpen(false)
+    // With the booking screen switched on, "Bokför manuellt" opens the row
+    // there (betalning, underlag and kontering on one page) instead of the
+    // dialog.
+    if (templatePickerTransaction && bookingScreen) {
+      router.push(bookingScreenHref({ kind: 'transaction', transactionId: templatePickerTransaction.id, account: null }))
+      return
+    }
     if (templatePickerTransaction) {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
@@ -4612,6 +4622,11 @@ export default function TransactionsPage() {
   // prefilled on the counter line of the journal entry form.
   function handlePickAccount(accountNumber: string) {
     if (!templatePickerTransaction) return
+    if (bookingScreen) {
+      setTemplatePickerOpen(false)
+      router.push(bookingScreenHref({ kind: 'transaction', transactionId: templatePickerTransaction.id, account: accountNumber }))
+      return
+    }
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(null)
     setBookingDialogProposalLines(null)
