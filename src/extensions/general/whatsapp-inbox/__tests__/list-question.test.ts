@@ -1448,6 +1448,14 @@ const nothingFollows: Array<[string, () => { conversation?: WhatsAppConversation
   })],
 ]
 
+/** A stop lands while the answer is saved: from then on the database holds the link paused. */
+function stopWhileAnswerIsSaved(mock: ReturnType<typeof db>['mock']): void {
+  answerMock.mockImplementation(async () => {
+    mock.setTable('whatsapp_phone_links', { data: makeLink({ muted_at: NOW.toISOString() }) })
+    return { question: makeQuestion({ status: 'answered' }), fact_id: 'fact-1', fact: 'Kontoret.' }
+  })
+}
+
 describe('a tap on a button', () => {
   const optionTap = { companyId: COMPANY, questionId: QUESTION_ID, kind: 'option', optionId: 'office' } satisfies QuestionTap
   const dontKnowTap = { companyId: COMPANY, questionId: QUESTION_ID, kind: 'dont_know' } satisfies QuestionTap
@@ -1681,10 +1689,11 @@ describe('a tap on a button', () => {
     expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
-  it('reads the link again before the next question: nothing follows when the link was paused meanwhile', async () => {
+  it('reads the link again before the next question: nothing follows a stop that came in while the answer was saved', async () => {
     listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
-    // The tap carries the link as it was read before the pause.
-    const { supabase } = db({ questions: [openRow], link: makeLink({ muted_at: '2026-11-20T09:59:59.000Z' }) })
+    const { supabase, mock } = db({ questions: [openRow] })
+    // The tap carries the link as it was read before the stop.
+    stopWhileAnswerIsSaved(mock)
 
     await applyListQuestionTap(supabase, tapArgs(optionTap))
 
@@ -1779,10 +1788,11 @@ describe('a written reply to a list question', () => {
     expect(sendButtonsMock).not.toHaveBeenCalled()
   })
 
-  it('reads the link again before the next question: nothing follows when the link was paused meanwhile', async () => {
+  it('reads the link again before the next question: nothing follows a stop that came in while the answer was saved', async () => {
     listMock.mockResolvedValue(openOf([makeQuestion({ question_id: OTHER_QUESTION_ID })]))
-    // The reply carries the link as it was read before the pause.
-    const { supabase } = db({ link: makeLink({ muted_at: '2026-11-20T09:59:59.000Z' }) })
+    const { supabase, mock } = db()
+    // The reply carries the link as it was read before the stop.
+    stopWhileAnswerIsSaved(mock)
 
     await applyListQuestionText(supabase, textArgs('Kontoret på Storgatan'))
 
