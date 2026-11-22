@@ -30,6 +30,7 @@ import {
   type Transaction,
 } from '../api-client'
 import { isSwedishUserMessage } from '@/lib/errors/get-error-message'
+import { isTimeoutError } from '@/lib/http/fetch-with-timeout'
 
 describe('api-client', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
@@ -242,6 +243,30 @@ describe('api-client', () => {
       const result = await getASPSPs('SE')
       expect(result).toEqual([{ name: 'TestBank', country: 'SE' }])
       expect(fetchSpy).toHaveBeenCalledTimes(2)
+    })
+
+    // The sync cron reads exactly this error as transient (isTimeoutError):
+    // a transactions read whose last attempt timed out must reach it as the
+    // AbortError, not wrapped into a message-only Error.
+    it('rethrows a transactions read whose last attempt timed out as the AbortError', async () => {
+      vi.useFakeTimers()
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        fetchSpy.mockRejectedValue(new DOMException('This operation was aborted', 'AbortError'))
+
+        const pending = getAllTransactionsWithRaw('acc-1', '2026-11-13', '2026-11-20').catch((e: unknown) => e)
+        await vi.runAllTimersAsync()
+        const error = await pending
+
+        expect(error).toMatchObject({ name: 'AbortError' })
+        expect(isTimeoutError(error)).toBe(true)
+        expect(fetchSpy).toHaveBeenCalledTimes(3)
+      } finally {
+        vi.useRealTimers()
+        errorSpy.mockRestore()
+        warnSpy.mockRestore()
+      }
     })
 
     it('does not retry a 429 whose body signals a daily quota', async () => {

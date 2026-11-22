@@ -3,6 +3,7 @@ import {
   calculateLatePaymentInterest,
   getAnnualInterestRate,
   getReferensrantaAt,
+  hasReferensrantaFor,
 } from '../late-payment-interest'
 
 describe('getReferensrantaAt', () => {
@@ -31,6 +32,22 @@ describe('getReferensrantaAt', () => {
 
   it('falls back to earliest entry for pre-2022 dates', () => {
     expect(getReferensrantaAt('2021-01-01')).toBe(0)
+  })
+})
+
+describe('hasReferensrantaFor', () => {
+  it('finds the row of the half-year a date falls in', () => {
+    expect(hasReferensrantaFor('2026-01-01')).toBe(true)
+    expect(hasReferensrantaFor('2026-06-30')).toBe(true)
+    expect(hasReferensrantaFor('2026-07-01')).toBe(true)
+    expect(hasReferensrantaFor('2026-12-31')).toBe(true)
+  })
+
+  it('is false for a half-year the table does not hold, even though the lookup still answers', () => {
+    expect(hasReferensrantaFor('2099-01-01')).toBe(false)
+    expect(hasReferensrantaFor('2099-07-01')).toBe(false)
+    expect(Number.isFinite(getReferensrantaAt('2099-07-01'))).toBe(true)
+    expect(hasReferensrantaFor('2021-06-01')).toBe(false)
   })
 })
 

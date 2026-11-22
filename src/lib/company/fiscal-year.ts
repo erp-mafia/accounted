@@ -24,7 +24,7 @@ export function fiscalYearStartMonthFor(
  * lands rather than backfilling from a stale anchor.
  */
 export function getCurrentFiscalYearStart(
-  settings: Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null | undefined,
+  settings: Partial<Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'>> | null | undefined,
   today: Date = new Date(),
 ): string {
   const startMonth = fiscalYearStartMonthFor(settings)

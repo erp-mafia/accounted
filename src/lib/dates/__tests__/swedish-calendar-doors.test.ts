@@ -114,7 +114,10 @@ describe('this year', () => {
   it('the tax deadline window opens from the Swedish year', async () => {
     const { supabase, findCall } = createTableMockSupabase({ deadlines: { data: [] } } as never)
     await generateTaxDeadlinesForUser(supabase as never, 'company-1', { ...DEADLINE_SETTINGS, fiscal_years: [] })
-    expect(findCall('deadlines', 'gte')).toEqual(['due_date', '2026-01-01'])
+    // The window is last year, this year and next (deadlineWindowYears), and
+    // the completed-row floor is a year before its first: 2026 to 2028 from
+    // the Swedish 2027 gives 2025-01-01, the UTC 2026 would give 2024-01-01.
+    expect(findCall('deadlines', 'gte')).toEqual(['due_date', '2025-01-01'])
   })
 })
 

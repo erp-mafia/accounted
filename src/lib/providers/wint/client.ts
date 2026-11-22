@@ -5,6 +5,8 @@ import { WINT_BASE_URL, WINT_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 import { cleanProviderPayload } from '../provider-text';
 
+// Per attempt, sized for one record. The migration worker passes its own for
+// whole register pages (MIGRATION_LIST_TIMEOUT_MS in provider-data-fetcher.ts).
 const FETCH_TIMEOUT_MS = 15_000;
 
 // WINT error bodies can carry customer data, and provider errors get logged
@@ -71,13 +73,13 @@ export class WintClient {
     };
   }
 
-  async get<T>(accessToken: string, path: string): Promise<T> {
+  async get<T>(accessToken: string, path: string, options: { timeoutMs?: number } = {}): Promise<T> {
     return withRetry(
       async () => {
         await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const response = await fetchInExecutionBudget(`${this.baseUrl}${path}`, {
           headers: this.authHeaders(accessToken),
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          signal: AbortSignal.timeout(options.timeoutMs ?? FETCH_TIMEOUT_MS),
         });
 
         if (!response.ok) {
@@ -102,7 +104,7 @@ export class WintClient {
   async getPage<T>(
     accessToken: string,
     path: string,
-    options?: { page?: number; pageSize?: number },
+    options?: { page?: number; pageSize?: number; timeoutMs?: number },
   ): Promise<{ items: T[]; page: number; totalItems: number; pageSize: number }> {
     const page = options?.page ?? 1;
     const pageSize = options?.pageSize ?? DEFAULT_PAGE_SIZE;
@@ -115,6 +117,7 @@ export class WintClient {
     const response = await this.get<WintListResponse<T>>(
       accessToken,
       `${path}${separator}${params.toString()}`,
+      { timeoutMs: options?.timeoutMs },
     );
 
     return {

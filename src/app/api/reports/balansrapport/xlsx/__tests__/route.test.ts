@@ -128,7 +128,7 @@ describe('GET /api/reports/balansrapport/xlsx', () => {
     expect(mockGenerate).not.toHaveBeenCalled()
   })
 
-  it('returns 500 with a message when the period does not exist', async () => {
+  it('returns 404 PERIOD_NOT_FOUND, and generates nothing, when the period is not the company\'s', async () => {
     enqueue({ data: { company_name: 'Test AB' } }) // company_settings
     enqueue({ data: null }) // fiscal_periods
     mockGenerate.mockRejectedValue(new Error('Fiscal period not found'))
@@ -137,7 +137,9 @@ describe('GET /api/reports/balansrapport/xlsx', () => {
       createMockRequest('/api/reports/balansrapport/xlsx', { searchParams: { period_id: 'missing' } }),
       noParams,
     )
-    expect(res.status).toBe(500)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('PERIOD_NOT_FOUND')
+    expect(mockGenerate).not.toHaveBeenCalled()
   })
 
   it('writes each account under its ÅRL heading, with a Summa line per heading', async () => {
