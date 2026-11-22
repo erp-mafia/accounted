@@ -232,7 +232,7 @@ export function KonteringLinesEditor({
     return (
       <div
         className={cn(
-          'col-span-2 flex items-baseline justify-end gap-1 text-xs tabular-nums text-muted-foreground sm:order-last sm:col-span-full @3xl:order-none @3xl:col-span-1 @3xl:block @3xl:self-center @3xl:text-right @3xl:text-sm',
+          'col-span-2 flex items-baseline justify-end gap-1 text-xs tabular-nums text-muted-foreground sm:order-last sm:col-[1/-2] @3xl:order-none @3xl:col-span-1 @3xl:block @3xl:self-center @3xl:text-right @3xl:text-sm',
           value == null && 'hidden @3xl:block',
         )}
       >

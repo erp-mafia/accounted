@@ -74,8 +74,10 @@ export function BookingScreen({ transaction, account, back }: BookingScreenProps
       <PageHeader
         title={t('title')}
         parent={{ label: backLabel, href: backHref }}
+        // The bank row is named once: in the Betalning strip while it is
+        // being booked, here when the page shows it booked or read-only.
         meta={
-          transaction ? (
+          transaction && (transaction.journal_entry_id || !canWrite) ? (
             <span data-ph-mask="">
               {[transaction.description, formatDate(transaction.date), amountLabel].filter(Boolean).join(' · ')}
             </span>
@@ -299,6 +301,7 @@ function TransactionBooking({
             <JournalEntryForm
               key={`${transaction.id}-${bankAccount}-${account ?? 'none'}`}
               embedded
+              onPage
               initialLines={bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)}
               initialDate={transaction.date}
               initialDescription={transaction.description}
@@ -361,6 +364,7 @@ function VoucherBooking({ onDone }: { onDone: () => void }) {
         kontering={
           <JournalEntryForm
             bare
+            onPage
             onEntryCreated={() => onDone()}
             onUploadedFilesChange={setUploadedFiles}
             uploadDropSurfaceRef={dropSurfaceRef}

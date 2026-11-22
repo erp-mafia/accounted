@@ -121,6 +121,11 @@ interface Props {
   /** Render without the Card chrome (e.g. inside a dialog) but keep the full
    *  non-embedded field set (series, notes, documents, voucher hint). */
   bare?: boolean
+  /** The form sits on a page (the booking screen), not in a dialog: the
+   *  verifikat header has no raised box of its own (Stil v3: no cards inside
+   *  the panel), only a hairline under it, so its fields share the rows' left
+   *  edge. */
+  onPage?: boolean
   /** Edit an existing DRAFT in place: the form PATCHes this entry instead of
    *  creating a new one. Only the draft's header + lines are updated. */
   editEntryId?: string
@@ -166,6 +171,14 @@ interface Props {
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
 
+/** The header's columns: date (when shown), description, series (when shown). Literal classes for Tailwind. */
+function headerColumns(date: boolean, series: boolean): string {
+  if (date && series) return 'sm:grid-cols-[9.5rem_minmax(0,1fr)_14rem]'
+  if (date) return 'sm:grid-cols-[9.5rem_minmax(0,1fr)]'
+  if (series) return 'sm:grid-cols-[minmax(0,1fr)_14rem]'
+  return ''
+}
+
 export default function JournalEntryForm({
   onCreated,
   onEntryCreated,
@@ -179,6 +192,7 @@ export default function JournalEntryForm({
   submitUrl,
   embedded,
   bare,
+  onPage = false,
   editEntryId,
   initialCurrency,
   initialExchangeRate,
@@ -334,6 +348,8 @@ export default function JournalEntryForm({
   const bareConfirmRef = useRef<HTMLButtonElement>(null)
 
   const isForeign = entryCurrency !== 'SEK'
+  // A bank row's date is the row's: the header shows no date field for it.
+  const showHeaderDate = !(embedded && initialDate)
 
   const isUploading = uploadedFiles.some((f) => f.status === 'uploading')
 
@@ -1573,9 +1589,12 @@ export default function JournalEntryForm({
       {/* Verifikat metadata: compact bar on top (Fortnox-style). Date, series
           and period are pre-filled; the period derives from the date. The
           konteringsrader below are the focus. */}
-      <div className="rounded-lg p-3 space-y-3 bg-control shadow-raised">
-        <div className="grid gap-3 grid-cols-1 sm:grid-cols-[1fr_2fr_auto]">
-          {!(embedded && initialDate) && (
+      <div className={onPage ? 'space-y-3 border-b-hairline pb-4' : 'rounded-lg p-3 space-y-3 bg-control shadow-raised'}>
+        {/* The description takes the width; the date and the series are as
+            wide as what they hold. A bank row's date is the row's and is not
+            shown, and the series then sits beside the description. */}
+        <div className={cn('grid gap-3 grid-cols-1', headerColumns(showHeaderDate, showSeries))}>
+          {showHeaderDate && (
             <div>
               <Label className="text-xs text-muted-foreground">{t('date')}</Label>
               <Input
@@ -1600,7 +1619,7 @@ export default function JournalEntryForm({
             // Closed list, not free text: the letters carry fixed meanings
             // (A = redovisning, B = kundfakturor, ...) and a typo here silently
             // starts a new series with its own number sequence.
-            <div className="w-full sm:w-72">
+            <div className="w-full">
               <Label className="text-xs text-muted-foreground">{t('series')}</Label>
               <Select
                 value={voucherSeries}
