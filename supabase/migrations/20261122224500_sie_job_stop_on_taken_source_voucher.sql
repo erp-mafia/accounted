@@ -3,12 +3,12 @@
 -- The worker hands every failed step to record_sie_job_failure, which backs
 -- off and claims the job again, up to 32 times (20260928095627). That is
 -- right for a failure that may pass on a retry, and wrong for one that
--- cannot: a voucher chunk refused because one of its vouchers has the source
--- series and number of a posted imported verifikat of the same fiscal year
--- (journal_import_source_owned_idx, or import_sie_chunk's own check of the
--- same identity) is refused again on every claim. One import in production
--- was claimed every few minutes on that refusal and then shown as a
--- technical error (2026-11-16).
+-- cannot: a voucher chunk refused by journal_import_source_owned_idx, because
+-- one of its vouchers has the source series and number of a posted imported
+-- verifikat of the same fiscal year, is refused again on every claim. One
+-- import in production (an append from another source program than the
+-- year's import) was claimed every few minutes on that refusal and then shown
+-- as a technical error (2026-11-16).
 --
 -- stop_sie_import_job ends such a run under the worker's lease and attempt
 -- (lock_sie_execution, as record_sie_job_failure), with the reason the worker
@@ -50,7 +50,7 @@ BEGIN
   END IF;
   UPDATE public.sie_imports SET job_state = 'paused',
     consecutive_failures = consecutive_failures + 1,
-    error_message = left(btrim(p_reason) || ' Tryck Ångra import för att ta bort det som bokfördes.', 2000),
+    error_message = left(btrim(p_reason) || ' Det som bokfördes tas bort med Ångra import.', 2000),
     worker_id = NULL, lease_until = NULL, job_attempt = job_attempt + 1,
     next_attempt_at = 'infinity'::timestamptz
     WHERE id = p_import_id;
@@ -59,3 +59,5 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.stop_sie_import_job(uuid, uuid, uuid, integer, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.stop_sie_import_job(uuid, uuid, uuid, integer, text) TO service_role;
+
+NOTIFY pgrst, 'reload schema';

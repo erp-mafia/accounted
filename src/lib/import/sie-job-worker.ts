@@ -416,8 +416,8 @@ export async function finishCompletedSIEImport(
  */
 export function takenSourceVoucherReason(err: SIESourceVoucherTakenError): string {
   const voucher = err.voucherRef ? `Verifikation ${err.voucherRef}` : 'En verifikation'
-  return `${voucher} har samma serie och nummer som en annan verifikation i räkenskapsåret, i filen eller redan bokförd, `
-    + 'och kan inte bokföras två gånger. Importen har stoppats.'
+  return `${voucher} har samma serie och nummer som en annan verifikation i räkenskapsåret, i filen eller redan bokförd. `
+    + 'Två verifikationer kan inte ha samma serie och nummer i ett räkenskapsår, så importen har stoppats.'
 }
 
 /**
@@ -487,8 +487,8 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Unknown SIE worker error'
       if (err instanceof SIESourceVoucherTakenError) {
-        // Refused the same way on every try: logged once, and the job stopped below.
-        log.error('SIE job stopped: a voucher repeats the source series and number of another verifikat of its year',err,
+        // Refused the same way on every try: logged once, and the job is stopped below.
+        log.error('SIE voucher chunk refused: a voucher has the source series and number of another verifikat of its year',err,
           {alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase,voucherRef:err.voucherRef})
       } else {
         log.error('SIE job requires recovery',err as Error,{alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase})

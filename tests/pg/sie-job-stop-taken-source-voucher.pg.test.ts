@@ -23,7 +23,7 @@ const manifest = JSON.stringify({
   input: { filename: 'synthetic.se', options: {}, mappings: [], fiscalYear: { start: '2026-01-01', end: '2026-12-31' } },
   file_storage_path: 'synthetic.se',
 })
-const REASON = 'Verifikation A1 i filen har samma serie och nummer som en verifikation som redan är bokförd i räkenskapsåret. Importen har stoppats.'
+const REASON = 'Verifikation A1 har samma serie och nummer som en annan verifikation i räkenskapsåret, i filen eller redan bokförd. Två verifikationer kan inte ha samma serie och nummer i ett räkenskapsår, så importen har stoppats.'
 
 let client: PoolClient
 let company: string
@@ -97,11 +97,11 @@ const voucher = (ordinal: number, series: string, number: number) => ({
 })
 
 /** The chunks prepared and sealed: the job is in its vouchers phase with nothing booked. */
-async function prepare(attempt: number, chunks: Array<ReturnType<typeof voucher>[]>) {
+async function prepare(attempt: number, chunks: Array<ReturnType<typeof voucher>[]>, sealed = manifest) {
   for (const [n, chunk] of chunks.entries()) {
     await client.query('SELECT public.save_sie_import_chunk($1,$2,$3,$4,$5,$6,$7)', [company, job, worker, attempt, 'vouchers', n, JSON.stringify(chunk)])
   }
-  await client.query('SELECT public.seal_sie_import_preparation($1,$2,$3,$4,$5,$6)', [company, job, worker, attempt, manifest, chunks.length])
+  await client.query('SELECT public.seal_sie_import_preparation($1,$2,$3,$4,$5,$6)', [company, job, worker, attempt, sealed, chunks.length])
 }
 
 const commitChunk = (attempt: number, chunk: number) =>
@@ -141,6 +141,45 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   await client.query('ROLLBACK TO SAVEPOINT scenario')
+})
+
+const appendManifest = (program: string) => JSON.stringify({
+  input: { filename: 'append.se', options: { onExistingPeriod: 'append' }, mappings: [], fiscalYear: { start: '2026-01-01', end: '2026-12-31' } },
+  file_storage_path: 'append.se',
+  source_program: program,
+})
+
+describe('an append from another source program with a voucher the year already holds (2026-11-16)', () => {
+  it("is refused by the index on every try, and the stop fails the append and leaves the year's import as it was", async () => {
+    // The year's import, from one program, books A1 and A2 and completes.
+    const base = job
+    let attempt = await claimed()
+    await prepare(attempt, [[voucher(0, 'A', 1), voucher(1, 'A', 2)]])
+    await commitChunk(attempt, 0)
+    await client.query('SELECT public.complete_sie_import_job($1,$2,$3,$4,$5,$6)', [company, base, worker, attempt,
+      JSON.stringify({ success: true, warnings: [] }), JSON.stringify({ sourceSystem: 'Program A' })])
+
+    // An append from another program carries A2 as well: its own check only
+    // compares with batches of its program, so the index refuses the insert.
+    const append = appendManifest('Program B')
+    job = (await client.query(`SELECT j.id FROM public.start_sie_append_job($1,$2,$3,'append.se',$4,$5,$6) j`,
+      [company, actor, period, 'a'.repeat(64), append, base])).rows[0].id
+    attempt = await claimed()
+    await prepare(attempt, [[voucher(5, 'A', 2)]], append)
+    for (let tried = 0; tried < 2; tried++) {
+      const refused = await refusal('SELECT public.import_sie_chunk($1,$2,$3,$4,$5,$6)', [company, job, worker, attempt, 'vouchers', 0])
+      expect(refused.code).toBe('23505')
+      expect(refused.message).toBe('duplicate key value violates unique constraint "journal_import_source_owned_idx"')
+      expect(refused.detail).toMatch(/, A, 2\) already exists\.$/)
+    }
+
+    expect((await stop(attempt)).rows[0].outcome).toBe('failed')
+    expect(await readJob()).toMatchObject({ job_state: 'failed', import_hold: null, booked: 0 })
+    const { rows } = await client.query(
+      `SELECT job_state, (SELECT count(*)::int FROM public.journal_entries e WHERE e.import_batch_id = $1 AND e.status = 'posted') AS posted
+       FROM public.sie_imports WHERE id = $1`, [base])
+    expect(rows[0]).toEqual({ job_state: 'completed', posted: 2 })
+  })
 })
 
 describe('a voucher whose source series and number the year already holds', () => {
@@ -188,7 +227,7 @@ describe('stop_sie_import_job', () => {
     expect(await readJob()).toMatchObject({
       job_state: 'paused', job_phase: 'vouchers', consecutive_failures: 1, worker_id: null,
       next_is_infinite: true, import_hold: job, booked: 1,
-      error_message: `${REASON} Tryck Ångra import för att ta bort det som bokfördes.`,
+      error_message: `${REASON} Det som bokfördes tas bort med Ångra import.`,
     })
     await makeDue()
     expect((await claim()).id).toBeNull()

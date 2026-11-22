@@ -1,8 +1,7 @@
 /**
- * A voucher chunk refused because one of its vouchers has the source series
- * and number of another verifikat of its fiscal year
- * (journal_import_source_owned_idx, or import_sie_chunk's own check of the
- * same identity) is refused the same way on every try
+ * A voucher chunk refused by journal_import_source_owned_idx, because one of
+ * its vouchers has the source series and number of another verifikat of its
+ * fiscal year, is refused the same way on every try
  * (tests/pg/sie-job-stop-taken-source-voucher.pg.test.ts). The worker handed
  * it to record_sie_job_failure, which claimed the job again for up to 32
  * failures and then showed a technical error (2026-11-16). It now stops the
@@ -56,16 +55,14 @@ describe('sieSourceVoucherTaken', () => {
     expect(taken?.message).toBe('Database operation "import_sie_chunk" failed: duplicate key value violates unique constraint "journal_import_source_owned_idx"')
   })
 
-  it("reads import_sie_chunk's own check of the same identity", () => {
-    expect(sieSourceVoucherTaken({ code: '23505', message: 'SIE conflicting voucher A762#909' })?.voucherRef).toBe('A762#909')
-  })
-
   it('names no voucher when the detail is missing', () => {
     expect(sieSourceVoucherTaken({ ...INDEX_REFUSAL, details: null })?.voucherRef).toBeNull()
   })
 
   it('is no answer for any other failure', () => {
     expect(sieSourceVoucherTaken({ code: '23505', message: 'duplicate key value violates unique constraint "journal_import_batch_ordinal_idx"' })).toBeNull()
+    // import_sie_chunk's own check also covers a changed voucher of the job itself: not this refusal.
+    expect(sieSourceVoucherTaken({ code: '23505', message: 'SIE conflicting voucher A762' })).toBeNull()
     expect(sieSourceVoucherTaken({ code: '57014', message: 'canceling statement due to statement timeout' })).toBeNull()
     expect(sieSourceVoucherTaken({ code: '55P03', message: 'SIE platform write capacity is busy' })).toBeNull()
   })
@@ -88,7 +85,7 @@ describe('runSIEWorker on a voucher chunk', () => {
 
     expect(calledWith(rpc, 'stop_sie_import_job')).toEqual([{
       p_company_id: 'company-1', p_import_id: 'import-1', p_worker_id: 'worker-1', p_attempt: 3,
-      p_reason: 'Verifikation A762 har samma serie och nummer som en annan verifikation i räkenskapsåret, i filen eller redan bokförd, och kan inte bokföras två gånger. Importen har stoppats.',
+      p_reason: 'Verifikation A762 har samma serie och nummer som en annan verifikation i räkenskapsåret, i filen eller redan bokförd. Två verifikationer kan inte ha samma serie och nummer i ett räkenskapsår, så importen har stoppats.',
     }])
     // Never retried as if it might pass.
     expect(calledWith(rpc, 'record_sie_job_failure')).toEqual([])
@@ -126,6 +123,6 @@ describe('runSIEWorker on a voucher chunk', () => {
 describe('takenSourceVoucherReason', () => {
   it('reads as a sentence for the person, never as the database error', () => {
     expect(takenSourceVoucherReason(new SIESourceVoucherTakenError('x', null)))
-      .toBe('En verifikation har samma serie och nummer som en annan verifikation i räkenskapsåret, i filen eller redan bokförd, och kan inte bokföras två gånger. Importen har stoppats.')
+      .toBe('En verifikation har samma serie och nummer som en annan verifikation i räkenskapsåret, i filen eller redan bokförd. Två verifikationer kan inte ha samma serie och nummer i ett räkenskapsår, så importen har stoppats.')
   })
 })
