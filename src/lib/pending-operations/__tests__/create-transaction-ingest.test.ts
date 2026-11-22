@@ -40,7 +40,7 @@ vi.mock('@/lib/cash-accounts/service', async () => {
 import { commitPendingOperation } from '../commit'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { cashAccountCurrencyMismatch, ensureManualCashAccount } from '@/lib/cash-accounts/service'
 
 const mockIngest = vi.mocked(ingestTransactions)
 
@@ -168,6 +168,52 @@ describe('commitPendingOperation: create_transaction through ingestTransactions'
     expect(ensureManualCashAccount).toHaveBeenCalledWith(expect.anything(), 'company-1', '1935', 'SEK')
     expect(mockIngest.mock.calls[0][4]).toEqual({ settlementAccount: '1935', skipAutoCategorization: true })
     expect(result.data).toMatchObject({ transaction_id: 'tx-42', cash_account_id: 'ca-1935' })
+  })
+
+  describe('ledger_account whose kassakonto is in another currency', () => {
+    it('409 CASH_ACCOUNT_CURRENCY_MISMATCH in Swedish, closing the proposal as one to stage again, before ingest', async () => {
+      vi.mocked(fetchExchangeRate).mockResolvedValueOnce({ currency: 'GBP', rate: 13.4, date: '2026-11-20' } as never)
+      vi.mocked(ensureManualCashAccount).mockRejectedValueOnce(cashAccountCurrencyMismatch('1948', 'EUR', 'GBP'))
+
+      const result = await commitPendingOperation(
+        claimedSupabase(null) as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ date: '2026-11-20', amount: -42.5, description: 'Kortköp London', currency: 'GBP', ledger_account: '1948' }),
+        // The app's own approval: still closed, since the proposal itself
+        // names the account (fixable-refusals.ts keeps only fixes outside it).
+        { keepFixableRefusals: true },
+      )
+
+      expect(result).toMatchObject({
+        status: 'rejected',
+        auto_rejected: true,
+        http_status: 409,
+        code: 'CASH_ACCOUNT_CURRENCY_MISMATCH',
+        data: { ledger_account: '1948', account_currency: 'EUR', currency: 'GBP' },
+        operation_status: 'rejected',
+      })
+      expect(result.error).toBe(
+        'Bankkontot på 1948 är i EUR, men transaktionen är i GBP. Ett bankkonto har bara en valuta, så inget sparades. ' +
+          'Lägg transaktionen på ett bankkonto i GBP.',
+      )
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
+
+    it('any other kassakonto failure stays a failure', async () => {
+      vi.mocked(ensureManualCashAccount).mockRejectedValueOnce(new Error('ensureManualCashAccount lookup failed: timeout'))
+
+      const result = await commitPendingOperation(
+        claimedSupabase(null) as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ date: '2026-10-01', amount: -200, description: 'WISE KORT', currency: 'SEK', ledger_account: '1935' }),
+      )
+
+      expect(result).toMatchObject({ status: 'failed', http_status: 500 })
+      expect(result.code).toBeUndefined()
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
   })
 
   describe('ledger_account on a company card', () => {

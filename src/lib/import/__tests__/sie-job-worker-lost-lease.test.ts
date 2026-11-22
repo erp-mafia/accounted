@@ -86,7 +86,7 @@ describe('runSIEWorker: a lost lease', () => {
   it('any other failure still alerts and is recorded', async () => {
     const { supabase, rpc } = client({
       claim_sie_import_job: { data: job() },
-      import_sie_chunk: { error: { message: 'duplicate key value violates unique constraint "journal_import_source_owned_idx"', code: '23505' } },
+      import_sie_chunk: { error: { message: 'canceling statement due to statement timeout', code: '57014' } },
     })
 
     await runSIEWorker({ supabase, importId: 'import-1' })

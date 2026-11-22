@@ -69,6 +69,18 @@ describe('writeZip', () => {
     expect(pulled).toEqual(['LÄSMIG.txt', 'sie/2024.se'])
   })
 
+  it('writes an entry given in parts as the same bytes as the entry whole', async () => {
+    const date = new Date(Date.UTC(2026, 10, 22, 4, 0, 0))
+    const whole = text(`[\n  {"text": "Faktura € mars ${'å'.repeat(3000)}"}\n]`)
+    const parts = [whole.subarray(0, 2), new Uint8Array(0), whole.subarray(2, 4000), whole.subarray(4000)]
+
+    const asParts = await collectBytes(writeZip([ENTRIES[0], { name: 'revision/b.json', data: parts }], { date }))
+    const asWhole = await collectBytes(writeZip([ENTRIES[0], { name: 'revision/b.json', data: whole }], { date }))
+
+    expect(new Uint8Array(asParts)).toEqual(new Uint8Array(asWhole))
+    expect((await readBack(asParts))['revision/b.json']).toEqual(whole)
+  })
+
   it('writes no ZIP64 records while offsets and counts fit 32 and 16 bits', async () => {
     const zip = new Uint8Array(await collectBytes(writeZip(ENTRIES)))
     const tail = new DataView(zip.buffer, zip.length - 22)

@@ -59,17 +59,17 @@ describe('captureBoundaryError', () => {
     expect(ph.captureException.mock.calls[0][1]).toEqual({ error_boundary: 'app', auto_reload: true })
   })
 
-  it('redacts the error before it leaves the browser', async () => {
+  // before_send redacts it on the way out, frames kept: exception-redaction.test.ts.
+  it('hands the SDK the error itself, so its frames can be parsed', async () => {
     const client = await load()
     client.initAnalytics()
     await client.analyticsReady()
 
-    client.captureBoundaryError(new Error('no company for 800101-1234'), 'app')
+    const caught = new Error('no company for 800101-1234')
+    client.captureBoundaryError(caught, 'app')
     await settle(client)
 
-    const [sent] = ph.captureException.mock.calls[0]
-    expect(sent.message).not.toContain('800101-1234')
-    expect(String(sent.stack)).not.toContain('800101-1234')
+    expect(ph.captureException.mock.calls[0][0]).toBe(caught)
   })
 
   it('leaves out an error with a digest: the server captured it in onRequestError', async () => {
@@ -110,7 +110,10 @@ describe('captureBoundaryError', () => {
     expect(ph.captureException).not.toHaveBeenCalled()
   })
 
-  it('never throws, and sends nothing, for a value whose message cannot be read', async () => {
+  it('never throws for a value whose message cannot be read', async () => {
+    ph.captureException.mockImplementationOnce((error: Error) => {
+      void error.message
+    })
     const client = await load()
     client.initAnalytics()
     await client.analyticsReady()
@@ -123,7 +126,7 @@ describe('captureBoundaryError', () => {
     expect(() => client.captureBoundaryError(unreadable, 'app')).not.toThrow()
     await settle(client)
 
-    expect(ph.captureException).not.toHaveBeenCalled()
+    expect(ph.captureException).toHaveBeenCalledTimes(1)
   })
 
   // The SDK throws inside the queued capture, so a missing guard shows up as
