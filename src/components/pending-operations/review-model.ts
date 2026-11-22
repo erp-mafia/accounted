@@ -250,6 +250,25 @@ export function proposalFacts(operationType: string, previewData: unknown): Fact
       return bulkBookFacts(data)
     case 'create_invoice':
       return isRegisterBookedInvoiceParams(data) ? null : invoiceFacts(data)
+    case 'create_self_billed_invoice': {
+      const [head, totals] = invoiceFacts(data)
+      head.push(
+        row('external_invoice_number', { key: 'preview_external_invoice_number' }, { kind: 'code', text: str(data.external_invoice_number) }),
+        row('received_date', { key: 'preview_received_date' }, { kind: 'code', text: str(data.received_date) }),
+      )
+      if (text(data.self_billing_agreement_ref)) {
+        head.push(row('self_billing_agreement_ref', { key: 'preview_self_billing_agreement_ref' }, {
+          kind: 'code', text: str(data.self_billing_agreement_ref),
+        }))
+      }
+      const currency = text(data.currency)
+      if (currency && !isLedgerCurrency(currency)) {
+        totals.push(row('total_sek', { key: 'preview_self_billed_total_sek' }, {
+          kind: 'money', amount: finite(data.total_sek), currency: 'SEK',
+        }))
+      }
+      return [head, totals]
+    }
     case 'create_supplier_invoice_from_inbox':
       return isRegisterBookedInvoiceParams(data) ? null : supplierInvoiceFacts(data)
     case 'match_transaction_invoice':
@@ -603,6 +622,11 @@ const REQUIRED: Record<string, Requirement[]> = {
   create_invoice: [
     { label: 'Kund', present: hasText('customer_name') },
     { label: 'Totalt', present: hasNumber('total') },
+  ],
+  create_self_billed_invoice: [
+    { label: 'Kund', present: hasText('customer_name') },
+    { label: { key: 'preview_external_invoice_number' }, present: hasText('external_invoice_number') },
+    { label: { key: 'preview_self_billed_total_sek' }, present: hasNumber('total_sek') },
   ],
   create_voucher: [{ label: { key: 'preview_account' }, present: hasKontering }],
   categorize_transaction: [{ label: { key: 'preview_account' }, present: hasKontering }],

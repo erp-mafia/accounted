@@ -599,7 +599,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/refresh-exchange-rate': gap('P3'),
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
   'POST /api/invoices/:id/resend': gap('P3', 'email an already emailed invoice again as a copy (crm#1339)'),
-  'POST /api/invoices/self-billed': covered([`POST ${V}/invoices`], 'is_self_billed: true runs the same service (createSelfBilledSaleInvoice); gnubok_create_invoice has no such argument'),
+  'POST /api/invoices/self-billed': covered([`POST ${V}/invoices`, 'gnubok_create_self_billed_invoice'], 'v1 uses is_self_billed=true'),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
   'POST /api/invoices/preview-email': uiOnly(PREVIEW),
   'POST /api/invoices/recurring': covered(['gnubok_create_recurring_schedule']),

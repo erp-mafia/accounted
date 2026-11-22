@@ -35,6 +35,7 @@ interface StagedOperation {
 const POSTING_DATE: Readonly<Record<string, (op: StagedOperation) => unknown>> = {
   // commitCreateVoucher posts the verifikat on params.entry_date.
   create_voucher: (op) => op.params?.entry_date,
+  create_self_billed_invoice: (op) => op.preview_data?.posts_on_approval === true ? op.params?.invoice_date : null,
   // categorizeMatchedTransaction books the bank row on the row's own date,
   // which every stager of the type states as preview.date.
   categorize_transaction: (op) => op.preview_data?.date,
@@ -98,8 +99,12 @@ export function stagedPeriodLockNote(
   if (!date || date !== checkedDate) return null
   const stop = stagedPeriodLock(date, lock)
   if (!stop) return null
+  const receivedSelfBill = op.operation_type === 'create_self_billed_invoice'
   if (stop.status === 'closed') {
-    return `PERIOD CLOSED: ${date} is in a fiscal year closed with a year-end closing, so this proposal cannot be approved as it stands: the approval is refused and nothing is booked. A closed year is not unlocked. Tell the user, and stage the entry again with a date in the open fiscal year.`
+    const next = receivedSelfBill
+      ? 'Tell the user that the actual invoice date is in a closed fiscal year.'
+      : 'Tell the user, and stage the entry again with a date in the open fiscal year.'
+    return `PERIOD CLOSED: ${date} is in a fiscal year closed with a year-end closing, so this proposal cannot be approved as it stands: the approval is refused and nothing is booked. A closed year is not unlocked. ${next}`
   }
   const what = stop.lock_date
     ? `is on or before the company lock date (bookkeeping is locked through ${stop.lock_date})`
@@ -107,7 +112,10 @@ export function stagedPeriodLockNote(
   const unlock = stop.lock_date
     ? 'the user moves the lock date back first (gnubok_update_bookkeeping_lock, or Inställningar > Bokföring in the app)'
     : 'the user unlocks the year first (gnubok_unlock_period, or Inställningar > Räkenskapsår in the app)'
-  return `PERIOD LOCKED: ${date} ${what}, so this proposal cannot be approved as it stands: the approval is refused with PERIOD_LOCKED and nothing is booked. Tell the user, then either stage it again with a date in an open period (and reject this one), or ${unlock} and it is approved after that.`
+  const next = receivedSelfBill
+    ? `Tell the user that the invoice retains its actual date and that ${unlock} before approving this proposal.`
+    : `Tell the user, then either stage it again with a date in an open period (and reject this one), or ${unlock} and it is approved after that.`
+  return `PERIOD LOCKED: ${date} ${what}, so this proposal cannot be approved as it stands: the approval is refused with PERIOD_LOCKED and nothing is booked. ${next}`
 }
 
 /**

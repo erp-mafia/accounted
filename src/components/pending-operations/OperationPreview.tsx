@@ -231,10 +231,11 @@ function VatWarningLines({ data }: { data: Record<string, unknown> }) {
   )
 }
 
-function InvoicePreview({ data }: { data: Record<string, unknown> }) {
+function InvoicePreview({ data, selfBilled = false }: { data: Record<string, unknown>; selfBilled?: boolean }) {
   const template = useIsTemplate()
+  const t = useTranslations('pending')
   const items = isPreviewInvoiceLines(data.items) ? data.items : []
-  const [head = [], totals = []] = proposalFacts('create_invoice', data) ?? []
+  const [head = [], totals = []] = proposalFacts(selfBilled ? 'create_self_billed_invoice' : 'create_invoice', data) ?? []
 
   return (
     <div className="space-y-3 text-sm">
@@ -244,6 +245,11 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
         <div className={cn(!template && 'border-t pt-2')}>
           <InvoiceLineRows items={items} currency={(data.currency as string) || 'SEK'} />
         </div>
+      )}
+      {selfBilled && typeof data.posts_on_approval === 'boolean' && (
+        <p className="text-muted-foreground">
+          {t(data.posts_on_approval ? 'preview_self_billed_posts' : 'preview_self_billed_cash')}
+        </p>
       )}
       <div className={cn(!template && 'border-t pt-2')}>
         <FactRows groups={[totals]} totalsFrom={0} />
@@ -1217,6 +1223,8 @@ export function OperationPreview({
         return isRegisterBookedInvoiceParams(op.preview_data)
           ? <RegisterBookedInvoicePreview data={op.preview_data} />
           : <InvoicePreview data={op.preview_data} />
+      case 'create_self_billed_invoice':
+        return <InvoicePreview data={op.preview_data} selfBilled />
       case 'create_supplier_invoice_from_inbox':
         return isRegisterBookedInvoiceParams(op.preview_data)
           ? <RegisterBookedSupplierInvoicePreview data={op.preview_data} />

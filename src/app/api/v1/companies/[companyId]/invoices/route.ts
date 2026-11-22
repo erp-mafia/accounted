@@ -83,6 +83,10 @@ function selfBilledFailureResponse(failure: SelfBilledSaleFailure, ctx: ApiV1Con
         ...base,
         details: { field: 'invoice_date', message: 'Ingen öppen bokföringsperiod för fakturadatumet.' },
       })
+    case 'duplicate':
+      return v1ErrorResponseFromCode('SELF_BILLED_INVOICE_DUPLICATE', ctx.log, base)
+    case 'review_changed':
+      return v1ErrorResponseFromCode('SELF_BILLED_INVOICE_REVIEW_CHANGED', ctx.log, base)
     case 'insert_failed':
       return v1ErrorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', ctx.log, {
         ...base,

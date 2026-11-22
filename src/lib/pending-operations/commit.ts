@@ -20,6 +20,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
+import { createSelfBilledSaleInvoice } from '@/lib/invoices/self-billed-sale'
+import { CreateSelfBilledInvoiceParamsSchema, selfBilledInvoiceFailure } from './schemas/create-self-billed-invoice'
 import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
@@ -2242,6 +2244,45 @@ async function commitCreateTransaction(
   }
 
   return { error: result.first_error?.message ?? 'The transaction could not be stored.', status: 500 }
+}
+
+async function commitCreateSelfBilledInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  operation: PendingOperation,
+): Promise<ExecutorResult> {
+  const parsed = CreateSelfBilledInvoiceParamsSchema.safeParse(operation.params)
+  if (!parsed.success) {
+    return { error: 'Ogiltiga uppgifter för självfakturan.', errorCode: 'VALIDATION_ERROR', status: 400 }
+  }
+
+  const totalSek = operation.preview_data?.total_sek
+  const postsOnApproval = operation.preview_data?.posts_on_approval
+  const result = typeof totalSek === 'number' && Number.isFinite(totalSek) && typeof postsOnApproval === 'boolean'
+    ? await createSelfBilledSaleInvoice(supabase, companyId, userId, parsed.data, { totalSek, postsOnApproval })
+    : { ok: false as const, failure: { code: 'review_changed' as const } }
+  if (!result.ok) {
+    const { code, message } = selfBilledInvoiceFailure(result.failure)
+    const entry = getErrorEntry(code)
+    return {
+      error: entry?.message_sv ?? message,
+      errorCode: code,
+      status: entry?.httpStatus ?? 400,
+      returnToPending: result.failure.code === 'fx_rate_unavailable',
+    }
+  }
+
+  return {
+    data: {
+      invoice_id: result.invoice.id,
+      external_invoice_number: result.invoice.external_invoice_number,
+      journal_entry_id: result.invoice.journal_entry_id ?? null,
+      status: result.invoice.status,
+      total: result.invoice.total,
+      currency: result.invoice.currency,
+    },
+  }
 }
 
 async function commitCreateInvoice(
@@ -6919,6 +6960,9 @@ async function commitPendingOperationInner(
         break
       case 'retag_line_dimensions':
         result = await commitRetagLineDimensions(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'create_self_billed_invoice':
+        result = await commitCreateSelfBilledInvoice(supabase, userId, companyId, pendingOp)
         break
       case 'create_invoice':
         result = isRegisterBookedInvoiceParams(pendingOp.params)

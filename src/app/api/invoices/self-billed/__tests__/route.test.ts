@@ -115,6 +115,21 @@ describe('POST /api/invoices/self-billed', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   })
 
+  it('returns 409 when the same customer invoice number is already registered', async () => {
+    mockDomesticVat()
+    enqueue({ data: makeCustomer({ id: VALID_UUID }) })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' } })
+    enqueue({
+      error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_invoices_self_billed_number"' },
+    })
+
+    const request = createMockRequest('/api/invoices/self-billed', { method: 'POST', body: validBody })
+    const { status } = await parseJsonResponse(await POST(request, { params: Promise.resolve({}) }))
+
+    expect(status).toBe(409)
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 401 when not authenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
 
@@ -213,9 +228,9 @@ describe('POST /api/invoices/self-billed', () => {
     })
 
     enqueue({ data: customer, error: null })                                   // fetch customer
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: created, error: null })                                    // insert invoice
     enqueue({ data: null, error: null })                                       // insert items
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: { ...created, customer, items: [] }, error: null })        // fetch complete
     enqueue({ data: null, error: null })                                       // update journal_entry_id
     enqueue({ data: { ...created, customer, items: [], journal_entry_id: 'je-1' }, error: null }) // fetch final
@@ -267,9 +282,9 @@ describe('POST /api/invoices/self-billed', () => {
     })
 
     enqueue({ data: customer, error: null })                                   // fetch customer
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: created, error: null })                                    // insert invoice
     enqueue({ data: null, error: null })                                       // insert items
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: { ...created, customer, items: [] }, error: null })        // fetch complete
     enqueue({ data: null, error: null })                                       // update journal_entry_id
     enqueue({ data: { ...created, customer, items: [], journal_entry_id: 'je-1' }, error: null }) // fetch final
@@ -305,9 +320,9 @@ describe('POST /api/invoices/self-billed', () => {
     const created = makeInvoice({ id: 'inv-1', invoice_number: null, is_self_billed: true, external_invoice_number: 'KUND-55012' })
 
     enqueue({ data: customer, error: null })                                   // fetch customer
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null }) // settings
     enqueue({ data: created, error: null })                                    // insert invoice
     enqueue({ data: null, error: null })                                       // insert items
-    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null }) // settings
     enqueue({ data: { ...created, customer, items: [] }, error: null })        // fetch complete
     enqueue({ data: { ...created, customer, items: [] }, error: null })        // fetch final
 
@@ -325,9 +340,9 @@ describe('POST /api/invoices/self-billed', () => {
     const created = makeInvoice({ id: 'inv-1', invoice_number: null, is_self_billed: true, external_invoice_number: 'KUND-55012' })
 
     enqueue({ data: customer, error: null })                                   // fetch customer
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: created, error: null })                                    // insert invoice
     enqueue({ data: null, error: null })                                       // insert items
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: { ...created, customer, items: [] }, error: null })        // fetch complete
     enqueue({ data: null, error: null })                                       // rollback delete
 

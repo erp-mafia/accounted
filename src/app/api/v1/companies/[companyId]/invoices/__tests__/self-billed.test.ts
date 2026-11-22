@@ -163,6 +163,14 @@ describe('POST /api/v1/.../invoices with is_self_billed', () => {
     expect(json.data.status).toBe('sent')
   })
 
+  it('409 when the customer invoice number is already registered', async () => {
+    mockCreate.mockResolvedValue({ ok: false, failure: { code: 'duplicate' } })
+    const res = await createInvoice(makePost(VALID_BODY), companyParams(COMPANY_ID))
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error.code).toBe('SELF_BILLED_INVOICE_DUPLICATE')
+  })
+
   it('404 when the service reports customer_not_found', async () => {
     mockCreate.mockResolvedValue({ ok: false, failure: { code: 'customer_not_found', customerId: CUSTOMER_ID } })
     const res = await createInvoice(makePost(VALID_BODY), companyParams(COMPANY_ID))

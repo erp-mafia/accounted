@@ -11,9 +11,7 @@
  *   - There is no send step: under faktureringsmetoden it is booked on
  *     registration; under kontantmetoden it stays unbooked until payment.
  *
- * This is the single implementation behind both the internal dashboard route
- * (/api/invoices/self-billed) and the public v1 invoice create endpoint (which
- * accepts an optional is_self_billed flag), so the two can never drift.
+ * Shared by the dashboard, v1 invoice creation and approval of MCP proposals.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -27,7 +25,7 @@ import type { DocumentVatMismatch } from '@/lib/vat/document-vat'
 import { createLogger } from '@/lib/logger'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import type { Invoice } from '@/types'
-import { checkAccountingMethod } from '@/lib/company/accounting-method'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 const log = createLogger('self-billed-sale')
 
@@ -56,7 +54,14 @@ export interface SelfBilledSaleInput {
   vat_breakdown?: Array<{ vat_rate: number; vat_amount: number }> | null
 }
 
+interface SelfBilledSaleReview {
+  totalSek: number
+  postsOnApproval: boolean
+}
+
 export type SelfBilledSaleFailure =
+  | { code: 'duplicate' }
+  | { code: 'review_changed' }
   | { code: 'customer_not_found'; customerId: string }
   | { code: 'vat_rule_violation'; attemptedRate: number; allowedRates: number[]; customerType: string }
   | { code: 'fx_rate_unavailable'; currency: string; invoiceDate: string }
@@ -242,10 +247,28 @@ export async function createSelfBilledSaleInvoice(
   companyId: string,
   userId: string,
   input: SelfBilledSaleInput,
+  review?: SelfBilledSaleReview,
 ): Promise<{ ok: true; invoice: Invoice } | { ok: false; failure: SelfBilledSaleFailure }> {
   const resolved = await resolveSelfBilledSaleDraft(supabase, companyId, input)
   if (!resolved.ok) return resolved
   const { draft } = resolved
+
+  // The approval gate priced the preview. Check the exact amount that this
+  // draft will store, before any writes, so a fresh FX rate cannot change it.
+  if (review && (draft.totalSek ?? draft.total) !== review.totalSek) {
+    return { ok: false, failure: { code: 'review_changed' } }
+  }
+
+  const settingsRead = await supabase
+    .from('company_settings')
+    .select('accounting_method, entity_type')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const accountingMethod = requireAccountingMethod(settingsRead)
+  if (review && (accountingMethod === 'accrual') !== review.postsOnApproval) {
+    return { ok: false, failure: { code: 'review_changed' } }
+  }
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type)
 
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
@@ -284,6 +307,9 @@ export async function createSelfBilledSaleInvoice(
     .single()
 
   if (invoiceError || !invoice) {
+    if (invoiceError?.code === '23505' && invoiceError.message.includes('idx_invoices_self_billed_number')) {
+      return { ok: false, failure: { code: 'duplicate' } }
+    }
     log.error('self-billed invoice insert failed', invoiceError as Error)
     return {
       ok: false,
@@ -310,25 +336,6 @@ export async function createSelfBilledSaleInvoice(
     log.error('self-billed invoice items insert failed; rolled back', itemsError, { invoiceId: invoice.id })
     return { ok: false, failure: { code: 'items_failed', pgCode: itemsError.code, pgMessage: itemsError.message } }
   }
-
-  const settingsRead = await supabase
-    .from('company_settings')
-    .select('accounting_method, entity_type')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  // Fail closed (accounted#58): whether the sale is booked now or at payment
-  // follows the method, so an unreadable one rolls the header back instead of
-  // guessing faktureringsmetoden.
-  const method = checkAccountingMethod(settingsRead)
-  if (!method.ok) {
-    await supabase.from('invoices').delete().eq('id', invoice.id)
-    log.error('self-billed invoice refused: accounting method unavailable; rolled back', method.error, {
-      invoiceId: invoice.id,
-    })
-    throw method.error
-  }
-  const { accountingMethod } = method
-  const entityType = await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type)
 
   const { data: completeInvoice } = await supabase
     .from('invoices')

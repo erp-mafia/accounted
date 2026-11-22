@@ -96,6 +96,7 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_get_invoice_deliveries',
     'gnubok_get_invoice_pdf',
     'gnubok_create_invoice',
+    'gnubok_create_self_billed_invoice',
     'gnubok_update_invoice',
     'gnubok_delete_draft_invoice',
     'gnubok_send_invoice',
