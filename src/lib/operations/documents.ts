@@ -38,6 +38,8 @@ import {
   attachDocumentToTransaction,
   detachDocumentFromTransaction,
 } from '@/lib/transactions/document-attach'
+import { createServiceClient } from '@/lib/supabase/server'
+import { requireCompanyWriter } from './access'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -422,7 +424,7 @@ export const documentsSetType = defineOperation({
     doc_type: z.enum(DOC_TYPES),
     previous_doc_type: z.string().nullable().describe('The type before; null when it had none.'),
   }),
-  errorCodes: ['DOC_NOT_FOUND'],
+  errorCodes: ['DOC_NOT_FOUND', 'FORBIDDEN'],
   mcp: {
     name: 'gnubok_set_document_type',
     title: 'Set Document Type',
@@ -473,7 +475,16 @@ export const documentsSetType = defineOperation({
       }
     }
     try {
-      const out = await setDocumentTypeByPerson(ctx.supabase, {
+      // document_classifications is written by the service role only (its RLS
+      // has a SELECT policy and nothing else), as Dokument's "Ändra typ" route
+      // and the MCP door write it. The app's approval runs this on the
+      // approver's own session, which the table refuses, so the approver's
+      // right to keep this company's books is checked here, and the type is
+      // then written through the service role. setDocumentTypeByPerson finds
+      // the document in ctx.companyId only.
+      const forbidden = await requireCompanyWriter(ctx)
+      if (forbidden) return forbidden
+      const out = await setDocumentTypeByPerson(createServiceClient(), {
         companyId: ctx.companyId,
         documentId: document_id,
         userId: ctx.userId,

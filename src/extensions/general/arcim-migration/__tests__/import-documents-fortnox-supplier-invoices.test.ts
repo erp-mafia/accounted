@@ -16,6 +16,7 @@ import {
   detectFileMagic,
   isArchivedForOwnJournalEntry,
 } from '@/lib/core/documents/document-service'
+import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { importProviderDocuments } from '../lib/import-documents'
 
 vi.mock('@/lib/providers/bokio/client', () => ({ BokioClient: class {} }))
@@ -136,7 +137,16 @@ const SUPPLIER_INVOICE_113 = {
   },
 }
 
-type Route = { status?: number; json?: unknown; bytes?: string; body?: string; timeout?: true }
+type Route = {
+  status?: number
+  json?: unknown
+  bytes?: string
+  body?: string
+  timeout?: true
+  hang?: true
+  /** Cut by the slice's hard stop, a moment before the slice's own clock reaches it. */
+  cut?: true
+}
 
 function forbidden(message: string, code: number): Route {
   return { status: 403, body: JSON.stringify({ ErrorInformation: { error: 1, message, code } }) }
@@ -157,7 +167,7 @@ function stubFortnox(overrides: Record<string, Route> = {}) {
     [`/archive/${FILE_SI_113}`]: { bytes: 'PDF-SI-113' },
     ...overrides,
   }
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     const path = `${url.pathname.replace(/^\/3/, '')}${url.search}`
     const route = routes[path]
@@ -165,6 +175,16 @@ function stubFortnox(overrides: Record<string, Route> = {}) {
     if (!route) return new Response(`unrouted ${path}`, { status: 418 })
     // What AbortSignal.timeout throws when Fortnox outlasts the 15 s limit.
     if (route.timeout) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    if (route.cut) throw new ExecutionBudgetExceeded('underlag-continuation')
+    // Still answering when the caller gives up on it: only the abort ends it.
+    if (route.hang) {
+      return new Promise<Response>((_, reject) => {
+        const signal = init?.signal
+        const abort = () => reject(signal?.reason ?? new DOMException('The operation was aborted', 'AbortError'))
+        if (signal?.aborted) abort()
+        else signal?.addEventListener('abort', abort, { once: true })
+      })
+    }
     if (route.bytes !== undefined) {
       return new Response(new TextEncoder().encode(route.bytes), {
         status: 200,
@@ -620,5 +640,94 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
       '(supplier invoice 114)',
       '(supplier invoice 115)',
     ])
+  })
+
+  // Every slice lists Fortnox again before it sweeps. On 2026-11-22 one
+  // company's supplier-invoice list outlasted the server's whole slice on
+  // most tries: the hard stop landed in it, and the slice either counted the
+  // file at its cursor failed and moved past it (11 receipts) or handed its
+  // own cursor back (UNDERLAG_RUN_NOT_ADVANCING).
+  describe('a slice whose time runs out in the supplier-invoice listing', () => {
+    const DETAIL_FORMS: Record<string, Route> = {
+      '/supplierinvoices/112': {
+        json: { SupplierInvoice: { GivenNumber: '112', Booked: true, Cancelled: false, VoucherSeries: 'D', VoucherNumber: 17, VoucherYear: 5 } },
+      },
+      '/supplierinvoices/114': {
+        json: { SupplierInvoice: { GivenNumber: '114', Booked: false, Cancelled: false, VoucherSeries: 'D', VoucherNumber: 0, VoucherYear: 6 } },
+      },
+      '/supplierinvoices/115': {
+        json: { SupplierInvoice: { GivenNumber: '115', Booked: false, Cancelled: true, VoucherSeries: 'D', VoucherNumber: 0, VoucherYear: 6 } },
+      },
+    }
+
+    /** One slice as the server runs it: swept to its deadline, cut at its hard stop. */
+    function serverSlice(opts: { cursor?: string; sweepMs: number; hardStopMs: number }) {
+      const startedAt = Date.now()
+      const deadline = startedAt + opts.sweepMs
+      return withExecutionDeadline(startedAt + opts.hardStopMs, 'underlag-continuation', () =>
+        importProviderDocuments({
+          supabase: supabaseWith(),
+          companyId: COMPANY,
+          userId: USER,
+          consentId: 'c1',
+          cursor: opts.cursor ?? null,
+          timeBudgetMs: deadline - Date.now(),
+          sweepDeadline: deadline,
+        }),
+      )
+    }
+
+    it('ends the slice out of time, and starts no file, when its hard stop lands in the invoice list', async () => {
+      const { requested } = stubFortnox({ '/supplierinvoices?page=1&limit=100': { hang: true } })
+
+      // The slice's own time runs out first, while the list still has its share.
+      const slice = withExecutionDeadline(Date.now() + 300, 'underlag-continuation', () =>
+        importProviderDocuments({ supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1' }),
+      )
+
+      // It answered { scanned: 1, failed: 1, nextCursor: A34 }: the cut read
+      // as an unreachable source, the sweep began past the hard stop with
+      // A34, counted it failed and moved the run past it.
+      await expect(slice).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
+      expect(requested()).not.toContain(`/archive/${FILE_A34}`)
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('takes a cut of the list where the slice ends as the slice running out, even before its own clock does', async () => {
+      const { requested } = stubFortnox({ '/supplierinvoices?page=1&limit=100': { cut: true } })
+
+      // The list's share reaches past the slice's end, so only the slice can
+      // have cut it, though the slice's deadline is not yet past by its clock.
+      const slice = withExecutionDeadline(Date.now() + 5_000, 'underlag-continuation', () =>
+        importProviderDocuments({ supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1' }),
+      )
+
+      await expect(slice).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
+      expect(requested()).not.toContain(`/archive/${FILE_A34}`)
+    })
+
+    it('ends the slice out of time past the voucher files, instead of handing its cursor back', async () => {
+      stubFortnox({ '/supplierinvoicefileconnections?page=1&limit=500': { hang: true } })
+
+      // It answered { scanned: 0, partial: true, nextCursor: A34 }: the
+      // cursor it was given, as if its supplier-invoice files were out of
+      // reach, which the server refuses as a run that does not advance.
+      await expect(serverSlice({ cursor: FILE_A34, sweepMs: 200, hardStopMs: 300 })).rejects.toBeInstanceOf(
+        ExecutionBudgetExceeded,
+      )
+    })
+
+    it('gives up on an invoice list that outlasts its share of the slice, and links every file through its invoice', async () => {
+      const { requested } = stubFortnox({ '/supplierinvoices?page=1&limit=100': { hang: true }, ...DETAIL_FORMS })
+
+      const result = await serverSlice({ sweepMs: 1_000, hardStopMs: 1_500 })
+
+      // The list is an index that only saves calls: without it each invoice
+      // is asked on its own detail form, within the same slice. It used to
+      // hold the slice to its hard stop and blame A34 (failed: 1).
+      expect(result).toMatchObject({ total: 5, linked: 3, unmatched: 2, failed: 0, partial: false, unreachableSources: [] })
+      expect(linkedEntries()).toEqual(['je-a34', 'je-d17-2024', 'je-d3-2025'])
+      expect(requested()).toContain('/supplierinvoices/112')
+    })
   })
 })

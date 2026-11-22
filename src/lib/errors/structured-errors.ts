@@ -2788,6 +2788,24 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bankkontot är avstängt och visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar innan transaktioner kan läggas på det.',
     message_en: 'This bank account is turned off and is printed on invoices. An owner or admin needs to turn it on in Settings before transactions can be put on it.',
   },
+  // ensureManualCashAccount: the kassakonto already on the row's ledger
+  // account is in another currency, and a ledger holds one (cash_accounts is
+  // UNIQUE on company and ledger). details: ledger_account, account_currency,
+  // currency. The sentence names only the cause: the bank-file import and the
+  // Stripe sync read it through getErrorMessage too, and each caller says its
+  // own next step (the create_transactions approval in commit.ts).
+  CASH_ACCOUNT_CURRENCY_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Bankkontot på det bokföringskontot har en annan valuta än transaktionen, och ett bankkonto har bara en valuta.',
+    message_en:
+      'The bank account on that ledger account is in another currency than the transaction, and a bank account holds one currency.',
+    remediation: {
+      description:
+        'Retrying does not help. Send the row again with ledger_account set to the bank account in its currency (gnubok_list_cash_accounts), or to a free BAS 19xx account: a missing kassakonto is created in the row\'s currency.',
+    },
+    retryable: false,
+  },
   CASH_ACCOUNT_PRIMARY_INELIGIBLE: {
     httpStatus: 400,
     message_sv: 'Kontot kan inte vara primärt. Det primära kontot måste vara ett aktivt bankkonto i SEK (konto 1920-1999).',
@@ -12491,8 +12509,11 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Banken kräver signering på sin egen webbsida, vilket inte stöds här ännu. Betala fakturorna med en betalfil i stället.',
     message_en: 'The bank requires signing on its own website, which is not supported here yet. Pay the invoices with a payment file instead.',
   },
+  // A 4xx, as BANK_PROVIDER_REFUSED: the bank answers the same refusal on
+  // every try (one that may pass on a retry is PAYMENT_PROVIDER_UNAVAILABLE).
+  // As a 502 it was logged at error and counted as an outage.
   PAYMENT_PROVIDER_REFUSED: {
-    httpStatus: 502,
+    httpStatus: 422,
     message_sv: 'Banken tog inte emot betalningen. Kontrollera uppgifterna och försök igen.',
     message_en: 'The bank did not accept the payment. Check the details and try again.',
   },

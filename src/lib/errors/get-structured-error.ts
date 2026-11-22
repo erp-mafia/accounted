@@ -123,6 +123,9 @@ const TRANSIENT_MESSAGE_PATTERNS = [
   /rate limit/i,
   /timed out/i,
   /aborted due to timeout/i,
+  // Cloudflare's 524 page by its title, which is what a gateway page keeps
+  // (lib/supabase/gateway-error-page.ts); its body's "timed out" is gone.
+  /a timeout occurred/i,
 ]
 
 /**
@@ -873,6 +876,17 @@ function buildResponse(
 }
 
 /**
+ * The bank's or provider's own code a refusal carries in its details: the log
+ * line names it too, not only the response (a generic PAYMENT_PROVIDER_REFUSED
+ * says nothing about which refusal it was).
+ */
+function providerCodeOf(details: unknown): { provider_code?: string } {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return {}
+  const code = (details as { provider_code?: unknown }).provider_code
+  return typeof code === 'string' && code !== '' ? { provider_code: code } : {}
+}
+
+/**
  * Construct an envelope-shaped error directly from a code (when the route
  * already knows the failure mode). Skips dispatch: useful inside a handler
  * that wants the standard shape without throwing.
@@ -892,7 +906,7 @@ export function errorResponseFromCode(
 ): NextResponse {
   const entry = entryFor(code)
   const status = ctx.status ?? entry.httpStatus
-  logAtLevel(log, status, code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId })
+  logAtLevel(log, status, code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId, ...providerCodeOf(ctx.details) })
   return buildResponse(
     code,
     {
