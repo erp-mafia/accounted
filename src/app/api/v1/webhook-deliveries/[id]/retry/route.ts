@@ -28,6 +28,7 @@ import type { IdempotencyClaim } from '@/lib/api/idempotency'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { kickWebhookDispatch } from '@/lib/webhooks/dispatch-kick'
 import { minimisePayload } from '@/lib/webhooks/handler'
+import { refusedEventFamily } from '@/lib/webhooks/public-events'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { verificationAllowsDelivery, webhookVerificationStatus } from '@/lib/webhooks/verification'
 import { hasScope } from '@/lib/auth/api-keys'
@@ -155,8 +156,9 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
 
 /**
  * Everything the retry checks and writes once the key (if any) is held: the
- * delivery's state, the payroll scope, the webhook itself, its URL, then the
- * new pending row. Returns the response; the caller settles the key.
+ * delivery's state, the scope its event family needs, the webhook itself, its
+ * URL, then the new pending row. Returns the response; the caller settles the
+ * key.
  */
 async function queueRedelivery(ctx: ApiV1Context, o: OriginalDelivery): Promise<Response> {
   if (o.status !== 'dead' && o.status !== 'delivered') {
@@ -175,13 +177,15 @@ async function queueRedelivery(ctx: ApiV1Context, o: OriginalDelivery): Promise<
   // the original create call required webhooks:manage AND payroll:read.
   // Retry checks the SAME pair against the CALLING key's scopes (which
   // may differ from the key that created the webhook in the first place).
-  const PAYROLL_SENSITIVE = /^(salary_run\.|agi\.)/
-  if (PAYROLL_SENSITIVE.test(o.event_type) && !hasScope(ctx.scopes, 'payroll:read')) {
+  // The families and their scopes are the ones create asks
+  // (SCOPED_EVENT_FAMILIES): company_question.* needs agent:read.
+  const refused = refusedEventFamily([o.event_type], (scope) => hasScope(ctx.scopes, scope))
+  if (refused) {
     return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
       requestId: ctx.requestId,
       details: {
-        required_scope: 'payroll:read',
-        reason: `Retrying ${o.event_type} requires payroll:read in addition to webhooks:manage.`,
+        required_scope: refused.scope,
+        reason: `Retrying ${o.event_type} requires ${refused.scope} in addition to webhooks:manage.`,
       },
     })
   }
