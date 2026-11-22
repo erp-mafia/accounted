@@ -2796,6 +2796,38 @@ describe('learning-loop repair (issue #865)', () => {
       expect(count).toBe(0)
     })
 
+    it('teaches nothing from reverse charge on the import account 4545, whose replay adds a ruta 21 basis to ruta 50 (#997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '4545', amount: 1000 },
+        { account: '2645', amount: 250 },
+        { account: '2614', amount: -250 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('teaches nothing from a basis pair without fiktiv moms, whose replay adds 2645/2614 (#997)', async () => {
+      const { count } = await learnedFrom([
+        { account: '1930', amount: -1000 },
+        { account: '6540', amount: 1000 },
+        { account: '4535', amount: 1000 },
+        { account: '4598', amount: -1000 },
+      ])
+      expect(count).toBe(0)
+    })
+
+    it('teaches nothing from a purchase whose first bank line is a debit, which the template reads as income (#997)', async () => {
+      const lines = [
+        { account: '1930', amount: 100 },
+        { account: '1930', amount: -1100 },
+        { account: '6540', amount: 1000 },
+        { account: '2645', amount: 250 },
+        { account: '2614', amount: -250 },
+      ]
+      expect((await learnedFrom(lines)).count).toBe(0)
+      expect(verifikatTemplateShape(lines)).toBeNull()
+    })
+
     it('leaves a counterparty untaught when its dominant shape teaches nothing, never its minority (#997)', async () => {
       const imports = Array.from({ length: 8 }, (_, i) =>
         makeSIEVoucher({

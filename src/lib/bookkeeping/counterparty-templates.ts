@@ -32,6 +32,7 @@ import {
 import { DimensionValidationError, type DimensionValidationIssue } from './dimension-errors'
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
+import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
 import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { bankSideOf, isMoneyLedger, learnableBankPair, settleBankLeg, type BankSide } from './bank-leg'
@@ -1952,16 +1953,25 @@ const REPLAY_PROBE_AMOUNT = 10000
  * a line pattern replays its basis pair's set (patternReverseChargeLines), none
  * without a pair. Both settled on their cost lines as the booking door settles
  * them (reverseChargePurchasesOn), with no momskod known: a cost line on a
- * basis account takes its own sats.
+ * basis account takes its own sats. null when the replay would book the
+ * purchase's basis twice: a cost line on an import account (4545-4547, ruta
+ * 50) gets a reverse-charge basis pair (ruta 20-24) beside it.
  */
-function replayedFiktivMomsKey(entries: readonly LinePatternEntry[]): string {
+function replayedFiktivMomsKey(
+  entries: readonly LinePatternEntry[],
+  settlementSide: 'debit' | 'credit',
+): string | null {
   let purchase: { base: number; rate: number; kind: ReverseChargeKind }
   let costLines: { account: string; amount: number }[]
   if (isSimpleShape(entries)) {
     const business = entries.find((e) => e.type === 'business')
-    // A business line on the credit side is a sale or a credit note: the
-    // simple builder books reverse charge on neither sign of it.
-    if (!business || business.side !== 'debit' || entries.some((e) => e.type === 'vat')) return ''
+    // A business line on the credit side is a sale or a credit note, and so
+    // is a template whose settlement (its first settlement line) is debited:
+    // the simple builder books reverse charge on neither sign of them.
+    if (
+      !business || business.side !== 'debit' || settlementSide !== 'credit' ||
+      entries.some((e) => e.type === 'vat')
+    ) return ''
     purchase = { base: REPLAY_PROBE_AMOUNT, rate: resolveReverseChargeRate({}), kind: DEFAULT_REVERSE_CHARGE_KIND }
     costLines = [{ account: business.account, amount: REPLAY_PROBE_AMOUNT }]
   } else {
@@ -1973,6 +1983,7 @@ function replayedFiktivMomsKey(entries: readonly LinePatternEntry[]): string {
       .map((e) => ({ account: e.account, amount: roundOre(REPLAY_PROBE_AMOUNT * (e.ratio ?? 0) * ratioScale) }))
     purchase = { base: REPLAY_PROBE_AMOUNT, rate: rcPair.rate, kind: rcPair.kind }
   }
+  if (costLines.some((line) => VAT_ACCOUNT_TABLE[line.account]?.basis?.kind === 'import')) return null
   const accounts = reverseChargePurchasesOn(purchase, costLines, new Map())
     .flatMap(generateReverseChargePurchaseLines)
     .map((line) => line.account_number)
@@ -2137,21 +2148,24 @@ function templateFieldsFromVoucherPatterns(
   // pattern whose voucher books a basis or offset account twice (two basis
   // pairs on one 4598, one per sats) replays another split of the sats and
   // teaches nothing either; a cost account booked on several lines merges as
-  // it does without reverse charge. A categorize booking whose replay would
+  // it does without reverse charge. A line pattern with a basis pair replays
+  // fiktiv moms whether or not its vouchers booked any, so it is judged too,
+  // and a replay that would book the basis twice (an import account beside a
+  // generated pair) teaches nothing. A categorize booking whose replay would
   // land in another ruta teaches nothing too (crm#1028).
-  if (voucherPatterns.some((vp) => vp.fiktivMoms !== '')) {
-    const replayed = replayedFiktivMomsKey(avgPattern)
-    const rcPair = isSimpleShape(avgPattern) ? null : patternReplayPlan(avgPattern).rcPair
+  const { settlementAccount, settlementSide } = voucherPatterns[0]
+  const rcPair = isSimpleShape(avgPattern) ? null : patternReplayPlan(avgPattern).rcPair
+  if (rcPair !== null || voucherPatterns.some((vp) => vp.fiktivMoms !== '')) {
+    const replayed = replayedFiktivMomsKey(avgPattern, settlementSide)
     const isPairLeg = (account: string) =>
       reverseChargeKindForBasisAccount(account) !== null ||
       account === rcPair?.basis.account ||
       account === rcPair?.offset.account
-    if (voucherPatterns.some((vp) =>
+    if (replayed === null || voucherPatterns.some((vp) =>
       vp.fiktivMoms !== replayed ||
       (rcPair !== null && repeatsAccount(vp.entries.filter((e) => isPairLeg(e.account)))),
     )) return null
   }
-  const { settlementAccount, settlementSide } = voucherPatterns[0]
 
   // Decide: simple (1 business + 0-1 VAT) → legacy fields; otherwise → line_pattern
   const businessEntries = avgPattern.filter(e => e.type === 'business')
@@ -2212,8 +2226,9 @@ export type VerifikatTemplateShape = NonNullable<ReturnType<typeof templateField
  * What one posted verifikat teaches as a counterparty template, read the way
  * the SIE learner reads an imported voucher (extractVoucherLinePattern):
  * pension plus särskild löneskatt stays one multi-line template. `lines` are
- * signed like SIE amounts (debit positive). `accountSet` is the shape's key,
- * the same one the SIE learner groups vouchers by. null when the verifikat
+ * signed like SIE amounts (debit positive). `accountSet` is the shape's
+ * account key, the one the SIE learner groups vouchers by beside their
+ * fiktiv-moms accounts (populateTemplatesFromSieVouchers). null when the verifikat
  * cannot be a pattern (no business line, no settlement line, more than five
  * business accounts, nothing left beside the VAT), or when its replay would
  * book its fiktiv moms on other accounts (templateFieldsFromVoucherPatterns).
