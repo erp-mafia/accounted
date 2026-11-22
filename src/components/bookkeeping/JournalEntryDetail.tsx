@@ -202,7 +202,10 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
         body: JSON.stringify({ notes: value || null }),
       })
       if (res.ok) {
-        await mutateDetail(current => current ? { ...current, entry: { ...current.entry, notes: value || null } } : current, { revalidate: false })
+        await mutateDetail(current => {
+          const existing = current ?? detail
+          return existing ? { ...existing, entry: { ...existing.entry, notes: value || null } } : existing
+        }, { revalidate: false })
         setEditingNotes(false)
       } else {
         // The refusal says why (a closed or locked period), not just that it failed.
@@ -218,7 +221,7 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
     } finally {
       setSavingNotes(false)
     }
-  }, [id, toast, t, mutateDetail])
+  }, [id, toast, t, mutateDetail, detail])
 
   // Open the confirm dialog and fetch the predicted voucher number. The
   // prediction is indicative (numbers are assigned atomically at commit); the
@@ -308,7 +311,7 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
   )
 
 
-  if (isLoading) {
+  if (isLoading && !detail) {
     return <DetailPageSkeleton />
   }
 
