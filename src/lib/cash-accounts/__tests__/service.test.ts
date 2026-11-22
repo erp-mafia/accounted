@@ -19,6 +19,8 @@ import {
   getRevokedConnectionIds,
   upsertFromPsd2,
   ensureManualCashAccount,
+  findCashAccountCurrencyMismatch,
+  isCashAccountCurrencyMismatch,
 } from '../service'
 import { pickKeeper } from '../twins'
 import { defaultLedgerForCurrency } from '../ledger-slots'
@@ -1021,6 +1023,18 @@ describe('ensureManualCashAccount', () => {
     expect(stub.inserted).toHaveLength(0)
   })
 
+  // A caller answers the conflict as a refusal (the create_transactions
+  // approval did not, and answered a 500): it carries its code and what it names.
+  it('refuses the different currency with CASH_ACCOUNT_CURRENCY_MISMATCH, naming the ledger and both currencies', async () => {
+    const stub: ManualStub = { lookup: { data: { id: 'ca-eur', currency: 'EUR' } }, inserted: [], lookupCount: 0 }
+    const err = await ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1948', 'gbp').catch((e: unknown) => e)
+    expect(isCashAccountCurrencyMismatch(err)).toBe(true)
+    expect(err).toMatchObject({
+      code: 'CASH_ACCOUNT_CURRENCY_MISMATCH',
+      details: { ledger_account: '1948', account_currency: 'EUR', currency: 'GBP' },
+    })
+  })
+
   it('creates a manual row (source=manual, uppercased currency) when none exists', async () => {
     const stub: ManualStub = {
       lookup: { data: null },
@@ -1075,5 +1089,29 @@ describe('ensureManualCashAccount', () => {
     await expect(
       ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'SEK'),
     ).rejects.toThrow(/boom/)
+  })
+})
+
+// The read a door makes before it stages a row (gnubok_create_transactions),
+// so the refusal ensureManualCashAccount gives at approval is said first.
+describe('findCashAccountCurrencyMismatch', () => {
+  it('answers the refusal for a row in another currency than the account on its ledger, writing nothing', async () => {
+    const stub: ManualStub = { lookup: { data: { id: 'ca-eur', currency: 'EUR' } }, inserted: [], lookupCount: 0 }
+    const mismatch = await findCashAccountCurrencyMismatch(makeManualSupabase(stub), 'c1', '1948', 'GBP')
+    expect(mismatch).toMatchObject({
+      code: 'CASH_ACCOUNT_CURRENCY_MISMATCH',
+      details: { ledger_account: '1948', account_currency: 'EUR', currency: 'GBP' },
+    })
+    expect(stub.inserted).toHaveLength(0)
+    expect(stub.updated ?? []).toHaveLength(0)
+  })
+
+  it('answers null for an account in the row currency, a ledger without one, and a failed read', async () => {
+    const same: ManualStub = { lookup: { data: { id: 'ca-eur', currency: 'EUR' } }, inserted: [], lookupCount: 0 }
+    expect(await findCashAccountCurrencyMismatch(makeManualSupabase(same), 'c1', '1948', 'eur')).toBeNull()
+    const none: ManualStub = { lookup: { data: null }, inserted: [], lookupCount: 0 }
+    expect(await findCashAccountCurrencyMismatch(makeManualSupabase(none), 'c1', '1949', 'GBP')).toBeNull()
+    const failed: ManualStub = { lookup: { data: null, error: { message: 'timeout' } }, inserted: [], lookupCount: 0 }
+    expect(await findCashAccountCurrencyMismatch(makeManualSupabase(failed), 'c1', '1948', 'GBP')).toBeNull()
   })
 })

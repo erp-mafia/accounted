@@ -1494,6 +1494,30 @@ describe('expected-condition log levels', () => {
     expect(errorSpy).not.toHaveBeenCalled()
   })
 
+  // The answer production got when the callback revoked a consent Enable
+  // Banking had already closed: a 400, not a 404 or a 401/403.
+  it('logs a 400 CLOSED_SESSION at warn: the session is already gone', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('{"code":400,"message":"Session is closed","error":"CLOSED_SESSION","detail":null}', { status: 400 })
+    )
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs a 400 with another error code at error, whatever its text says about the session', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('{"code":400,"message":"Invalid session id","error":"WRONG_REQUEST_PARAMETERS","detail":null}', { status: 400 })
+    )
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(errorSpy).toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
   it('still logs an unexpected revoke failure at error', async () => {
     fetchSpy.mockResolvedValue(new Response('{"message":"boom"}', { status: 500 }))
 

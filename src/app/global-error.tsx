@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { captureBoundaryError } from "@/lib/analytics/client";
 
 // Last-resort boundary: only fires when the root layout itself throws, so it
 // renders its own <html> and must stay free of app providers/components
@@ -51,6 +52,7 @@ export default function GlobalError({
 
   useEffect(() => {
     console.error("[global] Unhandled error:", error);
+    captureBoundaryError(error, "global", phase === "reloading");
     // The one-shot flag is already claimed in decideInitialPhase, so reaching
     // 'reloading' guarantees it persisted: reload exactly once.
     if (phase === "reloading") window.location.reload();

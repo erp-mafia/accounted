@@ -16,6 +16,7 @@ import {
   AssetOpeningChangedError,
   AssetValueAdjustmentBlockedError,
   BookkeepingDatabaseError,
+  sieSourceVoucherTaken,
   ContractRevenueRefusedError,
   contractRevenueRefusalFromRpc,
   DeferredTaxAlreadyPostedError,
@@ -97,7 +98,9 @@ export async function commitSIEImportChunk(supabase: SupabaseClient, job: SIEJob
     p_company_id: job.company_id, p_import_id: job.id, p_worker_id: job.worker_id,
     p_attempt: job.job_attempt, p_phase: phase, p_chunk_no: chunk,
   })
-  if (error) throw new BookkeepingDatabaseError('import_sie_chunk', error.message)
+  // A voucher whose source series and number the year already holds is
+  // refused on every try: its own error, so the worker stops the job.
+  if (error) throw sieSourceVoucherTaken(error) ?? new BookkeepingDatabaseError('import_sie_chunk', error.message)
   if (!data) throw new BookkeepingDatabaseError('import_sie_chunk', 'Missing completion receipt')
   return data as SIEChunkResult
 }

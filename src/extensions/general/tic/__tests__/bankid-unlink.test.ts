@@ -151,7 +151,7 @@ afterEach(() => {
 describe('route flags', () => {
   // These routes are user-level: a zero-company user (fresh BankID signup,
   // pre-onboarding) must be able to manage the connection from settings.
-  // Without skipCompanyContext the dispatcher throws 'No company context'.
+  // Without skipCompanyContext the dispatcher answers COMPANY_CONTEXT_MISSING.
   it('link and unlink skip company context', () => {
     expect(findRoute('POST', '/bankid/link').skipCompanyContext).toBe(true)
     expect(findRoute('POST', '/bankid/unlink').skipCompanyContext).toBe(true)

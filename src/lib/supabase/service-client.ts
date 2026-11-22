@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient, type SupabaseClientOptions } from '@supabase/supabase-js'
 import { withActorHeader } from '@/lib/supabase/actor-header'
 import { withEmptyPagePastEnd } from '@/lib/supabase/page-past-end'
+import { withShortGatewayErrorPage } from '@/lib/supabase/gateway-error-page'
 
 /**
  * Auth options every server-side Supabase client MUST use.
@@ -54,7 +55,8 @@ export const SERVER_AUTH_OPTIONS = {
  * caller's own fetch when it passes one: a service-role request has no
  * session, and the audit log reads the person from the header instead. A
  * counted page past the last row reads as an empty page, not a 416
- * (lib/supabase/page-past-end.ts).
+ * (lib/supabase/page-past-end.ts), and a gateway's HTML error page as one
+ * short message (lib/supabase/gateway-error-page.ts).
  *
  * Browser clients are a different case and must keep the ticker: a signed-in
  * tab genuinely needs its access token refreshed. Those go through
@@ -67,7 +69,10 @@ export function createServiceRoleClient(
 ): SupabaseClient {
   return createClient(url, key, {
     ...options,
-    global: { ...options?.global, fetch: withEmptyPagePastEnd(withActorHeader(options?.global?.fetch)) },
+    global: {
+      ...options?.global,
+      fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(withActorHeader(options?.global?.fetch))),
+    },
     auth: { ...options?.auth, ...SERVER_AUTH_OPTIONS },
   })
 }

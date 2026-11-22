@@ -89,6 +89,9 @@ describe('isSessionExpiredResponse', () => {
   it('does NOT match a non-401/403 status even with a session code in the body', () => {
     expect(isSessionExpiredResponse(500, CLOSED_SESSION_BODY)).toBe(false)
     expect(isSessionExpiredResponse(400, '{"error":"ASPSP_ERROR"}')).toBe(false)
+    // The 400 Enable Banking answers a DELETE of a closed session: "already
+    // gone" for deleteSession only, never a reason for a sync to flip a row.
+    expect(isSessionExpiredResponse(400, '{"code":400,"message":"Session is closed","error":"CLOSED_SESSION","detail":null}')).toBe(false)
   })
 })
 
