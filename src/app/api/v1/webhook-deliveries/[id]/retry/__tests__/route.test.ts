@@ -252,6 +252,66 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
     expect(body.error.details.required_scope).toBe('payroll:read')
   })
 
+  it('requires agent:read for company_question.* retries, as create does', async () => {
+    // The default key holds webhooks:manage only.
+    const mock = createTableMockSupabase({
+      webhook_deliveries: {
+        data: {
+          ...DEAD_DELIVERY,
+          event_type: 'company_question.answered',
+          payload: { questionId: 'q-1', status: 'answered', answeredVia: 'app', answeredAt: '2026-11-19T09:00:00.000Z' },
+        },
+        error: null,
+      },
+      company_members: { data: { company_id: COMPANY_ID }, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await retryDelivery(
+      makeRequest(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, {
+        method: 'POST',
+      }),
+      idParams(DELIVERY_ID),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+    expect(body.error.details.required_scope).toBe('agent:read')
+    expect(mock.findCalls('webhook_deliveries', 'insert')).toEqual([])
+  })
+
+  it('retries a company_question.* delivery for a key holding agent:read', async () => {
+    mockValidate.mockResolvedValueOnce({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['webhooks:manage', 'agent:read'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        webhook_deliveries: [
+          { data: { ...DEAD_DELIVERY, event_type: 'company_question.filed' }, error: null }, // lookup
+          { data: { id: NEW_DELIVERY_ID }, error: null }, // insert
+        ],
+        company_members: { data: { company_id: COMPANY_ID }, error: null },
+        webhooks: { data: ACTIVE_WEBHOOK, error: null },
+      }).supabase,
+    )
+
+    const res = await retryDelivery(
+      makeRequest(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, {
+        method: 'POST',
+      }),
+      idParams(DELIVERY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.webhook_delivery_id).toBe(NEW_DELIVERY_ID)
+  })
+
   it('refuses to retry a live delivery (pending/in_flight/failed)', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({

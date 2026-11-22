@@ -30,10 +30,10 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { hasScope } from '@/lib/auth/api-keys'
+import { refusedEventFamily } from '@/lib/webhooks/public-events'
 import {
   WebhookEventTypeListSchema,
   WebhookEventTypeSchema,
-  payrollEventTypesIn,
   refineWebhookEventTypeFields,
   resolveWebhookEventTypes,
 } from '@/lib/webhooks/subscription-event-types'
@@ -176,7 +176,7 @@ registerEndpoint({
     'Re-enabling a webhook (active: true) does NOT replay deliveries that went to dead status while it was disabled: those need POST /webhook-deliveries/{id}/retry.',
     'Changing webhook_url withholds deliveries until the new URL is verified: have the new receiver answer webhook.verification before you switch.',
     'active: true does not bypass verification: a pending or paused endpoint stays without deliveries until it passes the handshake.',
-    'event_types replaces the whole list: send every type the webhook should keep. Listing salary_run.* or agi.generated requires payroll:read.',
+    'event_types replaces the whole list: send every type the webhook should keep. Listing salary_run.* or agi.generated requires payroll:read; listing company_question.* requires agent:read.',
   ],
   example: {
     request: { active: true },
@@ -222,14 +222,15 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     const eventTypes = resolveWebhookEventTypes(body)
 
     // Same elevated-scope gate as create: listing a payroll type routes
-    // lönesummor and skatteavdrag to the receiver.
-    const payrollTypes = eventTypes ? payrollEventTypesIn(eventTypes) : []
-    if (payrollTypes.length > 0 && !hasScope(ctx.scopes, 'payroll:read')) {
+    // lönesummor and skatteavdrag to the receiver, and a question list type
+    // needs the scope the list is read with (SCOPED_EVENT_FAMILIES).
+    const refused = eventTypes ? refusedEventFamily(eventTypes, (scope) => hasScope(ctx.scopes, scope)) : null
+    if (refused) {
       return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
         requestId: ctx.requestId,
         details: {
-          required_scope: 'payroll:read',
-          reason: `Subscribing to ${payrollTypes.join(', ')} requires payroll:read in addition to webhooks:manage.`,
+          required_scope: refused.scope,
+          reason: `Subscribing to ${refused.eventTypes.join(', ')} requires ${refused.scope} in addition to webhooks:manage.`,
         },
       })
     }

@@ -6,7 +6,8 @@ import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
-import { useAssistantAvailable, useAssistantChatEnabled } from '@/contexts/CompanyContext'
+import { useAssistantAvailable, useAssistantChatEnabled, useBookingScreenEnabled } from '@/contexts/CompanyContext'
+import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -56,6 +57,7 @@ export default function BookkeepingPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { canWrite, lockedTitle } = useViewerLock()
+  const bookingScreen = useBookingScreenEnabled()
   // A read-only member gets no create dialog from a deep link either.
   const copyFromId = useMemo<string | null>(() => {
     const raw = searchParams.get('copy_from')
@@ -65,15 +67,13 @@ export default function BookkeepingPage() {
   // and the bokslut preflight) lives in the same query and is the list's to
   // read and write (lib/bookkeeping/verifikat-list-query.ts). The deep links
   // below consume only their own key, so that view survives them (crm#1998).
-  const replaceWithout = useCallback(
-    (key: string) => {
-      const rest = new URLSearchParams(window.location.search)
-      rest.delete(key)
-      const qs = rest.toString()
-      router.replace(qs ? `/bookkeeping?${qs}` : '/bookkeeping')
-    },
-    [router],
-  )
+  const hrefWithout = useCallback((key: string) => {
+    const rest = new URLSearchParams(window.location.search)
+    rest.delete(key)
+    const qs = rest.toString()
+    return qs ? `/bookkeeping?${qs}` : '/bookkeeping'
+  }, [])
+  const replaceWithout = useCallback((key: string) => router.replace(hrefWithout(key)), [router, hrefWithout])
 
   const [refreshKey, setRefreshKey] = useState(0)
   const [showNewEntry, setShowNewEntry] = useState(false)
@@ -185,12 +185,29 @@ export default function BookkeepingPage() {
   const wantsNew = canWrite && searchParams.has('new')
   useEffect(() => {
     if (!wantsNew || copyFromId || searchParams.get('skv_tx')) return
+    // With the booking screen switched on, the empty verifikat is booked
+    // there, and the screen returns to this list with its view kept.
+    if (bookingScreen) {
+      router.replace(bookingScreenHref({ kind: 'voucher' }, hrefWithout('new')))
+      return
+    }
     replaceWithout('new')
     setCopyPrefill(null)
     setSkvLink(null)
     setShowNewEntry(true)
-  }, [wantsNew, copyFromId, searchParams, replaceWithout])
+  }, [wantsNew, copyFromId, searchParams, replaceWithout, hrefWithout, bookingScreen, router])
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  // "Tomt verifikat": the booking screen when it is switched on, else the dialog.
+  const openEmptyVoucher = () => {
+    if (bookingScreen) {
+      router.push(bookingScreenHref({ kind: 'voucher' }, `/bookkeeping${window.location.search}`))
+      return
+    }
+    setCopyPrefill(null)
+    setSkvLink(null)
+    setShowNewEntry(true)
+  }
 
   const skvPrefill = useMemo<SkvLinkPrefill | null>(() => {
     if (!skvLink) return null
@@ -284,11 +301,7 @@ export default function BookkeepingPage() {
                 description: t('create_tomt_desc'),
                 disabled: !canWrite,
                 disabledTitle: lockedTitle,
-                onSelect: () => {
-                  setCopyPrefill(null)
-                  setSkvLink(null)
-                  setShowNewEntry(true)
-                },
+                onSelect: openEmptyVoucher,
               },
               {
                 key: 'mall',
@@ -342,14 +355,7 @@ export default function BookkeepingPage() {
                     'assistent',
                     () => openAgentSheet({ intentId: 'verifikation.draft', contextRef: 'verifikation:new' }),
                   ],
-                  [
-                    'tomt',
-                    () => {
-                      setCopyPrefill(null)
-                      setSkvLink(null)
-                      setShowNewEntry(true)
-                    },
-                  ],
+                  ['tomt', openEmptyVoucher],
                 ] as const
               )
                 .filter(([mode]) => createModes.includes(mode))

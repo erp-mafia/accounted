@@ -312,10 +312,17 @@ export async function reopenQuestion(supabase: SupabaseClient, admin: SupabaseCl
   if (reopenError) throw dbError(reopenError)
   if (!reopened) throw undoRefused(current.id, 'it changed in between')
 
+  const question = toQuestion(reopened as QuestionRow)
   await emitQuestionEvent({
     type: 'company_question.reopened',
-    payload: { questionId: current.id, userId: input.userId, companyId: input.companyId },
+    payload: {
+      questionId: current.id,
+      status: 'open',
+      createdAt: question.created_at,
+      userId: input.userId,
+      companyId: input.companyId,
+    },
   })
   if (current.fact_id) await retireAnswerFact(supabase, input.companyId, current.id, current.fact_id)
-  return toQuestion(reopened as QuestionRow)
+  return question
 }
