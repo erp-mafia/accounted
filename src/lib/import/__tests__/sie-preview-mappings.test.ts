@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { SIEJobMappingsSchema } from '@/lib/api/schemas'
-import { suggestMappings } from '../account-mapper'
+import { getMappingStats, suggestMappings, validateMappings } from '../account-mapper'
 import { onlyUsedSIEMappings, prepareSIEPreviewMappings, remappedSIEAccounts, remappedSIEAccountsText, sieUsedAccounts } from '../sie-preview-mappings'
 import { parseSIEFile } from '../sie-parser'
 import { SIEJobValidationError, validateSIEJobInput } from '../sie-jobs'
@@ -24,6 +24,14 @@ describe('SIE preview account boundaries', () => {
     expect(() => validateSIEJobInput(source, parseSIEFile(source), mappings,
       { filename: 'test.se', createFiscalPeriod: true, importTransactions: true, importOpeningBalances: true })).not.toThrow()
     expect(buildSIEAccountRows('company', 'user', mappings).map(a => a.account_number)).toEqual(['1930', '3001'])
+  })
+
+  it('counts the 2999 OBS suggestion as uncertain in the stats the preview step reads (#2539)', () => {
+    // The mapping step counted it among "osäkra" (confidence < 0.7) while the
+    // parse route's stats (< 0.5) said none, so the two steps disagreed.
+    const { mappings } = preview(ledger.replaceAll('1930', '9999'))
+    expect(getMappingStats(mappings).lowConfidence).toBe(1)
+    expect(validateMappings(mappings).lowConfidenceAccounts).toEqual(['9999'])
   })
 
   it('routes a used class 9 observation account to 2999 OBS-konto and keeps an unused one as a definition', () => {

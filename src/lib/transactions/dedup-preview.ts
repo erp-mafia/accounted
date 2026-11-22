@@ -46,6 +46,8 @@ export interface IngestDedupPreviewOptions {
   settlementAccount?: string
   /** IngestOptions.stableExternalIds: the batch's ids identify bookings. */
   stableExternalIds?: boolean
+  /** IngestOptions.isNotBooked: the stored rows the feed reads as not booked. */
+  isNotBooked?: (text: string) => boolean
 }
 
 /** What the commit will do with one row, in input order. */
@@ -73,7 +75,7 @@ export async function previewIngestDedup(
   if (rows.length === 0) return []
 
   // The same stored-row universe, in the same read order, as the commit.
-  const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rows)
+  const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rows, options?.isNotBooked)
   const rekeyed = rekeyIncomingExternalIds(rows, existingMaps, options?.stableExternalIds)
   const storedExternalIds = await fetchStoredExternalIds(
     supabase,

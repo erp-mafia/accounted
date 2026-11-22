@@ -221,8 +221,9 @@ describe('capabilityDigest', () => {
       resolveCapabilities(inputs({ jurisdiction: 'NO', entitled: new Set(), disabled: new Set(MODULE_KEYS), entityType: null })),
     )
     expect(digest.length).toBe(MODULES.filter((m) => m.kind === 'block' && m.jurisdictions.length > 0).length)
-    // Under 500 tokens in the worst case; a typical company lists zero to three modules.
-    expect(JSON.stringify(digest).length).toBeLessThan(2_000)
+    // About 550 tokens in the worst case (one entry per block, 24 blocks since
+    // company formation); a typical company lists zero to three modules.
+    expect(JSON.stringify(digest).length).toBeLessThan(2_200)
   })
 })
 

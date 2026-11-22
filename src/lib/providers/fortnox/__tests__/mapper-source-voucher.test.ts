@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { mapFortnoxToSupplierInvoice, mapFortnoxToSalesInvoice } from '../mapper'
 
 /**
- * Fortnox names the booking voucher on the detail form of a booked invoice as
- * VoucherSeries + VoucherNumber (+ VoucherYear). The migration links the
+ * Fortnox names the booking voucher on the detail form of a booked customer
+ * invoice as VoucherSeries + VoucherNumber (+ VoucherYear), and on a supplier
+ * invoice as the SUPPLIERINVOICE reference in Vouchers. The migration links the
  * imported invoice to the SIE-imported verifikat through the pair (#1463).
  * VoucherYear is deliberately NOT read: the invoice date resolves the fiscal
  * year on our side.
@@ -63,5 +64,46 @@ describe('mapFortnoxToSupplierInvoice: sourceVoucher', () => {
   it('leaves sourceVoucher undefined when absent or malformed', () => {
     expect(mapFortnoxToSupplierInvoice(supplierRaw()).sourceVoucher).toBeUndefined()
     expect(mapFortnoxToSupplierInvoice(supplierRaw({ VoucherSeries: 'B', VoucherNumber: 'x' })).sourceVoucher).toBeUndefined()
+  })
+
+  // Fortnox names a supplier invoice's booking in `Vouchers`; the top-level
+  // fields are filled only in the bookkeep response. A migration that read
+  // only those found no booking for any supplier invoice, so none was linked
+  // to the SIE verifikat that booked it and each offered Bokför again.
+  it('reads the SUPPLIERINVOICE reference in Vouchers, as an invoice read from Fortnox carries it', () => {
+    const dto = mapFortnoxToSupplierInvoice(supplierRaw({
+      Total: 4680,
+      Vouchers: [
+        { Number: 64, Series: 'D', Year: 10, ReferenceType: 'SUPPLIERINVOICE' },
+        { Number: 70, Series: 'E', Year: 10, ReferenceType: 'SUPPLIERPAYMENT' },
+      ],
+    }))
+    expect(dto.sourceVoucher).toEqual({ series: 'D', number: 64 })
+  })
+
+  it('reads a reference whose number arrives as a string', () => {
+    const dto = mapFortnoxToSupplierInvoice(supplierRaw({
+      Vouchers: [{ Number: '64', Series: 'd', Year: 10, ReferenceType: 'SUPPLIERINVOICE' }],
+    }))
+    expect(dto.sourceVoucher).toEqual({ series: 'D', number: 64 })
+  })
+
+  it('never guesses between two SUPPLIERINVOICE references', () => {
+    const dto = mapFortnoxToSupplierInvoice(supplierRaw({
+      VoucherSeries: 'D',
+      VoucherNumber: 64,
+      Vouchers: [
+        { Number: 64, Series: 'D', Year: 10, ReferenceType: 'SUPPLIERINVOICE' },
+        { Number: 65, Series: 'D', Year: 10, ReferenceType: 'SUPPLIERINVOICE' },
+      ],
+    }))
+    expect(dto.sourceVoucher).toBeUndefined()
+  })
+
+  it('names no booking when Vouchers holds only payments', () => {
+    const dto = mapFortnoxToSupplierInvoice(supplierRaw({
+      Vouchers: [{ Number: 70, Series: 'E', Year: 10, ReferenceType: 'SUPPLIERPAYMENT' }],
+    }))
+    expect(dto.sourceVoucher).toBeUndefined()
   })
 })

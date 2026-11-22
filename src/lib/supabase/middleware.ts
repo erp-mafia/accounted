@@ -25,7 +25,7 @@ import { userHasPassword } from '@/lib/auth/has-password'
 import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { BOOKS_GATE_COOKIE, decideBooksGate } from '@/lib/onboarding/books-gate'
-import { isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
+import { isFormationPath, isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
 import { LEGAL_PATHS } from '@/lib/legal/documents'
 import {
@@ -794,6 +794,7 @@ async function updateSessionInner(
   const isNoCompanyAllowed =
     pathname.startsWith('/onboarding') ||
     pathname.startsWith('/select-company') ||
+    isFormationPath(pathname) ||
     isNoCompanyDashboardPath(pathname) ||
     pathname.startsWith('/api/account/') ||
     pathname.startsWith('/api/company')
