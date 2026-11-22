@@ -14,7 +14,7 @@ import { bolagetGateResponse, operationContext } from '@/lib/bolaget/session'
 export const POST = withRouteContext(
   'bolaget.beneficial_owners_confirm',
   async (request, ctx) => {
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const validation = await validateBody(request, beneficialOwnersConfirm.input)
     if (!validation.success) return validation.response

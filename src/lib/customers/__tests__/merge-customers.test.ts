@@ -7,6 +7,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
+
+const syncDraftsMock = vi.fn().mockResolvedValue(0)
+vi.mock('@/lib/invoices/sync-draft-vat-headers', () => ({
+  syncDraftVatHeadersForCustomer: (...a: unknown[]) => syncDraftsMock(...a),
+}))
+
 import { encryptCustomerPersonalNumber } from '../protect-personal-number'
 import { mergeCustomers, undoCustomerMerge } from '../merge-customers'
 
@@ -41,6 +47,7 @@ function setup(personalNumbers: Record<string, string | null> = {}) {
 
 beforeEach(() => {
   vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'merge-customers-unit-test-only')
+  syncDraftsMock.mockClear()
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -58,6 +65,7 @@ describe('mergeCustomers', () => {
       p_company_id: 'company-1', p_survivor_id: SURVIVOR, p_merged_ids: [DUPLICATE], p_user_id: 'user-1',
     })
     expect(mock.findCall('rpc:merge_customers', 'rpc')).toBeUndefined()
+    expect(syncDraftsMock).not.toHaveBeenCalled()
   })
 
   it('merges with merge_customers and answers what moved', async () => {
@@ -68,6 +76,20 @@ describe('mergeCustomers', () => {
 
     expect(outcome).toEqual({ ok: true, data: { survivor: ANSWER.survivor, merged: ANSWER.merged, totals: ANSWER.totals } })
     expect(mock.findCall('rpc:merge_customers', 'rpc')?.[0]).toMatchObject({ p_survivor_id: SURVIVOR, p_merged_ids: [DUPLICATE] })
+    // The moved drafts take the survivor's VAT header (#3481).
+    expect(syncDraftsMock).toHaveBeenCalledWith(ctx.supabase, 'company-1', SURVIVOR)
+  })
+
+  it('re-derives no drafts when the merge moved no invoices', async () => {
+    const { mock, ctx } = setup()
+    const none = { invoices: 0, sales_orders: 0, recurring_invoice_schedules: 0, deadlines: 0 }
+    mock.setTable('rpc:merge_customers', {
+      data: { ...ANSWER, merged: [{ ...ANSWER.merged[0], invoices: 0, recurring_invoice_schedules: 0 }], totals: none },
+    })
+
+    expect(await mergeCustomers(ctx, { survivor_customer_id: SURVIVOR, merged_customer_ids: [DUPLICATE] }, { dryRun: false }))
+      .toMatchObject({ ok: true })
+    expect(syncDraftsMock).not.toHaveBeenCalled()
   })
 
   it('refuses the survivor among the merged before asking the database', async () => {
@@ -133,6 +155,8 @@ describe('undoCustomerMerge', () => {
       ok: true, data: { merge_id: MERGE_ID, survivor_customer_id: SURVIVOR, restored_customer_id: DUPLICATE, restored },
     })
     expect(mock.findCall('rpc:undo_customer_merge', 'rpc')?.[0]).toEqual({ p_company_id: 'company-1', p_merge_id: MERGE_ID, p_user_id: 'user-1' })
+    // The drafts moved back follow the restored card's VAT header (#3481).
+    expect(syncDraftsMock).toHaveBeenCalledWith(ctx.supabase, 'company-1', DUPLICATE)
   })
 
   it('dry-runs on the merge row alone: refuses one already undone, calls no write', async () => {

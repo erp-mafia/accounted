@@ -26,7 +26,7 @@ async function candidates(ctx: Parameters<typeof operationContext>[0], periodId:
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>('period.arsredovisning_signatures_from_roles', async (_request, ctx, { params }) => {
   const { id } = await params
-  if (await bolagetGate(ctx.supabase, ctx.companyId)) return NextResponse.json({ data: { candidates: [] } })
+  if (await bolagetGate(ctx.supabase, ctx.companyId, 'registers')) return NextResponse.json({ data: { candidates: [] } })
   return NextResponse.json({ data: { candidates: await candidates(ctx, id) } })
 })
 
@@ -35,7 +35,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'period.arsredovisning_signatures_from_roles_add',
   async (_request, ctx, { params }) => {
     const { id } = await params
-    const gate = await bolagetGateResponse(ctx)
+    const gate = await bolagetGateResponse(ctx, 'registers')
     if (gate) return gate
     const added = []
     for (const candidate of await candidates(ctx, id)) {

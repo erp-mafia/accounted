@@ -221,6 +221,8 @@ const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {
   // the listed gnubok_ask_question, and an answer goes through the listed
   // gnubok_remember_fact (answers_question_id).
   gnubok_close_question: 'Direct close of a question (not bookkeeping), search-only by the frozen tools/list; an answer goes through the listed gnubok_remember_fact.',
+  // Search-only by the frozen tools/list; the rot/rut page imports the same file.
+  gnubok_import_rot_rut_beslut: 'Direct import of a beslutsfil, search-only by the frozen tools/list; a raw tools/call and the rot/rut page carry it.',
 }
 
 describe('no search-only WRITE is out of reach (issue #2800)', () => {

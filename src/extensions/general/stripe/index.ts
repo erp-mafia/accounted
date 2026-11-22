@@ -23,6 +23,7 @@ import {
 import { feedConnectorRoutes, type FeedConnectorSpec } from '@/lib/feed-sync/connector-routes'
 import { MAX_BACKFILL_YEARS } from './types'
 import { stockholmWallTimeToUtc } from '@/lib/dates/iso'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StripeConnection } from './types'
 
 // Per-user limit: connect is an outward-facing OAuth operation.
@@ -110,7 +111,7 @@ export const stripeExtension: Extension = {
     {
       method: 'POST',
       path: '/connect',
-      handler: async (_request: Request, ctx: ExtensionContext) => {
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const log = ctx.log
         const supabase = ctx.supabase
         const companyId = ctx.companyId
@@ -182,6 +183,10 @@ export const stripeExtension: Extension = {
         // callback locates the row by oauth_state alone, so the row must
         // exist before Stripe can ever redirect back with that state.
         const oauthState = crypto.randomUUID()
+        // Remember the allowlisted origin (the app or a brand domain) the
+        // flow starts on: Stripe redirects to the one registered callback on
+        // the canonical host, where a brand-domain session does not exist.
+        const returnOrigin = await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' })
         const { data: created, error: insertError } = await supabase
           .from('stripe_connections')
           .insert({
@@ -190,6 +195,7 @@ export const stripeExtension: Extension = {
             status: 'pending',
             oauth_state: oauthState,
             livemode: isLiveMode(),
+            return_origin: returnOrigin,
           })
           .select('id')
           .single()

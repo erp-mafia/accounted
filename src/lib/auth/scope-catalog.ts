@@ -257,6 +257,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Companies
   gnubok_list_companies:                  'companies:read',
   gnubok_create_company:                  'companies:write',
+  gnubok_formation:                       'companies:write',
   gnubok_lookup_company:                  'companies:read',
   // Multi-company (one connection, every company): the scoped read tools
   // need companies:read for the scope itself; run_across_companies then
