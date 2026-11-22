@@ -49,7 +49,7 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
     return NextResponse.json({ error: budgetParam.error }, { status: 400 })
   }
 
-  const [{ data: companyRow }, { data: period }] = await Promise.all([
+  const [{ data: companyRow }, { data: period, error: periodError }] = await Promise.all([
     supabase
       .from('company_settings')
       .select('company_name')
@@ -60,16 +60,20 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
       .select('period_start, period_end')
       .eq('id', periodId)
       .eq('company_id', companyId)
-      .single(),
+      .maybeSingle(),
   ])
 
-  let range: { fromDate?: string; toDate?: string } = {}
-  if (period) {
-    const parsed = parseReportDateRange(searchParams, period)
-    if (!parsed.ok) {
-      return NextResponse.json({ error: parsed.error }, { status: 400 })
-    }
-    range = parsed.range
+  if (periodError) throw periodError
+  // A period_id that is not the active company's (a page still holding the
+  // previous company's year right after a company switch) is a stale request,
+  // not a failure: say so, and generate nothing from another company's period.
+  if (!period) {
+    return errorResponseFromCode('PERIOD_NOT_FOUND', log.child({ periodId }), { requestId })
+  }
+
+  const parsed = parseReportDateRange(searchParams, period)
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 })
   }
 
   const dimFilter = parseDimensionFilterParams(searchParams)
@@ -79,7 +83,7 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
 
   try {
     const report = await generateResultatrapport(supabase, companyId, periodId, {
-      ...range,
+      ...parsed.range,
       dimensions: dimFilter.dimensions,
       budgetId: budgetParam.budgetId,
     })
@@ -174,6 +178,7 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
     return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     if (err instanceof ReportBudgetError) return errorResponseFromCode(err.code, log, { requestId })
+    log.error('resultatrapport xlsx generation failed', err as Error, { periodId })
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera resultatrapport' },
       { status: 500 }

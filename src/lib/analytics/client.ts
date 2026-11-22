@@ -1,4 +1,5 @@
 import type { PostHog } from 'posthog-js'
+import { redactedError } from '@/lib/observability/redact'
 import { drainEarlyErrors } from './early-errors'
 import { isAnalyticsEnabled } from './enabled'
 import { replayMaskText } from './replay-masking'
@@ -214,6 +215,52 @@ export function captureAnalyticsEvent(event: string, properties?: Record<string,
       // Telemetry must never affect the flow that reported it.
     }
   })
+}
+
+/**
+ * Report an error that a React error boundary caught (AppErrorBoundary under
+ * app/error.tsx, app/(dashboard)/error.tsx, app/global-error.tsx) to PostHog
+ * Error Tracking, when analytics runs.
+ *
+ * Without this such an error reached no one: in production Next.js hands an
+ * error caught by an explicit boundary to console.error only (onCaughtError
+ * in next/dist/client/react-client-callbacks), and capture_exceptions above
+ * captures uncaught errors and rejections, not console output.
+ *
+ * Redacted first (lib/observability/redact.ts), as on the server paths into
+ * the vendor (onRequestError, the logger's sink). An error with a digest is
+ * left out: it was thrown in a server render, onRequestError
+ * (instrumentation.ts) already captured it on the server with its real
+ * message, and the browser holds only a generic copy.
+ *
+ * `autoReload` is true when the boundary reloads the page at once (its
+ * one-shot recovery), so the person never saw the fallback; an error that
+ * healed that way reads differently from one that stayed on screen.
+ * Never throws and never affects the boundary that reported it.
+ */
+export function captureBoundaryError(error: unknown, boundary: string, autoReload = false): void {
+  if (!isAnalyticsActive()) return
+  let redacted: Error
+  try {
+    if (hasServerDigest(error)) return
+    redacted = redactedError(error)
+  } catch {
+    // A value whose properties throw when read cannot be described safely,
+    // so it is not sent; the boundary has already logged it to the console.
+    return
+  }
+  void analyticsReady().then((posthog) => {
+    try {
+      posthog?.captureException(redacted, { error_boundary: boundary, auto_reload: autoReload })
+    } catch {
+      // Telemetry must never affect the boundary that reported it.
+    }
+  })
+}
+
+/** Next.js sets `digest` on an error from a server render, which the server has captured. */
+function hasServerDigest(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && typeof (error as { digest?: unknown }).digest === 'string'
 }
 
 /**

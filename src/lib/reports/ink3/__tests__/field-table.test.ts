@@ -145,7 +145,29 @@ describe('INK3 beskattningsperiod', () => {
     expect(resolveInk3FieldTable('2026-09-30')).toBe(table)
   })
 
-  it.each(['2025-12-31', '2026-06-30', '2027-04-30'])('refuses %s instead of guessing its codes', (end) => {
+  // Skatteverket's 2026P4 edition holds "tills vidare" and its own period
+  // table lists 2027P1, 2027P2 and 2027P3 (Nyheter SKV269 from
+  // beskattningsperiod 2026P4, ändrad 2026-11-09, kapitel 1 and 2).
+  it.each(['2027-01-31', '2027-04-30', '2027-06-30', '2027-08-31'])(
+    'a räkenskapsår ending %s files with the 2026P4 codes',
+    (end) => {
+      expect(resolveInk3FieldTable(end)).toBe(table)
+    },
+  )
+
+  it('covers the periods the 2026P4 package lists', () => {
+    expect(table.covers).toEqual(['2026P4', '2027P1', '2027P2', '2027P3'])
+  })
+
+  // A new edition replaces the old one from its own period: when one is
+  // added, the older table's covers must stop where the new one starts.
+  it('never has two editions covering the same period', () => {
+    const covered = Object.values(INK3_FIELD_TABLES).flatMap((t) => t.covers)
+    expect(new Set(covered).size).toBe(covered.length)
+    for (const t of Object.values(INK3_FIELD_TABLES)) expect(t.covers[0]).toBe(t.beskattningsperiod)
+  })
+
+  it.each(['2025-12-31', '2026-06-30', '2026-08-31', '2027-09-30', '2027-12-31'])('refuses %s instead of guessing its codes', (end) => {
     let error: unknown
     try {
       resolveInk3FieldTable(end)
@@ -154,7 +176,7 @@ describe('INK3 beskattningsperiod', () => {
     }
     expect(error).toBeInstanceOf(Ink3PeriodNotSupportedError)
     expect((error as Ink3PeriodNotSupportedError).code).toBe('TAX_DECL_INK3_PERIOD_NOT_SUPPORTED')
-    expect((error as Ink3PeriodNotSupportedError).supported).toEqual(['2026P4'])
+    expect((error as Ink3PeriodNotSupportedError).supported).toEqual(['2026P4', '2027P1', '2027P2', '2027P3'])
     expect((error as Error).message).toContain(ink3Beskattningsperiod(end))
   })
 })

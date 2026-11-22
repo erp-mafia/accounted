@@ -34,7 +34,6 @@ import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { lineBalance, storedLineAmount } from '@/lib/bookkeeping/line-balance'
 import { createClient } from '@/lib/supabase/client'
-import { fetchSessionUser } from '@/lib/auth/session-client'
 import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { isInvoicerRole } from '@/lib/auth/invoicer-role'
@@ -254,22 +253,16 @@ export default function SendInvoiceDialog({
         if (settingsError) throw new Error(t('company_settings_failed'))
         if (periodsError) throw new Error(t('fiscal_period_failed'))
 
-        const [originalResult, sessionUser] = await Promise.all([
-          invoice.credited_invoice_id
-            ? supabase
-                .from('invoices')
-                .select('id, invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
-                .eq('id', invoice.credited_invoice_id)
-                .eq('company_id', company.id)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null }),
-          // Only the signed-in address is needed, as the legacy CC fallback.
-          // The session is server-held, so the server answers it.
-          fetchSessionUser(),
-        ])
+        const originalResult = invoice.credited_invoice_id
+          ? await supabase
+              .from('invoices')
+              .select('id, invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
+              .eq('id', invoice.credited_invoice_id)
+              .eq('company_id', company.id)
+              .maybeSingle()
+          : { data: null, error: null }
 
         if (originalResult.error) throw new Error(t('original_invoice_failed'))
-        if (!sessionUser) throw new Error(t('load_failed_title'))
 
         if (cancelled) return
 
@@ -305,11 +298,9 @@ export default function SendInvoiceDialog({
         if (cancelled) return
 
         setCatalog(fetchedCatalog)
-        const legacyCc = companySettings?.email || sessionUser.email
-        setFixedCc(
-          companySettings?.invoice_email_cc_addresses
-          ?? (legacyCc ? [legacyCc] : []),
-        )
+        // The stored lists as is: the send route resolves the same lists,
+        // and NULL means no fixed copies (migration 20260914110000).
+        setFixedCc(companySettings?.invoice_email_cc_addresses ?? [])
         setFixedBcc(companySettings?.invoice_email_bcc_addresses ?? [])
         setShouldBookOnIssue(bookOnIssue)
         setIsInitialized(true)

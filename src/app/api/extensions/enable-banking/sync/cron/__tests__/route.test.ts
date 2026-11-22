@@ -665,6 +665,35 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
     consoleError.mockRestore()
     consoleWarn.mockRestore()
   })
+
+  // Production, 2026-10-25 to 2026-11-20: a transactions read that Enable
+  // Banking did not answer within the transport's timeout, on all three
+  // attempts, reached this handler as the raw AbortError and parked healthy
+  // connections in 'error', which the cron never selects again. The connector
+  // path reads its own timeout as CONNECTOR_TIMEOUT, a transient failure.
+  it('does not park a connection in error when the bank call times out', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const lastSyncedAt = hoursAgo(24)
+    state.active = [connection({ last_synced_at: lastSyncedAt })]
+    // What fetch rejects with when the transport's AbortController fires.
+    mocks.syncAccountTransactions.mockRejectedValue(new DOMException('This operation was aborted', 'AbortError'))
+    const failures: EventPayload<'bank_connection.sync_failed'>[] = []
+    eventBus.on('bank_connection.sync_failed', payload => {
+      failures.push(payload)
+    })
+
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
+
+    expect(await response.json()).toMatchObject({ processed: 1, totalFailed: 1 })
+    expect(state.updates).toEqual([])
+    expect(state.active[0]).toMatchObject({ status: 'active', last_synced_at: lastSyncedAt, error_message: null })
+    expect(failures).toMatchObject([{ connectionId: 'conn-1', status: 'active', trigger: 'cron' }])
+    const errorLines = consoleError.mock.calls.map(call => String(call[0]))
+    expect(errorLines.some(line => line.includes('sync failed for connection'))).toBe(false)
+    consoleError.mockRestore()
+    consoleWarn.mockRestore()
+  })
 })
 
 // event_log and the inbox bank match react to transaction.synced. The cron is
