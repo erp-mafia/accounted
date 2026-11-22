@@ -314,8 +314,9 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // is about the application, not this consent: the row is left alone too,
       // and the circuit breaker above decides whether the run goes on.
       // A request timeout on the direct path (the transport rethrows the
-      // AbortError once every attempt timed out) is the same case as the
-      // connector's CONNECTOR_TIMEOUT: nobody answered, the session is fine.
+      // AbortError when its last attempt timed out) is the same case as the
+      // connector's CONNECTOR_TIMEOUT: nobody answered in time, which says
+      // nothing about the session.
       const isCredentialRejected = isCredentialRejectionError(error)
       const isTransient = error instanceof AspspUnavailableError || error instanceof ConnectorSyncError
         || isTimeoutError(error)
