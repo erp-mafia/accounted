@@ -4,9 +4,9 @@
  * aktiebok is set up and never after; completing the setup needs shares,
  * happens once, is the owner's or an admin's and is entered in the register;
  * once in use an entry carries the day it is made and keeps the day of the
- * event; a change of a holder's name or organisationsnummer is entered as a
- * dated note, is the owner's or an admin's when it is their own statement
- * and goes through when another row's trigger makes it; and a holder's
+ * event; the name and organisationsnummer of a party the register names
+ * change only by the owner, an admin or the service role, also inside another
+ * row's trigger, and each change is entered as a dated note; and a holder's
  * replaced identity number and address are kept, out of members' reach and
  * append-only.
  */
@@ -238,7 +238,7 @@ describe('aktiebok: a holder\'s name or organisationsnummer changes (ABL 5:3, 5:
     expect(await notes(company)).toHaveLength(0)
   })
 
-  it('is the owner\'s or an admin\'s when it is their own statement (ABL 5:7), and a viewer\'s or a member\'s never', async () => {
+  it('is the owner\'s or an admin\'s (ABL 5:7), and a viewer\'s or a member\'s never', async () => {
     const { company, anna } = await companyWithRegister()
     const memberId = await insertAuthUser()
     await insertCompanyMember({ companyId: company.companyId, userId: memberId, role: 'member' })
@@ -262,7 +262,7 @@ describe('aktiebok: a holder\'s name or organisationsnummer changes (ABL 5:3, 5:
     expect(byOwner).toEqual([{ note: 'A. Ek: namnet ändrat från Anna Ek till A. Ek.', created_by: company.userId }])
   })
 
-  it('goes through, and is noted in their name, when a member\'s save of a supplier teaches the party its organisationsnummer', async () => {
+  it('holds inside another row\'s trigger too: a member\'s save of a supplier that would change the party is refused, an owner\'s goes through and is noted', async () => {
     const company = await seedCompany()
     const cls = await shareClass(company)
     // A supplier without an organisationsnummer, whose party also holds shares.
@@ -274,14 +274,28 @@ describe('aktiebok: a holder\'s name or organisationsnummer changes (ABL 5:3, 5:
     await holding(company, 'ingaende', day(OPENING), cls, holder, 1, 100)
     const memberId = await insertAuthUser()
     await insertCompanyMember({ companyId: company.companyId, userId: memberId, role: 'member' })
-    const seen = await withUserContext(memberId, async (client) => {
-      // The supplier row is the member's to change; its trigger completes the party.
-      await client.query(`UPDATE public.suppliers SET org_number = '556666-1012' WHERE id = $1`, [supplier.rows[0]!.id])
+    // The supplier row is the member's to change, but its trigger would teach the party its organisationsnummer.
+    const teach = `UPDATE public.suppliers SET org_number = '556666-1012' WHERE id = $1`
+    await expect(withUserContext(memberId, (client) => client.query(teach, [supplier.rows[0]!.id]))).rejects.toThrow(/SHARE_REGISTER_HOLDER_ADMIN_ONLY/)
+    expect(await notes(company)).toHaveLength(0)
+    // Anything else on the supplier is still the member's.
+    const other = await withUserContext(memberId, async (client) =>
+      (await client.query(`UPDATE public.suppliers SET email = 'ek@example.com' WHERE id = $1`, [supplier.rows[0]!.id])).rowCount)
+    expect(other).toBe(1)
+
+    const byOwner = await withUserContext(company.userId, async (client) => {
+      await client.query(teach, [supplier.rows[0]!.id])
       const p = await client.query(`SELECT org_number FROM public.parties WHERE id = $1`, [holder])
       const written = await client.query(`SELECT note, created_by FROM public.share_register_events WHERE company_id = $1 AND kind = 'anteckning'`, [company.companyId])
       return { org: p.rows[0].org_number, notes: written.rows }
     })
-    expect(seen).toEqual({ org: '5566661012', notes: [{ note: 'Ek Holding AB: organisationsnummer 5566661012 infört.', created_by: memberId }] })
+    expect(byOwner).toEqual({ org: '5566661012', notes: [{ note: 'Ek Holding AB: organisationsnummer 5566661012 infört.', created_by: company.userId }] })
+  })
+
+  it('lets the service role change the party, and notes it', async () => {
+    const { company, anna } = await companyWithRegister()
+    await runAsServiceRole((client) => client.query(`UPDATE public.parties SET display_name = 'Anna Ek Berg' WHERE id = $1`, [anna]))
+    expect((await notes(company)).map((n) => n.note)).toEqual(['Anna Ek Berg: namnet ändrat från Anna Ek till Anna Ek Berg.'])
   })
 
   it('enters nothing for an avstämningsbolag, whose register is not kept here', async () => {

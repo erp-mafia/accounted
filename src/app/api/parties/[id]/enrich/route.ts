@@ -148,8 +148,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         if (Object.keys(update).length) {
           const { error: renameError } = await supabase.from('parties').update(update).eq('company_id', companyId).eq('id', id)
           // A party the aktiebok names is renamed by the owner or an admin
-          // (parties_share_register_guard): when the party keeps its name,
-          // so do its supplier and customer rows.
+          // only (parties_share_register_guard): when the party keeps its
+          // name, so do its supplier and customer rows.
           if (renameError) renamedTo = null
         }
         if (renamedTo) {

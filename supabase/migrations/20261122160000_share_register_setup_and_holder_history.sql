@@ -26,9 +26,9 @@
 --      postal address in party_person_private; both were changed in place.
 --      Removed register data is kept at least ten years (ABL 5:3) and a
 --      change is dated (5:9). A change of name or organisationsnummer of a
---      party the register names now adds a dated note, and is the owner's or
---      an admin's when it is their own statement; the replaced identity
---      number and address are kept in party_person_private_history.
+--      party the register names is now the owner's, an admin's or the service
+--      role's, and adds a dated note; the replaced identity number and
+--      address are kept in party_person_private_history.
 --
 -- Nothing here changes an existing entry.
 -- =============================================================================
@@ -394,15 +394,14 @@ GRANT EXECUTE ON FUNCTION public.share_register_replay(uuid, date) TO authentica
 -- silently rewritten by that (ABL 5:3, 5:9): the change is entered as an
 -- anteckning that says what the name or number was.
 --
--- Who may make the change: the board keeps the aktiebok (ABL 5:7), so a
--- statement of the caller's own that renames such a party, or changes its
--- organisationsnummer, is the owner's or an admin's
--- (parties_share_register_guard). A change another trigger makes while a
--- customer or supplier is saved (the party learns its organisationsnummer)
--- is not refused: refusing it would fail that save. It is noted like any
--- other, which is why the note function is SECURITY DEFINER: the one whose
--- save changed the party need not be one who may write the aktiebok, and the
--- note is the register's own record of a change that has happened.
+-- Who may make the change: the board keeps the aktiebok (ABL 5:7), so the
+-- name and the organisationsnummer of such a party change only by the owner,
+-- an admin or the service role (parties_share_register_guard). That holds
+-- inside another row's trigger too: a member's save of a customer or supplier
+-- that would change the party is refused with the reason, and goes through
+-- once an owner or admin has made the change. So the one who changes the
+-- party is always one who may write the aktiebok, and the note is written as
+-- them, under the register's own policies.
 
 CREATE OR REPLACE FUNCTION public.parties_share_register_guard()
 RETURNS trigger
@@ -410,11 +409,10 @@ LANGUAGE plpgsql
 SET search_path = public
 AS $$
 BEGIN
-  -- Inside another trigger's statement, or the service role: not refused.
-  IF pg_trigger_depth() > 1 OR auth.uid() IS NULL THEN
-    RETURN NEW;
-  END IF;
-  IF public.user_is_company_admin(NEW.company_id) THEN
+  -- The service role (an import, a job, an approved proposal) is not a
+  -- signed-in member; a signed-in caller must be the owner or an admin, also
+  -- when another row's trigger makes the change for them.
+  IF auth.uid() IS NULL OR public.user_is_company_admin(NEW.company_id) THEN
     RETURN NEW;
   END IF;
   IF NOT EXISTS (
@@ -432,7 +430,7 @@ $$;
 REVOKE ALL ON FUNCTION public.parties_share_register_guard() FROM PUBLIC, anon, authenticated;
 
 COMMENT ON FUNCTION public.parties_share_register_guard() IS
-  'ABL 5:7: a statement of the caller''s own that changes the name or the organisationsnummer of a party the aktiebok names is the owner''s or an admin''s. A change made inside another trigger''s statement and the service role pass; parties_share_register_note enters every change in the register.';
+  'ABL 5:7: the name and the organisationsnummer of a party the aktiebok names change only by the owner, an admin or the service role, at any trigger depth; parties_share_register_note enters every change in the register.';
 
 DROP TRIGGER IF EXISTS parties_share_register_guard ON public.parties;
 CREATE TRIGGER parties_share_register_guard
@@ -444,7 +442,6 @@ CREATE TRIGGER parties_share_register_guard
 CREATE OR REPLACE FUNCTION public.parties_share_register_note()
 RETURNS trigger
 LANGUAGE plpgsql
-SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
