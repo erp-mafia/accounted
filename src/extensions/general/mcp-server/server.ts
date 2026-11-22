@@ -1,5 +1,5 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { CASH_OR_CARD_LEDGER_PATTERN } from '@/lib/cash-accounts/card-ledger'
+import { CASH_OR_CARD_LEDGER_PATTERN, isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA, sieAppendSummary } from './sie-import-status'
 import { MIGRATION_PROVIDER_IDS } from '@/lib/providers/catalog'
 import { isAnyUnattended, markUnattended, unattendedMarks, unattendedScopes } from './unattended'
@@ -250,7 +250,11 @@ import { resolveAgentWorklist } from '@/lib/receipt-hunt/agent-worklist'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { expandParty } from '@/lib/parties/party-api'
-import { listForCompany as listCashAccountsForCompany, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
+import {
+  findCashAccountCurrencyMismatch,
+  listForCompany as listCashAccountsForCompany,
+  resolveDefaultCashAccount,
+} from '@/lib/cash-accounts/service'
 import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
@@ -9058,6 +9062,20 @@ export const tools: McpTool[] = [
         const params = staging[i].params as {
           date: string; amount: number; description: string; currency: string
           ledger_account: string | null; bank_connection_id: string | null; external_id: string | null
+        }
+        // A ledger holds one currency: the approval refuses a row in another
+        // currency than the kassakonto already on its ledger_account
+        // (ensureManualCashAccount). Said now, before anything is staged. A
+        // card's currency is checked at approval, with the card.
+        if (params.ledger_account && !isCardLedgerAccount(params.ledger_account)) {
+          const mismatch = await findCashAccountCurrencyMismatch(supabase, companyId, params.ledger_account, params.currency)
+          if (mismatch) {
+            throw codedRefusal(
+              mismatch.code,
+              `transactions[${i}]: the bank account on ${mismatch.details.ledger_account} is in ${mismatch.details.account_currency}, not ${mismatch.details.currency}, and a ledger account holds one currency. ` +
+                'Send the row with the ledger_account of a bank account in its currency (gnubok_list_cash_accounts), or a free BAS 19xx account. Nothing was staged.',
+            )
+          }
         }
         const [decision] = await previewIngestDedup(
           supabase,

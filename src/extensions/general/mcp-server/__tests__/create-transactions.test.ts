@@ -70,6 +70,7 @@ describe('gnubok_create_transactions', () => {
 
   it('asks the ingest dedup per row with the commit\'s fields and settlement account', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { currency: 'EUR' }, error: null }) // the kassakonto on 1935: in the row's currency
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: { id: 'op-1' }, error: null })
@@ -88,6 +89,52 @@ describe('gnubok_create_transactions', () => {
       [expect.objectContaining({ date: '2026-05-01', amount: -50, description: 'Wise', currency: 'EUR', import_source: 'mcp' })],
       { settlementAccount: '1935' },
     )
+  })
+
+  // The approval refuses a row on a ledger whose kassakonto holds another
+  // currency (CASH_ACCOUNT_CURRENCY_MISMATCH); staging says so first, so no
+  // proposal is made that cannot be approved.
+  it('refuses a row in another currency than the kassakonto on its ledger_account, staging nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { currency: 'EUR' }, error: null }) // row 0: the kassakonto on 1948, EUR as well
+    enqueue({ data: { currency: 'EUR' }, error: null }) // row 1: the same kassakonto, but the row is GBP
+
+    const error = await tool
+      .execute(
+        {
+          transactions: [
+            { date: '2026-11-20', amount: -10, description: 'Kortköp Paris', currency: 'EUR', ledger_account: '1948' },
+            { date: '2026-11-20', amount: -42.5, description: 'Kortköp London', currency: 'GBP', ledger_account: '1948' },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      )
+      .catch((err: unknown) => err)
+
+    expect(error).toMatchObject({ code: 'CASH_ACCOUNT_CURRENCY_MISMATCH' })
+    expect(String((error as Error).message)).toMatch(/transactions\[1\].*1948 is in EUR, not GBP/)
+    expect(findCalls('cash_accounts', 'eq')).toContainEqual(['ledger_account', '1948'])
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+  })
+
+  it('does not read a kassakonto for a company card: the approval checks the card', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-1' }, error: null })
+
+    await tool.execute(
+      { transactions: [{ date: '2026-05-01', amount: -349, description: 'Molnkontoret AB', currency: 'SEK', ledger_account: '2890' }] },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+
+    expect(findCalls('cash_accounts', 'eq')).toHaveLength(0)
   })
 
   it('without ledger_account, previews on the default account the commit settles on (crm#1171)', async () => {
