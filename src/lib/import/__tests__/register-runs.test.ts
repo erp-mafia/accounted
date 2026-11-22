@@ -199,6 +199,9 @@ describe('undoRegisterImport', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    // An implementation another test set, or a queued one it left unused,
+    // must not answer this test's drafts lookup.
+    fetchAllRowsMock.mockReset()
   })
 
   it('is NOT_FOUND when the run is not visible in the company', async () => {
@@ -251,6 +254,122 @@ describe('undoRegisterImport', () => {
     const outcome = await undoRegisterImport(supabase as never, 'company-1', 'run-1', 'user-1')
 
     expect(outcome).toEqual({ ok: false, code, error })
+  })
+
+  // The import moved the header of the customer's open drafts with it
+  // (#3481); the undo moves it back for the rows it restored.
+  it('re-derives the drafts of the customers it restored to another VAT status, and only those', async () => {
+    enqueue({
+      data: {
+        id: 'run-1',
+        undone_at: null,
+        kind: 'customers',
+        updated_rows: [
+          { id: 'c1', before: { customer_type: 'eu_business', country: 'DE' }, after: { customer_type: 'swedish_business', country: 'SE' } },
+          { id: 'c2', before: { phone: null }, after: { phone: '08-123456' } },
+          { id: 'c3', before: { customer_type: 'eu_business' }, after: { customer_type: 'swedish_business' } },
+        ],
+      },
+    })
+    rpcMock.mockResolvedValue({
+      data: { deleted: 0, restored: 2, kept: [{ id: 'c3', name: 'Kept AB', reason: 'used_since_import' }] },
+      error: null,
+    })
+    // Which of them has an open draft: the lookup runs its query, and c1 has one.
+    fetchAllRowsMock.mockImplementationOnce(async (query: (range: { from: number; to: number }) => PromiseLike<unknown>) => {
+      await query({ from: 0, to: 999 })
+      return [{ customer_id: 'c1' }]
+    })
+    enqueue({ data: [] })
+    // syncDraftVatHeadersForCustomer for c1: the customer as restored, its draft, the seller, the write.
+    enqueue({ data: { id: 'c1', customer_type: 'eu_business', vat_number: 'DE123456789', vat_number_validated: true, country: 'DE' } })
+    enqueue({
+      data: [{
+        id: 'draft-1',
+        vat_treatment: 'standard_25',
+        moms_ruta: '05',
+        reverse_charge_text: null,
+        vat_treatment_override: null,
+        delivery_country: null,
+        items: [{ vat_rate: 0, line_type: 'service' }],
+      }],
+    })
+    enqueue({ data: { vat_registered: true } })
+    enqueue({ data: null })
+
+    const outcome = await undoRegisterImport(supabase as never, 'company-1', 'run-1', 'user-1')
+
+    expect(outcome.ok).toBe(true)
+    // c2 changed no VAT field, c3 was kept: only c1 is looked up and read.
+    expect(findCalls('invoices', 'in')).toEqual([['customer_id', ['c1']]])
+    expect(findCalls('customers', 'eq')).toEqual([
+      ['id', 'c1'],
+      ['company_id', 'company-1'],
+    ])
+    expect(findCall('invoices', 'update')![0]).toMatchObject({ vat_treatment: 'reverse_charge', moms_ruta: '39' })
+  })
+
+  it('reads no restored customer that has no open draft', async () => {
+    enqueue({
+      data: {
+        id: 'run-1',
+        undone_at: null,
+        kind: 'customers',
+        updated_rows: [{ id: 'c1', before: { customer_type: 'eu_business' }, after: { customer_type: 'swedish_business' } }],
+      },
+    })
+    rpcMock.mockResolvedValue({ data: { deleted: 0, restored: 1, kept: [] }, error: null })
+    fetchAllRowsMock.mockResolvedValueOnce([])
+
+    const outcome = await undoRegisterImport(supabase as never, 'company-1', 'run-1', 'user-1')
+
+    expect(outcome.ok).toBe(true)
+    expect(fetchAllRowsMock).toHaveBeenCalledTimes(1)
+    expect(findCall('customers', 'select')).toBeUndefined()
+    expect(findCall('invoices', 'update')).toBeUndefined()
+  })
+
+  it('starts no draft sync past its deadline and names the restored customers it left', async () => {
+    enqueue({
+      data: {
+        id: 'run-1',
+        undone_at: null,
+        kind: 'customers',
+        updated_rows: [
+          { id: 'c1', before: { customer_type: 'eu_business' }, after: { customer_type: 'swedish_business' } },
+          { id: 'c2', before: { phone: null }, after: { phone: '08-123456' } },
+        ],
+      },
+    })
+    const result = { deleted: 0, restored: 2, kept: [] }
+    rpcMock.mockResolvedValue({ data: result, error: null })
+
+    const outcome = await undoRegisterImport(supabase as never, 'company-1', 'run-1', 'user-1', {
+      draftSyncDeadline: Date.now() - 1,
+    })
+
+    // Undone either way; c2 changed no VAT field, so only c1 is left.
+    expect(outcome).toEqual({ ok: true, result, draftsNotSynced: ['c1'] })
+    expect(fetchAllRowsMock).not.toHaveBeenCalled()
+    expect(findCall('customers', 'select')).toBeUndefined()
+  })
+
+  it('touches no drafts when it undoes a supplier import', async () => {
+    enqueue({
+      data: {
+        id: 'run-1',
+        undone_at: null,
+        kind: 'suppliers',
+        updated_rows: [{ id: 's1', before: { country: 'DE' }, after: { country: 'SE' } }],
+      },
+    })
+    rpcMock.mockResolvedValue({ data: { deleted: 0, restored: 1, kept: [] }, error: null })
+
+    const outcome = await undoRegisterImport(supabase as never, 'company-1', 'run-1', 'user-1')
+
+    expect(outcome.ok).toBe(true)
+    expect(findCall('customers', 'select')).toBeUndefined()
+    expect(findCall('invoices', 'select')).toBeUndefined()
   })
 
   it('is FAILED when the lookup itself errors', async () => {

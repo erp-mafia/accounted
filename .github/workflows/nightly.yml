@@ -48,18 +48,6 @@ jobs:
       || (github.event_name == 'workflow_dispatch' && inputs.job != 'perf-reports')
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 60
-    services:
-      postgres:
-        image: supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       TOOL_PG_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -69,6 +57,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Postgres downloads and starts while the toolchain installs.
+      - uses: ./.github/actions/start-postgres
       - uses: ./.github/actions/setup-core
         with:
           zero-extensions: 'false'
@@ -94,6 +84,15 @@ jobs:
         # starts PostgREST on this runner fails.
         if: ${{ always() }}
         run: docker rm -f postgrest >/dev/null 2>&1 || true
+      - name: Stop Postgres
+        # Started by hand (start-postgres), so nothing else removes it. When an
+        # earlier step failed, its log goes to the job log first.
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" != "success" ]; then docker logs --tail 200 ci-postgres 2>&1 || true; fi
+          docker rm -f -v ci-postgres >/dev/null 2>&1 || true
 
   # The report benchmark (scripts/perf/README.md, "Report benchmark"): every
   # migration replayed into Postgres 17 with production's shared_buffers and
