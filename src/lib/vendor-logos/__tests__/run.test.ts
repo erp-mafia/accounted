@@ -127,7 +127,8 @@ describe('runVendorLogos', () => {
     expect(queued).not.toContain('skatteverket.se')
     expect(summary.read).toEqual({ suppliers: 1, documents: 1, transactions: 1 })
     // Bank texts are read only where a website could be written in them.
-    expect(c.findCalls('transactions', 'ilikeAnyOf').map((a) => a[0])).toEqual(['description', 'merchant_name'])
+    // Two weeks at a time (collect.test.ts), each window for both columns.
+    expect(new Set(c.findCalls('transactions', 'ilikeAnyOf').map((a) => a[0]))).toEqual(new Set(['description', 'merchant_name']))
     expect(c.findCall('transactions', 'ilikeAnyOf')?.[1]).toContain('%.se%')
     expect(c.findCall('vendor_logos', 'upsert')?.[1]).toEqual({ onConflict: 'domain', ignoreDuplicates: true })
   })
