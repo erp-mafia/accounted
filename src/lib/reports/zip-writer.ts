@@ -130,7 +130,7 @@ export async function* writeZip(
   let offset = 0
 
   for await (const entry of entries) {
-    const parts = entry.data instanceof Uint8Array ? [entry.data] : entry.data
+    const parts: readonly Uint8Array[] = Array.isArray(entry.data) ? entry.data : [entry.data as Uint8Array]
     let size = 0
     let crc = 0
     for (const part of parts) {

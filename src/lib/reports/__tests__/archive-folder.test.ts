@@ -33,6 +33,13 @@ describe('ArchiveFolder', () => {
     expect(await zip.file('dokument/a.pdf')!.async('uint8array')).toEqual(new Uint8Array([1, 2, 3]))
   })
 
+  it('is written once: a second zip fails rather than come out empty', async () => {
+    const root = ArchiveFolder.root()
+    root.file('a.txt', 'a')
+    await collectBytes(root.zip())
+    await expect(collectBytes(root.zip())).rejects.toThrow('written once')
+  })
+
   it('reads a deferred file only when the writer reaches it', async () => {
     const root = ArchiveFolder.root()
     const read: string[] = []
@@ -65,6 +72,11 @@ describe('jsonArray', () => {
       const bytes = Buffer.concat(jsonArray(array.map(jsonArrayElement)))
       expect(bytes.toString('utf8')).toBe(JSON.stringify(array, null, 2))
     }
+  })
+
+  it('hands out no buffer twice, so a reader that takes a chunk over cannot empty a separator', () => {
+    const parts = [...jsonArray([1, 2, 3].map(jsonArrayElement)), ...jsonArray([4].map(jsonArrayElement))]
+    expect(new Set(parts.map((part) => part.buffer)).size).toBe(parts.length)
   })
 })
 

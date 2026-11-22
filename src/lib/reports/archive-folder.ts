@@ -19,28 +19,35 @@ function toBytes(content: ArchiveContent): Uint8Array | readonly Uint8Array[] {
   return content instanceof Uint8Array ? content : new Uint8Array(content as ArrayBuffer)
 }
 
-const JSON_OPEN = utf8.encode('[\n')
-const JSON_COMMA = utf8.encode(',\n')
-const JSON_CLOSE = utf8.encode('\n]')
-
 /**
  * One element of `JSON.stringify(array, null, 2)` as UTF-8: the value's text
- * indented one level, as the array holds it. With jsonArray it writes a long
- * array as the same bytes while neither its objects nor its text are held
- * whole: a busy company's behandlingshistorik runs to hundreds of MB as
- * either, and as one string it was what ran the cloud backup out of memory.
+ * indented one level, as the array holds it (for plain data: a toJSON that
+ * reads its key would see "" here). With jsonArray it writes a long array as
+ * the same bytes while neither its objects nor its text are held whole: a busy
+ * company's behandlingshistorik runs to hundreds of MB as either, and as one
+ * string it was what ran the cloud backup out of memory.
  */
 export function jsonArrayElement(value: unknown): Uint8Array {
   return utf8.encode(`  ${(JSON.stringify(value, null, 2) ?? 'null').replace(/\n/g, '\n  ')}`)
 }
 
-/** `JSON.stringify(array, null, 2)` in parts, from the array's elements made by jsonArrayElement. */
+/**
+ * `JSON.stringify(array, null, 2)` in parts, from the array's elements made by
+ * jsonArrayElement. Every separator is its own buffer: a reader that takes
+ * over a chunk it is handed (a byte stream's enqueue detaches it) must not be
+ * able to empty one shared by the rows after it, or by the next archive.
+ */
 export function jsonArray(elements: readonly Uint8Array[]): Uint8Array[] {
   if (elements.length === 0) return [utf8.encode('[]')]
-  const parts: Uint8Array[] = [JSON_OPEN]
-  for (const element of elements) parts.push(element, JSON_COMMA)
-  parts[parts.length - 1] = JSON_CLOSE
+  const parts: Uint8Array[] = [utf8.encode('[\n')]
+  for (const element of elements) parts.push(element, utf8.encode(',\n'))
+  parts[parts.length - 1] = utf8.encode('\n]')
   return parts
+}
+
+/** Stands in for a file once the writer has had it: its content is let go, and a second zip() fails instead of missing it. */
+const WRITTEN: ArchiveRead = async () => {
+  throw new Error('An archive is written once: this file was written already')
 }
 
 /**
@@ -77,7 +84,7 @@ export class ArchiveFolder {
 
   private async *entries(): AsyncGenerator<ZipEntry> {
     for (const [name, content] of this.files) {
-      this.files.delete(name)
+      this.files.set(name, WRITTEN)
       const data = typeof content === 'function' ? await content() : content
       if (data !== null) yield { name, data: toBytes(data) }
     }
