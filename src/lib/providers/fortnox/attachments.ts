@@ -1,5 +1,10 @@
 import { FortnoxApiError, type FortnoxClient } from './client';
-import { fortnoxSupplierInvoiceBookingParts } from './supplier-invoice-voucher';
+import { fortnoxSupplierInvoiceSettled } from './mapper';
+import {
+  fortnoxSupplierInvoiceBookingParts,
+  fortnoxSupplierInvoiceCashBookingParts,
+  fortnoxSupplierInvoicePaymentParts,
+} from './supplier-invoice-voucher';
 
 /**
  * Fortnox attachment resource config + fetchers.
@@ -39,6 +44,8 @@ export interface FortnoxFinancialYear {
   id: number;
   fromDate: string;
   toDate: string;
+  /** The year's bookkeeping method, when Fortnox states it: CASH is kontantmetoden. */
+  accountingMethod?: 'ACCRUAL' | 'CASH';
 }
 
 export interface FortnoxFileConnection {
@@ -72,7 +79,13 @@ export async function fetchFortnoxFinancialYears(
     const fromDate = typeof raw.FromDate === 'string' ? raw.FromDate.trim() : '';
     const toDate = typeof raw.ToDate === 'string' ? raw.ToDate.trim() : '';
     if (id == null || !fromDate || !toDate) continue;
-    years.push({ id, fromDate, toDate });
+    const method = typeof raw.AccountingMethod === 'string' ? raw.AccountingMethod.trim().toUpperCase() : '';
+    years.push({
+      id,
+      fromDate,
+      toDate,
+      ...(method === 'ACCRUAL' || method === 'CASH' ? { accountingMethod: method } : {}),
+    });
   }
   return years;
 }
@@ -173,8 +186,8 @@ export interface FortnoxBookingVoucher {
 /**
  * What the supplier-invoice register says about one invoice's booking.
  *  - `booked`: one booking voucher named exactly.
- *  - `unbooked`: Fortnox says the invoice was never booked or was cancelled,
- *    so no verifikat exists to carry its file.
+ *  - `unbooked`: Fortnox says the invoice was cancelled, or never booked and
+ *    never paid, so no verifikat exists to carry its file.
  *  - `unknown`: the list form named no single booking voucher; only the
  *    detail form can tell (fetchFortnoxSupplierInvoiceBookingVoucher).
  */
@@ -236,7 +249,10 @@ export async function fetchFortnoxSupplierInvoiceFileConnections(
  * The booking voucher of every supplier invoice, read from the register's
  * list form (paid invoices included), by fortnoxSupplierInvoiceBookingParts.
  * An invoice it names no single booking for is `unknown`, never a guess: the
- * caller asks the detail form. Scope: supplierinvoice.
+ * caller asks the detail form. So is an unbooked invoice Fortnox names a
+ * payment for: under kontantmetoden that payment booked it, and only the
+ * detail form carries the balance that tells (crm#2112). Scope:
+ * supplierinvoice.
  */
 export async function fetchFortnoxSupplierInvoiceBookings(
   client: FortnoxClient,
@@ -255,8 +271,17 @@ export async function fetchFortnoxSupplierInvoiceBookings(
     if (!givenNumber) continue;
 
     // The list form spells cancellation `Cancel`, the detail form `Cancelled`.
-    if (raw.Cancel === true || raw.Cancelled === true || raw.Booked === false) {
+    if (raw.Cancel === true || raw.Cancelled === true) {
       bookings.set(givenNumber, { state: 'unbooked' });
+      continue;
+    }
+
+    // Never booked at registration. A paid one may be kontantmetod, booked by
+    // its payment: the detail form decides. Such files used to be dropped
+    // here uncounted.
+    if (raw.Booked === false) {
+      const paid = fortnoxSupplierInvoicePaymentParts(raw).length > 0;
+      bookings.set(givenNumber, { state: paid ? 'unknown' : 'unbooked' });
       continue;
     }
 
@@ -270,12 +295,22 @@ export async function fetchFortnoxSupplierInvoiceBookings(
 /**
  * The booking voucher from one supplier invoice's detail form, or null when
  * Fortnox names none (no booking reference: never booked; cancelled; an
- * invoice the register no longer has).
+ * invoice the register no longer has). An invoice Fortnox marks never booked
+ * (`Booked: false`) has no booking reference, whatever else it names.
+ *
+ * An invoice with no booking reference that is paid in full by one payment
+ * in a kontantmetod year (`cashYearIds`, Fortnox's financial-year ids whose
+ * AccountingMethod is CASH) was booked by that payment
+ * (fortnoxSupplierInvoiceCashBookingParts): that payment is returned. A
+ * payment in any other year, a part payment or part refund (a balance not
+ * zero), a balance Fortnox does not state, or an invoice Fortnox marks
+ * booked stays null.
  */
 export async function fetchFortnoxSupplierInvoiceBookingVoucher(
   client: FortnoxClient,
   accessToken: string,
   givenNumber: string,
+  cashYearIds: ReadonlySet<number> = new Set(),
 ): Promise<FortnoxBookingVoucher | null> {
   let response: Record<string, unknown>;
   try {
@@ -289,8 +324,19 @@ export async function fetchFortnoxSupplierInvoiceBookingVoucher(
   }
   const invoice = (response?.SupplierInvoice ?? {}) as Record<string, unknown>;
   if (invoice.Cancelled === true || invoice.Cancel === true) return null;
-  const parts = fortnoxSupplierInvoiceBookingParts(invoice);
-  return parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
+  // Never booked at registration, as in the list form: only the kontantmetod
+  // payment below can carry the file, never a voucher named some other way.
+  const parts = invoice.Booked === false ? null : fortnoxSupplierInvoiceBookingParts(invoice);
+  const booking = parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
+  if (booking) return booking;
+
+  const cash = fortnoxSupplierInvoiceCashBookingParts(invoice);
+  const payment = cash ? bookingVoucherFrom(cash.series, cash.number, cash.year) : null;
+  // Marked booked yet naming no SUPPLIERINVOICE voucher: what booked it is
+  // unknown, and the payment may only have cleared 2440.
+  if (!payment || invoice.Booked === true || !cashYearIds.has(payment.financialYearId)) return null;
+  if (!fortnoxSupplierInvoiceSettled(invoice)) return null;
+  return payment;
 }
 
 /**
