@@ -27,6 +27,7 @@ vi.mock('@/lib/bolaget/gate', () => ({ bolagetGate: vi.fn().mockResolvedValue(nu
 vi.mock('@/lib/bolaget/share-register', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bolaget/share-register')>()),
   registerShareEvent: vi.fn(),
+  completeShareRegisterSetup: vi.fn(),
   createShareClass: vi.fn(),
   updateShareClass: vi.fn(),
   setAvstamningsbolag: vi.fn(),
@@ -48,11 +49,12 @@ vi.mock('@/lib/bolaget/people', async (importOriginal) => ({
 
 import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
-import { createShareClass, registerShareEvent, setAvstamningsbolag, updateShareClass } from '@/lib/bolaget/share-register'
+import { completeShareRegisterSetup, createShareClass, registerShareEvent, setAvstamningsbolag, updateShareClass } from '@/lib/bolaget/share-register'
 import { addCompanyRole, endCompanyRole, setSignatoryRule } from '@/lib/bolaget/roles'
 import { confirmBeneficialOwners } from '@/lib/bolaget/beneficial-owners'
 import { savePersonPrivate } from '@/lib/bolaget/people'
 import { POST as postEvent } from '../share-register/events/route'
+import { POST as postSetup } from '../share-register/setup/route'
 import { POST as postClass } from '../share-classes/route'
 import { PATCH as patchClass } from '../share-classes/[id]/route'
 import { POST as postRole } from '../roles/route'
@@ -92,6 +94,12 @@ const doors: Door[] = [
     call: () => postEvent(req('/api/bolaget/share-register/events', 'POST', { kind: 'anteckning', event_date: '2026-10-01', note: 'x' }), noParams),
     write: vi.mocked(registerShareEvent),
     status: 201,
+  },
+  {
+    name: 'POST /api/bolaget/share-register/setup',
+    call: () => postSetup(req('/api/bolaget/share-register/setup', 'POST', {}), noParams),
+    write: vi.mocked(completeShareRegisterSetup),
+    status: 200,
   },
   {
     name: 'POST /api/bolaget/share-classes',
@@ -158,6 +166,7 @@ beforeEach(() => {
   state.role = 'member'
   vi.mocked(requireAuth).mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null } as never)
   vi.mocked(registerShareEvent).mockResolvedValue(ok({ share_register_event_id: 'e1', event_number: 1, kind: 'anteckning', event_date: '2026-10-01', range_start: null, range_end: null, share_class_id: null, from_party_id: null, to_party_id: null }))
+  vi.mocked(completeShareRegisterSetup).mockResolvedValue({ ok: true, data: { setup_completed_at: '2026-10-29T09:00:00Z', total_shares: 100, holders: 1, completed_now: true } })
   const shareClass = { id: ID, code: 'B', name: null, votes_per_share: 1, forbehall_samtycke: false, forbehall_forkop: false, forbehall_hembud: false, forbehall_omvandling: false, forbehall_inlosen: false, forbehall_text: null, bolagsordning_reference: null }
   vi.mocked(createShareClass).mockResolvedValue(ok(shareClass))
   vi.mocked(updateShareClass).mockResolvedValue(ok({ ...shareClass, votes_per_share: 10 }))

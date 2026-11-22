@@ -2,7 +2,15 @@
  * The aktiebok (ABL 5 kap.): read it as of a date, and add an entry.
  *
  * Every entry is dated and kept (ABL 5:3, 5:9); a mistake is voided by a
- * rattelse entry and entered again. The database refuses an entry the
+ * rattelse entry and entered again. The register has two phases. While it
+ * is set up an entry carries the day of the event, so a company can enter
+ * its history, or the holdings it carries over from the register it kept
+ * before (kind ingaende). Once every share is entered the setup is
+ * completed, and from then on an entry carries the day it is made: a
+ * shareholder has rights against the company from the day they are entered
+ * (ABL 4:37, 7:2), so an entry never changes who the register showed on an
+ * earlier day. The database holds the same rule
+ * (share_register_events_number). The database refuses an entry the
  * history cannot hold (share_register_replay); this service checks the same
  * rules first (register-state.ts) so the preview says why in Swedish, and
  * adds what only a person can judge as warnings: a förbehåll to clear, a
@@ -82,7 +90,7 @@ export async function loadShareEvents(supabase: SupabaseClient, companyId: strin
     ({ from, to }) =>
       supabase
         .from('share_register_events')
-        .select('id, event_number, event_date, kind, share_class_id, to_share_class_id, from_party_id, to_party_id, range_start, range_end, transfer_reason, price_total, ratio, aktiebrev_number, aktiebrev_action, counterparty_party_id, note_status, corrects_event_id, registered_on, decision_id, document_id, journal_entry_id, note, created_at, created_via')
+        .select('id, event_number, event_date, occurred_on, kind, share_class_id, to_share_class_id, from_party_id, to_party_id, range_start, range_end, transfer_reason, price_total, ratio, aktiebrev_number, aktiebrev_action, counterparty_party_id, note_status, corrects_event_id, registered_on, decision_id, document_id, journal_entry_id, note, created_at, created_via')
         .eq('company_id', companyId)
         .order('event_number')
         .range(from, to),
@@ -91,14 +99,21 @@ export async function loadShareEvents(supabase: SupabaseClient, companyId: strin
   return rows.map(normaliseEvent)
 }
 
-export async function loadRegisterSettings(supabase: SupabaseClient, companyId: string): Promise<{ is_avstamningsbolag: boolean }> {
+export interface RegisterSettings {
+  is_avstamningsbolag: boolean
+  /** When every share had been entered here; null while the register is set up. */
+  setup_completed_at: string | null
+}
+
+export async function loadRegisterSettings(supabase: SupabaseClient, companyId: string): Promise<RegisterSettings> {
   const { data, error } = await supabase
     .from('share_register_settings')
-    .select('is_avstamningsbolag')
+    .select('is_avstamningsbolag, setup_completed_at')
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) throw new Error(`share_register_settings read failed: ${error.message}`)
-  return { is_avstamningsbolag: Boolean((data as { is_avstamningsbolag?: boolean } | null)?.is_avstamningsbolag) }
+  const row = data as { is_avstamningsbolag?: boolean; setup_completed_at?: string | null } | null
+  return { is_avstamningsbolag: Boolean(row?.is_avstamningsbolag), setup_completed_at: row?.setup_completed_at ?? null }
 }
 
 async function loadShareCapitalSettings(supabase: SupabaseClient, companyId: string): Promise<{ aktiekapital: number | null; antal_aktier: number | null }> {
@@ -118,6 +133,8 @@ async function loadShareCapitalSettings(supabase: SupabaseClient, companyId: str
 export interface ShareRegisterData {
   as_of: string
   is_avstamningsbolag: boolean
+  /** When the setup was completed; null while the register is set up and an entry carries the day of the event. */
+  setup_completed_at: string | null
   classes: ShareClass[]
   /** Every entry, in entry order (the history), voided ones included. */
   events: ShareEvent[]
@@ -151,6 +168,7 @@ export async function loadShareRegisterData(ctx: OperationContext, asOf: string 
   return {
     as_of: day,
     is_avstamningsbolag: settings.is_avstamningsbolag,
+    setup_completed_at: settings.setup_completed_at,
     classes,
     events,
     replay,
@@ -170,7 +188,19 @@ function findClass(classes: readonly ShareClass[], id?: string | null, code?: st
 
 export interface ShareEventInput {
   kind: ShareEventKind
-  event_date: string
+  /**
+   * The day of the event; today when left out. While the register is set up
+   * the entry carries it. Once the register is in use the entry carries
+   * today, and an earlier day given here is kept as occurred_on.
+   */
+  event_date?: string | null
+  /** The day of the event, said beside an entry that carries a later day. */
+  occurred_on?: string | null
+  /**
+   * This entry makes the register complete: once it is in, the setup is
+   * completed (completeShareRegisterSetup) and the register is in use.
+   */
+  completes_setup?: boolean | null
   share_class_id?: string | null
   share_class_code?: string | null
   to_share_class_id?: string | null
@@ -221,12 +251,17 @@ export interface ShareEventCreated {
   share_register_event_id: string
   event_number: number
   kind: ShareEventKind
+  /** The day the entry carries. */
   event_date: string
+  /** The day of the event when it is earlier than event_date. */
+  occurred_on?: string | null
   range_start: number | null
   range_end: number | null
   share_class_id: string | null
   from_party_id: string | null
   to_party_id: string | null
+  /** Set when the entry completed the setup of the register. */
+  setup_completed_at?: string | null
 }
 
 const NEW_TO = 'new:to'
@@ -256,7 +291,11 @@ export async function registerShareEvent(
 ): Promise<OperationOutcome<ShareEventCreated>> {
   try {
     const today = todayIsoStockholm()
-    if (input.event_date > today) return { ok: false, code: 'BOLAGET_DATES_INVALID', messageSv: 'En anteckning i aktieboken kan inte dateras framåt i tiden.' }
+    const givenDate = input.event_date || today
+    if (givenDate > today) return { ok: false, code: 'BOLAGET_DATES_INVALID', messageSv: 'En anteckning i aktieboken kan inte dateras framåt i tiden.' }
+    if (input.occurred_on && input.occurred_on > givenDate) {
+      return { ok: false, code: 'BOLAGET_DATES_INVALID', messageSv: 'Händelsens dag kan inte vara senare än anteckningens datum.' }
+    }
     // Checked here so every door answers the same, a preview included: a
     // member is told before filling in a form or staging a proposal.
     const refused = await requireCompanyAdmin(ctx, REGISTER_ADMIN_MESSAGE_SV)
@@ -274,6 +313,21 @@ export async function registerShareEvent(
 
     const kind = input.kind
     const warnings: OperationWarning[] = []
+
+    // The day the entry belongs to. In use, the register takes no holding
+    // carried over from an earlier register, and an entry carries today.
+    const inUse = settings.setup_completed_at !== null
+    if (kind === 'ingaende' && inUse) return { ok: false, code: 'SHARE_REGISTER_SETUP_COMPLETE' }
+    if (input.completes_setup && inUse) return { ok: false, code: 'SHARE_REGISTER_SETUP_COMPLETE', messageSv: 'Aktieboken är redan upplagd och i bruk.' }
+    const eventDate = inUse ? today : givenDate
+    const occurredOn = entryOccurredOn(eventDate, input.occurred_on ?? (inUse ? givenDate : null))
+    if (inUse && givenDate < today && !input.occurred_on) {
+      warnings.push(warning(
+        'SHARE_REGISTER_DATED_ENTRY_DAY',
+        `Aktieboken är i bruk: anteckningen dateras ${today}, den dag den förs in. Händelsens dag ${givenDate} står i anteckningen.`,
+        `The share register is in use: the entry is dated ${today}, the day it is made. The day of the event, ${givenDate}, is stated in the entry.`,
+      ))
+    }
 
     // The class: named, the only one, or (first issue in an empty register) a new class A with one vote per share.
     let shareClass = findClass(classes, input.share_class_id, input.share_class_code)
@@ -343,7 +397,7 @@ export async function registerShareEvent(
         if (ISSUE_KINDS.includes(kind)) {
           rangeStart = nextFreeShareNumber(stored.ranges)
         } else if (HOLDER_KINDS.includes(kind)) {
-          const asOfDay = replayShareRegister(events, input.event_date, STORED)
+          const asOfDay = replayShareRegister(events, eventDate, STORED)
           const block = asOfDay.ranges.find(
             (r) => r.party_id === input.from_party_id && r.share_class_id === classId && r.range_end - r.range_start + 1 >= count,
           )
@@ -377,7 +431,8 @@ export async function registerShareEvent(
     const candidate: ShareEvent = {
       id: CANDIDATE,
       event_number: 0,
-      event_date: input.event_date,
+      event_date: eventDate,
+      occurred_on: occurredOn,
       kind,
       share_class_id: classId,
       to_share_class_id: toClassId,
@@ -413,8 +468,17 @@ export async function registerShareEvent(
     const alreadyBroken = new Set(replayShareRegister(events, null, STORED).noteProblems.map((problem) => problem.event_id))
     const broken = replayShareRegister(withEntry, null, STORED).noteProblems.find((problem) => !alreadyBroken.has(problem.event_id))
     if (broken) throw new ShareRegisterError('SHARE_REGISTER_NOTE_INVALID', broken.message, broken.event_number > 0 ? broken.event_number : null)
-    const before = replayShareRegister(events, input.event_date, STORED)
-    const after = replayShareRegister(withEntry, input.event_date, STORED)
+    const before = replayShareRegister(events, eventDate, STORED)
+    const after = replayShareRegister(withEntry, eventDate, STORED)
+    if (input.completes_setup) {
+      // A register is complete when it holds the company's shares: with this entry in, it must hold some.
+      if (replayShareRegister(withEntry, null, STORED).totalShares === 0) return { ok: false, code: 'SHARE_REGISTER_EMPTY' }
+      warnings.push(warning(
+        'SHARE_REGISTER_SETUP_COMPLETES',
+        'Med den här anteckningen är aktieboken upplagd och tas i bruk. Härefter dateras varje anteckning den dag den förs in, och ingående innehav kan inte längre föras in. Det kan inte ångras. En aktiebok som fördes tidigare ska bevaras i minst tio år (5 kap. 3 § ABL).',
+        'With this entry the share register is set up and taken into use. From then on every entry carries the day it is made, and no opening holding is taken. This cannot be undone. A share register kept before must be kept for at least ten years (ABL 5:3).',
+      ))
+    }
 
     // What a person must judge.
     if (kind === 'overlatelse' && shareClass && (shareClass.forbehall_samtycke || shareClass.forbehall_forkop || shareClass.forbehall_hembud) && !input.forbehall_cleared) {
@@ -422,6 +486,13 @@ export async function registerShareEvent(
         'SHARE_REGISTER_FORBEHALL_OPEN',
         'Aktieslaget har samtyckes-, förköps- eller hembudsförbehåll. Kontrollera att förbehållet är hanterat innan överlåtelsen förs in.',
         'The share class carries a consent, pre-emption or right-of-first-refusal clause. Check it has been handled before entering the transfer.',
+      ))
+    }
+    if (kind === 'ingaende') {
+      warnings.push(warning(
+        'SHARE_REGISTER_KEEP_EARLIER_REGISTER',
+        'Ett ingående innehav förs in från den aktiebok bolaget har fört tidigare. Den tidigare aktieboken ska bevaras i minst tio år efter att alla aktier har förts in här (5 kap. 3 § ABL).',
+        'An opening holding is carried over from the share register the company kept before. That earlier register must be kept for at least ten years after every share has been entered here (ABL 5:3).',
       ))
     }
     if (kind === 'nyemission' && !input.registered_on) {
@@ -470,7 +541,11 @@ export async function registerShareEvent(
         preview: {
           kind,
           kind_label: SHARE_EVENT_LABELS_SV[kind],
-          event_date: input.event_date,
+          // The day the entry will carry, and the day of the event when that is earlier.
+          event_date: eventDate,
+          occurred_on: occurredOn,
+          register_in_use: inUse,
+          completes_setup: Boolean(input.completes_setup),
           share_class: shareClass ? shareClass.code : createDefaultClass ? 'A' : null,
           creates_share_class: createDefaultClass ? 'A' : null,
           range_start: rangeStart,
@@ -517,7 +592,8 @@ export async function registerShareEvent(
       .from('share_register_events')
       .insert({
         company_id: ctx.companyId,
-        event_date: input.event_date,
+        event_date: eventDate,
+        occurred_on: occurredOn,
         kind,
         share_class_id: needsClass ? finalClassId : null,
         to_share_class_id: toClassId,
@@ -543,28 +619,127 @@ export async function registerShareEvent(
         created_by: ctx.userId,
         created_via: input.created_via ?? (ctx.pendingOperationId ? 'mcp' : 'app'),
       })
-      .select('id, event_number')
+      // The database has the last word on the day (share_register_events_number): read it back.
+      .select('id, event_number, event_date, occurred_on')
       .single()
     if (error) return bolagetFailure(error)
-    const row = data as { id: string; event_number: number }
+    const row = data as { id: string; event_number: number; event_date?: string | null; occurred_on?: string | null }
+    // The entry is in and stays. Completing the setup is its own write: if it
+    // fails the register is still being set up, and the caller is told.
+    let setupCompletedAt: string | null = null
+    if (input.completes_setup) {
+      const completed = await completeShareRegisterSetup(ctx, {}, { dryRun: false })
+      if (completed.ok && !completed.dryRun) setupCompletedAt = completed.data.setup_completed_at
+      else {
+        warnings.push(warning(
+          'SHARE_REGISTER_SETUP_NOT_COMPLETED',
+          'Anteckningen är införd, men aktieboken kunde inte markeras som upplagd. Markera den som upplagd under Aktiebok.',
+          'The entry is made, but the share register could not be marked as set up. Mark it as set up in Aktiebok.',
+        ))
+      }
+    }
     return {
       ok: true,
       data: {
         share_register_event_id: row.id,
         event_number: Number(row.event_number),
         kind,
-        event_date: input.event_date,
+        event_date: row.event_date ?? eventDate,
+        occurred_on: row.occurred_on ?? occurredOn,
         range_start: rangeStart,
         range_end: rangeEnd,
         share_class_id: needsClass ? finalClassId : null,
         from_party_id: candidate.from_party_id,
         to_party_id: toPartyId,
+        ...(input.completes_setup ? { setup_completed_at: setupCompletedAt } : {}),
       },
       created: true,
       ...(warnings.length > 0 ? { warnings } : {}),
     }
   } catch (error) {
     if (error instanceof ShareRegisterError) return bolagetFailure(error)
+    return bolagetFailure(error)
+  }
+}
+
+/** The day of the event as an entry keeps it: only when it is earlier than the day the entry carries. */
+export function entryOccurredOn(eventDate: string, occurredOn: string | null | undefined): string | null {
+  return occurredOn && occurredOn < eventDate ? occurredOn : null
+}
+
+export interface SetupCompleted {
+  setup_completed_at: string
+  total_shares: number
+  holders: number
+  /** False when the setup had been completed before this call. */
+  completed_now: boolean
+}
+
+/**
+ * Say that every share of the company is entered (dry-runnable). From then
+ * on an entry carries the day it is made, and no opening holding is taken.
+ * The database enters the completion in the register as a dated note: it is
+ * the day ABL 5:3 counts the ten years of an earlier register from. Done
+ * once; a second call answers the first one's moment.
+ */
+export async function completeShareRegisterSetup(
+  ctx: OperationContext,
+  input: { expected_last_event_number?: number | null },
+  { dryRun }: { dryRun: boolean },
+): Promise<OperationOutcome<SetupCompleted>> {
+  try {
+    const refused = await requireCompanyAdmin(ctx, REGISTER_ADMIN_MESSAGE_SV)
+    if (refused) return refused
+    const [settings, classes, events, capital] = await Promise.all([
+      loadRegisterSettings(ctx.supabase, ctx.companyId),
+      loadShareClasses(ctx.supabase, ctx.companyId),
+      loadShareEvents(ctx.supabase, ctx.companyId),
+      loadShareCapitalSettings(ctx.supabase, ctx.companyId),
+    ])
+    if (settings.is_avstamningsbolag) return { ok: false, code: 'SHARE_REGISTER_AVSTAMNINGSBOLAG' }
+    const lastEventNumber = events.reduce((max, e) => Math.max(max, e.event_number), 0)
+    const summary = summarizeHoldings(replayShareRegister(events, null, STORED).ranges, classes)
+    const answer = (completedAt: string, completedNow: boolean): SetupCompleted => ({
+      setup_completed_at: completedAt,
+      total_shares: summary.total_shares,
+      holders: summary.holders.length,
+      completed_now: completedNow,
+    })
+    if (settings.setup_completed_at && !dryRun) return { ok: true, data: answer(settings.setup_completed_at, false) }
+    if (input.expected_last_event_number !== null && input.expected_last_event_number !== undefined && input.expected_last_event_number !== lastEventNumber) {
+      return { ok: false, code: 'SHARE_REGISTER_STALE', details: { last_event_number: lastEventNumber } }
+    }
+    if (summary.total_shares === 0) return { ok: false, code: 'SHARE_REGISTER_EMPTY' }
+    const reconciliation = reconcileWithSettings(summary.total_shares, capital)
+    if (dryRun) {
+      const warnings: string[] = []
+      if (reconciliation.status === 'mismatch') {
+        warnings.push(`Aktieboken har ${summary.total_shares} aktier men företagsuppgifterna anger ${reconciliation.settings_shares}. Kontrollera vilket som stämmer innan aktieboken tas i bruk.`)
+      }
+      return {
+        ok: true,
+        dryRun: true,
+        preview: {
+          already_completed_at: settings.setup_completed_at,
+          total_shares: summary.total_shares,
+          holders: summary.holders.length,
+          last_event_number: lastEventNumber,
+          consequence_sv:
+            'Aktieboken tas i bruk. Härefter dateras varje anteckning den dag den förs in, och ingående innehav kan inte längre föras in. Det antecknas i aktieboken och kan inte ångras. En aktiebok som fördes tidigare ska bevaras i minst tio år (5 kap. 3 § ABL).',
+          warnings,
+        },
+      }
+    }
+    const { data, error } = await ctx.supabase
+      .from('share_register_settings')
+      .upsert({ company_id: ctx.companyId, setup_completed_at: new Date().toISOString(), setup_completed_by: ctx.userId }, { onConflict: 'company_id' })
+      .select('setup_completed_at')
+      .single()
+    if (error) return bolagetFailure(error)
+    const completedAt = (data as { setup_completed_at: string | null }).setup_completed_at
+    if (!completedAt) throw new Error('share_register_settings: the setup was not completed')
+    return { ok: true, data: answer(completedAt, true) }
+  } catch (error) {
     return bolagetFailure(error)
   }
 }

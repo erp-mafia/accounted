@@ -90,6 +90,10 @@ export function describeEvent(
     case 'fondemission':
       text = `${SHARE_EVENT_LABELS_SV[e.kind]}: ${shares} till ${name(e.to_party_id)}${price}${registered}`
       break
+    case 'ingaende':
+      // A holding as it stood on the entry's day, carried over from the register the company kept before.
+      text = `Ingående innehav: ${shares} hos ${name(e.to_party_id)}, överfört från bolagets tidigare aktiebok`
+      break
     case 'overlatelse':
       text = `Överlåtelse (${e.transfer_reason ? TRANSFER_REASON_LABELS_SV[e.transfer_reason].toLowerCase() : 'grund saknas'}): ${shares} från ${name(e.from_party_id)} till ${name(e.to_party_id)}${price}`
       break
@@ -126,7 +130,10 @@ export function describeEvent(
     default:
       text = 'Anteckning'
   }
-  return e.note && e.kind !== 'anteckning' ? `${text}. ${e.note}` : e.kind === 'anteckning' ? `Anteckning: ${e.note ?? ''}` : text
+  if (e.kind === 'anteckning') return `Anteckning: ${e.note ?? ''}`
+  // An entry made once the register is in use carries the day it was made; the day of the event is said in its text.
+  const dated = e.occurred_on ? `${text}. Händelsens dag ${e.occurred_on}` : text
+  return e.note ? `${dated}. ${e.note}` : dated
 }
 
 export interface AktiebokRow {
@@ -344,8 +351,20 @@ export function buildHolderExtractData(
   }
 }
 
+/**
+ * The bolagskategori an aktiebrev states (ABL 6:2 p. 1). An aktiebolag is
+ * private or public (ABL 1:2), and a public one carries (publ) after its
+ * name unless the name itself says it is public (ABL 28:7): the name tells
+ * which.
+ */
+export function companyCategory(name: string): 'Privat aktiebolag' | 'Publikt aktiebolag' {
+  return /\(publ\)|(^|\s)publikt(\s|$)/i.test(name) ? 'Publikt aktiebolag' : 'Privat aktiebolag'
+}
+
 export interface AktiebrevData {
   company: PdfCompany
+  /** Privat or publikt aktiebolag (ABL 6:2 p. 1). */
+  company_category: string
   number: string
   issued_on: string
   holder: { name: string; identity: string }
@@ -386,6 +405,7 @@ export function buildAktiebrevData(
   )
   return {
     company,
+    company_category: companyCategory(company.name),
     number: event.aktiebrev_number ?? '',
     issued_on: event.event_date,
     holder: { name: party.name, identity: identityText(party, fullPersonnummer) },

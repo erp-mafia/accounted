@@ -1057,6 +1057,7 @@ Response `200`:
   data: {
     as_of: string,
     is_avstamningsbolag: boolean,
+    setup_completed_at: string | null,
     total_shares: number,
     total_votes: number,
     next_free_share_number: number,
@@ -1127,7 +1128,7 @@ Response `200`:
 ```ts
 {
   data: {
-    events: { share_register_event_id: string, event_number: number, event_date: string, entered_at: string, kind: "bildande" | "nyemission" | "fondemission" | "overlatelse" | "indragning" | "omvandling" | "split" | "sammanlaggning" | "aktiebrev" | "pant" | "nyttjanderatt" | "anteckning" | "rattelse", kind_label: string, text: string, voided: boolean, corrects_event_id: string | null, share_class_id: string | null, from_party_id: string | null, to_party_id: string | null, counterparty_party_id: string | null, range_start: number | null, range_end: number | null, transfer_reason: string | null, price_total: number | null, ratio: number | null, aktiebrev_number: string | null, aktiebrev_action: "issued" | "returned" | null, note_status: "open" | "closed" | null, registered_on: string | null, decision_id: string | null, document_id: string | null, journal_entry_id: string | null, note: string | null }[]
+    events: { share_register_event_id: string, event_number: number, event_date: string, occurred_on: string | null, entered_at: string, kind: "bildande" | "ingaende" | "nyemission" | "fondemission" | "overlatelse" | "indragning" | "omvandling" | "split" | "sammanlaggning" | "aktiebrev" | "pant" | "nyttjanderatt" | "anteckning" | "rattelse", kind_label: string, text: string, voided: boolean, corrects_event_id: string | null, share_class_id: string | null, from_party_id: string | null, to_party_id: string | null, counterparty_party_id: string | null, range_start: number | null, range_end: number | null, transfer_reason: string | null, price_total: number | null, ratio: number | null, aktiebrev_number: string | null, aktiebrev_action: "issued" | "returned" | null, note_status: "open" | "closed" | null, registered_on: string | null, decision_id: string | null, document_id: string | null, journal_entry_id: string | null, note: string | null }[]
   },
   meta: {
     request_id: string,
@@ -1170,7 +1171,7 @@ Example response `200`:
 **Add a dated entry to the aktiebok: an issue, a transfer, a cancellation, a conversion, a split, an aktiebrev, a pledge or a note.**
 `scope:companies:write · risk:medium · idempotent · dry-run`
 
-Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided with kind rattelse and entered again. The register refuses an entry its history cannot hold: no share held twice, a transfer only of shares the transferor holds on that date. A new holder is named by to_name; their personnummer and address are completed in Accounted. Dry-runnable: the preview shows holdings before and after.
+Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided with kind rattelse and entered again. The register refuses an entry its history cannot hold: no share held twice, a transfer only of shares the transferor holds on that date. A register is first set up: the history is entered with the day of each event, or, for a company that kept its aktiebok elsewhere, today's holdings as kind ingaende. The entry with completes_setup true takes the register into use; from then on an entry carries the day it is made (a shareholder has rights from the day they are entered, ABL 4:37 and 7:2) and the day of the event is kept as occurred_on. A new holder is named by to_name; their personnummer and address are completed in Accounted. Dry-runnable: the preview shows holdings before and after and the day the entry will carry.
 
 **Use when:** Shares were issued, sold, given, inherited, cancelled, split, pledged, or an aktiebrev was issued or returned.
 **Do not use for:** Booking the money of an emission or a dividend (a voucher), or changing votes per share (PATCH /share-classes/{id}).
@@ -1179,6 +1180,8 @@ Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided
 - SHARE_REGISTER_NOT_HELD: the from-holder does not hold all of the shares on event_date.
 - SHARE_REGISTER_RANGE_TAKEN: an issue overlaps shares already held; omit the range and send share_count.
 - SHARE_REGISTER_STALE: the register got an entry after the one you saw; read it again and retry.
+- SHARE_REGISTER_SETUP_COMPLETE: the register is in use; kind ingaende and completes_setup belong to the setup only.
+- A company with a history never enters today's holdings as bildande: use ingaende, or enter the history as it happened.
 - A range_start with a share_count names the whole block (range_start to range_start + share_count - 1).
 - FORBIDDEN: only the company's owner or an administrator adds to the aktiebok.
 - BOLAGET_PERSONNUMMER_IN_APP_ONLY: a personnummer was sent; name the person and complete them in the app.
@@ -1193,8 +1196,10 @@ Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided
 Request body:
 ```ts
 {
-  kind: "bildande" | "nyemission" | "fondemission" | "overlatelse" | "indragning" | "omvandling" | "split" | "sammanlaggning" | "aktiebrev" | "pant" | "nyttjanderatt" | "anteckning" | "rattelse",
-  event_date: string,
+  kind: "bildande" | "ingaende" | "nyemission" | "fondemission" | "overlatelse" | "indragning" | "omvandling" | "split" | "sammanlaggning" | "aktiebrev" | "pant" | "nyttjanderatt" | "anteckning" | "rattelse",
+  event_date?: string | null,
+  occurred_on?: string | null,
+  completes_setup?: boolean | null,
   share_class_code?: string | null,
   to_share_class_code?: string | null,
   from_party_id?: string | null,
@@ -1245,13 +1250,15 @@ Response `200`:
   data: {
     share_register_event_id: string,
     event_number: number,
-    kind: "bildande" | "nyemission" | "fondemission" | "overlatelse" | "indragning" | "omvandling" | "split" | "sammanlaggning" | "aktiebrev" | "pant" | "nyttjanderatt" | "anteckning" | "rattelse",
+    kind: "bildande" | "ingaende" | "nyemission" | "fondemission" | "overlatelse" | "indragning" | "omvandling" | "split" | "sammanlaggning" | "aktiebrev" | "pant" | "nyttjanderatt" | "anteckning" | "rattelse",
     event_date: string,
+    occurred_on?: string | null,
     range_start: number | null,
     range_end: number | null,
     share_class_id: string | null,
     from_party_id: string | null,
-    to_party_id: string | null
+    to_party_id: string | null,
+    setup_completed_at?: string | null
   },
   meta: {
     request_id: string,
@@ -1273,6 +1280,7 @@ Example response `200`:
     "event_number": 4,
     "kind": "overlatelse",
     "event_date": "2026-10-01",
+    "occurred_on": null,
     "range_start": 1,
     "range_end": 100
   },

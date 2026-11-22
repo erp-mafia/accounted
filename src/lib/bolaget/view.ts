@@ -28,6 +28,12 @@ export interface ShareRegisterHolderView {
 export interface ShareRegisterView {
   as_of: string
   is_avstamningsbolag: boolean
+  /**
+   * When every share had been entered and the register was taken into use;
+   * null while it is set up. In use, an entry carries the day it is made and
+   * no ingaende entry is taken.
+   */
+  setup_completed_at: string | null
   total_shares: number
   total_votes: number
   next_free_share_number: number
@@ -85,6 +91,7 @@ export function shareRegisterView(data: ShareRegisterData, roles: RolesView | nu
   return {
     as_of: data.as_of,
     is_avstamningsbolag: data.is_avstamningsbolag,
+    setup_completed_at: data.setup_completed_at,
     total_shares: data.summary.total_shares,
     total_votes: data.summary.total_votes,
     next_free_share_number: nextFreeShareNumber(data.replay.ranges),
@@ -134,7 +141,10 @@ export function shareRegisterView(data: ShareRegisterData, roles: RolesView | nu
 export interface ShareEventView {
   share_register_event_id: string
   event_number: number
+  /** The day the entry belongs to in the register. */
   event_date: string
+  /** The day of the event when it is earlier than event_date; else null. */
+  occurred_on: string | null
   entered_at: string
   kind: ShareEventKind
   kind_label: string
@@ -168,6 +178,7 @@ export function shareEventsView(data: Pick<ShareRegisterData, 'events' | 'partie
     share_register_event_id: e.id,
     event_number: e.event_number,
     event_date: e.event_date,
+    occurred_on: e.occurred_on ?? null,
     entered_at: e.created_at,
     kind: e.kind,
     kind_label: SHARE_EVENT_LABELS_SV[e.kind],

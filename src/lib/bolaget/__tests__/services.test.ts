@@ -9,7 +9,7 @@ vi.mock('@/lib/dates/iso', async (importOriginal) => ({
   todayIsoStockholm: () => '2026-10-29',
 }))
 
-import { registerShareEvent } from '../share-register'
+import { completeShareRegisterSetup, registerShareEvent } from '../share-register'
 import { addCompanyRole, seedRolesFromSnapshot } from '../roles'
 import { confirmBeneficialOwners } from '../beneficial-owners'
 import type { OperationContext } from '@/lib/operations/types'
@@ -265,6 +265,165 @@ describe('registerShareEvent', () => {
       { dryRun: true },
     )
     expect(third).toMatchObject({ ok: false, code: 'SHARE_REGISTER_NOTE_INVALID' })
+  })
+})
+
+/** The register as registerShareEvent reads it once its setup is completed. */
+function enqueueEntryInUse(events: unknown[] = [founding]) {
+  enqueue({ data: { role: 'owner' } }) // company_members
+  enqueue({ data: { is_avstamningsbolag: false, setup_completed_at: '2026-06-01T08:00:00Z' } }) // share_register_settings
+  enqueue({ data: [classA] }) // share_classes
+  enqueue({ data: events }) // share_register_events
+}
+
+const annaParty = { id: ANNA, display_name: 'Anna', kind: 'person', org_number: null }
+
+describe('the two phases of the register', () => {
+  it('takes a holding carried over from an earlier register while it is set up, and says the earlier one is kept', async () => {
+    enqueueEntry([])
+    enqueue({ data: [annaParty] }) // parties in company
+    const outcome = await registerShareEvent(ctx, { kind: 'ingaende', event_date: '2026-01-01', to_party_id: ANNA, share_count: 500 }, { dryRun: true })
+    expect(outcome.ok && outcome.dryRun).toBe(true)
+    if (!outcome.ok || !outcome.dryRun) return
+    expect(outcome.preview).toMatchObject({ kind: 'ingaende', event_date: '2026-01-01', occurred_on: null, register_in_use: false, range_start: 1, range_end: 500, total_shares_after: 500 })
+    expect(outcome.preview.warning_codes).toContain('SHARE_REGISTER_KEEP_EARLIER_REGISTER')
+  })
+
+  it('refuses a carried-over holding once the register is in use', async () => {
+    enqueueEntryInUse()
+    const outcome = await registerShareEvent(ctx, { kind: 'ingaende', event_date: '2026-01-01', to_party_id: ANNA, share_count: 10 }, { dryRun: true })
+    expect(outcome).toMatchObject({ ok: false, code: 'SHARE_REGISTER_SETUP_COMPLETE' })
+  })
+
+  it('dates an entry the day it is made once the register is in use, and keeps the day of the event', async () => {
+    enqueueEntryInUse()
+    enqueue({ data: [annaParty] }) // assert in company
+    enqueue({ data: [annaParty] }) // ensureRegisterParty
+    enqueue({ data: { id: 'e2', event_number: 2, event_date: '2026-10-29', occurred_on: '2026-10-01' } }) // insert
+    const outcome = await registerShareEvent(ctx, { kind: 'nyemission', event_date: '2026-10-01', to_party_id: ANNA, share_count: 50 }, { dryRun: false })
+    expect(outcome).toMatchObject({ ok: true, data: { event_number: 2, event_date: '2026-10-29', occurred_on: '2026-10-01' } })
+    expect(findCall('share_register_events', 'insert')?.[0]).toMatchObject({ event_date: '2026-10-29', occurred_on: '2026-10-01' })
+    if (outcome.ok && !outcome.dryRun) expect(outcome.warnings?.map((w) => w.code)).toContain('SHARE_REGISTER_DATED_ENTRY_DAY')
+  })
+
+  it('previews the day the entry will carry in use: today, with the day of the event beside it', async () => {
+    enqueueEntryInUse()
+    enqueue({ data: [annaParty] }) // parties in company
+    const outcome = await registerShareEvent(ctx, { kind: 'nyemission', occurred_on: '2026-09-15', to_party_id: ANNA, share_count: 50 }, { dryRun: true })
+    expect(outcome.ok && outcome.dryRun).toBe(true)
+    if (!outcome.ok || !outcome.dryRun) return
+    expect(outcome.preview).toMatchObject({ event_date: '2026-10-29', occurred_on: '2026-09-15', register_in_use: true })
+    // The day was given as the day of the event: nothing was moved, so nothing is explained.
+    expect(outcome.preview.warning_codes).not.toContain('SHARE_REGISTER_DATED_ENTRY_DAY')
+  })
+
+  it('keeps the day of the event as the entry\'s own while the register is set up', async () => {
+    enqueueEntry()
+    enqueue({ data: [annaParty] })
+    enqueue({ data: [annaParty] })
+    enqueue({ data: { id: 'e2', event_number: 2 } })
+    const outcome = await registerShareEvent(ctx, { kind: 'nyemission', event_date: '2026-10-01', to_party_id: ANNA, share_count: 50 }, { dryRun: false })
+    expect(outcome).toMatchObject({ ok: true, data: { event_date: '2026-10-01', occurred_on: null } })
+    expect(findCall('share_register_events', 'insert')?.[0]).toMatchObject({ event_date: '2026-10-01', occurred_on: null })
+  })
+
+  it('refuses a day of the event later than the entry\'s date', async () => {
+    const outcome = await registerShareEvent(ctx, { kind: 'anteckning', event_date: '2026-10-01', occurred_on: '2026-10-05', note: 'x' }, { dryRun: true })
+    expect(outcome).toMatchObject({ ok: false, code: 'BOLAGET_DATES_INVALID' })
+  })
+
+  it('says before the write that an entry completes the setup, and completes it once the entry is in', async () => {
+    const opening = { ...founding, kind: 'ingaende', event_date: '2026-10-29' }
+    enqueueEntry([])
+    enqueue({ data: [annaParty] })
+    const preview = await registerShareEvent(ctx, { kind: 'ingaende', to_party_id: ANNA, share_count: 100, completes_setup: true }, { dryRun: true })
+    expect(preview.ok && preview.dryRun).toBe(true)
+    if (!preview.ok || !preview.dryRun) return
+    expect(preview.preview).toMatchObject({ completes_setup: true })
+    expect(preview.preview.warning_codes).toContain('SHARE_REGISTER_SETUP_COMPLETES')
+    expect(findCall('share_register_settings', 'upsert')).toBeUndefined()
+
+    reset()
+    enqueueEntry([])
+    enqueue({ data: [annaParty] }) // assert in company
+    enqueue({ data: [annaParty] }) // ensureRegisterParty
+    enqueue({ data: { id: 'e1', event_number: 1 } }) // insert
+    enqueue({ data: { role: 'owner' } }) // completeShareRegisterSetup: company_members
+    enqueue({ data: { is_avstamningsbolag: false, setup_completed_at: null } }) // share_register_settings
+    enqueue({ data: [classA] }) // share_classes
+    enqueue({ data: [opening] }) // share_register_events, the new entry in it
+    enqueue({ data: { aktiekapital: 25000, antal_aktier: 100 } }) // company_settings
+    enqueue({ data: { setup_completed_at: '2026-10-29T09:00:00Z' } }) // upsert
+    const outcome = await registerShareEvent(ctx, { kind: 'ingaende', to_party_id: ANNA, share_count: 100, completes_setup: true }, { dryRun: false })
+    expect(outcome).toMatchObject({ ok: true, data: { event_number: 1, setup_completed_at: '2026-10-29T09:00:00Z' } })
+    expect(findCall('share_register_settings', 'upsert')?.[0]).toMatchObject({ company_id: 'company-1', setup_completed_by: 'user-1' })
+  })
+
+  it('refuses to complete a setup with an entry that leaves the register without shares, and one that is already complete', async () => {
+    enqueueEntry([])
+    const empty = await registerShareEvent(ctx, { kind: 'anteckning', note: 'Kontrollerad', completes_setup: true }, { dryRun: true })
+    expect(empty).toMatchObject({ ok: false, code: 'SHARE_REGISTER_EMPTY' })
+
+    reset()
+    enqueueEntryInUse()
+    const again = await registerShareEvent(ctx, { kind: 'anteckning', note: 'Kontrollerad', completes_setup: true }, { dryRun: true })
+    expect(again).toMatchObject({ ok: false, code: 'SHARE_REGISTER_SETUP_COMPLETE' })
+  })
+})
+
+describe('completeShareRegisterSetup', () => {
+  function enqueueSetup(events: unknown[], settings: Record<string, unknown> = { is_avstamningsbolag: false, setup_completed_at: null }, capital: Record<string, unknown> | null = { aktiekapital: 25000, antal_aktier: 100 }) {
+    enqueue({ data: { role: 'owner' } }) // company_members
+    enqueue({ data: settings }) // share_register_settings
+    enqueue({ data: [classA] }) // share_classes
+    enqueue({ data: events }) // share_register_events
+    enqueue({ data: capital }) // company_settings
+  }
+
+  it('previews what the register holds and saves nothing', async () => {
+    enqueueSetup([founding])
+    const outcome = await completeShareRegisterSetup(ctx, {}, { dryRun: true })
+    expect(outcome.ok && outcome.dryRun).toBe(true)
+    if (!outcome.ok || !outcome.dryRun) return
+    expect(outcome.preview).toMatchObject({ total_shares: 100, holders: 1, last_event_number: 1, already_completed_at: null, warnings: [] })
+    expect(findCall('share_register_settings', 'upsert')).toBeUndefined()
+  })
+
+  it('warns in the preview when the register and the company details disagree on the number of shares', async () => {
+    enqueueSetup([founding], undefined, { aktiekapital: 25000, antal_aktier: 500 })
+    const outcome = await completeShareRegisterSetup(ctx, {}, { dryRun: true })
+    if (!outcome.ok || !outcome.dryRun) throw new Error('expected a preview')
+    expect((outcome.preview.warnings as string[])[0]).toMatch(/100 aktier.*500/)
+  })
+
+  it('refuses an empty register and a register that has moved on', async () => {
+    enqueueSetup([])
+    expect(await completeShareRegisterSetup(ctx, {}, { dryRun: false })).toMatchObject({ ok: false, code: 'SHARE_REGISTER_EMPTY' })
+    reset()
+    enqueueSetup([founding])
+    expect(await completeShareRegisterSetup(ctx, { expected_last_event_number: 0 }, { dryRun: false })).toMatchObject({ ok: false, code: 'SHARE_REGISTER_STALE' })
+    expect(findCall('share_register_settings', 'upsert')).toBeUndefined()
+  })
+
+  it('completes once: a second call answers the first one\'s moment and writes nothing', async () => {
+    enqueueSetup([founding])
+    enqueue({ data: { setup_completed_at: '2026-10-29T09:00:00Z' } }) // upsert
+    expect(await completeShareRegisterSetup(ctx, { expected_last_event_number: 1 }, { dryRun: false })).toMatchObject({
+      ok: true,
+      data: { setup_completed_at: '2026-10-29T09:00:00Z', total_shares: 100, holders: 1, completed_now: true },
+    })
+    reset()
+    enqueueSetup([founding], { is_avstamningsbolag: false, setup_completed_at: '2026-10-29T09:00:00Z' })
+    expect(await completeShareRegisterSetup(ctx, {}, { dryRun: false })).toMatchObject({ ok: true, data: { setup_completed_at: '2026-10-29T09:00:00Z', completed_now: false } })
+    expect(findCall('share_register_settings', 'upsert')).toBeUndefined()
+  })
+
+  it('is the owner\'s or an administrator\'s, and not for an avstämningsbolag', async () => {
+    enqueue({ data: { role: 'member' } })
+    expect(await completeShareRegisterSetup(ctx, {}, { dryRun: true })).toMatchObject({ ok: false, code: 'FORBIDDEN' })
+    reset()
+    enqueueSetup([founding], { is_avstamningsbolag: true, setup_completed_at: null })
+    expect(await completeShareRegisterSetup(ctx, {}, { dryRun: false })).toMatchObject({ ok: false, code: 'SHARE_REGISTER_AVSTAMNINGSBOLAG' })
   })
 })
 

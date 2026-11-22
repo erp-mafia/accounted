@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   EMPTY_EVENT,
   NEW_PARTY,
+  PRICED_KINDS,
   buildEventBody,
   parseWholeNumber,
   shareNumbersLabel,
@@ -270,5 +271,40 @@ describe('voteSharesAfter', () => {
 
   it('answers zero for a register without shares', () => {
     expect(voteSharesAfter([], classes, 'a', 2)).toEqual([])
+  })
+})
+
+describe('buildEventBody: the two phases of the register', () => {
+  const inUse = (over: Partial<FormState>) => buildEventBody(form({ kind: 'anteckning', note: 'x', ...over }), { today: TODAY, inUse: true })
+
+  it('sends the date as the entry\'s own while the register is set up, and asks for it', () => {
+    expect(bodyOf({ kind: 'anteckning', note: 'x' })).toMatchObject({ event_date: '2026-11-01' })
+    expect(errorsOf({ kind: 'anteckning', note: 'x', event_date: '' })).toEqual({ event_date: 'date_required' })
+  })
+
+  it('leaves the entry\'s day to the server once the register is in use, and sends an earlier day as the day of the event', () => {
+    const earlier = inUse({})
+    expect(earlier).toEqual({ ok: true, body: { kind: 'anteckning', note: 'x', occurred_on: '2026-11-01' } })
+    expect(inUse({ event_date: '' })).toEqual({ ok: true, body: { kind: 'anteckning', note: 'x' } })
+    expect(inUse({ event_date: TODAY })).toEqual({ ok: true, body: { kind: 'anteckning', note: 'x' } })
+    expect(inUse({ event_date: '2027-01-01' })).toEqual({ ok: false, errors: { event_date: 'date_future' } })
+  })
+
+  it('sends no day of the event with a rättelse', () => {
+    const result = buildEventBody(form({ kind: 'rattelse', note: 'fel ägare', corrects_event_id: 'e1' }), { today: TODAY, inUse: true })
+    expect(result).toEqual({ ok: true, body: { kind: 'rattelse', note: 'fel ägare', corrects_event_id: 'e1' } })
+  })
+
+  it('marks the entry that completes the setup, for the kinds that enter shares and only while set up', () => {
+    const opening = { kind: 'ingaende', to_party: RECEIVER, share_count: '500', completes_setup: 'true' }
+    expect(bodyOf(opening)).toMatchObject({ kind: 'ingaende', to_party_id: RECEIVER, share_count: 500, completes_setup: true })
+    expect(bodyOf({ kind: 'anteckning', note: 'x', completes_setup: 'true' })).not.toHaveProperty('completes_setup')
+    const used = buildEventBody(form({ ...opening, kind: 'nyemission' }), { today: TODAY, inUse: true })
+    expect(used.ok && used.body).not.toHaveProperty('completes_setup')
+  })
+
+  it('asks no price for a holding carried over from an earlier register', () => {
+    expect(PRICED_KINDS).not.toContain('ingaende')
+    expect(bodyOf({ kind: 'ingaende', to_party: RECEIVER, share_count: '500', price_total: '25000' })).not.toHaveProperty('price_total')
   })
 })

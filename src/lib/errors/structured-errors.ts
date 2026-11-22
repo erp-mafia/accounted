@@ -13233,6 +13233,17 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
     message_sv: 'Aktieboken har fått en ny anteckning sedan du förhandsgranskade. Förhandsgranska igen, så visas läget som det är nu.',
     message_en: 'The share register has a new entry since your preview. Preview again to see it as it stands now.',
   },
+  SHARE_REGISTER_SETUP_COMPLETE: {
+    httpStatus: 409,
+    message_sv: 'Aktieboken är redan upplagd och i bruk. Ett ingående innehav förs bara in medan aktieboken läggs upp: för in en överlåtelse eller en emission i stället.',
+    message_en: 'The share register is already set up and in use. An opening holding is entered only while the register is set up: enter a transfer or an issue instead.',
+    thrown_message_sv: true,
+  },
+  SHARE_REGISTER_EMPTY: {
+    httpStatus: 409,
+    message_sv: 'Aktieboken har inga aktier än. För in aktierna först.',
+    message_en: 'The share register holds no shares yet. Enter the shares first.',
+  },
   SHARE_REGISTER_AVSTAMNINGSBOLAG: {
     httpStatus: 409,
     message_sv: 'Bolaget är ett avstämningsbolag: aktieboken förs av den centrala värdepappersförvararen.',

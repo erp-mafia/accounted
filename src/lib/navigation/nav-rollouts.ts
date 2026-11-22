@@ -3,7 +3,7 @@ import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
 import { isInkorgV2Enabled } from '@/lib/inkorg/flag'
 import { isAutogiroEnabled } from '@/lib/invoices/autogiro/flag'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
-import { isBolagetEnabled } from '@/lib/env/bolaget-switch'
+import { isBolagetEnabled, isBolagetRegistersEnabled } from '@/lib/env/bolaget-switch'
 import { commitmentsEnabledFor } from '@/lib/env/commitments-switch'
 import { isCompanyQuestionsEnabled } from '@/lib/env/company-questions-switch'
 import { assistantChatRowShown } from '@/lib/env/assistant-chat-switch'
@@ -26,7 +26,8 @@ export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'arkivBrainEnabl
 /**
  * `bolagetRegisters`: the company row's `bolaget_registers_enabled` (a
  * company set up from a formation), which opens the register rows outside
- * the Bolaget rollout.
+ * the Bolaget rollout, as BOLAGET_REGISTERS_COMPANY_IDS does for the
+ * companies it names.
  */
 export function navRollouts(companyId: string | null | undefined, company: { bolagetRegisters?: boolean } = {}): NavRollouts {
   return {
@@ -41,7 +42,7 @@ export function navRollouts(companyId: string | null | undefined, company: { bol
     // page's actions follow.
     signingEnabled: signingSwitchedOn(companyId),
     // The Bolaget section (Aktiebok, Styrelse och firmateckning).
-    bolagetEnabled: isBolagetEnabled(companyId) || company.bolagetRegisters === true,
+    bolagetEnabled: isBolagetRegistersEnabled(companyId) || company.bolagetRegisters === true,
     // Möten, Kapital, Ägarskatt: the rollout alone.
     bolagetMoneyEnabled: isBolagetEnabled(companyId),
     // Avtal och åtaganden (Bolaget rollout, BOLAGET_COMPANY_IDS).

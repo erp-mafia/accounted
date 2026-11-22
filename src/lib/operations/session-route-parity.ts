@@ -321,6 +321,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   ),
   // Bolaget registers (lib/operations/bolaget.ts).
   'POST /api/bolaget/share-register/events': covered([`POST ${V}/share-register/events`, 'gnubok_register_share_event']),
+  // Taking the register into use: the same step as an entry sent with completes_setup.
+  'POST /api/bolaget/share-register/setup': covered([`POST ${V}/share-register/events`, 'gnubok_register_share_event']),
   'POST /api/bolaget/share-classes': covered([`POST ${V}/share-classes`, 'gnubok_create_share_class']),
   'PATCH /api/bolaget/share-classes/:id': covered([`PATCH ${V}/share-classes/:id`, 'gnubok_update_share_class']),
   'POST /api/bolaget/roles': covered([`POST ${V}/company-roles`, 'gnubok_add_company_role']),
@@ -328,7 +330,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bolaget/signatory-rules': covered([`POST ${V}/signatory-rules`, 'gnubok_set_signatory_rule']),
   'POST /api/bolaget/beneficial-owners/assessments': covered([`POST ${V}/beneficial-owners/assessments`, 'gnubok_confirm_beneficial_owners']),
   'PATCH /api/bolaget/people/:partyId': uiOnly(
-    'a holder\'s personnummer and postal address for the aktiebok (ABL 5:5): collected in the app only, never through an API key or an agent',
+    'a holder\'s name, personnummer and postal address for the aktiebok (ABL 5:5): collected and corrected in the app only, never through an API key or an agent',
   ),
   'PATCH /api/bolaget/settings': uiOnly(
     'the avstämningsbolag status, stated once in the app: the central securities depository then keeps the aktiebok and this register takes no entries',

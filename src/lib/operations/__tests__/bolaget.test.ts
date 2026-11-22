@@ -73,6 +73,7 @@ describe('Bolaget operations', () => {
     vi.mocked(loadShareRegisterData).mockResolvedValue({
       as_of: '2026-06-30',
       is_avstamningsbolag: false,
+      setup_completed_at: null,
       classes: [],
       events: [],
       replay,

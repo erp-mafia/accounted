@@ -48,6 +48,7 @@ export const ROLE_LABELS_SV: Record<CompanyRoleKind, string> = {
 
 export const SHARE_EVENT_KINDS = [
   'bildande',
+  'ingaende',
   'nyemission',
   'fondemission',
   'overlatelse',
@@ -63,8 +64,12 @@ export const SHARE_EVENT_KINDS = [
 ] as const
 export type ShareEventKind = (typeof SHARE_EVENT_KINDS)[number]
 
-/** Kinds that create new share numbers. */
-export const ISSUE_KINDS: readonly ShareEventKind[] = ['bildande', 'nyemission', 'fondemission']
+/**
+ * Kinds that put share numbers into the register: the issues, and an opening
+ * holding (ingaende), which enters shares that already existed in the
+ * register the company kept before.
+ */
+export const ISSUE_KINDS: readonly ShareEventKind[] = ['bildande', 'ingaende', 'nyemission', 'fondemission']
 /** Kinds that move or end shares a holder has. */
 export const HOLDER_KINDS: readonly ShareEventKind[] = ['overlatelse', 'indragning', 'omvandling']
 /** Kinds that renumber every share. */
@@ -74,6 +79,7 @@ export const HOLDING_KINDS: readonly ShareEventKind[] = [...ISSUE_KINDS, ...HOLD
 
 export const SHARE_EVENT_LABELS_SV: Record<ShareEventKind, string> = {
   bildande: 'Bildande',
+  ingaende: 'Ingående innehav',
   nyemission: 'Nyemission',
   fondemission: 'Fondemission',
   overlatelse: 'Överlåtelse',
@@ -135,7 +141,13 @@ export interface ShareClass {
 export interface ShareEvent {
   id: string
   event_number: number
+  /**
+   * The day the entry belongs to in the register: the day of the event while
+   * the register is set up, the day the entry is made once it is in use.
+   */
   event_date: string
+  /** The day of the event, when it is earlier than event_date; else null. */
+  occurred_on?: string | null
   kind: ShareEventKind
   share_class_id: string | null
   to_share_class_id: string | null
