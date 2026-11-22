@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
   calculatePeriodDates,
@@ -289,35 +290,34 @@ interface RestNet {
  * 11 §), and they need not: the skattekonto booking books every moms row on
  * 2650, a refund on 1650 only when 1650 holds exactly that claim. So 2650
  * ends on what is still owed or due for the period. When the rest has a net,
- * a claim the posted ones put on 1650 that 1650 still holds goes over with it
- * (`drain`: 1650 credit, 2650 debit): the period's refund or charge no longer
- * equals that claim, so no refund would clear 1650, and 1650 then holds
- * nothing of the period. A claim 1650 no longer holds exactly (paid out, or
- * mixed with another period's) is left where it is. Pure.
+ * a claim the posted ones put on 1650 that 1650 still carries goes over with
+ * it (`drain`: 1650 credit, 2650 debit): the period's refund or charge no
+ * longer equals that claim, so no refund would clear 1650, and 1650 then
+ * holds nothing of the period. A claim already paid out off 1650 is left
+ * where it is. Pure.
  */
 function netLines(net: number, rest?: RestNet): VatSettlementProposalLine[] {
-  const payable = (debit: number, credit: number): VatSettlementProposalLine => ({
-    account_number: VAT_SETTLEMENT_ACCOUNT,
+  const line = (account: string, debit: number, credit: number, text: string): VatSettlementProposalLine => ({
+    account_number: account,
     debit_amount: debit,
     credit_amount: credit,
-    line_description: 'Moms att betala',
-  })
-  const receivable = (debit: number, credit: number): VatSettlementProposalLine => ({
-    account_number: VAT_REFUND_ACCOUNT,
-    debit_amount: debit,
-    credit_amount: credit,
-    line_description: 'Moms att återfå',
+    line_description: text,
   })
   if (!rest) {
-    if (net > 0) return [payable(0, net)]
-    if (net < 0) return [receivable(-net, 0)]
+    if (net > 0) return [line(VAT_SETTLEMENT_ACCOUNT, 0, net, 'Moms att betala')]
+    if (net < 0) return [line(VAT_REFUND_ACCOUNT, -net, 0, 'Moms att återfå')]
     return []
   }
-  // 2650 takes the net and whatever comes off 1650.
+  // 2650 takes the net and whatever comes off 1650. The texts name the
+  // accounts: a line can lower a debt or a claim as well as add one.
   const onPayable = roundOre(net - rest.drain)
   return [
-    ...(rest.drain > 0 ? [receivable(0, rest.drain)] : []),
-    ...(onPayable > 0 ? [payable(0, onPayable)] : onPayable < 0 ? [payable(-onPayable, 0)] : []),
+    ...(rest.drain > 0 ? [line(VAT_REFUND_ACCOUNT, 0, rest.drain, 'Momsfordran')] : []),
+    ...(onPayable > 0
+      ? [line(VAT_SETTLEMENT_ACCOUNT, 0, onPayable, 'Redovisningskonto för moms')]
+      : onPayable < 0
+        ? [line(VAT_SETTLEMENT_ACCOUNT, -onPayable, 0, 'Redovisningskonto för moms')]
+        : []),
   ]
 }
 
@@ -420,10 +420,12 @@ async function remainingSettlementLines(
   companyId: string,
   ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicVatAccounts'>,
   filedNet: number,
-  settlementIds: string[],
+  settlements: ReadonlyArray<Pick<VatSettlementExistingEntry, 'id' | 'entry_date'>>,
   entryDate: string,
 ): Promise<{ lines: VatSettlementProposalLine[]; rounding_amount: number } | null> {
-  if (settlementIds.length === 0) return null
+  if (settlements.length === 0) return null
+  const settlementIds = settlements.map((e) => e.id)
+  const postedFrom = settlements.reduce((min, e) => (e.entry_date < min ? e.entry_date : min), settlements[0].entry_date)
   const moved = await movedByAccount(supabase, companyId, settlementIds, [VAT_ROUNDING_ACCOUNT])
   const cleared = new Map<string, number>()
   let onReceivable = 0
@@ -456,7 +458,7 @@ async function remainingSettlementLines(
   // With no net the period's total is unchanged, so a refund of the claim
   // still matches 1650: the claim stays.
   const claim = Math.max(roundOre(onReceivable), 0)
-  const drain = net !== 0 && claim > 0 && (await receivableStillHolds(supabase, companyId, claim, entryDate)) ? claim : 0
+  const drain = net !== 0 && claim > 0 && (await receivableStillHolds(supabase, companyId, claim, postedFrom, entryDate)) ? claim : 0
   return clearingLines(left, net, { drain })
 }
 
@@ -477,19 +479,39 @@ function filedNetOf(
 }
 
 /**
- * Whether 1650 still holds exactly the claim the period's posted
- * momsredovisningar put there: its balance (accountBalanceThrough, the one
- * read of what stands on an account) on today or the rest's own date,
- * whichever is later, equals the claim. The skattekonto booking clears 1650
- * with a refund only on the same match, so a claim already refunded, or one
- * mixed with another period's, is left alone. Throws when the balance cannot
- * be read, as the proposal's other reads do.
+ * Whether 1650 still carries the claim the period's posted momsredovisningar
+ * put there: its balance (accountBalanceThrough, the one read of what stands
+ * on an account) on today or the rest's own date, whichever is later, covers
+ * the claim, and no refund of it was booked off 1650 since they were posted.
+ * A refund is a credit on 1650 within a krona of the claim, the match the
+ * skattekonto booking makes before it books a refund there. Other claims on
+ * 1650 (the next period's, booked before this one is paid out) do not stop
+ * the move. Throws when a read fails, as the proposal's other reads do.
  */
-async function receivableStillHolds(supabase: SupabaseClient, companyId: string, claim: number, entryDate: string): Promise<boolean> {
+async function receivableStillHolds(
+  supabase: SupabaseClient,
+  companyId: string,
+  claim: number,
+  postedFrom: string,
+  entryDate: string,
+): Promise<boolean> {
   const today = todayIsoStockholm()
-  const balance = await accountBalanceThrough(supabase, companyId, VAT_REFUND_ACCOUNT, entryDate > today ? entryDate : today)
+  const through = entryDate > today ? entryDate : today
+  const balance = await accountBalanceThrough(supabase, companyId, VAT_REFUND_ACCOUNT, through)
   if (balance === null) throw new Error('momsfordran balance read failed')
-  return roundOre(balance - claim) === 0
+  if (roundOre(balance - claim) < 0) return false
+  const credits = await fetchEntryLines<{ credit_amount: number | string | null }>({
+    supabase,
+    lineColumns: 'credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q.eq('company_id', companyId).eq('status', 'posted').neq('source_type', 'storno').gte('entry_date', postedFrom).lte('entry_date', through),
+    filterLines: (q: EntryLinesQuery) => q.eq('account_number', VAT_REFUND_ACCOUNT),
+    attachEntriesAs: null,
+  })
+  return !credits.some((row) => {
+    const credit = Number(row.credit_amount) || 0
+    return credit > 0 && Math.abs(roundOre(credit - claim)) <= FILED_ROUNDING
+  })
 }
 
 const NET_LINE_ACCOUNTS = new Set([VAT_SETTLEMENT_ACCOUNT, VAT_REFUND_ACCOUNT, VAT_ROUNDING_ACCOUNT])
@@ -845,7 +867,7 @@ export async function buildVatSettlementProposal(
     companyId,
     ledger,
     filedNet,
-    existing.filter((e) => e.status === 'posted').map((e) => e.id),
+    existing.filter((e) => e.status === 'posted'),
     entryDate.entry_date,
   )
 

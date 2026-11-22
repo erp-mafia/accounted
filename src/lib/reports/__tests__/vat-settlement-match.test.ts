@@ -638,8 +638,8 @@ describe('a momsredovisning inside the period that cleared only part of it (crm#
     // charges the 330 net.
     expect(proposal.lines).toEqual([
       { account_number: '2611', debit_amount: 400.4, credit_amount: 0 },
-      { account_number: '1650', debit_amount: 0, credit_amount: 70, line_description: 'Moms att återfå' },
-      { account_number: '2650', debit_amount: 0, credit_amount: 330, line_description: 'Moms att betala' },
+      { account_number: '1650', debit_amount: 0, credit_amount: 70, line_description: 'Momsfordran' },
+      { account_number: '2650', debit_amount: 0, credit_amount: 330, line_description: 'Redovisningskonto för moms' },
       { account_number: '3740', debit_amount: 0, credit_amount: 0.4, line_description: 'Öres- och kronutjämning' },
     ])
     expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
@@ -663,8 +663,8 @@ describe('a momsredovisning inside the period that cleared only part of it (crm#
     // 100 ruta 49 gets back, and 1650 nothing a refund would have to match.
     expect(proposal.lines).toEqual([
       { account_number: '2641', debit_amount: 0, credit_amount: 30 },
-      { account_number: '1650', debit_amount: 0, credit_amount: 70, line_description: 'Moms att återfå' },
-      { account_number: '2650', debit_amount: 100, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '1650', debit_amount: 0, credit_amount: 70, line_description: 'Momsfordran' },
+      { account_number: '2650', debit_amount: 100, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ])
     expect(netAccountsAfter(full.lines, proposal.lines)).toEqual({ '2650': -100, '1650': 0 })
   })
@@ -683,8 +683,8 @@ describe('a momsredovisning inside the period that cleared only part of it (crm#
       { account_number: '2611', debit_amount: 400.4, credit_amount: 0 },
       { account_number: '2614', debit_amount: 500.5, credit_amount: 0 },
       { account_number: '2645', debit_amount: 0, credit_amount: 500.5 },
-      { account_number: '1650', debit_amount: 0, credit_amount: 670, line_description: 'Moms att återfå' },
-      { account_number: '2650', debit_amount: 270, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '1650', debit_amount: 0, credit_amount: 670, line_description: 'Momsfordran' },
+      { account_number: '2650', debit_amount: 270, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
       { account_number: '3740', debit_amount: 0, credit_amount: 0.4, line_description: 'Öres- och kronutjämning' },
     ])
     // One account holds the position, 270 to get back: the rest books no
@@ -721,7 +721,7 @@ describe('a momsredovisning inside the period that cleared only part of it (crm#
     // Expected entry: 2611 D 100 / 2650 C 100, no 3740 line: 2650 ends on 499.
     expect(proposal.lines).toEqual([
       { account_number: '2611', debit_amount: 100, credit_amount: 0 },
-      { account_number: '2650', debit_amount: 0, credit_amount: 100, line_description: 'Moms att betala' },
+      { account_number: '2650', debit_amount: 0, credit_amount: 100, line_description: 'Redovisningskonto för moms' },
     ])
     expect(netAccountsAfter(manual.lines, proposal.lines)).toEqual({ '2650': 499, '1650': 0 })
   })
@@ -759,8 +759,8 @@ describe('a refund period whose rest comes before or after its declaration is fi
     // Expected entry: 2611 D 250 / 1650 C 100 / 2650 C 150.
     expect(proposal.lines).toEqual([
       { account_number: '2611', debit_amount: 250, credit_amount: 0 },
-      { account_number: '1650', debit_amount: 0, credit_amount: 100, line_description: 'Moms att återfå' },
-      { account_number: '2650', debit_amount: 0, credit_amount: 150, line_description: 'Moms att betala' },
+      { account_number: '1650', debit_amount: 0, credit_amount: 100, line_description: 'Momsfordran' },
+      { account_number: '2650', debit_amount: 0, credit_amount: 150, line_description: 'Redovisningskonto för moms' },
     ])
     const books = [...settled.lines, ...asLines(proposal.lines)]
     // Filed after the sale: one charge of 150. Filed before it: the 100 paid out, then 250 charged.
@@ -771,14 +771,14 @@ describe('a refund period whose rest comes before or after its declaration is fi
   it('leaves a claim already paid out alone, filing on record or not (reviews of #3647)', async () => {
     const settled = settledClaim(100)
     // Filed at -100; the refund matched 1650 and cleared it.
-    const refunded = entry('2026-11-12', skvRow(100, '1650'), { description: 'Moms juli-sept 2026' })
+    const refunded = entry('2026-10-12', skvRow(100, '1650'), { description: 'Moms juli-sept 2026' })
     const entries = [purchase('2026-07-20', 100), settled, refunded, sale(250)]
     const marked = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries, shaped: [], filings: [FILED_Q3] }), CO, 'quarterly', 2026, 3)
     const unmarked = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries, shaped: [] }), CO, 'quarterly', 2026, 3)
     // Expected entry: 2611 D 250 / 2650 C 250, the correction on its own.
     const expected = [
       { account_number: '2611', debit_amount: 250, credit_amount: 0 },
-      { account_number: '2650', debit_amount: 0, credit_amount: 250, line_description: 'Moms att betala' },
+      { account_number: '2650', debit_amount: 0, credit_amount: 250, line_description: 'Redovisningskonto för moms' },
     ]
     expect(marked.lines).toEqual(expected)
     expect(unmarked.lines).toEqual(expected)
@@ -794,8 +794,8 @@ describe('a refund period whose rest comes before or after its declaration is fi
     // Expected entry: 2611 D 100 / 1650 C 300 / 2650 D 200.
     expect(proposal.lines).toEqual([
       { account_number: '2611', debit_amount: 100, credit_amount: 0 },
-      { account_number: '1650', debit_amount: 0, credit_amount: 300, line_description: 'Moms att återfå' },
-      { account_number: '2650', debit_amount: 200, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '1650', debit_amount: 0, credit_amount: 300, line_description: 'Momsfordran' },
+      { account_number: '2650', debit_amount: 200, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ])
     const books = [...settled.lines, ...asLines(proposal.lines)]
     // Filed before the sale: 300 paid out, then 100 charged. Filed after it: 200 paid out.
@@ -810,14 +810,61 @@ describe('a refund period whose rest comes before or after its declaration is fi
     // Expected entry: 2641 C 30 / 1650 C 100 / 2650 D 130.
     expect(proposal.lines).toEqual([
       { account_number: '2641', debit_amount: 0, credit_amount: 30 },
-      { account_number: '1650', debit_amount: 0, credit_amount: 100, line_description: 'Moms att återfå' },
-      { account_number: '2650', debit_amount: 130, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '1650', debit_amount: 0, credit_amount: 100, line_description: 'Momsfordran' },
+      { account_number: '2650', debit_amount: 130, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ])
     const books = [...settled.lines, ...asLines(proposal.lines)]
     // Filed after the purchase: 130 paid out. Filed before it: 100, then 30.
     expect(netAccountsAfter(afterRows(books, [130]), [])).toEqual({ '2650': 0, '1650': 0 })
     expect(netAccountsAfter(afterRows(books, [100, 30]), [])).toEqual({ '2650': 0, '1650': 0 })
     // Adding to 1650 instead (1650 D 30) left 2650 C 100 beside 1650 D 100 when 130 came at once.
+  })
+
+  it("moves the claim beside another period's claim still on 1650, whose own refund then matches it (review of #3647)", async () => {
+    // Q2's claim of 80 is not paid out yet when Q3's rest is booked.
+    const q2Bought = purchase('2026-05-10', 80)
+    const q2Settled = entry('2026-06-30', [{ account_number: '2641', credit: 80 }, { account_number: '1650', debit: 80 }], {
+      description: 'Momsredovisning Kvartal 2 2026',
+      source_type: 'vat_settlement',
+    })
+    const settled = settledClaim(100)
+    const proposal = await buildVatSettlementProposal(
+      ledger({ fiscalPeriods: years, entries: [q2Bought, q2Settled, purchase('2026-07-20', 100), settled, sale(250)], shaped: [] }),
+      CO, 'quarterly', 2026, 3,
+    )
+    // Expected entry: 2611 D 250 / 1650 C 100 / 2650 C 150, Q2's 80 left on 1650.
+    expect(proposal.lines).toEqual([
+      { account_number: '2611', debit_amount: 250, credit_amount: 0 },
+      { account_number: '1650', debit_amount: 0, credit_amount: 100, line_description: 'Momsfordran' },
+      { account_number: '2650', debit_amount: 0, credit_amount: 150, line_description: 'Redovisningskonto för moms' },
+    ])
+    const books = [...q2Settled.lines, ...settled.lines, ...asLines(proposal.lines)]
+    // Q3 filed after the sale (150 charged) or before it (100 paid out, 250 charged); Q2's 80 then paid out.
+    expect(netAccountsAfter(afterRows(books, [-150, 80]), [])).toEqual({ '2650': 0, '1650': 0 })
+    expect(netAccountsAfter(afterRows(books, [100, -250, 80]), [])).toEqual({ '2650': 0, '1650': 0 })
+  })
+
+  it("leaves 1650 to another period's claim once this period's own was paid out off it (review of #3647)", async () => {
+    const settled = settledClaim(100)
+    const refunded = entry('2026-10-12', skvRow(100, '1650'), { description: 'Moms juli-sept 2026' })
+    // October's own claim of 150 now sits on 1650.
+    const octBought = purchase('2026-10-05', 150)
+    const octSettled = entry('2026-10-31', [{ account_number: '2641', credit: 150 }, { account_number: '1650', debit: 150 }], {
+      description: 'Momsredovisning oktober 2026',
+      source_type: 'vat_settlement',
+    })
+    const proposal = await buildVatSettlementProposal(
+      ledger({ fiscalPeriods: years, entries: [purchase('2026-07-20', 100), settled, refunded, octBought, octSettled, sale(250)], shaped: [] }),
+      CO, 'quarterly', 2026, 3,
+    )
+    // Expected entry: 2611 D 250 / 2650 C 250. Taking 100 off 1650 would leave 1650 D 50 beside 2650 C 50.
+    expect(proposal.lines).toEqual([
+      { account_number: '2611', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2650', debit_amount: 0, credit_amount: 250, line_description: 'Redovisningskonto för moms' },
+    ])
+    // The correction's 250 charged, then October's 150 paid out against 1650.
+    const books = [...settled.lines, ...refunded.lines, ...octSettled.lines, ...asLines(proposal.lines)]
+    expect(netAccountsAfter(afterRows(books, [-250, 150]), [])).toEqual({ '2650': 0, '1650': 0 })
   })
 
   it('puts the rest of a period settled straight against the skattekonto on 2650', async () => {
@@ -829,7 +876,7 @@ describe('a refund period whose rest comes before or after its declaration is fi
     // Expected entry: 2641 C 30 / 2650 D 30, where Skatteverket's refund of the 30 is booked.
     expect(proposal.lines).toEqual([
       { account_number: '2641', debit_amount: 0, credit_amount: 30 },
-      { account_number: '2650', debit_amount: 30, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '2650', debit_amount: 30, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ])
     expect(partlySettledRestBooksAlone(proposal)).toBe(true)
   })
@@ -868,7 +915,7 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     // neither would ever clear.
     expect(proposal.lines).toEqual([
       { account_number: '2641', debit_amount: 0, credit_amount: 250 },
-      { account_number: '2650', debit_amount: 250, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '2650', debit_amount: 250, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ])
     expect(netAccountsAfter(settled.lines, proposal.lines)).toEqual({ '2650': 0, '1650': 0 })
     expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
@@ -889,7 +936,7 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     // Expected entry, as before the charge: 2641 C 250 / 2650 D 250.
     expect(proposal.lines).toEqual([
       { account_number: '2641', debit_amount: 0, credit_amount: 250 },
-      { account_number: '2650', debit_amount: 250, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '2650', debit_amount: 250, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ])
     // 2650 then holds the 250 the corrected declaration gets back, 1650
     // nothing, and the refund Skatteverket books on 2650 clears it.
@@ -965,7 +1012,7 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     // 49 gets back, the net one momsredovisning for the quarter would book.
     expect(proposal.lines).toEqual([
       { account_number: '2641', debit_amount: 0, credit_amount: 400 },
-      { account_number: '2650', debit_amount: 400, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '2650', debit_amount: 400, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ])
     expect(netAccountsAfter(settled.lines, proposal.lines)).toEqual({ '2650': -150, '1650': 0 })
     const once = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [sale, bigger], shaped: [] }), CO, 'quarterly', 2026, 3)
@@ -1020,12 +1067,13 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     const bought = entry('2026-09-21', [{ account_number: '5010', debit: 200 }, { account_number: '2641', debit: 50 }, { account_number: '2440', credit: 250 }])
     const proposal = await buildVatSettlementProposal(ledger({ fiscalPeriods: years, entries: [big, settledBig, credit, bought], shaped: [] }), CO, 'quarterly', 2026, 3)
     expect(proposal.filed_net).toBe(350)
-    // Expected entry: 2641 C 50 / 2650 D 50, no öre line. (The credit note's
-    // 100 on 2611 stays: a rest never clears an account the momsredovisning
-    // already cleared beyond its balance, as before.)
+    // Expected entry: 2641 C 50 / 2650 D 50, no öre line. The credit note's
+    // 100 stays on 2611: a rest does not reopen an account the momsredovisning
+    // cleared beyond its balance. That is the follow-up #3624 named, older
+    // than this change and not part of it.
     expect(proposal.lines).toEqual([
       { account_number: '2641', debit_amount: 0, credit_amount: 50 },
-      { account_number: '2650', debit_amount: 50, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '2650', debit_amount: 50, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ])
   })
 
@@ -1048,7 +1096,7 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     // debt on 2650 beside a 350 claim on 1650.
     const expected = [
       { account_number: '2641', debit_amount: 0, credit_amount: 100 },
-      { account_number: '2650', debit_amount: 100, credit_amount: 0, line_description: 'Moms att betala' },
+      { account_number: '2650', debit_amount: 100, credit_amount: 0, line_description: 'Redovisningskonto för moms' },
     ]
     expect(unpaid.lines).toEqual(expected)
     expect(paid.lines).toEqual(expected)
