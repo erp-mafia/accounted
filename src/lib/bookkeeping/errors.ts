@@ -1103,6 +1103,32 @@ export class BookkeepingDatabaseError extends Error {
   }
 }
 
+/**
+ * An SIE voucher chunk refused by journal_import_source_owned_idx: one of its
+ * vouchers has the source series and number of a posted imported verifikat
+ * of the same fiscal year. The chunk is refused the same way on every try,
+ * so the SIE worker stops the job instead of retrying it. `voucherRef` names
+ * the voucher ("A762") when the refusal's key does.
+ */
+export class SIESourceVoucherTakenError extends BookkeepingDatabaseError {
+  constructor(cause: string, readonly voucherRef: string | null) {
+    super('import_sie_chunk', cause, '23505')
+    this.name = 'SIESourceVoucherTakenError'
+  }
+}
+
+/**
+ * The journal_import_source_owned_idx refusal in an import_sie_chunk error,
+ * or null for any other failure. The unique violation's detail names the key:
+ * "Key (company_id, fiscal_period_id, source_voucher_series,
+ * source_voucher_number)=(<uuid>, <uuid>, A, 762) already exists."
+ */
+export function sieSourceVoucherTaken(error: { code?: string; message: string; details?: string | null }): SIESourceVoucherTakenError | null {
+  if (error.code !== '23505' || !error.message.includes('"journal_import_source_owned_idx"')) return null
+  const key = /=\([0-9a-f-]{36}, [0-9a-f-]{36}, (.*), (-?\d+)\) already exists/.exec(error.details ?? '')
+  return new SIESourceVoucherTakenError(error.message, key ? `${key[1]!.trim()}${key[2]}` : null)
+}
+
 export interface UnusedVoucherAllocation {
   fiscalPeriodId: string
   voucherSeries: string
