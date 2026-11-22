@@ -5,6 +5,8 @@ import { BL_BASE_URL, BL_BATCH_PAGE_SIZE, BL_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 import { cleanProviderPayload } from '../provider-text';
 
+// Per attempt, sized for one record. The migration worker passes its own for
+// whole register pages (MIGRATION_LIST_TIMEOUT_MS in provider-data-fetcher.ts).
 const FETCH_TIMEOUT_MS = 15_000;
 // The SIE export renders a whole fiscal year server-side (megabytes for an
 // active company): give it more room than ordinary CRUD reads.
@@ -83,6 +85,7 @@ export class BjornLundenClient {
   }
 
   /**
+   * @param options.timeoutMs Per-attempt timeout; default FETCH_TIMEOUT_MS.
    * @param options.retry Set to false to fail fast on the first error instead
    *   of retrying. Used by credential probes, where a bad User-Key answers
    *   HTTP 500 (a "retryable" status) and would otherwise burn the full retry
@@ -92,7 +95,7 @@ export class BjornLundenClient {
     accessToken: string,
     userKey: string,
     path: string,
-    options?: { retry?: boolean },
+    options?: { retry?: boolean; timeoutMs?: number },
   ): Promise<T> {
     return withRetry(
       async () => {
@@ -104,7 +107,7 @@ export class BjornLundenClient {
             'User-Key': userKey,
             Accept: 'application/json',
           },
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          signal: AbortSignal.timeout(options?.timeoutMs ?? FETCH_TIMEOUT_MS),
         });
 
         if (!response.ok) {
@@ -130,7 +133,7 @@ export class BjornLundenClient {
     accessToken: string,
     userKey: string,
     relativePath: string,
-    options?: { page?: number; pageSize?: number },
+    options?: { page?: number; pageSize?: number; timeoutMs?: number },
   ): Promise<{ items: T[]; page: number; totalPages: number; totalCount: number }> {
     // Sandbox-verified: the batch endpoints honor `page` and `rows`. The
     // response envelope echoes `pageRequested`, but a `pageRequested` REQUEST
@@ -141,7 +144,7 @@ export class BjornLundenClient {
     params.set('rows', String(options?.pageSize ?? BL_BATCH_PAGE_SIZE));
 
     const path = `${relativePath}?${params.toString()}`;
-    const response = await this.get<BLPaginatedResponse<T> | T[]>(accessToken, userKey, path);
+    const response = await this.get<BLPaginatedResponse<T> | T[]>(accessToken, userKey, path, { timeoutMs: options?.timeoutMs });
 
     // The register endpoints (/customer, /supplier) ignore paging and answer
     // the whole register as one bare array. That is the one and only page.

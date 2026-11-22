@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mostRecentEndedVatPeriod } from '../period-defaults'
+import { lastEndedCalendarPeriod, mostRecentEndedVatPeriod } from '../period-defaults'
 
 // Dates use the local-time Date(y, m, d) constructor: the ISO-string form
 // parses as UTC midnight, which shifts a calendar day in negative-offset
@@ -97,5 +97,25 @@ describe('mostRecentEndedVatPeriod', () => {
         period: 3,
       })
     })
+  })
+})
+
+// The periodisk sammanställning is due the 25th of the month after its
+// period (SFL 35 kap 9 §), so its view opens on the period that just ended.
+describe('lastEndedCalendarPeriod', () => {
+  it('returns the previous quarter, not the running one', () => {
+    expect(lastEndedCalendarPeriod('quarterly', new Date(2026, 10, 22))).toEqual({ year: 2026, period: 3 })
+    expect(lastEndedCalendarPeriod('quarterly', new Date(2026, 3, 1))).toEqual({ year: 2026, period: 1 })
+  })
+
+  it('returns Q4 of last year in the first quarter', () => {
+    expect(lastEndedCalendarPeriod('quarterly', new Date(2027, 0, 1))).toEqual({ year: 2026, period: 4 })
+    expect(lastEndedCalendarPeriod('quarterly', new Date(2027, 2, 31))).toEqual({ year: 2026, period: 4 })
+  })
+
+  it('returns the previous month, December of last year in January', () => {
+    expect(lastEndedCalendarPeriod('monthly', new Date(2026, 10, 22))).toEqual({ year: 2026, period: 10 })
+    expect(lastEndedCalendarPeriod('monthly', new Date(2027, 0, 10))).toEqual({ year: 2026, period: 12 })
+    expect(lastEndedCalendarPeriod('monthly', new Date(2027, 1, 10))).toEqual({ year: 2027, period: 1 })
   })
 })

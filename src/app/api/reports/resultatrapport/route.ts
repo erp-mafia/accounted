@@ -15,20 +15,24 @@ export const GET = withRouteContext('report.resultatrapport', async (request, { 
     return NextResponse.json({ error: 'period_id is required' }, { status: 400 })
   }
 
-  const { data: period } = await supabase
+  const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
     .select('period_start, period_end')
     .eq('id', periodId)
     .eq('company_id', companyId)
-    .single()
+    .maybeSingle()
 
-  let range: { fromDate?: string; toDate?: string } = {}
-  if (period) {
-    const parsed = parseReportDateRange(searchParams, period)
-    if (!parsed.ok) {
-      return NextResponse.json({ error: parsed.error }, { status: 400 })
-    }
-    range = parsed.range
+  if (periodError) throw periodError
+  // A period_id that is not the active company's (a page still holding the
+  // previous company's year right after a company switch) is a stale request,
+  // not a failure: say so, and generate nothing from another company's period.
+  if (!period) {
+    return errorResponseFromCode('PERIOD_NOT_FOUND', log.child({ periodId }), { requestId })
+  }
+
+  const parsed = parseReportDateRange(searchParams, period)
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 })
   }
 
   const dimFilter = parseDimensionFilterParams(searchParams)
@@ -43,13 +47,14 @@ export const GET = withRouteContext('report.resultatrapport', async (request, { 
 
   try {
     const result = await generateResultatrapport(supabase, companyId, periodId, {
-      ...range,
+      ...parsed.range,
       dimensions: dimFilter.dimensions,
       budgetId: budgetParam.budgetId,
     })
     return NextResponse.json({ data: result })
   } catch (err) {
     if (err instanceof ReportBudgetError) return errorResponseFromCode(err.code, log, { requestId })
+    log.error('resultatrapport generation failed', err as Error, { periodId })
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to generate resultatrapport' },
       { status: 500 }

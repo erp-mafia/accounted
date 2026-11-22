@@ -160,6 +160,16 @@ describe('POST /api/settings/skattekonto-account/transfer-draft', () => {
     expect(res.status).toBe(409)
   })
 
+  it('answers 400 telling the user to create the year when no open period covers the date', async () => {
+    enqueue({ data: { role: 'owner' } })
+    transferMock.mockResolvedValue({ ok: false, code: 'NO_OPEN_PERIOD_FOR_DATE', details: { entry_date: '2027-01-05' } })
+    const res = await TRANSFER(request('POST', {}, TRANSFER_URL), params)
+    expect(res.status).toBe(400)
+    const body = JSON.stringify(await res.json())
+    expect(body).toContain('NO_OPEN_PERIOD_FOR_DATE')
+    expect(body).toContain('Skapa eller öppna räkenskapsåret')
+  })
+
   it('is refused for a viewer', async () => {
     enqueue({ data: { role: 'viewer' } })
     const res = await TRANSFER(request('POST', {}, TRANSFER_URL), params)

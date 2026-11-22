@@ -19,7 +19,8 @@
 export interface ZipEntry {
   /** Path inside the archive, '/'-separated. */
   name: string
-  data: Uint8Array
+  /** The bytes, whole or in parts written one after another. */
+  data: Uint8Array | readonly Uint8Array[]
 }
 
 export interface ZipWriterOptions {
@@ -129,7 +130,13 @@ export async function* writeZip(
   let offset = 0
 
   for await (const entry of entries) {
-    const size = entry.data.length
+    const parts: readonly Uint8Array[] = Array.isArray(entry.data) ? entry.data : [entry.data as Uint8Array]
+    let size = 0
+    let crc = 0
+    for (const part of parts) {
+      size += part.length
+      crc = crc32(part, crc)
+    }
     // Each entry is held in memory before it is written, so none comes near
     // this; the check keeps a size from wrapping silently if one ever does.
     if (size >= UINT32_MARKER) throw new Error(`ZIP entry too large: ${entry.name}`)
@@ -137,7 +144,6 @@ export async function* writeZip(
     // Any character outside ASCII encodes to more bytes than UTF-16 units.
     const isUtf8 = name.length !== entry.name.length
     const extra = isUtf8 ? unicodePathField(name) : new Uint8Array(0)
-    const crc = crc32(entry.data)
     const flags = isUtf8 ? FLAG_UTF8 : 0
 
     const local = record(30 + name.length + extra.length, (view) => {
@@ -156,7 +162,7 @@ export async function* writeZip(
     local.set(name, 30)
     local.set(extra, 30 + name.length)
     yield local
-    if (size > 0) yield entry.data
+    for (const part of parts) if (part.length > 0) yield part
 
     const zip64 = offset >= zip64From32
     const centralExtra = zip64 ? concat([extra, zip64OffsetField(offset)]) : extra

@@ -18,7 +18,7 @@ import {
   type ExistingFond,
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import type { TrialBalanceRow } from '@/types'
-import { resolveInk3FieldTable, type Ink3FieldTable } from './field-table'
+import { ink3Beskattningsperiod, resolveInk3FieldTable, type Ink3FieldTable } from './field-table'
 import { ink3AccountTarget } from './account-mapping'
 import {
   ink3Layout,
@@ -577,7 +577,7 @@ export async function generateInk3Underlag(
       end: period.period_end as string,
       isClosed: Boolean(period.is_closed),
     },
-    beskattningsperiod: table.beskattningsperiod,
+    beskattningsperiod: ink3Beskattningsperiod(period.period_end as string),
     fieldTable: {
       beskattningsperiod: table.beskattningsperiod,
       files: table.source.files.map((f) => f.file),

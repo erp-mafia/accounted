@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { SupportLink } from '@/components/ui/support-link'
 import { StatusGlyph } from '@/components/ui/status-glyph'
+import { captureBoundaryError } from '@/lib/analytics/client'
 
 export default function DashboardError({
   error,
@@ -14,6 +15,7 @@ export default function DashboardError({
 }) {
   useEffect(() => {
     console.error('[dashboard] Unhandled error:', error)
+    captureBoundaryError(error, 'dashboard')
   }, [error])
 
   // Stil v3 states: the error sits in the page, centered where the content

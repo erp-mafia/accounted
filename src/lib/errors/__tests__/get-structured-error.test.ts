@@ -5,6 +5,7 @@ import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { dbError } from '../db-error'
 import { badArgument, codedRefusal } from '../refusal'
 import { userFacing } from '../user-facing'
+import { gatewayErrorMessage } from '@/lib/supabase/gateway-error-page'
 
 describe('getStructuredError', () => {
   it.each([
@@ -197,6 +198,18 @@ describe('retryable contract (always present, transient inference)', () => {
     expect(getStructuredError(new Error('fetch failed')).code).toBe('TRANSIENT_ERROR')
     expect(getStructuredError(new Error('socket hang up')).retryable).toBe(true)
     expect(getStructuredError(new Error('connect ECONNRESET 1.2.3.4:443')).retryable).toBe(true)
+  })
+
+  // The gateway page a database read meets is cut to its title
+  // (lib/supabase/gateway-error-page.ts): Cloudflare's timeouts stay transient.
+  it("classifies Cloudflare's timeout pages as transient by the title they keep", () => {
+    for (const [status, title] of [[522, 'x.supabase.co | 522: Connection timed out'], [524, 'x.supabase.co | 524: A timeout occurred']] as const) {
+      // The body said "timed out" (what the transient patterns matched); the title is what is kept.
+      const page = `<html><head><title>${title}</title></head><body>The origin web server timed out responding to this request.</body></html>`
+      const result = getStructuredError(new Error(`Database error: ${gatewayErrorMessage(status, page)}`))
+      expect(result.code).toBe('TRANSIENT_ERROR')
+      expect(result.retryable).toBe(true)
+    }
   })
 
   // A fetch that outlives AbortSignal.timeout rejects with the platform's own

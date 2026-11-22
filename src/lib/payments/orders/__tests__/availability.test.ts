@@ -116,10 +116,11 @@ describe('getCompanyPaymentVerification', () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringMatching(/stored record/), { code: 'TIMEOUT' })
 
     writer.setTable('company_payment_verifications', { data: null })
-    expect(await getCompanyPaymentVerification(ctx(), { now: NOW })).toEqual({ ok: false, code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    expect(await getCompanyPaymentVerification(ctx(), { now: NOW })).toEqual({ ok: false, code: 'PAYMENT_PROVIDER_UNAVAILABLE', details: { provider_code: 'TIMEOUT' } })
 
     registerPaymentInitiationProvider(fakeProvider({ getCompanyVerification: vi.fn().mockRejectedValue(new PaymentProviderError('no', 'KYC_REFUSED', false, 400)) }))
-    expect(await getCompanyPaymentVerification(ctx(), { now: NOW })).toEqual({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED' })
+    // The provider's code rides along, so the refusal's log line names it.
+    expect(await getCompanyPaymentVerification(ctx(), { now: NOW })).toEqual({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED', details: { provider_code: 'KYC_REFUSED' } })
   })
 
   it('refuses behind a closed door and without an organisationsnummer', async () => {
@@ -184,7 +185,7 @@ describe('startCompanyPaymentVerification', () => {
 
   it('writes nothing when the provider refuses to create the form', async () => {
     registerPaymentInitiationProvider(fakeProvider({ startCompanyVerification: vi.fn().mockRejectedValue(new PaymentProviderError('no', 'KYC_REFUSED', false, 400)) }))
-    expect(await startCompanyPaymentVerification(ctx(), { now: NOW })).toEqual({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED' })
+    expect(await startCompanyPaymentVerification(ctx(), { now: NOW })).toEqual({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED', details: { provider_code: 'KYC_REFUSED' } })
     expect(writer.tables()).toEqual([])
   })
 })

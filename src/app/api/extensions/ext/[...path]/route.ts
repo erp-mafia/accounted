@@ -2,7 +2,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
-import { requireCompanyId } from '@/lib/company/context'
+import { resolveSessionCompany } from '@/lib/api/with-route-context'
 import type { ActiveCompanyFacts } from '@/lib/company/active-company'
 import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import {
@@ -325,9 +325,12 @@ async function dispatchRequest(
   }
 
   // The resolver also reports the caller's role, so the gates below need no
-  // company_members read of their own.
+  // company_members read of their own. No company, or a resolution that
+  // failed, gets the answer a core route gives (resolveSessionCompany).
   const resolved: ActiveCompanyFacts = {}
-  const companyId = await requireCompanyId(supabase, user.id, resolved)
+  const company = await resolveSessionCompany(supabase, user.id, resolved, log.child({ userId: user.id }), requestId)
+  if (!company.ok) return decorateResponse(company.response, requestId)
+  const { companyId } = company
 
   // The permission shadow (lib/permissions/shadow.ts): decide() beside the
   // role gates below, told what they did. It reads nothing and changes nothing.

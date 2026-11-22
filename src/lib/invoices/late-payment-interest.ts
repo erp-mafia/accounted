@@ -37,7 +37,10 @@ import { roundOre } from '@/lib/money'
 /**
  * Riksbankens referensränta (Räntelagen 9 §), each entry effective from its
  * date until the next. Set twice a year, on the last weekday before
- * 1 January and 1 July; add the new row when Riksbanken publishes it.
+ * 1 January and 1 July; add the new row when Riksbanken publishes it. A date
+ * past the last row keeps its rate, so the calendar tripwire in
+ * lib/salary/__tests__/rates-calendar.test.ts fails CI once a half-year has
+ * begun without its row.
  *
  * Source, read 2026-10-26:
  * https://www.riksbank.se/sv/statistik/rantor-och-valutakurser/referensranta/
@@ -82,6 +85,16 @@ export function getReferensrantaAt(date: string): number {
     }
   }
   return REFERENSRANTA_HISTORY[0].rate
+}
+
+/**
+ * True when the table holds the row for the calendar half-year that `date`
+ * (YYYY-MM-DD) falls in. Räntelagen 9 §: the referensränta "fastställs för
+ * varje kalenderhalvår", so the half-years start on 1 January and 1 July.
+ */
+export function hasReferensrantaFor(date: string): boolean {
+  const halfYearStart = `${date.slice(0, 4)}-${date.slice(5, 7) < '07' ? '01' : '07'}-01`
+  return REFERENSRANTA_HISTORY.some((entry) => entry.from === halfYearStart)
 }
 
 /**

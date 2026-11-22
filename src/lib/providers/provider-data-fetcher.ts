@@ -65,7 +65,7 @@ export async function fetchInvoiceCompletionPage(
     const config = BOKIO_RESOURCE_CONFIGS[resource]!;
     try {
       const result = await bokioClient.getPage<Record<string, unknown>>(
-        accessToken, providerCompanyId, config.listEndpoint, { page, pageSize: 100 },
+        accessToken, providerCompanyId, config.listEndpoint, { page, pageSize: 100, timeoutMs: MIGRATION_LIST_TIMEOUT_MS },
       );
       if (result.page !== page || (!result.items.length && page < result.totalPages)) throw new Error('MIGRATION_PROVIDER_PAGE_MISMATCH');
       invoices = result.items.map(item => BOKIO_RESOURCE_CONFIGS[ResourceType.SalesInvoices]!.mapper(item) as SalesInvoiceDto);
@@ -112,7 +112,8 @@ export async function fetchInvoiceCompletionDetail(
 /**
  * A 1000-row register page is a report, not a record: the client's 15 s
  * single-record timeout cut every supplier invoice page of a 4805-invoice
- * register short. The limit applies per attempt; the migration worker's
+ * register short. Every provider's register pages get it, not only Visma's
+ * (#3136). The limit applies per attempt; the migration worker's
  * execution budget, shared by everything one invocation does, cancels the
  * request, the rate-limit wait and any further attempt at its deadline.
  */
@@ -159,12 +160,12 @@ export async function fetchMigrationPage(
   if (provider === 'visma') {
     result = await vismaClient.getPage(accessToken, config.listEndpoint, { page, pageSize: 1000, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
   } else if (provider === 'fortnox') {
-    result = await fortnoxClient.getPage(accessToken, config.listEndpoint, FORTNOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
+    result = await fortnoxClient.getPage(accessToken, config.listEndpoint, FORTNOX_RESOURCE_CONFIGS[kind]!.listKey, { page, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
   } else if (provider === 'briox') {
-    result = await brioxClient.getPage(accessToken, config.listEndpoint, BRIOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
+    result = await brioxClient.getPage(accessToken, config.listEndpoint, BRIOX_RESOURCE_CONFIGS[kind]!.listKey, { page, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
   } else if (provider === 'bokio') {
     try {
-      result = await bokioClient.getPage(accessToken, providerCompanyId!, config.listEndpoint, { page });
+      result = await bokioClient.getPage(accessToken, providerCompanyId!, config.listEndpoint, { page, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
     } catch (error) {
       // Preserve the direct importer's handling of optional Bokio AP endpoints.
       if ((resource === 'suppliers' || resource === 'supplierInvoices')
@@ -175,9 +176,9 @@ export async function fetchMigrationPage(
     }
   } else if (provider === 'bjornlunden') {
     // BL's party registers are a single unpaged response. Its invoice APIs page.
-    result = await bjornLundenClient.getPage(accessToken, providerCompanyId!, config.listEndpoint, { page });
+    result = await bjornLundenClient.getPage(accessToken, providerCompanyId!, config.listEndpoint, { page, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
   } else {
-    const response = await wintClient.getPage<Record<string, unknown>>(accessToken, config.listEndpoint, { page });
+    const response = await wintClient.getPage<Record<string, unknown>>(accessToken, config.listEndpoint, { page, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
     result = { ...response, totalPages: Math.ceil(response.totalItems / response.pageSize), totalCount: response.totalItems };
   }
   if (result.page !== page) throw new Error('MIGRATION_PROVIDER_PAGE_MISMATCH');
@@ -199,7 +200,7 @@ export async function fetchMigrationPage(
     // Ahead, because the RPC keeps the first record per source id, and where
     // /invoices repeats a credit note (status `credit`) the /credit-notes
     // form is the one that names the credited invoice.
-    const creditNotes = await fetchBokioCreditNotes(accessToken, providerCompanyId!);
+    const creditNotes = await fetchBokioCreditNotes(accessToken, providerCompanyId!, MIGRATION_LIST_TIMEOUT_MS);
     items = mergeBokioSalesDocuments(creditNotes, items);
     total += creditNotes.length;
   }
@@ -218,13 +219,14 @@ async function bokioPaginate<T>(
   companyId: string,
   path: string,
   pageSize?: number,
+  timeoutMs?: number,
 ): Promise<T[]> {
   const allItems: T[] = [];
   let page = 1;
   let totalPages = 1;
 
   do {
-    const result = await bokioClient.getPage<T>(accessToken, companyId, path, { page, pageSize });
+    const result = await bokioClient.getPage<T>(accessToken, companyId, path, { page, pageSize, timeoutMs });
     allItems.push(...result.items);
     totalPages = result.totalPages;
     page++;
@@ -252,12 +254,13 @@ const BOKIO_CREDIT_NOTE_PAGE_SIZE = 100;
 async function fetchBokioCreditNotes(
   accessToken: string,
   companyId: string,
+  timeoutMs?: number,
 ): Promise<Record<string, unknown>[]> {
   const config = BOKIO_RESOURCE_CONFIGS[ResourceType.CreditNotes];
   if (!config) return [];
   try {
     return await bokioPaginate<Record<string, unknown>>(
-      accessToken, companyId, config.listEndpoint, BOKIO_CREDIT_NOTE_PAGE_SIZE,
+      accessToken, companyId, config.listEndpoint, BOKIO_CREDIT_NOTE_PAGE_SIZE, timeoutMs,
     );
   } catch (err) {
     if (err instanceof BokioApiError && err.statusCode === 404) {

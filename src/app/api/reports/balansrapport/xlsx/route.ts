@@ -10,6 +10,7 @@ import {
 } from '@/lib/reports/xlsx-export'
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { BalansrapportSection } from '@/types'
 import { fileResponse } from '@/lib/api/file-response'
 
@@ -25,7 +26,7 @@ interface FlatRow {
   ub: number
 }
 
-export const GET = withRouteContext('report.balansrapport.xlsx', async (request, { supabase, companyId }) => {
+export const GET = withRouteContext('report.balansrapport.xlsx', async (request, { supabase, companyId, log, requestId }) => {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
 
@@ -33,7 +34,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
     return NextResponse.json({ error: 'period_id is required' }, { status: 400 })
   }
 
-  const [{ data: companyRow }, { data: period }] = await Promise.all([
+  const [{ data: companyRow }, { data: period, error: periodError }] = await Promise.all([
     supabase
       .from('company_settings')
       .select('company_name')
@@ -44,20 +45,24 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
       .select('period_start, period_end')
       .eq('id', periodId)
       .eq('company_id', companyId)
-      .single(),
+      .maybeSingle(),
   ])
 
-  let range: { fromDate?: string; toDate?: string } = {}
-  if (period) {
-    const parsed = parseReportDateRange(searchParams, period)
-    if (!parsed.ok) {
-      return NextResponse.json({ error: parsed.error }, { status: 400 })
-    }
-    range = parsed.range
+  if (periodError) throw periodError
+  // A period_id that is not the active company's (a page still holding the
+  // previous company's year right after a company switch) is a stale request,
+  // not a failure: say so, and generate nothing from another company's period.
+  if (!period) {
+    return errorResponseFromCode('PERIOD_NOT_FOUND', log.child({ periodId }), { requestId })
+  }
+
+  const parsed = parseReportDateRange(searchParams, period)
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 })
   }
 
   try {
-    const report = await generateBalansrapport(supabase, companyId, periodId, range)
+    const report = await generateBalansrapport(supabase, companyId, periodId, parsed.range)
 
     const rows: FlatRow[] = []
     const pushSection = (group: string, section: BalansrapportSection) => {
@@ -174,6 +179,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
     )
     return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
+    log.error('balansrapport xlsx generation failed', err as Error, { periodId })
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera balansrapport' },
       { status: 500 }

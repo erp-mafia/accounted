@@ -14,7 +14,7 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: vi.fn(async () => ({ user: { id: 'user-1' }, supabase: {} })),
 }))
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn(async (_s: unknown, _u: string, facts?: ActiveCompanyFacts) => {
+  getActiveCompanyId: vi.fn(async (_s: unknown, _u: string, facts?: ActiveCompanyFacts) => {
     if (facts && state.role) facts.role = state.role
     return 'company-1'
   }),

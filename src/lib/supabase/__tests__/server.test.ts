@@ -15,6 +15,12 @@ vi.mock('next/headers', () => ({
   headers: headersMock,
 }))
 
+const REST_URL = 'https://project.supabase.co/rest/v1/companies?select=id'
+/** A Cloudflare error page, abridged (gateway-error-page.test.ts has the full shape). */
+const GATEWAY_PAGE =
+  '<!DOCTYPE html><html><head><title>Script not found | project.supabase.co | Cloudflare</title></head>' +
+  '<body><span class="cf-error-code">1104</span><small>Ray ID: a5b6e815fc10d8e1</small></body></html>'
+
 describe('createServiceClient', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -48,6 +54,20 @@ describe('createServiceClient', () => {
     expect(cookiesMock).not.toHaveBeenCalled()
     // Its PostgREST requests name the scope's actor (lib/supabase/actor-header.ts).
     expect(options.global?.fetch).toEqual(expect.any(Function))
+  })
+
+  it("answers a gateway's HTML 5xx with one short message (lib/supabase/gateway-error-page.ts)", async () => {
+    createServerClientMock.mockReturnValue({ kind: 'service' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(GATEWAY_PAGE, { status: 500 })))
+    const { createServiceClient } = await import('../server')
+
+    createServiceClient()
+
+    const options = createServerClientMock.mock.calls[0][2] as { global: { fetch: typeof fetch } }
+    const response = await options.global.fetch(REST_URL)
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ message: 'Supabase answered HTTP 500 without JSON: Script not found | project.supabase.co | Cloudflare' })
+    vi.unstubAllGlobals()
   })
 })
 
@@ -127,6 +147,20 @@ describe('createClient (cookie session)', () => {
     const init = { method: 'POST', headers: { apikey: 'anon-key' } }
     await options.global.fetch(AUTH_URL, init)
     expect(defaultFetch).toHaveBeenCalledWith(AUTH_URL, init)
+    vi.unstubAllGlobals()
+  })
+
+  it("answers a gateway's HTML 5xx to a PostgREST read with one short message", async () => {
+    headersMock.mockResolvedValue(new Headers())
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(GATEWAY_PAGE, { status: 500 })))
+    const { createClient } = await import('../server')
+
+    await createClient()
+
+    const options = createServerClientMock.mock.calls[0][2] as { global: { fetch: typeof fetch } }
+    const response = await options.global.fetch(REST_URL)
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ message: 'Supabase answered HTTP 500 without JSON: Script not found | project.supabase.co | Cloudflare' })
     vi.unstubAllGlobals()
   })
 })
