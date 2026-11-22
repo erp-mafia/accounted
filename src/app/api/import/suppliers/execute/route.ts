@@ -12,12 +12,17 @@ import type { Supplier } from '@/types'
 import type { SupplierImportExecuteResult } from '@/lib/import/suppliers/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { supplierPaymentTermsDays } from '@/lib/supplier-invoices/due-date'
+import { typeAndCountryForUpdate } from '@/lib/import/shared/stated-fields'
+import { checkCountryConsistency } from '@/lib/vat/country-codes'
 
 interface ExistingSupplier {
   id: string
   name: string
   org_number: string | null
   email: string | null
+  supplier_type: string
+  country: string
+  vat_number: string | null
 }
 
 export const POST = withRouteContext(
@@ -43,7 +48,7 @@ export const POST = withRouteContext(
       const existingRaw = await fetchAllRows(({ from, to }) =>
         supabase
           .from('suppliers')
-          .select('id, name, org_number, email')
+          .select('id, name, org_number, email, supplier_type, country, vat_number')
           .eq('company_id', companyId)
           .range(from, to),
       )
@@ -67,9 +72,24 @@ export const POST = withRouteContext(
             continue
           }
 
+          // Merge mode: only overwrite fields where the file has a value. The
+          // parser fills the type, country and currency in for a new
+          // supplier; an update writes them only when the file states them,
+          // the type and country by the customer import's rule
+          // (lib/import/shared/stated-fields.ts) judged on whether the pair
+          // agrees. The supplier register refuses no pair, so one the row's
+          // own reading cannot make agree is written as the row states it.
+          const typeAndCountry = typeAndCountryForUpdate(
+            { type: row.supplier_type, type_stated: row.supplier_type_stated, country: row.country, country_stated: row.country_stated },
+            { type: match.supplier_type, country: match.country },
+            (type, country, writesTypeOrCountry) => writesTypeOrCountry
+              ? checkCountryConsistency({ partyType: type, country, vatNumber: row.vat_number || match.vat_number })
+              : null,
+          )
+          const typeAndCountryWrite = 'write' in typeAndCountry ? typeAndCountry.write : typeAndCountry.stated
           const merged: Record<string, unknown> = {}
           if (row.name) merged.name = row.name
-          if (row.supplier_type) merged.supplier_type = row.supplier_type
+          if (typeAndCountryWrite.type !== undefined) merged.supplier_type = typeAndCountryWrite.type
           if (row.org_number) merged.org_number = orgNumberKey(row.org_number) ?? row.org_number
           if (row.email) merged.email = row.email
           if (row.phone) merged.phone = row.phone
@@ -77,7 +97,7 @@ export const POST = withRouteContext(
           if (row.address_line2) merged.address_line2 = row.address_line2
           if (row.postal_code) merged.postal_code = row.postal_code
           if (row.city) merged.city = row.city
-          if (row.country) merged.country = row.country
+          if (typeAndCountryWrite.country !== undefined) merged.country = typeAndCountryWrite.country
           if (row.vat_number) merged.vat_number = row.vat_number
           if (row.bankgiro) merged.bankgiro = row.bankgiro
           if (row.plusgiro) merged.plusgiro = row.plusgiro
@@ -85,7 +105,7 @@ export const POST = withRouteContext(
           if (row.iban) merged.iban = row.iban
           if (row.bic) merged.bic = row.bic
           if (row.default_payment_terms !== null) merged.default_payment_terms = row.default_payment_terms
-          if (row.default_currency) merged.default_currency = row.default_currency
+          if (row.default_currency_stated) merged.default_currency = row.default_currency
           if (row.notes) merged.notes = row.notes
 
           if (Object.keys(merged).length === 0) {

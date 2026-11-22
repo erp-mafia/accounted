@@ -3,6 +3,7 @@ import { detectSupplierColumns } from './column-detector'
 import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
 import { columnName, unmapColumnsTheDataContradicts, type ColumnShapeCheck } from '../shared/column-checks'
 import { classifySupplier } from '../shared/classify'
+import { ANY_BUSINESS_WORDS, saysOnlyCompany, statedType } from '../shared/stated-fields'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { readBestSheet } from '../shared/workbook-reader'
 import type {
@@ -35,7 +36,7 @@ const SHAPE_CHECKS: ColumnShapeCheck<keyof DetectedSupplierColumns & string>[] =
 function normalizeSupplierType(value: string | null): SupplierType | null {
   if (!value) return null
   const lower = value.toLowerCase().trim()
-  if (lower === 'swedish_business' || lower === 'swedish' || lower === 'svensk' || lower === 'företag' || lower === 'foretag' || lower === 'business' || lower === 'ab' || lower === 'aktiebolag') {
+  if (lower === 'swedish_business' || lower === 'swedish' || lower === 'svensk' || ANY_BUSINESS_WORDS.includes(lower) || lower === 'ab' || lower === 'aktiebolag') {
     return 'swedish_business'
   }
   if (lower === 'eu_business' || lower === 'eu') {
@@ -59,10 +60,11 @@ function normalizeCountry(value: string | null): string {
   return normalizeCountryCode(value) ?? value.trim()
 }
 
-function normalizeCurrency(value: string | null): string {
-  if (!value) return 'SEK'
+/** A currency the register knows, as its code; null for none or another. */
+function knownCurrency(value: string | null): string | null {
+  if (!value) return null
   const upper = value.trim().toUpperCase()
-  return VALID_CURRENCIES.has(upper) ? upper : 'SEK'
+  return VALID_CURRENCIES.has(upper) ? upper : null
 }
 
 function cleanGiroNumber(value: string | null): string | null {
@@ -165,12 +167,11 @@ export async function parseSuppliersFile(
     const paymentTermsRaw = columns.payment_terms_col !== null
       ? row[columns.payment_terms_col]
       : null
-    const currencyRaw = get(columns.default_currency_col)
+    const currency = knownCurrency(get(columns.default_currency_col))
     const notes = get(columns.notes_col)
 
-    const explicitType = columns.supplier_type_col !== null
-      ? normalizeSupplierType(cellOrNull(row[columns.supplier_type_col]))
-      : null
+    const typeRaw = get(columns.supplier_type_col)
+    const explicitType = normalizeSupplierType(typeRaw)
     const supplierType: SupplierType =
       explicitType ?? classifySupplier({
         org_number: orgNumber,
@@ -200,6 +201,9 @@ export async function parseSuppliersFile(
       row_index: i + 2,
       name,
       supplier_type: supplierType,
+      supplier_type_stated: statedType(saysOnlyCompany(typeRaw), explicitType !== null),
+      country_stated: countryRaw !== null,
+      default_currency_stated: currency !== null,
       org_number: orgNumber,
       email,
       phone,
@@ -215,7 +219,7 @@ export async function parseSuppliersFile(
       iban,
       bic,
       default_payment_terms: parsePaymentTerms(paymentTermsRaw),
-      default_currency: normalizeCurrency(currencyRaw),
+      default_currency: currency ?? 'SEK',
       notes,
       is_valid: validationErrors.length === 0,
       validation_errors: validationErrors,

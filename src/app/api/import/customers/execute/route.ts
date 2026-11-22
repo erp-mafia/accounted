@@ -20,6 +20,7 @@ import {
 } from '@/lib/invariants/personal-number-shape'
 import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { typeAndCountryForUpdate, type TypeStated } from '@/lib/import/shared/stated-fields'
 import { invoiceTermsFor } from '@/lib/invoices/due-date'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 
@@ -67,25 +68,19 @@ interface ExistingCustomer {
  * What an update does to a matched customer's type and country: the fields to
  * write, or why the row is not imported.
  *
- * It writes what the row states and nothing it does not: the parser fills a
- * type and a country in for a new customer, and an update keeps the
- * customer's own. A row that says only that the customer is a company (a no
- * in a private-person column, a word like Företag) changes a private person
- * and keeps a company's own kind. The customer form's rules (the country rule,
- * #2025; an org number on a private person; a personnummer on a foreign
- * business) are judged on the result, each only when the update touches a
- * field it reads, as in updateCustomer. When one breaks, the row's own reading
- * fills in the one of the two the row does not state from the one it does: a
- * type it names in place of the customer's takes the country the row reads
- * for it, a country it states takes the type the row reads from it, but never
- * a private person (a personnummer-shaped number may be a sole trader's org
- * number). Anything else that breaks a rule, or still does, refuses the row:
- * a VAT number or an org number alone never rewrites a type or a country.
+ * It writes what the row states (typeAndCountryForUpdate,
+ * lib/import/shared/stated-fields.ts): the parser fills a type and a country
+ * in for a new customer, and an update keeps the customer's own. The customer
+ * form's rules (the country rule, #2025; an org number on a private person; a
+ * personnummer on a foreign business) are judged on the result, each only when
+ * the update touches a field it reads, as in updateCustomer. A result that
+ * still breaks one after the row's own reading has filled in what it could
+ * refuses the row.
  */
-function typeAndCountryForUpdate(
+function customerTypeAndCountry(
   row: {
     customer_type: string
-    customer_type_stated: 'type' | 'business' | null
+    customer_type_stated: TypeStated
     country: string
     country_stated: boolean
     vat_number: string | null
@@ -94,9 +89,6 @@ function typeAndCountryForUpdate(
   },
   customer: ExistingCustomer,
 ): { write: { customer_type?: string; country?: string } } | { refusal: string } {
-  const typeNamed = row.customer_type_stated === 'type'
-  const typeStated = typeNamed
-    || (row.customer_type_stated === 'business' && customer.customer_type === 'individual')
   // The file's org number: the schema moves a personnummer out of it when
   // the row reads as a private person.
   const fileOrgNumber = row.org_number || row.personal_number
@@ -117,24 +109,19 @@ function typeAndCountryForUpdate(
     return null
   }
 
-  const customerType = typeStated ? row.customer_type : customer.customer_type
-  const country = row.country_stated ? row.country : customer.country
-  const broken = brokenRule(customerType, country, typeStated || row.country_stated)
-  if (!broken) {
-    return {
-      write: {
-        ...(typeStated ? { customer_type: customerType } : {}),
-        ...(row.country_stated ? { country } : {}),
-      },
-    }
+  const update = typeAndCountryForUpdate(
+    { type: row.customer_type, type_stated: row.customer_type_stated, country: row.country, country_stated: row.country_stated },
+    { type: customer.customer_type, country: customer.country },
+    brokenRule,
+  )
+  if ('broken' in update) return { refusal: update.broken }
+  const { type, country } = update.write
+  return {
+    write: {
+      ...(type !== undefined ? { customer_type: type } : {}),
+      ...(country !== undefined ? { country } : {}),
+    },
   }
-  const fillsIn = typeNamed
-    ? !row.country_stated && row.customer_type !== customer.customer_type
-    : row.country_stated && !typeStated && row.customer_type !== 'individual'
-  if (!fillsIn) return { refusal: broken }
-  const stillBroken = brokenRule(row.customer_type, row.country, true)
-  if (stillBroken) return { refusal: stillBroken }
-  return { write: { customer_type: row.customer_type, country: row.country } }
 }
 
 /**
@@ -206,7 +193,7 @@ export const POST = withRouteContext(
             continue
           }
 
-          const typeAndCountry = typeAndCountryForUpdate(row, match)
+          const typeAndCountry = customerTypeAndCountry(row, match)
           if ('refusal' in typeAndCountry) {
             errors.push({ row_index: row.row_index, name: row.name, reason: typeAndCountry.refusal })
             continue
