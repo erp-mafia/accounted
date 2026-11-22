@@ -65,7 +65,7 @@ import { balancingProposalSide } from '@/lib/bookkeeping/kontering-amount-entry'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { bookedEntryOf, type BookedEntry } from '@/lib/bookkeeping/booking-answer'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
-import { resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
+import { isBlankVoucherRow, resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
 import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
 import {
   foldGeneratedVatLines,
@@ -831,13 +831,20 @@ export default function JournalEntryForm({
   // The guard lives inside the functional updater so chained updates see each
   // other's result, making it idempotent and safe under StrictMode's dev-only
   // double-invoke (no runaway append, no double blank row).
+  //
+  // A blank last row needs nothing, so no update is made then. This effect
+  // runs after every keystroke in a row, and right after a render React does
+  // not drop an update that changes nothing: it leaves one more render
+  // pending behind the keystroke. React counts each commit that leaves one
+  // pending as nested: keystrokes handled before that render ran (fast typing
+  // of a long radtext) added up, and past 50 the next keystroke threw
+  // "Maximum update depth exceeded" (React #185) in its own setLines.
   useEffect(() => {
+    const last = lines[lines.length - 1]
+    if (!last || isBlankVoucherRow(last)) return
     setLines((prev) => {
-      const last = prev[prev.length - 1]
-      if (!last) return prev
-      const trailingBlank =
-        last.account_number === '' && last.debit_amount === '' && last.credit_amount === ''
-      return trailingBlank ? prev : [...prev, makeBlankLine()]
+      const latest = prev[prev.length - 1]
+      return !latest || isBlankVoucherRow(latest) ? prev : [...prev, makeBlankLine()]
     })
   }, [lines, makeBlankLine])
 
