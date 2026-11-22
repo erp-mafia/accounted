@@ -1,6 +1,7 @@
 /**
- * The records a question rests on: whether each one exists in the company,
- * and the amounts that stand on them.
+ * The records a question rests on, and the records a question closed as
+ * settled names: what a reference must look like, whether each one exists in
+ * the company, and the amounts that stand on them.
  *
  * Amounts per kind:
  *   transaction       the amount, in its own currency and in SEK
@@ -15,12 +16,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { dbError } from '@/lib/errors/db-error'
+import { badArgument, fieldValidationError, type FieldIssue } from '@/lib/errors/refusal'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isUuid } from '@/lib/invariants/uuid'
 import { sumOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { findMoneyMentions } from './amounts'
-import type { EvidenceKind, EvidenceRef } from './types'
+import { amountsNotAmong, findMoneyMentions } from './amounts'
+import { EVIDENCE_KINDS, QUESTION_LIMITS, type EvidenceKind, type EvidenceRef } from './types'
 
 export interface ResolvedEvidence {
   /** References that name no record of the company. */
@@ -154,6 +156,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/**
+ * Evidence references as a caller gives them, read into `{ kind, id }`: at
+ * most QUESTION_LIMITS.maxEvidence entries, each of a known kind with an id,
+ * each record once, ids in lower case. Anything else is refused with a
+ * validation error on `evidence`.
+ */
+export function evidenceRefsOf(value: readonly unknown[]): EvidenceRef[] {
+  if (value.length > QUESTION_LIMITS.maxEvidence) {
+    throw badArgument(
+      'evidence',
+      `${value.length} evidence references; at most ${QUESTION_LIMITS.maxEvidence}`,
+      `Högst ${QUESTION_LIMITS.maxEvidence} underlag.`,
+    )
+  }
+  const refs: EvidenceRef[] = []
+  value.forEach((entry, index) => {
+    const kind = isRecord(entry) ? entry.kind : undefined
+    const rawId = isRecord(entry) && typeof entry.id === 'string' ? entry.id.trim() : ''
+    if (!(EVIDENCE_KINDS as readonly unknown[]).includes(kind)) {
+      throw badArgument(
+        `evidence.${index}`,
+        `evidence.${index}.kind must be one of ${EVIDENCE_KINDS.join(', ')}`,
+        `Underlagets typ måste vara en av ${EVIDENCE_KINDS.join(', ')}.`,
+      )
+    }
+    if (!rawId) throw badArgument(`evidence.${index}`, `evidence.${index}.id is required`)
+    // Ids are stored in lower case; an account number has no case.
+    const ref: EvidenceRef = { kind: kind as EvidenceKind, id: rawId.toLowerCase() }
+    if (!refs.some((seen) => seen.kind === ref.kind && seen.id === ref.id)) refs.push(ref)
+  })
+  return refs
+}
+
 /** The totals a reading of a document carries: totals.* and the prominent amounts. */
 function extractedAmounts(extracted: unknown): number[] {
   if (!isRecord(extracted)) return []
@@ -256,3 +291,38 @@ export async function resolveEvidence(
   const missing = refs.filter((ref) => !loaded.get(ref.kind)?.ids.has(ref.id))
   return { missing, amounts }
 }
+
+/**
+ * Refuses, with a validation error, unless every reference names a record of
+ * the company and every money amount written in `texts` stands on one of
+ * those records. `amountField` is the field an amount is reported on. Throws
+ * when a read fails.
+ */
+export async function assertStandsOnEvidence(
+  supabase: SupabaseClient,
+  companyId: string,
+  evidence: readonly EvidenceRef[],
+  texts: ReadonlyArray<string | null | undefined>,
+  amountField: string,
+): Promise<void> {
+  const resolved = await resolveEvidence(supabase, companyId, evidence)
+  if (resolved.missing.length > 0) {
+    const issues: FieldIssue[] = resolved.missing.map((ref) => ({
+      field: `evidence.${evidence.findIndex((e) => e.kind === ref.kind && e.id === ref.id)}`,
+      en: `no ${ref.kind} ${ref.id} in this company`,
+      sv: `Underlaget ${ref.kind} ${ref.id} finns inte i företaget.`,
+    }))
+    throw fieldValidationError('Evidence not found', issues)
+  }
+
+  const notOnEvidence = amountsNotAmong(texts, resolved.amounts)
+  if (notOnEvidence.length > 0) {
+    const issues: FieldIssue[] = notOnEvidence.map((amount) => ({
+      field: amountField,
+      en: `the amount "${amount}" is on none of the evidence records; write amounts as they stand on the records, or cite the record that carries it`,
+      sv: `Beloppet "${amount}" finns inte på något av underlagen.`,
+    }))
+    throw fieldValidationError('Amount not on the evidence', issues)
+  }
+}
+
