@@ -295,7 +295,8 @@ export async function fetchFortnoxSupplierInvoiceBookings(
 /**
  * The booking voucher from one supplier invoice's detail form, or null when
  * Fortnox names none (no booking reference: never booked; cancelled; an
- * invoice the register no longer has).
+ * invoice the register no longer has). An invoice Fortnox marks never booked
+ * (`Booked: false`) has no booking reference, whatever else it names.
  *
  * An invoice with no booking reference that is paid in full by one payment
  * in a kontantmetod year (`cashYearIds`, Fortnox's financial-year ids whose
@@ -323,7 +324,9 @@ export async function fetchFortnoxSupplierInvoiceBookingVoucher(
   }
   const invoice = (response?.SupplierInvoice ?? {}) as Record<string, unknown>;
   if (invoice.Cancelled === true || invoice.Cancel === true) return null;
-  const parts = fortnoxSupplierInvoiceBookingParts(invoice);
+  // Never booked at registration, as in the list form: only the kontantmetod
+  // payment below can carry the file, never a voucher named some other way.
+  const parts = invoice.Booked === false ? null : fortnoxSupplierInvoiceBookingParts(invoice);
   const booking = parts ? bookingVoucherFrom(parts.series, parts.number, parts.year) : null;
   if (booking) return booking;
 

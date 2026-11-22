@@ -315,7 +315,9 @@ describe('Fortnox attachments', () => {
       // Marked booked but naming no booking voucher: what booked it is unknown.
       .mockResolvedValueOnce(detail({ Booked: true, Vouchers: [payment(9)] }))
       // A credit note refunded in full: the refund booked it.
-      .mockResolvedValueOnce(detail({ Total: -1000, Balance: 0, Vouchers: [payment(9)] }));
+      .mockResolvedValueOnce(detail({ Total: -1000, Balance: 0, Vouchers: [payment(9)] }))
+      // Never booked and part-paid: a voucher named at the top never stands in for the payment rule.
+      .mockResolvedValueOnce(detail({ Balance: 500, VoucherSeries: 'E', VoucherNumber: 9, VoucherYear: 6, Vouchers: [payment(9)] }));
     const client = clientWith({ get } as Partial<FortnoxClient>);
     const cashYears = new Set([6]);
     const read = () => fetchFortnoxSupplierInvoiceBookingVoucher(client, 'token', '120', cashYears);
@@ -329,6 +331,7 @@ describe('Fortnox attachments', () => {
     await expect(read()).resolves.toBeNull();
     await expect(read()).resolves.toBeNull();
     await expect(read()).resolves.toEqual({ series: 'E', number: 9, financialYearId: 6 });
+    await expect(read()).resolves.toBeNull();
   });
 
   it('propagates a refused detail form so the caller can name the scope', async () => {
