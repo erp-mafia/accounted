@@ -116,8 +116,15 @@ const loaded = (pkg: string) => {
   return false
 }
 
+// The flags count too: a test that only makes a global read-only or hidden
+// changes it for every file after it.
 const sameDescriptor = (a: PropertyDescriptor, b: PropertyDescriptor) =>
-  Object.is(a.value, b.value) && a.get === b.get && a.set === b.set
+  Object.is(a.value, b.value) &&
+  a.get === b.get &&
+  a.set === b.set &&
+  a.writable === b.writable &&
+  a.enumerable === b.enumerable &&
+  a.configurable === b.configurable
 
 const restore = (target: object, saved: Map<PropertyKey, PropertyDescriptor>, skip: (key: PropertyKey) => boolean) => {
   for (const [key, d] of saved) {
