@@ -144,7 +144,7 @@ Once the rutor are final (step 1 has no high blocker left and the questions from
 2. Read \`booking_status\` first. \`booked\`: a posted momsredovisning already exists for the period; do not book again. \`draft\`: an unposted one exists; tell the user. \`is_empty: true\`: nothing to clear; skip to step 6.
 3. Show the user the lines and ask. On a yes, \`gnubok_book_vat_settlement({ period_type, year, period, expected_fingerprint })\` with the proposal's \`fingerprint\` stages it (high risk); approval books exactly those lines. \`VAT_SETTLEMENT_PROPOSAL_CHANGED\` means the ledger changed after the proposal: read it again and show the new lines.
 
-Booking before filing does not change the declaration: the rutor leave the momsredovisning verifikat out. If the books change after it is booked (a correction found in step 6), the momsredovisning no longer matches: the user reverses it (\`gnubok_reverse_journal_entry\`, storno, staged) and you book the new proposal. After filing, any correction is a new booking (storno or rättelse), never an edit.
+Booking before filing does not change the declaration: the rutor leave the momsredovisning verifikat out. If the books change after it is booked (a correction found in step 6), the momsredovisning no longer matches: the user reverses every posted one in \`existing_entries\` (\`gnubok_reverse_journal_entry\`, storno, staged), since each still gates booking, and you book the new proposal. After filing, any correction is a new booking (storno or rättelse), never an edit.
 
 ## Step 6: Validate (Skatteverket connected)
 

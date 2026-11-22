@@ -215,22 +215,25 @@ async function alreadyBookedByKey(ctx: OperationContext, sourceId: string): Prom
     return { ok: false, code: 'VAT_SETTLEMENT_ALREADY_BOOKED' }
   }
   const winner = data as { id: string; voucher_series: string | null; voucher_number: number | null; entry_date: string }
-  const named = {
-    journal_entry_id: winner.id,
-    voucher_series: winner.voucher_series,
-    voucher_number: winner.voucher_number,
-    entry_date: winner.entry_date,
+  // The winner may still be a draft here, so no posted_settlements list.
+  return {
+    ok: false,
+    code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
+    details: {
+      journal_entry_id: winner.id,
+      voucher_series: winner.voucher_series,
+      voucher_number: winner.voucher_number,
+      entry_date: winner.entry_date,
+    },
   }
-  // The same details as alreadyPostedRefusal: the winner is the one this read knows of.
-  return { ok: false, code: 'VAT_SETTLEMENT_ALREADY_BOOKED', details: { ...named, posted_settlements: [named] } }
 }
 
 /**
  * The period already has a posted settlement, tagged or recognised by shape:
  * the proposal re-clears the FULL period, so a second one would clear the
  * 26xx accounts twice. Every door refuses on this one reading. The details
- * name the latest (journal_entry_id and its voucher, as before) and, in
- * posted_settlements, every one: each gates on its own, so reversing only
+ * name the first listed (journal_entry_id and its voucher, as before) and,
+ * in posted_settlements, every one: each gates on its own, so reversing only
  * the one named leaves the period booked (#3646).
  */
 function alreadyPostedRefusal(proposal: VatSettlementProposal): Failure | null {
