@@ -15,6 +15,7 @@ import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-
 import { createLogger } from '@/lib/logger'
 import { calculatePeriodDates, fiscalPeriodForVatYear } from './period-dates'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { isInterimBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 
 const log = createLogger('reports/vat-declaration')
 
@@ -304,9 +305,10 @@ interface VatTotalsRpcPayload {
  * to touch 2650 (a supplier invoice with input VAT booked against 2650, say).
  * No rule separates that tail; it needs an explicit per-entry override.
  *
- * Förutbetalda intäkter on customer invoices (crm#1919): the totals of a
- * revenue account hold the sale an invoice deferred to 29xx on the invoice's
- * date, and its releases net to nothing. See fetchInvoiceDeferralShares.
+ * Periodiseringar on customer invoices (crm#1919): the totals of a revenue
+ * account hold the sale an invoice deferred to 29xx or accrued on 17xx on
+ * the invoice's date, and the months of its schedules net to nothing. See
+ * fetchInvoiceDeferralShares.
  */
 export async function fetchVatAccountTotals(
   supabase: SupabaseClient,
@@ -359,39 +361,61 @@ export async function fetchVatAccountTotals(
   }
 }
 
-/** Per verifikat, the revenue accounts its 29xx lines read as, and at which part. */
-export type InvoiceDeferralShares = ReadonlyMap<string, ReadonlyArray<{ target_account: string; share: number }>>
+/**
+ * Per verifikat, the revenue accounts its interim lines read as, and at which
+ * part: `share` of its 29xx lines, `accrued_share` of its 17xx lines (none
+ * when absent: a database before 20261122200000 answers 29xx parts only).
+ */
+export type InvoiceDeferralShares = ReadonlyMap<
+  string,
+  ReadonlyArray<{ target_account: string; share: number; accrued_share?: number }>
+>
 
 /**
- * Which verifikat's 29xx lines the momsdeklaration reads as a sale, and on
- * which revenue account (crm#1919). A periodiserad invoice line credits 29xx
- * instead of its revenue account, with its whole moms on 26xx the same day,
- * and the schedule releases it to the revenue account later with no moms.
- * The beskattningsunderlag is the ersättning (ML 2023:200 8 kap. 2 §) and
- * ruta 05 is the underlag of the moms in rutorna 10 to 12, so the sale is
- * reported in the period that carries its moms: the invoice's.
+ * Which verifikat's interim lines the momsdeklaration reads as a sale, and on
+ * which revenue account (crm#1919). A periodiserad invoice line credits an
+ * interim account instead of its revenue account, with its whole moms on
+ * 26xx the same day: 29xx for a förutbetald intäkt, which the schedule
+ * releases to the revenue account in the months after, and 17xx for an
+ * upplupen intäkt, whose months before the invoice credited the revenue
+ * account already; neither month carries moms. The beskattningsunderlag is
+ * the ersättning (ML 2023:200 8 kap. 2 §) and ruta 05 is the underlag of the
+ * moms in rutorna 10 to 12, so the sale is reported in the period that
+ * carries its moms: the invoice's (7 kap. 14 §, the invoice date under
+ * faktureringsmetoden).
  *
- * The SQL decides (vat_invoice_deferral_shares, migration 20261122140000),
- * for a deferral whose line carries Swedish moms: every 29xx line of the
- * invoice's verifikat and its kreditfaktura (at the invoice's parts), of each
- * release (whole, on its schedule's revenue account), of the months of a
- * manual periodisering spread out of what a rättelse added to the invoice's
- * 29xx lines (up to that part) and of every storno and rättelse down from any
- * of them is read as the sale, with its own sign. So a release (Dr 29xx / Cr
+ * The SQL decides (vat_invoice_deferral_shares, migrations 20261122140000
+ * and 20261122200000), for a periodisering whose line carries Swedish moms:
+ * every interim line of the invoice's verifikat and its kreditfaktura (at the
+ * invoice's parts), of each month of its schedules (whole, on its schedule's
+ * revenue account), of the months of a manual periodisering spread out of
+ * what a rättelse added to the invoice's lines of the plan's interim class
+ * (up to that part) and of every storno and rättelse down from any of them
+ * is read as the sale, with its own sign. So a month (Dr 29xx or 17xx / Cr
  * the revenue account) nets to nothing, and a rättelse that moves the
- * deferral to another 29xx account still reads it.
+ * periodisering to another account of its class still reads it. The parts
+ * are per interim class, each taken of what the invoice booked on that
+ * class, so a rättelse of one row of an invoice that both defers and accrues
+ * moves only that row's sale; a month's part reads its lines of both.
  * The figure and the drill-down apply it in SQL; a fold over one verifikat's
  * own lines (the changes to a filed period) reads it here and applies it with
  * readDeferredSaleLines.
  *
  * A database that has not run the migration yet (the deploy window) has no
  * such function: no verifikat reads that way there, so the answer is empty.
+ * One that has run 20261122140000 only answers no accrued_share: its 17xx
+ * lines read as they always did.
  */
 export async function fetchInvoiceDeferralShares(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<InvoiceDeferralShares> {
-  type ShareRow = { journal_entry_id: string; target_account: string; share: number | string }
+  type ShareRow = {
+    journal_entry_id: string
+    target_account: string
+    share: number | string
+    accrued_share?: number | string | null
+  }
   let rows: ShareRow[]
   try {
     // Paged in a total order: the answer covers the company's whole history,
@@ -411,10 +435,14 @@ export async function fetchInvoiceDeferralShares(
     }
     throw new Error(`vat_invoice_deferral_shares failed: ${err instanceof Error ? err.message : String(err)}`)
   }
-  const shares = new Map<string, Array<{ target_account: string; share: number }>>()
+  const shares = new Map<string, Array<{ target_account: string; share: number; accrued_share: number }>>()
   for (const row of rows) {
     const ofEntry = shares.get(row.journal_entry_id) ?? []
-    ofEntry.push({ target_account: row.target_account, share: Number(row.share) })
+    ofEntry.push({
+      target_account: row.target_account,
+      share: Number(row.share),
+      accrued_share: Number(row.accrued_share ?? 0),
+    })
     shares.set(row.journal_entry_id, ofEntry)
   }
   return shares
@@ -422,10 +450,12 @@ export async function fetchInvoiceDeferralShares(
 
 /**
  * One verifikat's lines as the momsdeklaration reads them: on a verifikat the
- * SQL reads as booking a deferred sale (fetchInvoiceDeferralShares), every
- * 29xx line adds that sale on each revenue account, at its part, rounded to
- * öre per line and part as the SQL's round(amount * share, 2) rounds it
- * (multiplyOre). The 29xx line itself stays; it reaches no ruta.
+ * SQL reads as booking a deferred or accrued sale (fetchInvoiceDeferralShares),
+ * every interim line (isInterimBalanceAccount: the SQL's ^(17|29)[0-9]{2}$)
+ * adds that sale on each revenue account at the part of its class, `share`
+ * for a 29xx line and `accrued_share` for a 17xx line, rounded to öre per
+ * line and part as the SQL's round(amount * share, 2) rounds it
+ * (multiplyOre). The interim line itself stays; it reaches no ruta.
  */
 export function readDeferredSaleLines(
   entryId: string,
@@ -436,12 +466,15 @@ export function readDeferredSaleLines(
   const ofEntry = shares.get(entryId)
   if (!ofEntry) return read
   for (const line of lines) {
+    if (!isInterimBalanceAccount(line.account_number)) continue
+    const accrued = line.account_number.startsWith('17')
     for (const part of ofEntry) {
-      if (!line.account_number.startsWith('29')) continue
+      const share = accrued ? (part.accrued_share ?? 0) : part.share
+      if (share === 0) continue
       read.push({
         account_number: part.target_account,
-        debit_amount: multiplyOre(Number(line.debit_amount) || 0, part.share),
-        credit_amount: multiplyOre(Number(line.credit_amount) || 0, part.share),
+        debit_amount: multiplyOre(Number(line.debit_amount) || 0, share),
+        credit_amount: multiplyOre(Number(line.credit_amount) || 0, share),
       })
     }
   }

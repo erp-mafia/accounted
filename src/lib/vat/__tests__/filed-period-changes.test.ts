@@ -85,7 +85,7 @@ function ledger(opts: {
   rattelser?: unknown[]
   lines?: ReturnType<typeof line>[]
   special?: Array<{ journal_entry_id: string; reason: string }>
-  deferrals?: Array<{ journal_entry_id: string; target_account: string; share: number }>
+  deferrals?: Array<{ journal_entry_id: string; target_account: string; share: number; accrued_share?: number }>
   submissions?: Array<{ id: string; key: string; value: unknown }>
   closing?: string[]
 }) {
@@ -236,6 +236,28 @@ describe('withChangesAfterFiling', () => {
 
     expect(read.changed_after_filing).toBeNull()
     expect(unread.changed_after_filing?.rutor_change).toEqual({ ruta05: -1000 })
+  })
+
+  it('leaves out the month of an upplupen intäkt an invoice books into the filed month afterwards (crm#1919)', async () => {
+    // An August invoice for July work: its July month, Dr 1790 / Cr 3001 on
+    // 2026-07-31, is posted with the invoice, after July was filed. The sale
+    // and its moms are the invoice's, in August; July holds nothing of it.
+    const month = entry({ id: 'e8', voucher_number: 15, entry_date: '2026-07-31', source_type: 'accrual', committed_at: '2026-08-20T09:00:00Z' })
+    const filed = (deferrals: Array<{ journal_entry_id: string; target_account: string; share: number; accrued_share?: number }>) => ledger({
+      late: [month],
+      lines: [line('e8', '1790', 8000, 0), line('e8', '3001', 0, 8000)],
+      deferrals,
+    })
+
+    const [read] = await withChangesAfterFiling(
+      filed([{ journal_entry_id: 'e8', target_account: '3001', share: 0, accrued_share: 1 }]).supabase as never,
+      COMPANY,
+      [JULY],
+    )
+    const [unread] = await withChangesAfterFiling(filed([]).supabase as never, COMPANY, [JULY])
+
+    expect(read.changed_after_filing).toBeNull()
+    expect(unread.changed_after_filing?.rutor_change).toEqual({ ruta05: 8000 })
   })
 
   it('moves no ruta when an inline rättelse changes what a release releases (crm#1919)', async () => {
