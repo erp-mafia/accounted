@@ -74,6 +74,7 @@ import { useListReturnHref } from '@/lib/hooks/use-detail-pager'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useAttribution } from '@/lib/attribution/use-attribution'
 import type { JournalEntryLine } from '@/types'
+import type { VoucherOwner } from '@/lib/core/bookkeeping/voucher-owner'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 import { OwnedVoucherActionDialog } from '@/components/bookkeeping/OwnedVoucherActionDialog'
 import { useReverseJournalEntry } from '@/components/bookkeeping/use-reverse-journal-entry'
@@ -120,12 +121,12 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
   )
   // A failed optional read is distinct from a successful empty list. Share
   // recovered references between voucher links and attachment discovery.
-  const { data: retriedReferences } = useSWR<UnderlagReference[]>(
+  const { data: retried, error: referencesError, mutate: retryReferences } = useSWR<{ references: UnderlagReference[]; owned_by: VoucherOwner | null }>(
     company?.id && detail?.references === null ? ['journal-entry-references', company.id, id] : null,
     async () => {
       const response = await fetch(`/api/bookkeeping/journal-entries/${id}/references`)
       if (!response.ok) throw new Error(t('error_load_failed'))
-      return (await response.json()).data.references
+      return (await response.json()).data
     },
     { revalidateOnFocus: false, errorRetryCount: 2 },
   )
@@ -162,11 +163,13 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
   // does (an SIE-imported verifikat, or the storno of an undone SIE import):
   // no "Radera verifikat" then, only where to go instead (PH 212).
   const deleteBlock = detail?.delete_block ?? null
-  const [attachmentCount, setAttachmentCount] = useState(0)
-  const references = detail?.references ?? retriedReferences ?? NO_REFERENCES
+  const [attachmentCount, setAttachmentCount] = useState<number | null>(null)
+  const resolvedReferences = detail?.references ?? retried?.references
+  const references = resolvedReferences ?? NO_REFERENCES
+  const referencesState = resolvedReferences != null ? 'ready' : referencesError ? 'error' : 'loading'
   // The object the verifikat books (an invoice, a periodisering, ...), from
   // the references GET: Vänd and Rätta lead with its own action first.
-  const owner = detail?.owned_by ?? null
+  const owner = detail?.owned_by ?? retried?.owned_by ?? null
   const [ownedIntent, setOwnedIntent] = useState<'reverse' | 'correct_lines' | 'correct_date' | null>(null)
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
@@ -519,6 +522,7 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
   const yearClosed = periodStatus === 'closed'
 
   const underlagAside = (() => {
+    if (attachmentCount === null || referencesState !== 'ready') return null
     if (attachmentCount === 0 && references.length === 0) {
       return <AttnLine>{t('no_attachments')}</AttnLine>
     }
@@ -902,6 +906,7 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
           document list. Each row is the followable half of a link the app
           already stores (BFL 5 kap 7 §, hänvisning till underlag). */}
       <DetailSection kicker={t('attachments_title')} aside={underlagAside}>
+        {referencesState === 'error' && <LoadError onRetry={() => void retryReferences()} />}
         {references.length > 0 && (
           <DefRow label={t('references_title')} className="items-baseline">
             <ul className="divide-y divide-border">
@@ -937,6 +942,7 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
         <JournalEntryAttachments
           journalEntryId={entry.id}
           references={references}
+          referencesState={referencesState}
           onCountChange={setAttachmentCount}
           variant="section"
         />

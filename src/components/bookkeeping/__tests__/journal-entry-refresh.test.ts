@@ -2,10 +2,10 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ data: undefined as unknown, error: undefined as unknown }))
+const state = vi.hoisted(() => ({ data: undefined as unknown, error: undefined as unknown, references: undefined as unknown, referencesError: undefined as unknown }))
 vi.mock('swr', () => ({ default: (key: unknown) => ({
-  data: Array.isArray(key) && key[0] === 'journal-entry-detail' ? state.data : undefined,
-  error: Array.isArray(key) && key[0] === 'journal-entry-detail' ? state.error : undefined,
+  data: Array.isArray(key) && key[0] === 'journal-entry-detail' ? state.data : Array.isArray(key) && key[0] === 'journal-entry-references' ? state.references : undefined,
+  error: Array.isArray(key) && key[0] === 'journal-entry-detail' ? state.error : Array.isArray(key) && key[0] === 'journal-entry-references' ? state.referencesError : undefined,
   isLoading: false, mutate: vi.fn(),
 }) }))
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), back: vi.fn() }) }))
@@ -22,7 +22,7 @@ vi.mock('@/components/bookkeeping/use-reverse-journal-entry', () => ({ useRevers
 vi.mock('@/components/ui/record-header', () => ({ RecordHeader: () => React.createElement('header', null, 'Voucher') }))
 vi.mock('@/components/ui/page-header-actions', () => ({ PageHeaderOverflowItems: () => null }))
 vi.mock('@/components/common/DetailPager', () => ({ DetailPager: () => null }))
-vi.mock('@/components/bookkeeping/JournalEntryAttachments', () => ({ default: () => null }))
+vi.mock('@/components/bookkeeping/JournalEntryAttachments', () => ({ default: ({ referencesState }: { referencesState: string }) => React.createElement('div', null, 'Attachments: ' + referencesState) }))
 vi.mock('@/components/bookkeeping/JournalEntryTransactionLinks', () => ({ default: () => null }))
 vi.mock('@/components/bookkeeping/JournalEntryStatusBadge', () => ({ default: () => null, useSourceTypeLabels: () => ({}) }))
 vi.mock('@/components/bookkeeping/VoucherLinesTable', () => ({ VoucherLinesTable: () => React.createElement('div', null, 'Voucher rows') }))
@@ -35,7 +35,7 @@ const detail = {
   chain: [], references: [], retag_log: [], rattelse_log: [], period_status: null, period: null,
 }
 const render = () => renderToStaticMarkup(React.createElement(JournalEntryDetail, { id: 'entry' }))
-beforeEach(() => { state.data = detail; state.error = undefined })
+beforeEach(() => { state.data = detail; state.error = undefined; state.references = undefined; state.referencesError = undefined })
 it('keeps cached voucher data visible and offers retry when refresh fails', () => {
   state.error = new Error('Connection lost')
   const html = render()
@@ -57,4 +57,29 @@ it('does not keep a stale voucher visible after a genuine 404', () => {
   expect(html).toContain('not_found_hint')
   expect(html).not.toContain('Previously retrieved note')
   expect(html).not.toContain('refresh_failed')
+})
+
+it('keeps unavailable references distinct from an empty attachment list while recovery is pending', () => {
+  state.data = { ...detail, references: null }
+  const html = render()
+  expect(html).toContain('Attachments: loading')
+  expect(html).not.toContain('no_attachments')
+})
+it('offers retry when reference recovery fails without reporting an empty attachment list', () => {
+  state.data = { ...detail, references: null }
+  state.referencesError = new Error('Reference read failed')
+  const html = render()
+  expect(html).toContain('Attachments: error')
+  expect(html).toContain('retry')
+  expect(html).not.toContain('no_attachments')
+})
+it('uses the recovered owner when both optional owner and reference reads failed', () => {
+  state.data = { ...detail, references: null, owned_by: null }
+  state.references = { references: [], owned_by: {
+    kind: 'supplier_invoice', owner_id: 'invoice', href: '/supplier-invoices/invoice', label: 'Recovered invoice',
+  } }
+  const html = render()
+  expect(html).toContain('Attachments: ready')
+  expect(html).toContain('Recovered invoice')
+  expect(html).toContain('/supplier-invoices/invoice')
 })

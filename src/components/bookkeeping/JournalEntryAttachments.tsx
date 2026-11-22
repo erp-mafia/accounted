@@ -58,6 +58,7 @@ import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-ref
 interface JournalEntryAttachmentsProps {
   journalEntryId: string
   references?: UnderlagReference[]
+  referencesState?: 'loading' | 'error' | 'ready'
   onCountChange?: (count: number) => void
   /**
    * 'section': embedded under a DetailSection kicker that already names the
@@ -78,6 +79,7 @@ function formatFileSize(bytes: number): string {
 export default function JournalEntryAttachments({
   journalEntryId,
   references,
+  referencesState = 'ready',
   onCountChange,
   variant = 'default',
 }: JournalEntryAttachmentsProps) {
@@ -172,6 +174,9 @@ export default function JournalEntryAttachments({
     }
   }, [journalEntryId, references])
 
+  const fetchDocumentsRef = useRef(fetchDocuments)
+  fetchDocumentsRef.current = fetchDocuments
+
   useEffect(() => {
     fetchDocuments()
     return () => { documentReadGeneration.current += 1 }
@@ -249,7 +254,7 @@ export default function JournalEntryAttachments({
           variant: 'destructive',
         })
       } else {
-        await fetchDocuments()
+        await fetchDocumentsRef.current()
         setBlockedDoc(null)
       }
     } catch {
@@ -288,7 +293,7 @@ export default function JournalEntryAttachments({
           variant: 'destructive',
         })
       } else {
-        await fetchDocuments()
+        await fetchDocumentsRef.current()
         setBlockedDoc(null)
       }
     } catch {
@@ -360,6 +365,8 @@ export default function JournalEntryAttachments({
 
       {loadFailed && documents.length === 0 ? (
         <LoadError title={t('load_failed')} onRetry={() => void fetchDocuments()} />
+      ) : documents.length === 0 && referencesState !== 'ready' ? (
+        referencesState === 'loading' ? <LateReveal aria-label={t('loading')}><Skeleton className="h-8 w-full" /></LateReveal> : null
       ) : documents.length === 0 && !showUpload ? (
         !embedded && (
           <p className="text-sm text-muted-foreground py-1">
