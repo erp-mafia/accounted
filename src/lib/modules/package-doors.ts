@@ -98,6 +98,8 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   billing: null,
   // The Bolaget registers (aktiebok, roles): Bokföring's package, never switched off.
   bolaget: null,
+  // Starting an aktiebolag: before the company exists, so no package applies.
+  formation: null,
   bookkeeping: null,
   // Budgets (accounted#134): planning beside the resultatrapport, part of Bokföring.
   budgets: null,

@@ -117,6 +117,12 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/billing/checkout': uiOnly('Stripe checkout'),
   'POST /api/billing/portal': uiOnly('Stripe customer portal'),
   'POST /api/billing/payment-packs': uiOnly('buying bank payment packs on the Stripe subscription: the owner\'s card is charged at once'),
+  // Company formation (lib/formation): a user-level draft before the company
+  // exists, so there is no company-scoped v1 or MCP door to put it behind.
+  'POST /api/formation': uiOnly('company formation draft before any company exists; v1 and MCP doors are company-scoped'),
+  'PUT /api/formation/:id': uiOnly('company formation draft before any company exists; v1 and MCP doors are company-scoped'),
+  'POST /api/formation/:id/submitted': uiOnly('the founder marks the verksamt.se filing as sent in, before the company exists'),
+  'POST /api/formation/:id/setup': uiOnly('one approval that creates the company from the formation; it becomes the company door\'s first write'),
   'POST /api/billing/usage/requests': uiOnly('asking Accounted for more of a priced service: a person asks, the operators open the charge by hand'),
 
   // ── Credentials, OAuth, membership (privilege) ─────────────────────

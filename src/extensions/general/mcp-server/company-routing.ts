@@ -91,6 +91,8 @@ const COMPANY_INDEPENDENT_TOOLS = new Set([
   // Public-registry lookup that feeds gnubok_create_company: same pre-company
   // stage of onboarding, no company data touched at all.
   'gnubok_lookup_company',
+  // A company formation belongs to the user and comes before its company.
+  'gnubok_formation',
   // Scoped tools take a set of companies (`scope`) instead of one company_id
   // and membership-check every company in the set themselves (see
   // resolveMcpCompanyScope). Listed here so the dispatcher projects no
