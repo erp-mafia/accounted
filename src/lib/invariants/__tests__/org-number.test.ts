@@ -3,6 +3,7 @@ import {
   normalizeOrgNumber,
   orgNumberKey,
   registrationNumberKey,
+  sameRegistration,
   isValidOrgNumber,
   isOrgNumberShaped,
   hasInvalidOrgNumberCheckDigit,
@@ -223,6 +224,32 @@ describe('registrationNumberKey', () => {
   it('returns null for missing input', () => {
     expect(registrationNumberKey(null)).toBeNull()
     expect(registrationNumberKey(undefined)).toBeNull()
+  })
+})
+
+describe('sameRegistration', () => {
+  it('tells two registrations of one sole trader apart by the serial', () => {
+    expect(sameRegistration('2002010112360001', '2002010112360002')).toBe(false)
+    expect(sameRegistration('2002010112360002', '2002010112360002')).toBe(true)
+    expect(sameRegistration('200201011236 0002', '2002010112360002')).toBe(true)
+  })
+
+  it('does not take a number without the serial for one with it', () => {
+    expect(sameRegistration('2002010112360001', '0201011236')).toBe(false)
+    expect(sameRegistration('200201011236', '0201011236')).toBe(true)
+  })
+
+  it('reads any other number in any written form, as registrationNumberKey does', () => {
+    expect(sameRegistration('5560125790', '165560125790')).toBe(true)
+    expect(sameRegistration('556012-5790', '5560125790')).toBe(true)
+    expect(sameRegistration('5560125790', '5566778899')).toBe(false)
+  })
+
+  it('is never true for a side with nothing readable on it', () => {
+    expect(sameRegistration(null, null)).toBe(false)
+    expect(sameRegistration(undefined, '5560125790')).toBe(false)
+    expect(sameRegistration('', '')).toBe(false)
+    expect(sameRegistration('BE0123456789', 'BE0123456789')).toBe(false)
   })
 })
 

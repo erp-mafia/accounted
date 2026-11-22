@@ -525,4 +525,47 @@ describe('ensureTicSnapshot: incomplete sections', () => {
 
     expect(result.snapshot).toEqual(partial)
   })
+
+  // A person can register an enskild firma more than once. Lens holds each
+  // registration as its own company (...0001, ...0002), all under the one
+  // personnummer the company is stored with, and the search picks one of them.
+  it('takes nothing from another registration of the same sole trader', async () => {
+    const previous = {
+      orgNumber: '2002010112360001',
+      statuses: [{ code: 'deregistered', isCeased: true }],
+      fiscalYear: { startMonthDay: '05-01', endMonthDay: '04-30' },
+      payrolls: [{ periodEnd: '2012-12-31', numberOfEmployees: 3 }],
+      incompleteSections: [],
+    }
+    const partial = {
+      orgNumber: '2002010112360002',
+      statuses: [],
+      fiscalYear: null,
+      payrolls: [],
+      incompleteSections: ['statuses', 'fiscalYear', 'payrolls'],
+    }
+    profileService.mockResolvedValue(partial)
+    const { supabase } = buildSupabase({
+      data: { org_number: '0201011236', tic_snapshot: previous, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    expect(result.snapshot).toEqual(partial)
+  })
+
+  it('keeps the last answered sections of the same sole-trader registration', async () => {
+    const previous = { orgNumber: '2002010112360002', statuses: [{ code: 'isActive' }], incompleteSections: [] }
+    const partial = { orgNumber: '2002010112360002', statuses: [], incompleteSections: ['statuses'] }
+    profileService.mockResolvedValue(partial)
+    const { supabase } = buildSupabase({
+      data: { org_number: '0201011236', tic_snapshot: previous, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    expect(result.snapshot).toEqual({ ...partial, statuses: [{ code: 'isActive' }], incompleteSections: [] })
+  })
 })
