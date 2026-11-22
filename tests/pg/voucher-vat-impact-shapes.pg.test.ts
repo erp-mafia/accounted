@@ -43,6 +43,13 @@ const CASES: Line[][] = [
   [['1930', 1250, 0], ['3001', 0, 1000], ['2611', 0, 250]],
   [['2645', 25, 0], ['2614', 0, 25], ['4535', 100, 0], ['2440', 0, 100]],
   [['2611', 300, 0], ['2012', 0, 300]],
+  // The rest of a partly settled period (#3646) puts its net on 2650 or 1650
+  // either way round. The restatement calls each a net_account_shape
+  // (vat-settlement-match.test.ts), so here the SQL must skip them too,
+  // whichever side the 2650/1650 line is on.
+  [['2641', 0, 250], ['2650', 250, 0]],
+  [['2611', 400.4, 0], ['2614', 500.5, 0], ['2645', 0, 500.5], ['1650', 0, 400], ['3740', 0, 0.4]],
+  [['2611', 400.4, 0], ['1650', 0, 70], ['2650', 0, 330], ['3740', 0, 0.4]],
 ]
 
 async function shapedIds(companyId: string): Promise<Set<string>> {

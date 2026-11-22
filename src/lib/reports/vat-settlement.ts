@@ -266,29 +266,39 @@ function clearingBalances(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamic
 }
 
 /**
- * What the period's posted momsredovisningar left on the two net accounts:
- * moms att betala on 2650 (credit minus debit) and moms att återfå on 1650
- * (debit minus credit). Either is below zero when a settlement booked a
- * refund on 2650 or a debt on 1650.
+ * Where the period's posted momsredovisningar put its net (#3646): whether
+ * they moved 2650 at all, and the claim they put on 1650 (debit minus
+ * credit, never below zero).
  */
 interface PostedNet {
-  payable: number
-  receivable: number
+  movedPayable: boolean
+  claim: number
 }
 
-const NOTHING_POSTED: PostedNet = { payable: 0, receivable: 0 }
+const NOTHING_POSTED: PostedNet = { movedPayable: false, claim: 0 }
 
 /**
  * The 2650/1650 lines that move `net` (positive, more att betala; negative,
  * more att återfå). With nothing posted it is one line, 2650 credit or 1650
- * debit. On top of the period's posted momsredovisningar, the lines move the
- * two to where one momsredovisning for the whole period puts them: what the
- * posted ones left plus `net` on 2650 when it is to pay, on 1650 when it is
- * to get back, and nothing on the other (#3646). A net the other way thus
- * first takes back what a posted one put on its account. Each line on the
- * account of its side would leave a debt on 2650 beside a claim on 1650 for
- * the same period: Skatteverket nets them on the skattekonto, so neither
- * would ever clear, and 2650 would not show ruta 49. Pure.
+ * debit.
+ *
+ * On top of the period's posted momsredovisningar (#3646), the books cannot
+ * say whether Skatteverket has already charged or paid out their net: a
+ * payment on the skattekonto names no period (SFL 62 kap. 11 §).
+ * - When they moved 2650, the net goes on 2650 in either direction.
+ *   Skatteverket's charge, refund and correction for the period are booked
+ *   on 2650 too (the skattekonto booking's moms rule), so 2650 ends on what
+ *   is still owed or due for the period, whether or not their net was paid.
+ *   Taking their net back off 2650 would, once it was paid, book a debt on
+ *   2650 beside a claim on 1650.
+ * - 1650 only holds a claim (BAS: Momsfordran, a receivable) that a refund
+ *   clears. A net to pay first takes back the claim they put on 1650, never
+ *   more, and credits only what goes past it to 2650; a net to get back adds
+ *   to 1650 when they did not move 2650. A claim Skatteverket has already
+ *   refunded is taken back all the same: 1650's balance cannot tell, as it
+ *   also holds other periods' claims, and the lines are reviewed before
+ *   they are booked.
+ * Pure.
  */
 function netLines(net: number, posted: PostedNet): VatSettlementProposalLine[] {
   const payable = (debit: number, credit: number): VatSettlementProposalLine => ({
@@ -303,25 +313,24 @@ function netLines(net: number, posted: PostedNet): VatSettlementProposalLine[] {
     credit_amount: credit,
     line_description: 'Moms att återfå',
   })
-  const total = roundOre(posted.payable - posted.receivable + net)
-  // Credit on 2650 and debit on 1650 to add; below zero, the other side.
-  const toPayable = roundOre(Math.max(total, 0) - posted.payable)
-  const toReceivable = roundOre(Math.max(-total, 0) - posted.receivable)
-  const onPayable = toPayable > 0 ? payable(0, toPayable) : toPayable < 0 ? payable(-toPayable, 0) : null
-  const onReceivable = toReceivable > 0 ? receivable(toReceivable, 0) : toReceivable < 0 ? receivable(0, -toReceivable) : null
-  // The account that ends on nothing first: what is taken back, then where the period lands.
-  const ordered = total >= 0 ? [onReceivable, onPayable] : [onPayable, onReceivable]
-  return ordered.filter((line): line is VatSettlementProposalLine => line !== null)
+  if (net > 0) {
+    // What is taken back first, then where the rest of the debt lands.
+    const back = roundOre(Math.min(net, posted.claim))
+    const owed = roundOre(net - back)
+    return [...(back > 0 ? [receivable(0, back)] : []), ...(owed > 0 ? [payable(0, owed)] : [])]
+  }
+  if (net < 0) return [posted.movedPayable ? payable(-net, 0) : receivable(-net, 0)]
+  return []
 }
 
 /**
  * The verifikat that clears these balances at exact öre, so the accounts
  * land on zero, and moves `net` to 2650 (positive, att betala) or 1650
- * (negative, att återfå), as netLines places it beside what the period's
- * posted momsredovisningar left there (`posted`); the öre gap between the
- * two goes on 3740. A positive (credit) balance clears with a debit and vice
- * versa: the same formula handles credit-note-heavy periods where an account
- * sits on the "wrong" side. Pure.
+ * (negative, att återfå), on the account netLines picks after the period's
+ * posted momsredovisningar (`posted`); the öre gap between the two goes on
+ * 3740. A positive (credit) balance clears with a debit and vice versa: the
+ * same formula handles credit-note-heavy periods where an account sits on
+ * the "wrong" side. Pure.
  */
 function clearingLines(
   balances: ReadonlyArray<readonly [string, number]>,
@@ -400,8 +409,8 @@ export function balanceLeftToClear(balance: number, cleared: number): number {
  * period's lines would clear a second time what those verifikat already
  * moved. Each account keeps what the settlements left on it
  * (balanceLeftToClear), and the net is the filed net less the net they
- * placed: what they covered, less the öre they put on 3740. It goes beside
- * what they put on 2650/1650 (netLines).
+ * placed: what they covered, less the öre they put on 3740. netLines picks
+ * 2650 or 1650 for it from where they put theirs.
  *
  * Null, and the full-period lines stand, when the period has no posted
  * momsredovisning of its own (nothing is read then), when those cleared the
@@ -418,13 +427,13 @@ async function remainingSettlementLines(
   if (settlementIds.length === 0) return null
   const moved = await movedByAccount(supabase, companyId, settlementIds, [VAT_ROUNDING_ACCOUNT])
   const cleared = new Map<string, number>()
-  let onPayable = 0
+  let movedPayable = false
   let onReceivable = 0
   let onRounding = 0
   for (const accounts of moved.values()) {
     for (const [account, amount] of accounts) {
-      // Debit minus credit: 2650's credit is what it owes, 1650's debit what it gets back.
-      if (account === VAT_SETTLEMENT_ACCOUNT) onPayable -= amount
+      // Debit minus credit, so 1650's debit is the claim it holds.
+      if (account === VAT_SETTLEMENT_ACCOUNT) movedPayable = true
       else if (account === VAT_REFUND_ACCOUNT) onReceivable += amount
       else if (account === VAT_ROUNDING_ACCOUNT) onRounding += amount
       else cleared.set(account, roundOre((cleared.get(account) ?? 0) + amount))
@@ -440,8 +449,8 @@ async function remainingSettlementLines(
   // carry them to 2650/1650 a second time, beside the 3740 line it gets.
   const placed = roundOre(covered + onRounding)
   return clearingLines(left, roundOre(filedNet - placed), {
-    payable: roundOre(onPayable),
-    receivable: roundOre(onReceivable),
+    movedPayable,
+    claim: Math.max(roundOre(onReceivable), 0),
   })
 }
 

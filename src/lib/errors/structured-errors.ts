@@ -5057,9 +5057,9 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
   VAT_SETTLEMENT_ALREADY_BOOKED: {
     httpStatus: 409,
     message_sv:
-      'Momsen för perioden är redan bokförd. Annullera det verifikatet först om perioden behöver bokföras om.',
+      'Momsen för perioden är redan bokförd. Om perioden behöver bokföras om, återför först varje momsredovisning som är bokförd för den.',
     message_en:
-      'The VAT for this period is already booked. Reverse that journal entry first if the period needs to be booked again.',
+      'The VAT for this period is already booked. If the period needs to be booked again, first reverse every VAT settlement booked for it.',
   },
   VAT_SETTLEMENT_EMPTY: {
     httpStatus: 400,

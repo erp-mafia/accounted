@@ -46,7 +46,7 @@ import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib
 import {
   buildVatSettlementProposal,
   findDraftVatSettlement,
-  findPostedVatSettlement,
+  postedVatSettlements,
   vatSettlementBookingStatus,
   type VatSettlementProposal,
 } from '@/lib/reports/vat-settlement'
@@ -230,20 +230,24 @@ async function alreadyBookedByKey(ctx: OperationContext, sourceId: string): Prom
 /**
  * The period already has a posted settlement, tagged or recognised by shape:
  * the proposal re-clears the FULL period, so a second one would clear the
- * 26xx accounts twice. Every door refuses on this one reading.
+ * 26xx accounts twice. Every door refuses on this one reading. The details
+ * name the latest (journal_entry_id and its voucher, as before) and, in
+ * posted_settlements, every one: each gates on its own, so reversing only
+ * the one named leaves the period booked (#3646).
  */
 function alreadyPostedRefusal(proposal: VatSettlementProposal): Failure | null {
-  const posted = findPostedVatSettlement(proposal.existing_entries)
-  if (!posted) return null
+  const posted = postedVatSettlements(proposal.existing_entries)
+  if (posted.length === 0) return null
+  const named = posted.map((entry) => ({
+    journal_entry_id: entry.id,
+    voucher_series: entry.voucher_series,
+    voucher_number: entry.voucher_number,
+    entry_date: entry.entry_date,
+  }))
   return {
     ok: false,
     code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
-    details: {
-      journal_entry_id: posted.id,
-      voucher_series: posted.voucher_series,
-      voucher_number: posted.voucher_number,
-      entry_date: posted.entry_date,
-    },
+    details: { ...named[0], posted_settlements: named },
   }
 }
 
