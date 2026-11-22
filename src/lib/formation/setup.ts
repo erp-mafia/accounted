@@ -28,7 +28,7 @@ import { planCompanySetup } from '@/lib/company/onboarding-input'
 import { setActiveCompany } from '@/lib/company/context'
 import { writeCompanySettings } from '@/lib/company/settings-writer'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
-import { registerShareEvent } from '@/lib/bolaget/share-register'
+import { completeShareRegisterSetup, registerShareEvent } from '@/lib/bolaget/share-register'
 import { addCompanyRole, setSignatoryRule } from '@/lib/bolaget/roles'
 import { confirmBeneficialOwners } from '@/lib/bolaget/beneficial-owners'
 import { ensureRegisterParty, savePersonPrivate } from '@/lib/bolaget/people'
@@ -272,6 +272,9 @@ export async function runFormationSetup(args: {
     state.aktiebok = true
     await saveState(service, formation, state)
   }
+  // The founders' shares are every share of a new company: the register is
+  // complete and in use from here. Answers the first moment when run again.
+  unwrap(await completeShareRegisterSetup(ctx, {}, { dryRun: false }), 'aktiebok')
 
   // --- roles ---------------------------------------------------------------
   if (!state.roles) {

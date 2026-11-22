@@ -4,14 +4,14 @@
  * every door: the operations, the dashboard routes and the pages.
  *
  * Two scopes. 'registers' (aktiebok, styrelse och firmateckning, verkliga
- * huvudmän) also opens for a company whose `bolaget_registers_enabled` is
- * set: one set up from a company formation (lib/formation/setup.ts). 'all'
- * (the default: meetings, capital, dividends, owner tax) stays on the
- * rollout alone.
+ * huvudmän) also opens for a company in BOLAGET_REGISTERS_COMPANY_IDS, and
+ * for one whose `bolaget_registers_enabled` is set: one set up from a
+ * company formation (lib/formation/setup.ts). 'all' (the default: meetings,
+ * capital, dividends, owner tax) stays on the rollout alone.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { keepsShareRegister, resolveCompanyEntityType } from '@/lib/company/entity-type'
-import { isBolagetEnabled } from '@/lib/env/bolaget-switch'
+import { isBolagetEnabled, isBolagetRegistersEnabled } from '@/lib/env/bolaget-switch'
 import { commitmentsEnabledFor } from '@/lib/env/commitments-switch'
 import type { BolagetHubAccess } from './hub'
 
@@ -28,7 +28,8 @@ async function registersOpenedFor(supabase: SupabaseClient, companyId: string): 
 
 /** Null when the company may use the registers, else the code that says why not. */
 export async function bolagetGate(supabase: SupabaseClient, companyId: string, scope: BolagetScope = 'all'): Promise<BolagetGateCode | null> {
-  if (!isBolagetEnabled(companyId) && !(scope === 'registers' && (await registersOpenedFor(supabase, companyId)))) return 'BOLAGET_DISABLED'
+  const open = scope === 'registers' ? isBolagetRegistersEnabled(companyId) || (await registersOpenedFor(supabase, companyId)) : isBolagetEnabled(companyId)
+  if (!open) return 'BOLAGET_DISABLED'
   const entityType = await resolveCompanyEntityType(supabase, companyId)
   return keepsShareRegister(entityType) ? null : 'BOLAGET_NOT_FOR_LEGAL_FORM'
 }

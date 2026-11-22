@@ -55,6 +55,7 @@ function register(holders: Array<[string, number]>, events: unknown[] = []) {
   return {
     as_of: '2026-05-01',
     is_avstamningsbolag: false,
+    setup_completed_at: null,
     classes: [{ id: CLASS_A, code: 'A', votes_per_share: 1 }],
     events,
     replay: { ranges: [], annotations: [], totalShares: holders.reduce((n, [, s]) => n + s, 0) },

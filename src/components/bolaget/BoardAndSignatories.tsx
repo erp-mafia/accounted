@@ -231,7 +231,8 @@ export function BoardAndSignatories() {
   })
 
   const latest = bo?.assessments[0] ?? null
-  const attn = bo && bo.differs ? <AttnLine>{t('attn_bo_differs')}</AttnLine> : latest?.changed && !latest.filed ? (
+  // Nothing confirmed yet is not a difference from what was confirmed: said as the first assessment it is.
+  const attn = bo && bo.differs ? <AttnLine>{t(bo.assessments.length === 0 ? 'attn_bo_first' : 'attn_bo_differs')}</AttnLine> : latest?.changed && !latest.filed ? (
     <AttnLine action={{ label: t('attn_bo_file_action'), href: bo!.filing_url }}>{t('attn_bo_file')}</AttnLine>
   ) : null
 

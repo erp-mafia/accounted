@@ -42,6 +42,7 @@ const ctx = { supabase: db.supabase, companyId: 'company-1', userId: 'user-1', l
 const register = {
   as_of: '2027-05-10',
   is_avstamningsbolag: false,
+  setup_completed_at: null,
   classes: [],
   events: [],
   replay: { ranges: [], annotations: [], totalShares: 1000 },

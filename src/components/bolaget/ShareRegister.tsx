@@ -27,6 +27,7 @@ import {
   RANGED_KINDS,
   RECEIVER_KINDS,
   REGISTERED_KINDS,
+  SETUP_KINDS,
   buildEventBody,
   shareNumbersLabel,
   voteSharesAfter,
@@ -70,7 +71,15 @@ interface PageData {
 }
 
 /** The dialog a failed action belongs to: its sentence is shown in that dialog's footer, where the person is. */
-type DialogName = 'event' | 'person' | 'class' | 'capital' | 'avstamning'
+type DialogName = 'event' | 'person' | 'class' | 'capital' | 'avstamning' | 'setup'
+
+/** What the register holds when its setup is about to be completed (the dry run of POST /api/bolaget/share-register/setup). */
+interface SetupPreview {
+  total_shares: number
+  holders: number
+  last_event_number: number
+  warnings: string[]
+}
 
 const FORBEHALL = ['samtycke', 'forkop', 'hembud', 'omvandling', 'inlosen'] as const
 
@@ -186,7 +195,9 @@ function EntryPreview({
           {t('preview_comment', { text: typed('note') })}
         </p>
       )}
-      {date < today && <p className="text-muted-foreground">{t('preview_backdated', { date, today })}</p>}
+      {/* While the register is set up an entry carries the day of the event; in use it carries today and names that day. */}
+      {!preview.register_in_use && date < today && <p className="text-muted-foreground">{t('preview_backdated', { date, today })}</p>}
+      {preview.occurred_on && <p className="text-muted-foreground">{t('preview_occurred_on', { date: preview.occurred_on, today: date })}</p>}
       {preview.matched_parties.map((m) => (
         <AttnLine key={`matched-${m.field}`} action={{ label: t('matched_other'), onClick: () => onPartyIsNew(m.field, true) }}>
           <span data-ph-mask="">{t('matched_existing', { name: m.name })}</span>
@@ -246,6 +257,8 @@ export function ShareRegister() {
   // A typed figure outside the entry form that cannot be read, said at its field.
   const [inputError, setInputError] = useState<'votes' | 'aktiekapital' | null>(null)
   const [confirmAvstamning, setConfirmAvstamning] = useState(false)
+  // The setup about to be completed: what the register holds, read when the dialog opens.
+  const [setupPreview, setSetupPreview] = useState<SetupPreview | null>(null)
 
   const requestedDay = useRef('')
   const load = useCallback(async (day: string) => {
@@ -289,6 +302,9 @@ export function ShareRegister() {
   // Nothing to list: the first-time state, also when the only entry has been voided (its history stays below).
   const showEmpty = Boolean(register) && noSharesToday && holders.length === 0
   const canAddEntry = isAdmin && Boolean(register) && !register?.is_avstamningsbolag
+  // In use: every share is entered, and an entry carries the day it is made. Until then the register is set up.
+  const inUse = Boolean(register?.setup_completed_at)
+  const canCompleteSetup = canAddEntry && !inUse && !noSharesToday
   // An entry is made against today's register: its dialogs wait for it when "Per datum" showed another day.
   const registerIsToday = !asOf && loadedAsOf === ''
 
@@ -308,7 +324,8 @@ export function ShareRegister() {
       ...EMPTY_EVENT,
       // Without shares there is nothing to transfer: the first entry is the bildande.
       kind: noSharesToday ? 'bildande' : 'overlatelse',
-      event_date: today,
+      // In use the entry carries today by itself: the field is the day of the event, and optional.
+      event_date: inUse ? '' : today,
       to_party: pick,
       counter_party: pick,
       ...preset,
@@ -339,7 +356,7 @@ export function ShareRegister() {
     if (!typed) return
     // With nobody in the registers the pickers are not shown: a blank pick is a new name.
     const form = people.length === 0 ? { ...typed, to_party: typed.to_party || NEW_PARTY, counter_party: typed.counter_party || NEW_PARTY } : typed
-    const built = buildEventBody(form, { today })
+    const built = buildEventBody(form, { today, inUse })
     if (!built.ok) {
       setFieldErrors(built.errors)
       setFailure(null)
@@ -420,6 +437,9 @@ export function ShareRegister() {
     setPerson({
       party_id: partyId,
       name,
+      new_name: name,
+      org_number: p?.org_number ?? '',
+      org_number_on_file: p?.org_number ?? '',
       kind: p?.kind ?? 'person',
       personnummer: '',
       birth_date: p?.birth_date ?? '',
@@ -437,10 +457,18 @@ export function ShareRegister() {
 
   async function savePerson() {
     if (!person) return
+    const newName = person.new_name.trim()
+    if (!newName) {
+      setFailure({ where: 'person', text: t('person_name_required') })
+      return
+    }
     setFailure(null)
     setBusy(true)
     try {
       const payload: Record<string, unknown> = {
+        // Sent only when changed: a change is entered in the aktiebok as a note.
+        ...(newName !== person.name ? { name: newName } : {}),
+        ...(person.kind === 'company' && person.org_number.trim() !== person.org_number_on_file ? { org_number: person.org_number.trim() || null } : {}),
         address_line1: person.address_line1,
         address_line2: person.address_line2,
         postal_code: person.postal_code,
@@ -551,6 +579,50 @@ export function ShareRegister() {
     }
   }
 
+  /** Open the confirmation with what the register holds now (a dry run: nothing is saved). */
+  async function openSetup() {
+    // The setup is completed against today's register.
+    if (asOf) setAsOf('')
+    setFailure(null)
+    setBusy(true)
+    try {
+      const res = await fetch('/api/bolaget/share-register/setup?dry_run=true', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({ title: getErrorMessage(body, { locale, fallback: t('setup_failed') }), variant: 'destructive' })
+        return
+      }
+      setSetupPreview(body.data as SetupPreview)
+    } catch {
+      toast({ title: t('unreachable_preview'), variant: 'destructive' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function confirmSetup() {
+    if (!setupPreview) return
+    setFailure(null)
+    setBusy(true)
+    try {
+      const res = await fetch('/api/bolaget/share-register/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // The register the person saw: refused when an entry got in since.
+        body: JSON.stringify({ expected_last_event_number: setupPreview.last_event_number }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) return refusal('setup', body, t('setup_failed'))
+      setSetupPreview(null)
+      await load('')
+    } catch {
+      // No answer: said in the dialog, which stays open. Trying again is safe: the setup is completed once.
+      setFailure({ where: 'setup', text: t('unreachable_save') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function saveCapital() {
     if (!capitalForm || !register) return
     const aktiekapital = parseAmountInput(capitalForm.aktiekapital)
@@ -631,6 +703,14 @@ export function ShareRegister() {
     }
     if (register.incomplete.without_identity > 0 || register.incomplete.without_address > 0) {
       return <AttnLine>{t('attn_incomplete', { count: Math.max(register.incomplete.without_identity, register.incomplete.without_address) })}</AttnLine>
+    }
+    // Nothing pressing: the one step that is left of the setup, as a fact with its action.
+    if (canCompleteSetup) {
+      return (
+        <AttnLine tone="info" action={{ label: t('setup_action'), onClick: () => void openSetup() }}>
+          {t('setup_line')}
+        </AttnLine>
+      )
     }
     return null
   })()
@@ -727,21 +807,55 @@ export function ShareRegister() {
         <FieldNote error={errorText('share_count')} />
       </div>
     )
-    const dateField = (
+    // While the register is set up the date is the entry's own. In use the
+    // entry carries today, and the field is the day of the event (optional);
+    // a rättelse has no such day.
+    const dateField = inUse && kind === 'rattelse' ? null : (
       <div className="space-y-1">
-        <Label htmlFor="sr-event_date">{quick ? t('quick_date') : t('field_event_date')}</Label>
+        <Label htmlFor="sr-event_date" optional={inUse}>
+          {inUse ? t('field_occurred_on') : kind === 'ingaende' ? t('field_ingaende_date') : quick ? t('quick_date') : t('field_event_date')}
+        </Label>
         <Input {...eventField('event_date')} type="date" max={today} className="tabular-nums" />
-        <FieldNote error={errorText('event_date')} help={t('event_date_help')} />
+        <FieldNote
+          error={errorText('event_date')}
+          help={inUse ? t('occurred_on_help', { today }) : kind === 'ingaende' ? t('ingaende_date_help') : t('event_date_help')}
+        />
       </div>
+    )
+    // The entry that makes the register complete takes it into use: offered while it is set up.
+    const completesField = !inUse && SETUP_KINDS.includes(kind) && (
+      <label className="flex items-start gap-2 text-sm sm:col-span-2">
+        <Checkbox checked={form.completes_setup === 'true'} onCheckedChange={(v) => changeEvent('completes_setup', v === true ? 'true' : '')} />
+        <span>{t('completes_setup')}</span>
+      </label>
     )
     if (quick) {
       return (
         <div className="grid gap-4 sm:grid-cols-2">
-          <p className="text-sm text-muted-foreground sm:col-span-2">{t('quick_intro')}</p>
+          {/* A new company enters its formation; one that kept its aktiebok elsewhere enters the holdings as they stand (while the register is set up). */}
+          {!inUse && (
+          <div className="space-y-1 sm:col-span-2">
+            <Label htmlFor="sr-quick-kind">{t('quick_kind')}</Label>
+            <SettingsSelect
+              id="sr-quick-kind"
+              value={kind === 'ingaende' ? 'ingaende' : 'bildande'}
+              onChange={(e) => {
+                changeEvent('kind', e.target.value)
+                // An opening holding stands as of a day, today unless another is given; a formation's day is asked for.
+                changeEvent('event_date', e.target.value === 'ingaende' ? today : '')
+              }}
+            >
+              <option value="bildande">{t('quick_kind_bildande')}</option>
+              <option value="ingaende">{t('quick_kind_ingaende')}</option>
+            </SettingsSelect>
+          </div>
+          )}
+          <p className="text-sm text-muted-foreground sm:col-span-2">{kind === 'ingaende' ? t('quick_intro_ingaende') : t('quick_intro')}</p>
           {partyPicker(form, 'to', t('quick_owner'))}
           {classField}
           {countField}
           {dateField}
+          {completesField}
           {classes.length === 0 && <p className="text-xs text-muted-foreground sm:col-span-2">{t('quick_hint')}</p>}
         </div>
       )
@@ -757,7 +871,8 @@ export function ShareRegister() {
           <div className="space-y-1">
             <Label htmlFor="sr-kind">{t('field_kind')}</Label>
             <SettingsSelect {...eventField('kind')}>
-              {SHARE_EVENT_KINDS.filter((k) => k !== 'rattelse').map((k) => (
+              {/* An opening holding belongs to the setup: not offered once the register is in use. */}
+              {SHARE_EVENT_KINDS.filter((k) => k !== 'rattelse' && !(inUse && k === 'ingaende')).map((k) => (
                 <option key={k} value={k}>
                   {t(`kind_${k}`)}
                 </option>
@@ -889,6 +1004,7 @@ export function ShareRegister() {
             <span>{t('forbehall_cleared')}</span>
           </label>
         )}
+        {completesField}
       </div>
     )
   }
@@ -1210,6 +1326,17 @@ export function ShareRegister() {
           </button>
         </p>
       )}
+      {/* Which phase the register is in: set up (an entry carries the day of the event) or in use (the day it is made). */}
+      {register && !register.is_avstamningsbolag && events.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {register.setup_completed_at ? t('setup_done', { date: formatDate(register.setup_completed_at) }) : t('setup_open')}{' '}
+          {canCompleteSetup && (
+            <button type="button" className={QUIET_LINK_CLASS} onClick={() => void openSetup()} disabled={busy}>
+              {t('setup_action')}
+            </button>
+          )}
+        </p>
+      )}
       {/* A member can keep the books but not the aktiebok: said once, instead of a form that is refused. */}
       {register && canWrite && !isAdmin && <p className="text-xs text-muted-foreground">{t('member_note')}</p>}
 
@@ -1228,6 +1355,35 @@ export function ShareRegister() {
             </Button>
             <Button onClick={() => void toggleAvstamning()} loading={busy}>
               {t('avstamning_confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(setupPreview)} onOpenChange={(open) => (open || busy ? null : setSetupPreview(null))}>
+        <DialogContent size="confirm">
+          <DialogHeader>
+            <DialogTitle>{t('setup_title')}</DialogTitle>
+            <DialogDescription className="text-[13px] leading-5">
+              {t('setup_description', { shares: setupPreview?.total_shares ?? 0, holders: setupPreview?.holders ?? 0 })}
+            </DialogDescription>
+          </DialogHeader>
+          {setupPreview && (
+            <div className="space-y-2 text-[13px] leading-5 text-muted-foreground">
+              <p>{t('setup_consequence_dates')}</p>
+              <p>{t('setup_consequence_keep')}</p>
+              {setupPreview.warnings.map((w) => (
+                <AttnLine key={w}>{w}</AttnLine>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <FooterNote failure={failureIn('setup')}>{t('setup_consequence')}</FooterNote>
+            <Button variant="ghost" onClick={() => setSetupPreview(null)} disabled={busy}>
+              {t('cancel')}
+            </Button>
+            <Button onClick={() => void confirmSetup()} loading={busy}>
+              {t('setup_confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1305,6 +1461,16 @@ export function ShareRegister() {
           </DialogHeader>
           {person && (
             <div className="grid gap-4 sm:grid-cols-2">
+              <div className={cn('space-y-1', person.kind === 'company' ? '' : 'sm:col-span-2')}>
+                <Label htmlFor="sr-new_name">{t('field_name')}</Label>
+                <Input {...field(person, setPerson as (s: FormState) => void, 'new_name')} maxLength={200} data-ph-mask="" />
+              </div>
+              {person.kind === 'company' && (
+                <div className="space-y-1">
+                  <Label htmlFor="sr-org_number">{t('field_org_number')}</Label>
+                  <Input {...field(person, setPerson as (s: FormState) => void, 'org_number')} maxLength={13} className="tabular-nums" />
+                </div>
+              )}
               {person.kind === 'person' && (
                 <>
                   <div className="space-y-1">
@@ -1370,7 +1536,10 @@ export function ShareRegister() {
             </div>
           )}
           <DialogFooter>
-            <FooterNote failure={failureIn('person')} />
+            {/* A changed name or organisationsnummer is entered in the aktiebok by the database: said before the save. */}
+            <FooterNote failure={failureIn('person')}>
+              {person && (person.new_name.trim() !== person.name || (person.kind === 'company' && person.org_number.trim() !== person.org_number_on_file)) ? t('person_name_consequence') : null}
+            </FooterNote>
             <Button variant="ghost" onClick={() => setPerson(null)} disabled={busy}>
               {t('cancel')}
             </Button>
