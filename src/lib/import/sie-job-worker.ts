@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { commitSIEImportChunk, reverseSIEImportChunk } from '@/lib/bookkeeping/engine'
+import { SIESourceVoucherTakenError } from '@/lib/bookkeeping/errors'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, readSIEClosingBalances, readSIESourceVouchers,
@@ -408,6 +409,34 @@ export async function finishCompletedSIEImport(
   return {learned,swept}
 }
 
+/**
+ * The person's sentence for a chunk refused because one of its vouchers has
+ * the source series and number of another verifikat of its fiscal year
+ * (SIESourceVoucherTakenError). stop_sie_import_job adds what became of the job.
+ */
+export function takenSourceVoucherReason(err: SIESourceVoucherTakenError): string {
+  const voucher = err.voucherRef ? `Verifikation ${err.voucherRef}` : 'En verifikation'
+  return `${voucher} har samma serie och nummer som en annan verifikation i räkenskapsåret, i filen eller redan bokförd, `
+    + 'och kan inte bokföras två gånger. Importen har stoppats.'
+}
+
+/**
+ * A refusal no retry can pass ends the run at once (stop_sie_import_job): the
+ * job fails and gives its year back when it booked nothing, and is paused
+ * with no automatic attempt, for Ångra, when it did. Until that function
+ * exists (code deployed ahead of migration 20261122224500) the failure is
+ * recorded as any other, as before.
+ */
+async function stopOnTakenSourceVoucher(supabase: SupabaseClient, job: SIEJob, err: SIESourceVoucherTakenError): Promise<void> {
+  try {
+    await sieJobRPC(supabase,job,'stop_sie_import_job',{p_reason:takenSourceVoucherReason(err)})
+  } catch (stopError) {
+    const code = (stopError as { code?: unknown }).code
+    if (code !== 'PGRST202' && code !== '42883') throw stopError
+    await sieJobRPC(supabase,job,'record_sie_job_failure',{p_error:err.message})
+  }
+}
+
 /** after() is only a fast path. Cron owns recovery, independent of the browser. */
 export async function runSIEWorker(options: { importId?:string; budgetMs?:number; supabase?:SupabaseClient } = {}): Promise<{ jobs:number; chunks:number }> {
   if (!runsSIEJobs()) return {jobs:0,chunks:0}
@@ -457,9 +486,17 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
       await finishCompletedSIEImport(supabase,job,learning,deadline)
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Unknown SIE worker error'
-      log.error('SIE job requires recovery',err as Error,{alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase})
+      if (err instanceof SIESourceVoucherTakenError) {
+        // Refused the same way on every try: logged once, and the job stopped below.
+        log.error('SIE job stopped: a voucher repeats the source series and number of another verifikat of its year',err,
+          {alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase,voucherRef:err.voucherRef})
+      } else {
+        log.error('SIE job requires recovery',err as Error,{alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase})
+      }
       try {
-        if (err instanceof SIEJobValidationError && job.job_phase === 'prepare') {
+        if (err instanceof SIESourceVoucherTakenError) {
+          await stopOnTakenSourceVoucher(supabase,job,err)
+        } else if (err instanceof SIEJobValidationError && job.job_phase === 'prepare') {
           await sieJobRPC(supabase,job,'fail_sie_preparation',{p_reason:reason})
         } else {
           // This queues behind any in-flight write and preserves its receipt.
