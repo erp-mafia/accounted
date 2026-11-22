@@ -462,6 +462,50 @@ describe('roles', () => {
     })
   })
 
+  // A representatives call that failed (budget spent, timeout) leaves the list
+  // empty and names it in incompleteSections: "could not ask", not "no board".
+  it('claims nothing while the snapshot could not fetch the representatives', async () => {
+    enqueue({ data: null, count: 0 }) // company_roles count
+    enqueue({
+      data: {
+        tic_snapshot: {
+          representatives: [],
+          board: null,
+          signatory: [{ description: 'Firman tecknas av styrelsen' }],
+          incompleteSections: ['board', 'representatives'],
+        },
+      },
+    })
+    enqueue({ data: null }) // settings upsert, were it reached
+    enqueue({ data: [{ company_id: 'company-1' }] }) // the claim, were it reached
+    expect(await seedRolesFromSnapshot(ctx)).toBe(0)
+    // Unclaimed, so the read after a complete snapshot seeds the board.
+    expect(findCalls('share_register_settings', 'update')).toEqual([])
+    expect(findCalls('company_signatory_rules', 'insert')).toEqual([])
+  })
+
+  it('seeds when only the board summary could not be fetched', async () => {
+    // The representatives were kept from the last answered fetch; the seed
+    // reads them, not the summary.
+    enqueue({ data: null, count: 0 })
+    enqueue({
+      data: {
+        tic_snapshot: {
+          representatives: [{ name: 'Anna Ek', positionDescription: 'VD' }],
+          board: null,
+          incompleteSections: ['board'],
+        },
+      },
+    })
+    enqueue({ data: null }) // settings upsert
+    enqueue({ data: [{ company_id: 'company-1' }] }) // claim
+    enqueue({ data: [] }) // person by name
+    enqueue({ data: ANNA }) // ensure_party
+    enqueue({ data: null }) // company_roles insert
+    expect(await seedRolesFromSnapshot(ctx)).toBe(1)
+    expect(findCall('company_roles', 'insert')?.[0]).toEqual(expect.objectContaining({ party_id: ANNA, role: 'vd' }))
+  })
+
   it('does not seed when another read already claimed it', async () => {
     enqueue({ data: null, count: 0 })
     enqueue({ data: { tic_snapshot: { representatives: [{ name: 'Anna', positionDescription: 'VD' }] } } })
