@@ -7,6 +7,8 @@ import {
   inToBookFilter,
   opensInBookingScreen,
   readAllToBookBankRows,
+  toBookScreenSubject,
+  toBookDoor,
   toBookCounts,
   toBookFilterFromSlug,
   toBookFilterOfBack,
@@ -36,6 +38,7 @@ const doc = (over: Partial<ToBookDocument> = {}): ToBookDocument => ({
   amount: 1249,
   currency: 'SEK',
   bankMatchTransactionId: null,
+  kind: null,
   ...over,
 })
 
@@ -109,6 +112,31 @@ describe('the walk on the booking screen', () => {
   it('keeps the list filter', () => {
     expect(bookingWalk(rows, 'missing')).toEqual(['a'])
     expect(bookingWalk(rows, 'no_bank')).toEqual([])
+  })
+})
+
+describe('a receipt found for a bank row', () => {
+  const rows = buildToBookRows(
+    [bank({ id: 'a', date: '2026-11-20' }), bank({ id: 'c', date: '2026-11-18' })],
+    [doc({ id: 'kvitto', bankMatchTransactionId: 'a', kind: 'receipt' }), doc({ id: 'faktura', bankMatchTransactionId: 'c', kind: 'supplier_invoice' })],
+  )
+  const receiptRow = rows.find((r) => r.transactionId === 'a')!
+  const invoiceRow = rows.find((r) => r.transactionId === 'c')!
+
+  it('opens the bank row on the booking screen with the receipt held as its underlag', () => {
+    expect(opensInBookingScreen(receiptRow)).toBe(true)
+    expect(toBookScreenSubject(receiptRow)).toEqual({ kind: 'transaction', transactionId: 'a', account: null, foundItemId: 'kvitto' })
+    expect(bookingWalk(rows, 'found')).toEqual(['a'])
+  })
+
+  it('leaves an invoice found for a row to Inkommande', () => {
+    expect(invoiceRow.foundKind).toBe('supplier_invoice')
+    expect(opensInBookingScreen(invoiceRow)).toBe(false)
+  })
+
+  it('opens a row without a found document with nothing held', () => {
+    const [plain] = buildToBookRows([bank({ id: 'b' })], [])
+    expect(toBookScreenSubject(plain)).toEqual({ kind: 'transaction', transactionId: 'b', account: null })
   })
 })
 
@@ -229,5 +257,12 @@ describe('readAllToBookBankRows', () => {
     })
 
     await expect(readAllToBookBankRows(readPage)).rejects.toThrow('HTTP 500')
+  })
+})
+
+describe('toBookDoor', () => {
+  it('leads every "book these" link to Att bokföra with the booking screen, else where it led', () => {
+    expect(toBookDoor(true, '/transactions?view=inbox')).toBe('/att-bokfora')
+    expect(toBookDoor(false, '/transactions?view=inbox')).toBe('/transactions?view=inbox')
   })
 })

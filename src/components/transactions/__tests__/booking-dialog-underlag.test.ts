@@ -240,7 +240,8 @@ describe('underlag survives closing a booking dialog', () => {
 
   for (const [name, src, open, txId] of [
     ['TransactionBookingDialog', BOOKING_SRC, 'open,\\s*onChange: onUnderlagChange,', 'transactionId'],
-    ['BookingScreen', SCREEN_SRC, 'open: true,', 'transaction.id'],
+    // The screen also starts with the receipt found for the row, held (never pinned).
+    ['BookingScreen', SCREEN_SRC, 'open: true,\\s*found,', 'transaction.id'],
   ] as const) {
     it(`${name} holds the row's underlag through useHeldUnderlag and wires every door to it`, () => {
       expect(src).toMatch(new RegExp(`useHeldUnderlag\\(\\{\\s*transactionId: transaction\\??\\.id(?: \\?\\? null)?,\\s*rowDocumentId: transaction\\??\\.document_id \\?\\? null,\\s*${open}\\s*\\}\\)`))

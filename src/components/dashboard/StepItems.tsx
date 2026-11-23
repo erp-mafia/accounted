@@ -20,6 +20,7 @@ import { INKORG_FOCUS_QUERY, INKORG_HREF } from '@/lib/inkorg/flag'
 import { PAYMENT_STATUSES_TO_BOOK, SETTLEMENT_STATUSES_TO_BOOK } from '@/lib/collections/settlements-ui'
 import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import { readSkattekontoOpeningDate, whereSkattekontoRowOpen } from '@/lib/skatteverket/skattekonto-open-rows'
+import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
 
 /**
  * What stands behind a count row, inside its Börja step: the first few items
@@ -36,6 +37,8 @@ import { readSkattekontoOpeningDate, whereSkattekontoRowOpen } from '@/lib/skatt
  *   inbox               GET /api/extensions/ext/invoice-inbox/items?limit=200, the
  *                       read Inkommande makes, in its Behöver dig queue order
  *   bank_rows, matches  transactions not yet booked (and with a proposed match)
+ *   to_book             the same bank rows, each opening the booking screen
+ *                       (Att bokföra's row, with the booking screen switched on)
  *   skattekonto         skattekonto_transactions booked at Skatteverket, no verifikat
  *   settlements, collected_payments, collection_decision, collection_attention
  *                       the collection tables, by the statuses the counts use
@@ -57,6 +60,7 @@ export type StepItemsKind =
   | 'missing_underlag'
   | 'inbox'
   | 'bank_rows'
+  | 'to_book'
   | 'matches'
   | 'skattekonto'
   | 'settlements'
@@ -235,6 +239,11 @@ const invoiceName = (invoice: unknown): string => {
  * (lib/worklist/categories.ts), the order oldest or soonest first, the limit
  * STEP_ITEMS_CAP.
  */
+/** The page a booking screen opened from a step returns to: Hem, or its Behöver dig view. */
+function stepBack(): string {
+  return new URLSearchParams(window.location.search).get('vy') === 'behover' ? '/?vy=behover' : '/'
+}
+
 async function loadFromTables(kind: StepItemsKind, companyId: string, href: string): Promise<StepItem[]> {
   const supabase = createClient()
   const rows = async (query: PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<Row[]> => {
@@ -244,6 +253,7 @@ async function loadFromTables(kind: StepItemsKind, companyId: string, href: stri
   }
   switch (kind) {
     case 'bank_rows':
+    case 'to_book':
     case 'matches': {
       let query = supabase
         .from('transactions')
@@ -260,7 +270,10 @@ async function loadFromTables(kind: StepItemsKind, companyId: string, href: stri
         date: text(r.date) || null,
         amount: num(r.amount),
         currency: text(r.currency) || null,
-        href: `/transactions?highlight=${r.id}`,
+        href:
+          kind === 'to_book'
+            ? bookingScreenHref({ kind: 'transaction', transactionId: String(r.id), account: null }, stepBack())
+            : `/transactions?highlight=${r.id}`,
       }))
     }
     case 'skattekonto': {

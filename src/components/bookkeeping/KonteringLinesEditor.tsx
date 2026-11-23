@@ -103,6 +103,8 @@ interface KonteringLinesEditorProps {
   notActivatedLabel?: string
   /** The account name shown under a picked account. */
   accountName?: (accountNumber: string) => string | undefined
+  /** The account name sits inside the field after the number instead, so every row keeps one height. */
+  accountNameInline?: boolean
   onAccountChange: (index: number, accountNumber: string) => void
   onAmountChange: (index: number, field: 'debit_amount' | 'credit_amount', value: string) => void
   /** Shows the description column; leave it out for account-and-amount rows. */
@@ -163,6 +165,7 @@ export function KonteringLinesEditor({
   catalog,
   notActivatedLabel,
   accountName,
+  accountNameInline = false,
   onAccountChange,
   onAmountChange,
   onDescriptionChange,
@@ -308,7 +311,8 @@ export function KonteringLinesEditor({
               onCreateAccount={onCreateAccount ? (prefill) => onCreateAccount(index, prefill) : undefined}
               onCommit={onAccountCommit ? () => onAccountCommit(index) : undefined}
               inputRef={accountInputRef ? (el) => accountInputRef(index, el) : undefined}
-              selectedName={accountName?.(line.account_number)}
+              selectedName={accountNameInline ? undefined : accountName?.(line.account_number)}
+              inlineName={accountNameInline ? accountName?.(line.account_number) : undefined}
               disabled={accountsDisabled}
             />
           </div>

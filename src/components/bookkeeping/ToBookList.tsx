@@ -22,6 +22,7 @@ import {
   toBookFilterFromSlug,
   toBookIsMoneyIn,
   toBookListHref,
+  toBookScreenSubject,
   TO_BOOK_FILTER_PARAM,
   TO_BOOK_FILTERS,
   type ToBookFilter,
@@ -33,10 +34,10 @@ import { cn, formatDate } from '@/lib/utils'
 
 /**
  * Att bokföra (/att-bokfora): everything that waits to be booked, as one
- * list (lib/bookkeeping/to-book.ts). A bank row opens the booking screen; a
- * bank row with a document found for it, and a document with no bank row,
- * open that document in Inkommande, where the pair is confirmed or the
- * document is booked.
+ * list (lib/bookkeeping/to-book.ts). A bank row opens the booking screen,
+ * with the receipt found for it held as its underlag; a bank row with an
+ * invoice found for it, and a document with no bank row, open that document
+ * in Inkommande, where the pair is confirmed or the document is booked.
  */
 export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
   const t = useTranslations('to_book_list')
@@ -61,7 +62,7 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
 
   const hrefOf = (row: ToBookRow): string =>
     opensInBookingScreen(row)
-      ? bookingScreenHref({ kind: 'transaction', transactionId: row.transactionId as string, account: null }, toBookListHref(filter))
+      ? bookingScreenHref(toBookScreenSubject(row), toBookListHref(filter))
       : inboxFocusHref(inboxBase, row.inboxItemId as string)
 
   return (
