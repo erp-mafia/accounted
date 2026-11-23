@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateVacationLiability, type VacationLiabilityRow } from '@/lib/reports/vacation-liability'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { splitVacationLiabilityChange } from '@/lib/salary/account-mapping'
-import type { AccrualProposal, AccrualsProposal } from './types'
+import type { AccrualProposal, AccrualsProposal, VacationProposalEmployee } from './types'
 
 /** Sociala avgifter on accrued salary/vacation (K3 BFNAR 2012:1 ch.19,
  *  K2 BFNAR 2016:10 ch.16). Same rate as the regular AGI calculation. */
@@ -139,7 +139,7 @@ export async function assessVacationLiability(
   // days x day value + earning_pay (procentregeln, running intjänandeår) +
   // variable_pay (sammalöneregeln, rörliga lönedelar). Read from the report;
   // nothing is recomputed here.
-  const employees = report.rows.map((row) => ({
+  const employees: VacationProposalEmployee[] = report.rows.map((row) => ({
     employee_id: row.employeeId,
     employee_name: row.employeeName,
     employment_start: row.employmentStart,
