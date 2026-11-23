@@ -31,6 +31,11 @@ describe('the way back to Hem', () => {
     expect(bookingScreenOrigin('/?vy=annat', true)).toBe('/')
   })
 
+  it('keeps the Börja step it was opened from, under Hem', () => {
+    expect(safeReturnPath('/?vy=borja&steg=to-book')).toBe('/?vy=borja&steg=to-book')
+    expect(bookingScreenOrigin('/?vy=borja&steg=to-book', true)).toBe('/')
+  })
+
   it('still refuses a page it does not return to', () => {
     expect(safeReturnPath('/settings')).toBeNull()
     expect(safeReturnPath('//evil.example')).toBeNull()
