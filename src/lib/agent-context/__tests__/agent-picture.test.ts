@@ -2,11 +2,12 @@
  * The agent picture's loader: each part, each part's failure leaving the
  * rest, the company filter on every read, and what is masked.
  *
- * The Supabase client is a small fake keyed by table: every chained call is
- * recorded, and a table's handler answers when the chain is awaited.
+ * The Supabase client is the table mock from tests/helpers: a table's
+ * handler answers when a chain is awaited, and sees the calls of that chain.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -20,33 +21,25 @@ interface Call {
 type Answer = { data?: unknown; error?: { message: string } | null; count?: number | null }
 type Handler = Answer | ((call: Call) => Answer | Promise<Answer>)
 
+/**
+ * The table mock from tests/helpers, with one addition: every awaited chain
+ * is kept whole (its table and its calls), so a test can ask what one read
+ * filtered on.
+ */
 function fakeSupabase(tables: Record<string, Handler>) {
   const calls: Call[] = []
-  const client = {
-    from(table: string) {
-      const call: Call = { table, ops: [] }
-      calls.push(call)
-      const answer = async () => {
-        const handler = tables[table]
-        const result = typeof handler === 'function' ? await handler(call) : handler
-        return { data: result?.data ?? null, error: result?.error ?? null, count: result?.count ?? null }
-      }
-      const builder: Record<string, unknown> = new Proxy(
-        {},
-        {
-          get(_target, prop: string) {
-            if (prop === 'then') return (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => answer().then(resolve, reject)
-            return (...args: unknown[]) => {
-              call.ops.push({ method: prop, args })
-              return builder
-            }
-          },
-        },
-      )
-      return builder
-    },
-  }
-  return { client: client as unknown as SupabaseClient, calls }
+  const resolvers = Object.fromEntries(
+    Object.entries(tables).map(([table, handler]): [string, TableMockResolver] => [
+      table,
+      (ops) => {
+        const call: Call = { table, ops }
+        calls.push(call)
+        return typeof handler === 'function' ? handler(call) : handler
+      },
+    ]),
+  )
+  const mock = createTableMockSupabase(resolvers)
+  return { client: mock.supabase as unknown as SupabaseClient, calls, tablesRead: () => [...new Set(mock.tables())] }
 }
 
 const filtered = (call: Call, method: string, column: string, value?: unknown) =>
@@ -600,9 +593,12 @@ describe('loadAgentPicture: agents', () => {
 
 describe('loadAgentPicture: the whole answer', () => {
   it('filters every read on the company, with the named exceptions', async () => {
-    const { client, calls } = fakeSupabase(tables())
+    const all = tables()
+    const { client, calls, tablesRead } = fakeSupabase(all)
     await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
     expect(calls.length).toBeGreaterThan(15)
+    // No table is read that this test does not know about.
+    expect(tablesRead().filter((table) => !(table in all))).toEqual([])
     for (const call of calls) {
       const byCompany = filtered(call, 'eq', 'company_id', COMPANY)
       if (call.table === 'companies') expect(filtered(call, 'eq', 'id', COMPANY)).toBe(true)
