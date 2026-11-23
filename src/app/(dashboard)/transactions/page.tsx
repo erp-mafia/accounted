@@ -4497,16 +4497,23 @@ export default function TransactionsPage() {
     openReview(tx, proposalFromTemplate(template, 'manual'), true)
   }
 
+  // With the booking screen switched on, Bokför on a row opens the row there,
+  // as from Att bokföra and Hem: the screen offers the row's suggestion.
+  function openRowOnBookingScreen(transaction: TransactionWithInvoice) {
+    router.push(bookingScreenHref({ kind: 'transaction', transactionId: transaction.id, account: null }, `/transactions${window.location.search}`))
+  }
+
   // Bokför on a row that carries a proposal goes straight to the
   // review with that template set; no picker in between.
   function bookProposal(transaction: TransactionWithInvoice) {
     const s = rowProposalFor(transaction)
-    if (!s) return openCategoryDialog(transaction)
+    if (!s) return bookingScreen ? openRowOnBookingScreen(transaction) : openCategoryDialog(transaction)
     // A decision the company already made (a rule, a settled counterpart, a
     // sure read of a receipt) books from the row; Ångra sits on the toast.
     // The company's switch and the rule's own say come first
     // (lib/transactions/direct-booking.ts), and the server judges it again.
     if (directBooking && !reviewRequired(s, directBooking)) return void bookDirect(transaction, s)
+    if (bookingScreen) return openRowOnBookingScreen(transaction)
     openReview(transaction, s, false)
   }
 
@@ -5079,6 +5086,7 @@ export default function TransactionsPage() {
                         accountLogo={accountLogoFor(item.data)}
                         proposal={proposalFor(item.data)}
                         onBookProposal={bookProposal}
+                        onOpenBookingScreen={bookingScreen ? openRowOnBookingScreen : undefined}
                         salaryRunPeriod={salaryPayoutFor(item.data)?.period ?? null}
                         giroCounterparty={giroCounterpartyFor(item.data)}
                       />
