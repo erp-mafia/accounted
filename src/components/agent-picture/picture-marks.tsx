@@ -29,7 +29,10 @@ const SOURCE_LOGO: Partial<Record<PictureSourceKey, string>> = {
   zettle: '/logos/zettle.svg',
 }
 
-const CLIENT_LOGO: Partial<Record<ConnectionKind, string>> = Object.fromEntries(AI_CLIENTS.map((client) => [client.id, client.logo]))
+const CLIENT_LOGO: Partial<Record<ConnectionKind, string>> = {
+  ...Object.fromEntries(AI_CLIENTS.map((client) => [client.id, client.logo])),
+  copilot: '/logos/copilot.webp',
+}
 
 function Logo({ src }: { src: string }) {
   // A small brand mark from public/logos: the image optimizer adds nothing for it.
