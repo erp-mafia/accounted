@@ -370,6 +370,9 @@ export async function buildIxbrlInput(
       vasentligaHandelser: pdfData.forvaltningsberattelse.important_events,
       flerarsoversikt,
       flerarsPerioder,
+      // The year's choice to state the flerårsöversikt in tkr, as the PDF
+      // does; spread only when on, so every other input keeps its content hash.
+      ...(pdfData.forvaltningsberattelse.flerarsoversikt_tkr === true ? { flerarsoversiktTkr: true } : {}),
       egetKapital,
       // K2: the specification itself, per post and kind, so the document's
       // table is the PDF's and tags every movement (the K3 document carries

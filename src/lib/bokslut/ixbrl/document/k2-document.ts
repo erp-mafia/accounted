@@ -99,7 +99,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       )
     }
 
-    const flerars = renderFlerarsoversikt(writer, fb.flerarsoversikt)
+    const flerars = renderFlerarsoversikt(writer, fb.flerarsoversikt, { tkr: fb.flerarsoversiktTkr })
     if (flerars) parts.push(flerars)
 
     // Förändringar i eget kapital: the report's specification per post and

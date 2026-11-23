@@ -647,6 +647,9 @@ export async function buildArsredovisningReport(
         'Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.',
       kontrollbalans_required: overrides.kontrollbalans_required ?? false,
       flerarsoversikt,
+      // The year's choice to state the flerårsöversikt in tkr. Only present
+      // when on: an absent key keeps the content hash of every other report.
+      ...(narrative?.flerarsoversikt_tkr === true ? { flerarsoversikt_tkr: true } : {}),
       egen_kapital_changes,
       resultatdisposition:
         overrides.resultatdisposition ??
