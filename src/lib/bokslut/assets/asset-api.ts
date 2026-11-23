@@ -37,6 +37,7 @@ import { validateComponents } from './k3-components'
 import { validateOpeningDepreciation } from './opening-depreciation'
 import { findK2ExcludedAccount, k2ExcludedAccountMessages } from './k2-account-guard'
 import { chartAwareDefaultAccounts, unusableAssetAccounts } from './asset-chart-accounts'
+import { ASSET_ACQUISITION_TYPES, assetAcquisitionType } from './acquisition-type'
 import type {
   AccountingFramework,
   Asset,
@@ -62,6 +63,9 @@ export const ASSET_CATEGORIES = [
 export const DEPRECIATION_METHODS = ['linear'] as const satisfies readonly WritableDepreciationMethod[]
 
 export const ASSET_DISPOSAL_TYPES = ['sale', 'scrap', 'business_transfer'] as const
+
+const ACQUISITION_TYPE_DESCRIPTION =
+  'How the asset came onto the books: purchase (default), business_acquisition (rörelseförvärv, inkråmsförvärv), merger (fusion) or reclassification (moved in from another balance sheet post, for example varulager or pågående nyanläggningar). The årsredovisning note shows each on its own row. For a merger or a reclassification, acquisition_date is the day the asset came in, opening_accumulated_depreciation the depreciation taken over with it as of that day, and useful_life_months the life that remains from that day (not the full life from the original purchase).'
 
 export const ASSET_DISPOSAL_VAT_TREATMENTS = [
   'standard_25',
@@ -201,6 +205,7 @@ export const CreateAssetSchema = z
     name: z.string().min(1).describe('Asset name as it appears in the register.'),
     category: z.enum(ASSET_CATEGORIES).describe('BAS category; drives the default account triple.'),
     acquisition_date: z.string().regex(ISO_DATE).describe('yyyy-MM-dd'),
+    acquisition_type: z.enum(ASSET_ACQUISITION_TYPES).optional().describe(ACQUISITION_TYPE_DESCRIPTION),
     // Positive: a zero-value asset would dodge the depreciation engine and
     // create a no-op row that confuses the balance sheet.
     acquisition_cost: z.number().positive().describe('Acquisition cost excl. VAT, SEK.'),
@@ -245,6 +250,9 @@ export type CreateAssetBody = z.infer<typeof CreateAssetSchema>
 export const UpdateAssetSchema = z.object({
   name: z.string().min(1).optional(),
   notes: z.string().nullable().optional(),
+  // Not part of the depreciation basis: it only decides the row of the note
+  // the asset's cost is shown on, so it stays editable after depreciation.
+  acquisition_type: z.enum(ASSET_ACQUISITION_TYPES).optional().describe(ACQUISITION_TYPE_DESCRIPTION),
   // Acquisition-basis corrections. The service (updateAsset) only permits
   // these while the asset is neither disposed nor depreciated, returning
   // ASSET_CORRECTION_BLOCKED (409) otherwise: they redefine the
@@ -557,6 +565,7 @@ export function assetView(asset: Asset, hasPostedDepreciation: boolean) {
     name: asset.name,
     category: asset.category,
     acquisition_date: asset.acquisition_date,
+    acquisition_type: assetAcquisitionType(asset),
     acquisition_cost: Number(asset.acquisition_cost),
     salvage_value: Number(asset.salvage_value ?? 0),
     useful_life_months: Number(asset.useful_life_months),
@@ -729,6 +738,7 @@ export const AssetViewSchema = z.object({
   name: z.string(),
   category: z.enum(ASSET_CATEGORIES),
   acquisition_date: z.string(),
+  acquisition_type: z.enum(ASSET_ACQUISITION_TYPES).describe('How the asset came onto the books; purchase unless stated.'),
   acquisition_cost: z.number(),
   salvage_value: z.number(),
   useful_life_months: z.number().int().describe('0 for land, which is never depreciated.'),

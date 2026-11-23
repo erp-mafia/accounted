@@ -13,6 +13,7 @@ import { getConcept, type TaxonomyRegistry } from '../taxonomy/registry'
 import type { FlerarsRow, IxbrlArsredovisningInput, Resultatdisposition } from '../types'
 import type { FactWriter } from './ix'
 import { fmtRange, periodColumnLabel, type Ctx } from './layout'
+import { renderFixedAssetTables } from './fixed-asset-note'
 import { renderRevisorspateckning } from './revisorspateckning-section'
 import { el, escapeText, formatSekAbs, paragraphs } from './xml'
 
@@ -358,8 +359,8 @@ export function renderResultatdisposition(writer: FactWriter, rd: Resultatdispos
 
 /**
  * Notes. Only the facts the taxonomy defines are tagged (principles,
- * medelantal anställda, the ÅRL 5 kap. disclosures, aktiekapital); every
- * other note body is rendered untagged. A concept the registry does not
+ * medelantal anställda, the ÅRL 5 kap. disclosures, aktiekapital, the K2
+ * anläggningstillgångar tables); every other note body is rendered untagged. A concept the registry does not
  * hold leaves its note untagged instead of failing the document.
  */
 export function renderNotes(
@@ -387,7 +388,11 @@ export function renderNotes(
     const isParentCompany = /koncernförhållanden/i.test(note.title)
     const isAktiekapital = /^aktiekapital$/i.test(note.title.trim())
     const aktiekapitalNot = input.disclosures.aktiekapitalNot ?? null
-    if (isAktiekapital && aktiekapitalNot) {
+    if (note.fixedAssets && note.fixedAssets.length > 0) {
+      // The K2 note on anläggningstillgångar: tagged tables per balance
+      // sheet post instead of the text body (fixed-asset-note.ts).
+      parts.push(renderFixedAssetTables(writer, registry, input, note.fixedAssets, warnings))
+    } else if (isAktiekapital && aktiekapitalNot) {
       // Same sentence as the PDF note (build-data.ts), with the registered
       // amount tagged: it repeats the BR fact Aktiekapital@balans0, and
       // repeated data MUST be tagged everywhere it appears (TA §2.7.2) with

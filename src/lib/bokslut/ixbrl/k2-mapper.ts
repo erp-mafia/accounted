@@ -15,6 +15,7 @@
  */
 
 import type { ConceptAmount, ConceptAmounts } from './types'
+import { roundWhole } from './whole-kronor'
 import type { EntityType } from '@/types'
 import { equalOre, isZeroOre, roundOre, sumOre } from '@/lib/money'
 import { isEntityType, supportsMemberCapital } from '@/lib/company/entity-type'
@@ -728,8 +729,16 @@ export function k2BrSectionForAccount(
   accountNumber: string,
   legalForm: K2LegalForm,
 ): K2BrSectionKey | null {
-  const mapping = brMappingsFor(legalForm).find((m) => inRanges(accountNumber, m.ranges))
-  return mapping ? (BR_SECTION_BY_CONCEPT.get(mapping.concept) ?? null) : null
+  const post = k2BrPostForAccount(accountNumber, legalForm)
+  return post ? (BR_SECTION_BY_CONCEPT.get(post) ?? null) : null
+}
+
+/**
+ * The balance sheet post (K2 concept) a BAS account is presented in, by BAS
+ * range only, as k2BrSectionForAccount. Null when no post covers the account.
+ */
+export function k2BrPostForAccount(accountNumber: string, legalForm: K2LegalForm): string | null {
+  return brMappingsFor(legalForm).find((m) => inRanges(accountNumber, m.ranges))?.concept ?? null
 }
 
 const RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING: Record<string, string> = {
@@ -893,12 +902,6 @@ function exactSumForMapping(rows: TrialBalanceRowLike[], mapping: PostMapping): 
       .filter((row) => inRanges(row.account_number, mapping.ranges))
       .map((row) => netBalance(row, mapping.balance)),
   )
-}
-
-function roundWhole(amount: number): number {
-  const normalized = roundOre(amount)
-  const rounded = Math.round(Math.abs(normalized))
-  return rounded === 0 ? 0 : Math.sign(normalized) * rounded
 }
 
 function exactAmount(

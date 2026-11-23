@@ -2,6 +2,7 @@ import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
 import type { EquitySpecification } from './equity-specification'
 import type { EquityMovementKind } from './equity-kinds'
 import type { DisclosureAnswers, DisclosureEvaluation, K3FirstYearStatus } from './disclosures/types'
+import type { FixedAssetNoteTable } from './k2-fixed-asset-note'
 
 /**
  * A förvaltningsberättelse text the K3 disclosure matrix adds, with the K3
@@ -48,6 +49,12 @@ export interface NoteEntry {
   key?: string
   /** The generated text, present only when the user replaced the body. */
   generated_body?: string
+  /**
+   * The K2 note on anläggningstillgångar as tables per balance sheet post
+   * (k2-fixed-asset-note.ts): the body is the same rows as text, and the
+   * iXBRL document tags the figures from these.
+   */
+  fixedAssets?: FixedAssetNoteTable[]
 }
 
 /** See cash-flow-omission.ts for the legal rule behind these values. */

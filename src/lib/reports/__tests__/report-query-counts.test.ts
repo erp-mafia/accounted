@@ -53,7 +53,11 @@ describe('report query counts', () => {
     // 46: the specification of changes in equity reads each year's equity
     // verifikat (one get_entries_with_account_lines per year) and the years'
     // ingående balans verifikat ids (fiscal_periods).
-    expect(db.total()).toBe(46)
+    // 47: a K2 year with years before it reads the stated rows of the
+    // anläggningstillgångar note of every year once
+    // (arsredovisning_narratives): the note opens with what the years before
+    // it stated.
+    expect(db.total()).toBe(47)
   })
 
   it('one SIE export reads the previous year as sums per account, whatever its size', async () => {

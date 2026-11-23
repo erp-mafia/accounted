@@ -215,6 +215,24 @@ export const K2_BALANSRAKNING_TILLGANGAR: StatementNode[] = [
   grandTotal('Summa tillgångar', 'Tillgangar', 'tillgangar'),
 ]
 
+/**
+ * The label the K2 balance sheet prints an asset post with: the note on a
+ * post carries the same name. Null for a concept that is no asset post.
+ */
+export function k2AssetPostLabel(concept: string): string | null {
+  const find = (nodes: readonly StatementNode[]): string | null => {
+    for (const node of nodes) {
+      if (node.kind === 'post' && node.concept === concept) return node.label
+      if (node.kind === 'group') {
+        const label = find(node.children)
+        if (label) return label
+      }
+    }
+    return null
+  }
+  return find(K2_BALANSRAKNING_TILLGANGAR)
+}
+
 /** K2 AB risbs 2024-09-12: equity and liabilities. */
 export const K2_BALANSRAKNING_EGET_KAPITAL_SKULDER: StatementNode[] = [
   section('Eget kapital'),

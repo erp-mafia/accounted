@@ -43,6 +43,7 @@ import { chartAwareDefaultAccounts, ensureAssetAccountsInChart } from './asset-c
 import type {
   AccountingFramework,
   Asset,
+  AssetAcquisitionType,
   AssetCategory,
   WritableDepreciationMethod,
   AssetDisposalType,
@@ -234,6 +235,8 @@ export interface CreateAssetInput {
   name: string
   category: AssetCategory
   acquisition_date: string
+  /** How the asset came onto the books; a purchase unless stated. */
+  acquisition_type?: AssetAcquisitionType
   acquisition_cost: number
   salvage_value?: number
   useful_life_months: number
@@ -260,6 +263,15 @@ export interface CreateAssetInput {
    *  chosen the aktiveringsmodell (K3 18.7). */
   internally_generated?: boolean
   notes?: string
+}
+
+/**
+ * The acquisition type as an insert writes it. A purchase is the column's
+ * default and is left out, so creating an ordinary asset does not depend on
+ * the column (the code can be live before its migration).
+ */
+function acquisitionTypeColumn(type: AssetAcquisitionType | undefined): { acquisition_type?: AssetAcquisitionType } {
+  return type && type !== 'purchase' ? { acquisition_type: type } : {}
 }
 
 /** The stored start date: null when it is the acquisition date. */
@@ -343,6 +355,7 @@ export async function createAsset(
     bas_expense_account: input.bas_expense_account ?? defaults.expense,
     // A zero amount carries no date: the DB CHECK pairs them.
     ...openingColumns(input.opening_accumulated_depreciation, input.opening_depreciation_date),
+    ...acquisitionTypeColumn(input.acquisition_type),
     notes: input.notes ?? null,
     // Own development (allowed above only on K3 with the aktiveringsmodell):
     // what the fond för utvecklingsutgifter follows.
@@ -433,6 +446,7 @@ async function createComponentAsset(
       bas_expense_account: accounts.expense,
       opening_accumulated_depreciation: 0,
       opening_depreciation_date: null,
+      ...acquisitionTypeColumn(input.acquisition_type),
       notes: input.notes ?? null,
       own_development: isOwnDevelopmentAccount(accounts.asset),
     })
@@ -598,6 +612,9 @@ export class AssetCorrectionBlockedError extends Error {
 export interface UpdateAssetInput {
   name?: string
   notes?: string | null
+  /** How the asset came onto the books. Not part of the depreciation basis:
+   *  it decides the row of the note the cost is shown on, nothing booked. */
+  acquisition_type?: AssetAcquisitionType
   /** "Correction" fields: they redefine the depreciation basis, so changing
    *  them implies the original entry was wrong. Only permitted while the asset
    *  is neither disposed nor depreciated (updateAsset() enforces; throws
