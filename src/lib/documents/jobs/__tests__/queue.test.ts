@@ -34,7 +34,7 @@ const mocked = (fn: unknown) => fn as ReturnType<typeof vi.fn>
 const job = (over: Partial<ClaimedJob> = {}): ClaimedJob => ({ id: 'job-1', company_id: 'co-1', document_id: 'doc-1', kind: 'read', attempts: 1, ...over })
 const DOCUMENT = { id: 'doc-1', company_id: 'co-1', storage_path: 'documents/co-1/a.pdf', mime_type: 'application/pdf' }
 const lastJobUpdate = () => findCalls('document_jobs', 'update').at(-1)?.[0]
-const run = (over: Partial<Parameters<typeof runDocumentJobs>[1]> = {}) => runDocumentJobs(supabase, { limit: 8, worker: 'test', deadlineAt: Number.MAX_SAFE_INTEGER, ...over })
+const run = (over: Partial<Parameters<typeof runDocumentJobs>[1]> = {}) => runDocumentJobs(supabase, { worker: 'test', deadlineAt: Number.MAX_SAFE_INTEGER, ...over })
 /**
  * A run first fails abandoned jobs (none here), then claims these one at a
  * time, each when the one before it is settled: the claim RPC hands out the
@@ -298,11 +298,38 @@ describe('runDocumentJobs', () => {
     expect(findCalls('document_jobs', 'update')).toEqual([[{ status: 'done', result: 'extracted agreement.loan', last_error: null, locked_at: null, locked_by: null }]])
   })
 
-  it('claims at most its limit of jobs in one run', async () => {
-    claim(job({ kind: 'extract' }), job({ id: 'job-2', kind: 'extract' }), job({ id: 'job-3', kind: 'extract' }))
+  it('claims until no job is due while time is left: no count ends the run', async () => {
+    // A cap of 8 a run held every company's documents behind one import's 17 000 read jobs for about 35 hours (crm#2166).
+    const jobs = Array.from({ length: 12 }, (_, i) => job({ id: `job-${i + 1}`, document_id: `doc-${i + 1}`, kind: 'extract' }))
+    claim(...jobs)
     mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'generic', reviewFields: [] })
-    await expect(run({ limit: 2 })).resolves.toEqual({ claimed: 2, done: 2, failed: 0 })
-    expect(due).toHaveLength(1)
+    await expect(run()).resolves.toEqual({ claimed: 12, done: 12, failed: 0 })
+    expect(due).toEqual([])
+    // The thirteenth claim found nothing due and ended the run.
+    expect(rpc.mock.calls.filter(([name]) => name === 'claim_document_jobs')).toHaveLength(13)
+  })
+
+  it('stops the run when the provider fails three jobs in a row, instead of spending an attempt of every due job', async () => {
+    const outage = { status: 'error', reason: 'provider_unavailable: 503 Bedrock is unable to process your request.' }
+    claim(...Array.from({ length: 6 }, (_, i) => job({ id: `job-${i + 1}`, document_id: `doc-${i + 1}`, kind: 'classify' })))
+    mocked(classifyDocument).mockResolvedValue(outage)
+    await expect(run()).resolves.toEqual({ claimed: 3, done: 0, failed: 3 })
+    // The other three were never claimed: their attempts are whole for when the provider is back.
+    expect(due).toHaveLength(3)
+    expect(log.warn).toHaveBeenCalledWith('document jobs stopped: the reader or the model provider failed jobs in a row', expect.objectContaining({ inARow: 3 }))
+  })
+
+  it('keeps going past provider failures that are not in a row: a job that ran resets the count', async () => {
+    const outage = { status: 'error', reason: 'provider_unavailable: 503 Bedrock is unable to process your request.' }
+    claim(...Array.from({ length: 6 }, (_, i) => job({ id: `job-${i + 1}`, document_id: `doc-${i + 1}`, kind: 'classify' })))
+    mocked(classifyDocument)
+      .mockResolvedValueOnce(outage)
+      .mockResolvedValueOnce(outage)
+      .mockResolvedValueOnce({ status: 'skipped', reason: 'already_typed' })
+      .mockResolvedValue(outage)
+    // Two failures, a job that ran, then three failures in a row: the sixth claim is the third in a row.
+    await expect(run()).resolves.toEqual({ claimed: 6, done: 1, failed: 5 })
+    expect(due).toEqual([])
   })
 
   it('queues a derivation after extracting an agreement, and runs it', async () => {

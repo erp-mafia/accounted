@@ -9,7 +9,7 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { readDocumentBytes } from './router'
 import { keptPreview } from '@/lib/documents/preview'
 import { historyReaderTier, readLaneFor, readPlanFor, isActingType, isBooked, type ReadPlan } from './lanes'
-import { READ_GAVE_UP, READ_GIVE_UP_AFTER, READ_RETRY_WAIT_MINUTES, READER_UNAVAILABLE, ReaderUnavailableError, readerForMime, type ReadOutcome } from './types'
+import { READ_GAVE_UP, READ_GIVE_UP_AFTER, READ_RETRY_WAIT_MINUTES, READER_UNAVAILABLE, ReaderUnavailableError, UNAVAILABLE_IN_A_ROW, readerForMime, type ReadOutcome } from './types'
 import { AI_CALL_LIMIT_MS, currentAiDeadline, isRunDeadlineCut } from '@/lib/ai/call-limit'
 import { aiCallLimitMs } from '@/lib/ai/config'
 import { classifyExtractionError } from '@/lib/documents/inbox-extraction/extraction-failure'
@@ -39,14 +39,6 @@ export type StoreOutcome =
   | { status: 'error'; reason: string }
 
 export const isReaderUnavailable = (out: StoreOutcome) => out.status === 'error' && out.reason.startsWith(READER_UNAVAILABLE)
-
-/**
- * How many documents in a row the reader or its model provider may fail on before a backfill pass stops. One
- * failure says little: it may be that document (a scan too long for what was left of the run), and stopping on it
- * let the same document head every run while the ones behind it were never tried. Three in a row is the reader
- * missing or the provider down, which fails every document the same way: stop and try again next run.
- */
-const UNAVAILABLE_IN_A_ROW = 3
 
 /** Reasons the backfill retries later: the model was gated or unconfigured when the row was read. */
 const RETRY_REASONS = ['ai_gated', 'ai_unconfigured', 'partial:ai_gated', 'partial:ai_unconfigured', 'partial:budget']
