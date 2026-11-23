@@ -1,19 +1,30 @@
 import { describe, expect, it } from 'vitest'
 import type { KnowledgeOption } from '../knowledge-choices'
-import { catalogueKnowledge, industryFirst, SEARCH_FROM_ROWS } from '../knowledge-list'
+import { catalogueKnowledge, chosenKnowledge, groupKnowledge, isActiveKnowledge, SEARCH_FROM_TILES } from '../knowledge-list'
 
 const option = (id: string, tier: KnowledgeOption['tier']): KnowledgeOption => ({ id, tier, title: id, summary: '', version: 1, reviewed_at: null })
 
+const CATALOGUE = [
+  option('horizontal/swedish-vat', 'horizontal'),
+  option('horizontal/swedish-payroll', 'horizontal'),
+  option('modifier/holding-ab', 'modifier'),
+  option('modifier/mixed-verksamhet', 'modifier'),
+  option('vertical/konsult-it', 'vertical'),
+  option('vertical/e-handel', 'vertical'),
+  option('community/shared', 'community'),
+  option('own/0d6f6f0e-0000-4000-8000-000000000001', 'own'),
+]
+
 describe('catalogueKnowledge', () => {
   it('holds the product\'s own items and leaves out the community\'s and the company\'s own', () => {
-    const list = catalogueKnowledge([
-      option('horizontal/swedish-vat', 'horizontal'),
-      option('community/shared', 'community'),
-      option('vertical/konsult-it', 'vertical'),
-      option('own/0d6f6f0e-0000-4000-8000-000000000001', 'own'),
-      option('modifier/holding-ab', 'modifier'),
+    expect(catalogueKnowledge(CATALOGUE).map((o) => o.id)).toEqual([
+      'horizontal/swedish-vat',
+      'horizontal/swedish-payroll',
+      'modifier/holding-ab',
+      'modifier/mixed-verksamhet',
+      'vertical/konsult-it',
+      'vertical/e-handel',
     ])
-    expect(list.map((o) => o.id)).toEqual(['horizontal/swedish-vat', 'vertical/konsult-it', 'modifier/holding-ab'])
   })
 
   it('is empty for an empty catalogue', () => {
@@ -21,21 +32,84 @@ describe('catalogueKnowledge', () => {
   })
 })
 
-describe('industryFirst', () => {
-  const rows = [{ key: 'horizontal/a' }, { key: 'vertical/konsult-it' }, { key: 'horizontal/b' }]
-
-  it('puts the company\'s own industry item first and keeps the others in order', () => {
-    expect(industryFirst(rows, 'vertical/konsult-it').map((row) => row.key)).toEqual(['vertical/konsult-it', 'horizontal/a', 'horizontal/b'])
+describe('what a company has chosen', () => {
+  it('is what its profile names and what it installed', () => {
+    const chosen = chosenKnowledge({ vertical_atoms: ['vertical/konsult-it'], modifier_atoms: ['modifier/holding-ab'] }, [{ atom_id: 'vertical/e-handel' }, { atom_id: null }])
+    expect([...chosen].sort()).toEqual(['modifier/holding-ab', 'vertical/e-handel', 'vertical/konsult-it'])
   })
 
-  it('leaves the list as it is without an industry, or with one the list does not hold', () => {
-    expect(industryFirst(rows, null).map((row) => row.key)).toEqual(['horizontal/a', 'vertical/konsult-it', 'horizontal/b'])
-    expect(industryFirst(rows, 'vertical/unknown').map((row) => row.key)).toEqual(['horizontal/a', 'vertical/konsult-it', 'horizontal/b'])
+  it('is nothing for a company with no profile and nothing installed', () => {
+    expect(chosenKnowledge(null, []).size).toBe(0)
+    expect(chosenKnowledge({ vertical_atoms: null, modifier_atoms: null }, []).size).toBe(0)
+  })
+})
+
+describe('isActiveKnowledge', () => {
+  const chosen = new Set(['vertical/konsult-it'])
+
+  it('is true for every general item, chosen or not', () => {
+    expect(isActiveKnowledge('horizontal', 'horizontal/swedish-vat', chosen)).toBe(true)
+    expect(isActiveKnowledge('horizontal', 'horizontal/swedish-vat', new Set())).toBe(true)
+  })
+
+  it('is true for another item only when the company has chosen it', () => {
+    expect(isActiveKnowledge('vertical', 'vertical/konsult-it', chosen)).toBe(true)
+    expect(isActiveKnowledge('vertical', 'vertical/e-handel', chosen)).toBe(false)
+    expect(isActiveKnowledge('modifier', 'modifier/holding-ab', chosen)).toBe(false)
+    expect(isActiveKnowledge('community', 'community/shared', chosen)).toBe(false)
+  })
+})
+
+describe('groupKnowledge', () => {
+  const ids = (groups: ReturnType<typeof groupKnowledge<KnowledgeOption>>) => groups.groups.map((g) => [g.id, g.items.map((o) => o.id)])
+
+  it('puts what the agent gets today first, by kind, then what else exists', () => {
+    const groups = groupKnowledge(CATALOGUE, new Set(['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'vertical/konsult-it', 'modifier/holding-ab']))
+    expect(ids(groups)).toEqual([
+      ['industry', ['vertical/konsult-it']],
+      ['general', ['horizontal/swedish-vat', 'horizontal/swedish-payroll']],
+      ['form', ['modifier/holding-ab']],
+      ['also', ['modifier/mixed-verksamhet', 'vertical/e-handel']],
+    ])
+    expect(groups.active).toBe(4)
+  })
+
+  it('leaves out a group with nothing in it', () => {
+    const general = groupKnowledge(CATALOGUE, new Set(['horizontal/swedish-vat', 'horizontal/swedish-payroll']))
+    expect(ids(general)).toEqual([
+      ['general', ['horizontal/swedish-vat', 'horizontal/swedish-payroll']],
+      ['also', ['modifier/holding-ab', 'modifier/mixed-verksamhet', 'vertical/konsult-it', 'vertical/e-handel']],
+    ])
+    expect(general.active).toBe(2)
+
+    const everything = groupKnowledge(CATALOGUE, new Set(CATALOGUE.map((o) => o.id)))
+    expect(everything.groups.map((g) => g.id)).toEqual(['industry', 'general', 'form'])
+    expect(everything.active).toBe(6)
+  })
+
+  it('never lists what the community shared or the company wrote, active or not', () => {
+    const groups = groupKnowledge(CATALOGUE, new Set(['community/shared', 'own/0d6f6f0e-0000-4000-8000-000000000001']))
+    expect(groups.groups.flatMap((g) => g.items.map((o) => o.id))).not.toContain('community/shared')
+    expect(groups.active).toBe(0)
+  })
+
+  it('guesses nothing when it is not known which are active: one group, no number', () => {
+    const groups = groupKnowledge(CATALOGUE, null)
+    expect(groups.groups.map((g) => g.id)).toEqual(['all'])
+    expect(groups.groups[0].items).toHaveLength(6)
+    expect(groups.active).toBeNull()
+    expect(groupKnowledge([], null)).toEqual({ groups: [], active: null })
+  })
+
+  it('counts the same items the card counts: the active ones', () => {
+    // The loader's number is the active ids' length; the panel's is this count over the same list and ids.
+    const active = ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'vertical/konsult-it']
+    expect(groupKnowledge(CATALOGUE, new Set(active)).active).toBe(active.length)
   })
 })
 
 describe('the search field', () => {
-  it('comes with a list longer than about twenty rows', () => {
-    expect(SEARCH_FROM_ROWS).toBe(20)
+  it('comes with more than thirty tiles', () => {
+    expect(SEARCH_FROM_TILES).toBe(30)
   })
 })

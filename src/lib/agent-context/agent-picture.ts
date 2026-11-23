@@ -11,8 +11,9 @@ import { createLogger } from '@/lib/logger'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { connectionKind, type ConnectionKind } from '@/lib/settings/mcp-connections'
 import { createServiceClient } from '@/lib/supabase/server'
+import { loadCompanySkillRows } from '@/lib/agent-skills/company-skills'
 import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
-import { catalogueKnowledge } from '@/lib/agent-skills/knowledge-list'
+import { catalogueKnowledge, chosenKnowledge, isActiveKnowledge } from '@/lib/agent-skills/knowledge-list'
 
 const log = createLogger('agent-picture')
 
@@ -133,10 +134,10 @@ export interface PictureChecks {
 }
 
 export interface PictureKnowledge {
-  /** How many items the catalogue's knowledge list holds for the company (lib/agent-skills/knowledge-list.ts); null when it could not be read. */
+  /** How many knowledge items the company's agent gets today (lib/agent-skills/knowledge-list.ts); null when it could not be read. */
   items: number | null
-  /** The company's own industry item in that list, which the list puts first; null without one. */
-  industry: string | null
+  /** Those items, by id: the folders tell what the agent gets from what else exists with them. Null when it could not be read. */
+  active: string[] | null
 }
 
 export interface PictureCompany {
@@ -544,21 +545,28 @@ async function loadMemoryFacts(supabase: SupabaseClient, companyId: string): Pro
 }
 
 /**
- * The catalogue's knowledge list for the company, as a number, and the
- * company's own industry item in it (the first live industry item of its
- * profile, as the catalogue page picks it). The registry behind the list is
- * the same for every company, so that read has no company filter.
+ * The knowledge items the company's agent gets today: the items of the
+ * catalogue's knowledge list that are active for the company, by the
+ * catalogue's own rule (lib/agent-skills/knowledge-list.ts: a general item
+ * always, an industry or company-form item when the profile names it or the
+ * company installed it). The registry behind the list is the same for every
+ * company, so that read has no company filter.
+ *
+ * Throws when the profile cannot be read: which items are active is then not
+ * known, and nothing is guessed.
  */
-async function loadKnowledge(supabase: SupabaseClient, companyId: string): Promise<{ items: number; industry: string | null }> {
-  const [options, profile] = await Promise.all([
+async function loadKnowledge(supabase: SupabaseClient, companyId: string): Promise<{ items: number; active: string[] }> {
+  const [options, profile, installed] = await Promise.all([
     loadKnowledgeOptions(supabase, companyId),
-    supabase.from('agent_profiles').select('vertical_atoms').eq('company_id', companyId).maybeSingle(),
+    supabase.from('agent_profiles').select('vertical_atoms, modifier_atoms').eq('company_id', companyId).maybeSingle(),
+    loadCompanySkillRows(supabase, companyId),
   ])
-  const list = catalogueKnowledge(options)
-  // The industry only orders the list: a failed profile read leaves it unordered.
-  const chosen = profile.error ? [] : ((profile.data as { vertical_atoms: string[] | null } | null)?.vertical_atoms ?? [])
-  const industry = chosen.find((id) => list.some((option) => option.id === id && option.tier === 'vertical')) ?? null
-  return { items: list.length, industry }
+  if (profile.error) failed('agent profile', profile.error)
+  const chosen = chosenKnowledge(profile.data as { vertical_atoms: string[] | null; modifier_atoms: string[] | null } | null, installed)
+  const active = catalogueKnowledge(options)
+    .filter((option) => isActiveKnowledge(option.tier, option.id, chosen))
+    .map((option) => option.id)
+  return { items: active.length, active }
 }
 
 // ---------------------------------------------------------------- checks
@@ -901,7 +909,7 @@ export async function loadAgentPicture(
       name: name?.name ?? null,
       counts: counts ?? NO_COUNTS,
       memory_facts: memoryFacts?.facts ?? null,
-      knowledge: { items: knowledge?.items ?? null, industry: knowledge?.industry ?? null },
+      knowledge: { items: knowledge?.items ?? null, active: knowledge?.active ?? null },
       checks: checks?.checks ?? null,
     },
     agents: agents && { ...agents, activity: agents.activity && { ...agents.activity, memory_facts: memoryFacts?.facts ?? null } },
