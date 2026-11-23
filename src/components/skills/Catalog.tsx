@@ -19,7 +19,6 @@ import type { AgentConnectionState, AgentsOverview } from '@/lib/agent-skills/ag
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
 import { AI_CLIENTS, type AiClient } from '@/lib/onboarding/ai-clients'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
-import { catalogueKnowledge } from '@/lib/agent-skills/knowledge-list'
 import type { SkillUsage } from '@/lib/agent-skills/usage'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -43,7 +42,8 @@ import { itemHue, seedOf, type ItemKind } from './hues'
 import { cn } from '@/lib/utils'
 import { StrataField } from './StrataField'
 import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, rulesSegment, type CommunityMeta, type SkillSummary } from './data'
+import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, type CommunityMeta, type SkillSummary } from './data'
+import { knowledgeRows } from './knowledge-rows'
 import styles from './skills.module.css'
 
 const KINDS: ItemKind[] = ['workflow', 'rules', 'analysis']
@@ -75,24 +75,6 @@ export interface CatalogItem {
   tag?: string
 }
 type Item = CatalogItem
-
-/**
- * The catalogue's knowledge list as rows (lib/agent-skills/knowledge-list.ts
- * says which items it holds): each with its display name, its one line and
- * the page it opens. The Kunskap kind of the catalogue and the list in the
- * agent picture are both drawn from this.
- */
-export function knowledgeRows(
-  options: readonly KnowledgeOption[],
-  hrefBase: string,
-  label: { name: (id: string, title: string) => string; desc: (id: string, summary: string) => string },
-  usedByFlows: (id: string) => number = () => 0,
-): CatalogItem[] {
-  return catalogueKnowledge(options).map((o) => ({
-    key: o.id, kind: 'rules', title: label.name(o.id, o.title), desc: label.desc(o.id, o.summary), href: `${hrefBase}/${rulesSegment(o.id)}`,
-    source: 'accounted', meta: null, categories: o.tier === 'vertical' || o.tier === 'modifier' ? [o.id] : [], popularity: usedByFlows(o.id), usedByFlows: usedByFlows(o.id),
-  }))
-}
 
 /**
  * Agentinstruktioner as a catalogue, laid out like Claude's Customize page:

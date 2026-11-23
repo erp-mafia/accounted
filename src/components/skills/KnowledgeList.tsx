@@ -8,8 +8,9 @@ import { LoadError } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { industryFirst, SEARCH_FROM_ROWS } from '@/lib/agent-skills/knowledge-list'
-import { CatalogList, NoHits, knowledgeRows } from './Catalog'
+import { CatalogList, NoHits, type CatalogItem } from './Catalog'
 import { readOptions } from './data'
+import { knowledgeRows } from './knowledge-rows'
 import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
 
 /**
@@ -42,7 +43,7 @@ export function KnowledgeList({ industry, hrefBase = '/skills' }: { industry: st
     )
   }
 
-  const rows = industryFirst(knowledgeRows(options.data, hrefBase, { name: knowledgeName, desc: knowledgeDesc }), industry).map((row) =>
+  const rows: CatalogItem[] = industryFirst(knowledgeRows(options.data, hrefBase, { name: knowledgeName, desc: knowledgeDesc }), industry).map((row) =>
     row.key === industry ? { ...row, tag: t('featured_industry') } : row,
   )
   const query = q.trim().toLocaleLowerCase('sv')
