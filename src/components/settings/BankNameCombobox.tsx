@@ -79,7 +79,7 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
 
   const close = useCallback(() => setIsOpen(false), [])
   const insideRefs = useMemo(() => [containerRef], [])
-  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+  const { highlightedIndex, setHighlightedIndex, resetHighlight, handleKeyDown } = useComboboxNavigation({
     count: filtered.length,
     isOpen,
     open: () => setIsOpen(true),
@@ -93,9 +93,10 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
     initialIndex: -1,
   })
 
+  // Through resetHighlight: the value changes with every keystroke.
   useEffect(() => {
-    setHighlightedIndex(-1)
-  }, [value, setHighlightedIndex])
+    resetHighlight(-1)
+  }, [value, resetHighlight])
 
   return (
     <div ref={containerRef} className="relative">

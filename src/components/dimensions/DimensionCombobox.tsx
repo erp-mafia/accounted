@@ -202,7 +202,7 @@ export default function DimensionCombobox({
 
   const close = useCallback(() => setIsOpen(false), [])
   const insideRefs = useMemo(() => [containerRef], [])
-  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+  const { highlightedIndex, setHighlightedIndex, resetHighlight, handleKeyDown } = useComboboxNavigation({
     count: optionCount,
     isOpen,
     open: openDropdown,
@@ -214,9 +214,10 @@ export default function DimensionCombobox({
     insideRefs,
   })
 
+  // Through resetHighlight: this runs after every keystroke in the search.
   useEffect(() => {
-    setHighlightedIndex(0)
-  }, [filteredValues, createCandidate, setHighlightedIndex])
+    resetHighlight(0)
+  }, [filteredValues, createCandidate, resetHighlight])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearch(e.target.value)
