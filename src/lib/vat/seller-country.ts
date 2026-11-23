@@ -24,7 +24,7 @@
  * (lib/operations/inkorg-one-click.ts) and the supplier-invoice form's
  * "Ny leverantör" read the same answer.
  */
-import { COUNTRY_OPTIONS, vatNumberCountryPrefix } from './country-codes'
+import { COUNTRY_OPTIONS, isAssignedCountryCode, vatNumberCountryPrefix } from './country-codes'
 import { isEuMemberCountry } from './eu-countries'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
@@ -152,9 +152,22 @@ const NAME_PATTERNS: ReadonlyArray<{ re: RegExp; code: string }> = COUNTRY_NAMES
  * on its own.
  */
 export function countryFromAddress(address: string | null | undefined): string | null {
+  const named = namedCountries(address)
+  if (named.length === 0) return null
+  return named.reduce((last, one) => (one.at > last.at ? one : last)).code
+}
+
+interface NamedCountry {
+  at: number
+  end: number
+  code: string
+}
+
+/** Every country the address names on its own, where it stands (see countryFromAddress). */
+function namedCountries(address: string | null | undefined): NamedCountry[] {
   const text = address?.trim()
-  if (!text) return null
-  const found: Array<{ at: number; end: number; code: string }> = []
+  if (!text) return []
+  const found: NamedCountry[] = []
   for (const { re, code } of NAME_PATTERNS) {
     for (const match of text.matchAll(re)) {
       const at = match.index ?? 0
@@ -168,11 +181,9 @@ export function countryFromAddress(address: string | null | undefined): string |
       found.push({ at, end: at + match[0].length, code: 'US' })
     }
   }
-  const standalone = found.filter(
+  return found.filter(
     (one) => !found.some((other) => other !== one && other.at <= one.at && other.end >= one.end && other.end - other.at > one.end - one.at),
   )
-  if (standalone.length === 0) return null
-  return standalone.reduce((last, one) => (one.at > last.at ? one : last)).code
 }
 
 /**
@@ -185,8 +196,32 @@ export function countryFromAddress(address: string | null | undefined): string |
  */
 export function swedishVatNumberAbroad(identity: SellerIdentity | null | undefined): string | null {
   if (vatNumberCountry(identity?.vatNumber) !== SWEDEN) return null
-  const fromAddress = countryFromAddress(identity?.address)
-  return fromAddress && fromAddress !== SWEDEN ? fromAddress : null
+  return countryEndingAddress(identity?.address)
+}
+
+/** What may follow an address's country: a postcode, punctuation, the end. */
+const AFTER_COUNTRY = /^[\s\d.,-]*$/
+
+/**
+ * The country other than Sweden that ends an address, or null. Stricter than
+ * countryFromAddress, since it overrules a Swedish VAT number: the name must
+ * close the address (a postcode may follow), so a person or a street called
+ * after a country inside a Swedish address ("c/o Israel Andersson",
+ * "Danmark 1, 755 91 Uppsala") is no country; an address that names Sweden
+ * anywhere is Swedish; and a last part that is only a country's ISO code
+ * counts, as a Peppol delivery writes it ("Hauptstr. 1, 10117 Berlin, DE").
+ */
+function countryEndingAddress(address: string | null | undefined): string | null {
+  const text = address?.trim()
+  if (!text) return null
+  const named = namedCountries(text)
+  if (named.some((one) => one.code === SWEDEN)) return null
+  if (named.length > 0) {
+    const last = named.reduce((latest, one) => (one.at > latest.at ? one : latest))
+    if (AFTER_COUNTRY.test(text.slice(last.end))) return last.code
+  }
+  const isoCode = text.split(/[,\n]/).pop()?.trim().toUpperCase() ?? ''
+  return /^[A-Z]{2}$/.test(isoCode) && isoCode !== SWEDEN && isAssignedCountryCode(isoCode) ? isoCode : null
 }
 
 const UNKNOWN: SellerCountry = { country: null, region: null, source: null }

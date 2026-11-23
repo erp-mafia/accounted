@@ -127,7 +127,7 @@ import {
   type ReverseChargeBoxParam,
   type ReverseChargeBoxRefusal,
 } from '@/lib/vat/reverse-charge-box'
-import type { SellerIdentity, SellerRegion } from '@/lib/vat/seller-country'
+import { regionOfCountry, swedishVatNumberAbroad, type SellerIdentity, type SellerRegion } from '@/lib/vat/seller-country'
 import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 
 const log = createLogger('transactions/categorize-core')
@@ -254,7 +254,7 @@ export interface CategorizeUnderlag {
    * charge is in the basis and the cost, never deducted. could_be_swedish_vat
    * when it is 25 % of the price, which the document cannot tell from Swedish VAT.
    */
-  foreign_seller_vat?: { could_be_swedish_vat: boolean }
+  foreign_seller_vat?: { could_be_swedish_vat: boolean; address_country?: string }
 }
 
 export interface CategorizePreview {
@@ -927,7 +927,12 @@ export async function categorizeTransaction(
           )
         }
         if (sellerVat.verdict === 'confirmed') {
-          underlag.foreign_seller_vat = { could_be_swedish_vat: sellerVat.couldBeSwedishVat }
+          // A Swedish VAT number beside an address abroad: the approver reads what was stated.
+          const addressCountry = swedishVatNumberAbroad(documentSeller)
+          underlag.foreign_seller_vat = {
+            could_be_swedish_vat: sellerVat.couldBeSwedishVat,
+            ...(addressCountry ? { address_country: addressCountry } : {}),
+          }
           checks.push(warned('reverse_charge_seller_vat', FOREIGN_SELLER_VAT_FLAG))
         } else {
           checks.push(passed('reverse_charge_seller_vat'))
@@ -949,8 +954,11 @@ export async function categorizeTransaction(
     !input.counterparty_template_id &&
     finalCategory.startsWith('expense_')
   ) {
+    // A Swedish VAT number beside an address abroad, confirmed as a seller not established here: the address's country.
+    const confirmedAbroad = input.confirm_foreign_seller_vat === true ? swedishVatNumberAbroad(documentSeller) : null
     const region =
       purchaseSellerRegion(documentSeller) ??
+      (confirmedAbroad ? regionOfCountry(confirmedAbroad) : null) ??
       (input.inbox_item_id ? await inboxItemSellerRegionById(supabase, companyId, input.inbox_item_id) : null)
     const box = reverseChargeBoxFor(region, finalCategory)
     if (box.ok) input = { ...input, reverse_charge_kind: box.kind }

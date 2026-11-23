@@ -24,7 +24,7 @@ describe('the seller VAT identifier and country off an extraction (crm#1411)', (
 describe('the seller country of a Swedish VAT number beside an address abroad', () => {
   it('shows the address\'s country, not Sweden', () => {
     const values = projectExtraction({
-      supplier: { vatNumber: 'SE502012345601', address: '65 Example Street\nSingapore, 01 049513\nSingapore' },
+      supplier: { vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' },
     })
 
     expect(values.seller_vat_identifier).toBe('SE502012345601')

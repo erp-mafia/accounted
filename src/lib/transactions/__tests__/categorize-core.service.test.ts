@@ -509,6 +509,52 @@ describe('categorizeTransaction: refusals every door shares', () => {
       }
     })
 
+    // A Swedish VAT number beside an address abroad: the seller may not be
+    // established in Sweden for the sale (ML 2023:200 16 kap. 4 §).
+    const swedishNumberAbroad = {
+      supplier: { vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' },
+      totals: { total: 1250, vatAmount: 250 },
+    }
+
+    it('asks about a Swedish VAT number beside an address abroad, naming the country, instead of refusing it as Swedish', async () => {
+      const outcome = await categorizeTransaction(withUnderlag(swedishNumberAbroad).supabase as never, 'user-1', COMPANY_ID, TX_ID, software, dry)
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+        details: { reason: 'not_confirmed', confirm_with: 'confirm_foreign_seller_vat', address_country: 'SG' },
+      })
+      if (!outcome.ok) {
+        expect(outcome.message?.sv).toMatch(/svenskt momsnummer men adressen på underlaget är i Singapore/)
+        expect(outcome.message?.en).toMatch(/not established in Sweden/)
+      }
+    })
+
+    it('with the flag, books it as reverse charge in the address\'s box, the charge never deducted, and tells the approver', async () => {
+      const outcome = await categorizeTransaction(
+        withUnderlag(swedishNumberAbroad).supabase as never,
+        'user-1',
+        COMPANY_ID,
+        TX_ID,
+        { ...software, confirm_foreign_seller_vat: true },
+        { ...dry, reverseChargeBoxParam: 'reverse_charge_kind' },
+      )
+
+      expect(outcome.ok && outcome.dryRun).toBe(true)
+      if (!outcome.ok || !outcome.dryRun) return
+      const lines = outcome.preview.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+      expect(lines).toEqual(expect.arrayContaining([
+        ['5420', 1250, 0],
+        ['2645', 312.5, 0],
+        ['2614', 0, 312.5],
+        // Singapore is outside the EU: ruta 22.
+        ['4531', 1250, 0],
+        ['4598', 0, 1250],
+      ]))
+      expect(lines.map(([account]) => account)).not.toContain('2641')
+      expect(outcome.preview.underlag?.foreign_seller_vat).toEqual({ could_be_swedish_vat: false, address_country: 'SG' })
+    })
+
     it('never takes the seller\'s VAT as a deduction: vat_amount stays refused with reverse charge', async () => {
       const outcome = await categorizeTransaction(
         withUnderlag(dutch).supabase as never,

@@ -187,6 +187,17 @@ export const FOREIGN_SELLER_VAT_NOTE = {
   en: 'The VAT the seller charged is not deductible in Sweden: it is part of the cost and of the reverse-charge basis. Ask the seller for a credit note for the VAT and give them your VAT number.',
 } as const
 
+/**
+ * Added when the seller's VAT number is Swedish and its address is abroad:
+ * the approver reads what the caller has stated (ML 2023:200 16 kap. 4 §).
+ */
+export function swedishVatNumberAbroadNote(addressCountry: string): { sv: string; en: string } {
+  return {
+    sv: `Säljaren har ett svenskt momsnummer men adress i ${getCountryName(addressCountry, 'sv')}: bokfört på uppgiften att säljaren inte är etablerad i Sverige för den här försäljningen.`,
+    en: `The seller has a Swedish VAT number but an address in ${getCountryName(addressCountry, 'en')}: booked on the statement that the seller is not established in Sweden for this sale.`,
+  }
+}
+
 /** Added when the charge is 25 % of the price, the Swedish rate: the document cannot tell whose VAT it is. */
 export const FOREIGN_SELLER_VAT_RATE_WARNING = {
   sv: 'Momsen på underlaget är 25 % av priset, samma sats som svensk moms. Kontrollera att det är utländsk moms: svensk moms bokförs med momssatsen som ingående moms, inte med omvänd skattskyldighet.',
@@ -261,13 +272,15 @@ export function sellerVatRefusalMessage(
     return {
       sv:
         `Omvänd skattskyldighet avvisas tills den bekräftas: säljaren har ett svenskt momsnummer men adressen på underlaget är i ` +
-        `${getCountryName(addressCountry, 'sv')}, och säljaren har debiterat moms (${charged}). Är säljaren inte etablerad i Sverige ` +
-        `för den här försäljningen är det köparen som redovisar momsen, och momsen på fakturan är felaktigt debiterad och dras inte av: ` +
+        `${getCountryName(addressCountry, 'sv')}, och säljaren har debiterat moms (${charged}). Är köpet en tjänst som beskattas i Sverige ` +
+        `enligt huvudregeln och säljaren inte etablerad i Sverige för försäljningen, är det köparen som redovisar momsen och momsen ` +
+        `på fakturan är felaktigt debiterad och dras inte av: ` +
         `skicka då igen med ${FOREIGN_SELLER_VAT_FLAG}=true. Deltar säljarens etablering i Sverige i försäljningen, bokför med momssatsen (standard_25) i stället.`,
       en:
         `Reverse charge refused until confirmed: the seller has a Swedish VAT number but the underlag's address is in ` +
-        `${getCountryName(addressCountry, 'en')}, and the seller charged VAT (${charged}). If the seller is not established in Sweden ` +
-        `for this sale, the buyer accounts for the VAT, and the VAT on the invoice was charged in error and is not deducted: ` +
+        `${getCountryName(addressCountry, 'en')}, and the seller charged VAT (${charged}). If the purchase is a service taxed in Sweden ` +
+        `under the main rule and the seller is not established in Sweden for the sale, the buyer accounts for the VAT, and the VAT ` +
+        `on the invoice was charged in error and is not deducted: ` +
         `resend with ${FOREIGN_SELLER_VAT_FLAG}=true. If the seller's establishment in Sweden takes part in the sale, book it at its rate (standard_25) instead.`,
     }
   }

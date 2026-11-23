@@ -275,7 +275,7 @@ describe('planOneClick: where the seller is, when nothing says', () => {
 // established here for the sale decides who owes the VAT (ML 2023:200
 // 16 kap. 4 och 9 §§), and the document cannot tell. One click asks.
 describe('planOneClick: a Swedish VAT number beside an address abroad', () => {
-  const supplier = { name: 'Example Cloud Pte. Ltd.', vatNumber: 'SE502012345601', address: '65 Example Street\nSingapore, 01 049513\nSingapore' }
+  const supplier = { name: 'Example Cloud Pte. Ltd.', vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' }
 
   it('opens the editor for a charge, never deducting it as Swedish input VAT', () => {
     const reading = doc({ supplier, totals: { subtotal: 120, vatAmount: 30, total: 150 } })
@@ -288,6 +288,12 @@ describe('planOneClick: a Swedish VAT number beside an address abroad', () => {
   it('says why in a foreign currency too', () => {
     const reading = doc({ supplier, invoice: { currency: 'USD' }, totals: { subtotal: 52.24, vatAmount: 13.06, total: 65.3 } })
     const plan = planOneClick(input({ reading, bank: { ...BANK, amountSek: -620 } }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'swedish_vat_number_abroad'])
+  })
+
+  it('reads a Peppol delivery\'s address, which ends with the country code', () => {
+    const reading = doc({ supplier: { ...supplier, address: 'Hauptstr. 1, 10117 Berlin, DE' }, totals: { subtotal: 120, vatAmount: 30, total: 150 } })
+    const plan = planOneClick(input({ reading }))
     expect([plan.ask, plan.reason]).toEqual(['editor', 'swedish_vat_number_abroad'])
   })
 

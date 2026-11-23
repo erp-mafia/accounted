@@ -47,7 +47,7 @@ describe('sellerCountry', () => {
 // for VAT here, and whether it is established here for the sale (ML 2023:200
 // 16 kap. 4 §) decides who owes the VAT (16 kap. 9 §). The person says.
 describe('a Swedish VAT number beside an address abroad', () => {
-  const singapore = { vatNumber: 'SE502012345601', address: '65 Example Street\n#38-02 Example Centre\nSingapore, 01 049513\nSingapore' }
+  const singapore = { vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' }
 
   it('decides no country', () => {
     expect(sellerCountry(singapore)).toEqual({ country: null, region: null, source: null })
@@ -64,6 +64,26 @@ describe('a Swedish VAT number beside an address abroad', () => {
     expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm' })).toBeNull()
     expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901' })).toBeNull()
     expect(sellerCountry({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm' })).toEqual({ country: 'SE', region: 'se', source: 'vat_number' })
+  })
+
+  it('reads the country code a Peppol delivery ends the address with', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: 'Hauptstr. 1, 10117 Berlin, DE' })).toBe('DE')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm' })).toBeNull()
+  })
+
+  it('takes no country inside a Swedish address: a person, a street, or a country after Sweden', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'c/o Israel Andersson, Storgatan 1, 111 22 Stockholm' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Danmark 1, 755 91 Uppsala' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Mässans gata 1, 411 19 Göteborg, Sweden. Offices in Oslo, Norway' })).toBeNull()
+    expect(sellerCountry({ vatNumber: 'SE556677889901', address: 'c/o Israel Andersson, Storgatan 1, 111 22 Stockholm' })).toEqual({
+      country: 'SE',
+      region: 'se',
+      source: 'vat_number',
+    })
+  })
+
+  it('lets a postcode follow the country', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: 'Example Strasse 2, Berlin, Germany 10117' })).toBe('DE')
   })
 
   it('is about a Swedish number only: another state\'s number keeps its country', () => {

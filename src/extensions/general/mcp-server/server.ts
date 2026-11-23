@@ -481,7 +481,7 @@ import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFo
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
 import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
 import { previewVoucherVatDeclaration } from '@/lib/vat/voucher-vat-impact'
-import { FOREIGN_SELLER_VAT_NOTE, FOREIGN_SELLER_VAT_RATE_WARNING } from '@/lib/vat/reverse-charge-box'
+import { FOREIGN_SELLER_VAT_NOTE, FOREIGN_SELLER_VAT_RATE_WARNING, swedishVatNumberAbroadNote } from '@/lib/vat/reverse-charge-box'
 import { runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
@@ -9882,7 +9882,11 @@ export const tools: McpTool[] = [
       // the document cannot tell the charge from Swedish VAT.
       const foreignSellerVat = preview.underlag?.foreign_seller_vat
       const foreignSellerVatNote = foreignSellerVat
-        ? [FOREIGN_SELLER_VAT_NOTE.sv, ...(foreignSellerVat.could_be_swedish_vat ? [FOREIGN_SELLER_VAT_RATE_WARNING.sv] : [])].join(' ')
+        ? [
+            ...(foreignSellerVat.address_country ? [swedishVatNumberAbroadNote(foreignSellerVat.address_country).sv] : []),
+            FOREIGN_SELLER_VAT_NOTE.sv,
+            ...(foreignSellerVat.could_be_swedish_vat ? [FOREIGN_SELLER_VAT_RATE_WARNING.sv] : []),
+          ].join(' ')
         : undefined
 
       // Resolve-don't-select: codes AND natural-language names resolve against
