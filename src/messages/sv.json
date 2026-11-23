@@ -17832,6 +17832,7 @@
     "personal_number_label": "Personnummer för den som signerar",
     "method_qr": "Signera med BankID",
     "method_same_device": "BankID på den här enheten",
+    "method_qr_other_device": "BankID på en annan enhet",
     "qr_label": "QR-kod för BankID",
     "signing_qr_hint": "Öppna BankID-appen och skanna QR-koden.",
     "steps_intro": "Banken signerar i flera steg med varsin QR-kod. Håll BankID-appen redo mellan stegen.",
