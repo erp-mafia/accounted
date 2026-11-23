@@ -117,6 +117,40 @@ describe('the work of a day, by card', () => {
   const cards = agentCards([connection('c1'), connection('c2'), key('k1', 'Nattjobbet'), key('k2', 'Nattjobbet'), key('k3', 'Rapporter')])
   const of = (id: string) => cards.find((card) => card.id === id)!
 
+  it('keeps a label that is also a name on Object.prototype as an ordinary entry', () => {
+    const work = tallyWork(
+      [{ actor_id: null, actor_label: 'constructor' }],
+      [
+        { actor_id: null, actor_label: '__proto__' },
+        { actor_id: null, actor_label: '__proto__' },
+        { actor_id: '__proto__', actor_label: 'x' },
+      ],
+    )
+    // Nothing reached the prototype every object shares.
+    expect(Object.hasOwn(Object.prototype, 'proposals')).toBe(false)
+    expect(Object.hasOwn(Object.prototype, 'questions')).toBe(false)
+    expect(({} as Record<string, unknown>).proposals).toBeUndefined()
+    // The rows are counted under their own keys.
+    expect(Object.keys(work.by_label).sort()).toEqual(['__proto__', 'constructor'])
+    expect(work.by_label['__proto__']).toEqual({ questions: 0, proposals: 2 })
+    expect(work.by_label.constructor).toEqual({ questions: 1, proposals: 0 })
+    expect(Object.keys(work.by_connection)).toEqual(['__proto__'])
+    expect(work.by_connection['__proto__']).toEqual({ questions: 0, proposals: 1 })
+    // As the browser gets it: the counts survive the trip as own entries.
+    const sent = JSON.parse(JSON.stringify(work)) as PictureWork
+    expect(Object.hasOwn(sent.by_label, '__proto__')).toBe(true)
+    expect(Object.getPrototypeOf(sent.by_label)).toBe(Object.prototype)
+  })
+
+  it('reads only a table\'s own entries: a card whose label is a name on Object.prototype counts nothing inherited', () => {
+    const named = agentCards([key('k9', 'constructor'), key('k8', 'toString')])
+    const empty: PictureWork = { by_connection: {}, by_label: {} }
+    for (const card of named) expect(cardWork(card, empty)).toEqual({ questions: 0, proposals: 0 })
+    const some: PictureWork = JSON.parse(JSON.stringify(tallyWork([], [{ actor_id: null, actor_label: 'constructor' }]))) as PictureWork
+    const owner = named.find((card) => card.labels.includes('constructor'))!
+    expect(cardWork(owner, some)).toEqual({ questions: 0, proposals: 1 })
+  })
+
   it('counts each row under the connection it names, or under its label when it names none', () => {
     const work = tallyWork(
       [

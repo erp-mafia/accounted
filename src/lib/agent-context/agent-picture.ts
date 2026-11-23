@@ -855,7 +855,9 @@ async function workTodayOrUnknown(supabase: SupabaseClient, companyId: string, n
 async function readToolCalls(supabase: SupabaseClient, companyId: string, now: Date): Promise<Omit<PictureActivity, 'memory_facts' | 'work'>> {
   const day = todayIsoStockholm(now)
   const dayStart = stockholmWallTimeToUtc(day, '00:00').getTime()
-  const actors: Record<string, PictureActorActivity> = {}
+  // No prototype: the key is text read from the log, and a table without one
+  // holds any text as an ordinary entry.
+  const actors: Record<string, PictureActorActivity> = Object.create(null) as Record<string, PictureActorActivity>
   let capped = false
 
   for (let page = 0; page < ACTIVITY_MAX_PAGES; page += 1) {

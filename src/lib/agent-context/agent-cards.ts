@@ -121,18 +121,32 @@ export function cardOwnsRow(card: OwningCard, row: StagerRef): boolean {
 const NO_WORK: PictureWorkCount = { questions: 0, proposals: 0 }
 
 /**
+ * A count table keyed by stored text. It has no prototype, so a key that is
+ * also a name on Object.prototype (`__proto__`, `constructor`) is an ordinary
+ * entry of the table and never reaches the prototype.
+ */
+function countTable(): Record<string, PictureWorkCount> {
+  return Object.create(null) as Record<string, PictureWorkCount>
+}
+
+/** A table's own entry for a key, or undefined: never something inherited. */
+function ownCount(table: Record<string, PictureWorkCount>, key: string): PictureWorkCount | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined
+}
+
+/**
  * Questions and proposals counted by who staged them: by connection for the
  * rows that name one, by label for the rows that carry a label alone. A row
  * with neither is counted nowhere.
  */
 export function tallyWork(questions: readonly StagerRef[], proposals: readonly StagerRef[]): PictureWork {
-  const work: PictureWork = { by_connection: {}, by_label: {} }
+  const work: PictureWork = { by_connection: countTable(), by_label: countTable() }
   const add = (row: StagerRef, what: keyof PictureWorkCount) => {
     const bucket = row.actor_id ? work.by_connection : work.by_label
     const key = row.actor_id || row.actor_label
     if (!key) return
-    const count = (bucket[key] ??= { questions: 0, proposals: 0 })
-    count[what] += 1
+    if (!Object.hasOwn(bucket, key)) bucket[key] = { questions: 0, proposals: 0 }
+    bucket[key][what] += 1
   }
   for (const row of questions) add(row, 'questions')
   for (const row of proposals) add(row, 'proposals')
@@ -143,8 +157,8 @@ export function tallyWork(questions: readonly StagerRef[], proposals: readonly S
 export function cardWork(card: OwningCard, work: PictureWork | null | undefined): PictureWorkCount {
   if (!work) return NO_WORK
   const parts = [
-    ...card.connections.map((connection) => work.by_connection[connection.id]),
-    ...card.labels.map((label) => work.by_label[label]),
+    ...card.connections.map((connection) => ownCount(work.by_connection, connection.id)),
+    ...card.labels.map((label) => ownCount(work.by_label, label)),
   ].filter((part): part is PictureWorkCount => part !== undefined)
   return parts.reduce((sum, part) => ({ questions: sum.questions + part.questions, proposals: sum.proposals + part.proposals }), NO_WORK)
 }
