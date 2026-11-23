@@ -8697,52 +8697,60 @@ export const tools: McpTool[] = [
         | undefined
       if (dimensionRows.length > 0) {
         try {
-          const { data: valueRows, error: valueErr } = await supabase
-            .from('dimension_values')
-            .select('dimension_id, code, name')
-            .eq('company_id', companyId)
-            .eq('is_active', true)
-            .order('code', { ascending: true })
-          if (!valueErr) {
-            const byDimension = new Map<string, Array<{ code: string; name: string }>>()
-            for (const v of (valueRows ?? []) as Array<{ dimension_id: string; code: string; name: string }>) {
-              const bucket = byDimension.get(v.dimension_id) ?? []
-              bucket.push({ code: v.code, name: v.name })
-              byDimension.set(v.dimension_id, bucket)
-            }
-            // Account dimension rules (PR10): tell the agent up front which
-            // accounts refuse postings without a value (required) and which
-            // auto-apply one (default/fixed) - so gnubok_create_voucher calls
-            // self-correct instead of bouncing off MANDATORY_DIMENSION_MISSING.
-            const requiredByDimension = new Map<string, string[]>()
-            const defaultByDimension = new Map<string, string[]>()
-            const { data: ruleRows, error: ruleErr } = await supabase
-              .from('account_dimension_rules')
-              .select('account_number, rule_type, dimension_id')
+          // Every active value, paged past PostgREST's 1,000-row cap: the
+          // count and the top values per dimension come from this set, and a
+          // read cut at 1,000 rows across all dimensions showed a dimension
+          // whose codes sort late as empty (crm#2152). A code is unique only
+          // inside its dimension, so id completes the order. A failed read
+          // throws into the catch below.
+          const valueRows = await fetchAllRows<{ dimension_id: string; code: string; name: string }>(({ from, to }) =>
+            supabase
+              .from('dimension_values')
+              .select('dimension_id, code, name')
               .eq('company_id', companyId)
               .eq('is_active', true)
-            if (!ruleErr) {
-              for (const r of (ruleRows ?? []) as Array<{ account_number: string; rule_type: string; dimension_id: string }>) {
-                const target = r.rule_type === 'required' ? requiredByDimension : defaultByDimension
-                const bucket = target.get(r.dimension_id) ?? []
-                bucket.push(r.account_number)
-                target.set(r.dimension_id, bucket)
+              .order('code', { ascending: true })
+              .order('id', { ascending: true })
+              .range(from, to),
+          )
+          const byDimension = new Map<string, Array<{ code: string; name: string }>>()
+          for (const v of valueRows) {
+            const bucket = byDimension.get(v.dimension_id) ?? []
+            bucket.push({ code: v.code, name: v.name })
+            byDimension.set(v.dimension_id, bucket)
+          }
+          // Account dimension rules (PR10): tell the agent up front which
+          // accounts refuse postings without a value (required) and which
+          // auto-apply one (default/fixed) - so gnubok_create_voucher calls
+          // self-correct instead of bouncing off MANDATORY_DIMENSION_MISSING.
+          const requiredByDimension = new Map<string, string[]>()
+          const defaultByDimension = new Map<string, string[]>()
+          const { data: ruleRows, error: ruleErr } = await supabase
+            .from('account_dimension_rules')
+            .select('account_number, rule_type, dimension_id')
+            .eq('company_id', companyId)
+            .eq('is_active', true)
+          if (!ruleErr) {
+            for (const r of (ruleRows ?? []) as Array<{ account_number: string; rule_type: string; dimension_id: string }>) {
+              const target = r.rule_type === 'required' ? requiredByDimension : defaultByDimension
+              const bucket = target.get(r.dimension_id) ?? []
+              bucket.push(r.account_number)
+              target.set(r.dimension_id, bucket)
+            }
+          }
+          dimensionsBlock = {
+            enabled: settingsRow?.dimensions_enabled === true,
+            dimensions: dimensionRows.map((d) => {
+              const values = byDimension.get(d.id) ?? []
+              return {
+                sie_dim_no: d.sie_dim_no,
+                name: d.name,
+                active_value_count: values.length,
+                required_on_accounts: (requiredByDimension.get(d.id) ?? []).sort(),
+                default_on_accounts: (defaultByDimension.get(d.id) ?? []).sort(),
+                top_values: values.slice(0, 10),
               }
-            }
-            dimensionsBlock = {
-              enabled: settingsRow?.dimensions_enabled === true,
-              dimensions: dimensionRows.map((d) => {
-                const values = byDimension.get(d.id) ?? []
-                return {
-                  sie_dim_no: d.sie_dim_no,
-                  name: d.name,
-                  active_value_count: values.length,
-                  required_on_accounts: (requiredByDimension.get(d.id) ?? []).sort(),
-                  default_on_accounts: (defaultByDimension.get(d.id) ?? []).sort(),
-                  top_values: values.slice(0, 10),
-                }
-              }),
-            }
+            }),
           }
         } catch {
           // Best-effort: a values-read failure just omits the block.
