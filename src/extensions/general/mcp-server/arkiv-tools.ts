@@ -1,6 +1,7 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { chartAccountNamesLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { RECORD_KIND_DETAIL_SCOPES, scopeSatisfied, type ApiKeyScope } from '@/lib/auth/scope-catalog'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/arkiv/untrusted'
 import { dbError } from '@/lib/errors/db-error'
@@ -558,17 +559,71 @@ async function lineAccountNames(supabase: SupabaseClient, companyId: string, acc
   }
 }
 
-async function journalEntryRecord(supabase: SupabaseClient, companyId: string, journalEntryId: string) {
-  // The lines ride along in the same read, as in the v1 GET of a verifikat.
+/**
+ * A verifikat's ledger part: its status, lines, the storno chain (reverses:
+ * this is the storno of; reversed_by: the storno of this; correction_of: this
+ * replaces), the inline rättelser made inside it (newest first; the struck and
+ * added lines are in gnubok_get_rattelse_log) and, when posted, both
+ * correction paths. A failed rättelse lookup says rattelser_unavailable,
+ * never an empty history.
+ */
+async function ledgerPart(
+  supabase: SupabaseClient,
+  companyId: string,
+  e: { id: string; status: string; reverses_id: string | null; reversed_by_id: string | null; correction_of_id: string | null },
+  lines: unknown[],
+) {
+  const { data: rattelseRows, error: rattelseError } = await supabase
+    .from('journal_entry_rattelse_log')
+    .select('id, rattelse_type, created_at')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', e.id)
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (rattelseError) receiptLog.warn('rättelse log lookup failed', { journalEntryId: e.id, error: rattelseError.message })
+  const chainRef = (id: string | null) => (id ? recordRef('journal_entry', id) : null)
+  return {
+    status: e.status,
+    lines,
+    corrections: {
+      reverses: chainRef(e.reverses_id),
+      reversed_by: chainRef(e.reversed_by_id),
+      correction_of: chainRef(e.correction_of_id),
+      ...(rattelseError
+        ? { rattelser_unavailable: true }
+        : {
+            rattelser: ((rattelseRows ?? []) as unknown as Array<{ id: string; rattelse_type: string; created_at: string }>).map((r) => ({
+              rattelse_id: r.id,
+              rattelse_type: r.rattelse_type,
+              created_at: r.created_at,
+            })),
+          }),
+    },
+    ...(e.status === 'posted' ? { hint: CORRECTION_HINT } : {}),
+  }
+}
+
+const JE_HEADER_COLUMNS = 'id, voucher_series, voucher_number, entry_date, description'
+// The lines ride along in the same read, as in the v1 GET of a verifikat.
+const JE_LEDGER_COLUMNS =
+  'id, voucher_series, voucher_number, entry_date, description, status, reverses_id, reversed_by_id, correction_of_id, lines:journal_entry_lines(id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, sort_order)'
+
+/**
+ * A verifikat as a record. `ledger` (the key holds the journal_entry detail
+ * scope, RECORD_KIND_DETAIL_SCOPES) adds its lines, status and correction
+ * history; without it the record is the header and documents only, and the
+ * ledger is not read.
+ */
+async function journalEntryRecord(supabase: SupabaseClient, companyId: string, journalEntryId: string, opts: { ledger: boolean }) {
   const { data: entry, error } = await supabase
     .from('journal_entries')
-    .select('id, voucher_series, voucher_number, entry_date, description, status, reverses_id, reversed_by_id, correction_of_id, lines:journal_entry_lines(id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, sort_order)')
+    .select(opts.ledger ? JE_LEDGER_COLUMNS : JE_HEADER_COLUMNS)
     .eq('id', journalEntryId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) throw dbError(error)
   if (!entry) return null
-  const lineRows = (((entry as unknown as { lines?: JournalEntryLineRow[] | null }).lines ?? []) as JournalEntryLineRow[])
+  const lineRows = (opts.ledger ? ((entry as unknown as { lines?: JournalEntryLineRow[] | null }).lines ?? []) : [])
     .slice()
     .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   const [names, { data: docs, error: docError }] = await Promise.all([
@@ -626,18 +681,6 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
   } catch (err) {
     receiptLog.warn('voucher link lookup failed', { journalEntryId, error: err instanceof Error ? err.message : String(err) })
   }
-  // The inline rättelser made inside this verifikat, newest first; the struck
-  // and added lines are in gnubok_get_rattelse_log. Same contract again: a
-  // failed lookup says rattelser_unavailable, never an empty history.
-  const { data: rattelseRows, error: rattelseError } = await supabase
-    .from('journal_entry_rattelse_log')
-    .select('id, rattelse_type, created_at')
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', journalEntryId)
-    .order('created_at', { ascending: false })
-    .limit(50)
-  if (rattelseError) receiptLog.warn('rättelse log lookup failed', { journalEntryId, error: rattelseError.message })
-  const chainRef = (id: string | null) => (id ? recordRef('journal_entry', id) : null)
   return {
     journal_entry_id: e.id,
     voucher: formatVoucher({
@@ -646,25 +689,7 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
     }),
     entry_date: e.entry_date,
     description: e.description,
-    status: e.status,
-    lines,
-    // The storno chain (reverses: this is the storno of; reversed_by: the
-    // storno of this; correction_of: this replaces) and the inline rättelser.
-    corrections: {
-      reverses: chainRef(e.reverses_id),
-      reversed_by: chainRef(e.reversed_by_id),
-      correction_of: chainRef(e.correction_of_id),
-      ...(rattelseError
-        ? { rattelser_unavailable: true }
-        : {
-            rattelser: ((rattelseRows ?? []) as unknown as Array<{ id: string; rattelse_type: string; created_at: string }>).map((r) => ({
-              rattelse_id: r.id,
-              rattelse_type: r.rattelse_type,
-              created_at: r.created_at,
-            })),
-          }),
-    },
-    ...(e.status === 'posted' ? { hint: CORRECTION_HINT } : {}),
+    ...(opts.ledger ? await ledgerPart(supabase, companyId, e, lines) : {}),
     documents,
     ...(decision ? { decision } : {}),
     ...(decisionUnavailable ? { decision_unavailable: true } : {}),
@@ -831,7 +856,12 @@ export function createArkivTools(deps: Deps): McpTool[] {
             return { ...base, party }
           }
           case 'journal_entry': {
-            const journalEntry = await journalEntryRecord(supabase, companyId, ref.id)
+            // The ledger part only for a key the dispatcher named a detail
+            // scope for (__keyScopes); a call without the marker gets the
+            // header and documents, as a documents:read key does.
+            const keyScopes = Array.isArray(args.__keyScopes) ? (args.__keyScopes as ApiKeyScope[]) : null
+            const ledger = keyScopes !== null && scopeSatisfied(keyScopes, RECORD_KIND_DETAIL_SCOPES.journal_entry)
+            const journalEntry = await journalEntryRecord(supabase, companyId, ref.id, { ledger })
             if (!journalEntry) throw recordNotFound('journal_entry', ref.id)
             return { ...base, journal_entry: journalEntry }
           }

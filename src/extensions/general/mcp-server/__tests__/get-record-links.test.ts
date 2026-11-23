@@ -26,6 +26,8 @@ const JE = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 const TX = '11111111-1111-4111-8111-111111111111'
 const DOC = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const mockLinks = getVoucherLinks as ReturnType<typeof vi.fn>
+// The scopes the dispatcher hands over (__keyScopes) for a key that reads the ledger.
+const LEDGER_KEY = ['documents:read', 'reports:read']
 const getRecord = tools.find((t) => t.name === 'gnubok_get_record')!
 
 const NONE = {
@@ -108,7 +110,7 @@ describe('gnubok_get_record journal_entry links', () => {
     mock.enqueue({ data: [] }) // supplier invoices paid by it
     mock.enqueue({ data: [] }) // skattekonto rows booked by it
     mock.enqueue({ data: [{ id: RATTELSE, rattelse_type: 'lines', created_at: '2026-10-17T08:00:00Z' }] })
-    const out = (await getRecord.execute({ record_ref: `journal_entry:${JE}` }, CO, 'user-1', mock.supabase as unknown as SupabaseClient)) as { journal_entry: Record<string, unknown> }
+    const out = (await getRecord.execute({ record_ref: `journal_entry:${JE}`, __keyScopes: LEDGER_KEY }, CO, 'user-1', mock.supabase as unknown as SupabaseClient)) as { journal_entry: Record<string, unknown> }
 
     expect(out.journal_entry.voucher).toBe('A7')
     expect(out.journal_entry.status).toBe('posted')
@@ -157,7 +159,7 @@ describe('gnubok_get_record journal_entry links', () => {
     mock.enqueue({ data: [] }) // supplier invoices paid by it
     mock.enqueue({ data: [] }) // skattekonto rows booked by it
     mock.enqueue({ data: null, error: timeout }) // rättelse log
-    const out = (await getRecord.execute({ record_ref: `journal_entry:${JE}` }, CO, 'user-1', mock.supabase as unknown as SupabaseClient)) as { journal_entry: Record<string, unknown> }
+    const out = (await getRecord.execute({ record_ref: `journal_entry:${JE}`, __keyScopes: LEDGER_KEY }, CO, 'user-1', mock.supabase as unknown as SupabaseClient)) as { journal_entry: Record<string, unknown> }
 
     expect(out.journal_entry.status).toBe('reversed')
     expect(out.journal_entry).not.toHaveProperty('hint')
@@ -175,5 +177,54 @@ describe('gnubok_get_record journal_entry links', () => {
     expect(out.journal_entry.voucher).toBe('A7')
     expect(out.journal_entry).not.toHaveProperty('links')
     expect(out.journal_entry.links_unavailable).toBe(true)
+  })
+})
+
+// gnubok_get_record is a documents:read tool: the verifikat's lines, status
+// and correction history are the ledger, served only to a key that also holds
+// reports:read (RECORD_KIND_DETAIL_SCOPES). Without it the record is the
+// header and documents, and the ledger is not even read.
+describe('gnubok_get_record journal_entry ledger scope', () => {
+  const LEDGER_FIELDS = ['status', 'lines', 'corrections', 'hint']
+
+  function postedVoucherWithLines() {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({
+      data: {
+        id: JE, voucher_series: 'A', voucher_number: 7, entry_date: '2026-10-16', description: 'Bankavgift', status: 'posted',
+        reverses_id: null, reversed_by_id: null, correction_of_id: null,
+        lines: [
+          { id: '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e01', account_number: '6570', debit_amount: 50, credit_amount: 0, line_description: null, currency: 'SEK', amount_in_currency: null, sort_order: 0 },
+          { id: '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e02', account_number: '1930', debit_amount: 0, credit_amount: 50, line_description: null, currency: 'SEK', amount_in_currency: null, sort_order: 1 },
+        ],
+      },
+    })
+    return mock
+  }
+
+  beforeEach(() => {
+    mockLinks.mockReset()
+    mockLinks.mockResolvedValue([])
+  })
+
+  it.each([
+    ['a documents-only key', { __keyScopes: ['documents:read'] }],
+    ['a call without the dispatcher\'s scopes', {}],
+  ])('%s gets the header and documents only, and the ledger is not read', async (_label, scopeArgs) => {
+    const mock = postedVoucherWithLines()
+    const out = (await getRecord.execute({ record_ref: `journal_entry:${JE}`, ...scopeArgs }, CO, 'user-1', mock.supabase as unknown as SupabaseClient)) as { journal_entry: Record<string, unknown> }
+    expect(out.journal_entry).toMatchObject({ journal_entry_id: JE, voucher: 'A7', entry_date: '2026-10-16', description: 'Bankavgift', documents: [] })
+    for (const field of LEDGER_FIELDS) expect(out.journal_entry).not.toHaveProperty(field)
+    expect(mock.findCall('journal_entries', 'select')).toEqual(['id, voucher_series, voucher_number, entry_date, description'])
+    expect(mock.findCall('chart_of_accounts', 'select')).toBeUndefined()
+    expect(mock.findCall('journal_entry_rattelse_log', 'select')).toBeUndefined()
+  })
+
+  it('a key with reports:read gets the lines, status, correction history and hint', async () => {
+    const mock = postedVoucherWithLines()
+    const out = (await getRecord.execute({ record_ref: `journal_entry:${JE}`, __keyScopes: ['documents:read', 'reports:read'] }, CO, 'user-1', mock.supabase as unknown as SupabaseClient)) as { journal_entry: Record<string, unknown> }
+    for (const field of LEDGER_FIELDS) expect(out.journal_entry).toHaveProperty(field)
+    expect((out.journal_entry.lines as Array<{ account_number: string }>).map((l) => l.account_number)).toEqual(['6570', '1930'])
+    expect(String(mock.findCall('journal_entries', 'select')?.[0])).toContain('lines:journal_entry_lines(')
   })
 })
