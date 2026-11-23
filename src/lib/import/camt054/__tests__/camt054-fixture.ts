@@ -126,10 +126,12 @@ export function entry(fields: EntryFields): string {
 }
 
 export interface NotificationFields {
-  /** The account: an IBAN by default; `bban` writes a domestic number, `giroTyped` types the account BGNR with the bankgiro as its name. */
+  /** The account: an IBAN by default; `bban` writes a domestic number, `giroTyped` types the account BGNR with the bankgiro as its name ('' for no name). */
   iban?: string | null
   bban?: string
   giroTyped?: string
+  /** <Ownr>: the account owner's name and organisation number. */
+  owner?: { name: string; orgNumber: string }
   entries: string[]
 }
 
@@ -139,8 +141,9 @@ export function notification(fields: NotificationFields): string {
     : fields.iban === null
       ? ''
       : el('Id', el('IBAN', fields.iban ?? OWN_IBAN))
-  const typed = fields.giroTyped ? `${el('Tp', el('Prtry', 'BGNR'))}${el('Nm', fields.giroTyped)}` : ''
-  const account = id || typed ? el('Acct', `${id}${typed}${el('Ccy', 'SEK')}`) : ''
+  const typed = fields.giroTyped === undefined ? '' : `${el('Tp', el('Prtry', 'BGNR'))}${el('Nm', fields.giroTyped)}`
+  const owner = fields.owner ? el('Ownr', `${el('Nm', fields.owner.name)}${el('Id', el('OrgId', el('Othr', el('Id', fields.owner.orgNumber))))}`) : ''
+  const account = id || typed ? el('Acct', `${id}${typed}${el('Ccy', 'SEK')}${owner}`) : ''
   return el('Ntfctn', `${el('Id', 'NTF-1')}${el('CreDtTm', '2026-12-01T06:00:00')}${account}${fields.entries.join('')}`)
 }
 
