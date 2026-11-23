@@ -839,7 +839,9 @@ export type TableMockResult = { data?: unknown; error?: unknown; count?: number 
  * A table answer computed from the chain that asked: every builder call made
  * on that one chain (`.select()`, `.eq()`, `.in()`, ...), in order. For a
  * table the code reads in two shapes (one row by id, a list by `.in()`), so a
- * test answers by WHAT was asked instead of by the order of the reads.
+ * test answers by WHAT was asked instead of by the order of the reads. An
+ * RPC's chain starts with the call itself, `{ method: 'rpc', args: [args] }`,
+ * so calls of one function side by side are each answered by their own args.
  *
  * It may answer with a Promise, for a test that lets something else happen
  * while the statement is on its way (another request interleaved with it). A
@@ -962,10 +964,11 @@ export function createTableMockSupabase(
 
   const supabase = {
     from: vi.fn((table: string) => buildChain(table)),
-    // Recorded as method 'rpc' on key 'rpc:<name>', so findCall can read the args.
+    // Recorded as method 'rpc' on key 'rpc:<name>', so findCall can read the
+    // args, and first on its own chain, so a resolver can.
     rpc: vi.fn((name: string, args?: unknown) => {
       calls.push({ table: `rpc:${name}`, method: 'rpc', args: [args] })
-      return buildChain(`rpc:${name}`)
+      return buildChain(`rpc:${name}`, [{ method: 'rpc', args: [args] }])
     }),
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null }),
