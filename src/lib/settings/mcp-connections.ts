@@ -46,9 +46,8 @@ export function connectionKind(row: Pick<ConnectionRow, 'source' | 'client'>): C
 
 /**
  * The shown names that more than one row of the list carries. Rows under
- * such a name cannot be told apart by it, so each of them also says who
- * connected it and since when; a row whose name is its own says nothing
- * more.
+ * such a name cannot be told apart by it, so each of them also says since
+ * when it has been connected; a row whose name is its own says nothing more.
  */
 export function sharedNames(names: readonly string[]): Set<string> {
   const seen = new Set<string>()
@@ -56,6 +55,20 @@ export function sharedNames(names: readonly string[]): Set<string> {
   for (const name of names) (seen.has(name) ? shared : seen).add(name)
   return shared
 }
+
+/**
+ * The most characters the quiet text after a shared name may hold
+ * ("sedan 28 mars 2026", "since Sep 30, 2026"), so that it is shown whole
+ * with its date, the part that tells two such rows apart.
+ *
+ * A row of the connection list is one line. At the settings column's full
+ * width (880px) the row's fixed parts (the mark, the sign-in column, the
+ * permissions, the company control of a person with several companies, last
+ * used, the button and the gaps between them) leave the name cell about
+ * 194px. Beside the name "MCP-klient" (68px and an 8px gap) that is about
+ * 118px: 18 characters of this text at 12px, which average 6.5px each.
+ */
+export const SHARED_NAME_TEXT_BUDGET = 18
 
 /** A connection unused this long is worth one quiet question: still needed? */
 export const STALE_AFTER_DAYS = 90

@@ -190,9 +190,13 @@ function PermissionSummary({ scopes, source }: { scopes: readonly string[]; sour
  *
  * Several rows can carry one name (two sign-ins from Claude are both
  * "Claude"). Such a row also says, as quiet text after its name and badges,
- * since when it has been connected, and for the viewer's own row that they
- * connected it; a colleague's row already names its owner in its badge. A
- * row whose name no other row carries shows nothing more.
+ * since when it has been connected ("sedan 4 jan. 2026"): the date is what
+ * tells two such rows apart, so the text is short enough to be shown whole
+ * (SHARED_NAME_TEXT_BUDGET) and, where the row is short of room, the name of
+ * a hand-made key and the badges give way before it. Whose the row is stays
+ * where it was: a colleague's row names its owner in its badge, and the
+ * viewer's own row says in the text's title that they connected it. A row
+ * whose name no other row carries shows nothing more.
  */
 export function McpConnectionsPanel({
   keys,
@@ -439,13 +443,17 @@ export function McpConnectionsPanel({
           <ul className="pt-2">
             {keys.map((key) => {
               const kind = connectionKind(key)
+              // A name another row carries too: the row also says since when (from created_at).
+              const since = shared.has(rowName(key)) ? t('shared_name_since', { date: formatDateLong(key.created_at, locale) }) : null
+              // Beside that text, what can be cut gives way first: the text holds the date.
+              const yields = since ? 'shrink-[100]' : 'shrink'
               return (
                 <li key={key.id} className="flex items-center gap-3 border-b-hairline px-1 py-2">
                   <ClientMark kind={kind} />
                   <span className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
                     {/* A client's name is a word or two and must stay whole; a
                         hand-made key's name can be long and truncates. */}
-                    <span className={cn('truncate', kind !== 'key' && 'shrink-0')}>{rowName(key)}</span>
+                    <span className={cn('truncate', kind !== 'key' ? 'shrink-0' : since && 'shrink-[100]')}>{rowName(key)}</span>
                     {key.mode === 'test' && (
                       <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-xs font-normal">
                         {t('badge_test')}
@@ -455,7 +463,7 @@ export function McpConnectionsPanel({
                       <Badge
                         variant="secondary"
                         title={key.owner_name ?? undefined}
-                        className="max-w-56 shrink truncate px-1.5 py-0 text-xs font-normal"
+                        className={cn('max-w-56 truncate px-1.5 py-0 text-xs font-normal', yields)}
                       >
                         {key.owner_name ? t('badge_colleague_named', { name: key.owner_name }) : t('badge_colleague')}
                       </Badge>
@@ -464,16 +472,17 @@ export function McpConnectionsPanel({
                         the person who sponsors it: marked so it is not read
                         as one of their own connections. */}
                     {key.service_account && (
-                      <Badge variant="secondary" className="max-w-48 shrink truncate px-1.5 py-0 text-xs font-normal">
+                      <Badge variant="secondary" className={cn('max-w-48 truncate px-1.5 py-0 text-xs font-normal', yields)}>
                         {t('badge_service_account', { name: key.service_account.name })}
                       </Badge>
                     )}
-                    {/* A name another row carries too: who connected this one and since when (from is_own and created_at). */}
-                    {shared.has(rowName(key)) && (
-                      <span className="min-w-0 truncate text-xs text-muted-foreground">
-                        {key.is_own !== false
-                          ? t('shared_name_since_you', { date: formatDateLong(key.created_at, locale) })
-                          : t('shared_name_since', { date: formatDateLong(key.created_at, locale) })}
+                    {/* The viewer's own row says who connected it in the title; a colleague's row says it in its badge. */}
+                    {since && (
+                      <span
+                        className="min-w-0 truncate text-xs text-muted-foreground"
+                        title={key.is_own !== false ? t('shared_name_since_you', { date: formatDateLong(key.created_at, locale) }) : since}
+                      >
+                        {since}
                       </span>
                     )}
                   </span>
