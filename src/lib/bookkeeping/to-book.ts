@@ -25,6 +25,44 @@ export interface ToBookBankRow {
   document_id: string | null
 }
 
+/** Where the next page of open bank rows starts, as the route answers it. */
+export interface ToBookBankCursor {
+  after_date: string
+  after_id: string
+}
+
+/** One page of GET /api/transactions?unmatched=true. */
+export interface ToBookBankPage {
+  data?: ToBookBankRow[]
+  has_more?: boolean
+  next?: ToBookBankCursor | null
+}
+
+/**
+ * Every open bank row. The route answers at most 500 rows a request and says
+ * has_more when more follow, so the rows are read page after page, each from
+ * where the one before ended, until none are left: the list and its counts
+ * then hold every open row, not the newest 500. A page that fails fails the
+ * read, and so does an answer that has more but no next that moves on (it
+ * would read the same page again): a partial list is never shown as the whole.
+ */
+export async function readAllToBookBankRows(
+  readPage: (after: ToBookBankCursor | null) => Promise<ToBookBankPage>,
+): Promise<ToBookBankRow[]> {
+  const rows: ToBookBankRow[] = []
+  let after: ToBookBankCursor | null = null
+  for (;;) {
+    const page = await readPage(after)
+    if (!page.has_more) return [...rows, ...(page.data ?? [])]
+    const next = page.next
+    if (!next || (next.after_date === after?.after_date && next.after_id === after.after_id)) {
+      throw new Error('The open bank rows answer has more rows but no next page to read')
+    }
+    rows.push(...(page.data ?? []))
+    after = next
+  }
+}
+
 /** A document waiting in Inkommande. */
 export interface ToBookDocument {
   id: string
