@@ -61,6 +61,21 @@ describe('flowLayout', () => {
     expect(layout.sockets).toContainEqual({ x: 700, y: 76 })
   })
 
+  it('reads the layout off the agents when there are no sources', () => {
+    const side = flowLayout({ map: MAP, core: CORE, cards: [card('claude', 'out', rect(800, 100, 200, 52))], inColumn: null, outColumn: null })!
+    expect(side.stacked).toBe(false)
+    expect(side.lines.map((l) => l.id)).toEqual(['claude'])
+    const below = flowLayout({
+      map: rect(0, 0, 332, 700),
+      core: rect(16, 300, 300, 200),
+      cards: [card('claude', 'out', rect(16, 560, 300, 52))],
+      inColumn: null,
+      outColumn: rect(16, 540, 300, 100),
+    })!
+    expect(below.stacked).toBe(true)
+    expect(below.lines.map((l) => l.id)).toEqual(['out'])
+  })
+
   it('dashes the line of a card that is not connected and marks an active one', () => {
     const layout = flowLayout({
       map: MAP,

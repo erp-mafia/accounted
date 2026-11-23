@@ -90,7 +90,11 @@ export function flowLayout(input: FlowInput): FlowLayout | null {
 
   const lines: FlowLine[] = []
   const sockets: Array<{ x: number; y: number }> = []
-  const stacked = right(cards[0].rect) > core.left
+  // Side by side when the sources end left of the company's card (or, with no
+  // sources, when the agents start right of it).
+  const firstIn = cards.find((card) => card.side === 'in')
+  const firstOut = cards.find((card) => card.side === 'out')
+  const stacked = firstIn ? right(firstIn.rect) > core.left : firstOut ? firstOut.rect.left < right(core) : false
 
   if (!stacked) {
     const inPoint = [x(core.left), y(middleY(core))] as const
