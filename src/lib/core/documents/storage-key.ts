@@ -146,6 +146,15 @@ export async function downloadDocumentObject(
 }
 
 /**
+ * True when a row that names its file by bucket and key names one in the
+ * company's own folder of the documents bucket: the only place such rows (the
+ * reconciliation attachments) keep their files.
+ */
+export function isCompanyFolderObject(bucket: string, storagePath: string, companyId: string): boolean {
+  return bucket === DOCUMENTS_BUCKET && isCompanyFolderDocumentKey(storagePath, companyId)
+}
+
+/**
  * Download the object a row names by bucket and key, for rows whose files only
  * ever live in the company's own folder of the documents bucket (the
  * reconciliation attachments): any other bucket, a legacy key or a key outside
@@ -157,7 +166,7 @@ export async function downloadCompanyFolderObject(
   storagePath: string,
   companyId: string
 ): ReturnType<typeof downloadDocumentObject> {
-  if (bucket !== DOCUMENTS_BUCKET || !isCompanyFolderDocumentKey(storagePath, companyId)) {
+  if (!isCompanyFolderObject(bucket, storagePath, companyId)) {
     const refusal = keyOutsideCompany()
     return { blob: null, error: refusal, errors: [refusal], resolvedPath: null }
   }

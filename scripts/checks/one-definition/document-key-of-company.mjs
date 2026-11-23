@@ -8,7 +8,7 @@
 export default {
   rule: 'document-key-of-company',
   says: "The service role reads, signs or removes a document row's stored key only when the key lies inside the row's own company: its folder documents/{companyId}/..., or a legacy uploader key one folder deep, with no empty, '.' or '..' part and no character a URL reads differently.",
-  home: 'src/lib/core/documents/storage-key.ts: isDocumentKeyOfCompany, isCompanyFolderDocumentKey, documentStoragePathCandidates, downloadDocumentObject, downloadCompanyFolderObject, signDocumentObject',
+  home: 'src/lib/core/documents/storage-key.ts: isDocumentKeyOfCompany, isCompanyFolderDocumentKey, documentStoragePathCandidates, downloadDocumentObject, isCompanyFolderObject, downloadCompanyFolderObject, signDocumentObject',
   why: "Routes, crons, agent tools and the archive export each handed a document's stored key to Storage on their own; one rule behind every door keeps them from disagreeing.",
   match: [
     // A row's stored key handed to Storage directly.
