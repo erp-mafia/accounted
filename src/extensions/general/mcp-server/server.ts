@@ -2319,6 +2319,25 @@ const AUTO_PERIOD_DATE_KEYS = [
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 /**
+ * The since..until window (both inclusive) of gnubok_list_verifikat_without_documents
+ * and gnubok_receipt_hunt_worklist. Both bounds are checked: a date the RPC
+ * cannot read failed as a database error, and a since that was not a string
+ * was dropped unread.
+ */
+function sinceUntilArgs(args: Record<string, unknown>): { since: string | null; until: string | null } {
+  const [since, until] = (['since', 'until'] as const).map((key) => {
+    const value = args[key]
+    if (value === undefined || value === null) return null
+    if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
+      throw badArgument(key, `${key} must be an ISO date (YYYY-MM-DD).`)
+    }
+    return value
+  })
+  if (since && until && since > until) throw badArgument('since', 'since must not be after until.')
+  return { since, until }
+}
+
+/**
  * A tool's qr_mode argument: one of INVOICE_QR_MODES, or null/omitted for
  * the company default (invoice_qr_mode). Anything else is refused the way
  * InvoiceQrModeSchema refuses it on the web API.
@@ -9627,17 +9646,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
-      // Both bounds are checked: a date the RPC cannot read failed as a
-      // database error, and a since that was not a string was dropped unread.
-      const [since, until] = (['since', 'until'] as const).map((key) => {
-        const value = args[key]
-        if (value === undefined || value === null) return null
-        if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
-          throw badArgument(key, `${key} must be an ISO date (YYYY-MM-DD).`)
-        }
-        return value
-      })
-      if (since && until && since > until) throw badArgument('since', 'since must not be after until.')
+      const { since, until } = sinceUntilArgs(args)
       const minAmount = typeof args.min_amount === 'number' && Number.isFinite(args.min_amount)
         ? Math.max(0, args.min_amount)
         : 0
@@ -9695,6 +9704,7 @@ export const tools: McpTool[] = [
         limit: { type: 'number', description: 'Max items to return, 1-100 (default 25)' },
         offset: { type: 'integer', minimum: 0, description: 'Items to skip: pass next_offset from the previous page (default 0)' },
         since: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return items on or after this date.' },
+        until: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return items on or before this date.' },
       },
     },
     outputSchema: {
@@ -9751,8 +9761,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const limit = Number(args.limit) || undefined
       const offset = Number(args.offset) || undefined
-      const since = typeof args.since === 'string' ? args.since : null
-      return resolveAgentWorklist(supabase, companyId, { limit, offset, since })
+      const { since, until } = sinceUntilArgs(args)
+      return resolveAgentWorklist(supabase, companyId, { limit, offset, since, until })
     },
   },
 

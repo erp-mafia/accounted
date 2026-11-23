@@ -344,6 +344,65 @@ describe('resolveAgentWorklist', () => {
     expect(item('tx-card').next_step).toMatch(/kvittoadressen/)
   })
 
+  it("sends no mail search for Stripe's own rows on the Stripe balance: it names Stripe's invoice and report", async () => {
+    const stripe = { ...UNBOOKED, currency: 'SEK', import_source: 'stripe' }
+    mockFetchPurchases.mockResolvedValue([
+      { ...stripe, id: 'tx-stripe-fee', description: 'Stripe-avgift (Stripe-betalning Anna Exempel)', amount: -85.38, amount_sek: null },
+      { ...stripe, id: 'tx-stripe-usage', description: 'Stripe: Billing - Usage Fee (2026-11-12)', amount: -198.67, amount_sek: null },
+      { ...stripe, id: 'tx-stripe-tax', description: 'Stripe: Automatic Taxes (2026-11-12): Automatic tax', amount: -141.91, amount_sek: null },
+      { ...stripe, id: 'tx-stripe-refund', description: 'Stripe-återbetalning', amount: -2498.75, amount_sek: null },
+      // The payer's name is the company's customer, never a merchant to search for.
+      { ...stripe, id: 'tx-stripe-cafe', description: 'Stripe-avgift (Stripe-betalning Café Exempel AB)', amount: -85.38, amount_sek: null },
+      // Paid through Stripe at another merchant, on the bank account: a purchase with a receipt.
+      { ...UNBOOKED, id: 'tx-bank-card', description: 'STRIPE* EXEMPELTJANST', currency: 'SEK', amount: -299, amount_sek: null, import_source: 'enable_banking' },
+    ])
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 0, verifikat: [] })
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+    const item = (id: string) => items.find((i) => i.transaction_id === id)!
+
+    for (const id of ['tx-stripe-fee', 'tx-stripe-usage', 'tx-stripe-tax', 'tx-stripe-refund', 'tx-stripe-cafe']) {
+      expect(item(id), id).toMatchObject({
+        mail_searchable: false,
+        portal: null,
+        next_step: 'Logga in på Stripe och ladda ner underlaget: månadsfakturan för Stripes avgifter, saldorapporten för övriga rader.',
+      })
+    }
+    expect(item('tx-bank-card')).toMatchObject({ mail_searchable: true })
+    expect(item('tx-bank-card').next_step).toMatch(/kvittoadressen/)
+  })
+
+  it('takes an until, inclusive, for both sources', async () => {
+    mockFetchPurchases.mockResolvedValue([
+      { ...UNBOOKED, id: 'tx-before', date: '2026-02-27' },
+      { ...UNBOOKED, id: 'tx-first', date: '2026-03-01' },
+      { ...UNBOOKED, id: 'tx-last', date: '2026-03-31' },
+      { ...UNBOOKED, id: 'tx-after', date: '2026-04-01' },
+    ])
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 3, verifikat: VERIFIKAT })
+    const result = await resolveAgentWorklist(supabase, 'co-1', { since: '2026-03-01', until: '2026-03-31' })
+
+    expect((supabase as unknown as { rpc: ReturnType<typeof vi.fn> }).rpc).toHaveBeenCalledWith('verifikat_without_documents', {
+      p_company_id: 'co-1',
+      p_since: '2026-03-01',
+      p_min_amount: 0,
+      p_limit: 100,
+      p_offset: 0,
+      p_until: '2026-03-31',
+    })
+    const transactions = result.items.filter((i) => i.kind === 'transaction').map((i) => i.transaction_id)
+    expect(transactions.sort()).toEqual(['tx-first', 'tx-last'])
+    // 3 verifikat minus the claimed one, plus the two purchases inside the month.
+    expect(result.total_count).toBe(4)
+  })
+
+  it('reads the RPC as before when no until is given', async () => {
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 3, verifikat: VERIFIKAT })
+    await resolveAgentWorklist(supabase, 'co-1', { since: '2026-03-01' })
+
+    const rpc = (supabase as unknown as { rpc: ReturnType<typeof vi.fn> }).rpc
+    expect(rpc.mock.calls[0][1]).not.toHaveProperty('p_until')
+  })
+
   it('throws when the RPC reports not-ok', async () => {
     const supabase = mockSupabase(fixture(), { ok: false, code: 'forbidden' })
     await expect(resolveAgentWorklist(supabase, 'co-1')).rejects.toThrow('forbidden')

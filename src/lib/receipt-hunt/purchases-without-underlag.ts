@@ -60,10 +60,12 @@ export interface PurchaseWithoutUnderlag {
   amount_sek: number | null
   exchange_rate: number | null
   journal_entry_id: string | null
+  /** The feed the row came from (transactions.import_source), e.g. 'stripe' for the Stripe balance. */
+  import_source: string | null
 }
 
 const COLUMNS =
-  'id, company_id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, journal_entry_id'
+  'id, company_id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, journal_entry_id, import_source'
 
 /**
  * Outflows with no document, not ignored, not privately flagged, and not booked
