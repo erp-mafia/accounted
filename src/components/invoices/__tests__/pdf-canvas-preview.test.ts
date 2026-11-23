@@ -63,7 +63,7 @@ describe('invoice PDF previews', () => {
     expect(PANE).toContain('{visible && drawsInPage && pdf.blob ? (')
     expect(PANE).toContain('file={pdf.blob}')
     // The render's bytes travel with its URL.
-    expect(HOOK).toContain('setResult({ url, blob, ...meta })')
+    expect(HOOK).toContain('setResult({ url, blob, renderedBody: body, ...meta })')
     // The <object> path stays for the other browsers.
     expect(PANE).toContain('type="application/pdf"')
   })

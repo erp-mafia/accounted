@@ -2448,6 +2448,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       focusSettingsField('invoice_date')
       return
     }
+    // The company's settings decide the checks below: until they have
+    // loaded, nothing is issued (the create would number it first).
+    if (issues && partiesUnknown) {
+      toast({
+        title: t('review_company_missing_title'),
+        description: t('review_company_missing_description'),
+        variant: 'destructive',
+      })
+      return
+    }
     // The send refuses a faktura without the seller's VAT number, and the
     // create before it would already have numbered it: stop here and say why
     // (the status line carries the fix).
@@ -3236,6 +3246,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           companySettings,
         )
       : 'ok'
+  // Until the company's settings have loaded the rule cannot be read, so a
+  // send or a kontantfaktura waits for them: the create before the send would
+  // otherwise number an invoice the send then refuses.
+  const partiesUnknown = !isSelfBilled && companySettings === null
   const detailsReasons = resolveDetailsExpansion({
     documentType: watchDocumentType,
     isSelfBilled,
@@ -3758,7 +3772,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // number validates into a reverse charge) blocks the confirm, so nothing
   // is saved and numbered for the send to refuse.
   const partiesRefuseConfirm =
-    confirmIntent?.kind !== 'create' && (partiesVerdict === 'seller_missing' || partiesVerdict === 'buyer_missing')
+    confirmIntent?.kind !== 'create' &&
+    (partiesUnknown || partiesVerdict === 'seller_missing' || partiesVerdict === 'buyer_missing')
   const confirmDisabled =
     !canWrite ||
     (isPaidConfirm && !isPaidAtIssueAccount(paidAccount)) ||

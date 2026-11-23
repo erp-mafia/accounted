@@ -6943,6 +6943,8 @@
     "total_incl_vat_label": "Total incl. VAT",
     "review_customer_missing_title": "Customer details could not be loaded",
     "review_customer_missing_description": "Reload the page and try again. Contact support if the problem persists.",
+    "review_company_missing_title": "Company details could not be loaded",
+    "review_company_missing_description": "Reload the page and try again. Contact support if the problem persists.",
     "payee_account_label": "Pay to",
     "payee_account_default": "Default: {account}",
     "payee_account_default_none": "Company default account"
