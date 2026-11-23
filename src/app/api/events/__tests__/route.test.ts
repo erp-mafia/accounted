@@ -83,8 +83,9 @@ describe('GET /api/events', () => {
   })
 
   /**
-   * Wire the service-role client the API-key branch uses. The route makes at
-   * most two queries in order: company_members, then event_log.
+   * Wire the service-role client the API-key branch uses. The route queries
+   * in order: company_members, then event_log (one read without types; with
+   * types the reads of readEventPage).
    */
   const withKeyClient = (
     results: { data?: unknown; error?: unknown }[],
@@ -395,6 +396,8 @@ describe('GET /api/events', () => {
   })
 
   it('supports types filter parameter', async () => {
+    // The type's sequences, then the page's rows.
+    enqueue({ data: [{ sequence: 1 }] })
     enqueue({ data: [sampleEvents[0]] })
 
     const request = createMockRequest('/api/events', {
@@ -407,6 +410,293 @@ describe('GET /api/events', () => {
 
     expect(status).toBe(200)
     expect(body.data).toHaveLength(1)
+  })
+
+  // ── Types filter: one read per type (crm#2142) ───────────────
+  // An equality on event_type is one ordered range of
+  // idx_event_log_company_type_sequence; `in` (event_type = ANY) is not, and
+  // the planner walked the whole company log instead. Per type the read
+  // takes sequences only; the page's rows come in one read by sequence.
+
+  const EVENT_COLUMNS = 'sequence, event_type, entity_id, data, created_at'
+
+  /** An event row of `type` at `sequence`. */
+  const eventAt = (sequence: number, type: string) => ({
+    sequence,
+    event_type: type,
+    entity_id: null,
+    data: {},
+    created_at: '2026-11-23T10:00:00Z',
+  })
+
+  /** A read of sequences only. */
+  const seqs = (...sequences: number[]) => ({ data: sequences.map((sequence) => ({ sequence })) })
+
+  it('reads one named type with an equality on event_type, sequences first, never in on the type', async () => {
+    enqueue(seqs(3))
+    enqueue({ data: [eventAt(3, 'journal_entry.committed')] })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'journal_entry.committed', after: '1' } }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { sequence: number }[]; cursor: number }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.map((e) => e.sequence)).toEqual([3])
+    expect(body.cursor).toBe(3)
+    // One type is one snapshot: no horizon read.
+    expect(findSessionCalls('event_log', 'select')).toEqual([['sequence'], [EVENT_COLUMNS]])
+    expect(findSessionCalls('event_log', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['event_type', 'journal_entry.committed'],
+      ['company_id', 'company-1'],
+    ])
+    expect(findSessionCalls('event_log', 'gt')).toEqual([['sequence', 1]])
+    expect(findSessionCalls('event_log', 'lte')).toEqual([])
+    expect(findSessionCalls('event_log', 'in')).toEqual([['sequence', [3]]])
+  })
+
+  it('reads each named type on its own up to the horizon and merges the pages in sequence order', async () => {
+    enqueue(seqs(9)) // the company's newest sequence
+    enqueue(seqs(1, 4, 6)) // invoice.created
+    enqueue(seqs(2, 3, 9)) // customer.created
+    enqueue({ data: [eventAt(1, 'invoice.created'), eventAt(2, 'customer.created'), eventAt(3, 'customer.created')] })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.created,customer.created', limit: '3' } }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      data: { sequence: number; event_type: string }[]
+      cursor: number
+      has_more: boolean
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.map((e) => e.sequence)).toEqual([1, 2, 3])
+    expect(body.cursor).toBe(3)
+    expect(body.has_more).toBe(true)
+    expect(findSessionCalls('event_log', 'order')).toContainEqual(['sequence', { ascending: false }])
+    expect(findSessionCalls('event_log', 'eq').filter(([column]) => column === 'event_type')).toEqual([
+      ['event_type', 'invoice.created'],
+      ['event_type', 'customer.created'],
+    ])
+    // Every type read is bounded by the horizon and by one page.
+    expect(findSessionCalls('event_log', 'lte')).toEqual([
+      ['sequence', 9],
+      ['sequence', 9],
+    ])
+    expect(findSessionCalls('event_log', 'limit')).toEqual([[1], [3], [3]])
+    // The page's rows: the first three sequences of the merge.
+    expect(findSessionCalls('event_log', 'in')).toEqual([['sequence', [1, 2, 3]]])
+  })
+
+  it('keeps the cursor on every type read', async () => {
+    enqueue(seqs(20))
+    enqueue(seqs(11))
+    enqueue(seqs(12))
+    enqueue({ data: [eventAt(11, 'invoice.paid'), eventAt(12, 'invoice.sent')] })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,invoice.sent', after: '10' } }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(findSessionCalls('event_log', 'gt')).toEqual([
+      ['sequence', 10],
+      ['sequence', 10],
+    ])
+  })
+
+  it('answers a short merged page with has_more false and the last sequence as cursor', async () => {
+    enqueue(seqs(5))
+    enqueue(seqs(5))
+    enqueue(seqs(2))
+    enqueue({ data: [eventAt(2, 'invoice.sent'), eventAt(5, 'invoice.paid')] })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,invoice.sent' } }),
+    )
+    const { body } = await parseJsonResponse<{ data: { sequence: number }[]; cursor: number; has_more: boolean }>(
+      response,
+    )
+
+    expect(body.data.map((e) => e.sequence)).toEqual([2, 5])
+    expect(body.cursor).toBe(5)
+    expect(body.has_more).toBe(false)
+    expect(findSessionCalls('event_log', 'in')).toEqual([['sequence', [2, 5]]])
+  })
+
+  it('reads nothing more when the company has no event past the cursor', async () => {
+    enqueue(seqs(42))
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,invoice.sent', after: '42' } }),
+    )
+    const { body } = await parseJsonResponse<{ data: unknown[]; cursor: number; has_more: boolean }>(response)
+
+    expect(body).toEqual({ data: [], cursor: 42, has_more: false })
+    expect(findSessionCalls('event_log', 'select')).toHaveLength(1)
+  })
+
+  it('answers an empty page for a company without events', async () => {
+    enqueue({ data: [] })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,invoice.sent' } }),
+    )
+    const { body } = await parseJsonResponse<{ data: unknown[]; cursor: number }>(response)
+
+    expect(body.data).toEqual([])
+    expect(body.cursor).toBe(0)
+    expect(findSessionCalls('event_log', 'select')).toHaveLength(1)
+  })
+
+  it('reads a type named twice once', async () => {
+    enqueue(seqs(1))
+    enqueue({ data: [eventAt(1, 'invoice.created')] })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.created, invoice.created' } }),
+    )
+    const { body } = await parseJsonResponse<{ data: { sequence: number }[] }>(response)
+
+    expect(body.data.map((e) => e.sequence)).toEqual([1])
+    expect(findSessionCalls('event_log', 'eq').filter(([column]) => column === 'event_type')).toEqual([
+      ['event_type', 'invoice.created'],
+    ])
+  })
+
+  it('reads a repeated type among several once', async () => {
+    enqueue(seqs(3))
+    enqueue(seqs(1))
+    enqueue(seqs(3))
+    enqueue({ data: [eventAt(1, 'invoice.paid'), eventAt(3, 'invoice.sent')] })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,invoice.sent,invoice.paid' } }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(findSessionCalls('event_log', 'eq').filter(([column]) => column === 'event_type')).toEqual([
+      ['event_type', 'invoice.paid'],
+      ['event_type', 'invoice.sent'],
+    ])
+  })
+
+  it('reads more types than run at once, and merges all of them', async () => {
+    const six = ['a.one', 'b.two', 'c.three', 'd.four', 'e.five', 'f.six']
+    enqueue(seqs(60))
+    six.forEach((_, i) => enqueue(seqs(60 - i * 10)))
+    enqueue({ data: [10, 20, 30, 40, 50, 60].map((n, i) => eventAt(n, six[5 - i])) })
+
+    const response = await GET(createMockRequest('/api/events', { searchParams: { types: six.join(',') } }))
+    const { body } = await parseJsonResponse<{ data: { sequence: number }[] }>(response)
+
+    expect(body.data.map((e) => e.sequence)).toEqual([10, 20, 30, 40, 50, 60])
+    expect(findSessionCalls('event_log', 'eq').filter(([column]) => column === 'event_type')).toEqual(
+      six.map((type) => ['event_type', type]),
+    )
+    expect(findSessionCalls('event_log', 'in')).toEqual([['sequence', [10, 20, 30, 40, 50, 60]]])
+  })
+
+  it('withholds the closed families on every type read of a key and on the page read', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    const keyClient = withKeyClient([
+      membershipFound,
+      seqs(2),
+      seqs(2),
+      seqs(1),
+      { data: [eventAt(1, 'invoice.sent'), eventAt(2, 'invoice.paid')] },
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,invoice.sent' } }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { sequence: number }[] }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.map((e) => e.sequence)).toEqual([1, 2])
+    // Three families' prefixes on the two type reads and the page read.
+    expect(keyClient.findCalls('event_log', 'not')).toHaveLength(9)
+  })
+
+  it('answers 500 when the read of one type fails, and starts no read after it', async () => {
+    const six = ['a.one', 'b.two', 'c.three', 'd.four', 'e.five', 'f.six']
+    enqueue(seqs(60))
+    enqueue({ error: { message: 'canceling statement due to statement timeout', code: '57014' } })
+
+    const response = await GET(createMockRequest('/api/events', { searchParams: { types: six.join(',') } }))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
+    // The horizon and the four reads already running; not the last two types,
+    // and no page read.
+    expect(findSessionCalls('event_log', 'select')).toHaveLength(5)
+  })
+
+  it('answers 500 when the horizon read fails, before any type read', async () => {
+    enqueue({ error: { message: 'canceling statement due to statement timeout', code: '57014' } })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,invoice.sent' } }),
+    )
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
+    expect(findSessionCalls('event_log', 'select')).toHaveLength(1)
+  })
+
+  it('answers 500 when the page read fails', async () => {
+    enqueue(seqs(4))
+    enqueue({ error: { message: 'connection reset', code: '08006' } })
+
+    const response = await GET(createMockRequest('/api/events', { searchParams: { types: 'invoice.paid' } }))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
+  })
+
+  it('answers the rows the page read finds when one went between the reads', async () => {
+    // Sequence 2 was pruned (30-day retention) after the type read.
+    enqueue(seqs(1, 2, 3))
+    enqueue({ data: [eventAt(1, 'invoice.paid'), eventAt(3, 'invoice.paid')] })
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid', limit: '3' } }),
+    )
+    const { body } = await parseJsonResponse<{ data: { sequence: number }[]; cursor: number; has_more: boolean }>(
+      response,
+    )
+
+    expect(body.data.map((e) => e.sequence)).toEqual([1, 3])
+    expect(body.cursor).toBe(3)
+    expect(body.has_more).toBe(false)
+  })
+
+  it('reads each of up to a hundred types with a read of its own', async () => {
+    const hundred = Array.from({ length: 100 }, (_, i) => `custom.type_${i}`)
+    enqueue(seqs(1))
+
+    const response = await GET(createMockRequest('/api/events', { searchParams: { types: hundred.join(',') } }))
+
+    expect(response.status).toBe(200)
+    expect(findSessionCalls('event_log', 'eq').filter(([column]) => column === 'event_type')).toHaveLength(100)
+    expect(findSessionCalls('event_log', 'in')).toEqual([])
+  })
+
+  it('reads more types than there are event types in one query with in', async () => {
+    const many = Array.from({ length: 101 }, (_, i) => `custom.type_${i}`)
+    enqueue({ data: [eventAt(1, 'custom.type_0')] })
+
+    const response = await GET(createMockRequest('/api/events', { searchParams: { types: many.join(',') } }))
+
+    expect(response.status).toBe(200)
+    expect(findSessionCalls('event_log', 'select')).toHaveLength(1)
+    expect(findSessionCalls('event_log', 'in')).toEqual([['event_type', many]])
   })
 
   it('returns has_more=true when results equal limit', async () => {
@@ -547,7 +837,7 @@ describe('GET /api/events', () => {
     }
     mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
     mockValidateApiKey.mockResolvedValue(apiKeyAuth({ scopes: ['events:read', 'agent:read'] }))
-    const keyClient = withKeyClient([membershipFound, { data: [stored] }])
+    const keyClient = withKeyClient([membershipFound, { data: [{ sequence: 7 }] }, { data: [stored] }])
 
     const response = await GET(
       createMockRequest('/api/events', { searchParams: { types: 'company_question.closed' } }),
@@ -557,7 +847,8 @@ describe('GET /api/events', () => {
     expect(status).toBe(200)
     expect(body.data).toEqual([stored])
     expect(body.cursor).toBe(7)
-    expect(keyClient.findCalls('event_log', 'in')).toEqual([['event_type', ['company_question.closed']]])
+    expect(keyClient.findCalls('event_log', 'eq')).toContainEqual(['event_type', 'company_question.closed'])
+    expect(keyClient.findCalls('event_log', 'in')).toEqual([['sequence', [7]]])
   })
 
   it('serves payroll and question list events to a session user', async () => {
