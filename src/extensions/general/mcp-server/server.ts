@@ -5459,6 +5459,9 @@ const KEY_SCOPE_TOOLS: ReadonlySet<string> = new Set([
   'gnubok_propose_accruals',
   // Shows the operations an answer led to only to a key with pending_operations:read.
   'gnubok_list_questions',
+  // A verifikat's lines and correction history only for a key with
+  // reports:read (RECORD_KIND_DETAIL_SCOPES).
+  'gnubok_get_record',
 ])
 
 /** Whether the dispatcher hands the tool the caller's key scopes (__keyScopes). */
