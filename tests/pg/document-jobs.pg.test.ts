@@ -23,8 +23,9 @@ async function insertDocument(userId: string, companyId: string, docType: string
 
 type ClaimedRow = { id: string; company_id: string; document_id: string; kind: string; attempts: number }
 
-const claim = async (batchSize: number, worker: string): Promise<ClaimedRow[]> =>
-  (await getPool().query(`SELECT * FROM public.claim_document_jobs($1, $2)`, [batchSize, worker])).rows
+/** As of now, or as of `asOf`: then only jobs due by that time are claimed. */
+const claim = async (batchSize: number, worker: string, asOf?: string): Promise<ClaimedRow[]> =>
+  (await getPool().query(`SELECT * FROM public.claim_document_jobs($1, $2, coalesce($3::timestamptz, now()))`, [batchSize, worker, asOf ?? null])).rows
 
 describe('document_jobs', () => {
   let userId: string
@@ -56,8 +57,10 @@ describe('document_jobs', () => {
          ($1, $2, 'read', '2000-01-01'), ($1, $3, 'read', '2000-01-02'), ($1, $4, 'read', now() + interval '1 hour')`,
       [companyId, older, newer, later],
     )
-    expect(await claim(1, 'worker-1')).toEqual([expect.objectContaining({ document_id: older, attempts: 1 })])
-    expect(await claim(1, 'worker-2')).toEqual([expect.objectContaining({ document_id: newer })])
+    // As of 2000-01-03, so no other company's due job is drawn instead (the claim draws a company per job;
+    // document-jobs-fair-claim.pg.test.ts): within one company the longest-due job goes first.
+    expect(await claim(1, 'worker-1', '2000-01-03')).toEqual([expect.objectContaining({ document_id: older, attempts: 1 })])
+    expect(await claim(1, 'worker-2', '2000-01-03')).toEqual([expect.objectContaining({ document_id: newer })])
     const { rows } = await getPool().query(`SELECT status, locked_by FROM public.document_jobs WHERE document_id = $1`, [older])
     expect(rows[0]).toEqual({ status: 'running', locked_by: 'worker-1' })
     expect((await claim(500, 'worker-3')).filter((r) => r.document_id === later)).toEqual([])

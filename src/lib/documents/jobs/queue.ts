@@ -62,21 +62,23 @@ export async function enqueueMissingExtractions(supabase: SupabaseClient, limit:
 }
 
 /**
- * Claims due jobs one at a time and runs each, up to `limit`, starting none at
- * or after `deadlineAt` (epoch ms). A job is claimed only when it is about to
- * run: the batch used to be claimed up front, so a run that was killed left
- * the jobs it never started marked running, each with an attempt spent, for
- * the ten minutes before another worker may take them over (the worker was
- * seen at 242 s of its 300 in the 30 days to 2026-11-12). Jobs not reached
- * stay queued, untouched, for the next tick a minute later.
+ * Claims due jobs one at a time and runs each until none is due, starting
+ * none at or after `deadlineAt` (epoch ms): the time is the run's only limit,
+ * not a count. A job is claimed only when it is about to run: the batch used
+ * to be claimed up front, so a run that was killed left the jobs it never
+ * started marked running, each with an attempt spent, for the ten minutes
+ * before another worker may take them over (the worker was seen at 242 s of
+ * its 300 in the 30 days to 2026-11-12). Jobs not reached stay queued,
+ * untouched, for the next tick a minute later. Which company's job comes next
+ * is the claim's to decide (claim_document_jobs draws a company per job).
  */
-export async function runDocumentJobs(supabase: SupabaseClient, opts: { limit: number; worker: string; deadlineAt: number; now?: () => number }): Promise<RunSummary> {
+export async function runDocumentJobs(supabase: SupabaseClient, opts: { worker: string; deadlineAt: number; now?: () => number }): Promise<RunSummary> {
   const now = opts.now ?? Date.now
   await failAbandonedJobs(supabase)
   const summary: RunSummary = { claimed: 0, done: 0, failed: 0 }
   const identities = new Map<string, CompanyIdentity>()
 
-  while (summary.claimed < opts.limit && now() < opts.deadlineAt) {
+  while (now() < opts.deadlineAt) {
     const { data, error } = await supabase.rpc('claim_document_jobs', { p_batch_size: 1, p_worker: opts.worker })
     if (error) throw new Error(`claim failed: ${error.message}`)
     const job = ((data ?? []) as ClaimedJob[])[0]
