@@ -1016,6 +1016,15 @@ export const TRANSACTION_METHODS = [
 
 export type TransactionMethod = (typeof TRANSACTION_METHODS)[number]
 
+/**
+ * The title a bank row is stored with when its source gave none
+ * (normalizeImportedDescription in lib/transactions/external-id.ts, which
+ * exports it as FALLBACK_DESCRIPTION). It sits beside the row's type because
+ * the ledger reads it too: a row with only this title names no counterparty
+ * (namesCounterparty in lib/bookkeeping/counterparty-templates.ts).
+ */
+export const TRANSACTION_FALLBACK_DESCRIPTION = 'Okänd transaktion'
+
 // Transaction
 export interface Transaction {
   id: string
