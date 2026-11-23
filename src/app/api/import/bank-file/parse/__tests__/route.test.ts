@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { HANDELSBANKEN_XLSX_ROWS, streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
 import { septemberFile } from '@/lib/import/bgmax/__tests__/bgmax-fixture'
+import { decemberFile } from '@/lib/import/camt054/__tests__/camt054-fixture'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
@@ -112,6 +113,16 @@ describe('POST /api/import/bank-file/parse (skattekonto redirect)', () => {
   it('refuses a BG Max deposit specification, with or without a format override', async () => {
     for (const format of [undefined, 'generic_csv']) {
       const response = await POST(makeFileRequest(septemberFile(), 'BGMAX.txt', format), emptyParams)
+      const body = await response.json()
+      expect(response.status).toBe(400)
+      expect(body.error.code).toBe('BANK_FILE_DEPOSIT_SPEC_DETECTED')
+    }
+    expect(supabase.from).not.toHaveBeenCalledWith('bank_file_imports')
+  })
+
+  it('sends the bank\'s notification of incoming payments (camt.054) the same way, whatever format was chosen', async () => {
+    for (const format of [undefined, 'camt053']) {
+      const response = await POST(makeFileRequest(decemberFile(), 'camt054.xml', format), emptyParams)
       const body = await response.json()
       expect(response.status).toBe(400)
       expect(body.error.code).toBe('BANK_FILE_DEPOSIT_SPEC_DETECTED')

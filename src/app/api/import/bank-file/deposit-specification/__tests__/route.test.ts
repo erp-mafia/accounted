@@ -1,14 +1,17 @@
 /**
- * Tests for POST /api/import/bank-file/deposit-specification (crm#1170): a
- * BG Max file is parsed here and handed to attachBgMaxDeposits (its matching
- * and writes are tested in lib/import/bgmax/__tests__/attach.test.ts). Covers
- * 401, the 400 refusals (no file, not a BG Max file, a test file, nothing to
- * attach), the read-only preview and the apply.
+ * Tests for POST /api/import/bank-file/deposit-specification (crm#1170,
+ * crm#1883): a BG Max file or a camt.054 notification is parsed here and
+ * handed to attachBgMaxDeposits (its matching and writes are tested in
+ * lib/import/bgmax/__tests__/attach.test.ts and
+ * lib/import/camt054/__tests__/attach.test.ts). Covers 401, the 400 refusals
+ * (no file, neither format, a test file, nothing to attach), the read-only
+ * preview and the apply.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { septemberFile, start, opening, payment, depositRecord, end } from '@/lib/import/bgmax/__tests__/bgmax-fixture'
+import { decemberFile, document, entry, notification, payment as camtPayment } from '@/lib/import/camt054/__tests__/camt054-fixture'
 
 const { supabase, reset } = createQueuedMockSupabase()
 
@@ -83,10 +86,13 @@ describe('POST /api/import/bank-file/deposit-specification', () => {
     expect((await response.json()).error.code).toBe('BANK_FILE_NO_FILE')
   })
 
-  it('refuses a file that is not a BG Max file', async () => {
-    const response = await POST(makeRequest('Bokföringsdag;Text;Belopp\n2026-09-14;BG 123-4567;1500,00'), emptyParams)
-    expect(response.status).toBe(400)
-    expect((await response.json()).error.code).toBe('BGMAX_NOT_DEPOSIT_FILE')
+  it('refuses a file that is neither a BG Max file nor a camt.054 notification', async () => {
+    const statement = '<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt></BkToCstmrStmt></Document>'
+    for (const content of ['Bokföringsdag;Text;Belopp\n2026-09-14;BG 123-4567;1500,00', statement]) {
+      const response = await POST(makeRequest(content), emptyParams)
+      expect(response.status).toBe(400)
+      expect((await response.json()).error.code).toBe('BGMAX_NOT_DEPOSIT_FILE')
+    }
     expect(attachMock).not.toHaveBeenCalled()
   })
 
@@ -128,6 +134,28 @@ describe('POST /api/import/bank-file/deposit-specification', () => {
     const { data } = await response.json()
     expect(attachMock).toHaveBeenCalledWith(supabase, expect.objectContaining({ apply: true }))
     expect(data).toMatchObject({ applied: true, matched_payments: 5, ready_rows: 2, filename: 'BGMAX_20260930.txt' })
+  })
+
+  it('reads a camt.054 notification and hands its entries over as deposits', async () => {
+    const response = await POST(makeRequest(decemberFile(), true), emptyParams)
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    expect(attachMock).toHaveBeenCalledWith(supabase, expect.objectContaining({ apply: true, source: 'camt054' }))
+    const { deposits } = attachMock.mock.calls[0]![1]
+    expect(deposits).toHaveLength(1)
+    expect(deposits[0]).toMatchObject({ date: '2026-12-01', amount: 1500, account: expect.objectContaining({ iban: expect.any(String) }) })
+    expect(deposits[0].payments).toHaveLength(3)
+    expect(data).toMatchObject({ applied: true, date_from: '2026-12-01', date_to: '2026-12-01', rejected_deposits: 0 })
+  })
+
+  it('refuses a camt.054 notification with nothing to attach', async () => {
+    const debitsOnly = document([
+      notification({ entries: [entry({ amount: '100.00', date: '2026-12-01', indicator: 'DBIT', payments: [camtPayment({ amount: '100.00' })] })] }),
+    ])
+    const response = await POST(makeRequest(debitsOnly, true), emptyParams)
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('CAMT054_NO_DEPOSITS')
+    expect(attachMock).not.toHaveBeenCalled()
   })
 
   it('is closed to a viewer', async () => {

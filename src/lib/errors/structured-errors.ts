@@ -5426,14 +5426,14 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
   BANK_FILE_DEPOSIT_SPEC_DETECTED: {
     httpStatus: 400,
     message_sv:
-      'Filen är Bankgirots insättningsuppgifter (BG Max), inte ett kontoutdrag. Den kopplar inbetalningarna till bankrader som redan finns.',
+      'Filen är insättningsuppgifter (BG Max eller camt.054), inte ett kontoutdrag. Den kopplar inbetalningarna till bankrader som redan finns.',
     message_en:
-      'This file is a Bankgirot deposit specification (BG Max), not a bank statement. It attaches the payments to bank rows that already exist.',
+      'This file is a deposit specification (BG Max or camt.054), not a bank statement. It attaches the payments to bank rows that already exist.',
   },
   BGMAX_NOT_DEPOSIT_FILE: {
     httpStatus: 400,
-    message_sv: 'Filen är inte en BG Max-fil med Bankgirots insättningsuppgifter.',
-    message_en: 'The file is not a BG Max deposit specification file.',
+    message_sv: 'Filen är varken en BG Max-fil från Bankgirot eller bankens avisering av inbetalningar (camt.054).',
+    message_en: 'The file is neither a Bankgirot BG Max file nor the bank\'s notification of incoming payments (camt.054).',
   },
   BGMAX_TEST_FILE: {
     httpStatus: 400,
@@ -5444,6 +5444,11 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Filen innehåller inga insättningar som går att koppla: summan av betalningarna stämmer inte med insättningen, eller filen är avkortad.',
     message_en: 'The file holds no deposit that can be attached: the payments do not add up to the deposit, or the file is truncated.',
+  },
+  CAMT054_NO_DEPOSITS: {
+    httpStatus: 400,
+    message_sv: 'Filen innehåller inga bokförda inbetalningar som går att koppla: posterna saknar betalningsuppgifter, eller betalningarna summerar inte till posten.',
+    message_en: 'The file holds no booked incoming payment that can be attached: the entries carry no payment details, or the payments do not add up to the entry.',
   },
   BANK_FILE_UNDO_NOT_FOUND: {
     httpStatus: 404,

@@ -475,7 +475,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/import/bank-file/parse': uiOnly(PREVIEW),
   'POST /api/import/bank-file/check-duplicates': uiOnly(PREVIEW),
   'POST /api/import/bank-file/execute': covered([`POST ${V}/imports/bank`]),
-  'POST /api/import/bank-file/deposit-specification': gap('P3', 'BG Max deposit specification (crm#1170): writes the split of rows that already exist; v1 would take the whole file'),
+  'POST /api/import/bank-file/deposit-specification': gap('P3', 'deposit specification, BG Max or camt.054 (crm#1170, crm#1883): writes the split of rows that already exist; v1 would take the whole file'),
   'DELETE /api/import/bank-file/:id/undo': covered([`POST ${V}/imports/bank/:id/undo`, 'gnubok_undo_bank_import']),
   'POST /api/import/skattekonto-file/parse': uiOnly(PREVIEW),
   'POST /api/import/skattekonto-file/execute': covered([`POST ${V}/imports/skattekonto-file`], 'v1 takes the whole file; no MCP tool (would stage file bytes)'),

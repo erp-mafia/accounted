@@ -3,7 +3,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import { detectBgMax, parseBgMax } from '@/lib/import/bgmax/parser'
-import { attachBgMaxDeposits } from '@/lib/import/bgmax/attach'
+import { attachBgMaxDeposits, type AttachableDeposit } from '@/lib/import/bgmax/attach'
+import { detectCamt054, parseCamt054 } from '@/lib/import/camt054/parser'
 
 // A year's file attaches a few hundred deposits, each a delete, an insert and
 // a marker; give it the bank-file import's budget.
@@ -12,15 +13,17 @@ export const maxDuration = 300
 /**
  * POST /api/import/bank-file/deposit-specification
  *
- * Bankgirot's deposit specification (a BG Max file, crm#1170): each deposit
- * in the file is attached to the stored bank row that is that deposit, as
- * the row's split (one part per payment with OCR, payer and amount), and each
- * payment gets the open customer invoice its reference names. Never creates
- * or changes a bank row; a deposit with no stored row is reported and
- * attaches when the same file is uploaded after the next bank sync.
+ * A deposit specification: Bankgirot's BG Max file (crm#1170) or the bank's
+ * own notification of incoming payments (ISO 20022 camt.054, crm#1883). Each
+ * deposit in the file is attached to the stored bank row that is that
+ * deposit, as the row's split (one part per payment with OCR, payer and
+ * amount), and each payment gets the open customer invoice its reference
+ * names. Never creates or changes a bank row; a deposit with no stored row
+ * is reported and attaches when the same file is uploaded after the next
+ * bank sync.
  *
- * FormData: `file` (the BG Max file), `apply` ("true" writes; anything else
- * is the preview, which reads and matches only).
+ * FormData: `file` (the BG Max or camt.054 file), `apply` ("true" writes;
+ * anything else is the preview, which reads and matches only).
  */
 export const POST = withRouteContext(
   'bank_file.deposit_specification',
@@ -40,15 +43,17 @@ export const POST = withRouteContext(
     }
 
     const content = decodeFileContent(await file.arrayBuffer())
-    if (!detectBgMax(content)) {
+    const source = detectBgMax(content) ? 'bgmax' : detectCamt054(content) ? 'camt054' : null
+    if (!source) {
       return errorResponseFromCode('BGMAX_NOT_DEPOSIT_FILE', log, { requestId })
     }
-    const parsed = parseBgMax(content)
-    if (parsed.test_file) {
+    const parsed = source === 'bgmax' ? parseBgMax(content) : parseCamt054(content)
+    if ('test_file' in parsed && parsed.test_file) {
       return errorResponseFromCode('BGMAX_TEST_FILE', log, { requestId })
     }
-    if (parsed.deposits.length === 0) {
-      return errorResponseFromCode('BGMAX_NO_DEPOSITS', log, {
+    const deposits: readonly AttachableDeposit[] = parsed.deposits
+    if (deposits.length === 0) {
+      return errorResponseFromCode(source === 'bgmax' ? 'BGMAX_NO_DEPOSITS' : 'CAMT054_NO_DEPOSITS', log, {
         requestId,
         details: { issues: parsed.issues.slice(0, 5).map((i) => i.message) },
       })
@@ -57,11 +62,13 @@ export const POST = withRouteContext(
     const summary = await attachBgMaxDeposits(supabase, {
       companyId,
       userId: user.id,
-      deposits: parsed.deposits,
+      deposits,
       apply,
+      source,
     })
     if (apply) {
-      log.info('bgmax deposit specification attached', {
+      log.info('deposit specification attached', {
+        source,
         deposits: summary.deposits,
         matched: summary.matched_deposits,
         noRow: summary.no_row,

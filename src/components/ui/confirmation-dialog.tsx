@@ -7,7 +7,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -88,7 +87,10 @@ export function ConfirmationDialog({
           {/* Attention is one ochre sentence, not a banner (convention 6). */}
           {warningText && <AttnLine>{warningText}</AttnLine>}
 
-          <DialogFooter className="static m-0 border-0 p-0">
+          {/* A plain row, not DialogFooter: that one draws a hairline of its
+              own, and this block already has the one above it. On a phone the
+              buttons stack full width at 44px, as in every dialog footer. */}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end max-sm:[&>button]:h-11 max-sm:[&>button]:w-full">
             <Button
               variant="ghost"
               onClick={() => onOpenChange(false)}
@@ -105,7 +107,7 @@ export function ConfirmationDialog({
             >
               {isSubmitting ? 'Skapar...' : confirmLabel}
             </Button>
-          </DialogFooter>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
