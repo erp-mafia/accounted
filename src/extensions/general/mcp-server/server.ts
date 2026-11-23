@@ -677,6 +677,7 @@ import { batchAllocationsFromParts } from '@/lib/transactions/parts-read'
 import { giroCounterpartyForWire, mayReadGiro, readGiroCounterparty, type GiroRow } from '@/lib/transactions/giro-counterparty'
 import { loadGiroRegister } from '@/lib/transactions/giro-register'
 import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
+import { TRANSACTION_SEARCH_MIN_CHARS, transactionTextSearchFilter } from '@/lib/transactions/text-search'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
@@ -2420,6 +2421,7 @@ function normalizeVoucherNumber(value: unknown, field: string): number | undefin
  * answered UNKNOWN_ERROR "try again" for a call no retry fixes. The forms
  * the cast took keep working (an unpadded month or day, a trailing time,
  * YYYYMMDD) and are passed on as YYYY-MM-DD. Empty or null is no bound.
+ * gnubok_list_uncategorized_transactions reads its date_from / date_to here too.
  */
 const JOURNAL_DATE_RE = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/
 const COMPACT_DATE_RE = /^(\d{4})(\d{2})(\d{2})$/
@@ -9244,17 +9246,22 @@ export const tools: McpTool[] = [
     keywords: ['okategoriserade', 'banktransaktioner', 'kontohändelser', 'att bokföra'],
     title: 'List Uncategorized Transactions',
     // suggested_match (crm#1510): paid for by the limit/offset notes, which
-    // restated what every paginated tool's limit and offset are.
-    description: 'List bank transactions with no journal entry yet, newest first. Paginated. cash_account_id narrows to one bank account. batch_suggestion (a Bankgirot split) feeds gnubok_match_batch_allocate. suggested_match is Accounted\'s own match: the user approves it in Att göra.',
+    // restated what every paginated tool's limit and offset are. The
+    // date_from/date_to/text filters (bare, named here): paid for by the
+    // limit note and the paging example (has_more and next_offset say it pages).
+    description: 'Unbooked bank rows, newest first. Filters: cash_account_id, date_from/date_to, text (description, merchant, reference). batch_suggestion feeds gnubok_match_batch_allocate. suggested_match is Accounted\'s own: the user approves it in Att göra.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        limit: { type: 'number', description: '1-100, default 20' },
+        limit: { type: 'number' },
         offset: { type: 'number' },
         cash_account_id: { type: 'string' },
+        date_from: { type: 'string' },
+        date_to: { type: 'string' },
+        text: { type: 'string' },
       },
-      examples: [{}, { limit: 100, offset: 100 }],
+      examples: [{}, { date_from: '2026-11-16', date_to: '2026-11-22' }],
     },
     outputSchema: paginatedSchema('transactions', {
       type: 'object',
@@ -9287,6 +9294,26 @@ export const tools: McpTool[] = [
       if (cashAccountId && !UUID_RE.test(cashAccountId)) {
         throw badArgument('cash_account_id', 'cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
       }
+      // "Last week's rows" and "did X pay?" are filters on the query itself,
+      // so the page, has_more and total_count all describe the filtered set.
+      const dateFrom = normalizeJournalDate(args.date_from, 'date_from')
+      const dateTo = normalizeJournalDate(args.date_to, 'date_to')
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        throw badArgument('date_from', 'date_from must not be after date_to.')
+      }
+      let textFilter: string | null = null
+      if (args.text !== undefined && args.text !== null) {
+        if (typeof args.text !== 'string' || args.text.length > 200) {
+          throw badArgument('text', 'text must be a string of at most 200 characters.')
+        }
+        textFilter = transactionTextSearchFilter(args.text, ['description', 'merchant_name', 'reference'])
+        if (!textFilter) {
+          throw badArgument(
+            'text',
+            `text needs at least ${TRANSACTION_SEARCH_MIN_CHARS} characters besides , ( ) % * and \\ (got ${JSON.stringify(args.text)}).`,
+          )
+        }
+      }
 
       // The rows countUnbookedBankTransactions counts (lib/transactions/
       // unbooked.ts), so total_count is the number Accounted://attention, the
@@ -9315,6 +9342,9 @@ export const tools: McpTool[] = [
         )
         .eq('company_id', companyId)
       if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
+      if (dateFrom) listQuery = listQuery.gte('date', dateFrom)
+      if (dateTo) listQuery = listQuery.lte('date', dateTo)
+      if (textFilter) listQuery = listQuery.or(textFilter)
       const { data, error, count } = await listQuery
         .order('date', { ascending: false })
         .order('id', { ascending: true })
