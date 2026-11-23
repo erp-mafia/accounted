@@ -5506,10 +5506,10 @@ Example response `200`:
 
 ### `GET /api/v1/companies/{companyId}/webshop-orders/oss-underlag`
 
-**Underlag for the OSS declaration (unionsordningen): a quarter's webshop sales to consumers in other EU countries, per country and VAT rate, in euro.**
+**Underlag for the OSS declaration (unionsordningen): a quarter's sales to consumers in other EU countries, per country and VAT rate, in euro.**
 `scope:reports:read · risk:low · idempotent`
 
-Adds up the webshop orders booked on the OSS accounts (VAT code oss, the OSS output VAT account, or accounts a Shopify country rule names for OSS) in a calendar quarter: per destination country and VAT rate the sales without VAT and the VAT, in euro at the ECB rate for the last day of the quarter (the next publication day when the ECB published none) and in kronor as booked. Refunds of an earlier quarter's sales are corrections of that quarter (country, quarter, VAT). unaccounted lists the OSS-account verifikat that book no order (manual vouchers, stornos): they count in ledger_vat_sek but in no row or total, because the ledger does not say their country or VAT rate. warnings names the orders missing from the underlag. Read-only; nothing is filed.
+Adds up what is booked on the OSS accounts (VAT code oss, the OSS output VAT account, accounts a Shopify country rule names for OSS, and 26xx accounts that name an OSS country) in a calendar quarter: per country and VAT rate the sales without VAT and the VAT, in euro at the ECB rate for the last day of the quarter (the next publication day when the ECB published none) and in kronor as booked. A verifikat that books a webshop order takes country and rate from the order. One that books no order takes them from its accounts, when the sales account names a country and a rate (accounts.oss-countries): the VAT follows the sales it is booked with. Refunds of an earlier quarter's orders, and stornos and rättelser of an earlier quarter's verifikat, are corrections of that quarter (country, quarter, VAT). unaccounted lists the verifikat with neither an order nor a country on their accounts: they count in ledger_vat_sek but in no row or total. accounts lists the OSS accounts that name a country, those a verifikat waits for (blocks_vouchers) and what their names suggest. warnings names what is missing or needs a look. Read-only; nothing is filed.
 
 **Use when:** Before filing the quarterly OSS declaration in Skatteverket's e-tjänst, or to check what the OSS accounts hold per country.
 **Do not use for:** The Swedish momsdeklaration (OSS sales are outside it), EU sales taxed in Sweden below the distance-selling threshold, or invoices (they carry Swedish VAT only).
@@ -5518,8 +5518,10 @@ Adds up the webshop orders booked on the OSS accounts (VAT code oss, the OSS out
 - Only booked orders count, in the quarter of the verifikat that books them: book the quarter's orders first (warnings unbooked_orders).
 - Euro amounts are null until the ECB has published the rate for the last day of the quarter (warnings rate_unavailable); the kronor amounts are final.
 - The VAT is declared with two decimals, never rounded. A nil_return quarter still needs a declaration.
-- nil_return is true only when nothing is left outside the underlag: no unaccounted verifikat, no warning about a missing order, no VAT on the OSS accounts. Empty rows with nil_return false is NOT a nil return: a sale booked as a manual voucher has no order to take its country from (warnings vouchers_without_order), so it is declared by hand from the sales records.
+- nil_return is true only when nothing is left outside the underlag: no unaccounted verifikat, no warning about a missing order, no VAT on the OSS accounts. Empty rows with nil_return false is NOT a nil return: a sale booked as a manual voucher on an account that names no country has nothing to take its country from (warnings vouchers_without_order), so the account is given its country or the sale is declared by hand from the sales records.
 - A correction uses the ECB rate of the quarter it corrects, so a full refund takes back exactly what was declared.
+- refund_vouchers are refunds booked as verifikat of their own, placed by their accounts: they are taken off the quarter they are booked in (warnings refund_vouchers_netted). One that belongs to an earlier quarter is declared as a correction of that quarter instead.
+- rate_mismatch on a row (warnings vat_rate_mismatch): the VAT its verifikat book is not the row's rate of their sales. A wrong rate on the account, a wrong VAT amount, or VAT booked on an account that names no OSS country.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -5532,12 +5534,14 @@ Response `200`:
 {
   data: {
     period: { year: number, quarter: number, label: string, start: string, end: string, deadline: string },
-    rows: { country: string, vat_rate: number, net_eur: number | null, vat_eur: number | null, net_sek: number, vat_sek: number, order_count: number }[],
-    corrections: { country: string, period: { year: number, quarter: number, label: string }, vat_eur: number | null, vat_sek: number, refund_count: number }[],
+    rows: { country: string, vat_rate: number, net_eur: number | null, vat_eur: number | null, net_sek: number, vat_sek: number, order_count: number, voucher_count: number, rate_mismatch: boolean }[],
+    corrections: { country: string, period: { year: number, quarter: number, label: string }, vat_eur: number | null, vat_sek: number, refund_count: number, voucher_count: number }[],
     totals: { net_eur: number | null, vat_eur: number | null, corrections_vat_eur: number | null, net_sek: number, vat_sek: number, corrections_vat_sek: number },
     rates: { currency: string, for_date: string, rate: number | null, rate_date: string | null, unavailable: boolean }[],
     ledger_vat_sek: number,
     unaccounted: { journal_entry_id: string, voucher_series: string | null, voucher_number: number, entry_date: string, description: string, net_sek: number, vat_sek: number }[],
+    refund_vouchers: { journal_entry_id: string, voucher_series: string | null, voucher_number: number, entry_date: string, description: string, net_sek: number, vat_sek: number }[],
+    accounts: { account_number: string, account_name: string, kind: "sales" | "vat", country: string | null, vat_rate: number | null, suggested_country: string | null, suggested_vat_rate: number | null, blocks_vouchers: boolean }[],
     warnings: { code: string, message_sv: string, message_en: string, order_numbers: string[] }[],
     nil_return: boolean
   },
@@ -5573,7 +5577,9 @@ Example response `200`:
         "vat_eur": 16.77,
         "net_sek": 1000,
         "vat_sek": 190,
-        "order_count": 1
+        "order_count": 1,
+        "voucher_count": 0,
+        "rate_mismatch": false
       }
     ],
     "corrections": [],
@@ -5596,6 +5602,8 @@ Example response `200`:
     ],
     "ledger_vat_sek": 190,
     "unaccounted": [],
+    "refund_vouchers": [],
+    "accounts": [],
     "warnings": [],
     "nil_return": false
   },

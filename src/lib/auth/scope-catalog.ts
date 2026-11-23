@@ -642,6 +642,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_delete_account: 'bookkeeping:write',
   gnubok_activate_accounts: 'bookkeeping:write',
   gnubok_deactivate_accounts: 'bookkeeping:write',
+  gnubok_set_oss_account_countries: 'bookkeeping:write',
   gnubok_update_company_tax_profile: 'companies:write',
   gnubok_update_bookkeeping_lock: 'companies:write',
   gnubok_create_dimension:                'bookkeeping:write',

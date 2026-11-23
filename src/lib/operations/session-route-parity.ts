@@ -221,6 +221,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/bookkeeping/accounts/:number': covered([`DELETE ${V}/accounts/:number`, 'gnubok_delete_account']),
   'POST /api/bookkeeping/accounts/activate': covered([`POST ${V}/accounts/activate`, 'gnubok_activate_accounts']),
   'POST /api/bookkeeping/accounts/deactivate': covered([`POST ${V}/accounts/deactivate`, 'gnubok_deactivate_accounts']),
+  'POST /api/bookkeeping/accounts/oss-countries': covered([`POST ${V}/accounts/oss-countries`, 'gnubok_set_oss_account_countries']),
   'POST /api/bookkeeping/accounts/prune': gap('P3', 'bulk-delete unused accounts; DELETE /accounts/:number does it one at a time'),
 
   // ── Journal entries (verifikat) ────────────────────────────────────

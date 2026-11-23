@@ -479,6 +479,7 @@ import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/reopen-external/r
 import '@/app/api/v1/companies/[companyId]/accounts/[number]/route'
 import '@/app/api/v1/companies/[companyId]/accounts/activate/route'
 import '@/app/api/v1/companies/[companyId]/accounts/deactivate/route'
+import '@/app/api/v1/companies/[companyId]/accounts/oss-countries/route'
 import '@/app/api/v1/companies/[companyId]/settings/tax-profile/route'
 import '@/app/api/v1/companies/[companyId]/settings/bookkeeping-lock/route'
 import '@/app/api/v1/companies/[companyId]/settings/skattekonto-account/route'

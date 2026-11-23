@@ -3,10 +3,13 @@ import type { EcbRateLookup } from '@/lib/currency/ecb'
 import {
   classifyOssBookings,
   finalizeOssUnderlag,
+  ossAccountsOf,
   ossDeadline,
   ossQuarterBounds,
   ossQuarterOf,
   ossRateNeeds,
+  ruleVatAccountCountries,
+  type OssAccountCountry,
   type OssClassifyInput,
   type OssEntry,
   type OssOrder,
@@ -68,6 +71,8 @@ function input(overrides: Partial<OssClassifyInput> = {}): OssClassifyInput {
     entries: [],
     orders: [],
     parentBookingDates: new Map(),
+    accountCountries: new Map(),
+    linkedEntryDates: new Map(),
     quarterOrders: [],
     ...overrides,
   }
@@ -103,7 +108,7 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
 
     expect(result.rows).toEqual([
       // 1000 / 11.331 = 88.2534…, 190 / 11.331 = 16.7681…: two decimals, never whole euro.
-      { country: 'DE', vat_rate: 19, net_eur: 88.25, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1 },
+      { country: 'DE', vat_rate: 19, net_eur: 88.25, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1, voucher_count: 0, rate_mismatch: false },
     ])
     expect(result.totals).toEqual({
       net_eur: 88.25,
@@ -136,8 +141,8 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
 
     expect(result.rows).toEqual([
       // 88.2534… + 100 = 188.25; 16.7681… + 19 = 35.77
-      { country: 'DE', vat_rate: 7, net_eur: 35.3, vat_eur: 2.47, net_sek: 400, vat_sek: 28, order_count: 1 },
-      { country: 'DE', vat_rate: 19, net_eur: 188.25, vat_eur: 35.77, net_sek: 2125, vat_sek: 403.75, order_count: 2 },
+      { country: 'DE', vat_rate: 7, net_eur: 35.3, vat_eur: 2.47, net_sek: 400, vat_sek: 28, order_count: 1, voucher_count: 0, rate_mismatch: false },
+      { country: 'DE', vat_rate: 19, net_eur: 188.25, vat_eur: 35.77, net_sek: 2125, vat_sek: 403.75, order_count: 2, voucher_count: 0, rate_mismatch: false },
     ])
   })
 
@@ -152,7 +157,7 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
     }))
 
     expect(result.rows).toEqual([
-      { country: 'DE', vat_rate: 19, net_eur: 44.13, vat_eur: 8.38, net_sek: 500, vat_sek: 95, order_count: 2 },
+      { country: 'DE', vat_rate: 19, net_eur: 44.13, vat_eur: 8.38, net_sek: 500, vat_sek: 95, order_count: 2, voucher_count: 0, rate_mismatch: false },
     ])
     expect(result.corrections).toEqual([])
   })
@@ -170,7 +175,7 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
     expect(result.rows).toEqual([])
     expect(result.corrections).toEqual([
       // -95 / 10.9 = -8.7155…: the Q2 rate, so a full refund takes back what Q2 declared.
-      { country: 'DE', period: { year: 2026, quarter: 2, label: 'Q2 2026' }, vat_eur: -8.72, vat_sek: -95, refund_count: 1 },
+      { country: 'DE', period: { year: 2026, quarter: 2, label: 'Q2 2026' }, vat_eur: -8.72, vat_sek: -95, refund_count: 1, voucher_count: 0 },
     ])
     expect(result.totals.corrections_vat_eur).toBe(-8.72)
     expect(result.totals.corrections_vat_sek).toBe(-95)
@@ -207,7 +212,7 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
       orders: [order('o1', { journal_entry_id: 'e1' })],
     }))
     expect(corrected.rows).toEqual([
-      { country: 'DE', vat_rate: 19, net_eur: 88.25, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1 },
+      { country: 'DE', vat_rate: 19, net_eur: 88.25, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1, voucher_count: 0, rate_mismatch: false },
     ])
     expect(corrected.unaccounted).toEqual([])
   })
@@ -374,5 +379,261 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
       { currency: 'SEK', date: '2026-03-31' },
       { currency: 'EUR', date: '2026-09-30' },
     ])
+  })
+})
+
+// A chart with one sales account per country and rate and one VAT account
+// per country, the way OSS is booked without an order feed.
+const COUNTRY_REVENUE = new Set(['3106', '3149', '3150', '3151'])
+const COUNTRY_VAT = new Set(['2670', '2671', '2672'])
+const COUNTRIES = new Map<string, OssAccountCountry>([
+  ['3149', { country: 'DE', vat_rate: 19 }],
+  ['3150', { country: 'FR', vat_rate: 20 }],
+  ['3151', { country: 'DE', vat_rate: 7 }],
+  ['2671', { country: 'DE', vat_rate: null }],
+  ['2672', { country: 'FR', vat_rate: null }],
+])
+
+/** A posted verifikat in Q3 with the given credit (positive) or debit (negative) per account. */
+function voucher(id: string, lines: Array<[string, number]>, overrides: Partial<OssEntry> = {}): OssEntry {
+  return {
+    id,
+    voucher_series: 'A',
+    voucher_number: Number(id.replace(/\D/g, '')) || 1,
+    entry_date: '2026-08-15',
+    description: `Faktura ${id}`,
+    status: 'posted',
+    reverses_id: null,
+    correction_of_id: null,
+    lines: lines.map(([account_number, value]) =>
+      value >= 0
+        ? { account_number, debit_amount: 0, credit_amount: value }
+        : { account_number, debit_amount: -value, credit_amount: 0 },
+    ),
+    ...overrides,
+  }
+}
+
+function byAccount(overrides: Partial<OssClassifyInput> = {}): OssClassifyInput {
+  return input({ revenueAccounts: COUNTRY_REVENUE, vatAccounts: COUNTRY_VAT, accountCountries: COUNTRIES, ...overrides })
+}
+
+describe('verifikat placed by the country their accounts name', () => {
+  it('declares a verifikat that books no order under the country and rate of its sales account', () => {
+    const result = underlag(byAccount({ entries: [voucher('e1', [['3149', 1000], ['2671', 190]])] }))
+
+    expect(result.rows).toEqual([
+      { country: 'DE', vat_rate: 19, net_eur: 88.25, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 0, voucher_count: 1, rate_mismatch: false },
+    ])
+    expect(result.rates).toEqual([
+      { currency: 'SEK', for_date: '2026-09-30', rate: 11.331, rate_date: '2026-09-30', unavailable: false },
+    ])
+    expect(result.unaccounted).toEqual([])
+    expect(result.refund_vouchers).toEqual([])
+    expect(result.warnings).toEqual([])
+    expect(result.ledger_vat_sek).toBe(190)
+    expect(result.nil_return).toBe(false)
+  })
+
+  it('gives the VAT on a shared VAT account to the one sale it is booked with', () => {
+    const result = underlag(byAccount({ entries: [voucher('e1', [['3150', 500], ['2670', 100]])] }))
+    expect(result.rows.map((row) => [row.country, row.vat_rate, row.net_sek, row.vat_sek])).toEqual([['FR', 20, 500, 100]])
+  })
+
+  it('gives each country its own VAT account in a verifikat that sells to several', () => {
+    const result = underlag(byAccount({
+      entries: [voucher('e1', [['3149', 1000], ['3150', 500], ['2671', 190], ['2672', 100]])],
+    }))
+    expect(result.rows.map((row) => [row.country, row.vat_rate, row.net_sek, row.vat_sek, row.voucher_count, row.rate_mismatch])).toEqual([
+      ['DE', 19, 1000, 190, 1, false],
+      ['FR', 20, 500, 100, 1, false],
+    ])
+  })
+
+  it('shares one VAT line between several sales by what their rates make of them, to the öre', () => {
+    const result = underlag(byAccount({
+      // Two German rates on the German VAT account, and France with it on the shared one.
+      entries: [
+        voucher('e1', [['3149', 1000], ['3151', 400], ['2671', 218.01]]),
+        voucher('e2', [['3149', 1000], ['3150', 500], ['2670', 290]]),
+      ],
+    }))
+    expect(result.rows.map((row) => [row.country, row.vat_rate, row.net_sek, row.vat_sek])).toEqual([
+      // e1: 218.01 × 28 / 218 = 28.0013 → 28.00 to 7 %, and 19 % takes what is left, 190.01.
+      ['DE', 7, 400, 28],
+      ['DE', 19, 2000, 380.01],
+      ['FR', 20, 500, 100],
+    ])
+    expect(result.totals.vat_sek).toBe(508.01)
+    expect(result.ledger_vat_sek).toBe(508.01)
+  })
+
+  it('shares a VAT line by unrounded proportions, so sales of a few öre still carry their part', () => {
+    // 0.02 at 19 % against 0.01 at 20 %: 38 parts to 20, and each rounds to one öre.
+    const result = underlag(byAccount({ entries: [voucher('e1', [['3149', 0.02], ['3150', 0.01], ['2670', 0.02]])] }))
+    expect(result.rows.map((row) => [row.country, row.net_sek, row.vat_sek])).toEqual([
+      ['DE', 0.02, 0.01],
+      ['FR', 0.01, 0.01],
+    ])
+  })
+
+  it('leaves a verifikat out whole when one of its sales accounts names no country, and names the account', () => {
+    const classification = classifyOssBookings(byAccount({
+      entries: [voucher('e1', [['3149', 1000], ['3106', 200], ['2670', 230]])],
+    }))
+    expect(classification.rows.size).toBe(0)
+    expect(classification.accountsWithoutCountry).toEqual(['3106'])
+    expect(classification.unaccounted.map((v) => [v.journal_entry_id, v.net_sek, v.vat_sek])).toEqual([['e1', 1200, 230]])
+    expect(classification.warnings.map((w) => w.code)).toEqual(['vouchers_without_order'])
+  })
+
+  it('does not read a VAT line with no sale to go to as a sale: the payment of last quarter\'s OSS VAT', () => {
+    const result = underlag(byAccount({
+      entries: [
+        voucher('e9', [['2671', -190], ['2672', -100]], { description: 'Betalning OSS' }),
+        // German sale, French VAT account: no French sale in the verifikat to carry it.
+        voucher('e10', [['3149', 1000], ['2672', 190]]),
+      ],
+    }))
+    expect(result.rows).toEqual([])
+    expect(result.unaccounted.map((v) => v.journal_entry_id)).toEqual(['e9', 'e10'])
+    expect(result.accounts).toEqual([])
+    expect(result.nil_return).toBe(false)
+  })
+
+  it('makes the storno of an earlier quarter\'s verifikat a correction of that quarter, at that quarter\'s rate', () => {
+    const result = underlag(byAccount({
+      entries: [voucher('e8', [['3149', -1000], ['2671', -190]], { reverses_id: 'e-q2' })],
+      linkedEntryDates: new Map([['e-q2', '2026-05-20']]),
+    }))
+    expect(result.rows).toEqual([])
+    expect(result.corrections).toEqual([
+      // -190 / 10.9 = -17.431…
+      { country: 'DE', period: { year: 2026, quarter: 2, label: 'Q2 2026' }, vat_eur: -17.43, vat_sek: -190, refund_count: 0, voucher_count: 1 },
+    ])
+    expect(result.refund_vouchers).toEqual([])
+    expect(result.unaccounted).toEqual([])
+    expect(result.warnings).toEqual([])
+  })
+
+  it('makes the rättelse that replaces an earlier quarter\'s verifikat a correction of that quarter too', () => {
+    // Booked on Germany in Q2, taken back and booked on France in Q3: both belong to Q2.
+    const result = underlag(byAccount({
+      entries: [
+        voucher('e8', [['3149', -1000], ['2671', -190]], { reverses_id: 'e-q2' }),
+        voucher('e9', [['3150', 1000], ['2672', 200]], { correction_of_id: 'e-q2' }),
+      ],
+      linkedEntryDates: new Map([['e-q2', '2026-05-20']]),
+    }))
+    expect(result.rows).toEqual([])
+    expect(result.corrections.map((c) => [c.country, c.period.label, c.vat_sek, c.voucher_count])).toEqual([
+      ['DE', 'Q2 2026', -190, 1],
+      ['FR', 'Q2 2026', 200, 1],
+    ])
+  })
+
+  it('leaves a storno outside when the verifikat it takes back cannot be read', () => {
+    const result = underlag(byAccount({
+      entries: [voucher('e8', [['3149', -1000], ['2671', -190]], { reverses_id: 'gone' })],
+    }))
+    expect(result.rows).toEqual([])
+    expect(result.corrections).toEqual([])
+    expect(result.unaccounted.map((v) => v.journal_entry_id)).toEqual(['e8'])
+  })
+
+  it('takes a refund booked as a verifikat of its own off the quarter, and lists it', () => {
+    const result = underlag(byAccount({
+      entries: [
+        voucher('e1', [['3149', 1000], ['2671', 190]]),
+        voucher('e2', [['3149', -400], ['2671', -76]], { description: 'Kreditfaktura' }),
+      ],
+    }))
+    expect(result.rows.map((row) => [row.country, row.net_sek, row.vat_sek, row.voucher_count, row.rate_mismatch])).toEqual([
+      ['DE', 600, 114, 2, false],
+    ])
+    expect(result.refund_vouchers).toEqual([
+      { journal_entry_id: 'e2', voucher_series: 'A', voucher_number: 2, entry_date: '2026-08-15', description: 'Kreditfaktura', net_sek: -400, vat_sek: -76 },
+    ])
+    expect(result.warnings.map((w) => w.code)).toEqual(['refund_vouchers_netted'])
+    expect(result.warnings[0].message_sv).toContain('rättelse')
+    expect(result.warnings[0].message_en).toContain('correction')
+  })
+
+  it('marks a row whose booked VAT is not the rate of its sales, and lets a krona of rounding pass', () => {
+    const wrongRate = underlag(byAccount({ entries: [voucher('e1', [['3149', 1000], ['2671', 210]])] }))
+    expect(wrongRate.rows[0]).toMatchObject({ vat_sek: 210, rate_mismatch: true })
+    expect(wrongRate.warnings.map((w) => w.code)).toEqual(['vat_rate_mismatch'])
+
+    // VAT booked on an account that is not an OSS VAT account never reaches the row.
+    const noVat = underlag(byAccount({ entries: [voucher('e1', [['3149', 1000]])] }))
+    expect(noVat.rows[0]).toMatchObject({ vat_sek: 0, rate_mismatch: true })
+
+    // 1234.50 at 19 % is 234.555; booked as whole kronor it is 0.445 off.
+    const rounded = underlag(byAccount({ entries: [voucher('e1', [['3149', 1234.5], ['2671', 235]])] }))
+    expect(rounded.rows[0]).toMatchObject({ vat_sek: 235, rate_mismatch: false })
+    expect(rounded.warnings).toEqual([])
+  })
+
+  it('lets the order decide when a verifikat books one, whatever its accounts name', () => {
+    const result = underlag(byAccount({
+      entries: [voucher('e1', [['3149', 1000], ['2671', 200]])],
+      orders: [order('o1', { journal_entry_id: 'e1', customer_country: 'FR', vat_breakdown: [{ rate: 20, net: 1000, tax: 200 }] })],
+    }))
+    expect(result.rows).toEqual([
+      { country: 'FR', vat_rate: 20, net_eur: 88.25, vat_eur: 17.65, net_sek: 1000, vat_sek: 200, order_count: 1, voucher_count: 0, rate_mismatch: false },
+    ])
+  })
+})
+
+describe('ruleVatAccountCountries', () => {
+  it('gives a VAT account the country the rules name it for, when they name one other EU country', () => {
+    expect(
+      ruleVatAccountCountries(
+        new Map([
+          ['2671', new Set(['DE'])],
+          // The EU catch-all, two countries and Sweden say no single country: the account is shared.
+          ['2670', new Set(['EU'])],
+          ['2680', new Set(['DE', 'FR'])],
+          ['2690', new Set(['SE'])],
+        ]),
+      ),
+    ).toEqual(new Map([['2671', 'DE']]))
+  })
+})
+
+describe('ossAccountsOf', () => {
+  const sales = [
+    { account_number: '3106', account_name: 'Försäljning varor till annat EU-land, momspliktig', country: null, vat_rate: null },
+    { account_number: '3149', account_name: 'Försäljning OSS Tyskland 19 %', country: 'DE', vat_rate: 19 },
+    { account_number: '3150', account_name: 'Försäljning enl. OSS (Frankrike 20%)', country: null, vat_rate: null },
+    { account_number: '3152', account_name: 'Försäljning OSS Spanien 21%', country: null, vat_rate: null },
+  ]
+  const vat = [
+    { account_number: '2611', account_name: 'Utgående moms på försäljning inom Sverige, 25 %', country: null, vat_rate: null },
+    { account_number: '2670', account_name: 'Utgående moms på försäljning inom EU, OSS', country: null, vat_rate: null },
+    { account_number: '2671', account_name: 'Utgående moms OSS Tyskland', country: 'DE', vat_rate: null },
+    { account_number: '2672', account_name: 'Utgående moms OSS Frankrike', country: null, vat_rate: null },
+    { account_number: '2690', account_name: 'Avräkning OSS Frankrike', country: null, vat_rate: null },
+  ]
+
+  it('lists the accounts that name a country, the sales accounts a verifikat waits for, and the VAT accounts whose name states a country', () => {
+    const accounts = ossAccountsOf({
+      salesAccounts: sales,
+      vatAccounts: vat,
+      ossVatAccounts: new Set(['2670', '2671']),
+      accountsWithoutCountry: ['3150'],
+    })
+    expect(accounts).toEqual([
+      { account_number: '2671', account_name: 'Utgående moms OSS Tyskland', kind: 'vat', country: 'DE', vat_rate: null, suggested_country: null, suggested_vat_rate: null, blocks_vouchers: false },
+      { account_number: '2672', account_name: 'Utgående moms OSS Frankrike', kind: 'vat', country: null, vat_rate: null, suggested_country: 'FR', suggested_vat_rate: null, blocks_vouchers: false },
+      { account_number: '3149', account_name: 'Försäljning OSS Tyskland 19 %', kind: 'sales', country: 'DE', vat_rate: 19, suggested_country: null, suggested_vat_rate: null, blocks_vouchers: false },
+      { account_number: '3150', account_name: 'Försäljning enl. OSS (Frankrike 20%)', kind: 'sales', country: null, vat_rate: null, suggested_country: 'FR', suggested_vat_rate: 20, blocks_vouchers: true },
+    ])
+  })
+
+  it('lists nothing for a company whose OSS accounts name no country and wait for none', () => {
+    expect(
+      ossAccountsOf({ salesAccounts: sales.filter((a) => a.country === null), vatAccounts: vat.filter((a) => a.country === null), ossVatAccounts: new Set(['2670']), accountsWithoutCountry: [] }),
+    ).toEqual([])
   })
 })
