@@ -239,9 +239,13 @@ const invoiceName = (invoice: unknown): string => {
  * (lib/worklist/categories.ts), the order oldest or soonest first, the limit
  * STEP_ITEMS_CAP.
  */
-/** The page a booking screen opened from a step returns to: Hem, or its Behöver dig view. */
+/**
+ * The page a booking screen opened from a step returns to: the view the step
+ * was opened in, Börja on its step included, so the person goes on from the
+ * same place (safeReturnPath keeps any view of Hem).
+ */
 function stepBack(): string {
-  return new URLSearchParams(window.location.search).get('vy') === 'behover' ? '/?vy=behover' : '/'
+  return `${window.location.pathname}${window.location.search}`
 }
 
 async function loadFromTables(kind: StepItemsKind, companyId: string, href: string): Promise<StepItem[]> {
