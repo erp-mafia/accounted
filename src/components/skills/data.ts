@@ -84,6 +84,13 @@ export async function readOptions(url: string): Promise<KnowledgeOption[]> {
   return (await response.json()).data as KnowledgeOption[]
 }
 
+/** One item's own text, as the AI reads it (GET /api/skills?slug=). A failed read throws. */
+export async function readBody(url: string): Promise<string> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Item body request failed')
+  return ((await response.json()).data as { body: string }).body
+}
+
 export async function readCatalog(url: string): Promise<SkillSummary[]> {
   const response = await fetch(url)
   if (!response.ok) throw new Error('Skills request failed')

@@ -16220,6 +16220,14 @@
     "title": "Ways of working",
     "help": "Ways of working are what you give your own AI: workflows it runs, knowledge it follows and analyses it works out. Connect your AI to use them.",
     "help_knowledge": "What the agent knows about the rules: Swedish rules by area, for your legal form and industry. Open an area to read it.",
+    "folders_general": "Rules",
+    "folders_form": "Your legal form",
+    "folders_also": "Also available",
+    "folders_count": "{count, plural, =0 {Your agent gets no knowledge areas today.} =1 {Your agent gets # knowledge area today.} other {Your agent gets # knowledge areas today.}}",
+    "folders_unknown": "Which knowledge areas apply to the company could not be read right now.",
+    "folders_back": "All knowledge areas",
+    "ai_text_title": "The text your AI reads",
+    "reviewed_on": "Reviewed {date}",
     "create_prompt_workflow": "Load the \"create-skill\" skill from Accounted (load_skill) and follow it. I want to create a workflow of my own.",
     "create_prompt_rules": "Load the \"create-skill\" skill from Accounted (load_skill) and follow it. I want to write down knowledge of my own for my AI to follow.",
     "create_prompt_analysis": "Load the \"create-skill\" skill from Accounted (load_skill) and follow it. I want to create an analysis of my own.",
@@ -16750,6 +16758,7 @@
     "knowledge_save_failed": "Could not change the knowledge. Try again.",
     "knowledge_all_added": "Everything is already included.",
     "knowledge_descs": {
+      "swedish-k3-k4-judgment": "K3 in depth, K4 in outline and when an auditor should decide.",
       "swedish-cash-register": "Cash registers, staff ledgers and how daily takings are booked.",
       "swedish-daily-bookkeeping": "How everyday bank lines and receipts are booked, with the right VAT.",
       "swedish-ef-skatteplanering": "Self-employment contributions, interest allocation and tax allocation reserves for sole traders.",
@@ -16779,6 +16788,7 @@
       "swedish-project-accounting": "Projects, work in progress, revenue recognition and grants."
     },
     "knowledge_names": {
+      "swedish-k3-k4-judgment": "K3 and K4",
       "swedish-cash-register": "Cash register",
       "swedish-daily-bookkeeping": "Daily bookkeeping",
       "swedish-ef-skatteplanering": "Tax planning, sole trader",

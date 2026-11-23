@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
@@ -23,6 +25,18 @@ describe('Instruktioner labels', () => {
     for (const messages of [sv, en]) {
       const names = Object.keys(messages.skills_registry.knowledge_names).sort()
       expect(names).toEqual(Object.keys(messages.skills_registry.knowledge_descs).sort())
+    }
+  })
+
+  it('names every general rule area the repository ships, so none shows under its registry title', () => {
+    // The general items are the swedish-* skills (.claude/skills): each needs a name and a line here.
+    const shipped = readdirSync(join(__dirname, '..', '..', '..', '..', '.claude', 'skills'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('swedish-'))
+      .map((entry) => entry.name)
+    expect(shipped.length).toBeGreaterThan(10)
+    for (const messages of [sv, en]) {
+      const names = messages.skills_registry.knowledge_names as Record<string, string>
+      expect(shipped.filter((slug) => !names[slug])).toEqual([])
     }
   })
 

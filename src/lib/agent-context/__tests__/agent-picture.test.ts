@@ -45,11 +45,12 @@ function fakeSupabase(tables: Record<string, Handler>) {
 const filtered = (call: Call, method: string, column: string, value?: unknown) =>
   call.ops.some((op) => op.method === method && op.args[0] === column && (value === undefined || op.args[1] === value))
 
-const { listUnexplainedMock, dataStatusMock, inboxAddressMock, knowledgeOptionsMock, enabled } = vi.hoisted(() => ({
+const { listUnexplainedMock, dataStatusMock, inboxAddressMock, knowledgeOptionsMock, skillRowsMock, enabled } = vi.hoisted(() => ({
   listUnexplainedMock: vi.fn(),
   dataStatusMock: vi.fn(),
   inboxAddressMock: vi.fn(),
   knowledgeOptionsMock: vi.fn(),
+  skillRowsMock: vi.fn(),
   enabled: new Set<string>(),
 }))
 
@@ -70,6 +71,9 @@ vi.mock('@/lib/documents/inbox-address', () => ({
 }))
 vi.mock('@/lib/agent-skills/knowledge-choices', () => ({
   loadKnowledgeOptions: (...args: unknown[]) => knowledgeOptionsMock(...args),
+}))
+vi.mock('@/lib/agent-skills/company-skills', () => ({
+  loadCompanySkillRows: (...args: unknown[]) => skillRowsMock(...args),
 }))
 
 import { limitNotConnected, loadAgentActivity, loadAgentPicture, type PictureSource, type PictureSourceGroup } from '../agent-picture'
@@ -116,7 +120,7 @@ function tables(over: Record<string, Handler> = {}): Record<string, Handler> {
     customers: { count: 38 },
     suppliers: { count: 64 },
     agent_memory: { count: 23 },
-    agent_profiles: { data: { vertical_atoms: ['vertical/retired', 'vertical/konsult-it'] } },
+    agent_profiles: { data: { vertical_atoms: ['vertical/retired', 'vertical/konsult-it'], modifier_atoms: null } },
     fiscal_periods: { data: [{ id: 'period-1' }] },
     api_keys: (call) =>
       filtered(call, 'eq', 'company_id')
@@ -186,11 +190,13 @@ const OK_QUEUE = {
 }
 
 const option = (id: string, tier: string) => ({ id, tier, title: id, summary: '', version: 1, reviewed_at: null })
-/** Three of the product's own items, one the community shared and one the company wrote. */
+/** Five of the product's own items, one the community shared and one the company wrote. */
 const KNOWLEDGE = [
   option('horizontal/swedish-vat', 'horizontal'),
+  option('horizontal/swedish-payroll', 'horizontal'),
   option('modifier/holding-ab', 'modifier'),
   option('vertical/konsult-it', 'vertical'),
+  option('vertical/e-handel', 'vertical'),
   option('community/shared', 'community'),
   option('own/0d6f6f0e-0000-4000-8000-000000000001', 'own'),
 ]
@@ -214,6 +220,7 @@ beforeEach(() => {
   dataStatusMock.mockResolvedValue(FEED_OK)
   inboxAddressMock.mockResolvedValue('exempel-ab12@inbox.example')
   knowledgeOptionsMock.mockResolvedValue(KNOWLEDGE)
+  skillRowsMock.mockResolvedValue([])
   skatteverket.mockResolvedValue({ state: 'connected', last_sync_at: '2026-03-01T21:14:00.000Z' })
 })
 
@@ -403,27 +410,43 @@ describe('loadAgentPicture: the company', () => {
     expect(broken.company.memory_facts).toBeNull()
   })
 
-  it('counts the catalogue\'s knowledge list: the product\'s own items, not the community\'s and not the company\'s', async () => {
+  it('counts the knowledge items the agent gets today: the general ones and the ones the profile names', async () => {
     const { client, calls } = fakeSupabase(tables())
     const picture = await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
     expect(knowledgeOptionsMock).toHaveBeenCalledWith(client, COMPANY)
-    // The first industry item of the profile that the list holds; one that is no longer live is passed over.
-    expect(picture.company.knowledge).toEqual({ items: 3, industry: 'vertical/konsult-it' })
-    expect(calls.find((c) => c.table === 'agent_profiles')!.ops.find((op) => op.method === 'select')!.args[0]).toBe('vertical_atoms')
+    expect(skillRowsMock).toHaveBeenCalledWith(client, COMPANY)
+    // Both general items, and the one industry item of the profile that is in the list (a retired one is not).
+    // The company form item, the other industry and what the community or the company wrote are not active.
+    expect(picture.company.knowledge).toEqual({
+      items: 3,
+      active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'vertical/konsult-it'],
+    })
+    expect(calls.find((c) => c.table === 'agent_profiles')!.ops.find((op) => op.method === 'select')!.args[0]).toBe('vertical_atoms, modifier_atoms')
   })
 
-  it('has no industry item for a company whose profile names none, or whose profile cannot be read', async () => {
-    const none = await loadAgentPicture(fakeSupabase(tables({ agent_profiles: { data: null } })).client, COMPANY, USER, ports(), NOW)
-    expect(none.company.knowledge).toEqual({ items: 3, industry: null })
-    const broken = await loadAgentPicture(fakeSupabase(tables({ agent_profiles: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
-    expect(broken.company.knowledge).toEqual({ items: 3, industry: null })
+  it('counts a company-form item the profile names and an item the company installed', async () => {
+    skillRowsMock.mockResolvedValue([{ id: 'install-1', atom_id: 'vertical/e-handel' }, { id: 'own-1', atom_id: null }])
+    const agent_profiles = { data: { vertical_atoms: null, modifier_atoms: ['modifier/holding-ab'] } }
+    const picture = await loadAgentPicture(fakeSupabase(tables({ agent_profiles })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.company.knowledge).toEqual({
+      items: 4,
+      active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'modifier/holding-ab', 'vertical/e-handel'],
+    })
   })
 
-  it('says unknown when the knowledge list cannot be read', async () => {
+  it('counts the general items alone for a company with no profile', async () => {
+    const picture = await loadAgentPicture(fakeSupabase(tables({ agent_profiles: { data: null } })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.company.knowledge).toEqual({ items: 2, active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll'] })
+  })
+
+  it('says unknown, and guesses nothing, when the profile or the list cannot be read', async () => {
+    const noProfile = await loadAgentPicture(fakeSupabase(tables({ agent_profiles: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(noProfile.company.knowledge).toEqual({ items: null, active: null })
+
     knowledgeOptionsMock.mockRejectedValue(new Error('boom'))
-    const picture = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
-    expect(picture.company.knowledge).toEqual({ items: null, industry: null })
-    expect(picture.company.counts.vouchers).toBe(4912)
+    const noList = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(noList.company.knowledge).toEqual({ items: null, active: null })
+    expect(noList.company.counts.vouchers).toBe(4912)
   })
 })
 

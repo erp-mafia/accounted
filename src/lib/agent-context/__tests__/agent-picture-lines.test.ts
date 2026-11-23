@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { flowLayout, isReadingNow, type FlowCard, type FlowRect } from '../agent-picture-lines'
+import { flowLayout, hitTest, isReadingNow, type FlowCard, type FlowRect } from '../agent-picture-lines'
 
 const rect = (left: number, top: number, width: number, height: number): FlowRect => ({ left, top, width, height })
 
@@ -142,5 +142,29 @@ describe('isReadingNow', () => {
 
   it('takes a call stamped a moment ahead of the server clock as made now', () => {
     expect(isReadingNow('2026-03-02T10:00:02.000Z', new Date(now))).toBe(true)
+  })
+})
+
+describe('hitTest', () => {
+  const rows = [
+    { id: 'context', rect: rect(400, 100, 300, 50) },
+    { id: 'checks', rect: rect(400, 150, 300, 50) },
+    { id: 'memory', rect: rect(400, 200, 300, 80) },
+  ]
+
+  it('names the target a point lands in', () => {
+    expect(hitTest(rows, 550, 120)).toBe('context')
+    expect(hitTest(rows, 401, 199)).toBe('checks')
+    expect(hitTest(rows, 699, 279)).toBe('memory')
+  })
+
+  it('takes the first target on a shared edge', () => {
+    expect(hitTest(rows, 500, 150)).toBe('context')
+  })
+
+  it('answers nothing for a point outside every target', () => {
+    expect(hitTest(rows, 399, 120)).toBeNull()
+    expect(hitTest(rows, 550, 281)).toBeNull()
+    expect(hitTest([], 0, 0)).toBeNull()
   })
 })
