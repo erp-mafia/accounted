@@ -33,7 +33,6 @@ import { createLogger } from '@/lib/logger'
 import {
   formatPeriodLabel,
   isMomsAccount,
-  resolvePeriodDates,
   RUTA_49_TERMS,
   VAT_ACCOUNTS,
   VAT_SETTLEMENT_NET_ACCOUNTS,
@@ -41,6 +40,7 @@ import {
   type MomsredovisningDetection,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
+import { vatPeriodHolding } from '@/lib/reports/vat-settlement'
 import { filedVatPeriodsOfDates } from './filed-period-for-date'
 
 const log = createLogger('vat/voucher-vat-impact')
@@ -269,15 +269,14 @@ async function vatPeriodOfDate(
   companyId: string,
   momsPeriod: MomsPeriod,
   entryDate: string,
-  fiscalPeriodId: string | null,
 ): Promise<VoucherVatPeriod> {
   const year = Number(entryDate.slice(0, 4))
   const month = Number(entryDate.slice(5, 7))
   const period = momsPeriod === 'monthly' ? month : momsPeriod === 'quarterly' ? Math.ceil(month / 3) : 1
-  // Helårsmoms is the räkenskapsår (resolvePeriodDates), named by the year it ends.
-  const { start, end } = await resolvePeriodDates(
-    supabase, companyId, momsPeriod, year, period, fiscalPeriodId ?? undefined,
-  )
+  // Helårsmoms is the räkenskapsår that holds the date (vatPeriodHolding),
+  // named by the year it ends. Not the one ending in the date's calendar
+  // year: on a broken räkenskapsår that one can end before the date.
+  const { start, end } = await vatPeriodHolding(supabase, companyId, momsPeriod, entryDate)
   const periodYear = momsPeriod === 'yearly' ? Number(end.slice(0, 4)) : year
   const filed = (await filedVatPeriodsOfDates(supabase, companyId, [entryDate])).get(entryDate)
   return {
@@ -307,7 +306,6 @@ export async function previewVoucherVatDeclaration(
   companyId: string,
   input: {
     entryDate: string
-    fiscalPeriodId: string | null
     lines: readonly VoucherImpactLine[]
     isOpeningBalance: boolean
   },
@@ -335,7 +333,7 @@ export async function previewVoucherVatDeclaration(
       supabase.rpc('skattekonto_shape_accounts', { p_company_id: companyId }),
       fetchDynamicVatAccounts(supabase, companyId),
       isMomsPeriod(row?.moms_period)
-        ? vatPeriodOfDate(supabase, companyId, row.moms_period, input.entryDate, input.fiscalPeriodId)
+        ? vatPeriodOfDate(supabase, companyId, row.moms_period, input.entryDate)
         : Promise.resolve(null),
     ])
     if (taxAccountsResult.error) throw new Error(taxAccountsResult.error.message)

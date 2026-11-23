@@ -95,7 +95,6 @@ export async function filedPeriodVoucherWarning(
     if (!filed) continue
     const impact = await previewVoucherVatDeclaration(supabase, companyId, {
       entryDate: posting.date,
-      fiscalPeriodId: null,
       lines: posting.lines,
       // The declaration leaves an opening balance on the period's first day
       // out and decides one inside the period only at posting: neither is a
