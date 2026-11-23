@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Supplier invoices: undoing a credit refuses the credit note's own id (2026-11)
+
+- **Fix: \`POST /supplier-invoices/{id}/uncredit\` with a credit note's id answers \`400 SI_UNCREDIT_CREDIT_NOTE\`** (crm#2171, 2026-11-23), on a dry run too, whatever the credit note's status; \`details.credited_invoice_id\` names the original to send instead, and is null for a credit note linked to no original, whose credit cannot be undone here; \`details.credit_note_status\` is \`reversed\` when the credit is already undone. **Before**, a credit note's id was taken for the original's: the dry run answered 200 with a preview that restored the credit note as an invoice to pay, and the commit answered \`400 SI_UNCREDIT_FAILED\` without saying why (the database refuses a credit note in a payable status, so nothing was written). An already undone credit note's id answered a no-op. The API version date is unchanged.
+
 ### Supplier invoices: an undone credit or payment goes back to attest (2026-11)
 
 - **Fix: an unpaid supplier invoice nobody attested rests at \`registered\` when its credit or its payment is undone** (crm#2165, 2026-11-23): \`POST /supplier-invoices/{id}/uncredit\` (\`restored_status\` on a dry run) and the storno of a payment verifikat (\`POST /journal-entries/{id}/reverse\`). It is \`approved\` only when it carries an attest (\`approved_at\`), and \`overdue\` past its due date, as before. **Before**, both answered \`approved\` for an invoice that was never attested, so it skipped attest: \`POST /supplier-invoices/{id}/approve\` refused it and it was offered for payment. The API version date is unchanged.
