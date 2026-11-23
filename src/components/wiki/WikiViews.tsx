@@ -28,6 +28,7 @@ const WIKI_PATH = '/wiki'
 export function WikiViews({ facts, picture = false }: { facts: boolean; picture?: boolean }) {
   const searchParams = useSearchParams()
   const place = wikiPlace({ view: searchParams.get('view'), item: searchParams.get(PICTURE_ITEM_PARAM) }, { picture, facts })
+  // An address the server page leads away from (the map, with the picture) shows the picture until it has.
   const view = place.show === 'view' ? place.view : 'context'
   // The picture is one menu row whichever of its rows the address names.
   useClaimNavRow(WIKI_PATH, place.show === 'picture' ? WIKI_PATH : null)

@@ -71,8 +71,29 @@ export function pictureRowHref(row: PictureRow, item?: string | null): string {
   return `/wiki?${query}`
 }
 
-/** What /wiki shows for an address: one of its views, or the picture with the row and the item the address names. */
-export type WikiPlace = { show: 'view'; view: WikiView } | { show: 'picture'; row: PictureRow | null; item: string | null }
+/**
+ * Where the bookkeeping profile's lines are for a company with the picture:
+ * the sentence above the list of Bokföringsregler (lib/agent-context/profile-line.ts).
+ */
+export const PICTURE_PROFILE_HREF = '/rules'
+
+/**
+ * Where each wiki view is for a company with the agent picture on: Minne
+ * and Arbetssätt are rows of the picture, the map is on Bokföringsregler,
+ * and the context view and Fakta keep their addresses.
+ */
+export function pictureHrefOfView(view: WikiView): string {
+  if (view === 'map') return PICTURE_PROFILE_HREF
+  if (view === 'memory') return pictureRowHref('memory')
+  if (view === 'skills') return pictureRowHref('knowledge')
+  return wikiViewHref(view)
+}
+
+/** What /wiki shows for an address: one of its views, the picture with the row and the item the address names, or another page. */
+export type WikiPlace =
+  | { show: 'view'; view: WikiView }
+  | { show: 'picture'; row: PictureRow | null; item: string | null }
+  | { show: 'redirect'; href: string }
 
 /**
  * What /wiki shows for `view` and `item`, for a company with or without the
@@ -83,13 +104,15 @@ export type WikiPlace = { show: 'view'; view: WikiView } | { show: 'picture'; ro
  * context view.
  *
  * With the picture, /wiki is the picture: a `view` that names a row opens
- * that row, and `item` one folder of the Kunskap row. The map and Fakta
- * (where the company has it) stay views of their own.
+ * that row, and `item` one folder of the Kunskap row. The map leads to
+ * Bokföringsregler, and Fakta (where the company has it) stays a view of
+ * its own.
  */
 export function wikiPlace(address: { view?: string | null; item?: string | null }, company: { picture: boolean; facts: boolean }): WikiPlace {
   const parsed = parseWikiView(address.view)
   const view = parsed === 'facts' && !company.facts ? 'context' : parsed
-  if (!company.picture || view === 'map' || view === 'facts') return { show: 'view', view }
+  if (!company.picture || view === 'facts') return { show: 'view', view }
+  if (view === 'map') return { show: 'redirect', href: PICTURE_PROFILE_HREF }
   const row = pictureRowOf(address.view)
   return { show: 'picture', row, item: row === 'knowledge' && address.item ? address.item : null }
 }

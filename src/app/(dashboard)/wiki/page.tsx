@@ -1,4 +1,5 @@
 import { Suspense } from 'react'
+import { redirect } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -20,18 +21,20 @@ import { getDashboardCompanyId } from '../request-context'
  * For a company in AGENT_PICTURE_COMPANY_IDS the context view is the agent
  * picture, and its help says what the picture is. A `view` that names a row
  * of the picture (wikiPlace) shows the picture with that row open, under the
- * picture's own title. The switch is read here, on the server: the browser
- * gets a boolean.
+ * picture's own title, and the map leads to Bokföringsregler, where its
+ * lines are. The switch is read here, on the server: the browser gets a
+ * boolean.
  */
 export default async function WikiPage({ searchParams }: { searchParams: Promise<{ view?: string | string[] }> }) {
-  const t = await getTranslations('wiki')
   const companyId = await getDashboardCompanyId()
   const facts = !!companyId && isArkivBrainEnabled(companyId)
   const picture = isAgentPictureEnabled(companyId)
-  // The top bar names the view, as the menu does: Kontext and Minne are rows
-  // of Agenter, Karta a row of Företaget (nav-v3.ts), all views of this page.
   const raw = (await searchParams).view
   const place = wikiPlace({ view: Array.isArray(raw) ? raw[0] : raw }, { picture, facts })
+  if (place.show === 'redirect') redirect(place.href)
+  const t = await getTranslations('wiki')
+  // The top bar names the view, as the menu does: Kontext and Minne are rows
+  // of Agenter, Karta a row of Företaget (nav-v3.ts), all views of this page.
   const view = place.show === 'view' ? place.view : 'context'
   return (
     <>

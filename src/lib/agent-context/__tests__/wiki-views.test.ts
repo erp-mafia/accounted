@@ -7,6 +7,7 @@ import {
   knowledgeItemParam,
   legacyKnowledgeHref,
   parseWikiView,
+  pictureHrefOfView,
   pictureRowHref,
   pictureRowOf,
   wikiPlace,
@@ -104,6 +105,19 @@ describe('what /wiki shows for an address', () => {
     expect(wikiPlace({ view: 'knowledge', item: '' }, withPicture)).toEqual({ show: 'picture', row: 'knowledge', item: null })
   })
 
+  it('leads the map to Bokföringsregler, where its lines are', () => {
+    expect(wikiPlace({ view: 'map' }, withPicture)).toEqual({ show: 'redirect', href: '/rules' })
+    expect(wikiPlace({ view: 'map', item: 'horizontal.swedish-vat' }, { picture: true, facts: true })).toEqual({ show: 'redirect', href: '/rules' })
+    // Only with the picture: every other company keeps the map.
+    expect(wikiPlace({ view: 'map' }, without)).toEqual({ show: 'view', view: 'map' })
+  })
+
+  it('never leads a company without the picture anywhere else', () => {
+    for (const view of [...WIKI_VIEWS, ...PICTURE_ROWS, 'nonsense', null, undefined]) {
+      for (const facts of [false, true]) expect(wikiPlace({ view }, { picture: false, facts }).show, String(view)).toBe('view')
+    }
+  })
+
   it('keeps Fakta a view of its own where the company has it, and the picture where it has not', () => {
     expect(wikiPlace({ view: 'facts' }, { picture: true, facts: true })).toEqual({ show: 'view', view: 'facts' })
     expect(wikiPlace({ view: 'facts' }, { picture: true, facts: false })).toEqual({ show: 'picture', row: null, item: null })
@@ -126,6 +140,27 @@ describe('what /wiki shows for an address', () => {
       for (const facts of [false, true]) {
         const parsed = parseWikiView(view)
         expect(wikiPlace({ view }, { picture: false, facts })).toEqual({ show: 'view', view: parsed === 'facts' && !facts ? 'context' : parsed })
+      }
+    }
+  })
+})
+
+describe('where each wiki view is for a company with the picture', () => {
+  it('names the row, Bokföringsregler or the view itself', () => {
+    expect(pictureHrefOfView('context')).toBe('/wiki')
+    expect(pictureHrefOfView('map')).toBe('/rules')
+    expect(pictureHrefOfView('facts')).toBe('/wiki?view=facts')
+    expect(pictureHrefOfView('memory')).toBe('/wiki?view=memory')
+    expect(pictureHrefOfView('skills')).toBe('/wiki?view=knowledge')
+  })
+
+  it('names a place /wiki shows without leading on: no address of its own is a redirect', () => {
+    for (const view of WIKI_VIEWS) {
+      const href = pictureHrefOfView(view)
+      if (!href.startsWith('/wiki')) continue
+      const query = new URLSearchParams(href.split('?')[1] ?? '')
+      for (const facts of [false, true]) {
+        expect(wikiPlace({ view: query.get('view'), item: query.get('item') }, { picture: true, facts }).show, href).not.toBe('redirect')
       }
     }
   })

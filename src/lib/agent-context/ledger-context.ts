@@ -179,6 +179,11 @@ function explicitRulesRead(supabase: SupabaseClient, companyId: string) {
     .limit(25)
 }
 
+/** The voucher series a company has numbered in (voucher_sequences rows), each once, in order. */
+export function voucherSeriesInUse(rows: ReadonlyArray<{ voucher_series: unknown }> | null | undefined): string[] {
+  return [...new Set((rows ?? []).map((v) => v.voucher_series as string))].sort()
+}
+
 export async function buildLedgerContext(
   supabase: SupabaseClient,
   companyId: string,
@@ -371,9 +376,7 @@ export async function buildLedgerContext(
     .filter((r) => r.match !== '')
     .slice(0, MAX_EXPLICIT_RULES)
 
-  const voucherSeries = [
-    ...new Set((voucherSeriesRes.data ?? []).map((v) => v.voucher_series as string)),
-  ].sort()
+  const voucherSeries = voucherSeriesInUse(voucherSeriesRes.data)
 
   return {
     meta: {

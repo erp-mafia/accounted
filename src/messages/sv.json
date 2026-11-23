@@ -11707,6 +11707,10 @@
   "rules": {
       "title": "Bokföringsregler",
       "help": "En regel är en mening: när en transaktion ser ut så här, gör så här. Reglerna kommer från dina godkännanden och rättelser, och från historik du har importerat. En regel konterar varje träff. När motparten har bokförts likadant tre gånger bokförs nästa träff med ett klick, utan granskning, och kan ångras direkt efteråt. En regel från importerad historik granskas en gång här innan den kan bokföras med ett klick. Stäng av Ett klick på en regel så granskas den alltid, eller stäng av Bokföring med ett klick för hela företaget i Inställningar under Bokföring. En rättelse räknas i kolumnen Rättad och börjar om räkningen. En pausad regel matchar inget. Att bokföra helt själv, utan klick, kommer med autopiloten. Spärrar: en bokning som en spärr träffar bokförs aldrig med ett klick, i en massbokning, av en regel för automatisk bokföring eller av en agent, utan en person bokför den från granskningen. Ägare och administratörer lägger till och arkiverar spärrar.",
+    "profile_line": "Företaget {parts}.",
+    "profile_method": "{method, select, accrual {bokför med fakturametoden} other {bokför med kontantmetoden}}",
+    "profile_vat": "{period, select, monthly {redovisar moms månadsvis} quarterly {redovisar moms kvartalsvis} other {redovisar moms årsvis}}",
+    "profile_series": "{count, plural, one {använder serie {series}} other {använder serierna {series}}}",
       "search": "Sök regler…",
       "ladder_label": "Läge",
       "filter_all": "Alla",
