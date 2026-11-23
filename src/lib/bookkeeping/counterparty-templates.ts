@@ -1746,7 +1746,7 @@ export async function upsertCounterpartyTemplate(
 function rejectedByUnlearnableReverseCharge(existing: CategorizationTemplate): boolean {
   if (!existing.is_active || existing.mode === 'auto') return false
   if (existing.line_pattern && existing.line_pattern.length > 0) return false
-  if (legacyTemplateDirection(existing.debit_account, existing.credit_account) === 'income') return false
+  if (legacyTemplateDirection(existing.debit_account, existing.credit_account) !== 'expense') return false
   return momsKindOfTreatment(existing.vat_treatment) !== 'reverse_charge'
 }
 

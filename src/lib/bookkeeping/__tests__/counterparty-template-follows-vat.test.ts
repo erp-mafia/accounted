@@ -210,6 +210,18 @@ describe('upsertCounterpartyTemplate: a booking whose moms contradicts the learn
     }
   })
 
+  it('leaves a template that is not an expense: a supplier payment or a transfer books no moms of its own', async () => {
+    for (const pair of [{ debit_account: '2440', credit_account: '1930' }, { debit_account: '1940', credit_account: '1930' }]) {
+      const { tx, booked } = reverseChargePurchase('GitHub', 'non_eu_services', '5420')
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: makeCategorizationTemplate({ counterparty_name: 'github', ...pair, vat_treatment: null, occurrence_count: 1 }) })
+
+      await upsertCounterpartyTemplate(supabase as never, 'company-1', tx, booked, 'user_approved')
+
+      expect(findCalls('categorization_templates', 'update')).toHaveLength(0)
+    }
+  })
+
   it('writes nothing when no template holds the counterparty', async () => {
     const { tx, booked } = reverseChargePurchase('GitHub', 'non_eu_services', '5420')
     const { supabase, findCalls } = createQueuedMockSupabase()
