@@ -1320,6 +1320,203 @@ describe('correctEntry: dimension-only corrections', () => {
 })
 
 /**
+ * crm#2161: a 1510 line booked without the invoice's currency cannot be
+ * linked to a foreign-currency invoice (LINK_VOUCHER_CURRENCY_MISMATCH). The
+ * rättelse that adds the currency kept the accounts and kronor, so it was
+ * refused as "identical to the original" and the only way out was a storno
+ * and a new voucher by hand.
+ */
+describe('correctEntry: currency-only corrections (crm#2161)', () => {
+  const sekOriginal = makeJournalEntry({
+    id: 'orig-1',
+    status: 'posted',
+    description: 'Kundbetalning',
+    fiscal_period_id: 'fp-1',
+    voucher_series: 'A',
+    lines: [
+      makeJournalEntryLine({ account_number: '2999', debit_amount: 1129, credit_amount: 0 }),
+      makeJournalEntryLine({ account_number: '1510', debit_amount: 0, credit_amount: 1129 }),
+    ],
+  })
+
+  function fullRunResults(original = sekOriginal) {
+    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
+    const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
+    return [
+      { data: original, error: null }, // fetch original
+      { data: [{ id: 'acc-2999', account_number: '2999' }, { id: 'acc-1510', account_number: '1510' }], error: null },
+      { data: reversalEntry, error: null }, // insert reversal
+      { data: null, error: null }, // reversal lines
+      { data: null, error: null }, // post reversal
+      { data: correctedEntry, error: null }, // insert corrected
+      { data: null, error: null }, // corrected lines
+      { data: null, error: null }, // post corrected
+      { data: [{ id: 'orig-1' }], error: null }, // CAS original to reversed
+      { data: null, error: null }, // relink transactions
+      { data: null, error: null }, // relink voucher links
+      { data: null, error: null }, // relink documents
+      { data: { ...reversalEntry, lines: [] }, error: null },
+      { data: { ...correctedEntry, lines: [] }, error: null },
+    ]
+  }
+
+  const withEur: CreateJournalEntryLineInput[] = [
+    { account_number: '2999', debit_amount: 1129, credit_amount: 0 },
+    {
+      account_number: '1510',
+      debit_amount: 0,
+      credit_amount: 1129,
+      currency: 'EUR',
+      amount_in_currency: 100,
+      exchange_rate: 11.29,
+    },
+  ]
+
+  it('accepts a correction that only gives a line its currency, and stores it', async () => {
+    results = fullRunResults()
+    const supabase = makeClient()
+
+    const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', withEur)
+
+    expect(result.corrected).toBeDefined()
+    const correctedLineInsert = inserts
+      .filter((i) => i.table === 'journal_entry_lines')
+      .map((i) => i.payload as Array<{ account_number: string; currency: string; amount_in_currency: number | null; exchange_rate: number | null }>)[1]
+    expect(correctedLineInsert.find((l) => l.account_number === '1510')).toMatchObject({
+      currency: 'EUR',
+      amount_in_currency: 100,
+      exchange_rate: 11.29,
+    })
+  })
+
+  it('accepts a correction that only changes the amount in the currency', async () => {
+    const eurOriginal = makeJournalEntry({
+      ...sekOriginal,
+      lines: [
+        makeJournalEntryLine({ account_number: '2999', debit_amount: 1129, credit_amount: 0 }),
+        makeJournalEntryLine({
+          account_number: '1510',
+          debit_amount: 0,
+          credit_amount: 1129,
+          currency: 'EUR',
+          amount_in_currency: 90,
+          exchange_rate: 12.5444,
+        }),
+      ],
+    })
+    results = fullRunResults(eurOriginal)
+    const supabase = makeClient()
+
+    const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', withEur)
+
+    expect(result.corrected).toBeDefined()
+  })
+
+  it('still rejects lines whose currency, amount and rate are the stored ones', async () => {
+    // Numeric columns arrive as strings.
+    const eurOriginal = makeJournalEntry({
+      ...sekOriginal,
+      lines: [
+        makeJournalEntryLine({ account_number: '2999', debit_amount: 1129, credit_amount: 0 }),
+        makeJournalEntryLine({
+          account_number: '1510',
+          debit_amount: 0,
+          credit_amount: 1129,
+          currency: 'EUR',
+          amount_in_currency: '100.00' as unknown as number,
+          exchange_rate: '11.290000' as unknown as number,
+        }),
+      ],
+    })
+    results = [{ data: eurOriginal, error: null }]
+    const supabase = makeClient()
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', withEur)
+    ).rejects.toMatchObject({
+      code: 'MEANINGLESS_CORRECTION',
+      reason: 'identical_to_original',
+    })
+    expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(0)
+  })
+
+  it('still rejects the amounts restated without currency on a foreign-currency original: no silent strip', async () => {
+    // The correction dialog sends account, amounts and text only. Restating a
+    // EUR line that way is no change, and must not post a kronor copy of it.
+    const eurOriginal = makeJournalEntry({
+      ...sekOriginal,
+      lines: [
+        makeJournalEntryLine({ account_number: '2999', debit_amount: 1129, credit_amount: 0 }),
+        makeJournalEntryLine({
+          account_number: '1510',
+          debit_amount: 0,
+          credit_amount: 1129,
+          currency: 'EUR',
+          amount_in_currency: 100,
+          exchange_rate: 11.29,
+        }),
+      ],
+    })
+    results = [{ data: eurOriginal, error: null }]
+    const supabase = makeClient()
+    const dialogLines: CreateJournalEntryLineInput[] = [
+      { account_number: '2999', debit_amount: 1129, credit_amount: 0, line_description: 'Kundbetalning' },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1129 },
+    ]
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', dialogLines)
+    ).rejects.toMatchObject({
+      code: 'MEANINGLESS_CORRECTION',
+      reason: 'identical_to_original',
+    })
+    expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(0)
+  })
+
+  it('accepts a correction that explicitly sets a foreign line back to kronor', async () => {
+    const eurOriginal = makeJournalEntry({
+      ...sekOriginal,
+      lines: [
+        makeJournalEntryLine({ account_number: '2999', debit_amount: 1129, credit_amount: 0 }),
+        makeJournalEntryLine({
+          account_number: '1510',
+          debit_amount: 0,
+          credit_amount: 1129,
+          currency: 'EUR',
+          amount_in_currency: 100,
+          exchange_rate: 11.29,
+        }),
+      ],
+    })
+    results = fullRunResults(eurOriginal)
+    const supabase = makeClient()
+    const toKronor: CreateJournalEntryLineInput[] = [
+      { account_number: '2999', debit_amount: 1129, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1129, currency: 'SEK' },
+    ]
+
+    const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', toKronor)
+
+    expect(result.corrected).toBeDefined()
+  })
+
+  it('still rejects kronor lines restated with an explicit SEK and no amount in currency', async () => {
+    results = [{ data: sekOriginal, error: null }]
+    const supabase = makeClient()
+    const restated: CreateJournalEntryLineInput[] = [
+      { account_number: '2999', debit_amount: 1129, credit_amount: 0, currency: 'SEK', amount_in_currency: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1129, currency: 'SEK' },
+    ]
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', restated)
+    ).rejects.toMatchObject({
+      code: 'MEANINGLESS_CORRECTION',
+      reason: 'identical_to_original',
+    })
+  })
+})
+
+/**
  * crm#1397: "Skapa ändringsverifikation" on a bank fee, with the original's
  * lines swapped to debit/credit as the rättelse. The storno already reverses
  * the original, so the rättelse reversed it a second time and the fee ended

@@ -17,11 +17,7 @@ import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeep
 import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import { storedLineValues } from '@/lib/bookkeeping/line-balance'
 import { roundOre } from '@/lib/money'
-import {
-  dimensionsBagKey,
-  normalizeLineDimensions,
-  type DimensionAliasInput,
-} from '@/lib/bookkeeping/dimension-resolver'
+import { dimensionsBagKey, normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { assertLinesWithinUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
@@ -71,32 +67,50 @@ function netsToZeroPerAccount(lines: CreateJournalEntryLineInput[]): boolean {
 
 /**
  * True when proposed lines are the same multiset as the original lines
- * (account_number + debit + credit + dimensions bag). A rättelse must actually
- * change something, and a changed tag is a change: in a locked period storno
- * plus correction is the only way to fix a wrong project or cost center (the
- * retag path is open-period only). The bag is compared normalized, so key
- * order, '01' vs '1', the cost_center/project aliases and '' vs a missing key
- * are not differences.
+ * (account_number + debit + credit + dimensions bag, and the currency, amount
+ * in currency and rate). A rättelse must actually change something, and a
+ * changed tag is a change: in a locked period storno plus correction is the
+ * only way to fix a wrong project or cost center (the retag path is
+ * open-period only). So is a line's currency: a 1510 line without the
+ * invoice's currency cannot be linked to a foreign-currency invoice, and this
+ * is how it gets one (crm#2161).
+ *
+ * Both sides are compared as journal_entry_lines stores them
+ * (storedLineValues), so key order, '01' vs '1', the cost_center/project
+ * aliases, '' vs a missing key, an omitted SEK and numeric strings are not
+ * differences. A proposed line that states no currency, amount in currency
+ * or rate (the correction dialog sends none) matches the original line
+ * whatever its currency: restating the amounts is not a request to drop the
+ * currency, and must not pass as a change that does.
  */
 function isIdenticalToOriginal(
   proposed: CreateJournalEntryLineInput[],
   original: JournalEntryLine[]
 ): boolean {
   if (proposed.length !== original.length) return false
-  const key = (line: DimensionAliasInput & { account_number: string }, d: number, c: number) =>
-    JSON.stringify([
-      line.account_number,
-      roundOre(d),
-      roundOre(c),
-      dimensionsBagKey(normalizeLineDimensions(line)),
-    ])
-  const proposedKeys = proposed
-    .map((l) => key(l, l.debit_amount || 0, l.credit_amount || 0))
-    .sort()
-  const originalKeys = original
-    .map((l) => key(l, Number(l.debit_amount) || 0, Number(l.credit_amount) || 0))
-    .sort()
-  return proposedKeys.every((k, i) => k === originalKeys[i])
+  const noAccountIds = new Map<string, string>()
+  const storedProposed = storedLineValues(proposed, noAccountIds)
+  const remaining = storedLineValues(original.map(postedLineAsInput), noAccountIds)
+  type Stored = (typeof remaining)[number]
+  const amountsKey = (l: Stored) =>
+    JSON.stringify([l.account_number, l.debit_amount, l.credit_amount, dimensionsBagKey(l.dimensions)])
+  const fullKey = (l: Stored) =>
+    JSON.stringify([amountsKey(l), l.currency, l.amount_in_currency, l.exchange_rate])
+  const statesCurrency = (l: CreateJournalEntryLineInput) =>
+    l.currency != null || l.amount_in_currency != null || l.exchange_rate != null
+  // Lines that state a currency need their exact match; the rest take any
+  // original with the same amounts, so they are matched last.
+  const order = proposed
+    .map((line, index) => ({ index, explicit: statesCurrency(line) }))
+    .sort((a, b) => Number(b.explicit) - Number(a.explicit))
+  for (const { index, explicit } of order) {
+    const line = storedProposed[index]
+    const key = explicit ? fullKey : amountsKey
+    const match = remaining.findIndex((o) => key(o) === key(line))
+    if (match < 0) return false
+    remaining.splice(match, 1)
+  }
+  return true
 }
 
 /**

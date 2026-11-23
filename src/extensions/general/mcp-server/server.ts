@@ -733,6 +733,7 @@ import {
   paymentFeeShortfall,
 } from '@/lib/bookkeeping/payment-fee'
 import { isLedgerCurrency, resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { storedLineValues } from '@/lib/bookkeeping/line-balance'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError, capabilityBlockedRefusal } from '@/lib/entitlements/has-capability'
 import { CAPABILITY, MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -27389,7 +27390,8 @@ export const tools: McpTool[] = [
         )
       }
 
-      const previewLines = bookedLines.map((l) => ({
+      const storedBookedLines = storedLineValues(bookedLines, new Map())
+      const previewLines = bookedLines.map((l, i) => ({
         account_number: l.account_number,
         // Fallback to the BAS catalog name for a seedable account that is not
         // in the chart yet, so the approver still reads a named line.
@@ -27400,6 +27402,13 @@ export const tools: McpTool[] = [
         debit_amount: l.debit_amount,
         credit_amount: l.credit_amount,
         line_description: l.line_description ?? null,
+        // As the line will store them (storedLineValues), so the approver and
+        // the agent see a line that posts in kronor before it is approved: a
+        // 1510 line without the invoice's currency cannot be linked to a
+        // foreign-currency invoice afterwards (crm#2161).
+        currency: storedBookedLines[i].currency,
+        amount_in_currency: storedBookedLines[i].amount_in_currency,
+        exchange_rate: storedBookedLines[i].exchange_rate,
         dimensions: l.dimensions ?? null,
       }))
 
