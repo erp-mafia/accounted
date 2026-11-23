@@ -280,10 +280,8 @@
       "stage_label": "The graph. Arrow keys move between the dots, Enter picks, Esc lets go.",
       "chips_label": "Light up one sort of knowledge",
       "families": {
-        "taught": "What you taught it",
         "read": "From the books",
-        "wait": "Waiting",
-        "instructions": "Instructions"
+        "wait": "Waiting"
       },
       "kinds": {
         "agent": "The agent",

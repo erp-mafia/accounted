@@ -10,8 +10,9 @@ import { cn, formatDateLong } from '@/lib/utils'
 import { buildContextGraph, chipFamily, parseBriefingText } from '@/lib/context-graph/build'
 import { layoutGraph, STAGE_NARROW, STAGE_WIDE } from '@/lib/context-graph/layout'
 import { CHIP_FAMILIES, type ChipFamily, type GraphFamily, type GraphNode, type GraphNodeKind } from '@/lib/context-graph/types'
+import { useKnowledgeName } from '@/components/skills/knowledge-labels'
 import { FAMILY_DOT, GraphStage, type StageNode } from './GraphStage'
-import { describeNode, nodeLabel, nodeName, type NodePages, type NodeText } from './node-text'
+import { describeNode, familyLabel, nodeLabel, nodeName, type NodePages, type NodeText } from './node-text'
 
 /**
  * The context graph at the top of the wiki's context view: what the agent
@@ -25,6 +26,8 @@ import { describeNode, nodeLabel, nodeName, type NodePages, type NodeText } from
  * everything outside their family; picking a dot keeps it, its lines and its
  * neighbours and says what it is in a small floating panel inside the stage
  * (under the stage on a phone), with its links and the page that holds it.
+ * A chip is named as the agent picture's card names the same thing, and a
+ * knowledge dot as the knowledge folders name the area (node-text.ts).
  *
  * `className` is for a host that is not the page (a dialog): it takes the
  * bleed away there.
@@ -40,6 +43,7 @@ const LINKS_SHOWN = 6
 export function ContextGraph({ text, className }: { text: string; className?: string }) {
   const t = useTranslations('wiki')
   const tNav = useTranslations('nav')
+  const knowledgeName = useKnowledgeName()
   const locale = useLocale()
   const wrapRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState<number | null>(null)
@@ -67,17 +71,17 @@ export function ContextGraph({ text, className }: { text: string; className?: st
   const view = useMemo(() => {
     if (!model || model.empty) return null
     const byId = new Map(model.nodes.map((n) => [n.id, n]))
-    const labelled = model.nodes.map((n) => ({ id: n.id, label: nodeLabel(n, t), quiet: SENTENCE_KINDS.has(n.kind) }))
+    const labelled = model.nodes.map((n) => ({ id: n.id, label: nodeLabel(n, t, knowledgeName), quiet: SENTENCE_KINDS.has(n.kind) }))
     const layout = layoutGraph(labelled, model.edges, narrow ? STAGE_NARROW : STAGE_WIDE)
     const texts = new Map<string, NodeText>()
     const pages: NodePages = { home: tNav('home'), accounts: tNav('v3_accounts_balance'), deadlines: tNav('v3_deadlines') }
     for (const n of model.nodes) {
       const counterparties = (layout.neighbours[n.id] ?? []).filter((id) => byId.get(id)?.kind === 'counterparty').length
-      texts.set(n.id, describeNode(n, t, (date) => formatDateLong(date, locale), counterparties, pages))
+      texts.set(n.id, describeNode(n, t, (date) => formatDateLong(date, locale), counterparties, pages, knowledgeName))
     }
     const nodes: StageNode[] = model.nodes.map((n, i) => ({ id: n.id, family: n.family, label: labelled[i].label, name: nodeName(n, texts.get(n.id)!, t) }))
     return { byId, layout, texts, nodes }
-  }, [model, narrow, t, tNav, locale])
+  }, [model, narrow, t, tNav, knowledgeName, locale])
 
   const lit = useMemo(() => {
     if (!model || !family) return null
@@ -121,7 +125,7 @@ export function ContextGraph({ text, className }: { text: string; className?: st
             )}
           >
             <FamilyDot family={f} />
-            {t(`graph.families.${f}`)}
+            {familyLabel(f, t)}
             <span className="font-medium tabular-nums text-muted-foreground">{model.counts[f].toLocaleString('sv-SE')}</span>
           </button>
         ))}

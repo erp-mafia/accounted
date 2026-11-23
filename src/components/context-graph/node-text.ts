@@ -2,7 +2,8 @@ import type { useTranslations } from 'next-intl'
 import { clientDisplayName } from '@/lib/agent-context/context-window'
 import { vatLabel } from '@/lib/agent-context/vat-labels'
 import { formatCurrency } from '@/lib/utils'
-import type { GraphNode } from '@/lib/context-graph/types'
+import { shortLabel } from '@/lib/context-graph/build'
+import type { ChipFamily, GraphNode } from '@/lib/context-graph/types'
 
 /**
  * What a dot says in words: its name under the dot, and the lines of its
@@ -16,9 +17,42 @@ type T = ReturnType<typeof useTranslations>
 const FACT_KINDS = new Set(['fact', 'preference', 'pattern', 'correction'])
 const STATUS = new Set(['active', 'needs_reconsent'])
 
+/**
+ * The message each chip of the legend is named by, in the wiki namespace.
+ * What people saved and the knowledge areas are rows of the agent picture's
+ * card (Minne, Kunskap): the legend reads the card's own row names, so one
+ * thing has one word on the card and in the graph that opens from it.
+ */
+export const FAMILY_LABEL_KEY: Readonly<Record<ChipFamily, string>> = {
+  taught: 'picture.row_memory',
+  read: 'graph.families.read',
+  wait: 'graph.families.wait',
+  instructions: 'picture.row_knowledge',
+}
+
+/** The name on a chip of the legend. */
+export function familyLabel(family: ChipFamily, t: (key: string) => string): string {
+  return t(FAMILY_LABEL_KEY[family])
+}
+
+/**
+ * A knowledge area's name by its id and its title in the briefing: the lookup
+ * the knowledge folders name their tiles with (useKnowledgeName in
+ * components/skills/knowledge-labels.ts).
+ */
+export type KnowledgeName = (id: string, title: string) => string
+
+/** A knowledge dot's title: the folder's name for the area when the lookup is given, else the briefing's own. */
+function knowledgeTitle(node: GraphNode, knowledgeName: KnowledgeName | undefined): string | null {
+  if (node.kind !== 'skill' || !node.text) return null
+  return knowledgeName && node.atomId ? knowledgeName(node.atomId, node.text) : node.text
+}
+
 /** The name under a dot. */
-export function nodeLabel(node: GraphNode, t: T): string {
+export function nodeLabel(node: GraphNode, t: T, knowledgeName?: KnowledgeName): string {
   if (node.kind === 'more') return t('graph.more', { count: node.count ?? 0 })
+  const knowledge = knowledgeTitle(node, knowledgeName)
+  if (knowledge) return shortLabel(knowledge)
   return node.label ?? t(`graph.kinds.${node.kind}`)
 }
 
@@ -43,7 +77,14 @@ export interface NodePages {
   deadlines: string
 }
 
-export function describeNode(node: GraphNode, t: T, formatDateLong: (date: string) => string, linkedCounterparties: number, pages?: NodePages): NodeText {
+export function describeNode(
+  node: GraphNode,
+  t: T,
+  formatDateLong: (date: string) => string,
+  linkedCounterparties: number,
+  pages?: NodePages,
+  knowledgeName?: KnowledgeName,
+): NodeText {
   const kind = t(`graph.kinds.${node.kind === 'more' && node.moreOf ? node.moreOf : node.kind}`)
   const date = (d: string | null | undefined) => (d ? formatDateLong(d) : null)
   const lines = (...parts: (string | null | undefined | false)[]) => parts.filter((p): p is string => !!p)
@@ -137,7 +178,7 @@ export function describeNode(node: GraphNode, t: T, formatDateLong: (date: strin
     case 'question':
       return { kind, title: node.text ?? '', meta: lines(node.detail, node.date ? t('graph.asked', { date: date(node.date) ?? '' }) : null), link: null }
     case 'skill':
-      return { kind, title: node.text ?? '', meta: lines(node.detail), link: view('skills') }
+      return { kind, title: knowledgeTitle(node, knowledgeName) ?? '', meta: lines(node.detail), link: view('skills') }
     case 'workflows':
       return { kind, title: t('workflows_count', { count: node.count ?? 0 }), meta: [t('sources.accounted')], link: view('skills') }
     case 'permissions':

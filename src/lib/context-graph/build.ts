@@ -166,7 +166,7 @@ export function buildContextGraph(briefing: Json, caps: GraphCaps = GRAPH_CAPS):
   const skillIds: { id: string; atom: string }[] = []
   capped(objects(briefing.atoms).filter((a) => str(a.title)), caps.skills, 'instructions', 'skill', 'agent', (a, i) => {
     const atom = str(a.atom_id) ?? str(a.id) ?? `atom-${i}`
-    const id = add({ id: `skill:${atom}`, family: 'instructions', kind: 'skill', label: shortLabel(str(a.title)!), text: str(a.title), detail: str(a.description) })
+    const id = add({ id: `skill:${atom}`, family: 'instructions', kind: 'skill', label: shortLabel(str(a.title)!), text: str(a.title), detail: str(a.description), atomId: atom })
     skillIds.push({ id, atom })
     link('agent', id)
   })

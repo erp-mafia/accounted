@@ -280,10 +280,8 @@
       "stage_label": "Grafen. Piltangenterna går mellan punkterna, Enter väljer, Esc släpper.",
       "chips_label": "Lys upp en sorts kunskap",
       "families": {
-        "taught": "Det ni lärt den",
         "read": "Ur bokföringen",
-        "wait": "Väntar",
-        "instructions": "Instruktioner"
+        "wait": "Väntar"
       },
       "kinds": {
         "agent": "Agenten",
