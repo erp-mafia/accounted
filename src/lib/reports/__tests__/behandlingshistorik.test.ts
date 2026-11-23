@@ -118,6 +118,20 @@ describe('behandlingshistorik_sources: the rows it selects', () => {
     expect(arrayLiteral(sql, 'action')).toEqual([...GLOBAL_ACTIONS])
   })
 
+  // The window is read in two parts (20261123104000): the audited tables'
+  // rows that are not a global action, then the global actions. The two
+  // lists of actions must be the same, or a row is read twice or not at all.
+  it('splits the window on the same global actions in both parts', () => {
+    const sql = liveSourcesMigration()
+    const lists = [...sql.matchAll(/a\.action (?:= ANY|<> ALL) \(ARRAY\[([^\]]*)\]\)/g)].map((m) =>
+      [...m[1].matchAll(/'([^']+)'/g)].map((literal) => literal[1]),
+    )
+    expect(lists).toEqual([[...GLOBAL_ACTIONS], [...GLOBAL_ACTIONS]])
+    // The global actions are read without the exclusion, whose cases all name
+    // an INSERT, COMMIT or UPDATE: none of them may be a global action.
+    expect(GLOBAL_ACTIONS.filter((action) => ['INSERT', 'COMMIT', 'UPDATE'].includes(action))).toEqual([])
+  })
+
   // The function leaves these rows in the database because no event can come
   // from them; if a normaliser ever renders one, the SQL must stop excluding it.
   it('leaves out only rows auditRowToEvent turns into nothing', () => {
