@@ -24886,10 +24886,15 @@ export const tools: McpTool[] = [
         // stands without it; the Dispositioner step shows the same verdict.
       }
 
+      // Readiness lists only what blocks the close; the bokslut's own work
+      // (sign-offs, periodiseringar, skatt) is the checklist in
+      // bokslutsbilagor, so a clear readiness never reads as "done".
+      const noBlockers =
+        'Inga blockerare kvar. Vad bokslutet kräver i övrigt (avstämningar, periodiseringar, skatt) står i checklistan i gnubok_get_bokslutsbilagor.'
       const summary = validation.ready
         ? warnings.length > 0
-          ? `Klart för bokslut. ${warnings.length} varning(ar) att granska.`
-          : 'Klart för bokslut.'
+          ? `${noBlockers} ${warnings.length} varning(ar) att granska.`
+          : noBlockers
         : `Inte klart: ${blockers.length} blockerare måste åtgärdas.`
 
       return {

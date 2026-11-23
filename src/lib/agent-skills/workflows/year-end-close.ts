@@ -49,7 +49,11 @@ The opening balances of this year are the closing balances of the last one. Clos
 
 ## Step 1: Readiness
 
-\`gnubok_year_end_readiness({ fiscal_period_id })\`. Run it first to see the scope of work, and again after each fix. Blockers and what to do:
+\`gnubok_year_end_readiness({ fiscal_period_id })\` lists only what blocks the close: \`ready: true\` means the close can run, not that the bokslut is done. Run it first, and again after each fix.
+
+The scope of work is the year-end checklist: \`gnubok_get_bokslutsbilagor({ period_id })\` (search-only: through \`gnubok_call_tool\`) returns \`checklist.items\` with each step's \`state\` (bank and skattekonto signed off at balansdagen, the reskontra tie-outs, periodiseringar, avskrivningar, dispositioner, the year's tax and more) and \`checklist.summary.open\`, plus every balance account with its sign-off. Read it at the start, work the open items through Steps 2 to 5, and name the ones still open in the report. Steps the system cannot judge are ticked by the user on the Bokslut page in Accounted, not by you.
+
+Blockers and what to do:
 
 | Blocker \`kind\` | Meaning | What you do |
 |---|---|---|
@@ -205,6 +209,7 @@ In the user's language, short groups:
 
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`, \`gnubok_list_fiscal_periods\`: orientation
 - \`gnubok_year_end_readiness\`: blockers, warnings, optional closing-entry preview
+- \`gnubok_get_bokslutsbilagor\`: the year-end checklist and every balance account's sign-off (search-only, via \`gnubok_call_tool\`)
 - \`gnubok_get_reconciliation_status\`, \`gnubok_vat_close_check\`, \`gnubok_get_trial_balance\`, \`gnubok_query_journal\`: completeness checks
 - \`gnubok_list_voucher_gaps\`, \`gnubok_explain_voucher_gap\`: BFNAR 2013:2 gaps
 - \`gnubok_post_kontantmetod_cutoff\`: kontantmetoden cut-off, årsomföring per invoice (search-only, via \`gnubok_stage_tool\`)
