@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Voucher number gaps in a fiscal year (BFNAR 2013:2 p. 5.9: every series is
@@ -29,18 +30,38 @@ export interface ListedVoucherGap {
   explanation: VoucherGapExplanationRow | null
 }
 
+/**
+ * A voucher number held by a cancelled (makulerad) verifikat: posted, then
+ * voided (today only by cancel_orphaned_entry, for the orphan of a failed
+ * workflow). detect_voucher_gaps counts the number as used, so it is no gap,
+ * while every journal list and report leaves the verifikat out. Listed so
+ * each number in the series can be accounted for (BFNAR 2013:2 p. 5.9).
+ */
+export interface ListedCancelledVoucher {
+  /** The cancelled journal entry: header and lines are kept. */
+  id: string
+  series: string
+  voucher_number: number
+  entry_date: string
+  description: string | null
+  /** The note written for this number (the orphan cleanup writes one), or null. */
+  explanation: VoucherGapExplanationRow | null
+}
+
 export interface VoucherGapListing {
   /** The series checked: the filter, else the year's voucher_sequences rows, else ['A']. */
   series: string[]
   /** The year's voucher_sequences series (empty with a filter or without rows). */
   sequenceSeries: string[]
   gaps: ListedVoucherGap[]
+  /** The checked series' cancelled numbers; present only with options.withCancelled. */
+  cancelled?: ListedCancelledVoucher[]
 }
 
 /** A gap read that did not complete: never to be read as "no gaps". */
 export class VoucherGapCheckError extends Error {
   constructor(
-    readonly stage: 'voucher_sequences' | 'detect_voucher_gaps' | 'voucher_gap_explanations',
+    readonly stage: 'voucher_sequences' | 'detect_voucher_gaps' | 'voucher_gap_explanations' | 'cancelled_vouchers',
     reason: string | undefined,
   ) {
     super(`Voucher gap check failed at ${stage}${reason ? `: ${reason}` : ''}`)
@@ -51,14 +72,16 @@ export class VoucherGapCheckError extends Error {
 /**
  * Every gap in the year's series with its explanation. Series: the filter
  * when given, else the year's voucher_sequences rows, else ['A'] (a year
- * with vouchers but no sequence row is still checked). Throws
+ * with vouchers but no sequence row is still checked). With withCancelled,
+ * also the numbers those series hold on a cancelled verifikat (the listing
+ * views; the year-end gate needs only the gaps). Throws
  * VoucherGapCheckError on any failed read, so a caller fails closed.
  */
 export async function listVoucherGaps(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options: { series?: string } = {},
+  options: { series?: string; withCancelled?: boolean } = {},
 ): Promise<VoucherGapListing> {
   let sequenceSeries: string[] = []
   if (!options.series) {
@@ -86,34 +109,72 @@ export async function listVoucherGaps(
     }
   }
 
-  if (gaps.length > 0) {
-    // Keyed like the table's UNIQUE (company_id, fiscal_period_id,
-    // voucher_series, gap_start, gap_end).
-    const { data, error } = await supabase
-      .from('voucher_gap_explanations')
-      .select('id, voucher_series, gap_start, gap_end, explanation, user_id, created_at')
-      .eq('company_id', companyId)
-      .eq('fiscal_period_id', fiscalPeriodId)
-    if (error) throw new VoucherGapCheckError('voucher_gap_explanations', error.message)
-    const byKey = new Map(
-      ((data ?? []) as Array<VoucherGapExplanationRow & { voucher_series: string; gap_start: number; gap_end: number }>).map(
-        (e) => [`${e.voucher_series}:${e.gap_start}:${e.gap_end}`, e],
-      ),
-    )
-    for (const gap of gaps) {
-      const match = byKey.get(`${gap.series}:${gap.gap_start}:${gap.gap_end}`)
-      if (match) {
-        gap.explanation = {
-          id: match.id,
-          explanation: match.explanation,
-          user_id: match.user_id,
-          created_at: match.created_at,
-        }
-      }
+  // Read once, and only when a gap or a cancelled number asks for one. Keyed
+  // like the table's UNIQUE (company_id, fiscal_period_id, voucher_series,
+  // gap_start, gap_end); a cancelled number's note is the range [n, n].
+  let explanationsByKey: Map<string, VoucherGapExplanationRow> | null = null
+  const explanationFor = async (voucherSeries: string, start: number, end: number): Promise<VoucherGapExplanationRow | null> => {
+    if (!explanationsByKey) {
+      const { data, error } = await supabase
+        .from('voucher_gap_explanations')
+        .select('id, voucher_series, gap_start, gap_end, explanation, user_id, created_at')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+      if (error) throw new VoucherGapCheckError('voucher_gap_explanations', error.message)
+      explanationsByKey = new Map(
+        ((data ?? []) as Array<VoucherGapExplanationRow & { voucher_series: string; gap_start: number; gap_end: number }>).map(
+          (e): [string, VoucherGapExplanationRow] => [
+            `${e.voucher_series}:${e.gap_start}:${e.gap_end}`,
+            { id: e.id, explanation: e.explanation, user_id: e.user_id, created_at: e.created_at },
+          ],
+        ),
+      )
     }
+    return explanationsByKey.get(`${voucherSeries}:${start}:${end}`) ?? null
   }
 
-  return { series, sequenceSeries, gaps }
+  for (const gap of gaps) {
+    gap.explanation = await explanationFor(gap.series, gap.gap_start, gap.gap_end)
+  }
+
+  if (!options.withCancelled) return { series, sequenceSeries, gaps }
+
+  // The numbers detect_voucher_gaps counts as used that no journal list
+  // shows: a cancelled verifikat that drew one. A cancelled draft holds
+  // voucher_number 0 and no number.
+  type CancelledRow = { id: string; voucher_series: string; voucher_number: number; entry_date: string; description: string | null }
+  let rows: CancelledRow[]
+  try {
+    rows = await fetchAllRows<CancelledRow>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id, voucher_series, voucher_number, entry_date, description')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .eq('status', 'cancelled')
+        .gt('voucher_number', 0)
+        .in('voucher_series', series)
+        .order('voucher_series')
+        .order('voucher_number')
+        .order('id')
+        .range(from, to),
+    )
+  } catch (err) {
+    throw new VoucherGapCheckError('cancelled_vouchers', err instanceof Error ? err.message : undefined)
+  }
+  const cancelled: ListedCancelledVoucher[] = []
+  for (const row of rows) {
+    cancelled.push({
+      id: row.id,
+      series: row.voucher_series,
+      voucher_number: row.voucher_number,
+      entry_date: row.entry_date,
+      description: row.description ?? null,
+      explanation: await explanationFor(row.voucher_series, row.voucher_number, row.voucher_number),
+    })
+  }
+
+  return { series, sequenceSeries, gaps, cancelled }
 }
 
 // ---------------------------------------------------------------------------

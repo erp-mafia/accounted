@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { cn, formatDate } from '@/lib/utils'
 import { formatVoucherGapRange } from '@/lib/bookkeeping/voucher-gap-label'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 
 interface GapExplanation {
   id: string
@@ -38,6 +40,16 @@ interface VoucherGap {
   series: string
   gap_start: number
   gap_end: number
+  explanation: GapExplanation | null
+}
+
+/** A number held by a cancelled verifikat: used, so no gap, but in no list. */
+interface CancelledVoucher {
+  id: string
+  series: string
+  voucher_number: number
+  entry_date: string
+  description: string | null
   explanation: GapExplanation | null
 }
 
@@ -68,7 +80,9 @@ function scopeKeyOf(periodId: string | null, series: string | null): string {
  * between them and moves on to the next after each save. Explained gaps are
  * done work, so they leave the default view but stay one click away behind a
  * quiet "Förklarade luckor (N)" disclosure: the documentation must remain
- * findable, not just exist.
+ * findable, not just exist. Numbers held by a cancelled verifikat are no
+ * gap, but the list hides the verifikat, so they sit behind a second quiet
+ * "Makulerade verifikat (N)" disclosure that opens each one.
  *
  * Write-once by design: editing waits for a history trail.
  */
@@ -103,12 +117,14 @@ export default function VoucherGapNotice({
   // at once instead of staying clickable until the new reply lands, so a
   // dialog can only ever open for a gap of the year it would be saved to.
   const scopeKey = scopeKeyOf(periodId, series)
-  const [loaded, setLoaded] = useState<{ scopeKey: string; gaps: VoucherGap[] } | null>(null)
+  const [loaded, setLoaded] = useState<{ scopeKey: string; gaps: VoucherGap[]; cancelled: CancelledVoucher[] } | null>(null)
   const gaps = loaded && loaded.scopeKey === scopeKey ? loaded.gaps : []
+  const cancelled = loaded && loaded.scopeKey === scopeKey ? loaded.cancelled : []
   const unexplained = gaps.filter((gap) => !gap.explanation)
   const explained = gaps.filter((gap) => gap.explanation)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [showExplained, setShowExplained] = useState(false)
+  const [showCancelled, setShowCancelled] = useState(false)
   // The gap being explained, pinned to the räkenskapsår it was opened for: a
   // save must never attach an explanation to a year the list switched to
   // while the dialog was open.
@@ -131,11 +147,15 @@ export default function VoucherGapNotice({
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
       if (gen !== fetchGenRef.current) return
-      setLoaded({ scopeKey: key, gaps: (json?.data?.gaps ?? []) as VoucherGap[] })
+      setLoaded({
+        scopeKey: key,
+        gaps: (json?.data?.gaps ?? []) as VoucherGap[],
+        cancelled: (json?.data?.cancelled ?? []) as CancelledVoucher[],
+      })
     } catch {
       // A failed probe hides the rows; the bokslut preflight is the
       // enforcement surface and reports its own failures.
-      if (gen === fetchGenRef.current) setLoaded({ scopeKey: key, gaps: [] })
+      if (gen === fetchGenRef.current) setLoaded({ scopeKey: key, gaps: [], cancelled: [] })
     }
   }, [periodId, series])
 
@@ -232,7 +252,7 @@ export default function VoucherGapNotice({
     }
   }
 
-  if (!periodId || gaps.length === 0) return null
+  if (!periodId || (gaps.length === 0 && cancelled.length === 0)) return null
 
   const joiner = t('gap_range_joiner')
   const targetRange = target ? formatVoucherGapRange(target.gap, joiner) : ''
@@ -251,6 +271,29 @@ export default function VoucherGapNotice({
       </button>
     ) : null
 
+  const cancelledToggle =
+    cancelled.length > 0 ? (
+      <button
+        type="button"
+        className={cn(QUIET_LINK_CLASS, 'print:hidden')}
+        aria-expanded={showCancelled}
+        onClick={() => setShowCancelled((v) => !v)}
+      >
+        {showCancelled
+          ? t('gap_cancelled_hide')
+          : t('gap_cancelled_toggle', { count: cancelled.length })}
+      </button>
+    ) : null
+
+  const separator = <span className="text-muted-foreground print:hidden"> · </span>
+  const toggles = [explainedToggle, cancelledToggle].filter((toggle) => toggle !== null)
+  const joinedToggles = toggles.map((toggle, i) => (
+    <Fragment key={i}>
+      {i > 0 && separator}
+      {toggle}
+    </Fragment>
+  ))
+
   return (
     <>
       <div className="px-1 pb-2">
@@ -260,10 +303,10 @@ export default function VoucherGapNotice({
               canExplain ? { label: t('gap_explain_action'), onClick: openDialog } : undefined
             }
             trailing={
-              explainedToggle ? (
+              toggles.length > 0 ? (
                 <>
-                  <span className="text-muted-foreground print:hidden"> · </span>
-                  {explainedToggle}
+                  {separator}
+                  {joinedToggles}
                 </>
               ) : undefined
             }
@@ -271,7 +314,7 @@ export default function VoucherGapNotice({
             {t('gap_attn', { count: unexplained.length })}
           </AttnLine>
         ) : (
-          <p className="text-xs leading-5">{explainedToggle}</p>
+          <p className="text-xs leading-5">{joinedToggles}</p>
         )}
       </div>
 
@@ -307,6 +350,32 @@ export default function VoucherGapNotice({
               </div>
             )
           })}
+        </div>
+      )}
+
+      {showCancelled && cancelled.length > 0 && (
+        <div className="divide-y divide-border border-b-hairline text-[13px] leading-5">
+          {cancelled.map((entry) => (
+            <div
+              key={entry.id}
+              className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-1 py-3"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="font-medium">
+                  <Link href={`/bookkeeping/${entry.id}`} className="hover:underline">
+                    {t('gap_cancelled_title', {
+                      voucher: formatVoucher({ voucher_series: entry.series, voucher_number: entry.voucher_number }),
+                    })}
+                  </Link>
+                </p>
+                {entry.description && <p className="text-muted-foreground">{entry.description}</p>}
+                {entry.explanation && <p className="text-muted-foreground">{entry.explanation.explanation}</p>}
+              </div>
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                {formatDate(entry.entry_date)}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 

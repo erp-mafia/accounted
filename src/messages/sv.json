@@ -9107,6 +9107,9 @@
     "gap_saved": "Förklaringen sparades",
     "gap_forbidden": "Bara ägare och administratörer kan förklara luckor.",
     "gap_save_failed": "Kunde inte spara förklaringen.",
+    "gap_cancelled_toggle": "Makulerade verifikat ({count})",
+    "gap_cancelled_hide": "Dölj makulerade verifikat",
+    "gap_cancelled_title": "Verifikat {voucher} är makulerat",
     "no_results_line": "Inga verifikationer matchar dina filter."
   },
   "attachment_preview_sheet": {

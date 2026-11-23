@@ -29,7 +29,7 @@ export const GET = withRouteContext('voucher_gaps.list', async (request, ctx) =>
   // read is a 500, never "no gaps" on a compliance view whose check did not run.
   let listing: VoucherGapListing
   try {
-    listing = await listVoucherGaps(supabase, companyId, fiscal_period_id, { series: voucher_series })
+    listing = await listVoucherGaps(supabase, companyId, fiscal_period_id, { series: voucher_series, withCancelled: true })
   } catch (err) {
     log.error('voucher gap listing failed', err as Error)
     return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
@@ -43,6 +43,9 @@ export const GET = withRouteContext('voucher_gaps.list', async (request, ctx) =>
       gaps: allGaps,
       totalGaps: allGaps.length,
       unexplainedGaps: unexplained,
+      // Numbers held by a cancelled verifikat: used, so no gap, but shown
+      // in no journal list; the gap notice lists them as makulerade.
+      cancelled: listing.cancelled ?? [],
     },
   })
 })
