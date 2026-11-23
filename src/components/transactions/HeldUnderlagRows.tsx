@@ -10,19 +10,20 @@ import type { useHeldUnderlag } from './use-held-underlag'
  * The rows under the document a bank-row booking shows, in the booking
  * dialog and on the booking screen: the row's earlier underlag (it can be
  * taken off), one compact zone for more (the only zone then, so a drop is
- * handled once), the documents picked from the inbox, and the host's own way
- * in last.
+ * handled once) with the host's other ways in on its line, and the
+ * documents picked from the inbox.
  */
 export function HeldUnderlagRows({
   attachments,
   onDetachEarlier,
   dropSurfaceRef,
-  children,
+  actions,
 }: {
   attachments: ReturnType<typeof useHeldUnderlag>
   onDetachEarlier: () => void
   dropSurfaceRef: RefObject<HTMLElement | null>
-  children?: ReactNode
+  /** More ways in, beside "Ladda upp" on the zone's line. */
+  actions?: ReactNode
 }) {
   const t = useTranslations('tx_booking_dialog')
   const tUnderlag = useTranslations('tx_booking_underlag')
@@ -44,6 +45,7 @@ export function HeldUnderlagRows({
         onUploaded={attachments.claimUpload}
         compact
         dropSurfaceRef={dropSurfaceRef}
+        actions={actions}
       />
       {attachments.attached.inboxDocs.map((doc) => (
         <UnderlagFileRow
@@ -53,7 +55,6 @@ export function HeldUnderlagRows({
           onRemove={() => void attachments.letGo(doc.document_id)}
         />
       ))}
-      {children}
     </div>
   )
 }

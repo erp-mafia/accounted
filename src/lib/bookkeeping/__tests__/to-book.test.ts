@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  toBookAmountLabel,
+  toBookIsMoneyIn,
   bookingWalk,
   buildToBookRows,
   inToBookFilter,
@@ -120,5 +122,24 @@ describe('the filter in the address', () => {
     expect(toBookFilterOfBack('/transactions?visa=saknar-underlag')).toBeNull()
     expect(toBookFilterOfBack('/att-bokforax')).toBeNull()
     expect(toBookFilterOfBack(null)).toBeNull()
+  })
+})
+
+describe('the amount a row shows', () => {
+  it('writes money in on a bank row with a plus, money out with its minus', () => {
+    expect(toBookAmountLabel({ kind: 'bank', amount: 2985, currency: 'SEK' })).toBe('+2\u00a0985')
+    expect(toBookAmountLabel({ kind: 'bank', amount: -414.77, currency: 'SEK' })).toBe('\u2212414,77')
+    expect(toBookIsMoneyIn({ kind: 'bank', amount: 2985 })).toBe(true)
+    expect(toBookIsMoneyIn({ kind: 'bank', amount: -1 })).toBe(false)
+  })
+
+  it('gives a document no sign, and no amount no text', () => {
+    expect(toBookAmountLabel({ kind: 'document', amount: 100, currency: 'SEK' })).toBe('100')
+    expect(toBookIsMoneyIn({ kind: 'document', amount: 100 })).toBe(false)
+    expect(toBookAmountLabel({ kind: 'document', amount: null, currency: null })).toBe('')
+  })
+
+  it('keeps the currency of a foreign amount', () => {
+    expect(toBookAmountLabel({ kind: 'bank', amount: 12.5, currency: 'EUR' })).toMatch(/^\+12,50\s€$/)
   })
 })

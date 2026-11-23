@@ -209,8 +209,9 @@ export default function TransactionBookingDialog({
 
   // Secondary intake path beside the upload zone: underlag already in the
   // inkorg, picked instead of uploaded again.
+  // The inbox is another way in beside "Ladda upp", on the zone's own line.
   const pickFromInbox = (
-    <Button variant="ghost" className="-ml-2.5 self-start" onClick={() => setInboxPickerOpen(true)}>
+    <Button variant="ghost" onClick={() => setInboxPickerOpen(true)}>
       <InboxIcon className="h-4 w-4" />
       {t('doc_pick_inbox')}
     </Button>
@@ -311,20 +312,18 @@ export default function TransactionBookingDialog({
                   onUploaded={claimUpload}
                   compact
                   dropSurfaceRef={dropSurfaceRef}
+                  actions={pickFromInbox}
                 />
               </>
             )}
 
-            {viewerDocId ? (
+            {viewerDocId && (
               <HeldUnderlagRows
                 attachments={attachments}
                 onDetachEarlier={() => void detachEarlierUnderlag()}
                 dropSurfaceRef={dropSurfaceRef}
-              >
-                {pickFromInbox}
-              </HeldUnderlagRows>
-            ) : (
-              pickFromInbox
+                actions={pickFromInbox}
+              />
             )}
           </div>
 
@@ -343,6 +342,7 @@ export default function TransactionBookingDialog({
                         foreignAmount: Math.abs(transaction.amount),
                         exchangeRate: transaction.exchange_rate,
                         businessLineDescription: proposalLineDescription ?? undefined,
+                        settlementLineDescription: bankAccountName ?? t('bank_line_description'),
                       })
                     : preselectedTemplate
                       ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)

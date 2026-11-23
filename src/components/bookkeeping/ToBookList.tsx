@@ -17,8 +17,10 @@ import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
 import {
   inToBookFilter,
   opensInBookingScreen,
+  toBookAmountLabel,
   toBookCounts,
   toBookFilterFromSlug,
+  toBookIsMoneyIn,
   toBookListHref,
   TO_BOOK_FILTER_PARAM,
   TO_BOOK_FILTERS,
@@ -27,7 +29,7 @@ import {
 } from '@/lib/bookkeeping/to-book'
 import { useToBookRows } from './use-to-book-rows'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
-import { cn, formatDate, formatRowAmount } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 
 /**
  * Att bokföra (/att-bokfora): everything that waits to be booked, as one
@@ -123,8 +125,10 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
                     )}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                    {/* Missing is most rows, so it is muted text; the chip
+                        marks the exception, a receipt found for the row. */}
                     {row.underlag === 'missing' ? (
-                      <Badge variant="warning">{t('underlag_missing')}</Badge>
+                      <span className="text-muted-foreground">{t('underlag_missing')}</span>
                     ) : row.underlag === 'found' ? (
                       <Badge variant="outline">{t('underlag_found')}</Badge>
                     ) : (
@@ -137,11 +141,11 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
                     className={cn(
                       TD_CLASS,
                       'whitespace-nowrap text-right tabular-nums',
-                      row.amount != null && row.amount > 0 && row.kind === 'bank' ? 'text-success' : 'text-strong',
+                      toBookIsMoneyIn(row) ? 'text-success' : 'text-strong',
                     )}
                     data-ph-mask=""
                   >
-                    {row.amount == null ? '' : `${row.amount > 0 && row.kind === 'bank' ? '+' : ''}${formatRowAmount(row.amount, row.currency)}`}
+                    {toBookAmountLabel(row)}
                   </td>
                   <td className={cn(TD_CLASS, 'text-muted-foreground')} aria-hidden="true">
                     <ChevronRightIcon className="h-4 w-4" />
