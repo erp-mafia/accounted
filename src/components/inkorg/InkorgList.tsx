@@ -164,7 +164,9 @@ function InkorgRow({
     ) : status.kind === 'booked_with' ? (
       <Badge variant="secondary">{status.voucher ? t('status_booked_with', { voucher: status.voucher }) : t('status_booked_with_no_voucher')}</Badge>
     ) : status.kind === 'waiting' ? (
-      <Badge variant="secondary">{t('status_waiting')}</Badge>
+      // The normal state, on nearly every row of Behöver dig: muted text,
+      // so the chips mark the rows that deviate.
+      <span className="text-xs text-muted-foreground">{t('status_waiting')}</span>
     ) : status.kind === 'reading' ? (
       <span className="text-xs text-muted-foreground">{t('row_reading')}</span>
     ) : null
