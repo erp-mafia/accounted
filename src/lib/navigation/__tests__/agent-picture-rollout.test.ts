@@ -70,21 +70,27 @@ describe('the Agenter area', () => {
     })
   })
 
-  it('is Koppla en agent, Kontext, Bokföringsregler and Chatt where the picture is on, with no group label', () => {
+  it('is Koppla en agent, Kontext and Bokföringsregler where the picture is on, with no group label and no Chatt', () => {
     vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
     expect(agentsMenu(COMPANY)).toEqual({
       create: '/settings/api',
-      groups: [
-        [null, ['/wiki', '/rules']],
-        [null, ['/chat']],
-      ],
-      rows: ['/wiki', '/rules', '/chat'],
+      groups: [[null, ['/wiki', '/rules']]],
+      rows: ['/wiki', '/rules'],
     })
   })
 
-  it('keeps Chatt out where the chat is switched off, with or without the picture', () => {
-    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+  it('has no Chatt where the picture is on, whatever the chat switch says', () => {
     vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
-    expect(agentsMenu(COMPANY).rows).toEqual(['/wiki', '/rules'])
+    for (const chat of [undefined, 'true', 'false']) {
+      if (chat !== undefined) vi.stubEnv('ASSISTANT_CHAT_ENABLED', chat)
+      expect(agentsMenu(COMPANY).rows, String(chat)).toEqual(['/wiki', '/rules'])
+    }
+  })
+
+  it('keeps Chatt by the chat switch alone for a company outside the switch', () => {
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', 'another-company')
+    expect(agentsMenu(COMPANY).rows).toContain('/chat')
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+    expect(agentsMenu(COMPANY).rows).toEqual(['/rules', '/skills', '/wiki', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory'])
   })
 })

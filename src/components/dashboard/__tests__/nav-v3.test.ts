@@ -321,31 +321,28 @@ describe('the tree', () => {
     expect(agents.create).toEqual([{ href: '/settings/api', module: 'agent', labelKey: 'v3_connect_agent', requiresMcpExtension: true }])
   })
 
-  it('has, where the agent picture is on, Koppla en agent, then Kontext and Bokföringsregler with no group label, then Chatt', () => {
+  it('has, where the agent picture is on, Koppla en agent, then Kontext and Bokföringsregler with no group label, and no Chatt', () => {
     const agents = NAV_V3_AREAS.find((a) => a.id === 'agents')!
     const nav = sv.nav as Record<string, string>
     const enNav = en.nav as Record<string, string>
     const withPicture = gateAreas([agents], (item) => !item.hiddenWithAgentPicture)[0]
     const menu = (table: Record<string, string>) =>
       withPicture.groups.map((g) => [g.labelKey ? table[g.labelKey] : null, g.items.map((item) => table[item.labelKey])])
-    expect(menu(nav)).toEqual([
-      [null, ['Kontext', 'Bokföringsregler']],
-      [null, ['Chatt']],
-    ])
-    expect(menu(enNav)).toEqual([
-      [null, ['Context', 'Bookkeeping rules']],
-      [null, ['Chat']],
-    ])
-    expect(areaItems(withPicture).map((item) => item.href)).toEqual(['/wiki', '/rules', '/chat'])
+    expect(menu(nav)).toEqual([[null, ['Kontext', 'Bokföringsregler']]])
+    expect(menu(enNav)).toEqual([[null, ['Context', 'Bookkeeping rules']]])
+    expect(areaItems(withPicture).map((item) => item.href)).toEqual(['/wiki', '/rules'])
     expect(areaCreate(withPicture)?.href).toBe('/settings/api')
-    // What the picture replaces is in no row: Arbetssätt, Bokföringsprofil, Fakta, Minne and the wiki's Arbetssätt view.
+    // What the picture replaces is in no row: Arbetssätt, Bokföringsprofil, Fakta, Minne and the wiki's Arbetssätt view. Chatt is in none either.
     const hidden = areaItems(agents).filter((item) => item.hiddenWithAgentPicture).map((item) => item.href)
-    expect(hidden).toEqual(['/rules', '/skills', '/wiki', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills'])
+    expect(hidden).toEqual(['/rules', '/skills', '/wiki', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills', '/chat'])
     // Each hidden page still resolves to the area: it is reachable by its address.
-    for (const href of ['/skills', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills']) {
+    for (const href of ['/skills', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills', '/chat', '/chat/new']) {
       const [path, query = ''] = href.split('?')
       expect(resolveNavPlace(path, query)?.area, href).toBe('agents')
     }
+    // The Chatt row keeps its own switch as well: it is one row, hidden by either.
+    const chat = areaItems(agents).filter((item) => item.href === '/chat')
+    expect(chat.map((item) => [!!item.requiresAssistantChat, !!item.hiddenWithAgentPicture])).toEqual([[true, true]])
   })
 
   it('lists the page a create button opens only where the area owns it without a row', () => {

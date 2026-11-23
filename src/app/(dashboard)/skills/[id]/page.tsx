@@ -1,23 +1,25 @@
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { getDashboardCompanyId } from '../../request-context'
 import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
 import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
+import { pictureRowHref } from '@/lib/agent-context/wiki-views'
 import { COMMUNITY_OPEN } from '@/lib/agent-skills/agents'
 import { InstructionDetail } from '@/components/skills/InstructionDetail'
-import { KnowledgeItemPage } from '@/components/skills/KnowledgeItemPage'
+
+/** The address segment of a knowledge item: kunskap.<item>, the item as lib/agent-context/wiki-views.ts spells it. */
+const KNOWLEDGE_SEGMENT = 'kunskap.'
 
 /**
  * /skills/[id]: one agent instruction's page (a flow id, own-<uuid>, kunskap.<pack> or community.<slug>). Hidden in production with /skills.
- * For a company with the agent picture on, a knowledge item's page (kunskap.<pack>) is open whatever the Agenter page's own switch
- * says, and it is the item alone: what the picture's Kunskap panel shows for an opened folder, under a trail back to the picture.
+ * For a company with the agent picture on, a knowledge item's address (kunskap.<pack>) leads to the picture with its Kunskap row open on
+ * that item's folder, whatever the Agenter page's own switch says. Every other id answers as it does without the picture.
  */
 export default async function AgentPage({ params }: { params: Promise<{ id: string }> }) {
   const companyId = await getDashboardCompanyId()
   const { id } = await params
   const segment = decodeURIComponent(id)
-  const pictureItem = isAgentPictureEnabled(companyId) && segment.startsWith('kunskap.')
-  if (!isAgentsPageEnabled(companyId) && !pictureItem) notFound()
-  if (pictureItem) return <KnowledgeItemPage segment={id} />
+  if (isAgentPictureEnabled(companyId) && segment.startsWith(KNOWLEDGE_SEGMENT)) redirect(pictureRowHref('knowledge', segment.slice(KNOWLEDGE_SEGMENT.length)))
+  if (!isAgentsPageEnabled(companyId)) notFound()
   // Community items and author pages wait for the community launch.
   if (!COMMUNITY_OPEN && (segment.startsWith('community.') || segment.startsWith('av.'))) notFound()
   return <InstructionDetail segment={id} />

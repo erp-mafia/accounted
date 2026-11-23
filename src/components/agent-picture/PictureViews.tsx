@@ -14,6 +14,7 @@ import { StatusGlyph, type StatusTone } from '@/components/ui/status-glyph'
 import { RawText } from '@/components/wiki/wiki-parts'
 import { formatCurrency } from '@/lib/utils'
 import type { PictureCheckLine, PictureChecks, PictureCheckStatus } from '@/lib/agent-context/agent-picture'
+import { PICTURE_ROWS, isPictureRow, type PictureRow } from '@/lib/agent-context/wiki-views'
 
 function FoldersSkeleton() {
   return (
@@ -28,13 +29,9 @@ function FoldersSkeleton() {
 // The folders bring the catalogue's folder mark and item view with them: loaded when the Kunskap view is first opened.
 const KnowledgeFolders = dynamic(() => import('@/components/skills/KnowledgeFolders').then((m) => m.KnowledgeFolders), { loading: () => <FoldersSkeleton /> })
 
-/** What a row of the company's card opens. */
-export const PICTURE_VIEWS = ['context', 'checks', 'memory', 'knowledge'] as const
-export type PictureView = (typeof PICTURE_VIEWS)[number]
-
-export function isPictureView(value: unknown): value is PictureView {
-  return typeof value === 'string' && (PICTURE_VIEWS as readonly string[]).includes(value)
-}
+/** What a row of the company's card opens: the rows are named where their addresses are (lib/agent-context/wiki-views.ts). */
+export { PICTURE_ROWS as PICTURE_VIEWS, isPictureRow as isPictureView }
+export type PictureView = PictureRow
 type SheetView = Exclude<PictureView, 'context'>
 
 /** The briefing, as the page that hosts the picture loads it (once): the context graph is drawn from its text. */
@@ -65,6 +62,10 @@ const REASONS = new Set([
  * the raw text under it, Kontroller the check lines, Minne the memory as one
  * list, Kunskap the knowledge items as folders, each opening in place. The
  * last three open in the app's slide-over.
+ *
+ * `knowledgeItem` is the knowledge item the address names: the Kunskap view
+ * opens on its folder, and `onKnowledgeItemClose` is told when that folder
+ * is left.
  */
 export function PictureViews({
   view,
@@ -73,6 +74,8 @@ export function PictureViews({
   context,
   checks,
   activeKnowledge,
+  knowledgeItem = null,
+  onKnowledgeItemClose,
   when,
 }: {
   view: PictureView | null
@@ -82,6 +85,8 @@ export function PictureViews({
   checks: PictureChecks | null
   /** The knowledge items the agent gets today, by id; null when that could not be read. */
   activeKnowledge: readonly string[] | null
+  knowledgeItem?: string | null
+  onKnowledgeItemClose?: () => void
   /** An instant or a date in words: today (with its time), another day by its date. */
   when: (instant: string) => string
 }) {
@@ -123,7 +128,7 @@ export function PictureViews({
               <SlideOverBody className="space-y-5">
                 {shown === 'checks' && <ChecksView checks={checks} when={when} />}
                 {shown === 'memory' && <AgentMemoryPanel plain />}
-                {shown === 'knowledge' && <KnowledgeFolders active={activeKnowledge} />}
+                {shown === 'knowledge' && <KnowledgeFolders active={activeKnowledge} item={knowledgeItem} onItemClose={onKnowledgeItemClose} />}
               </SlideOverBody>
             </>
           )}

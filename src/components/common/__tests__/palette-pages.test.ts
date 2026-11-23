@@ -364,3 +364,69 @@ describe('localizeEntry: the palette in the language of the reader', () => {
     expect(localizeEntry(entry, palette(en))).toBe(entry)
   })
 })
+
+
+/**
+ * Where the agent picture is on (AGENT_PICTURE_COMPANY_IDS) the Agenter area
+ * is the picture and the rules, and the addresses the picture took over
+ * lead to it: /skills and the wiki's Minne and Arbetssätt views to the
+ * picture, the bookkeeping profile to Bokföringsregler. The palette offers
+ * where they lead, once, and none of the addresses that only lead on.
+ */
+describe('the palette where the agent picture is on', () => {
+  const withPicture = () => pagesFor({ agentPictureEnabled: true })
+  /** Addresses that lead elsewhere for such a company, and Chatt, which its menu does not list. */
+  const LEFT = ['/skills', '/wiki?view=map', '/wiki?view=memory', '/wiki?view=skills', '/agent-knowledge', '/settings/assistant', '/chat']
+
+  it('offers Kontext, Bokföringsregler and Koppla en agent under Agenter, and nothing else there', () => {
+    const agents = withPicture().filter((p) => p.group === nav.v3_agents)
+    expect(agents.map((p) => [p.label, p.href])).toEqual([
+      [nav.v3_context, '/wiki'],
+      [nav.v2_rules, '/rules'],
+      [nav.v3_connect_agent, '/settings/api'],
+    ])
+  })
+
+  it('offers each place once in the whole list', () => {
+    const hrefs = withPicture().map((p) => p.href)
+    for (const href of ['/wiki', '/rules', '/settings/api']) expect(hrefs.filter((h) => h === href), href).toHaveLength(1)
+  })
+
+  it('offers no address that only leads on, under any name, and no Chatt', () => {
+    const pages = withPicture()
+    for (const href of LEFT) expect(pages.some((p) => p.href === href), href).toBe(false)
+    expect(pages.filter((p) => /^\/(skills|chat|agent-knowledge)(\/|\?|$)/.test(p.href) || p.href.startsWith('/wiki?'))).toEqual([])
+    // The names those rows had find no page, instead of one that would only lead on.
+    for (const word of ['arbetssätt', 'kompetens', 'instruktioner', 'minne', 'bokföringsprofil', 'chatt', 'assistent']) {
+      expect(pages.filter((p) => matches(p, word)).map((p) => p.href), word).toEqual([])
+    }
+  })
+
+  it('finds the picture and the rules by the words people type', () => {
+    const pages = withPicture()
+    const first = (query: string) => pages.find((p) => matches(p, query))?.href
+    expect(first('kontext')).toBe('/wiki')
+    expect(first('wiki')).toBe('/wiki')
+    expect(first('bokföringsregler')).toBe('/rules')
+    expect(first('regler')).toBe('/rules')
+    expect(first('koppla en agent')).toBe('/settings/api')
+    expect(first('api och mcp')).toBe('/settings/api')
+  })
+
+  it('changes nothing outside the Agenter area', () => {
+    const outside = (pages: ReturnType<typeof pagesFor>) => pages.filter((p) => p.group !== nav.v3_agents)
+    expect(outside(withPicture())).toEqual(outside(pagesFor()))
+  })
+
+  it('leaves the palette of a company outside the switch as it was', () => {
+    // Absent and off read the same.
+    expect(pagesFor({ agentPictureEnabled: false })).toEqual(pagesFor())
+    const agents = pagesFor().filter((p) => p.group === nav.v3_agents).map((p) => p.href)
+    expect(agents).toEqual(['/rules', '/skills', '/wiki', '/wiki?view=map', '/wiki?view=memory', '/chat', '/settings/api'])
+    const first = (query: string) => pagesFor().find((p) => matches(p, query))?.href
+    expect(first('arbetssätt')).toBe('/skills')
+    expect(first('minne')).toBe('/wiki?view=memory')
+    expect(first('bokföringsprofil')).toBe('/wiki?view=map')
+    expect(first('assistent')).toBe('/chat')
+  })
+})

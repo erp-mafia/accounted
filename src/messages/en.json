@@ -11700,6 +11700,10 @@
   "rules": {
       "title": "Bookkeeping rules",
       "help": "A rule is a sentence: when a transaction looks like this, do this. Rules come from your approvals and corrections, and from history you imported. A rule categorises every hit. Once the counterparty has been booked the same way three times, the next hit books with one click, without a review, and can be undone right after. A rule from imported history is reviewed once here before it can book with one click. Turn off One click on a rule and it is always reviewed, or turn off one-click booking for the whole company in Settings under Bookkeeping. A correction counts in the Corrected column and starts the count over. A paused rule matches nothing. Booking entirely on its own, without a click, comes with autopilot. Blocks: a booking a block matches is never booked with one click, in a bulk booking, by a rule for automatic booking or by an agent; a person books it from its review. Owners and administrators add and archive blocks.",
+    "profile_line": "The company {parts}.",
+    "profile_method": "{method, select, accrual {books with the accrual method} other {books with the cash method}}",
+    "profile_vat": "{period, select, monthly {reports VAT monthly} quarterly {reports VAT quarterly} other {reports VAT yearly}}",
+    "profile_series": "{count, plural, one {uses series {series}} other {uses series {series}}}",
       "search": "Search rules…",
       "ladder_label": "Mode",
       "filter_all": "All",
