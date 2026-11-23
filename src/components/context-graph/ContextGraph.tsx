@@ -25,6 +25,9 @@ import { describeNode, nodeLabel, nodeName, type NodePages, type NodeText } from
  * everything outside their family; picking a dot keeps it, its lines and its
  * neighbours and says what it is in a small floating panel inside the stage
  * (under the stage on a phone), with its links and the page that holds it.
+ *
+ * `className` is for a host that is not the page (a dialog): it takes the
+ * bleed away there.
  */
 
 /** Below this much room the web is laid out for a phone (nearly square, shorter). */
@@ -34,7 +37,7 @@ const SENTENCE_KINDS: ReadonlySet<GraphNodeKind> = new Set(['fact', 'group_fact'
 /** How many linked things the panel lists before "+N". */
 const LINKS_SHOWN = 6
 
-export function ContextGraph({ text }: { text: string }) {
+export function ContextGraph({ text, className }: { text: string; className?: string }) {
   const t = useTranslations('wiki')
   const tNav = useTranslations('nav')
   const locale = useLocale()
@@ -100,7 +103,7 @@ export function ContextGraph({ text }: { text: string }) {
   ) : null
 
   return (
-    <section ref={wrapRef} aria-label={t('graph.label')} className="-mx-4 border-b-hairline border-t-hairline md:-mx-6">
+    <section ref={wrapRef} aria-label={t('graph.label')} className={cn('-mx-4 border-b-hairline border-t-hairline md:-mx-6', className)}>
       <div role="group" aria-label={t('graph.chips_label')} className="flex flex-wrap gap-1.5 px-4 pt-3 md:px-6">
         {CHIP_FAMILIES.filter((f) => model.counts[f] > 0).map((f) => (
           <button

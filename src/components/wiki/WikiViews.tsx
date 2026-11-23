@@ -17,8 +17,8 @@ import { ContextView } from './ContextView'
  *
  * `facts`: whether the company is inside the Arkiv rollout, where Fakta has
  * something to show. `picture`: whether the company has the agent picture
- * switched on (lib/env/agent-picture-switch.ts), which then opens the
- * context view in place of the graph.
+ * switched on (lib/env/agent-picture-switch.ts): the context view is then
+ * the picture.
  */
 export function WikiViews({ facts, picture = false }: { facts: boolean; picture?: boolean }) {
   const searchParams = useSearchParams()
