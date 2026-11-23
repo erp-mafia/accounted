@@ -12319,7 +12319,7 @@
     "desc_trial_balance": "All accounts with opening and closing balances",
     "desc_kpi": "Margin, liquidity and other key figures",
     "desc_likviditetsprognos": "The bank balance week by week for the next 13 weeks",
-    "desc_income_statement": "Profit or loss in the statutory layout",
+    "desc_income_statement": "Profit or loss by account group, before closing entries",
     "desc_balance_sheet": "Financial position at the end of the period",
     "desc_kassaflodesanalys": "Change in liquidity during the year",
     "desc_arsredovisning": "Directors' report, notes and signatures",

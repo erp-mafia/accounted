@@ -12319,7 +12319,7 @@
     "desc_trial_balance": "Alla konton med ingående och utgående saldo",
     "desc_kpi": "Marginal, likviditet och andra nyckeltal",
     "desc_likviditetsprognos": "Banksaldot vecka för vecka de kommande 13 veckorna",
-    "desc_income_statement": "Årets resultat enligt uppställningsform",
+    "desc_income_statement": "Resultat per kontogrupp, före bokslutstransaktioner",
     "desc_balance_sheet": "Ekonomisk ställning vid periodens slut",
     "desc_kassaflodesanalys": "Likviditetens förändring under året",
     "desc_arsredovisning": "Förvaltningsberättelse, noter och underskrifter",

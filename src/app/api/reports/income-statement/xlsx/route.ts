@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { NET_RESULT_LABEL } from '@/lib/reports/income-definitions'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import {
@@ -125,7 +126,7 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
       {
         section: 'Sammanfattning',
         account_number: '',
-        account_name: 'Årets resultat',
+        account_name: NET_RESULT_LABEL,
         amount: report.net_result,
       },
     ]
