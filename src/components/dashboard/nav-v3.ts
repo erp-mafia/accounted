@@ -166,10 +166,10 @@ export const NAV_V3_AREAS: NavV3Area[] = [
     groups: [
       {
         items: [
-          { href: '/', module: 'platform', labelKey: 'home', icon: HomeIcon, match: ['/onboarding/books'] },
+          // Hem lists what needs the person (it took over Behöver dig), and counts it.
+          { href: '/', module: 'platform', labelKey: 'home', icon: HomeIcon, match: ['/onboarding/books', '/arkiv/granska'] },
           // One list of what waits to be booked, beside the queues it gathers, while the booking screen rolls out.
           { href: '/att-bokfora', module: 'platform', labelKey: 'v3_to_book', icon: InboxStackIcon, requiresBookingScreen: true },
-          { href: '/?vy=behover', module: 'platform', labelKey: 'v3_needs_you', icon: InboxIcon, match: ['/arkiv/granska'] },
           { href: '/pending', module: 'platform', labelKey: 'v3_routine', icon: ArrowPathIcon },
           { href: '/questions', module: 'platform', labelKey: 'v3_questions', icon: QuestionMarkCircleIcon, requiresCompanyQuestions: true },
           { href: '/?vy=gjort', module: 'platform', labelKey: 'v3_done', icon: CheckIcon },

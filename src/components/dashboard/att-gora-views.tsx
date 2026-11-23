@@ -22,11 +22,8 @@ import {
   countUrgentThings,
   dueStateOf,
   firstRows,
-  groupNameParts,
-  groupNames,
   groupRows,
   headlineOf,
-  isUrgentRow,
   queueWindow,
   shownRows,
   thingsOf,
@@ -35,13 +32,14 @@ import {
 } from './need-model'
 
 /**
- * Att göra V8 ("calm Hem"): the three faces of the same rows. Hem sums them
- * up (headline, Först, one line per group), Behöver dig lists them, Börja
- * walks them one at a time on the fixed step template. The rows, their state
- * and their dialogs live in AttGoraSection; everything here only draws.
+ * Att göra V8 ("calm Hem"): the two faces of the same rows. Hem lists them
+ * under its headline (Först, then Behöver dig by group), Börja walks them one
+ * at a time on the fixed step template. A row leads to the same place on
+ * both lists. The rows, their state and their dialogs live in
+ * AttGoraSection; everything here only draws.
  */
 
-export type HemView = 'hem' | 'behover' | 'borja'
+export type HemView = 'hem' | 'borja'
 
 const hemHref = (view: HemView | 'gjort', step?: string) =>
   view === 'hem' ? '/' : `/?vy=${view}${step ? `&steg=${encodeURIComponent(step)}` : ''}`
@@ -182,13 +180,6 @@ function PhoneStartButton({ lead }: { lead: LeadAction | null }) {
 
 const SECTION_TITLE_CLASS = 'text-[15px] font-medium text-strong'
 
-function namesLine(rows: NeedRow[], t: T): string {
-  // A group of one row is that row: its name and its own data.
-  if (rows.length === 1 && rows[0].detail) return `${groupNameParts(rows)[0]} · ${rows[0].detail}`
-  const { shown, more } = groupNames(groupNameParts(rows))
-  return more > 0 ? t('names_more', { names: shown.join(', '), more }) : shown.join(', ')
-}
-
 /* ------------------------------------------------------------------ Hem */
 
 export function HemCalm({
@@ -237,7 +228,9 @@ export function HemCalm({
   // The headline counts things, not rows: "Betala 5 leverantörsfakturor" is five.
   const headline = headlineOf(countUrgentThings(rows, todayIso), countThings(rows), !notStarted)
   const first = firstRows(rows, todayIso)
-  const groups = groupRows(rows)
+  // A row in Först is not listed again below it.
+  const firstKeys = new Set(first.map((row) => row.key))
+  const listed = rows.filter((row) => !firstKeys.has(row.key))
   const primary = leadOf(rows, lead, t)
   // Kom igång leads the page until something is
   // urgent; then the three blocks (Först, Behöver dig, Rutin) come first and
@@ -290,68 +283,17 @@ export function HemCalm({
         <section aria-label={t('first_title')}>
           <h2 className={SECTION_TITLE_CLASS}>{t('first_title')}</h2>
           <ul className="-mx-2 mt-2 border-t-hairline">
-            {first.map((row) => (
-              <li key={row.key}>
-                <Link
-                  href={hemHref('borja', row.key)}
-                  className="flex min-h-11 items-center gap-3 border-b-hairline px-2 py-2 transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-                >
-                  <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
-                    <row.icon className="h-[15px] w-[15px]" />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-[13px]" data-ph-mask="">
-                    <span className="text-strong">{row.name}</span>
-                    {row.detail && <span className="text-muted-foreground"> · {row.detail}</span>}
-                  </span>
-                  <span className="flex shrink-0 justify-start sm:w-28">
-                    <WhenCell row={row} todayIso={todayIso} t={t} />
-                  </span>
-                  <span className="hidden w-28 shrink-0 text-right text-[13px] tabular-nums sm:block">{amountText(row.amount)}</span>
-                </Link>
-              </li>
-            ))}
+            {first.map((row) =>
+              row.embed ? <li key={row.key} className="px-1">{row.embed}</li> : <ListRow key={row.key} row={row} todayIso={todayIso} t={t} />,
+            )}
           </ul>
         </section>
       )}
 
-      {groups.length > 0 && (
+      {listed.length > 0 && (
         <section aria-label={t('need_title')}>
-          <div className="flex items-center gap-3">
-            <h2 className={cn(SECTION_TITLE_CLASS, 'min-w-0 flex-1')}>{t('need_title')}</h2>
-            <Link
-              href={hemHref('behover')}
-              className="inline-flex min-h-7 items-center text-xs text-foreground underline underline-offset-[3px] pointer-coarse:min-h-10"
-            >
-              {t('show_all', { count: headline.total })}
-            </Link>
-          </div>
-          <ul className="-mx-2 mt-2 border-t-hairline">
-            {groups.map(({ group, rows: groupRowsOf }) => {
-              const soonest = firstRows(groupRowsOf, todayIso, 1)[0]
-              return (
-                <li key={group}>
-                  <Link
-                    href={hemHref('borja', groupRowsOf[0].key)}
-                    className="flex min-h-[60px] items-center gap-4 border-b-hairline px-2 py-2.5 transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-medium text-strong">{t(`group_${group}`, { count: Math.max(1, countThings(groupRowsOf)) })}</span>
-                      <span className="block truncate text-xs text-muted-foreground" data-ph-mask="">
-                        {namesLine(groupRowsOf, t)}
-                      </span>
-                    </span>
-                    {soonest && isUrgentRow(soonest, todayIso) && (
-                      <span className="shrink-0">
-                        <WhenCell row={{ ...soonest, badge: undefined }} todayIso={todayIso} t={t} />
-                        {!soonest.due && <Badge variant="warning" className="font-normal">{t('when_now')}</Badge>}
-                      </span>
-                    )}
-                    <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  </Link>
-                </li>
-              )
-            })}
-          </ul>
+          <h2 className={SECTION_TITLE_CLASS}>{t('need_title')}</h2>
+          <NeedGroups rows={listed} todayIso={todayIso} t={t} />
         </section>
       )}
 
@@ -470,94 +412,50 @@ function ListRow({ row, todayIso, t }: { row: NeedRow; todayIso: string; t: T })
   )
 }
 
-export function NeedList({
-  rows,
-  todayIso,
-  clearTitle,
-  clearBody,
-  notStarted = false,
-  lead,
-  resume,
-  incomplete = false,
-}: {
-  rows: NeedRow[]
-  todayIso: string
-  clearTitle: string
-  clearBody: ReactNode
-  /** See HemCalm.notStarted: the empty list is then a first-time state, not the green check. */
-  notStarted?: boolean
-  /** See HemCalm.incomplete. */
-  incomplete?: boolean
-  /** See HemCalm.lead. */
-  lead?: LeadAction | null
-  resume?: ReactNode
-}) {
-  const t = useTranslations('hem')
-  const tCommon = useTranslations('common')
-  const router = useRouter()
+/**
+ * The rows by group, as Hem lists them: a verb heading per group (with its
+ * sum where there are several rows), the rows, and "Visa alla N" on a long
+ * group so the list stays one screen per group. Anchored by group (#decide,
+ * #review) for the links that lead to one.
+ */
+function NeedGroups({ rows, todayIso, t }: { rows: NeedRow[]; todayIso: string; t: T }) {
   const groups = groupRows(rows)
-  const primary = leadOf(rows, lead, t)
-  // A long group shows its first rows and "Visa alla N": the list stays one screen per group.
   const [openGroups, setOpenGroups] = useState<ReadonlySet<NeedGroup>>(new Set())
-
   return (
-    <div className="space-y-8">
-      <StartButton lead={primary} />
-      {primary && (
-        <div className="md:hidden">
-          <PhoneStartButton lead={primary} />
-        </div>
-      )}
-      {rows.length === 0 && incomplete ? (
-        <EmptyState
-          tone="error"
-          title={t('headline_incomplete')}
-          description={t('incomplete_body')}
-          actionLabel={tCommon('retry')}
-          onAction={() => router.refresh()}
-        />
-      ) : rows.length === 0 ? (
-        <EmptyState tone={notStarted ? 'empty' : 'done'} icon={notStarted ? undefined : CheckIcon} title={clearTitle}>
-          {clearBody && <div className="text-[13px] text-muted-foreground">{clearBody}</div>}
-        </EmptyState>
-      ) : (
-        <div className="stagger-enter -mx-2">
-          <div className="hidden h-8 items-center gap-3 border-b-hairline px-2 text-xs font-medium text-muted-foreground sm:flex" aria-hidden>
-            <span className="min-w-0 flex-1">{t('col_what')}</span>
-            <span className="w-24 shrink-0">{t('col_when')}</span>
-            <span className="w-24 shrink-0 text-right">{t('col_amount')}</span>
-            <span className="hidden w-3.5 shrink-0 sm:block" />
-          </div>
-          {groups.map(({ group, rows: groupRowsOf }) => {
-            const { shown, hidden } = shownRows(groupRowsOf, openGroups.has(group))
-            const headId = `need-group-${group}`
-            return (
-              <section key={group} id={group} aria-labelledby={headId}>
-                <h2 id={headId} className="flex items-end gap-2 border-b-hairline px-2 pb-1.5 pt-4 text-xs font-medium text-muted-foreground">
-                  {t(`verb_${group}`)}
-                  {/* The sum, where there are several rows to sum; one row says its own number. */}
-                  {groupRowsOf.length > 1 && <span className="font-normal tabular-nums">{Math.max(1, countThings(groupRowsOf))}</span>}
-                </h2>
-                <ul>
-                  {shown.map((row) =>
-                    row.embed ? <li key={row.key} className="px-1">{row.embed}</li> : <ListRow key={row.key} row={row} todayIso={todayIso} t={t} />,
-                  )}
-                </ul>
-                {hidden > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setOpenGroups((prev) => new Set(prev).add(group))}
-                    className="flex min-h-11 w-full items-center border-b-hairline px-2 text-left text-xs text-foreground underline underline-offset-[3px] transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-                  >
-                    {t('list_show_all', { count: groupRowsOf.length })}
-                  </button>
-                )}
-              </section>
-            )
-          })}
-        </div>
-      )}
-      {resume}
+    <div className="-mx-2 mt-2">
+      <div className="hidden h-8 items-center gap-3 border-b-hairline px-2 text-xs font-medium text-muted-foreground sm:flex" aria-hidden>
+        <span className="min-w-0 flex-1">{t('col_what')}</span>
+        <span className="w-24 shrink-0">{t('col_when')}</span>
+        <span className="w-24 shrink-0 text-right">{t('col_amount')}</span>
+        <span className="hidden w-3.5 shrink-0 sm:block" />
+      </div>
+      {groups.map(({ group, rows: groupRowsOf }) => {
+        const { shown, hidden } = shownRows(groupRowsOf, openGroups.has(group))
+        const headId = `need-group-${group}`
+        return (
+          <section key={group} id={group} aria-labelledby={headId}>
+            <h3 id={headId} className="flex items-end gap-2 border-b-hairline px-2 pb-1.5 pt-4 text-xs font-medium text-muted-foreground">
+              {t(`verb_${group}`)}
+              {/* The sum, where there are several rows to sum; one row says its own number. */}
+              {groupRowsOf.length > 1 && <span className="font-normal tabular-nums">{Math.max(1, countThings(groupRowsOf))}</span>}
+            </h3>
+            <ul>
+              {shown.map((row) =>
+                row.embed ? <li key={row.key} className="px-1">{row.embed}</li> : <ListRow key={row.key} row={row} todayIso={todayIso} t={t} />,
+              )}
+            </ul>
+            {hidden > 0 && (
+              <button
+                type="button"
+                onClick={() => setOpenGroups((prev) => new Set(prev).add(group))}
+                className="flex min-h-11 w-full items-center border-b-hairline px-2 text-left text-xs text-foreground underline underline-offset-[3px] transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+              >
+                {t('list_show_all', { count: groupRowsOf.length })}
+              </button>
+            )}
+          </section>
+        )
+      })}
     </div>
   )
 }
@@ -598,17 +496,15 @@ export function GuidedSteps({
 
   if (!row) {
     // Through the walk with rows still standing is not "done": no green check,
-    // the number that is left (the one Behöver dig shows) and the way to it.
+    // the number that is left (the one Hem shows) and the way back to it.
     const left = countThings(rows)
     if (rows.length > 0) {
       return (
         <EmptyState
           title={t('borja_done_title')}
           description={left > 0 ? t('borja_done_body', { count: left }) : undefined}
-          actionLabel={t('borja_done_list')}
-          actionHref={hemHref('behover')}
-          secondaryActionLabel={t('back_home')}
-          secondaryActionHref="/"
+          actionLabel={t('back_home')}
+          actionHref={hemHref('hem')}
         />
       )
     }

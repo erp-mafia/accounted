@@ -23,11 +23,12 @@ describe('bookingScreenHref', () => {
 })
 
 describe('the way back to Hem', () => {
-  it('returns to Hem and to its Behöver dig view, named after each', () => {
+  it('returns to Hem, whatever its view, named Hem', () => {
     expect(safeReturnPath('/')).toBe('/')
+    // An old link to the list view Hem took over still lands on Hem.
     expect(safeReturnPath('/?vy=behover')).toBe('/?vy=behover')
     expect(bookingScreenOrigin('/', true)).toBe('/')
-    expect(bookingScreenOrigin('/?vy=behover', true)).toBe('/?vy=behover')
+    expect(bookingScreenOrigin('/?vy=behover', true)).toBe('/')
     expect(bookingScreenOrigin('/?vy=annat', true)).toBe('/')
   })
 

@@ -191,7 +191,7 @@ export default async function DashboardPage({
 
   // Hem (Att göra V8): the notice line, then the streamed pane, which opens
   // with the date and the headline and carries Kom igång right under it.
-  // Behöver dig, Börja and Gjort are views of the same
+  // Hem lists what needs the person; Börja and Gjort are views of the same
   // page (?vy=), so every count comes from one read.
   const tHem = await getTranslations('hem')
   const hem = (
@@ -221,7 +221,7 @@ export default async function DashboardPage({
 
   // The top bar: the view's title (the menu label), Hem as the parent of the
   // views under it, and the slot the view puts its one primary in.
-  const title = vy === 'behover' ? tHem('need_title') : vy === 'borja' ? tHem('borja_title') : vy === 'gjort' ? tHem('done_title') : tHem('title')
+  const title = vy === 'borja' ? tHem('borja_title') : vy === 'gjort' ? tHem('done_title') : tHem('title')
   const header = (
     <PageHeader
       title={title}
