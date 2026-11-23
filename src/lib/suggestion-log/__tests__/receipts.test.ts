@@ -193,6 +193,26 @@ describe('buildDecisionReceipt', () => {
     expect(r.proposed_by).toMatchObject({ pending_operation_id: 'op-other', label: 'Claude' })
   })
 
+  it("a booking accepted from the company's own earlier booking has its chosen candidate", () => {
+    const precedent = {
+      source: 'precedent',
+      source_id: 'precedent:5420',
+      rank: 0,
+      proposal: { booking: { kind: 'account', account: '5420', vat_treatment: 'standard_25', category: 'expense_software' }, debit_account: '5420', credit_account: '1930', vat_treatment: 'standard_25' },
+      confidence: 0.6,
+      model: null,
+      prompt_sha256: null,
+      matches_final: true,
+      evidence: { seen_count: 3 },
+    }
+    const r = buildDecisionReceipt(
+      bankRow({ suggestions: [precedent, assistant], acted_on: 0, final: { journal_entry_id: JE, booking: null, account: '5420', vat_treatment: 'standard_25', lines: [] } }),
+      emptyCtx,
+    )
+    expect(r.candidates.map((c) => c.source)).toEqual(['precedent', 'assistant'])
+    expect(r.chosen).toMatchObject({ source: 'precedent', source_id: 'precedent:5420', accounts: ['5420'], vat_treatment: 'standard_25', matches_final: true })
+  })
+
   it('skips suggestion shapes it does not know and coerces an unknown actor to user', () => {
     const r = buildDecisionReceipt(bankRow({ suggestions: [{ source: 'oracle' }, 'junk', rule], acted_on: 2, actor_type: 'robot' }), emptyCtx)
     expect(r.candidates).toHaveLength(1)
