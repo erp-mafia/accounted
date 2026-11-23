@@ -207,16 +207,29 @@ export function renderCoverPage(
 }
 
 /**
- * Flerårsöversikt: column per year; whole SEK everywhere keeps repeated
- * facts trivially consistent across scales (TA §2.7.3). Empty when there
- * are no rows.
+ * Flerårsöversikt: column per year. Whole kronor by default, which keeps the
+ * facts it repeats from the resultaträkning identical to them. With
+ * `tkr` (the year's choice) nettoomsättning and resultat efter finansiella
+ * poster are stated in thousands of kronor at scale 3 (TA §2.10.3), as in
+ * Bolagsverket's K2 example 1: the same concept may appear at another scale
+ * when the values correspond (TA §2.7.3), and a tkr figure rounded from the
+ * whole-krona one always does. The unit is said in the table's heading, as
+ * for kronor; the rows keep the taxonomy's own labels (TA §2.20). Soliditet
+ * is a percentage either way. Empty when there are no rows.
  */
-export function renderFlerarsoversikt(writer: FactWriter, rows: FlerarsRow[]): string {
+export function renderFlerarsoversikt(
+  writer: FactWriter,
+  rows: FlerarsRow[],
+  opts: { tkr?: boolean } = {},
+): string {
   if (rows.length === 0) return ''
+  const tkr = opts.tkr === true
+  const amount = (concept: string, ctxId: string, value: number): string =>
+    tkr ? writer.moneyThousands(concept, ctxId, value) : writer.money(concept, ctxId, value)
   const header = el(
     'tr',
     {},
-    el('th', {}, 'Flerårsöversikt (kr)') +
+    el('th', {}, tkr ? 'Flerårsöversikt (tkr)' : 'Flerårsöversikt (kr)') +
       rows.map((row) => el('th', { class: 'num' }, escapeText(row.year))).join(''),
   )
   const factCtx = (index: number, kind: 'period' | 'balans'): string | null => {
@@ -245,13 +258,13 @@ export function renderFlerarsoversikt(writer: FactWriter, rows: FlerarsRow[]): s
     header +
       rowFor(
         'Nettoomsättning',
-        (ctxId, index) => writer.money('Nettoomsattning', ctxId, rows[index].nettoomsattning),
+        (ctxId, index) => amount('Nettoomsattning', ctxId, rows[index].nettoomsattning),
         'period',
       ) +
       rowFor(
         'Resultat efter finansiella poster',
         (ctxId, index) =>
-          writer.money('ResultatEfterFinansiellaPoster', ctxId, rows[index].resultatEfterFinansiellaPoster),
+          amount('ResultatEfterFinansiellaPoster', ctxId, rows[index].resultatEfterFinansiellaPoster),
         'period',
       ) +
       rowFor(

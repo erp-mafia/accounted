@@ -223,6 +223,13 @@ export const narrativeShape = {
     .describe(
       'K2 anläggningstillgångar note: the rows neither the anläggningsregister nor the ledger can tell apart, per balance sheet post (for example MaskinerAndraTekniskaAnlaggningar) and row, whole SEK, positive as the taxonomy names the row: cost.omrakningsdifferenser (raises anskaffningsvärden), depreciation.omrakningsdifferenser (lowers accumulated avskrivningar), and for nedskrivningar booked on the post\'s write-down accounts outside the register: impairment.fusion (taken over, never negative), impairment.forsaljningar (left with an asset sold or scrapped, never negative), impairment.omklassificeringar and impairment.omrakningsdifferenser (lower accumulated nedskrivningar). Everything else in the note comes from the register, where each asset says how it was acquired (acquisition_type). Merged per row: a row sent replaces that row, null removes a row, a post or everything.',
     ),
+  // The flerårsöversikt in thousands of kronor, K2 and K3 alike: the PDF
+  // prints and the iXBRL document tags (scale 3) nettoomsättning and resultat
+  // efter finansiella poster in tkr. Everything else stays in whole kronor.
+  flerarsoversikt_tkr: z
+    .boolean()
+    .optional()
+    .describe('State the amounts of the flerårsöversikt in thousands of kronor (tkr) instead of whole kronor, in the PDF and the iXBRL document; the statements and notes stay in whole kronor.'),
 }
 
 type NarrativeRuleInput = {

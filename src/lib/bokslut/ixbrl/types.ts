@@ -119,6 +119,12 @@ export interface IxbrlArsredovisningInput {
     /** Period ranges aligned 1:1 with flerarsoversikt rows (newest first).
      *  Index 0/1 reuse period0/period1; 2/3 get their own contexts. */
     flerarsPerioder: Array<{ start: string; end: string }>
+    /** The year states the flerårsöversikt's amounts in thousands of kronor
+     *  (arsredovisning_narratives.flerarsoversikt_tkr). The rows above stay
+     *  whole kronor: the document rounds and tags them at scale 3. Present
+     *  only when true, so every other input, and a version locked before the
+     *  choice existed, keeps its shape and states them in kronor. */
+    flerarsoversiktTkr?: boolean
     egetKapital: EgetKapitalForandring
     /**
      * The year's changes in equity per post and kind of movement (the

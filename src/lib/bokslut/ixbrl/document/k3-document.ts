@@ -226,7 +226,7 @@ export function generateK3IxbrlDocument(input: IxbrlArsredovisningInput): Genera
         ),
       )
     }
-    const flerars = renderFlerarsoversikt(writer, fb.flerarsoversikt)
+    const flerars = renderFlerarsoversikt(writer, fb.flerarsoversikt, { tkr: fb.flerarsoversiktTkr })
     if (flerars) parts.push(flerars)
     if (k3.equity.placement === 'management_report') {
       const equity = renderEquity(writer, registry, input, k3.equity, ctx, warnings)
