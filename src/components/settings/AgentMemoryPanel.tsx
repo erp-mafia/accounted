@@ -60,10 +60,11 @@ const KIND_FILTER: { value: 'all' | Kind; label: string }[] = [
 ]
 
 /**
- * What the assistant remembers about the company, to read, add to, edit and
- * hide. `plain` is the same panel as one list, newest first: no kind filter,
- * no hidden rows to bring back, no pinning. Adding a memory and each row's
- * edit and hide stay.
+ * What the assistant remembers about the company, to read, add to, edit, pin
+ * and hide. `plain` is the same panel as one list, newest first, with no
+ * kind filter, no help and no count line. Everything that changes a memory
+ * stays: adding one, each row's pin, edit and hide, and showing the hidden
+ * rows so one can be brought back.
  */
 export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
   const { toast } = useToast()
@@ -273,25 +274,25 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         {!plain && (
-          <>
-            {/* The segments scroll sideways on a phone instead of pushing the page wide. */}
-            <div className="max-w-full overflow-x-auto rounded-lg">
-              <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
-            </div>
-            <button
-              type="button"
-              onClick={() => setIncludeDismissed((v) => !v)}
-              aria-pressed={includeDismissed}
-              className={cn(QUIET_LINK_CLASS, 'ml-1 text-xs')}
-            >
-              {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
-            </button>
-            <HelpPopover className="shrink-0">
-              Bokföringsassistenten använder dessa anteckningar för att ge dig rätt råd. Fäst det som alltid
-              ska vara med, redigera fel, eller dölj det som inte längre stämmer. Upp till 30 minnen ingår i
-              samtal per tur.
-            </HelpPopover>
-          </>
+          // The segments scroll sideways on a phone instead of pushing the page wide.
+          <div className="max-w-full overflow-x-auto rounded-lg">
+            <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setIncludeDismissed((v) => !v)}
+          aria-pressed={includeDismissed}
+          className={cn(QUIET_LINK_CLASS, plain ? 'text-xs' : 'ml-1 text-xs')}
+        >
+          {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
+        </button>
+        {!plain && (
+          <HelpPopover className="shrink-0">
+            Bokföringsassistenten använder dessa anteckningar för att ge dig rätt råd. Fäst det som alltid
+            ska vara med, redigera fel, eller dölj det som inte längre stämmer. Upp till 30 minnen ingår i
+            samtal per tur.
+          </HelpPopover>
         )}
         {canWrite && (
           <Button className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
@@ -381,7 +382,7 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
             const who = savedBy(row)
             return (
               <li key={row.id} className={cn('group flex items-start gap-3 border-b-hairline py-3.5', dimmed && 'opacity-60')}>
-                {plain ? null : canWrite && row.is_active ? (
+                {canWrite && row.is_active ? (
                   <button
                     type="button"
                     onClick={() => patch(row.id, { is_pinned: !row.is_pinned })}
