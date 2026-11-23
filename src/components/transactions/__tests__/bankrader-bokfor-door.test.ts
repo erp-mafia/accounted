@@ -30,6 +30,15 @@ describe('Bankrader Bokför with the booking screen', () => {
     expect(review).toBeGreaterThan(screen)
   })
 
+  it('opens a picked template or counterpart on the booking screen with it used, in place of the quick review', () => {
+    const review = PAGE_SRC.slice(PAGE_SRC.indexOf('function openReview('), PAGE_SRC.indexOf('function handleTemplateSelected('))
+    const toScreen = review.indexOf('if (bookingScreen) {')
+    expect(toScreen).toBeGreaterThan(-1)
+    expect(review).toContain('stagePickedProposal(transaction.id, proposal)')
+    expect(review).toContain("bookingScreenHref({ kind: 'transaction', transactionId: transaction.id, account: null, picked: true }")
+    expect(review.indexOf('setQuickReviewOpen(true)')).toBeGreaterThan(toScreen)
+  })
+
   it('returns to Bankrader with its filters', () => {
     expect(PAGE_SRC).toContain(
       "router.push(bookingScreenHref({ kind: 'transaction', transactionId: transaction.id, account: null }, `/transactions${window.location.search}`))",

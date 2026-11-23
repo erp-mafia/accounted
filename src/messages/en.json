@@ -5550,6 +5550,7 @@
     "offer_label": "Suggestion: {name}",
     "offer_use": "Use",
     "offer_used": "Using the suggestion: {name}",
+    "offer_applying": "Filling in the template’s lines…",
     "offer_undo": "Undo",
     "offer_failed": "Could not fetch the suggestion's lines. Enter them yourself or try again.",
     "title": "Book",

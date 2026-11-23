@@ -5550,6 +5550,7 @@
     "offer_label": "Förslag: {name}",
     "offer_use": "Använd",
     "offer_used": "Förslaget används: {name}",
+    "offer_applying": "Fyller i mallens rader…",
     "offer_undo": "Ångra",
     "offer_failed": "Kunde inte hämta förslagets rader. Kontera själv eller försök igen.",
     "title": "Bokför",

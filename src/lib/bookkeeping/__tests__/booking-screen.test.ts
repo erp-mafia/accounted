@@ -72,6 +72,14 @@ describe('parseBookingScreenSubject', () => {
     expect(parseBookingScreenSubject({ transaktion: TX, konto: 'abcd' })).toMatchObject({ account: null })
   })
 
+  it('reads that a picked proposal waits, and nothing else as one', () => {
+    const subject = { kind: 'transaction' as const, transactionId: TX, account: null, picked: true }
+    const query = Object.fromEntries(new URL(`https://x${bookingScreenHref(subject)}`).searchParams)
+    expect(query.vald).toBe('1')
+    expect(parseBookingScreenSubject(query)).toEqual(subject)
+    expect(parseBookingScreenSubject({ transaktion: TX, vald: 'ja' })).not.toHaveProperty('picked')
+  })
+
   it('reads the inbox item found for the row, and drops one that is not a uuid', () => {
     const subject = { kind: 'transaction' as const, transactionId: TX, account: null, foundItemId: ITEM }
     const query = Object.fromEntries(new URL(`https://x${bookingScreenHref(subject)}`).searchParams)

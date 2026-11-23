@@ -30,6 +30,7 @@ import { categorizeBodyFor, type BookingProposal } from '@/lib/bookkeeping/propo
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { fetchProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { proposalLinesToFormLines, type ProposalLine } from '@/lib/bookkeeping/proposal-lines'
+import { takePickedProposal } from '@/lib/bookkeeping/booking-screen-pick'
 import { useProposalWhy } from '@/components/transactions/proposal-why'
 import { useToBookRows } from './use-to-book-rows'
 import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
@@ -58,11 +59,13 @@ export interface BookingScreenProps {
   found: AvailableInboxDoc | null
   /** The found document was asked for but could not be read: the screen says so. */
   foundFailed?: boolean
+  /** A proposal the person picked beside the row waits (booking-screen-pick.ts): the screen opens with it used. */
+  picked?: boolean
   /** The page to return to (the list with its filters), checked by safeReturnPath. */
   back: string | null
 }
 
-export function BookingScreen({ transaction, account, found, foundFailed = false, back }: BookingScreenProps) {
+export function BookingScreen({ transaction, account, found, foundFailed = false, picked = false, back }: BookingScreenProps) {
   const t = useTranslations('booking_screen')
   const router = useRouter()
   const { canWrite, lockedTitle } = useViewerLock()
@@ -170,6 +173,7 @@ export function BookingScreen({ transaction, account, found, foundFailed = false
           account={account}
           found={found}
           foundFailed={foundFailed}
+          picked={picked}
           amountLabel={amountLabel ?? ''}
           nextUp={walk.afterRow}
           onTouched={() => setTouched(true)}
@@ -292,6 +296,7 @@ function TransactionBooking({
   account,
   found,
   foundFailed,
+  picked,
   amountLabel,
   nextUp,
   onTouched,
@@ -301,6 +306,7 @@ function TransactionBooking({
   account: string | null
   found: AvailableInboxDoc | null
   foundFailed: boolean
+  picked: boolean
   amountLabel: string
   /** The row Bokför opens next, named under the form. */
   nextUp: ToBookRow | null
@@ -348,14 +354,13 @@ function TransactionBooking({
   const [used, setUsed] = useState<{ proposal: BookingProposal; lines: ProposalLine[] } | null>(null)
   const [applying, setApplying] = useState(false)
   const [applyError, setApplyError] = useState<string | null>(null)
-  const applySuggestion = async () => {
-    if (!proposal) return
+  const applyProposal = async (chosen: BookingProposal) => {
     onTouched()
     setApplying(true)
     setApplyError(null)
     try {
-      const lines = await fetchProposalPreview({ transaction_id: transaction.id, booking: categorizeBodyFor(proposal) })
-      if (lines.length > 0) setUsed({ proposal, lines })
+      const lines = await fetchProposalPreview({ transaction_id: transaction.id, booking: categorizeBodyFor(chosen) })
+      if (lines.length > 0) setUsed({ proposal: chosen, lines })
       else setApplyError(t('offer_failed'))
     } catch {
       setApplyError(t('offer_failed'))
@@ -363,6 +368,20 @@ function TransactionBooking({
       setApplying(false)
     }
   }
+  const applySuggestion = () => (proposal ? applyProposal(proposal) : undefined)
+
+  // A template or counterpart picked beside the row in Bankrader: used at
+  // once, as a pick in the quick review was. Taken once, so a reload or the
+  // next row opens with the screen's own suggestion.
+  const pickTaken = useRef(false)
+  useEffect(() => {
+    if (!picked || pickTaken.current) return
+    pickTaken.current = true
+    const chosen = takePickedProposal(transaction.id)
+    if (chosen) void applyProposal(chosen)
+    // Once, on opening: the pick is the row's when the screen opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const detachEarlierUnderlag = () =>
     attachments.detachEarlier({
@@ -475,6 +494,10 @@ function TransactionBooking({
                   </div>
                   {applyError && <p className="text-xs text-destructive">{applyError}</p>}
                 </div>
+              ) : applying ? (
+                <p className="text-sm text-muted-foreground">{t('offer_applying')}</p>
+              ) : applyError ? (
+                <p className="text-xs text-destructive">{applyError}</p>
               ) : null}
               <JournalEntryForm
                 key={`${transaction.id}-${bankAccount}-${account ?? 'none'}-${used ? used.proposal.template_id : 'own'}`}

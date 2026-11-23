@@ -119,6 +119,7 @@ import {
 } from '@/lib/bookkeeping/matchable-statuses'
 import { useAssistantReadsAvailable, useBookingScreenEnabled, useCompany } from '@/contexts/CompanyContext'
 import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
+import { stagePickedProposal } from '@/lib/bookkeeping/booking-screen-pick'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { collectPages } from '@/lib/lists/collect-pages'
@@ -4481,6 +4482,17 @@ export default function TransactionsPage() {
   // Opened from the picker "Byt" opened, it gets the underlag the closed
   // review held; every other way in starts without one.
   function openReview(transaction: TransactionWithInvoice, proposal: BookingProposal, picked: boolean) {
+    // With the booking screen switched on, the row opens there with the
+    // proposal used (a pick, or one the server would not book unreviewed).
+    if (bookingScreen) {
+      setTemplatePickerOpen(false)
+      setTemplatePickerUnderlag(null)
+      stagePickedProposal(transaction.id, proposal)
+      router.push(
+        bookingScreenHref({ kind: 'transaction', transactionId: transaction.id, account: null, picked: true }, `/transactions${window.location.search}`),
+      )
+      return
+    }
     const underlag = underlagForReview(templatePickerUnderlag, {
       transactionId: transaction.id,
       fromPicker: templatePickerOpen,

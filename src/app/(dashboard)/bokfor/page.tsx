@@ -26,6 +26,7 @@ export default async function BookingScreenRoute({
     transaktion?: string | string[]
     konto?: string | string[]
     underlag?: string | string[]
+    vald?: string | string[]
     tillbaka?: string | string[]
   }>
 }) {
@@ -66,11 +67,12 @@ export default async function BookingScreenRoute({
   }
   return (
     <BookingScreen
-      key={`${subject.transactionId}:${subject.account ?? ''}:${found?.inbox_item_id ?? ''}`}
+      key={`${subject.transactionId}:${subject.account ?? ''}:${found?.inbox_item_id ?? ''}:${subject.picked ? 'vald' : ''}`}
       transaction={transaction}
       account={subject.account}
       found={found}
       foundFailed={foundFailed}
+      picked={subject.picked === true}
       back={back}
     />
   )
