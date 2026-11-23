@@ -4,12 +4,17 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { readOnlyResponse } from '@/lib/auth/require-write'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { creatorOf, resolveCreators, type Creator } from '@/lib/attribution/person-names'
+import { answeredQuestionsOfFacts } from '@/lib/questions/fact-questions'
 import { createServiceClient } from '@/lib/supabase/server'
 
 // GET /api/agent/memory
 //
 // Lists memory entries for the active company, ordered by pin > relevance >
 // recency. Powers /settings/assistant?view=memory (transparency UI per plan §11).
+//
+// A row that answered a question carries `answered_question`: the question's
+// text and the answer as the person gave it ({ question, answer }), read with
+// the caller's own client; null on every other row.
 //
 // Query params:
 //   include_dismissed: 'true' includes is_active=false rows (audit view).
@@ -88,7 +93,16 @@ export const GET = withRouteContext('agent.memory.list', async (request, ctx) =>
 
   const { data, error } = await query
   if (error) throw error
-  return NextResponse.json({ data: await withCreators(data ?? []) })
+  const rows = data ?? []
+  const [named, answered] = await Promise.all([
+    withCreators(rows),
+    answeredQuestionsOfFacts(
+      supabase,
+      companyId,
+      rows.map((row) => row.id),
+    ),
+  ])
+  return NextResponse.json({ data: named.map((row) => ({ ...row, answered_question: answered.get(row.id) ?? null })) })
 })
 
 export const POST = withRouteContext(

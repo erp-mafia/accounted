@@ -11,11 +11,13 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsSeg, SettingsSelect, SettingsTextarea } from '@/components/settings/SettingsRows'
+import { memoryRowText } from '@/components/settings/agent-memory-row'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDateLong } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { attributionWordsFrom, formatActorAttribution, mcpClientDisplayName } from '@/lib/attribution/format-actor'
 import type { Creator } from '@/lib/attribution/person-names'
+import type { AnsweredQuestionOfFact } from '@/lib/questions/fact-questions'
 
 import type { FactKind as Kind, FactSource as Source } from '@/lib/agent-context/agent-competence'
 
@@ -35,6 +37,8 @@ interface AgentMemoryRow {
   created_by?: Creator | null
   /** The MCP client label that wrote it; null outside MCP. */
   client: string | null
+  /** The question the row answered, with the answer as the person gave it (GET only). */
+  answered_question?: AnsweredQuestionOfFact | null
 }
 
 const KIND_LABEL: Record<Kind, string> = {
@@ -380,6 +384,7 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
             const isBusy = busyId === row.id
             const dimmed = !row.is_active
             const who = savedBy(row)
+            const text = memoryRowText(row)
             return (
               <li key={row.id} className={cn('group flex items-start gap-3 border-b-hairline py-3.5', dimmed && 'opacity-60')}>
                 {canWrite && row.is_active ? (
@@ -423,7 +428,10 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
                       </div>
                     </div>
                   ) : (
-                    <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{row.content}</p>
+                    <>
+                      {text.quiet && <p className="break-words text-[13px] leading-6 text-muted-foreground">{text.quiet}</p>}
+                      <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{text.main}</p>
+                    </>
                   )}
                   <p className="mt-1 text-xs tabular-nums text-muted-foreground">
                     {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]} · {formatDateLong(row.created_at)}
