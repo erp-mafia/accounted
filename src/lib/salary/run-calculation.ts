@@ -637,6 +637,9 @@ export async function runSalaryCalculation(
   const variableVacationPayEmployees: string[] = []
   const vacationDaysPayEmployees: string[] = []
   const netRepayments: string[] = []
+  // Employees whose personnummer could not be decrypted: their avgift rate,
+  // which follows the age, is unknown, so their rows stay uncalculated.
+  const unreadablePersonnummerEmployees: string[] = []
   // Vacation days the law and the data cannot price (vacation-days-pay.ts):
   // collected for the whole roster, then refused together before anything
   // is written.
@@ -1171,6 +1174,7 @@ export async function runSalaryCalculation(
     )
     if (result.vaxaStodRefund) vaxaStodRefundEmployees.push(employeeName)
     if (lineItems.some((li) => li.isNetDeduction && li.amount > 0)) netRepayments.push(employeeName)
+    if (result.personnummerUnreadable) unreadablePersonnummerEmployees.push(employeeName)
     // The breakdown names where the variable vacation pay came from, next to
     // the additions it is part of.
     if (variableVacationPayStep) {
@@ -1252,7 +1256,11 @@ export async function runSalaryCalculation(
       parental_days: parentalDays,
       vacation_days_taken: vacationDaysTaken,
       vacation_paid_days_per_day_off: vacationPaidDaysPerDayOff,
-      calculation_breakdown: { steps: result.steps },
+      // The breakdown is the proof of a calculation (calculation-state.ts).
+      // Without a readable personnummer the avgifter are a placeholder, so
+      // the row gets none: the run reads stale, and review, approval,
+      // booking and the AGI refuse it until a calculation that can read it.
+      calculation_breakdown: result.personnummerUnreadable ? null : { steps: result.steps },
       ytd_gross: roundOre((ytdByEmployee.get(sre.employee_id)?.gross || 0) + result.grossSalary),
       ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + effectiveTax),
       ytd_net: ytdByEmployee.get(sre.employee_id)?.net === null ? null : roundOre((ytdByEmployee.get(sre.employee_id)?.net ?? 0) + effectiveNet),
@@ -1504,6 +1512,13 @@ export async function runSalaryCalculation(
 
   // 11. Warnings: non-blocking annotations the caller should surface.
   const warnings: string[] = []
+  // First: it is the one warning that stops the run.
+  if (unreadablePersonnummerEmployees.length > 0) {
+    warnings.push(
+      `Personnumret kunde inte läsas för ${unreadablePersonnummerEmployees.join(', ')}, så arbetsgivaravgiften, som beror på åldern, är inte beräknad. ` +
+        'Beräkna om lönekörningen: den kan inte godkännas, bokföras eller deklareras innan dess. Kvarstår felet, kontakta supporten.',
+    )
+  }
   if (taxTableSource === 'fallback') {
     warnings.push(
       `Skatteverkets skattetabell-API är inte nåbart: beräkningen använder lokal reservdata för ${paymentYear}. Kontrollera att Skatteverket inte publicerat ändringar innan lönekörningen bokförs.`,
