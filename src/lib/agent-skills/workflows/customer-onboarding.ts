@@ -38,7 +38,9 @@ later: much cheaper to ask the customer once at onboarding.
 
 ### Step 1: Check if the customer already exists
 
-\`gnubok_list_customers\` returns all customers. Search by name client-side.
+\`gnubok_list_customers\` returns all customers, by name, when they fit one
+answer; a larger register answers a page with has_more: page on with offset
+(next_offset) before concluding a customer is missing. Search by name client-side.
 If a customer with the same org_number or vat_number exists, USE THAT ONE.
 Duplicate customers fragment the AR ledger and confuse aging reports.
 If one buyer already has two cards, stage \`gnubok_merge_customers\`: the
