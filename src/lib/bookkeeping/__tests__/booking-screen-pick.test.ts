@@ -49,6 +49,11 @@ describe('the proposal picked for a bank row', () => {
     expect(takePickedProposal('tx-1', storage)).toBeNull()
     storage.setItem('accounted.booking-screen-pick', '{not json')
     expect(takePickedProposal('tx-1', storage)).toBeNull()
+    // A booking kind the preview does not know, or one missing what its kind needs.
+    for (const booking of [{ kind: 'mystery' }, { kind: 'template', category: 'expense_office' }, { kind: 'account', account: '6110' }]) {
+      storage.setItem('accounted.booking-screen-pick', JSON.stringify({ transactionId: 'tx-1', proposal: { ...PROPOSAL, booking } }))
+      expect(takePickedProposal('tx-1', storage)).toBeNull()
+    }
   })
 
   it('is nothing without storage', () => {

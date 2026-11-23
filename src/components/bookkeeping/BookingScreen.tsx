@@ -373,12 +373,18 @@ function TransactionBooking({
   // A template or counterpart picked beside the row in Bankrader: used at
   // once, as a pick in the quick review was. Taken once, so a reload or the
   // next row opens with the screen's own suggestion.
+  // The form waits for it: booking before its lines land would skip the pick.
   const pickTaken = useRef(false)
+  const [pickPending, setPickPending] = useState(picked)
   useEffect(() => {
     if (!picked || pickTaken.current) return
     pickTaken.current = true
     const chosen = takePickedProposal(transaction.id)
-    if (chosen) void applyProposal(chosen)
+    if (!chosen) {
+      setPickPending(false)
+      return
+    }
+    void applyProposal(chosen).finally(() => setPickPending(false))
     // Once, on opening: the pick is the row's when the screen opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -499,37 +505,39 @@ function TransactionBooking({
               ) : applyError ? (
                 <p className="text-xs text-destructive">{applyError}</p>
               ) : null}
-              <JournalEntryForm
-                key={`${transaction.id}-${bankAccount}-${account ?? 'none'}-${used ? used.proposal.template_id : 'own'}`}
-                embedded
-                onPage
-                initialLines={
-                  used
-                    ? proposalLinesToFormLines(used.lines, {
-                        settlementAccount: bankAccount,
-                        currency: transaction.currency,
-                        foreignAmount: Math.abs(transaction.amount),
-                        exchangeRate: transaction.exchange_rate,
-                        lineDescription: used.proposal.name_sv,
-                        settlementLineDescription: bankAccountName ?? t('bank_line_description'),
-                      })
-                    : bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)
-                }
-                initialDate={transaction.date}
-                initialDescription={transaction.description}
-                submitUrl={`/api/transactions/${transaction.id}/book`}
-                sourceType="bank_transaction"
-                sourceId={transaction.id}
-                seriesPicker
-                cashAccountId={transaction.cash_account_id ?? null}
-                onEntryCreated={(entryId) => void handleBooked(entryId)}
-                duplicateMatchTransaction={{
-                  id: transaction.id,
-                  cash_account_id: transaction.cash_account_id ?? null,
-                  currency: transaction.currency ?? 'SEK',
-                }}
-                onDuplicateMatched={(journalEntryId) => void handleBooked(journalEntryId)}
-              />
+              {!pickPending && (
+                <JournalEntryForm
+                  key={`${transaction.id}-${bankAccount}-${account ?? 'none'}-${used ? used.proposal.template_id : 'own'}`}
+                  embedded
+                  onPage
+                  initialLines={
+                    used
+                      ? proposalLinesToFormLines(used.lines, {
+                          settlementAccount: bankAccount,
+                          currency: transaction.currency,
+                          foreignAmount: Math.abs(transaction.amount),
+                          exchangeRate: transaction.exchange_rate,
+                          lineDescription: used.proposal.name_sv,
+                          settlementLineDescription: bankAccountName ?? t('bank_line_description'),
+                        })
+                      : bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)
+                  }
+                  initialDate={transaction.date}
+                  initialDescription={transaction.description}
+                  submitUrl={`/api/transactions/${transaction.id}/book`}
+                  sourceType="bank_transaction"
+                  sourceId={transaction.id}
+                  seriesPicker
+                  cashAccountId={transaction.cash_account_id ?? null}
+                  onEntryCreated={(entryId) => void handleBooked(entryId)}
+                  duplicateMatchTransaction={{
+                    id: transaction.id,
+                    cash_account_id: transaction.cash_account_id ?? null,
+                    currency: transaction.currency ?? 'SEK',
+                  }}
+                  onDuplicateMatched={(journalEntryId) => void handleBooked(journalEntryId)}
+                />
+              )}
               {nextUp && (
                 <p className="text-xs text-muted-foreground" data-ph-mask="">
                   {t('walk_next_up', {

@@ -41,16 +41,26 @@ export function stagePickedProposal(
   }
 }
 
+/** What each kind of booking a proposal makes needs, as the preview reads it (proposal.ts ProposalBooking). */
+function isBooking(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const b = value as Record<string, unknown>
+  switch (b.kind) {
+    case 'template':
+      return typeof b.template_id === 'string' && typeof b.category === 'string'
+    case 'counterparty':
+      return typeof b.counterparty_template_id === 'string'
+    case 'account':
+      return typeof b.account === 'string' && typeof b.vat_treatment === 'string' && typeof b.category === 'string'
+    default:
+      return false
+  }
+}
+
 function isProposal(value: unknown): value is BookingProposal {
   if (!value || typeof value !== 'object') return false
   const p = value as Partial<BookingProposal>
-  return (
-    typeof p.template_id === 'string' &&
-    typeof p.name_sv === 'string' &&
-    !!p.booking &&
-    typeof p.booking === 'object' &&
-    typeof (p.booking as { kind?: unknown }).kind === 'string'
-  )
+  return typeof p.template_id === 'string' && typeof p.name_sv === 'string' && isBooking(p.booking)
 }
 
 /**
