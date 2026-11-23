@@ -11,17 +11,17 @@ Per provider: jurisdiktion, reverse charge-status, faktureringsmodell, payout-cy
 ## Stripe
 
 **Faktureringsentitet (EEA)**: Stripe Technology Europe Ltd, Dublin, Irland.
-**Reverse charge**: JA (B2B-tjänst från IE till SE, 6 kap. 33 § ML, huvudregeln). Konto 4535 + 2614/2645.
+**Reverse charge**: NEJ på kortavgiften (processing fee): den är en momsfri betaltjänst (10 kap. 33 § ML), så ingen omvänd moms och ingen ruta i momsdeklarationen. JA på Stripes programvarutjänster (Billing, Radar, Tax, abonnemang): momspliktiga B2B-tjänster från IE till SE (6 kap. 33 § ML, huvudregeln), konto 4535 + 2614/2645, rutorna 21, 30 och 48.
 **Faktureringsmodell**: Avgifter debiteras netto från payout. Månatlig faktura med specifikation laddas ner från Dashboard → Documents.
 **Payout-cykel**: T+2 för SEK, T+7 för EUR/USD (default; konfigurerbart per konto).
 **BAS-konton**:
 - 1581: Fordringar Stripe (clearingunderkonto till 1580)
-- 6040: Kontokortsavgifter (transaktionsavgifter)
-- 4535: Inköp av tjänster från annat EU-land 25 % (reverse charge på den momspliktiga delen)
-- 2614 + 2645: utgående/ingående RC-moms
+- 6040: Kontokortsavgifter (transaktionsavgifter, momsfria, ingen RC)
+- 4535: Inköp av tjänster från annat EU-land 25 % (reverse charge på Billing, Radar, Tax och abonnemang, inte på kortavgiften)
+- 2614 + 2645: utgående/ingående RC-moms på de momspliktiga programvarutjänsterna
 - 3960/7960: FX vid USD/EUR-payout
 **Fee-struktur (EEA-kort, default 2025)**: 1,4 % + 1,80 SEK; non-EEA: 2,9 % + 1,80 SEK; valutaväxling +2 %; Klarna via Stripe +1,99 %.
-**Momsbedömning per komponent** (dnr 8-5507): processing fee = momspliktig teknisk tjänst (RC tillämpas); interchange/scheme fees = vidaredebiterad pass-through, normalt momsfri. Stripe specificerar inte alltid uppdelning: i praktiken behandlas hela transaktionsavgiften som RC-tjänst om Stripe inte tydligt anger annat.
+**Momsbedömning per komponent**: kortavgiften (processing fee) är momsfri. Undantaget i 10 kap. 33 § ML (art. 135.1 d i direktiv 2006/112/EG) omfattar en betaltjänst där leverantören själv ser till att medel överförs (EU-domstolen C-2/95 SDC p. 53 och 66, C-607/14 Bookit p. 38-42; Skatteverkets ställningstagande 2020-01-13, dnr 8-5507), och en kortbetalningsleverantör som tog emot medlen, höll dem och betalade ut till handlaren med avdrag för en procentuell avgift tillhandahöll en undantagen tjänst (HFD 2014 ref. 73). En undantagen avgift ger ingen omvänd betalningsskyldighet och hamnar inte i någon ruta: 16 kap. ML gäller bara skattepliktiga tillhandahållanden. Ren teknisk eller administrativ hantering är däremot momspliktig (C-607/14 Bookit p. 53, C-130/15 NEC, C-5/17 DPAS, C-42/18 Cardpoint): Stripes programvarutjänster (Billing, Radar, Tax, abonnemang) bokförs med omvänd moms enligt ovan.
 
 ## Klarna
 

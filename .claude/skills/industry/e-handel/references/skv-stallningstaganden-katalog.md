@@ -30,7 +30,7 @@ Komplett katalog över relevanta avgöranden 2018-2025. Paragrafnyckel från GML
 
 **dnr 8-5507**: Betaltjänster och undantaget från skatteplikt
 - **Datum**: 2020-01-13.
-- **Innehåll**: Tjänster som är undantagna från moms enligt 10 kap. 16 § ML (motsvarar GML 3 kap. 9 §): momsfri endast vid rättsliga/ekonomiska förändringar mellan betalare och mottagare. Rena tekniska/administrativa tjänster är momspliktiga. Avgörande för momsklassificering av Stripe/Klarna/Adyen-avgifter per komponent.
+- **Innehåll**: Tjänster som är undantagna från moms enligt 10 kap. 33 § ML (motsvarar GML 3 kap. 9 §): momsfri endast vid rättsliga/ekonomiska förändringar mellan betalare och mottagare. Rena tekniska/administrativa tjänster är momspliktiga. Avgörande för momsklassificering av Stripe/Klarna/Adyen-avgifter per komponent.
 - **Status**: Gällande.
 
 ### Vouchers och presentkort
@@ -60,10 +60,10 @@ Komplett katalog över relevanta avgöranden 2018-2025. Paragrafnyckel från GML
 - **Rättsfråga**: Vad krävs för att en plattform ska anses förmedla "i eget namn" enligt 5 kap. 4 § ML (med påföljden att plattformen blir momsskyldig som om den vore säljare)?
 - **Princip**: HFD lyfter fram kontroll över prissättning, fakturering, betalningsflöde och kundkontakt som centrala kriterier. Plattform som agerar "i annans namn" (klar agentstatus) faller utanför 5 kap. 4 § ML.
 
-### Mål nr 4610-21: Mellanbanksavgifter och kortinlösen
-- **Avgjort**: 2022-01-07.
-- **Rättsfråga**: Är kortinlösentjänster momsfria? Är mellanbanksavgifter (interchange) ersättning för en tjänst eller en intern allokering?
-- **Princip**: Inlösentjänst klassificeras som momsfri finansiell tjänst (3 kap. 9 § ML, nu 10 kap. 16 § ML 2023:200). Mellanbanksavgiften är ej ersättning för en separat tjänst utan en kostnadsfördelning mellan kortnätverk. Innebörd för bokföring: vid uppdelad fakturaspecifikation från payment provider följs klassificeringen per komponent: pure inlösen är momsfri, tilläggstjänster är momspliktiga.
+### Mål nr 4610-21: Kortutgivarens tjänst till nätverksoperatören
+- **Avgjort**: 2022-01-07 (förhandsbesked, Skatterättsnämndens besked fastställt).
+- **Rättsfråga**: Omsätter en kortutgivare en tjänst när den överför ett belopp motsvarande kortinnehavarens köp till nätverksoperatören och får ersättning i form av "billing credit", en procentuell andel av beloppet?
+- **Princip**: Ja. Prestationerna är villkorade av varandra och ersättningen är bestämd i förväg, så det är ett ömsesidigt utbyte av prestationer och därmed omsättning av tjänst. Domen prövade inte om tjänsten är undantagen från skatteplikt och säger inget om momsbehandlingen av en handlares kortinlösenavgift; för den gäller 10 kap. 33 § ML och dnr 8-5507 (jfr HFD 2014 ref. 73).
 
 ### HFD 2023 ref. 45: Mål nr 7254-7255-22: Blandad verksamhet
 - **Avgjort**: 2023-10-16.

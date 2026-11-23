@@ -157,7 +157,9 @@ Facts. Restaurant, 12 % VAT on food. Day's card sales 30 Sept: **11 200 SEK incl
 
 **ML 10 kap 33 § (2023:200)**: "Från skatteplikt undantas tillhandahållanden av bank- och finansieringstjänster samt sådana tillhandahållanden som utgör värdepappershandel eller liknande verksamhet." The paragraph expressly excludes **notariatverksamhet, inkassotjänster, administrativa tjänster avseende factoring och uthyrning av förvaringsutrymmen** from the concept.
 
-The EU basis is **article 135.1 d** of the VAT Directive (transactions concerning payments and transfers). Per Skatteverket's rättsliga vägledning on *Betaltjänster och förmedling av sådana tjänster*, the service must **"medföra en ändring i den befintliga rättsliga och finansiella ställningen mellan betalaren och mottagaren"**: that change of legal and financial position is the defining characteristic of an exempt payment service.
+The EU basis is **article 135.1 d** of the VAT Directive 2006/112/EC (transactions concerning payments and transfers). The exemption covers a payment service where the supplier itself carries out the transfer of funds (**CJEU C-2/95 SDC** p. 53, 66; **C-607/14 Bookit** p. 38-42); mere technical or administrative handling is taxable (**Bookit** p. 53; **C-130/15 NEC**; **C-5/17 DPAS**; **C-42/18 Cardpoint**). Skatteverket's **ställningstagande 2020-01-13 (dnr 8-5507)**, which replaced its 2017 ställningstagande *Betaltjänster och förmedling av sådana tjänster*, draws the same line: exempt when the provider "själv ser till att medel överförs", taxable when it only forwards payment instructions.
+
+Case law: **HFD 2014 ref. 73**: a card payment provider that received the funds, held them and paid the merchant net of a percentage fee supplied an exempt service. **HFD 2019 ref. 45**: Klarna's checkout service, including its per-claim fee, was held taxable.
 
 **So:** moving the money is exempt. Selling software, hardware, data, access or marketing around the money movement is **not**.
 
@@ -166,7 +168,8 @@ The EU basis is **article 135.1 d** of the VAT Directive (transactions concernin
 | Invoice line | Treatment | Why |
 |---|---|---|
 | Kortinlösenavgift / acquiring fee / processing fee (x % + fixed) | **Exempt**, no VAT, no reverse charge | Effects the transfer of funds: ML 10 kap 33 § |
-| Klarna/Stripe/Zettle transaction fee on a settled sale | **Exempt** | Same |
+| Stripe/Zettle transaction fee on a settled sale | **Exempt** | Same; HFD 2014 ref. 73 |
+| Klarna checkout fee, including its per-claim fee | **Taxable** | HFD 2019 ref. 45 |
 | Swish-transaktionsavgift | **Exempt** | Same |
 | Valutaväxlingspåslag / FX conversion fee | **Exempt** | Currency transaction |
 | Utbetalningsavgift / payout fee | **Exempt** | Part of the transfer |
@@ -217,7 +220,7 @@ Not ruta 21, not ruta 22, not ruta 23 or 24, not ruta 30-32, not ruta 48, and no
 
 | Fee, supplier | Ruta 21 | Ruta 22 | Ruta 30/31/32 | Ruta 48 | Cost account |
 |---|---|---|---|---|---|
-| Exempt payment fee, **EU** supplier (Klarna DE, Adyen NL, Stripe Payments Europe IE) | - | - | - | - | 6570 |
+| Exempt payment fee, **EU** supplier (Adyen NL, Stripe Payments Europe IE) | - | - | - | - | 6570 |
 | Exempt payment fee, **non-EU** supplier (UK, US, CH acquirer) | - | - | - | - | 6570 |
 | Exempt payment fee, **Swedish** supplier | - | - | - | - | 6570 |
 | **Taxable** service, EU supplier (Shopify subscription, Amazon commission, Etsy fees) | **Yes**: beskattningsunderlaget | - | **Yes** (usually ruta 30) | **Yes** | 6540/6590/6910 or 4535-4537 |
@@ -399,7 +402,10 @@ Do not guess. Ask when:
 - **Årsredovisningslag (1995:1554)**: 2 kap 4 § första stycket 6 (kvittningsförbud); 4 kap 13 § (omräkning av fordringar och skulder)
 - **Bokföringslag (1999:1078)**: 5 kap 2 § (bokföringstidpunkt), 4 § (sidoordnad bokföring), 6 § (verifikation, gemensam verifikation)
 - **Skatteförfarandelag (2011:1244)**: 39 kap 4-5 §§ (kassaregister)
-- **Skatteverket**: *Fylla i momsdeklarationen* (ruta 21/22/24 conditions); *Betaltjänster och förmedling av sådana tjänster*, rättslig vägledning; *Tänk på att redovisa dricks om inte arbetsgivaren gjort det* (2024); *Moms på drickspengar*, rättslig vägledning
+- **Directive 2006/112/EC**: art. 135(1)(d)
+- **CJEU**: C-2/95 SDC (p. 53, 66); C-607/14 Bookit (p. 38-42, 53); C-130/15 NEC; C-5/17 DPAS; C-42/18 Cardpoint
+- **HFD**: 2014 ref. 73 (card payment provider, exempt); 2019 ref. 45 (Klarna checkout, taxable)
+- **Skatteverket**: *Fylla i momsdeklarationen* (ruta 21/22/24 conditions); ställningstagande 2020-01-13, dnr 8-5507 (betaltjänster; replaced the 2017 ställningstagande *Betaltjänster och förmedling av sådana tjänster*); *Tänk på att redovisa dricks om inte arbetsgivaren gjort det* (2024); *Moms på drickspengar*, rättslig vägledning
 - **BAS 2026 kontoplan** (bas.se, `BAS_kontoplan_2026_v2.xlsx`) and **Kontoplansförändringar 2026**: 1580 removed, 1686 added; 7833-7835 removed, 7830 renamed; class 4 restructured to separate Handelsvaror from Råvaror och förnödenheter
 - **BFN**: BFNAR 2012:1 (K3) kap. 30; BFNAR 2016:10 (K2)
 - Provider documentation used only to describe settlement mechanics, never for a tax or accounting conclusion

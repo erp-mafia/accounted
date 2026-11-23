@@ -123,7 +123,7 @@ Följande delsystem matar journalen:
 | Löner | Lönekörningar, arbetsgivardeklaration (AGI) | Debet 7xxx + 7510, kredit 2710/2731/1930; semesterlöneskuld 2920/2940 |
 | Anläggningstillgångar | Anläggningsregister med årliga avskrivningar | Debet 78xx, kredit ackumulerade avskrivningar (t.ex. 1219, 1229) |
 | Periodiseringar | Periodiseringsscheman över flera perioder | Debet/kredit 17xx respektive 29xx |
-| Kortbetalningar (Stripe) | Betalning av kundfaktura via betallänk och utbetalning till bankkontot | Betalning: debet 1686, kredit 1510. Utbetalning: debet 1930 och 6570 (avgift), kredit 1686, samt omvänd moms på avgiften |
+| Kortbetalningar (Stripe) | Betalning av kundfaktura via betallänk och utbetalning till bankkontot | Betalning: debet 1686, kredit 1510. Avgifter: debet 6570 för kortavgiften (momsfri betaltjänst, ingen omvänd moms), övriga Stripe-tjänster med omvänd skattskyldighet (2645/2614), kredit 1686. Utbetalning: debet 1930, kredit 1686 |
 | Webbutiker (Shopify, WooCommerce, Zettle) | Order och återbetalningar hämtas som underlag | Kontering när användaren bokför ordern |
 
 [STRYK DE DELSYSTEM SOM INTE ANVÄNDS I DITT FÖRETAG]
