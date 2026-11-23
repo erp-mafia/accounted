@@ -68,6 +68,24 @@ describe('identifySignedInPerson', () => {
     expect(isAnalyticsActive()).toBe(true)
   })
 
+  it('records what fits the free plan: clicks in the menu, top bar and on primary actions, no page leaves, 70% of replays', async () => {
+    const { identifySignedInPerson, analyticsReady } = await load()
+    identifySignedInPerson({ analyticsOn: true, user: USER, identityHash: null })
+    await analyticsReady()
+
+    const options = ph.init.mock.calls[0][1]
+    expect(options.autocapture).toEqual({
+      dom_event_allowlist: ['click'],
+      element_allowlist: ['a', 'button'],
+      css_selector_allowlist: ['nav', 'aside', '.page-header', '[data-ph-capture]'],
+    })
+    expect(options.capture_pageleave).toBe(false)
+    expect(options.session_recording).toMatchObject({ sampleRate: 0.7, maskAllInputs: true })
+    // The privacy choices stay as they were.
+    expect(options.persistence).toBe('memory')
+    expect(options.api_host).toBe('/rl')
+  })
+
   it('does nothing at all when the person switched analytics off', async () => {
     const { identifySignedInPerson, isAnalyticsActive } = await load()
 
