@@ -131,6 +131,7 @@ describe('sellerVatOnReverseCharge', () => {
     expect(sellerVatOnReverseCharge({ sellerVat: 21, total: 121, confirmedForeign: false })).toEqual({
       verdict: 'refused',
       reason: 'not_confirmed',
+      addressCountry: null,
     })
   })
 
@@ -156,15 +157,42 @@ describe('sellerVatOnReverseCharge', () => {
     }
   })
 
-  it('reads a foreign seller registered for VAT in Sweden by its SE number, whatever its address says', () => {
-    expect(
-      sellerVatOnReverseCharge({
-        sellerVat: 25,
-        total: 125,
-        seller: { vatNumber: 'SE502012345601', address: '1 Main St, Austin, Texas 78701, United States' },
-        confirmedForeign: true,
-      }),
-    ).toMatchObject({ verdict: 'refused', reason: 'seller_vat_swedish' })
+  // A Swedish VAT number beside an address abroad: the seller may not be
+  // established here for the sale (ML 2023:200 16 kap. 4 §), and then the
+  // buyer owes the VAT (16 kap. 9 §) and the charge is felaktigt debiterad
+  // (2 kap. 12 §), never ingående moms (13 kap. 4 §). The person says which.
+  const ABROAD = { vatNumber: 'SE502012345601', address: '1 Main St, Austin, Texas 78701, United States' }
+
+  it('asks about a Swedish VAT number beside an address abroad, naming the country, instead of refusing it as Swedish', () => {
+    expect(sellerVatOnReverseCharge({ sellerVat: 25, total: 125, seller: ABROAD, confirmedForeign: false })).toEqual({
+      verdict: 'refused',
+      reason: 'not_confirmed',
+      addressCountry: 'US',
+    })
+  })
+
+  it('books it on the person\'s word, without the warning to check it is not Swedish VAT', () => {
+    expect(sellerVatOnReverseCharge({ sellerVat: 25, total: 125, seller: ABROAD, confirmedForeign: true })).toEqual({
+      verdict: 'confirmed',
+      couldBeSwedishVat: false,
+    })
+  })
+
+  it('words the question for a Swedish VAT number abroad: the flag, the country, and when the rate applies instead', () => {
+    const ask = sellerVatRefusalMessage('not_confirmed', '13.06 USD', 'SG')
+    expect(ask.sv).toContain(`${FOREIGN_SELLER_VAT_FLAG}=true`)
+    expect(ask.en).toContain(`${FOREIGN_SELLER_VAT_FLAG}=true`)
+    expect(ask.sv).toContain('Singapore')
+    expect(ask.en).toContain('Singapore')
+    expect(ask.sv).toContain('13.06 USD')
+    expect(ask.sv).toMatch(/inte etablerad i Sverige/)
+    expect(ask.en).toMatch(/not established in Sweden/)
+    expect(ask.sv).not.toMatch(/utländsk moms/)
+  })
+
+  it('leaves the box unread for a Swedish VAT number abroad unless the supplier card says abroad', () => {
+    expect(purchaseSellerRegion(ABROAD)).toBeNull()
+    expect(purchaseSellerRegion(ABROAD, 'non_eu_business')).toBe('non_eu')
   })
 
   it('words each refusal in both locales: the flag by name, or why it is not honoured', () => {

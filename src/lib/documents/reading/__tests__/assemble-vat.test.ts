@@ -20,3 +20,20 @@ describe('the seller VAT identifier and country off an extraction (crm#1411)', (
     expect(countryFromVatIdentifier('GB123456789')).toBe('GB')
   })
 })
+
+describe('the seller country of a Swedish VAT number beside an address abroad', () => {
+  it('shows the address\'s country, not Sweden', () => {
+    const values = projectExtraction({
+      supplier: { vatNumber: 'SE502012345601', address: '65 Example Street\nSingapore, 01 049513\nSingapore' },
+    })
+
+    expect(values.seller_vat_identifier).toBe('SE502012345601')
+    expect(values.seller_country_code).toBe('SG')
+  })
+
+  it('keeps Sweden for a Swedish VAT number with a Swedish address', () => {
+    const values = projectExtraction({ supplier: { vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm' } })
+
+    expect(values.seller_country_code).toBe('SE')
+  })
+})

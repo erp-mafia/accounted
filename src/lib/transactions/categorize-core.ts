@@ -915,8 +915,15 @@ export async function categorizeTransaction(
               currency: underlag.currency,
               reason: sellerVat.reason,
               ...(sellerVat.reason === 'not_confirmed' ? { confirm_with: FOREIGN_SELLER_VAT_FLAG } : {}),
+              ...(sellerVat.reason === 'not_confirmed' && sellerVat.addressCountry ? { address_country: sellerVat.addressCountry } : {}),
             },
-            { message: sellerVatRefusalMessage(sellerVat.reason, [underlag.vat_amount, underlag.currency].filter(Boolean).join(' ')) },
+            {
+              message: sellerVatRefusalMessage(
+                sellerVat.reason,
+                [underlag.vat_amount, underlag.currency].filter(Boolean).join(' '),
+                sellerVat.reason === 'not_confirmed' ? sellerVat.addressCountry : null,
+              ),
+            },
           )
         }
         if (sellerVat.verdict === 'confirmed') {

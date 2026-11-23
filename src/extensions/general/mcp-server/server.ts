@@ -9736,7 +9736,7 @@ export const tools: McpTool[] = [
           description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"1":"KS01","6":"P001"}. Tags the expense/business lines of the generated voucher: never the bank or VAT lines. Unknown values rejected, never auto-created.',
         },
         allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard. Set true ONLY after the user confirms this bank line is a separate event: the guard blocks a second verifikat for an event already booked.' },
-        confirm_foreign_seller_vat: { type: 'boolean', description: 'reverse_charge on an underlag with VAT: it is FOREIGN VAT charged in error. Never deducted.' },
+        confirm_foreign_seller_vat: { type: 'boolean', description: 'reverse_charge on an underlag with VAT: it is FOREIGN VAT charged in error, or a seller with an SE VAT number and an address abroad is not established in Sweden for the sale. Never deducted.' },
         proposal_id: { type: 'string', maxLength: 200, description: 'Id of the suggestion booked from (in its categorize_args). Recorded only.' },
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
       },

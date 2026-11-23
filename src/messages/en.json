@@ -10666,6 +10666,8 @@
     "rc_seller_vat_title": "The seller charged VAT",
     "rc_seller_vat_description": "If it is foreign VAT the seller charged in error, the purchase is posted as reverse charge on the whole amount. The foreign VAT is not deductible in Sweden: ask the seller for a credit note and give them your VAT number. Swedish VAT is posted at its rate instead.",
     "rc_seller_vat_confirm_action": "Foreign VAT: post",
+    "rc_seller_vat_se_abroad_description": "The seller has a Swedish VAT number but an address in {country}. If the seller is not established in Sweden for this purchase, you account for the VAT as reverse charge on the whole amount, and the VAT on the invoice was charged in error and is not deductible: ask the seller for a credit note and give them your VAT number. If the seller's establishment in Sweden takes part in the sale, the VAT is posted at its rate instead.",
+    "rc_seller_vat_se_abroad_confirm_action": "Not established in Sweden: post",
     "customer_invoice_matched_title": "Customer invoice matched",
     "customer_invoice_matched_description": "The invoice was marked as paid",
     "supplier_invoice_matched_title": "Supplier invoice matched",

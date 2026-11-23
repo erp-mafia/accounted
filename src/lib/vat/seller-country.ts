@@ -7,7 +7,9 @@
  * Deterministic, and in this order, the first that answers wins:
  *   1. the VAT number's prefix (EL is Greece; XI, Northern Ireland, is the
  *      United Kingdom, which is right for the services this decides), when
- *      the number has its member state's format;
+ *      the number has its member state's format, except a Swedish number
+ *      beside an address that names another country (swedishVatNumberAbroad),
+ *      which decides nothing;
  *   2. the IBAN's country;
  *   3. a Swedish organisationsnummer (ten digits, the hyphen optional);
  *   4. a country named in the address as read, by the names the country
@@ -173,8 +175,25 @@ export function countryFromAddress(address: string | null | undefined): string |
   return standalone.reduce((last, one) => (one.at > last.at ? one : last)).code
 }
 
+/**
+ * The country the address names when the VAT number is Swedish and the
+ * address is abroad, else null. A business established abroad can register
+ * for VAT in Sweden, so its number starts with SE; whether it is established
+ * here for the sale (ML 2023:200 16 kap. 4 §) decides whether it owes the
+ * VAT or the buyer does (16 kap. 9 §), and the document does not tell. The
+ * caller asks the person; nothing decides it as Swedish or as foreign.
+ */
+export function swedishVatNumberAbroad(identity: SellerIdentity | null | undefined): string | null {
+  if (vatNumberCountry(identity?.vatNumber) !== SWEDEN) return null
+  const fromAddress = countryFromAddress(identity?.address)
+  return fromAddress && fromAddress !== SWEDEN ? fromAddress : null
+}
+
+const UNKNOWN: SellerCountry = { country: null, region: null, source: null }
+
 /** The seller's country, by the order in the file comment. */
 export function sellerCountry(identity: SellerIdentity | null | undefined): SellerCountry {
+  if (swedishVatNumberAbroad(identity)) return { ...UNKNOWN }
   const fromVat = vatNumberCountry(identity?.vatNumber)
   if (fromVat) return { country: fromVat, region: regionOfCountry(fromVat), source: 'vat_number' }
   const fromIban = ibanCountry(identity?.iban)
@@ -183,7 +202,7 @@ export function sellerCountry(identity: SellerIdentity | null | undefined): Sell
   if (org && SWEDISH_ORG_NUMBER.test(org)) return { country: SWEDEN, region: 'se', source: 'org_number' }
   const fromAddress = countryFromAddress(identity?.address)
   if (fromAddress) return { country: fromAddress, region: regionOfCountry(fromAddress), source: 'address' }
-  return { country: null, region: null, source: null }
+  return { ...UNKNOWN }
 }
 
 /**

@@ -10666,6 +10666,8 @@
     "rc_seller_vat_title": "Säljaren har debiterat moms",
     "rc_seller_vat_description": "Är det utländsk moms som säljaren har debiterat felaktigt bokförs köpet med omvänd moms på hela beloppet. Den utländska momsen är inte avdragsgill i Sverige: be säljaren om en kreditfaktura och ge dem ert momsregistreringsnummer. Svensk moms bokförs med momssatsen i stället.",
     "rc_seller_vat_confirm_action": "Utländsk moms: bokför",
+    "rc_seller_vat_se_abroad_description": "Säljaren har ett svenskt momsnummer men adress i {country}. Är säljaren inte etablerad i Sverige för det här köpet redovisar ni momsen med omvänd moms på hela beloppet, och momsen på fakturan är felaktigt debiterad och inte avdragsgill: be säljaren om en kreditfaktura och ge dem ert momsregistreringsnummer. Deltar säljarens etablering i Sverige i försäljningen bokförs momsen med momssatsen i stället.",
+    "rc_seller_vat_se_abroad_confirm_action": "Inte etablerad i Sverige: bokför",
     "customer_invoice_matched_title": "Kundfaktura matchad",
     "customer_invoice_matched_description": "Fakturan markerades som betald",
     "supplier_invoice_matched_title": "Leverantörsfaktura matchad",
