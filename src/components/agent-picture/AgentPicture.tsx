@@ -35,7 +35,7 @@ import type {
 } from '@/lib/agent-context/agent-picture'
 import type { ConnectionKind } from '@/lib/settings/mcp-connections'
 import { withoutPictureRow } from '@/lib/agent-context/wiki-views'
-import { PictureViews, isPictureView, type PictureContext, type PictureView } from './PictureViews'
+import { PictureViews, isPictureView, type PictureAgentView, type PictureContext, type PictureView } from './PictureViews'
 import { agentCardDetail, type PictureWords } from './agent-card-text'
 import { AgentMark, LogoTile, SourceMark } from './picture-marks'
 
@@ -109,10 +109,12 @@ function forgetInAddress(options?: { keepRow?: boolean }): void {
 /**
  * One picture of what a connected agent gets: what is connected on the left,
  * the company in the middle, the agents on the right, and a line from every
- * card to the company's card (GET /api/wiki/picture). Every card leads to
- * where its connection is managed; every row of the company's card opens its
- * own view. The agents are one card per product: the connections the screen
- * names by the same kind share a card (lib/agent-context/agent-cards.ts).
+ * card to the company's card (GET /api/wiki/picture). A source's card leads
+ * to where its connection is managed; every row of the company's card opens
+ * its own view, and an agent's card opens what the agent did for the company
+ * in the same side panel (AgentPanel). The agents are one card per product:
+ * the connections the screen names by the same kind share a card
+ * (lib/agent-context/agent-cards.ts).
  * While the tab is visible the agents' activity and the memory's count are
  * asked for again every 30 seconds (GET /api/wiki/picture/activity): a card
  * whose connection just made a call says so, gets a ring and a moving line,
@@ -125,11 +127,22 @@ function forgetInAddress(options?: { keepRow?: boolean }): void {
  * `row` is the row the address names (lib/agent-context/wiki-views.ts): the
  * picture opens with that row's view open, and opens it when the address
  * comes to name it while the picture is shown. `item` is the knowledge item
- * the address names, whose folder the Kunskap view opens on. Closing the
- * view takes both out of the address; a row opened from the card is not
- * written to it.
+ * the address names, whose folder the Kunskap view opens on. `agent` is the
+ * agent card the address names, by its id: its panel opens once the picture
+ * has that card. Closing takes all three out of the address; a row or a card
+ * opened by a press is not written to it.
  */
-export function AgentPicture({ context, row = null, item = null }: { context: PictureContext; row?: PictureView | null; item?: string | null }) {
+export function AgentPicture({
+  context,
+  row = null,
+  item = null,
+  agent = null,
+}: {
+  context: PictureContext
+  row?: PictureView | null
+  item?: string | null
+  agent?: string | null
+}) {
   const t = useTranslations('wiki')
   const locale = useLocale() as ErrorLocale
   const [load, setLoad] = useState<LoadState>({ state: 'loading' })
@@ -141,16 +154,25 @@ export function AgentPicture({ context, row = null, item = null }: { context: Pi
     setNamedRow(row)
     if (row) setView(row)
   }
+  // The agent card whose panel is open, by its id: the one the address names, and one it comes to name.
+  const [agentCard, setAgentCard] = useState<string | null>(agent)
+  const [namedAgent, setNamedAgent] = useState(agent)
+  if (agent !== namedAgent) {
+    setNamedAgent(agent)
+    if (agent) setAgentCard(agent)
+  }
 
   // A view that is closing still covers the page for the length of its
   // animation and takes every press, so a press on another row would be
   // lost. While one is closing, a press is placed by where it landed: on a
-  // row of the company's card it opens that row's view.
+  // row of the company's card it opens that row's view, on an agent's card
+  // that card's panel.
   const closingUntil = useRef(0)
   const reopenedAt = useRef(0)
   const closeView = useCallback(() => {
     if (performance.now() - reopenedAt.current < REOPEN_GRACE_MS) return
     closingUntil.current = performance.now() + CLOSING_MS
+    setAgentCard(null)
     setView(null)
     forgetInAddress()
   }, [])
@@ -164,10 +186,16 @@ export function AgentPicture({ context, row = null, item = null }: { context: Pi
         rect: el.getBoundingClientRect(),
       }))
       const row = hitTest(rows, event.clientX, event.clientY)
-      if (!isPictureView(row)) return
+      const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-picture-agent]')).map((el) => ({
+        id: el.dataset.pictureAgent ?? '',
+        rect: el.getBoundingClientRect(),
+      }))
+      const card = isPictureView(row) ? null : hitTest(cards, event.clientX, event.clientY)
+      if (!isPictureView(row) && !card) return
       closingUntil.current = 0
       reopenedAt.current = performance.now()
-      setView(row)
+      if (isPictureView(row)) setView(row)
+      else setAgentCard(card)
     }
     window.addEventListener('pointerdown', onPress, true)
     return () => window.removeEventListener('pointerdown', onPress, true)
@@ -234,7 +262,19 @@ export function AgentPicture({ context, row = null, item = null }: { context: Pi
   if (load.state === 'failed') {
     return <LoadError title={t('picture.load_failed_title')} description={load.description} onRetry={retry} />
   }
-  return <PictureFigure picture={load.data} activity={activity} view={view} item={item} onOpen={setView} onClose={closeView} context={context} />
+  return (
+    <PictureFigure
+      picture={load.data}
+      activity={activity}
+      view={view}
+      item={item}
+      agentCard={agentCard}
+      onOpen={setView}
+      onOpenAgent={setAgentCard}
+      onClose={closeView}
+      context={context}
+    />
+  )
 }
 
 /** The canvas: between two hairlines, on the dotted ground, as wide as the page. */
@@ -298,7 +338,9 @@ function PictureFigure({
   activity,
   view,
   item,
+  agentCard,
   onOpen,
+  onOpenAgent,
   onClose,
   context,
 }: {
@@ -307,7 +349,10 @@ function PictureFigure({
   view: PictureView | null
   /** The knowledge item the address names. */
   item: string | null
+  /** The agent card whose panel is open, by its id. */
+  agentCard: string | null
   onOpen: (view: PictureView) => void
+  onOpenAgent: (card: string) => void
   onClose: () => void
   context: PictureContext
 }) {
@@ -406,6 +451,23 @@ function PictureFigure({
     { id: 'keys' as const, label: t('picture.groups.keys'), cards: cardsOf('keys') },
   ].filter((group) => group.cards.length > 0)
   const more = picture.agents?.more ?? 0
+
+  // What the open card's panel is given. A card the picture does not list (an id the address made up) opens nothing.
+  const openCard = agentCard ? (picture.agents?.list.find((card) => card.id === agentCard) ?? null) : null
+  const openState = openCard ? agentCardState(openCard, activity) : null
+  const agentView: PictureAgentView | null =
+    openCard && openState
+      ? {
+          card: openCard,
+          name: nameOf(openCard),
+          maskName: openCard.kind === 'key' || openCard.service_account !== null,
+          calls:
+            activity && openState.calls > 0 && openState.last_call_at
+              ? { count: openState.calls, last_call_at: openState.last_call_at, capped: openState.capped }
+              : null,
+          activity,
+        }
+      : null
 
   const memoryFacts = activity ? (activity.memory_facts ?? picture.company.memory_facts) : picture.company.memory_facts
   const updated = latestDelivery(picture.sources)
@@ -545,6 +607,8 @@ function PictureFigure({
                     flowId={card.id}
                     side="out"
                     href={CONNECT_AGENT_HREF}
+                    // A connected agent's card opens its panel; one that is offered leads to where it is connected.
+                    onPress={card.state === 'connected' ? () => onOpenAgent(card.id) : undefined}
                     state={card.state}
                     active={card.active}
                     ring={card.active ? 'live' : null}
@@ -568,6 +632,7 @@ function PictureFigure({
 
       <PictureViews
         view={view}
+        agent={agentView}
         onClose={onClose}
         companyName={picture.company.name}
         context={context}
@@ -576,6 +641,7 @@ function PictureFigure({
         knowledgeItem={item}
         onKnowledgeItemClose={() => forgetInAddress({ keepRow: true })}
         when={when}
+        time={words.time}
       />
     </>
   )
@@ -593,15 +659,18 @@ function CardGroup({ label, children }: { label: string; children: ReactNode }) 
 
 /**
  * One card: a source or an agent. The whole card is the link to where it is
- * managed. A card that is not connected is flat with a hairline, faded, its
- * mark greyed, and says Koppla. A ring says something is happening: blue for
- * a connection that just made a call, ochre for a source that just
- * delivered. The data attributes are what the lines are measured from.
+ * managed (`href`); with `onPress` it is instead a button that opens what is
+ * behind it in place. A card that is not connected is flat with a hairline,
+ * faded, its mark greyed, and says Koppla. A ring says something is
+ * happening: blue for a connection that just made a call, ochre for a source
+ * that just delivered. The data attributes are what the lines are measured
+ * from, and what a press is placed by while a view is closing.
  */
 function PictureCard({
   flowId,
   side,
   href,
+  onPress,
   state,
   active = false,
   ring,
@@ -613,6 +682,7 @@ function PictureCard({
   flowId: string
   side: 'in' | 'out'
   href: string
+  onPress?: () => void
   state: PictureLinkState
   active?: boolean
   ring: 'live' | 'fresh' | null
@@ -623,19 +693,20 @@ function PictureCard({
 }) {
   const t = useTranslations('wiki')
   const off = state === 'not_connected'
-  return (
-    <Link
-      href={href}
-      data-flow-id={flowId}
-      data-flow-side={side}
-      data-flow-connected={state === 'connected' ? 'true' : 'false'}
-      data-flow-active={active ? 'true' : 'false'}
-      style={ring === 'live' ? LIVE_RING : ring === 'fresh' ? FRESH_RING : undefined}
-      className={cn(
-        'flex min-h-13 items-center gap-2.5 rounded-lg px-2.5 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/70',
-        off ? 'border border-border transition-colors duration-150 hover:bg-secondary/60' : 'bg-control shadow-raised transition-shadow duration-150 hover:shadow-raised-hover',
-      )}
-    >
+  const flow = {
+    'data-flow-id': flowId,
+    'data-flow-side': side,
+    'data-flow-connected': state === 'connected' ? 'true' : 'false',
+    'data-flow-active': active ? 'true' : 'false',
+    style: ring === 'live' ? LIVE_RING : ring === 'fresh' ? FRESH_RING : undefined,
+    className: cn(
+      'flex min-h-13 items-center gap-2.5 rounded-lg px-2.5 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/70',
+      off ? 'border border-border transition-colors duration-150 hover:bg-secondary/60' : 'bg-control shadow-raised transition-shadow duration-150 hover:shadow-raised-hover',
+      onPress && 'w-full text-left',
+    ),
+  }
+  const body = (
+    <>
       {mark}
       <span className={cn('flex min-w-0 flex-1 flex-col', off && 'opacity-60')}>
         <span className="truncate text-[13px] font-medium text-strong" {...(maskName ? { 'data-ph-mask': '' } : {})}>
@@ -648,6 +719,18 @@ function PictureCard({
         </span>
       </span>
       {off && <span className="shrink-0 text-xs font-medium text-strong">{t('picture.connect')}</span>}
+    </>
+  )
+  if (onPress) {
+    return (
+      <button type="button" data-picture-agent={flowId} onClick={onPress} {...flow}>
+        {body}
+      </button>
+    )
+  }
+  return (
+    <Link href={href} {...flow}>
+      {body}
     </Link>
   )
 }

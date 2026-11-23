@@ -53,11 +53,21 @@ const FACT_KINDS = new Set(['fact', 'preference', 'pattern', 'correction'])
  * `picture`: the company has the agent picture switched on. The view is
  * then the picture alone (components/agent-picture): no window bar and no
  * list of sections. The briefing is still loaded here, once, and handed to
- * the picture, whose Kontext row draws the context graph from it. `row` and
- * `item` are the row of the picture and the knowledge item the address
- * names, which the picture opens.
+ * the picture, whose Kontext row draws the context graph from it. `row`,
+ * `item` and `agent` are the row of the picture, the knowledge item and the
+ * agent card the address names, which the picture opens.
  */
-export function ContextView({ picture = false, row = null, item = null }: { picture?: boolean; row?: PictureRow | null; item?: string | null }) {
+export function ContextView({
+  picture = false,
+  row = null,
+  item = null,
+  agent = null,
+}: {
+  picture?: boolean
+  row?: PictureRow | null
+  item?: string | null
+  agent?: string | null
+}) {
   const t = useTranslations('wiki')
   const locale = useLocale() as ErrorLocale
   const [load, setLoad] = useState<LoadState>({ state: 'loading' })
@@ -90,6 +100,7 @@ export function ContextView({ picture = false, row = null, item = null }: { pict
       <AgentPicture
         row={row}
         item={item}
+        agent={agent}
         context={
           load.state === 'ok'
             ? { state: 'ok', text: load.data.text }

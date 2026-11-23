@@ -1,7 +1,7 @@
 /**
  * AGENT_PICTURE_COMPANY_IDS: the picture of what a connected agent gets, on
  * the Kontext view of /wiki (what is connected, the company, the agents) and
- * its two routes under /api/wiki/picture. Unset = nobody: the Kontext view
+ * its routes under /api/wiki/picture. Unset = nobody: the Kontext view
  * keeps its graph for every company.
  *
  * Where it is on, the Agenter menu is the picture and Bokföringsregler

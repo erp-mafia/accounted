@@ -783,7 +783,7 @@ export async function loadAgentActivity(supabase: SupabaseClient, companyId: str
 }
 
 /** The actor types a connection stages a proposal as (lib/auth/api-keys.ts credentialActor). */
-const CONNECTION_ACTOR_TYPES = ['api_key', 'mcp_oauth', 'service_account'] as const
+export const CONNECTION_ACTOR_TYPES = ['api_key', 'mcp_oauth', 'service_account'] as const
 /** Proposals read for one day at most: past it the day's counts are lower bounds. */
 const WORK_MAX_ROWS = 5000
 
@@ -1041,6 +1041,17 @@ async function readConnections(
 /** A connection as the picture hands it out: without what only put it on its card. */
 function shownConnection({ service_account_id: _accountId, label: _label, ...connection }: ReadConnection): PictureAgent {
   return connection
+}
+
+/**
+ * Every card of the company's connections as the person may list them: the
+ * ones the picture lists and the ones past them. The tool call log is not
+ * read, so a connection's calls are 0 here. Throws when the connections
+ * cannot be read.
+ */
+export async function loadAgentCards(supabase: SupabaseClient, companyId: string, userId: string): Promise<PictureAgentCard[]> {
+  const connections = await readConnections(supabase, companyId, userId, Promise.resolve(null))
+  return agentCards(connections).map((card): PictureAgentCard => ({ ...card, connections: card.connections.map(shownConnection) }))
 }
 
 /** The cards with their tool calls and the day's work; the picture adds the memory count it reads in its own part. */

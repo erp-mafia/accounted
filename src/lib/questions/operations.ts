@@ -165,7 +165,8 @@ export interface QuestionOperation {
   voucher_label: string | null
 }
 
-interface StagedRow {
+/** A pending_operations row as the reads of an operation's line select it. */
+export interface StagedRow {
   id: string
   operation_number?: number | null
   operation_type: string | null
@@ -208,6 +209,27 @@ function postedEntryOf(row: StagedRow): string | null {
   if (typeof result !== 'object' || result === null || Array.isArray(result)) return null
   const id = (result as Record<string, unknown>).journal_entry_id
   return typeof id === 'string' && isUuid(id) ? id : null
+}
+
+/**
+ * The rows as the operations a list shows, in the order given: each with
+ * what its line is built from (see questionOperations). The bank rows they
+ * name are read through `supabase` with the company filter, so a row the
+ * reader cannot read is left without its bank row.
+ */
+export async function operationsOfRows(supabase: SupabaseClient, companyId: string, rows: readonly StagedRow[]): Promise<QuestionOperation[]> {
+  const bankRows = await namedBankRows(supabase, companyId, rows)
+  return rows.map((row) => ({
+    operation_id: row.id,
+    operation_number: operationNumberOf(row),
+    operation_type: stated(row.operation_type) ?? '',
+    title: typeof row.title === 'string' ? row.title : '',
+    status: row.status,
+    journal_entry_id: postedEntryOf(row),
+    bank_row: (isUuid(row.transaction_id) ? bankRows.get(row.transaction_id) : undefined) ?? null,
+    document_name: stated(row.document_name),
+    voucher_label: stated(row.voucher_label),
+  }))
 }
 
 /**
@@ -265,24 +287,14 @@ export async function questionOperations(
   })
   if (stagedError) throw dbError(stagedError)
   const rows = (stagedRows ?? []) as unknown as StagedRow[]
-  const staged = new Map(rows.map((row) => [row.id, row]))
-  const bankRows = await namedBankRows(supabase, companyId, rows)
+  const staged = new Map((await operationsOfRows(supabase, companyId, rows)).map((operation) => [operation.operation_id, operation]))
 
   for (const link of links) {
-    const row = staged.get(link.operation_id)
-    if (!row) continue
+    const operation = staged.get(link.operation_id)
+    if (!operation) continue
     const operations = byQuestion.get(link.question_id) ?? []
-    operations.push({
-      operation_id: row.id,
-      operation_number: operationNumberOf(row),
-      operation_type: stated(row.operation_type) ?? '',
-      title: typeof row.title === 'string' ? row.title : '',
-      status: row.status,
-      journal_entry_id: postedEntryOf(row),
-      bank_row: (isUuid(row.transaction_id) ? bankRows.get(row.transaction_id) : undefined) ?? null,
-      document_name: stated(row.document_name),
-      voucher_label: stated(row.voucher_label),
-    })
+    // A copy per link, so a list never shares an operation with another question's.
+    operations.push({ ...operation })
     byQuestion.set(link.question_id, operations)
   }
   return byQuestion

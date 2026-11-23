@@ -76,7 +76,7 @@ vi.mock('@/lib/agent-skills/company-skills', () => ({
   loadCompanySkillRows: (...args: unknown[]) => skillRowsMock(...args),
 }))
 
-import { limitNotConnected, loadAgentActivity, loadAgentPicture, type PictureSource, type PictureSourceGroup } from '../agent-picture'
+import { limitNotConnected, loadAgentActivity, loadAgentCards, loadAgentPicture, type PictureSource, type PictureSourceGroup } from '../agent-picture'
 
 const ALL_EXTENSIONS = ['enable-banking', 'skatteverket', 'tic', 'invoice-inbox', 'whatsapp-inbox', 'mail', 'stripe', 'shopify', 'woocommerce', 'zettle']
 
@@ -846,6 +846,34 @@ describe('loadAgentPicture: agents', () => {
     expect(picture.agents).toBeNull()
     expect(picture.company.name).toBe('Exempelbolaget AB')
     expect(sourceOf(picture, 'bank:cash-1')).toBeDefined()
+  })
+})
+
+describe('loadAgentCards', () => {
+  it('answers every card the person may list, the ones past the listed six too, without reading the log', async () => {
+    const key = (n: number) => keyRow(`k${n}`, { name: `Nyckel ${n}`, client: null, last_used_at: `2026-02-0${n}T00:00:00.000Z` })
+    const api_keys = homedKeys([...[1, 2, 3, 4, 5, 6, 7, 8].map(key), keyRow('c1'), keyRow('c2')])
+    const { client, calls } = fakeSupabase(tables({ api_keys }))
+    const cards = await loadAgentCards(client, COMPANY, USER)
+    expect(cards.map((card) => [card.id, card.connections.map((c) => c.id), card.labels])).toEqual([
+      ['key:k8', ['k8'], ['Nyckel 8']],
+      ['key:k7', ['k7'], ['Nyckel 7']],
+      ['key:k6', ['k6'], ['Nyckel 6']],
+      ['key:k5', ['k5'], ['Nyckel 5']],
+      ['key:k4', ['k4'], ['Nyckel 4']],
+      ['key:k3', ['k3'], ['Nyckel 3']],
+      ['key:k2', ['k2'], ['Nyckel 2']],
+      ['key:k1', ['k1'], ['Nyckel 1']],
+      ['claude', ['c1', 'c2'], ['Claude (Anthropic)']],
+    ])
+    // Only the connections: the keys homed in the company and the person's own.
+    expect([...new Set(calls.map((c) => c.table))]).toEqual(['api_keys'])
+    for (const read of calls) expect(filtered(read, 'eq', 'company_id', COMPANY) || filtered(read, 'eq', 'user_id', USER)).toBe(true)
+    expect(cards.flatMap((card) => card.connections).every((c) => c.calls_today === 0 && c.last_call_at === null)).toBe(true)
+  })
+
+  it('throws when the connections cannot be read', async () => {
+    await expect(loadAgentCards(fakeSupabase(tables({ api_keys: { error: { message: 'boom' } } })).client, COMPANY, USER)).rejects.toThrow('connections read failed: boom')
   })
 })
 

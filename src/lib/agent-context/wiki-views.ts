@@ -6,7 +6,8 @@
  *
  * For a company with the agent picture on (lib/env/agent-picture-switch.ts)
  * /wiki is the picture, and the address can name the row of the company's
- * card that is open: wikiPlace says what an address shows.
+ * card that is open: wikiPlace says what an address shows. It can instead
+ * name the agent card that is open (pictureAgentOf).
  */
 export const WIKI_VIEWS = ['context', 'map', 'facts', 'memory', 'skills'] as const
 export type WikiView = (typeof WIKI_VIEWS)[number]
@@ -76,6 +77,24 @@ export function pictureRowHref(row: PictureRow, item?: string | null): string {
   return `/wiki?${query}`
 }
 
+/** The query parameter that names the open agent card of the picture, by the card's id (lib/agent-context/agent-cards.ts). */
+export const PICTURE_AGENT_PARAM = 'agent'
+
+/** The picture's address with one agent card open. */
+export function pictureAgentHref(card: string): string {
+  return `/wiki?${new URLSearchParams({ [PICTURE_AGENT_PARAM]: card })}`
+}
+
+/**
+ * The agent card an address names, for an address that shows the picture.
+ * A row and a card are not open at once: an address that names a row names
+ * no card, so `view` and `item` mean what they mean without `agent`.
+ */
+export function pictureAgentOf(address: { view?: string | null; agent?: string | null }): string | null {
+  if (pictureRowOf(address.view)) return null
+  return address.agent ? address.agent : null
+}
+
 /**
  * Where the bookkeeping profile's lines are for a company with the picture:
  * the sentence above the list of Bokföringsregler (lib/agent-context/profile-line.ts).
@@ -123,16 +142,20 @@ export function wikiPlace(address: { view?: string | null; item?: string | null 
 }
 
 /**
- * An address (path, query and hash) without the picture's row and item:
- * where closing a row leaves the page, so a reload opens nothing. With
- * `keepRow` only the item goes: the folder is closed and its row stays open.
+ * An address (path, query and hash) without the picture's row, item and
+ * agent card: where closing a row or a card leaves the page, so a reload
+ * opens nothing. With `keepRow` only the item goes: the folder is closed and
+ * its row stays open.
  */
 export function withoutPictureRow(address: string, { keepRow = false }: { keepRow?: boolean } = {}): string {
   const hashAt = address.indexOf('#')
   const hash = hashAt < 0 ? '' : address.slice(hashAt)
   const [path, search = ''] = (hashAt < 0 ? address : address.slice(0, hashAt)).split('?')
   const query = new URLSearchParams(search)
-  if (!keepRow) query.delete('view')
+  if (!keepRow) {
+    query.delete('view')
+    query.delete(PICTURE_AGENT_PARAM)
+  }
   query.delete(PICTURE_ITEM_PARAM)
   const rest = query.toString()
   return `${path}${rest ? `?${rest}` : ''}${hash}`

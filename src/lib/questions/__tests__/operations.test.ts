@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver, type TableMockResult } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 import type { CoreEvent } from '@/lib/events/types'
-import { linkQuestionOperation, questionOperations } from '../operations'
+import { linkQuestionOperation, operationsOfRows, questionOperations } from '../operations'
 import { QUESTION_LIMITS } from '../types'
 
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
@@ -479,5 +479,65 @@ describe('questionOperations', () => {
       transactions: failed,
     })
     await expect(questionOperations(bankRows.supabase as never, COMPANY, [QUESTION_ID])).rejects.toMatchObject({ code: '57014' })
+  })
+})
+
+describe('operationsOfRows', () => {
+  const ROW = '10000000-0000-4000-8000-000000000001'
+  const row = (n: number, overrides: Record<string, unknown> = {}) => ({
+    id: operationId(n),
+    operation_type: 'categorize_transaction',
+    title: `Förslag ${n}`,
+    status: 'pending',
+    result_data: null,
+    transaction_id: null,
+    document_name: null,
+    voucher_label: null,
+    ...overrides,
+  })
+
+  it('answers the rows as operations, in the order given, with the bank rows they name read for the company', async () => {
+    const mock = createTableMockSupabase({
+      transactions: { data: [{ id: ROW, date: '2026-11-03', description: 'KORTKOP 1234', merchant_name: 'Leverantören AB', amount: -4990.5, currency: 'SEK' }] },
+    })
+
+    const operations = await operationsOfRows(mock.supabase as never, COMPANY, [
+      row(2, { transaction_id: ROW }),
+      row(1, { operation_type: 'create_customer', status: 'committed', result_data: { journal_entry_id: ENTRY } }),
+    ])
+
+    expect(operations).toEqual([
+      {
+        operation_id: operationId(2),
+        operation_number: null,
+        operation_type: 'categorize_transaction',
+        title: 'Förslag 2',
+        status: 'pending',
+        journal_entry_id: null,
+        bank_row: { label: 'Leverantören AB', amount: -4990.5, currency: 'SEK' },
+        document_name: null,
+        voucher_label: null,
+      },
+      {
+        operation_id: operationId(1),
+        operation_number: null,
+        operation_type: 'create_customer',
+        title: 'Förslag 1',
+        status: 'committed',
+        journal_entry_id: ENTRY,
+        bank_row: null,
+        document_name: null,
+        voucher_label: null,
+      },
+    ])
+    expect(mock.findCalls('transactions', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCalls('transactions', 'in')).toEqual([['id', [ROW]]])
+  })
+
+  it('reads no bank row when the rows name none, and answers nothing for no rows', async () => {
+    const mock = createTableMockSupabase({})
+    await expect(operationsOfRows(mock.supabase as never, COMPANY, [row(1)])).resolves.toHaveLength(1)
+    await expect(operationsOfRows(mock.supabase as never, COMPANY, [])).resolves.toEqual([])
+    expect(mock.tables()).toEqual([])
   })
 })

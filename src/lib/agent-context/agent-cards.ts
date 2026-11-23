@@ -62,6 +62,9 @@ export function agentCardId(connection: Pick<CardConnection, 'id' | 'kind' | 'na
   return connection.kind
 }
 
+/** What a card's id looks like: a kind, or `account:` or `key:` and an id. A door that is handed one checks it against this. */
+export const AGENT_CARD_ID_RE = /^(?:[a-z_]{1,40}|(?:account|key):[0-9A-Za-z-]{1,64})$/
+
 /**
  * The connections as cards, in the order each card's first connection was
  * given (the loader gives the ones that worked last first). Each card knows
@@ -145,6 +148,13 @@ export function cardWork(card: OwningCard, work: PictureWork | null | undefined)
   ].filter((part): part is PictureWorkCount => part !== undefined)
   return parts.reduce((sum, part) => ({ questions: sum.questions + part.questions, proposals: sum.proposals + part.proposals }), NO_WORK)
 }
+
+// ---------------------------------------------------------------- the card's panel
+
+/** Questions, and proposals, a card's panel lists at most; the counts carry the rest. */
+export const AGENT_WORK_SHOWN = 10
+/** How many days back a card's approved and rejected proposals are counted. */
+export const AGENT_RESOLVED_DAYS = 30
 
 // ---------------------------------------------------------------- the card's line
 
