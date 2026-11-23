@@ -254,8 +254,9 @@ export async function unlockPeriod(
 
   // BFNAR 2013:2 p. 9.16 (behandlingshistorik): unlocking a locked period is a
   // sensitive control change. Persist it to the immutable audit_log (not just
-  // event_log, which has 30-day TTL) so an auditor can reconstruct who
-  // unlocked which period and when, even years later.
+  // event_log, which is no audit record: its rows can be deleted and the
+  // archive export leaves it out) so an auditor can reconstruct who unlocked
+  // which period and when, even years later.
   await supabase.from('audit_log').insert({
     user_id: userId,
     company_id: companyId,

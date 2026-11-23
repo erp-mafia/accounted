@@ -755,7 +755,7 @@ async function persistBankSession(
 
   // Audit trail: PSD2 consent has been exchanged and account metadata stored.
   // ASVS V16 requires this transition to be logged as a security event; emit
-  // here so the event_log handler persists it (30-day TTL).
+  // here so the event_log handler persists it.
   try {
     await eventBus.emit({
       type: 'bank_connection.consent_granted',

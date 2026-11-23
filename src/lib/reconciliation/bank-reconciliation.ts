@@ -796,7 +796,7 @@ export async function runReconciliation(
         // Behandlingshistorik (BFNAR 2013:2 kap 8, BFL 7:1): every auto-applied
         // link is a match event and must land in the append-only log, exactly
         // like the invoice-match and confirm-suggestion paths. The bus event
-        // below goes to event_log (30-day TTL) and is NOT an audit record.
+        // below goes to event_log, which is NOT an audit record.
         await logMatchEvent(supabase, userId, match.transaction.id, 'matched', {
           matchConfidence: match.confidence,
           matchMethod: match.method,

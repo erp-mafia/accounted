@@ -18,7 +18,7 @@ import { eventBus } from '@/lib/events/bus'
 // that type, so votes from the chat land in the existing triage flow rather
 // than in a second place someone has to remember to look at. That is also why
 // there is no migration here: event_log takes the payload as jsonb and already
-// treats agent.* as telemetry with the longer retention.
+// treats agent.* as telemetry (kept 180 days, then only as anonymous counts).
 
 const BodySchema = z.object({
   conversation_id: z.string().uuid(),
