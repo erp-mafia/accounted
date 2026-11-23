@@ -45,7 +45,7 @@
 import { equalOre, inferDecimalMark, parseSwedishAmount, roundOre, sumOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { isSaneDateString } from '@/lib/invariants'
-import { splitCsvRecords } from '@/lib/import/source-chart/parse-chart-csv'
+import { splitCsvRecords } from '@/lib/csv-records'
 import type { WebshopVatBreakdownLine } from '@/types'
 import type { WebshopOrderUpsert } from './types'
 
@@ -53,10 +53,11 @@ import type { WebshopOrderUpsert } from './types'
 const CONSUMER_VAT_PAIRS = 4
 
 /**
- * How far net + VAT may miss a row's amount and still be rounding: two öre
- * of VAT rounding per rate, carried over to the net (0.08 kr at 25 %, 0.33 kr
- * at 6 %). Anything above is a part of the amount the report gives no VAT
- * for (a gift card, a 0 % line), and the row is held.
+ * How far the VAT of one rate may be off and still be rounding: two öre.
+ * Net is that VAT over the rate, so net + VAT misses the amount by up to
+ * two öre times (1 + 1 / rate): 0.10 kr at 25 %, 0.19 kr at 12 %, 0.35 kr at
+ * 6 %. Anything above is a part of the amount the report gives no VAT for
+ * (a gift card, a 0 % line), and the row is held.
  */
 const VAT_ROUNDING_PER_RATE = 0.02
 
@@ -91,6 +92,8 @@ export type KustomSettlementRefusal =
   | 'KUSTOM_SETTLEMENT_DATE_FORMAT'
   /** The transactions do not add up to the summary: a cut or edited file. */
   | 'KUSTOM_SETTLEMENT_TOTALS_MISMATCH'
+  /** The file stops inside a quoted field or mid-record: a download that was cut. */
+  | 'KUSTOM_SETTLEMENT_CUT_SHORT'
 
 /** The payout as the summary states it, for booking the bank row by hand. */
 export interface KustomPayout {
@@ -170,16 +173,27 @@ function detectDelimiter(text: string): string {
   return counts[0][1] > 0 ? counts[0][0] : ';'
 }
 
-type CsvRecord = Map<string, string>
+/**
+ * A record's cells by column name: one shared index per header and the
+ * row's own fields. Never a map per row: the header's width is the file's
+ * to choose, and a map per row makes the work columns times rows instead of
+ * the size of the file.
+ */
+interface CsvRecord {
+  index: ReadonlyMap<string, number>
+  fields: readonly string[]
+}
 
-function toRecord(header: string[], fields: string[]): CsvRecord {
-  const record = new Map<string, string>()
-  header.forEach((name, i) => record.set(name, (fields[i] ?? '').trim()))
-  return record
+/** Column positions by name; a name given twice is read from its last column. */
+function columnIndex(header: readonly string[]): Map<string, number> {
+  const index = new Map<string, number>()
+  header.forEach((name, i) => index.set(name, i))
+  return index
 }
 
 function cell(record: CsvRecord, name: string): string {
-  return record.get(name) ?? ''
+  const at = record.index.get(name)
+  return at === undefined ? '' : (record.fields[at] ?? '')
 }
 
 /**
@@ -214,10 +228,13 @@ function vatBreakdownOf(
   const buckets = Array.from(taxByRate.entries())
     .map(([rate, tax]) => ({ rate, net: roundOre(tax / (rate / 100)), tax }))
     .sort((a, b) => b.net - a.net)
-  const tolerance = roundOre(sumOre(buckets.map((b) => VAT_ROUNDING_PER_RATE / (b.rate / 100))))
+  const tolerance = roundOre(sumOre(buckets.map((b) => VAT_ROUNDING_PER_RATE * (1 + 100 / b.rate))))
   const remainder = roundOre(amount - sumOre(buckets.flatMap((b) => [b.net, b.tax])))
   if (Math.abs(remainder) > tolerance) return null
   buckets[0].net = roundOre(buckets[0].net + remainder)
+  // An amount of a few öre or none at all can absorb the tolerance and leave
+  // VAT with no revenue under it: that is no sale to split.
+  if (buckets[0].net <= 0) return null
   return buckets.sort((a, b) => b.rate - a.rate)
 }
 
@@ -258,6 +275,10 @@ function finalRow(parsed: KustomEntry, hold: KustomHoldReason | null): WebshopOr
  * 'elsewhere': a shop selling through Kustom Checkout gets the same sale from
  * its store and from the settlement report, and booking both doubles the
  * revenue and the VAT.
+ *
+ * Booked elsewhere (the till, the shop feed) comes before every other
+ * reason, so a return whose sale is booked there is left out also when it
+ * shipped abroad or its VAT does not add up.
  */
 export function kustomImport(
   file: KustomSettlementFile,
@@ -268,8 +289,12 @@ export function kustomImport(
   let returnsHeld = 0
   const leftOut: number[] = []
   for (const p of file.entries) {
-    const hold =
-      p.hold ?? (knownElsewhere.has(p.row.order_number) ? 'elsewhere' : p.vat === null ? 'vat' : null)
+    const hold: KustomHoldReason | null =
+      p.hold === 'in_store'
+        ? 'in_store'
+        : knownElsewhere.has(p.row.order_number)
+          ? 'elsewhere'
+          : (p.hold ?? (p.vat === null ? 'vat' : null))
     if (p.kind === 'return' && hold !== null && LEFT_OUT_REASONS.has(hold)) {
       leftOut.push(p.amount)
       continue
@@ -297,7 +322,11 @@ export function kustomImport(
  */
 export function parseKustomSettlementReport(content: string): KustomSettlementOutcome {
   const text = content.replace(/^﻿/, '')
-  const { records } = splitCsvRecords(text, detectDelimiter(text))
+  const { records, unterminated } = splitCsvRecords(text, detectDelimiter(text))
+  // A file that stops inside a quoted field was cut on its way down. The rows
+  // before the cut read fine, and the last one can lose a column that holds
+  // it (the shipping country) while its amount still adds up.
+  if (unterminated) return { ok: false, code: 'KUSTOM_SETTLEMENT_CUT_SHORT' }
   const normalized = records.map((r) => r.map((f) => f.trim()))
 
   const summaryAt = normalized.findIndex((r) => r.includes('total_settlement_amount'))
@@ -305,7 +334,7 @@ export function parseKustomSettlementReport(content: string): KustomSettlementOu
   if (summaryAt < 0 || headerAt < 0 || headerAt <= summaryAt + 1) {
     return { ok: false, code: 'KUSTOM_SETTLEMENT_NOT_RECOGNIZED' }
   }
-  const summary = toRecord(normalized[summaryAt], normalized[summaryAt + 1])
+  const summary: CsvRecord = { index: columnIndex(normalized[summaryAt]), fields: normalized[summaryAt + 1] }
   const header = normalized[headerAt]
   const merchantId = cell(summary, 'merchant_id')
   if (!merchantId || !header.includes('capture_date')) {
@@ -314,9 +343,17 @@ export function parseKustomSettlementReport(content: string): KustomSettlementOu
   if (!header.includes('tax_rate_1') || !header.includes('tax_amount_1')) {
     return { ok: false, code: 'KUSTOM_SETTLEMENT_NO_CONSUMER_VAT' }
   }
-  const inStoreColumns = header.filter((name) => name.startsWith('ipp_'))
+  // Every record of an export is as wide as its header, so a last record
+  // that is narrower was cut between two fields: its amount can still add up
+  // while a later column (the shipping country) is gone.
+  const lastRecord = normalized[normalized.length - 1]
+  if (normalized.length - 1 > headerAt && lastRecord.length < header.length) {
+    return { ok: false, code: 'KUSTOM_SETTLEMENT_CUT_SHORT' }
+  }
+  const isInStoreColumn = header.map((name) => name.startsWith('ipp_'))
 
-  const transactions = normalized.slice(headerAt + 1).map((fields) => toRecord(header, fields))
+  const index = columnIndex(header)
+  const transactions: CsvRecord[] = normalized.slice(headerAt + 1).map((fields) => ({ index, fields }))
 
   // One decimal mark for the whole file, proven by its cells: the portal's
   // minor-units format ("95840") proves none and is refused rather than read
@@ -391,7 +428,8 @@ export function parseKustomSettlementReport(content: string): KustomSettlementOu
     // purchase_country is Kustom's purchase country, or the merchant's when
     // the order had none, so it only ever stands in for Sweden-or-not.
     const country = (cell(t, 'shipping_address_country') || cell(t, 'purchase_country')).toUpperCase() || null
-    const inStore = inStoreColumns.some((name) => cell(t, name) !== '')
+    // Over the row's own fields, so the work stays the size of the file.
+    const inStore = t.fields.some((value, i) => isInStoreColumn[i] === true && value !== '')
     const hold: KustomHoldReason | null = inStore
       ? 'in_store'
       : country !== null && country !== COUNTRY_SWEDEN

@@ -51,7 +51,10 @@ export default function KustomSettlementImport() {
     async (file: File | undefined) => {
       if (!file) return
       const name = file.name.toLowerCase()
-      if (!ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext))) return
+      if (!ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext))) {
+        setError(t('kustom_file_type'))
+        return
+      }
       // The host refuses a larger body before the route runs, with a plain
       // 413 that says nothing; one payout's report is far below it.
       if (isHostedDeployment() && file.size > HOSTED_MAX_UPLOAD_BYTES) {

@@ -226,12 +226,31 @@ describe('parseKustomSettlementReport', () => {
     expect(rows[0].vat_breakdown).toEqual([{ rate: 25, net: 26.7, tax: 6.67 }])
   })
 
+  it('takes two öre of VAT rounding per rate, carried into the net, and no more', () => {
+    const rows_ = [
+      // 25.02 on 125.00 is two öre off 25.00: net 100.08 and the sum misses
+      // by 0.10 kr, which is still rounding.
+      sale({ captureId: 'cap-r2', amount: '125.00', vat: [['2500', '25.02']] }),
+      // Three öre off is not.
+      sale({ captureId: 'cap-r3', amount: '125.00', vat: [['2500', '25.03']] }),
+      // Two öre of VAT on nothing is within the tolerance but leaves no
+      // revenue under the VAT.
+      sale({ captureId: 'cap-r0', amount: '0.00', vat: [['2500', '0.02']] }),
+    ]
+    const { rows } = imported(report({ rows: rows_, summary: summaryOf('250.00', '0.00', '250.00') }))
+    expect(rows.map((r) => [r.is_paid, r.vat_breakdown])).toEqual([
+      [true, [{ rate: 25, net: 99.98, tax: 25.02 }]],
+      [false, []],
+      [false, []],
+    ])
+  })
+
   it('holds a sale whose VAT does not add up, and imports such a return without a split', () => {
     const rows_ = [
       // 25 % VAT of 100.00 would be 20.00: half the amount carries no VAT the
       // report explains (a gift card, a 0 % line), so the split is a guess.
       sale({ captureId: 'cap-5', amount: '200.00', vat: [['2500', '20.00']] }),
-      // 0.40 kr off at 25 % is more than rounding (at most 0.08 kr).
+      // 0.40 kr off at 25 % is more than rounding (at most 0.10 kr).
       sale({ captureId: 'cap-6', amount: '125.40', vat: [['2500', '25.00']] }),
       // No VAT on the row at all.
       sale({ captureId: 'cap-7', amount: '50.00' }),
@@ -295,6 +314,22 @@ describe('parseKustomSettlementReport', () => {
     expect(result.returnsLeftOut).toEqual({ count: 1, total: 300 })
   })
 
+  it('leaves out a return the shop feed has also when it shipped abroad', () => {
+    const rows_ = [
+      sale({ captureId: 'cap-dk', amount: '125.00', shipTo: 'DK', ref: 'WOO-7', vat: [['2500', '25.00']] }),
+      ret({ refundId: 'ref-dk', amount: '125.00', shipTo: 'DK', ref: 'WOO-7', vat: [['2500', '25.00']] }),
+      ret({ refundId: 'ref-dk2', amount: '25.00', shipTo: 'DK', ref: 'OWN-8', vat: [['2500', '5.00']] }),
+    ]
+    const result = imported(report({ rows: rows_, summary: summaryOf('125.00', '150.00', '-25.00') }), new Set(['WOO-7']))
+    // The shop feed's sale and return are not imported again; the return the
+    // feed does not have stays for a person, without a split.
+    expect(result.rows.map((r) => [r.order_number, r.row_type, r.payment_method_title, r.vat_breakdown.length])).toEqual([
+      ['WOO-7', 'order', 'Kustom: ordern finns redan från butiken, bokför inte två gånger', 1],
+      ['OWN-8', 'refund', 'Kustom: levererad utanför Sverige, bokför manuellt', 0],
+    ])
+    expect(result.returnsLeftOut).toEqual({ count: 1, total: 125 })
+  })
+
   it('refuses a report without consumer VAT, also in the default layout that has no refund_id', () => {
     const header = 'type;capture_date;sale_date;order_id;short_order_id;capture_id;merchant_reference1;amount;posting_currency;purchase_country'
     const rows = ['SALE;2026-11-18T09:00:00.000Z;2026-11-18T09:00:00.000Z;aaaa1111;AAAA-1;cap-1;REFA;1250.00;SEK;SE']
@@ -325,6 +360,42 @@ describe('parseKustomSettlementReport', () => {
   it('refuses a file whose rows do not add up to its summary (cut or edited)', () => {
     const rows = report().split('\n')
     expect(refusal(rows.slice(0, -1).join('\n'))).toBe('KUSTOM_SETTLEMENT_TOTALS_MISMATCH')
+  })
+
+  it('refuses a file cut inside a quoted field or between two fields, even when its totals add up', () => {
+    // Cut right after the opening quote of shipping_address_country: the
+    // field reads empty, purchase_country SE stands in, and a sale shipped
+    // abroad would read as Swedish.
+    const inQuote = [sale({ captureId: 'cap-dk', amount: '125.00', vat: [['2500', '25.00']] }).replace(/;;$/, ';"')]
+    expect(refusal(report({ rows: inQuote, summary: summaryOf('125.00', '0.00', '125.00') }))).toBe(
+      'KUSTOM_SETTLEMENT_CUT_SHORT',
+    )
+    // Unquoted, cut after the VAT columns: the last record is narrower than
+    // the header and has lost the same column.
+    const between = [sale({ captureId: 'cap-dk', amount: '125.00', vat: [['2500', '25.00']] }).replace(/;;;;$/, ';;')]
+    expect(refusal(report({ rows: between, summary: summaryOf('125.00', '0.00', '125.00') }))).toBe(
+      'KUSTOM_SETTLEMENT_CUT_SHORT',
+    )
+    // A quoted field that closes is read as usual.
+    const quoted = [sale({ captureId: 'cap-q', amount: '125.00', vat: [['2500', '25.00']] }).replace(/;;$/, ';"SE";')]
+    expect(refusal(report({ rows: quoted, summary: summaryOf('125.00', '0.00', '125.00') }))).toBe('ok')
+  })
+
+  it('finds an in-store mark in a far column of a wide header', () => {
+    // The header's width is the file's to choose: thousands of extra and
+    // in-store columns over hundreds of rows.
+    const extra = Array.from({ length: 5000 }, (_, i) => `x_${i}`).join(';')
+    const ipp = Array.from({ length: 5000 }, (_, i) => `ipp_${i}`).join(';')
+    const header = `${TX_HEADER};${extra};${ipp}`
+    const fees = Array.from({ length: 500 }, () => 'FEE;2026-11-18T09:00:00.000Z;;o;O;c;;;1.00;SEK')
+    const inStore = sale({ captureId: 'cap-t', amount: '125.00', vat: [['2500', '25.00']] }) + ';'.repeat(10000) + 'T-9'
+    const rows_ = [sale({ captureId: 'cap-w', amount: '125.00', vat: [['2500', '25.00']] }), ...fees, inStore]
+    const result = imported(report({ header, rows: rows_, summary: summaryOf('250.00', '0.00', '250.00') }))
+    expect(result.rows.map((r) => [r.external_id, r.is_paid])).toEqual([
+      [kustomCaptureExternalId('M100', 'cap-w'), true],
+      [kustomCaptureExternalId('M100', 'cap-t'), false],
+    ])
+    expect(result.rows[1].payment_method_title).toMatch(/i butik/)
   })
 
   it('refuses a file that is not a Kustom settlement report', () => {

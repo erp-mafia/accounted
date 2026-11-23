@@ -13639,6 +13639,7 @@
     "kustom_payout_release": "Released by Kustom",
     "kustom_payout_reversal_note": "Reversed purchases are not on the Orders page. Book them by hand.",
     "kustom_file_too_large": "The file is larger than {max} MB. Download the report for one payout at a time.",
+    "kustom_file_type": "Choose the report as a CSV file (.csv or .txt).",
     "kustom_payout_settlement": "Paid out",
     "kustom_result_open_orders": "Go to the Orders page",
     "kustom_result_new_import": "Upload another report",
