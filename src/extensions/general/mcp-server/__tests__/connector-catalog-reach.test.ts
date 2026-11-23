@@ -221,6 +221,10 @@ const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {
   // the listed gnubok_ask_question, and an answer goes through the listed
   // gnubok_remember_fact (answers_question_id).
   gnubok_close_question: 'Direct close of a question (not bookkeeping), search-only by the frozen tools/list; an answer goes through the listed gnubok_remember_fact.',
+  // Linking a staged operation to a question writes one link row and no
+  // bookkeeping, so it saves at once, and it is search-only because
+  // tools/list is frozen. A raw tools/call carries it.
+  gnubok_link_question_operation: 'Direct link of an own staged operation to a question (not bookkeeping), search-only by the frozen tools/list; a raw tools/call carries it.',
   // Search-only by the frozen tools/list; the rot/rut page imports the same file.
   gnubok_import_rot_rut_beslut: 'Direct import of a beslutsfil, search-only by the frozen tools/list; a raw tools/call and the rot/rut page carry it.',
 }

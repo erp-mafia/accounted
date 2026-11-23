@@ -1,22 +1,26 @@
 /**
  * The question list as MCP tools: file a question for the company's people,
- * read the list, close a question without an answer. An answer is a saved
- * fact: gnubok_remember_fact with answers_question_id (answerQuestionWithFact).
+ * read the list, close a question without an answer, and link a staged
+ * operation to the question whose answer it follows from. An answer is a
+ * saved fact: gnubok_remember_fact with answers_question_id
+ * (answerQuestionWithFact).
  *
  * The checks are the core's (src/lib/questions): the evidence must exist in
  * the company, every amount in the text must stand on it, the limits hold
- * and the same records are asked about once.
+ * and the same records are asked about once; a link needs a question that
+ * is answered or closed as settled, and an operation the caller staged.
  *
- * gnubok_ask_question is a listed tool. The other two are search-only
+ * gnubok_ask_question is a listed tool. The other three are search-only
  * (catalogVisibility 'search'): the read rides the gnubok_call_tool bridge;
- * the close saves at once and is reached by a client that can name a tool
- * outside tools/list.
+ * the close and the link save at once and are reached by a client that can
+ * name a tool outside tools/list.
  */
 import { badArgument } from '@/lib/errors/refusal'
 import { createLogger } from '@/lib/logger'
 import { answerQuestion, closeQuestion } from '@/lib/questions/answer'
 import { fileQuestion } from '@/lib/questions/file'
 import { listQuestions } from '@/lib/questions/list'
+import { linkQuestionOperation } from '@/lib/questions/operations'
 import {
   EVIDENCE_KINDS,
   QUESTION_CLOSE_REASONS,
@@ -309,6 +313,42 @@ export function createQuestionTools(deps: {
           via: doorOf(actor),
         })
         return questionView(closed)
+      },
+    },
+    {
+      name: 'gnubok_link_question_operation',
+      keywords: ['fråga', 'koppla förslag', 'förslag efter svar', 'link operation', 'question operation', 'answer led to'],
+      title: 'Link Operation To Question',
+      description: `Tie a pending_operation this connection staged to the question whose answer it follows from. The question must be answered, or closed as settled, and takes at most ${QUESTION_LIMITS.maxOperations} operations. The person then sees the proposal under the question. Saves at once.`,
+      catalogVisibility: 'search',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          question_id: { type: 'string' },
+          operation_id: { type: 'string', description: 'The id of a pending_operation this connection staged.' },
+        },
+        required: ['question_id', 'operation_id'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          question_id: { type: 'string' },
+          operation_id: { type: 'string' },
+          status: { type: 'string', enum: ['linked'] },
+        },
+        required: ['question_id', 'operation_id', 'status'],
+      },
+      annotations: deps.idempotentWrite,
+      async execute(args, companyId, userId, supabase, actor) {
+        return linkQuestionOperation(supabase, {
+          companyId,
+          questionId: args.question_id,
+          operationId: args.operation_id,
+          userId,
+          // An operation names the credential that staged it: a caller that is not a key or a connection staged none.
+          actorId: actor?.type === 'api_key' && actor.id ? actor.id : null,
+        })
       },
     },
   ]

@@ -200,6 +200,7 @@
     "gnubok_link_document_to_voucher": ["actor","message","preview","risk_level","staged"],
     "gnubok_link_documents_to_vouchers": ["actor","message","preview","risk_level","staged"],
     "gnubok_link_invoice_to_voucher": ["actor","message","preview","risk_level","staged"],
+    "gnubok_link_question_operation": ["operation_id","question_id","status"],
     "gnubok_link_rot_rut_payout_voucher": ["actor","message","preview","risk_level","staged"],
     "gnubok_link_supplier_invoice_to_voucher": ["actor","message","preview","risk_level","staged"],
     "gnubok_link_transaction_to_journal_entry": ["actor","message","preview","risk_level","staged"],

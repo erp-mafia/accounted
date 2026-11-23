@@ -244,6 +244,7 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_ask_question',
     'gnubok_list_questions',
     'gnubok_close_question',
+    'gnubok_link_question_operation',
   ],
   byra: [
     'gnubok_client_overview',

@@ -49,6 +49,8 @@ const DIRECT_WRITES_WITHOUT_KEY: Record<string, string> = {
     'One question per company and set of evidence records (unique fingerprint): a repeat answers COMPANY_QUESTION_ALREADY_ASKED and writes nothing.',
   gnubok_close_question:
     'Closes an open question only (the write filters on status open): a repeat answers COMPANY_QUESTION_ALREADY_ENDED and writes nothing.',
+  gnubok_link_question_operation:
+    'One row per question and operation (unique pair): a repeat answers linked again and writes nothing.',
   gnubok_feedback:
     'Telemetry to event_log, rate-limited 1 per 60 s per actor: a duplicate report reaches the product team twice and nothing reaches the books.',
   gnubok_create_document_upload:
