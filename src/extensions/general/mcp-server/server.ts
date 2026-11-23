@@ -4914,6 +4914,64 @@ function pageTail(rows: unknown[], total: number, offset: number) {
   }
 }
 
+/**
+ * Bytes a tools/call result costs on the wire. handleMcpRequest answers with
+ * one buffered JSON body that carries the result twice: pretty-printed in
+ * content[0].text, a JSON string, so its quotes and newlines are escaped
+ * again, and compact as structuredContent.
+ */
+export function toolResultWireBytes(result: unknown): number {
+  const text = JSON.stringify(result, null, 2)
+  return Buffer.byteLength(JSON.stringify({ content: [{ type: 'text', text }], structuredContent: result }), 'utf8')
+}
+
+/**
+ * What one tools/call answer may weigh. The route answers with a buffered
+ * body (NextResponse.json), and Vercel refuses a buffered function response
+ * over 4.5 MB; the rest is room for the JSON-RPC envelope and the company
+ * block the text carries for a key that reaches several companies.
+ */
+export const MCP_ANSWER_BUDGET_BYTES = 4_400_000
+
+/**
+ * Whether a result fits one answer. Each of its two copies is at least the
+ * compact JSON, so a register far over the budget is not printed twice to
+ * find that out.
+ */
+function fitsOneAnswer(result: unknown): boolean {
+  if (2 * Buffer.byteLength(JSON.stringify(result), 'utf8') > MCP_ANSWER_BUDGET_BYTES) return false
+  return toolResultWireBytes(result) <= MCP_ANSWER_BUDGET_BYTES
+}
+
+const REGISTER_PAGE_DEFAULT = 100
+const REGISTER_PAGE_MAX = 200
+
+/**
+ * The answer of a register list (customers, articles), cut from the whole
+ * register in its display order (crm#2151). With limit or offset: that page.
+ * Without either: the whole register, as these tools have always answered,
+ * when it fits one answer; a register too large for one answer, which could
+ * not be answered at all before, gets its first page, with has_more,
+ * next_offset and total_count saying there is more. Only the rows answered
+ * pass through `present` (the customer list opens personnummer there).
+ */
+function registerAnswer<Row, Out>(
+  key: string,
+  sorted: Row[],
+  args: Record<string, unknown>,
+  present: (rows: Row[]) => Out[],
+): Record<string, unknown> {
+  if (args.limit == null && args.offset == null) {
+    const rows = present(sorted)
+    const whole = { [key]: rows, ...pageTail(rows, rows.length, 0) }
+    if (fitsOneAnswer(whole)) return whole
+  }
+  const limit = Math.min(Math.max(1, Math.floor(Number(args.limit)) || REGISTER_PAGE_DEFAULT), REGISTER_PAGE_MAX)
+  const offset = Math.max(0, Math.floor(Number(args.offset)) || 0)
+  const rows = present(sorted.slice(offset, offset + limit))
+  return { [key]: rows, ...pageTail(rows, sorted.length, offset) }
+}
+
 // Shared by the report tools' optional `dimensions` filter arg: parse the raw
 // bag, then resolve value NAMES → registry codes in one pass (resolve-don't-
 // select: the exact contract gnubok_create_voucher uses, incl. free-text
@@ -9932,13 +9990,20 @@ export const tools: McpTool[] = [
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: { include_archived: { type: 'boolean' } },
+      properties: {
+        include_archived: { type: 'boolean' },
+        limit: { type: 'integer' },
+        offset: { type: 'integer' },
+      },
     },
     outputSchema: {
       type: 'object',
       properties: {
         customers: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
+        next_offset: { type: 'number' },
       },
       required: ['customers', 'count'],
     },
@@ -9981,15 +10046,15 @@ export const tools: McpTool[] = [
       // number built on one is nulled: that covers a Swedish enskild firma
       // (its org number is the owner's personnummer) and the legacy rows
       // that carry one in org_number under another customer type.
-      const customers = rows.map(({ personal_number, ...customer }) => {
-        const identifiers = agentCustomerIdentifiers(customer, maskStoredCustomerPersonalNumber(personal_number))
-        const masksNothing =
-          identifiers.org_number === customer.org_number && identifiers.vat_number === customer.vat_number
-        if (customer.customer_type !== 'individual' && masksNothing) return customer
-        return { ...customer, ...identifiers }
-      })
-
-      return { customers, count: customers.length }
+      return registerAnswer('customers', rows, args, (answered) =>
+        answered.map(({ personal_number, ...customer }) => {
+          const identifiers = agentCustomerIdentifiers(customer, maskStoredCustomerPersonalNumber(personal_number))
+          const masksNothing =
+            identifiers.org_number === customer.org_number && identifiers.vat_number === customer.vat_number
+          if (customer.customer_type !== 'individual' && masksNothing) return customer
+          return { ...customer, ...identifiers }
+        }),
+      )
     },
   },
 
@@ -10268,13 +10333,15 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_articles',
     keywords: ['artikel', 'artiklar', 'produkter', 'artikelregister'],
     title: 'List Articles',
-    description: "List the active company's catalog articles (artikelregister). Use to look up an article to add to an invoice line. Active articles only by default.",
+    description: 'List the catalog articles (artikelregister) to put on invoice lines; active only unless include_inactive.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        query: { type: 'string', description: 'Optional case-insensitive filter on name or article_number.' },
-        include_inactive: { type: 'boolean', description: 'Include deactivated articles (default false).' },
+        query: { type: 'string', description: 'Case-insensitive filter on name or article_number.' },
+        include_inactive: { type: 'boolean' },
+        limit: { type: 'integer' },
+        offset: { type: 'integer' },
       },
     },
     outputSchema: {
@@ -10282,6 +10349,9 @@ export const tools: McpTool[] = [
       properties: {
         articles: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
+        next_offset: { type: 'number' },
       },
       required: ['articles', 'count'],
     },
@@ -10313,7 +10383,7 @@ export const tools: McpTool[] = [
       }
       articles.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
-      return { articles, count: articles.length }
+      return registerAnswer('articles', articles, args, (answered) => answered)
     },
   },
 
