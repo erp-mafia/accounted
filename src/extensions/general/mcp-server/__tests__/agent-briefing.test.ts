@@ -14,6 +14,7 @@ import {
 import { workflowSkills } from '../skills'
 import { isDefaultCatalogTool } from '../tool-reach'
 import { ALL_SCOPES, DEFAULT_OAUTH_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
+import { createPagedMockSupabase, manyRows } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -100,12 +101,14 @@ function mockSupabase(opts: {
   }>
   // company_inboxes.local_part of the active inbox (crm#1174). undefined → no row.
   inboxLocalPart?: string
-  errors?: { profile?: string; memory?: string; atoms?: string }
+  errors?: { profile?: string; memory?: string; atoms?: string; dimensionValues?: string }
 }) {
   const profile = opts.profile === undefined ? null : opts.profile
   const memoryRows = opts.memoryRows ?? []
   const atomRows = opts.atomRows ?? []
   const errors = opts.errors ?? {}
+  // The values read pages like PostgREST: at most 1,000 rows a request.
+  const pagedValues = createPagedMockSupabase({ dimension_values: opts.dimensionValueRows ?? [] })
 
   /** Order-agnostic chainable query resolving to `data` when awaited. */
   const chainResolving = (data: unknown) => {
@@ -118,6 +121,7 @@ function mockSupabase(opts: {
   }
 
   return {
+    findCalls: pagedValues.findCalls,
     from: vi.fn((table: string) => {
       if (table === 'company_skills') return chainResolving([])
       if (table === 'profiles') {
@@ -213,7 +217,12 @@ function mockSupabase(opts: {
         return chainResolving(opts.dimensionRows ?? [])
       }
       if (table === 'dimension_values') {
-        return chainResolving(opts.dimensionValueRows ?? [])
+        if (errors.dimensionValues) {
+          const failing = chainResolving(null)
+          failing.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: { message: errors.dimensionValues } })
+          return failing
+        }
+        return pagedValues.supabase.from(table)
       }
       if (table === 'account_dimension_rules') {
         // PR10: the briefing surfaces active rules; default none.
@@ -595,6 +604,54 @@ describe('gnubok_get_agent_briefing tool', () => {
       { type: 'api_key' }
     )) as { dimensions?: { enabled: boolean } }
     expect(result.dimensions?.enabled).toBe(false)
+  })
+
+  it('counts every active value past 1,000 rows, a dimension whose codes sort last included (crm#2152)', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const projects = manyRows(1500, (i) => ({ dimension_id: 'dim-6', code: `P${String(i).padStart(5, '0')}`, name: `Projekt ${i}` }))
+    const costCentres = ['X1', 'X2', 'X3'].map((code) => ({ dimension_id: 'dim-1', code, name: `Kostnadsställe ${code}` }))
+    const supabase = mockSupabase({
+      profile: null,
+      dimensionsEnabled: true,
+      dimensionRows: [
+        { id: 'dim-1', sie_dim_no: 1, name: 'Kostnadsställe' },
+        { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' },
+      ],
+      // Ordered by code across the company, as the read orders them.
+      dimensionValueRows: [...projects, ...costCentres],
+    })
+
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      dimensions?: { dimensions: Array<{ sie_dim_no: number; active_value_count: number; top_values: Array<{ code: string }> }> }
+    }
+
+    const [ks, projekt] = result.dimensions!.dimensions
+    expect(ks).toMatchObject({ sie_dim_no: 1, active_value_count: 3 })
+    expect(ks.top_values.map((v) => v.code)).toEqual(['X1', 'X2', 'X3'])
+    expect(projekt).toMatchObject({ sie_dim_no: 6, active_value_count: 1500 })
+    expect(projekt.top_values.map((v) => v.code)).toEqual(projects.slice(0, 10).map((v) => v.code))
+    // Every page reads the company's active values (the MCP client has no RLS
+    // to fall back on) on a total order: a code is unique only inside its dimension.
+    const pages = supabase.findCalls('dimension_values', 'range')
+    const filters = supabase.findCalls('dimension_values', 'eq')
+    const orders = supabase.findCalls('dimension_values', 'order').map(([column]) => column)
+    expect(pages.length).toBeGreaterThan(1)
+    expect(filters).toEqual(pages.flatMap(() => [['company_id', 'company-1'], ['is_active', true]]))
+    expect(orders).toEqual(pages.flatMap(() => ['code', 'id']))
+  })
+
+  it('omits the dimensions block, and still briefs, when the values read fails', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const supabase = mockSupabase({
+      profile: null,
+      dimensionRows: [{ id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }],
+      errors: { dimensionValues: 'canceling statement due to statement timeout' },
+    })
+
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as Record<string, unknown>
+
+    expect('dimensions' in result).toBe(false)
+    expect(result.company).toBeDefined()
   })
 })
 
