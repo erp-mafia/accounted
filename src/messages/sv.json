@@ -21574,6 +21574,8 @@
     "saved": "Sparat: {fact}",
     "closed_dont_know": "Stängd utan svar.",
     "closed_not_relevant": "Stängd. Vi har noterat att du inte vill ha sådana frågor.",
+    "settled": "Löst utan dig",
+    "settled_evidence_label": "Underlag som besvarade frågan",
     "undo": "Ångra",
     "undo_failed": "Det gick inte att ångra.",
     "action_failed": "Det gick inte att spara."

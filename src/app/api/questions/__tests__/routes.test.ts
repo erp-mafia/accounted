@@ -301,3 +301,73 @@ describe('POST /api/questions/[id]/reopen', () => {
     expect(user.payloads('agent_memory', 'update')[0]).toMatchObject({ is_active: false })
   })
 })
+
+describe('questions closed as settled at the dashboard doors', () => {
+  const SETTLED_ID = 'e0000000-0000-4000-8000-000000000002'
+  const NOTE = 'Betalningen på 4 990 kr är bokförd mot leverantörens faktura.'
+  const settledRow = (overrides: Record<string, unknown> = {}) =>
+    row({
+      id: SETTLED_ID,
+      status: 'closed',
+      close_reason: 'settled',
+      close_note: NOTE,
+      close_evidence: [{ kind: 'transaction', id: TX }],
+      answered_at: '2026-11-20T09:00:00.000Z',
+      answered_via: 'claude',
+      ...overrides,
+    })
+  /** Open rows for the read of open questions, settled rows for the read that filters on the close reason. */
+  const questions =
+    (open: unknown[], settled: unknown[]): TableMockResolver =>
+    (calls) => ({ data: calls.some((c) => c.method === 'eq' && c.args[0] === 'close_reason') ? settled : open })
+  const transaction = { id: TX, date: '2026-11-03', description: 'KORTKOP', merchant_name: 'Leverantören AB', amount: -4990, currency: 'SEK' }
+
+  it('GET lists a settled question after the open ones, with its note and the records of its close as lines', async () => {
+    user.setTable('company_questions', questions([row()], [settledRow()]))
+    user.setTable('transactions', { data: [transaction] })
+
+    const { status, body } = await parseJsonResponse<Envelope>(await GET(createMockRequest('/api/questions'), noParams))
+
+    expect(status).toBe(200)
+    const listed = body.data as Array<{ question_id: string; question: string; settled?: { close_note: string | null; close_evidence: unknown[]; closed_at: string | null } }>
+    expect(listed.map((question) => question.question_id)).toEqual([QUESTION_ID, SETTLED_ID])
+    expect(listed[0]).not.toHaveProperty('settled')
+    expect(listed[1].question).toBe(QUESTION)
+    expect(listed[1].settled).toEqual({
+      close_note: NOTE,
+      close_evidence: [expect.objectContaining({ kind: 'transaction', id: TX, found: true, label: 'Leverantören AB', amount: -4990, href: `/transactions?highlight=${TX}` })],
+      closed_at: '2026-11-20T09:00:00.000Z',
+    })
+    // A read-only member reads them too, and every read is of this company.
+    expect(requireWriteMock).not.toHaveBeenCalled()
+    for (const filters of [user.findCalls('company_questions', 'eq'), user.findCalls('transactions', 'eq')]) {
+      expect(filters).toContainEqual(['company_id', COMPANY])
+    }
+  })
+
+  it('GET lists a question settled without a note and without records with neither', async () => {
+    user.setTable('company_questions', questions([], [settledRow({ close_note: null, close_evidence: [] })]))
+
+    const { body } = await parseJsonResponse<Envelope>(await GET(createMockRequest('/api/questions'), noParams))
+
+    expect(body.data).toEqual([expect.objectContaining({ question_id: SETTLED_ID, settled: { close_note: null, close_evidence: [], closed_at: '2026-11-20T09:00:00.000Z' } })])
+  })
+
+  it('the close route takes neither a note nor records, and writes neither', async () => {
+    for (const body of [
+      { reason: 'dont_know', note: NOTE },
+      { reason: 'dont_know', evidence: [`transaction:${TX}`] },
+      { reason: 'not_relevant', note: NOTE, evidence: [{ kind: 'transaction', id: TX }] },
+    ]) {
+      expect((await CLOSE(post('close', body), idParams())).status, JSON.stringify(body)).toBe(400)
+    }
+    expect(admin.supabase.from).not.toHaveBeenCalled()
+
+    admin.setTable('company_questions', questionsTable(row(), row({ status: 'closed', close_reason: 'dont_know', answered_at: '2026-11-19T09:00:00.000Z' })))
+    expect((await CLOSE(post('close', { reason: 'dont_know' }), idParams())).status).toBe(200)
+    const payload = admin.payloads('company_questions', 'update')[0] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('close_note')
+    expect(payload).not.toHaveProperty('close_evidence')
+  })
+})
+

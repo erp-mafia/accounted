@@ -23,6 +23,9 @@ export interface QuestionRow {
   id: string
   status: string
   close_reason: string | null
+  /** Absent on a row read without it. */
+  close_note?: string | null
+  close_evidence?: unknown
   question: string
   why: string | null
   options: unknown
@@ -62,6 +65,8 @@ export function toQuestion(row: QuestionRow): CompanyQuestion {
     question_id: row.id,
     status: (QUESTION_STATUSES as readonly string[]).includes(row.status) ? (row.status as QuestionStatus) : 'open',
     close_reason: (QUESTION_CLOSE_REASONS as readonly unknown[]).includes(row.close_reason) ? (row.close_reason as QuestionCloseReason) : null,
+    close_note: typeof row.close_note === 'string' && row.close_note.trim() ? row.close_note.trim() : null,
+    close_evidence: evidenceOf(row.close_evidence),
     question: row.question,
     why: row.why,
     options: optionsOf(row.options),
@@ -95,7 +100,7 @@ export async function readQuestionRow(supabase: SupabaseClient, companyId: strin
   const { data, error } = await supabase
     .from('company_questions')
     .select(
-      'id, status, close_reason, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
+      'id, status, close_reason, close_note, close_evidence, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
     )
     .eq('id', questionId)
     .eq('company_id', companyId)

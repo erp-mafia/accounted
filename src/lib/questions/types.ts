@@ -50,6 +50,8 @@ export const QUESTION_LIMITS = {
   maxText: 500,
   /** Characters in a written answer. */
   maxAnswerText: 2000,
+  /** Characters in the note on a question closed as settled. */
+  maxCloseNote: 300,
   /** Days an answered or closed question stays in the list. */
   recentDays: 90,
 } as const
@@ -66,6 +68,16 @@ export interface CompanyQuestion {
   question_id: string
   status: QuestionStatus
   close_reason: QuestionCloseReason | null
+  /**
+   * On a question closed as settled: where the answer is, when the close
+   * said. Set on every question read from its row (toQuestion).
+   */
+  close_note?: string | null
+  /**
+   * On a question closed as settled: the records that hold the answer, when
+   * the close cited any. Set on every question read from its row.
+   */
+  close_evidence?: EvidenceRef[]
   question: string
   why: string | null
   options: QuestionOption[]

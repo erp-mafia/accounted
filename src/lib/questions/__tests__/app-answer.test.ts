@@ -6,8 +6,11 @@ import {
   closeAsPerson,
   countOpenQuestions,
   listAppQuestions,
+  listAppSettledQuestions,
+  listQuestionPage,
   questionFactRef,
   reopenQuestion,
+  SETTLED_SHOWN_MAX,
   UNDO_WINDOW_MS,
 } from '../app-answer'
 
@@ -387,3 +390,188 @@ describe('reopenQuestion', () => {
     expect(user.supabase.from).not.toHaveBeenCalled()
   })
 })
+
+describe('the questions closed as settled, as the page lists them', () => {
+  const SETTLED_ID = 'e0000000-0000-4000-8000-000000000002'
+  const INVOICE = '20000000-0000-4000-8000-000000000001'
+  const NOTE = 'Betalningen på 4 990 kr är bokförd mot leverantörens faktura.'
+  const settledRow = (overrides: Record<string, unknown> = {}) =>
+    row({
+      id: SETTLED_ID,
+      status: 'closed',
+      close_reason: 'settled',
+      close_note: NOTE,
+      close_evidence: [{ kind: 'supplier_invoice', id: INVOICE }],
+      answered_at: '2026-11-20T09:00:00.000Z',
+      answered_via: 'claude',
+      ...overrides,
+    })
+  /** Open rows for the read of open questions, settled rows for the read that filters on the close reason. */
+  const questions =
+    (open: unknown[], settled: unknown[]): TableMockResolver =>
+    (calls) => ({ data: calls.some((c) => c.method === 'eq' && c.args[0] === 'close_reason') ? settled : open })
+  const records = {
+    transactions: { data: [{ id: TX, date: '2026-11-03', description: 'KORTKOP', merchant_name: 'Leverantören AB', amount: -4990, currency: 'SEK' }] },
+    supplier_invoices: {
+      data: [{ id: INVOICE, supplier_invoice_number: 'F-1042', invoice_date: '2026-11-01', total: 4990, currency: 'SEK', supplier: { name: 'Leverantören AB' } }],
+    },
+  }
+
+  it('lists a settled question with its note and the records of its close as lines', async () => {
+    const mock = createTableMockSupabase({ company_questions: questions([], [settledRow()]), ...records })
+
+    const settled = await listAppSettledQuestions(mock.supabase as never, COMPANY)
+
+    expect(settled).toEqual([
+      {
+        question_id: SETTLED_ID,
+        question: QUESTION,
+        why: 'Svaret avgör vad som väntas framåt.',
+        options: [
+          { id: 'more', label: 'Fler licenser' },
+          { id: 'annual', label: 'Årsbetalning' },
+        ],
+        evidence: [expect.objectContaining({ kind: 'transaction', id: TX, found: true, label: 'Leverantören AB' })],
+        asked_at: '2026-11-19T08:00:00.000Z',
+        settled: {
+          close_note: NOTE,
+          close_evidence: [
+            {
+              kind: 'supplier_invoice',
+              id: INVOICE,
+              found: true,
+              date: '2026-11-01',
+              label: 'Leverantören AB',
+              detail: 'F-1042',
+              amount: 4990,
+              currency: 'SEK',
+              href: expect.stringContaining(INVOICE),
+            },
+          ],
+          closed_at: '2026-11-20T09:00:00.000Z',
+        },
+      },
+    ])
+    // The settled read: this company, closed as settled, at most what the page shows.
+    expect(mock.findCalls('company_questions', 'eq')).toEqual([
+      ['company_id', COMPANY],
+      ['status', 'closed'],
+      ['close_reason', 'settled'],
+    ])
+    expect(mock.findCalls('company_questions', 'limit')).toEqual([[SETTLED_SHOWN_MAX]])
+    // The records of the close are read in this company, once per kind.
+    expect(mock.findCalls('supplier_invoices', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCalls('supplier_invoices', 'select')).toHaveLength(1)
+  })
+
+  it('lists a question settled without a note and without records with neither', async () => {
+    const mock = createTableMockSupabase({ company_questions: questions([], [settledRow({ close_note: null, close_evidence: [] })]), ...records })
+
+    const [settled] = await listAppSettledQuestions(mock.supabase as never, COMPANY)
+
+    expect(settled.settled).toEqual({ close_note: null, close_evidence: [], closed_at: '2026-11-20T09:00:00.000Z' })
+    expect(mock.tables()).not.toContain('supplier_invoices')
+  })
+
+  it('shows a record of the close that is no longer there as a line that says so', async () => {
+    const mock = createTableMockSupabase({ company_questions: questions([], [settledRow()]), ...records, supplier_invoices: { data: [] } })
+
+    const [settled] = await listAppSettledQuestions(mock.supabase as never, COMPANY)
+
+    expect(settled.settled?.close_evidence).toEqual([expect.objectContaining({ kind: 'supplier_invoice', id: INVOICE, found: false, href: null })])
+  })
+
+  it('gives the page the open questions first, then the settled ones', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questions(
+        [row()],
+        [settledRow(), settledRow({ id: 'e0000000-0000-4000-8000-000000000003', close_note: null, close_evidence: [], answered_at: '2026-11-18T09:00:00.000Z' })],
+      ),
+      ...records,
+    })
+
+    const page = await listQuestionPage(mock.supabase as never, COMPANY)
+
+    expect(page.map((question) => [question.question_id, question.settled?.close_note ?? null, question.settled !== undefined])).toEqual([
+      [QUESTION_ID, null, false],
+      [SETTLED_ID, NOTE, true],
+      ['e0000000-0000-4000-8000-000000000003', null, true],
+    ])
+    expect(page[0]).not.toHaveProperty('settled')
+    expect(page[1].settled?.close_evidence).toEqual([expect.objectContaining({ kind: 'supplier_invoice', id: INVOICE, label: 'Leverantören AB', amount: 4990 })])
+  })
+
+  it('gives the page only the open questions when none is settled', async () => {
+    const mock = createTableMockSupabase({ company_questions: questions([row()], []), ...records })
+    const page = await listQuestionPage(mock.supabase as never, COMPANY)
+    expect(page.map((question) => question.question_id)).toEqual([QUESTION_ID])
+  })
+
+  it('refuses for a company the list is not switched on for, and reads nothing', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', 'another-company')
+    const mock = createTableMockSupabase()
+    expect(await refusalOf(listQuestionPage(mock.supabase as never, COMPANY))).toMatchObject({ code: 'COMPANY_QUESTIONS_OFF' })
+    expect(await refusalOf(listAppSettledQuestions(mock.supabase as never, COMPANY))).toMatchObject({ code: 'COMPANY_QUESTIONS_OFF' })
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+})
+
+describe('reopenQuestion on a close that said where the answer is', () => {
+  const NOW = new Date('2026-11-19T09:05:00.000Z')
+  const ended = (overrides: Record<string, unknown> = {}) => ({
+    id: QUESTION_ID,
+    status: 'closed',
+    answered_by: USER,
+    answered_at: '2026-11-19T09:00:00.000Z',
+    answered_via: 'app',
+    fact_id: null,
+    ...overrides,
+  })
+  const reopen = (user: ReturnType<typeof createTableMockSupabase>, admin: ReturnType<typeof createTableMockSupabase>) =>
+    reopenQuestion(user.supabase as never, admin.supabase as never, { companyId: COMPANY, questionId: QUESTION_ID, userId: USER, now: NOW })
+
+  const carried: Array<[string, Record<string, unknown>]> = [
+    ['a note and records', { close_note: 'Bokfört mot fakturan.', close_evidence: [{ kind: 'transaction', id: TX }] }],
+    ['records only', { close_note: null, close_evidence: [{ kind: 'transaction', id: TX }] }],
+    ['a note only', { close_note: 'Bokfört mot fakturan.', close_evidence: [] }],
+  ]
+
+  it.each(carried)('clears both when the close carried %s', async (_name, onRow) => {
+    const user = createTableMockSupabase({ company_questions: { data: ended(onRow) } })
+    const admin = createTableMockSupabase({ company_questions: { data: row() } })
+
+    const result = await reopen(user, admin)
+
+    expect(result).toMatchObject({ status: 'open', close_reason: null, close_note: null, close_evidence: [] })
+    expect(admin.payloads('company_questions', 'update')).toEqual([
+      {
+        status: 'open',
+        close_reason: null,
+        answer_option: null,
+        answer_text: null,
+        fact_id: null,
+        answered_by: null,
+        answered_at: null,
+        answered_via: null,
+        close_note: null,
+        close_evidence: [],
+      },
+    ])
+  })
+
+  it('reads the note and the records of the close with the question it reopens', async () => {
+    const user = createTableMockSupabase({ company_questions: { data: ended() } })
+    const admin = createTableMockSupabase({ company_questions: { data: row() } })
+
+    await reopen(user, admin)
+
+    const [[columns]] = user.findCalls('company_questions', 'select') as Array<[string]>
+    expect(columns).toContain('close_note')
+    expect(columns).toContain('close_evidence')
+    // A close without either leaves the write as it was.
+    const [payload] = admin.payloads('company_questions', 'update') as Array<Record<string, unknown>>
+    expect(payload).not.toHaveProperty('close_note')
+    expect(payload).not.toHaveProperty('close_evidence')
+  })
+})
+

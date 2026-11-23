@@ -93,6 +93,32 @@ function QuestionBlock({
   const { question, ended, busy, error } = item
   const own = ownWordsBody(ownText)
 
+  if (ended?.kind === 'settled') {
+    return (
+      <li className="space-y-3 border-b-hairline px-2 py-4">
+        <h2 className="text-[13px] font-medium text-strong" data-ph-mask="">
+          {question.question}
+        </h2>
+        <div className="flex min-h-7 items-center gap-x-2 text-[13px]">
+          <StatusGlyph tone="ok" />
+          <span className="min-w-0 flex-1">{t('settled')}</span>
+        </div>
+        {ended.note && (
+          <p className="text-[13px] text-foreground" data-ph-mask="">
+            {ended.note}
+          </p>
+        )}
+        {ended.evidence.length > 0 && (
+          <ul aria-label={t('settled_evidence_label')} className="-mx-2 border-t-hairline">
+            {ended.evidence.map((line) => (
+              <EvidenceRow key={`${line.kind}:${line.id}`} line={line} t={t} />
+            ))}
+          </ul>
+        )}
+      </li>
+    )
+  }
+
   if (ended) {
     return (
       <li className="border-b-hairline px-2 py-3">
@@ -203,7 +229,9 @@ function QuestionBlock({
 /**
  * The question list: each open question as a block with the records it rests
  * on, why it is asked and its answers. One press answers; the block then
- * shows what was saved, with Ångra. `initial` is null when the server could
+ * shows what was saved, with Ångra. A question that was closed as settled
+ * comes after them as its text, the line saying so, the note of its close
+ * and the records the close named. `initial` is null when the server could
  * not read the list.
  */
 export function QuestionList({ initial }: { initial: AppQuestion[] | null }) {

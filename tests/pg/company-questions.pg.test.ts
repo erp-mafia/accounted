@@ -8,6 +8,10 @@ import { seedCompany, setActiveCompany } from './fixtures'
  * companies' questions and write none; the service role writes; one question
  * per company and fingerprint; a question is open exactly while it has no
  * answered_at, and closed exactly when it has a close_reason.
+ *
+ * close_note and close_evidence (migration 20261122220500): a note of 1 to
+ * 300 characters after trimming, at most eight records, and either one only
+ * on a question closed as settled.
  */
 
 const fingerprintOf = (seed: string) => createHash('sha256').update(seed).digest('hex')
@@ -155,4 +159,89 @@ describe('company_questions', () => {
     const { rows } = await getPool().query(`SELECT status, fact_id FROM public.company_questions WHERE id = $1`, [id])
     expect(rows[0]).toEqual({ status: 'answered', fact_id: null })
   })
+
+  it('starts a question without a close note and with no close evidence, and lets a member read both', async () => {
+    const id = await insertQuestion(companyId)
+    const { rows } = await getPool().query(`SELECT close_note, close_evidence FROM public.company_questions WHERE id = $1`, [id])
+    expect(rows[0]).toEqual({ close_note: null, close_evidence: [] })
+
+    await getPool().query(
+      `UPDATE public.company_questions
+          SET status = 'closed', close_reason = 'settled', answered_at = now(),
+              close_note = 'Booked against the supplier invoice.', close_evidence = $2::jsonb
+        WHERE id = $1`,
+      [id, JSON.stringify([{ kind: 'transaction', id: randomUUID() }])],
+    )
+    await setActiveCompany(userId, companyId)
+    const seen = await withUserContext(userId, async (client) => {
+      const { rows: mine } = await client.query<{ close_note: string | null; close_evidence: unknown[] }>(
+        `SELECT close_note, close_evidence FROM public.company_questions WHERE id = $1`,
+        [id],
+      )
+      return mine[0]
+    })
+    expect(seen.close_note).toBe('Booked against the supplier invoice.')
+    expect(seen.close_evidence).toHaveLength(1)
+  })
+
+  it('holds a close note to 1 to 300 characters after trimming, and close evidence to an array of at most eight', async () => {
+    const id = await insertQuestion(companyId)
+    const settle = (note: string | null, evidence: unknown) =>
+      getPool().query(
+        `UPDATE public.company_questions
+            SET status = 'closed', close_reason = 'settled', answered_at = now(), close_note = $2, close_evidence = $3::jsonb
+          WHERE id = $1`,
+        [id, note, JSON.stringify(evidence)],
+      )
+    const ref = () => ({ kind: 'transaction', id: randomUUID() })
+
+    await expect(settle('', [ref()])).rejects.toMatchObject({ code: '23514' })
+    await expect(settle('   ', [ref()])).rejects.toMatchObject({ code: '23514' })
+    await expect(settle('a'.repeat(301), [ref()])).rejects.toMatchObject({ code: '23514' })
+    await expect(settle('Booked.', Array.from({ length: 9 }, ref))).rejects.toMatchObject({ code: '23514' })
+    await expect(settle('Booked.', { kind: 'transaction' })).rejects.toMatchObject({ code: '23514' })
+    await expect(settle('Booked.', 'transaction')).rejects.toMatchObject({ code: '23514' })
+
+    // 300 characters, counted after trimming, with eight records.
+    await expect(settle(` ${'a'.repeat(300)} `, Array.from({ length: 8 }, ref))).resolves.toBeDefined()
+    // Records without a note, and a settled close with neither.
+    await expect(settle(null, [ref()])).resolves.toBeDefined()
+    await expect(settle(null, [])).resolves.toBeDefined()
+  })
+
+  it('holds a close note and close evidence only on a question closed as settled', async () => {
+    const evidence = JSON.stringify([{ kind: 'transaction', id: randomUUID() }])
+    const update = (id: string, sql: string, params: unknown[] = []) =>
+      getPool().query(`UPDATE public.company_questions SET ${sql} WHERE id = $1`, [id, ...params])
+
+    // An open question carries neither.
+    const open = await insertQuestion(companyId)
+    await expect(update(open, `close_note = 'Booked.'`)).rejects.toMatchObject({ code: '23514' })
+    await expect(update(open, `close_evidence = $2::jsonb`, [evidence])).rejects.toMatchObject({ code: '23514' })
+
+    // Nor does an answered one, or one closed with another reason.
+    const answered = await insertQuestion(companyId)
+    await expect(
+      update(answered, `status = 'answered', answered_at = now(), close_note = 'Booked.', close_evidence = $2::jsonb`, [evidence]),
+    ).rejects.toMatchObject({ code: '23514' })
+    for (const reason of ['dont_know', 'not_relevant', 'withdrawn']) {
+      const closed = await insertQuestion(companyId)
+      await expect(
+        update(closed, `status = 'closed', close_reason = $2, answered_at = now(), close_note = 'Booked.'`, [reason]),
+      ).rejects.toMatchObject({ code: '23514' })
+      await expect(
+        update(closed, `status = 'closed', close_reason = $2, answered_at = now(), close_evidence = $3::jsonb`, [reason, evidence]),
+      ).rejects.toMatchObject({ code: '23514' })
+      await expect(update(closed, `status = 'closed', close_reason = $2, answered_at = now()`, [reason])).resolves.toBeDefined()
+    }
+
+    // A settled one carries both, and cannot be opened again while it does.
+    const settled = await insertQuestion(companyId)
+    await update(settled, `status = 'closed', close_reason = 'settled', answered_at = now(), close_note = 'Booked.', close_evidence = $2::jsonb`, [evidence])
+    await expect(update(settled, `status = 'open', close_reason = NULL, answered_at = NULL`)).rejects.toMatchObject({ code: '23514' })
+    await update(settled, `status = 'open', close_reason = NULL, answered_at = NULL, close_note = NULL, close_evidence = '[]'::jsonb`)
+    const { rows } = await getPool().query(`SELECT status, close_note, close_evidence FROM public.company_questions WHERE id = $1`, [settled])
+    expect(rows[0]).toEqual({ status: 'open', close_note: null, close_evidence: [] })
+  })
 })
+

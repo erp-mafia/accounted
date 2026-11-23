@@ -4,6 +4,9 @@
  * The doors are the app and the WhatsApp chat (PERSON_DOORS); the one an
  * answer or a close came through is recorded on the question.
  *
+ * The app's page also lists the questions that were closed as settled, each
+ * with the note and the records its close named (listQuestionPage).
+ *
  * A person's answer is a saved fact, as it is from every other door: the
  * question and the answer in one sentence ("<question> Svar: <answer>"),
  * saved to agent_memory as the person's own (source user_taught), and the
@@ -13,7 +16,8 @@
  * Undo (reopenQuestion) puts back what the app's own answer or close did:
  * the question is open again and the fact that answer saved is retired. Only
  * the person who answered, only for ten minutes, and only an answer given in
- * the app: a fact saved through another door is never retired from here.
+ * the app: a fact saved through another door is never retired from here. A
+ * note and records its close carried are taken off the question with it.
  *
  * Two clients: `supabase` reads the question and saves the fact, `admin` is
  * the service role, which alone writes company_questions. In the app
@@ -30,7 +34,7 @@ import { createLogger } from '@/lib/logger'
 import { answerQuestion, closeQuestion } from './answer'
 import { emitQuestionEvent } from './events'
 import { evidenceLines, type EvidenceLine } from './evidence-lines'
-import { listQuestions } from './list'
+import { listQuestions, listSettledQuestions } from './list'
 import { assertCompanyQuestionsOn, questionNotFound, readQuestionRow, toQuestion, type QuestionRow } from './rows'
 import { QUESTION_LIMITS, type CompanyQuestion, type QuestionOption } from './types'
 
@@ -58,7 +62,19 @@ export type AppCloseReason = (typeof APP_CLOSE_REASONS)[number]
 
 export type AnswerLocale = 'sv' | 'en'
 
-/** An open question as the app lists it. */
+/** Questions closed as settled that the app's page lists at most. */
+export const SETTLED_SHOWN_MAX = 20
+
+/** How a question closed as settled ended, as the app lists it. */
+export interface AppSettled {
+  /** Where the answer is, when the close said. */
+  close_note: string | null
+  /** The records the close named, as readable lines. */
+  close_evidence: EvidenceLine[]
+  closed_at: string | null
+}
+
+/** A question as the app lists it: an open one, or one closed as settled. */
 export interface AppQuestion {
   question_id: string
   question: string
@@ -66,6 +82,8 @@ export interface AppQuestion {
   options: QuestionOption[]
   evidence: EvidenceLine[]
   asked_at: string
+  /** Set on a question closed as settled; absent on an open one. */
+  settled?: AppSettled
 }
 
 /** The source_ref of the fact a person's answer saves. */
@@ -94,6 +112,43 @@ export async function listAppQuestions(supabase: SupabaseClient, companyId: stri
     evidence: lines[index] ?? [],
     asked_at: question.created_at,
   }))
+}
+
+/**
+ * The questions closed as settled in the last 90 days, the latest first, at
+ * most SETTLED_SHOWN_MAX: each with the note of its close and the records
+ * the close named, as the lines a question's own evidence is shown with.
+ */
+export async function listAppSettledQuestions(supabase: SupabaseClient, companyId: string): Promise<AppQuestion[]> {
+  const settled = await listSettledQuestions(supabase, companyId, SETTLED_SHOWN_MAX)
+  // One read per kind for the questions' own records and the records of their closes together.
+  const lines = await evidenceLines(supabase, companyId, [
+    ...settled.map((question) => question.evidence),
+    ...settled.map((question) => question.close_evidence ?? []),
+  ])
+  return settled.map((question, index) => ({
+    question_id: question.question_id,
+    question: question.question,
+    why: question.why,
+    options: question.options,
+    evidence: lines[index] ?? [],
+    asked_at: question.created_at,
+    settled: {
+      close_note: question.close_note ?? null,
+      close_evidence: lines[settled.length + index] ?? [],
+      closed_at: question.answered_at,
+    },
+  }))
+}
+
+/**
+ * What the app's question page lists: the open questions, the oldest first,
+ * then the questions closed as settled, the latest first.
+ */
+export async function listQuestionPage(supabase: SupabaseClient, companyId: string): Promise<AppQuestion[]> {
+  const open = await listAppQuestions(supabase, companyId)
+  const settled = await listAppSettledQuestions(supabase, companyId)
+  return [...open, ...settled]
 }
 
 /**
@@ -257,10 +312,10 @@ export interface ReopenQuestionInput {
 
 /**
  * Undoes an answer or a close made in the app: the question is open again,
- * and the fact the answer saved is retired. Refuses a question that is still
- * open, one somebody else ended, one ended through another door, and one
- * ended more than ten minutes ago. A reopened question emits
- * company_question.reopened.
+ * and the fact the answer saved is retired. A note and records the close
+ * carried are cleared. Refuses a question that is still open, one somebody
+ * else ended, one ended through another door, and one ended more than ten
+ * minutes ago. A reopened question emits company_question.reopened.
  */
 export async function reopenQuestion(supabase: SupabaseClient, admin: SupabaseClient, input: ReopenQuestionInput): Promise<CompanyQuestion> {
   assertCompanyQuestionsOn(input.companyId)
@@ -268,7 +323,7 @@ export async function reopenQuestion(supabase: SupabaseClient, admin: SupabaseCl
 
   const { data, error } = await supabase
     .from('company_questions')
-    .select('id, status, answered_by, answered_at, answered_via, fact_id')
+    .select('id, status, answered_by, answered_at, answered_via, fact_id, close_note, close_evidence')
     .eq('id', input.questionId)
     .eq('company_id', input.companyId)
     .maybeSingle()
@@ -281,7 +336,12 @@ export async function reopenQuestion(supabase: SupabaseClient, admin: SupabaseCl
     answered_at: string | null
     answered_via: string | null
     fact_id: string | null
+    close_note?: string | null
+    close_evidence?: unknown
   }
+  const carriesCloseNote =
+    (typeof current.close_note === 'string' && current.close_note !== '') ||
+    (Array.isArray(current.close_evidence) && current.close_evidence.length > 0)
 
   if (current.status === 'open' || !current.answered_at) throw undoRefused(current.id, 'it is open')
   if (current.answered_by !== input.userId) throw undoRefused(current.id, 'it was ended by someone else')
@@ -300,13 +360,15 @@ export async function reopenQuestion(supabase: SupabaseClient, admin: SupabaseCl
       answered_by: null,
       answered_at: null,
       answered_via: null,
+      // An open question carries neither: both are cleared when the close left any.
+      ...(carriesCloseNote ? { close_note: null, close_evidence: [] } : {}),
     })
     .eq('id', current.id)
     .eq('company_id', input.companyId)
     .eq('status', current.status)
     .eq('answered_by', input.userId)
     .select(
-      'id, status, close_reason, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
+      'id, status, close_reason, close_note, close_evidence, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
     )
     .maybeSingle()
   if (reopenError) throw dbError(reopenError)

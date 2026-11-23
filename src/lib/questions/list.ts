@@ -1,8 +1,9 @@
 /**
  * A company's question list: the open questions first (the oldest first),
- * then those answered or closed in the last 90 days (the latest first). And
- * the open questions of several companies as one list, for a door that
- * serves a person rather than one company.
+ * then those answered or closed in the last 90 days (the latest first). The
+ * questions closed as settled in those days, on their own. And the open
+ * questions of several companies as one list, for a door that serves a
+ * person rather than one company.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
@@ -33,7 +34,7 @@ async function openQuestions(supabase: SupabaseClient, companyId: string, limit:
   const { data, error } = await supabase
     .from('company_questions')
     .select(
-      'id, status, close_reason, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
+      'id, status, close_reason, close_note, close_evidence, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
     )
     .eq('company_id', companyId)
     .eq('status', 'open')
@@ -53,7 +54,7 @@ async function endedQuestions(
   const { data, error } = await supabase
     .from('company_questions')
     .select(
-      'id, status, close_reason, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
+      'id, status, close_reason, close_note, close_evidence, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
     )
     .eq('company_id', companyId)
     .in('status', statuses)
@@ -78,6 +79,30 @@ export async function listQuestions(
   if (open.length >= limit) return open
   const ended = await endedQuestions(supabase, companyId, ['answered', 'closed'], limit - open.length)
   return [...open, ...ended]
+}
+
+/**
+ * The questions closed as settled in the last 90 days, the latest first, at
+ * most `limit`. Refuses when the list is not switched on; throws when the
+ * read fails.
+ */
+export async function listSettledQuestions(supabase: SupabaseClient, companyId: string, limit: number): Promise<CompanyQuestion[]> {
+  assertCompanyQuestionsOn(companyId)
+  const since = new Date(Date.now() - QUESTION_LIMITS.recentDays * DAY_MS).toISOString()
+  const { data, error } = await supabase
+    .from('company_questions')
+    .select(
+      'id, status, close_reason, close_note, close_evidence, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
+    )
+    .eq('company_id', companyId)
+    .eq('status', 'closed')
+    .eq('close_reason', 'settled')
+    .gte('answered_at', since)
+    .order('answered_at', { ascending: false })
+    .limit(limitOf(limit))
+  if (error) throw dbError(error)
+  // Only what was asked for is handed on, whatever the read answers.
+  return ((data ?? []) as QuestionRow[]).map(toQuestion).filter((question) => question.status === 'closed' && question.close_reason === 'settled')
 }
 
 /**
@@ -120,7 +145,7 @@ export async function listOpenQuestionsAcross(
     const { data, error } = await supabase
       .from('company_questions')
       .select(
-        'id, company_id, status, close_reason, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
+        'id, company_id, status, close_reason, close_note, close_evidence, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
       )
       .in('company_id', chunk)
       .eq('status', 'open')
