@@ -276,6 +276,10 @@ export interface UserUiState {
   // hidden by this person, with its X or under Inställningar > Ditt konto.
   // Its own choice: hide_assistant_fab is the built-in assistant's button.
   support_fab_hidden?: boolean
+  // Favoriter (lib/navigation/favorites): the hrefs of the menu rows this
+  // person pinned, in the order they were added. Per person, not per company:
+  // the sidebar draws only the ones the open company's menu shows.
+  nav_favorites?: string[]
 }
 
 export type AgentPanelMode = 'docked' | 'floating'

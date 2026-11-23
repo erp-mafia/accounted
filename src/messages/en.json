@@ -218,7 +218,12 @@
     "v3_overview": "Overview",
     "v3_meetings": "Meetings",
     "v3_capital": "Capital",
-    "v3_owner_tax": "Owner tax"
+    "v3_owner_tax": "Owner tax",
+    "v3_favorites": "Favourites",
+    "v3_favorite_add": "Add to favourites",
+    "v3_favorite_remove": "Remove from favourites",
+    "v3_favorites_full": "You can have at most {max} favourites",
+    "v3_favorites_save_failed": "Could not save the favourite"
   },
   "discord_invite": {
     "title": "Join our Discord",

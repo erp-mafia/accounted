@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import type { UserUiState } from '@/types'
 import { SKIPPABLE_SETUP_STEPS } from '@/lib/onboarding/checklist'
+import { NAV_FAVORITES_CAP } from '@/lib/navigation/favorites'
 
 // Partial update: the client sends only the keys it changed. Strict schemas
 // so typos fail loudly instead of accumulating junk in the jsonb bag.
@@ -66,6 +67,12 @@ const BodySchema = z
       .object({ hidden: z.array(z.string().max(32)).max(16).optional() })
       .strict()
       .optional(),
+    // Favoriter (lib/navigation/favorites.ts): the hrefs of the menu rows the
+    // person pinned, in the order they were added. Replaced whole, never
+    // merged: the list IS the preference. An entry is a route path; the
+    // sidebar draws one only when it is a row of the menu, so nothing stored
+    // here is ever followed as a link.
+    nav_favorites: z.array(z.string().max(200).startsWith('/')).max(NAV_FAVORITES_CAP).optional(),
   })
   .strict()
 

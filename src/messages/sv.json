@@ -218,7 +218,12 @@
     "v3_overview": "Översikt",
     "v3_meetings": "Möten",
     "v3_capital": "Kapital",
-    "v3_owner_tax": "Ägarskatt"
+    "v3_owner_tax": "Ägarskatt",
+    "v3_favorites": "Favoriter",
+    "v3_favorite_add": "Lägg till i favoriter",
+    "v3_favorite_remove": "Ta bort från favoriter",
+    "v3_favorites_full": "Du kan ha högst {max} favoriter",
+    "v3_favorites_save_failed": "Kunde inte spara favoriten"
   },
   "discord_invite": {
     "title": "Gå med i vår Discord",

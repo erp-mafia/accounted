@@ -201,6 +201,11 @@ export default async function DashboardLayout({
     }),
   )
 
+  // The person's favourite menu rows (ui_state.nav_favorites), handed to the
+  // sidebar of every shell below so the Favoriter group is there on first
+  // paint. Per person, so it is read before any company is.
+  const navFavorites = ((userPrefs?.ui_state ?? {}) as import('@/types').UserUiState).nav_favorites
+
   const pathname = headerStore.get('x-pathname') ?? ''
   // Dashboard pages that stay reachable without an active company (Profil
   // and the delete-account page): the same list the middleware lets through.
@@ -313,6 +318,7 @@ export default async function DashboardLayout({
             <DashboardNav
               navGate={{ entityType: 'enskild_firma', surface: capabilitySurfaceWithoutCompany('enskild_firma') }}
               extensionNavItems={getExtensionNavItems()}
+              navFavorites={navFavorites}
             >
             <main
               id="main-content"
@@ -500,6 +506,7 @@ export default async function DashboardLayout({
             <DashboardNav
               navGate={{ entityType: 'enskild_firma', surface: capabilitySurfaceWithoutCompany('enskild_firma') }}
               extensionNavItems={getExtensionNavItems()}
+              navFavorites={navFavorites}
             >
             <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
               <MainContainer companyId={null}>
@@ -767,6 +774,7 @@ export default async function DashboardLayout({
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
             showDiscordInvite={showDiscordInvite}
+            navFavorites={navFavorites}
           >
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <MainContainer companyId={companyId}>
