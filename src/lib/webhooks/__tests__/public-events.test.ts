@@ -63,7 +63,7 @@ describe('public webhook event catalogue', () => {
     expect(WEBHOOKS_MD).toContain('- `invoice.sent`: ')
   })
 
-  it('delivers the four question list events in the Questions group, documented with their payload fields and scope', () => {
+  it('delivers the five question list events in the Questions group, documented with their payload fields and scope', () => {
     const groups: ReadonlyArray<PublicWebhookEventGroup> = PUBLIC_WEBHOOK_EVENT_GROUPS
     const questions = groups.find((group) => group.title === 'Questions')
     expect(questions?.events.map((event) => event.type)).toEqual([
@@ -71,16 +71,19 @@ describe('public webhook event catalogue', () => {
       'company_question.answered',
       'company_question.closed',
       'company_question.reopened',
+      'company_question.prepared',
     ])
     expect(questions?.note).toContain('`agent:read`')
 
     // Each event documents exactly the fields its payload carries beside
-    // companyId: the question by id and its state.
+    // companyId: the question by id and its state, or the operation that was
+    // linked to it by id.
     const documentedFields: Record<string, string[]> = {
       'company_question.filed': ['questionId', 'status', 'createdAt'],
       'company_question.answered': ['questionId', 'status', 'answeredVia', 'answeredAt'],
       'company_question.closed': ['questionId', 'status', 'closeReason', 'answeredVia', 'answeredAt'],
       'company_question.reopened': ['questionId', 'status', 'createdAt'],
+      'company_question.prepared': ['questionId', 'operationId'],
     }
     const allFields = [...new Set(Object.values(documentedFields).flat())]
     for (const event of questions?.events ?? []) {
@@ -150,6 +153,7 @@ describe('scoped event families', () => {
       'company_question.answered': ['agent:read'],
       'company_question.closed': ['agent:read'],
       'company_question.reopened': ['agent:read'],
+      'company_question.prepared': ['agent:read'],
     })
   })
 
