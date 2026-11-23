@@ -80,16 +80,34 @@ export interface ToBookDocument {
 }
 
 /**
- * What the row has for underlag: a document on the bank row, one found for
- * it in Inkommande, none yet, or the row is itself a document.
+ * An open skattekonto event (lib/skatteverket/skattekonto-open-rows.ts), as
+ * the skattekonto read answers it: Skatteverket carried it out and no
+ * verifikat holds it yet.
  */
-export type ToBookUnderlag = 'attached' | 'found' | 'missing' | 'document'
+export interface ToBookSkattekontoRow {
+  id: string
+  /** transaktionsdatum */
+  date: string
+  /** transaktionstext */
+  text: string
+  /** belopp_skatteverket: positive is money into the skattekonto. */
+  amount: number
+}
+
+/**
+ * What the row has for underlag: a document on the bank row, one found for
+ * it in Inkommande, none yet, the row is itself a document, or Skatteverket's
+ * own record of a skattekonto event.
+ */
+export type ToBookUnderlag = 'attached' | 'found' | 'missing' | 'document' | 'skatteverket'
 
 export interface ToBookRow {
   key: string
-  kind: 'bank' | 'document'
+  kind: 'bank' | 'document' | 'skattekonto'
   /** The bank row, for a bank row. */
   transactionId: string | null
+  /** The skattekonto event, for a skattekonto row. */
+  skattekontoId: string | null
   /** The inbox item: the document itself, or the one found for the bank row. */
   inboxItemId: string | null
   date: string | null
@@ -102,7 +120,7 @@ export interface ToBookRow {
   foundKind: InboxDocumentKind | null
 }
 
-export const TO_BOOK_FILTERS = ['all', 'missing', 'found', 'no_bank'] as const
+export const TO_BOOK_FILTERS = ['all', 'missing', 'found', 'no_bank', 'skattekonto'] as const
 export type ToBookFilter = (typeof TO_BOOK_FILTERS)[number]
 
 /** Newest first; rows without a date last, in the order they came. */
@@ -113,7 +131,11 @@ function newestFirst(a: ToBookRow, b: ToBookRow): number {
   return a.date < b.date ? 1 : -1
 }
 
-export function buildToBookRows(bankRows: readonly ToBookBankRow[], documents: readonly ToBookDocument[]): ToBookRow[] {
+export function buildToBookRows(
+  bankRows: readonly ToBookBankRow[],
+  documents: readonly ToBookDocument[],
+  skattekonto: readonly ToBookSkattekontoRow[] = [],
+): ToBookRow[] {
   // A row without a document gets the first document that looks paid by it.
   const waiting = new Set(bankRows.filter((r) => !r.document_id).map((r) => r.id))
   const foundFor = new Map<string, ToBookDocument>()
@@ -129,6 +151,7 @@ export function buildToBookRows(bankRows: readonly ToBookBankRow[], documents: r
       key: `tx:${r.id}`,
       kind: 'bank',
       transactionId: r.id,
+      skattekontoId: null,
       inboxItemId: found?.id ?? null,
       date: r.date,
       name: r.description,
@@ -145,6 +168,7 @@ export function buildToBookRows(bankRows: readonly ToBookBankRow[], documents: r
       key: `doc:${d.id}`,
       kind: 'document',
       transactionId: null,
+      skattekontoId: null,
       inboxItemId: d.id,
       date: d.date,
       name: d.name,
@@ -154,7 +178,21 @@ export function buildToBookRows(bankRows: readonly ToBookBankRow[], documents: r
       underlag: 'document',
       foundKind: null,
     }))
-  return [...bank, ...docs].sort(newestFirst)
+  const skv: ToBookRow[] = skattekonto.map((r) => ({
+    key: `skv:${r.id}`,
+    kind: 'skattekonto',
+    transactionId: null,
+    skattekontoId: r.id,
+    inboxItemId: null,
+    date: r.date,
+    name: r.text,
+    amount: r.amount,
+    currency: 'SEK',
+    cashAccountId: null,
+    underlag: 'skatteverket',
+    foundKind: null,
+  }))
+  return [...bank, ...docs, ...skv].sort(newestFirst)
 }
 
 /** Whether a row belongs under a filter. */
@@ -168,6 +206,8 @@ export function inToBookFilter(row: ToBookRow, filter: ToBookFilter): boolean {
       return row.underlag === 'found'
     case 'no_bank':
       return row.kind === 'document'
+    case 'skattekonto':
+      return row.kind === 'skattekonto'
   }
 }
 
@@ -181,17 +221,17 @@ export function toBookCounts(rows: readonly ToBookRow[]): Record<ToBookFilter, n
 
 /**
  * A row's amount as the list and the booking screen write it: money in on a
- * bank row carries a "+" (it shows green beside it), a document's amount has
- * no sign of its own, no amount is no text.
+ * bank row or the skattekonto carries a "+" (it shows green beside it), a
+ * document's amount has no sign of its own, no amount is no text.
  */
 export function toBookAmountLabel(row: Pick<ToBookRow, 'kind' | 'amount' | 'currency'>): string {
   if (row.amount == null) return ''
   return `${toBookIsMoneyIn(row) ? '+' : ''}${formatRowAmount(row.amount, row.currency)}`
 }
 
-/** Money in on a bank row: the list shows its amount green. */
+/** Money in on a bank row or the skattekonto: the list shows its amount green. */
 export function toBookIsMoneyIn(row: Pick<ToBookRow, 'kind' | 'amount'>): boolean {
-  return row.kind === 'bank' && row.amount != null && row.amount > 0
+  return row.kind !== 'document' && row.amount != null && row.amount > 0
 }
 
 /** The list's page. */
@@ -243,6 +283,7 @@ const FILTER_SLUGS: Record<Exclude<ToBookFilter, 'all'>, string> = {
   missing: 'saknar-underlag',
   found: 'kvitto-hittat',
   no_bank: 'utan-bankrad',
+  skattekonto: 'skattekonto',
 }
 
 /** The filter an address names; an unknown or missing one is Alla. */
