@@ -5144,6 +5144,8 @@
     "disconnect_dialog_description_colleague": "Anslutningen tillhör {owner}, som förlorar åtkomsten till bokföringen via {name} direkt och behöver ansluta igen själv.",
     "colleague_fallback": "en kollega",
     "badge_colleague_named": "Ansluten av {name}",
+    "shared_name_since_you": "Ansluten av dig sedan {date}",
+    "shared_name_since": "sedan {date}",
     "hero_title_own": "Anslut ditt eget Claude",
     "hero_body_team_colleague_named": "{owner} har redan kopplat Claude, så {appName} finns troligen redan i er organisation. Klicka Connect i Claude och logga in med ditt eget konto.",
     "hero_plan_aria": "Vilket Claude använder du?",

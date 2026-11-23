@@ -5144,6 +5144,8 @@
     "disconnect_dialog_description_colleague": "This connection belongs to {owner}, who loses access to the books through {name} immediately and has to connect again themselves.",
     "colleague_fallback": "a colleague",
     "badge_colleague_named": "Connected by {name}",
+    "shared_name_since_you": "Connected by you since {date}",
+    "shared_name_since": "since {date}",
     "hero_title_own": "Connect your own Claude",
     "hero_body_team_colleague_named": "{owner} has already connected Claude, so {appName} is most likely in your organization already. Click Connect in Claude and sign in with your own account.",
     "hero_plan_aria": "Which Claude do you use?",

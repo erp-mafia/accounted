@@ -32,7 +32,7 @@ import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
 import { claudeConnectorLink } from '@/lib/onboarding/checklist'
 import { getBranding } from '@/lib/branding/service'
 import { ALL_SCOPES } from '@/lib/auth/scope-catalog'
-import { STALE_AFTER_DAYS, connectionKind, isStaleConnection, type ConnectionKind } from '@/lib/settings/mcp-connections'
+import { STALE_AFTER_DAYS, connectionKind, isStaleConnection, sharedNames, type ConnectionKind } from '@/lib/settings/mcp-connections'
 import { cn, formatDateLong } from '@/lib/utils'
 
 const branding = getBranding()
@@ -187,6 +187,12 @@ function PermissionSummary({ scopes, source }: { scopes: readonly string[]; sour
  * sign-ins from the MCP OAuth flow (one per client sign-in) and
  * keys made by hand under Utvecklare. With nothing connected, Claude is the
  * hero: it is the path for nearly everyone and the only one-click link.
+ *
+ * Several rows can carry one name (two sign-ins from Claude are both
+ * "Claude"). Such a row also says, as quiet text after its name and badges,
+ * since when it has been connected, and for the viewer's own row that they
+ * connected it; a colleague's row already names its owner in its badge. A
+ * row whose name no other row carries shows nothing more.
  */
 export function McpConnectionsPanel({
   keys,
@@ -258,6 +264,9 @@ export function McpConnectionsPanel({
     if (kind === 'partner') return key.client_label ?? t('kind_partner')
     return t(`kind_${kind}`)
   }
+
+  // The names more than one row is shown with: those rows cannot be told apart by the name.
+  const shared = sharedNames(keys.map(rowName))
 
   async function disconnect(key: ApiKeyRow) {
     const isSignin = key.source === 'signin'
@@ -458,6 +467,14 @@ export function McpConnectionsPanel({
                       <Badge variant="secondary" className="max-w-48 shrink truncate px-1.5 py-0 text-xs font-normal">
                         {t('badge_service_account', { name: key.service_account.name })}
                       </Badge>
+                    )}
+                    {/* A name another row carries too: who connected this one and since when (from is_own and created_at). */}
+                    {shared.has(rowName(key)) && (
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">
+                        {key.is_own !== false
+                          ? t('shared_name_since_you', { date: formatDateLong(key.created_at, locale) })
+                          : t('shared_name_since', { date: formatDateLong(key.created_at, locale) })}
+                      </span>
                     )}
                   </span>
                   <span className="hidden w-40 shrink-0 truncate text-xs text-muted-foreground md:block">
