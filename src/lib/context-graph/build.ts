@@ -16,8 +16,8 @@
  *
  * Caps keep the picture readable (GRAPH_CAPS). Each kind shows its first N
  * as the briefing orders them (counterparties: the most used in twelve
- * months first); the rest collapse into one "+N" dot per kind, the chips
- * keep the full counts, and every thing stays in the lists under the graph.
+ * months first); the rest collapse into one "+N" dot per kind, the model
+ * keeps the full counts, and every thing stays in the lists under the graph.
  *
  * The briefing carries open questions for a company with the question list
  * switched on (2026-11); it does not carry deadlines or permissions today.
@@ -166,7 +166,7 @@ export function buildContextGraph(briefing: Json, caps: GraphCaps = GRAPH_CAPS):
   const skillIds: { id: string; atom: string }[] = []
   capped(objects(briefing.atoms).filter((a) => str(a.title)), caps.skills, 'instructions', 'skill', 'agent', (a, i) => {
     const atom = str(a.atom_id) ?? str(a.id) ?? `atom-${i}`
-    const id = add({ id: `skill:${atom}`, family: 'instructions', kind: 'skill', label: shortLabel(str(a.title)!), text: str(a.title), detail: str(a.description) })
+    const id = add({ id: `skill:${atom}`, family: 'instructions', kind: 'skill', label: shortLabel(str(a.title)!), text: str(a.title), detail: str(a.description), atomId: atom })
     skillIds.push({ id, atom })
     link('agent', id)
   })
