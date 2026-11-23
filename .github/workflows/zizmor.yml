@@ -26,9 +26,12 @@ on:
 permissions:
   contents: read
 
+# As in ci.yml: a newer push to a pull request cancels the run it supersedes;
+# on main the run in progress always finishes, so no commit on main is left
+# with a cancelled (red) check.
 concurrency:
   group: zizmor-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   audit:
