@@ -206,7 +206,7 @@ describe('issuable: seller and buyer name and address', () => {
   })
 
   it('passes an exempt supply without VAT: 17 kap. 12 § frees it from the invoice', () => {
-    const rent = draft({ total: 15000, vat_amount: 0, customer: makeCustomer(noAddress) })
+    const rent = draft({ total: 15000, vat_amount: 0, customer: makeCustomer(noAddress), items: [{ vat_rate: 0, line_type: 'product' }] })
     expect(issuable(rent, settings)).toBeNull()
   })
 

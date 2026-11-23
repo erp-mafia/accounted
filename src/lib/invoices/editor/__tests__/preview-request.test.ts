@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildEditorPreviewRequest,
+  previewRateKey,
+  previewRateKeyOfBody,
   readPdfPreviewMeta,
   withQuoteValidity,
 } from '@/lib/invoices/editor/preview-request'
@@ -156,5 +158,28 @@ describe('readPdfPreviewMeta', () => {
       exchangeRate: null,
       exchangeRateDate: null,
     })
+  })
+})
+
+// The party check converts a foreign total at the preview's rate only while
+// that render was for the same currency and rate date.
+describe('previewRateKey', () => {
+  it('is the currency and the rate date: the delivery date, else the invoice date', () => {
+    expect(previewRateKey({ currency: 'EUR', invoice_date: '2026-11-20', delivery_date: null })).toBe('EUR|2026-11-20')
+    expect(previewRateKey({ currency: 'EUR', invoice_date: '2026-11-20', delivery_date: '2026-11-18' })).toBe('EUR|2026-11-18')
+    expect(previewRateKey(null)).toBeNull()
+  })
+
+  it('reads the same key back from the body a render was made from', () => {
+    const request = { currency: 'EUR', invoice_date: '2026-11-20', items: [] }
+    expect(previewRateKeyOfBody(JSON.stringify(request))).toBe(previewRateKey(request))
+    expect(previewRateKeyOfBody(null)).toBeNull()
+    expect(previewRateKeyOfBody('{not json')).toBeNull()
+  })
+
+  it('tells a render for another currency or date from the current request', () => {
+    const rendered = JSON.stringify({ currency: 'EUR', invoice_date: '2026-11-20' })
+    expect(previewRateKeyOfBody(rendered)).not.toBe(previewRateKey({ currency: 'USD', invoice_date: '2026-11-20' }))
+    expect(previewRateKeyOfBody(rendered)).not.toBe(previewRateKey({ currency: 'EUR', invoice_date: '2026-11-21' }))
   })
 })

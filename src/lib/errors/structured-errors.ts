@@ -2953,10 +2953,10 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_SEND_BUYER_ADDRESS_MISSING: {
     httpStatus: 400,
-    message_sv: 'Kundens namn eller adress saknas. De måste stå på fakturan när den är över 4 000 kr inklusive moms eller när köparen i ett annat EU-land redovisar momsen (ML 17 kap. 24, 26 och 27 §§). Lägg till adressen på kunden innan du skickar fakturan.',
-    message_en: "The customer's name or address is missing. They must be on the invoice when it is over 4,000 kr including VAT or when the buyer in another EU country accounts for the VAT (ML 17 kap. 24, 26 and 27 §§). Add the address to the customer before issuing the invoice.",
+    message_sv: 'Kundens namn eller adress saknas. De måste stå på fakturan när den är över 4 000 kr inklusive moms eller när köparen i ett annat EU-land redovisar momsen (ML 17 kap. 24, 26 och 27 §§). Lägg till det som saknas på kunden innan du skickar fakturan.',
+    message_en: "The customer's name or address is missing. They must be on the invoice when it is over 4,000 kr including VAT or when the buyer in another EU country accounts for the VAT (ML 17 kap. 24, 26 and 27 §§). Add what is missing to the customer before issuing the invoice.",
     remediation: {
-      description: "Add the customer's street address, postal code and town (gnubok_update_customer, or PATCH the customer), then issue the invoice again.",
+      description: "Add the customer's missing name or address (a street with its postal code and town) with gnubok_update_customer, or PATCH the customer, then issue the invoice again.",
       tool: 'gnubok_update_customer',
     },
   },

@@ -92,15 +92,20 @@ export type InvoicePartiesVerdict =
   /** A förenklad faktura without the buyer's name or address: a warning. */
   | 'buyer_missing_simplified'
 
-export type InvoicePartiesInvoice = Pick<Invoice, 'credited_invoice_id' | 'document_type' | 'total' | 'vat_amount' | 'currency' | 'vat_treatment'>
+export type InvoicePartiesInvoice = Pick<Invoice, 'credited_invoice_id' | 'document_type' | 'total' | 'currency' | 'vat_treatment'>
   & Partial<Pick<Invoice, 'total_sek' | 'exchange_rate'>>
   & {
     /**
-     * The lines' deductions: a ROT or grön teknik line is construction work on
-     * a private buyer's home. Lines the caller did not load leave a private
-     * buyer's invoice asked for, as if it were construction work.
+     * The lines: a ROT or grön teknik deduction is construction work on a
+     * private buyer's home, and the rates say whether a domestic sale is
+     * exempt. Lines the caller did not load leave the invoice asked for, as
+     * construction work and a taxable sale would be.
      */
-    items?: ReadonlyArray<{ deduction_type?: DeductionType | null }> | null
+    items?: ReadonlyArray<{
+      deduction_type?: DeductionType | null
+      vat_rate?: number | null
+      line_type?: string | null
+    }> | null
   }
 
 export type InvoicePartiesCustomer = Pick<Customer, 'name' | 'customer_type'> & PostalAddress
@@ -119,21 +124,29 @@ const DOMESTIC_TREATMENTS: ReadonlySet<Invoice['vat_treatment']> = new Set<Invoi
 ])
 
 /**
+ * A VAT-registered seller's domestic sale whose every priced line is at 0 %:
+ * an exempt supply (10 kap.). Decided from the line rates, not the rounded
+ * VAT total, so a taxable line whose VAT rounds to 0,00 kr keeps the sale
+ * taxable.
+ */
+function exemptDomesticSale(invoice: InvoicePartiesInvoice, seller: InvoicePartiesSeller): boolean {
+  if (seller.vat_registered === false || !DOMESTIC_TREATMENTS.has(invoice.vat_treatment) || !invoice.items) return false
+  const priced = invoice.items.filter((item) => item.line_type !== 'text')
+  return priced.length > 0 && priced.every((item) => item.vat_rate != null && Number(item.vat_rate) === 0)
+}
+
+/**
  * Whether 17 kap. 24 § asks for the parties at all: a faktura issued under
  * 10 or 11 §. A sale to a business or another legal person is one, unless it
- * is an exempt supply 12 § frees from the invoice (a VAT-registered seller's
- * domestic sale without VAT); a sale to a private person only as
- * construction or installation work (11 § p.3).
+ * is an exempt supply 12 § frees from the invoice; a sale to a private person
+ * only as construction or installation work (11 § p.3).
  */
 function fullContentRulesApply(
   invoice: InvoicePartiesInvoice,
   customer: InvoicePartiesCustomer,
   seller: InvoicePartiesSeller,
 ): boolean {
-  const exemptDomesticSale = seller.vat_registered !== false
-    && DOMESTIC_TREATMENTS.has(invoice.vat_treatment)
-    && Number(invoice.vat_amount) === 0
-  if (exemptDomesticSale) return false
+  if (exemptDomesticSale(invoice, seller)) return false
   if (customer.customer_type !== 'individual') return true
   if (!invoice.items) return true
   return invoice.items.some((item) => !!item.deduction_type && CONSTRUCTION_DEDUCTIONS.has(item.deduction_type))

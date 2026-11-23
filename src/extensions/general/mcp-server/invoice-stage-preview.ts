@@ -365,9 +365,10 @@ export async function buildIssuePreview(
 
 /**
  * The seller's and the buyer's name and address as the approval's issuable
- * will read them (crm#2080), the lines' deductions included for a private
- * buyer (construction work is the one sale to a private person that needs
- * them). A failed read claims nothing: the approval decides.
+ * will read them (crm#2080), with the lines: their deductions say whether a
+ * sale to a private person is construction work, their rates whether a
+ * domestic sale is exempt. A failed read claims nothing: the approval
+ * decides.
  */
 export async function stagedInvoiceParties(
   supabase: SupabaseClient,
@@ -382,21 +383,17 @@ export async function stagedInvoiceParties(
     .maybeSingle()
   if (error || !seller) return 'ok'
   const customer = invoice.customer as InvoicePartiesCustomer | null | undefined
-  let items: Array<{ deduction_type: DeductionType | null }> = []
-  if (customer?.customer_type === 'individual') {
-    const { data: rows, error: itemsError } = await supabase
-      .from('invoice_items')
-      .select('deduction_type')
-      .eq('invoice_id', invoice.id)
-    if (itemsError) return 'ok'
-    items = (rows ?? []) as Array<{ deduction_type: DeductionType | null }>
-  }
+  const { data: rows, error: itemsError } = await supabase
+    .from('invoice_items')
+    .select('deduction_type, vat_rate, line_type')
+    .eq('invoice_id', invoice.id)
+  if (itemsError) return 'ok'
+  const items = (rows ?? []) as Array<{ deduction_type: DeductionType | null; vat_rate: number | null; line_type: string | null }>
   return invoicePartiesVerdict(
     {
       credited_invoice_id: invoice.credited_invoice_id ?? null,
       document_type: (invoice.document_type ?? 'invoice') as Invoice['document_type'],
       total: invoice.total,
-      vat_amount: invoice.vat_amount,
       total_sek: invoice.total_sek ?? null,
       currency: (invoice.currency ?? 'SEK') as Invoice['currency'],
       exchange_rate: invoice.exchange_rate ?? null,

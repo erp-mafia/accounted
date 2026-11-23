@@ -341,7 +341,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       }
       // And the lines' deductions: construction work is the one sale to a
       // private person that needs the addresses.
-      expect(projection).toMatch(/items:invoice_items\([^)]*\bdeduction_type\b/)
+      for (const column of ['deduction_type', 'vat_rate', 'line_type']) {
+        expect(projection).toMatch(new RegExp(`items:invoice_items\\([^)]*\\b${column}\\b`))
+      }
     })
 
     it('issues a förenklad faktura without the buyer address, with a warning', async () => {

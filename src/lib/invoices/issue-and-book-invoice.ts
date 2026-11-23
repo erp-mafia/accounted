@@ -67,7 +67,7 @@ export interface IssueRefusal {
  * columns and the items with deduction_type.
  */
 export function issuable(
-  invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type' | 'total' | 'vat_amount' | 'vat_treatment'>
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type' | 'total' | 'vat_treatment'>
     & Partial<Pick<Invoice, 'payment_details' | 'total_sek' | 'exchange_rate'>>
     & Pick<InvoicePartiesInvoice, 'items'>
     & { customer?: InvoicePartiesCustomer | null },

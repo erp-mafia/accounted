@@ -165,23 +165,37 @@ describe('invoicePartiesVerdict', () => {
   })
 
   describe('an exempt supply (12 §)', () => {
-    it('asks nothing of a domestic sale on which a VAT-registered seller charges no VAT', () => {
+    const atZero = [{ vat_rate: 0, line_type: 'product' }, { vat_rate: 25, line_type: 'text' }]
+
+    it('asks nothing of a domestic sale whose every priced line a VAT-registered seller puts at 0 %', () => {
       const bare = makeCompanySettings({ ...noAddress, vat_registered: true })
-      const rent = makeInvoice({ total: 15000, vat_amount: 0, vat_treatment: 'standard_25' })
+      const rent = makeInvoice({ total: 15000, vat_amount: 0, vat_treatment: 'standard_25', items: atZero as never })
       expect(invoicePartiesVerdict(rent, makeCustomer(noAddress), seller)).toBe('ok')
       expect(invoicePartiesVerdict(rent, makeCustomer(noAddress), bare)).toBe('ok')
     })
 
-    it('asks for both once any line carries VAT', () => {
-      const mixed = makeInvoice({ total: 15000, vat_amount: 1000, vat_treatment: 'standard_25' })
+    it('asks for both once any priced line carries a rate', () => {
+      const mixed = makeInvoice({ total: 15000, items: [...atZero, { vat_rate: 25, line_type: 'product' }] as never })
       expect(invoicePartiesVerdict(mixed, makeCustomer(noAddress), seller)).toBe('buyer_missing')
     })
 
+    it('reads the rates, not the rounded VAT: a taxable line whose VAT rounds to 0,00 kr stays taxable', () => {
+      const rounded = makeInvoice({ total: 4000.01, vat_amount: 0, items: [{ vat_rate: 25, line_type: 'product' }] as never })
+      expect(invoicePartiesVerdict(rounded, makeCustomer(noAddress), seller)).toBe('buyer_missing')
+    })
+
+    it('takes no sale as exempt when its lines were not loaded or none is priced', () => {
+      const unknown = makeInvoice({ total: 15000, vat_amount: 0, vat_treatment: 'standard_25' })
+      expect(invoicePartiesVerdict(unknown, makeCustomer(noAddress), seller)).toBe('buyer_missing')
+      const textOnly = makeInvoice({ total: 15000, vat_amount: 0, items: [{ vat_rate: 0, line_type: 'text' }] as never })
+      expect(invoicePartiesVerdict(textOnly, makeCustomer(noAddress), seller)).toBe('buyer_missing')
+    })
+
     it('keeps asking for a zero-rated reverse charge or export, which needs its invoice', () => {
-      const builder = makeInvoice({ total: 15000, vat_amount: 0, vat_treatment: 'reverse_charge_domestic' })
+      const builder = makeInvoice({ total: 15000, vat_treatment: 'reverse_charge_domestic', items: atZero as never })
       expect(invoicePartiesVerdict(builder, makeCustomer(noAddress), seller)).toBe('buyer_missing')
       const buyer = makeCustomer({ ...noAddress, customer_type: 'non_eu_business', country: 'NO' })
-      const exported = makeInvoice({ total: 15000, vat_amount: 0, vat_treatment: 'export' })
+      const exported = makeInvoice({ total: 15000, vat_treatment: 'export', items: atZero as never })
       expect(invoicePartiesVerdict(exported, buyer, seller)).toBe('buyer_missing')
     })
   })

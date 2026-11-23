@@ -186,7 +186,7 @@ import {
 } from '@/lib/invoices/editor/primary-action'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { resolveTopBarMeta } from '@/lib/invoices/editor/top-bar-meta'
-import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
+import { buildEditorPreviewRequest, previewRateKey, previewRateKeyOfBody, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
 import {
   draftAccrualEntryDates,
   proposeDraftCashLines,
@@ -3179,6 +3179,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       })
     : null
   const pdf = useInvoicePdfPreview(previewBody, previewRefreshKey)
+  // What the last good render's exchange rate is for.
+  const renderedRateKey = useMemo(() => previewRateKeyOfBody(pdf.renderedBody), [pdf.renderedBody])
   const preliminaryNumber =
     !isSelfBilled && watchDocumentType !== 'delivery_note' && !(isEditMode && initial?.invoice_number)
       ? numberPreview
@@ -3213,8 +3215,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     !hasRequiredSellerVatNumber(companySettings, { document_type: watchDocumentType, credited_invoice_id: null })
   // The seller's and the buyer's name and address (crm#2080): the answer the
   // send's issuable will give, said before the confirm. A foreign total is
-  // measured at the preview's rate; the lines' deductions say whether a sale
-  // to a private person is construction work.
+  // measured at the preview's rate only while that render was for this
+  // currency and date (a stale rate leaves the total unknown); the lines say
+  // whether a sale to a private person is construction work and whether a
+  // domestic sale is exempt.
   const partiesVerdict =
     !isSelfBilled && companySettings !== null
       ? invoicePartiesVerdict(
@@ -3222,10 +3226,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             credited_invoice_id: null,
             document_type: watchDocumentType,
             total,
-            vat_amount: vatAmount,
             currency: watchCurrency,
             vat_treatment: headerVatTreatment,
-            exchange_rate: pdf.exchangeRate,
+            exchange_rate:
+              renderedRateKey !== null && renderedRateKey === previewRateKey(previewRequest) ? pdf.exchangeRate : null,
             items: watchItems,
           },
           selectedCustomer,
@@ -3749,10 +3753,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         ? { kind: 'invoice', invoiceId: initial.id }
         : { kind: 'staged', files: stagedAttachments, onChange: setStagedAttachments }
       : null
+  // A send or a kontantfaktura issues the invoice: a refused name or address
+  // (one that turned so while the dialog was open, as when the buyer's VAT
+  // number validates into a reverse charge) blocks the confirm, so nothing
+  // is saved and numbered for the send to refuse.
+  const partiesRefuseConfirm =
+    confirmIntent?.kind !== 'create' && (partiesVerdict === 'seller_missing' || partiesVerdict === 'buyer_missing')
   const confirmDisabled =
     !canWrite ||
     (isPaidConfirm && !isPaidAtIssueAccount(paidAccount)) ||
     (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) ||
+    partiesRefuseConfirm ||
     (confirmChannel === 'email' && isCompanyAdmin && extraCcError !== null)
 
   // ===== Top bar ===========================================================
@@ -5581,10 +5592,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 )}
               </div>
             )}
-            {/* A förenklad faktura goes out without the seller's or the
-                buyer's name or address (crm#2080): said before it is issued. */}
-            {confirmIntent?.kind !== 'create' &&
-              (partiesVerdict === 'seller_missing_simplified' || partiesVerdict === 'buyer_missing_simplified') && (
+            {/* A name or address the send refuses, or a förenklad faktura
+                that goes out without one (crm#2080): said before it is
+                issued. */}
+            {confirmIntent?.kind !== 'create' && partiesVerdict !== 'ok' && (
               <InvoicePartiesNotice
                 verdict={partiesVerdict}
                 customerId={selectedCustomer?.id}
