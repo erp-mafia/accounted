@@ -76,8 +76,14 @@ const partsOf = (html: string): string[] => [...html.matchAll(/<section aria-lab
 /** One part's markup. */
 const partOf = (html: string, name: string): string => html.match(new RegExp(`<section aria-label="${name}"[\\s\\S]*?</section>`))?.[0] ?? ''
 /** Every link of some markup: where it leads and what it says. */
-const linksOf = (html: string): Array<[string, string]> => [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => [m[1], m[2].replace(/<[^>]+>/g, '')])
-const textOf = (html: string): string => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+/** The text between the tags of some markup, each tag giving way to `gap`. */
+const betweenTags = (html: string, gap: string): string =>
+  html
+    .split('<')
+    .map((part, index) => (index === 0 ? part : part.slice(part.indexOf('>') + 1)))
+    .join(gap)
+const linksOf = (html: string): Array<[string, string]> => [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => [m[1], betweenTags(m[2], '')])
+const textOf = (html: string): string => betweenTags(html, ' ').replace(/\s+/g, ' ').trim()
 
 describe('agentPanelParts', () => {
   it('leaves out a part with nothing in it, and says so when neither part has anything', () => {

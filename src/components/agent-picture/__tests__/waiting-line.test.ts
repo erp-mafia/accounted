@@ -21,7 +21,12 @@ const IntlProvider = NextIntlClientProvider as (props: Omit<ComponentProps<typeo
 function render(waiting: PictureWaiting | null, locale: 'sv' | 'en' = 'sv'): string {
   return renderToStaticMarkup(createElement(IntlProvider, { locale, messages: locale === 'sv' ? sv : en }, createElement(WaitingLine, { waiting })))
 }
-const textOf = (html: string): string => html.replace(/<[^>]+>/g, '')
+/** The text between the tags of some markup. */
+const textOf = (html: string): string =>
+  html
+    .split('<')
+    .map((part, index) => (index === 0 ? part : part.slice(part.indexOf('>') + 1)))
+    .join('')
 const linksOf = (html: string): Array<[string, string]> => [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => [m[1], textOf(m[2])])
 
 describe('waitingLine', () => {

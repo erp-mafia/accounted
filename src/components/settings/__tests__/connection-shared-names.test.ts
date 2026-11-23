@@ -51,7 +51,12 @@ function render(keys: ApiKeyRow[], locale: 'sv' | 'en' = 'sv'): string {
 /** The text of each row's name cell: the name, its badges and the quiet text, tags stripped. */
 const nameCells = (html: string): string[] =>
   [...html.matchAll(/<li class="flex items-center gap-3 border-b-hairline px-1 py-2">[\s\S]*?<span class="flex min-w-0 flex-1 items-center gap-2 text-\[13px\]">([\s\S]*?)<\/span><span class="hidden w-40/g)].map((m) =>
-    m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+    m[1]
+      .split('<')
+      .map((part, index) => (index === 0 ? part : part.slice(part.indexOf('>') + 1)))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
   )
 
 describe('sharedNames', () => {
