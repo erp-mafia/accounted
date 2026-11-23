@@ -1182,6 +1182,73 @@ describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5
     await expect(buildArsredovisningData(supabase, 'co1', 'fp1')).rejects.toMatchObject({ message: 'connection reset' })
   })
 
+  it('K2: the Avskrivningar note carries its rows per balance sheet post, for the tagged table', async () => {
+    const machine = {
+      ...landWithoutWriteDowns,
+      id: 'machine-1',
+      name: 'Svarv',
+      category: 'machinery',
+      acquisition_cost: 400_000,
+      useful_life_months: 120,
+      bas_asset_account: '1210',
+      bas_accumulated_account: '1219',
+      bas_expense_account: '7831',
+    }
+    plantLedger([ledgerRow('1130', 900_000), ledgerRow('1210', 400_000)], [landWithoutWriteDowns, machine])
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Avskrivningar')
+    expect(note?.body.split('\n')).toEqual([
+      'Avskrivningar görs linjärt över bedömd nyttjandeperiod:',
+      '• Maskiner: 10 år',
+      'Mark skrivs inte av.',
+    ])
+    expect(note?.depreciationPrinciples).toEqual([
+      { label: 'Maskiner', period: '10 år', post: 'MaskinerAndraTekniskaAnlaggningar' },
+    ])
+  })
+
+  it('K2: the Avskrivningar note reads the register as it stood on the balance sheet date', async () => {
+    const depreciable = (overrides: Record<string, unknown>) => ({
+      ...landWithoutWriteDowns,
+      category: 'equipment',
+      acquisition_cost: 60_000,
+      useful_life_months: 60,
+      bas_asset_account: '1220',
+      bas_accumulated_account: '1229',
+      bas_expense_account: '7832',
+      ...overrides,
+    })
+    plantLedger(
+      [ledgerRow('1130', 900_000), ledgerRow('1220', 60_000)],
+      [
+        landWithoutWriteDowns,
+        // Sold after the year: it was on the books at the balance sheet date.
+        depreciable({ id: 'sold-later', name: 'Dator', disposed_at: '2026-01-15' }),
+        // Bought after the year: not in this year's report.
+        depreciable({ id: 'bought-later', name: 'Svarv', category: 'machinery', useful_life_months: 120, bas_asset_account: '1210', bas_accumulated_account: '1219', acquisition_date: '2026-02-01' }),
+        // Sold during the year: no row, as before.
+        depreciable({ id: 'sold-in-year', name: 'Bil', category: 'vehicle', useful_life_months: 96, bas_asset_account: '1240', bas_accumulated_account: '1249', disposed_at: '2025-11-30' }),
+      ],
+    )
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Avskrivningar')
+    expect(note?.depreciationPrinciples).toEqual([
+      { label: 'Inventarier', period: '5 år', post: 'InventarierVerktygInstallationer' },
+    ])
+    expect(note?.body).not.toContain('Maskiner')
+  })
+
+  it('K2: a company with mark only has the sentence and no rows', async () => {
+    plantLedger([ledgerRow('1130', 900_000)], [landWithoutWriteDowns])
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Avskrivningar')
+    expect(note?.body).toBe('Mark skrivs inte av.')
+    expect(note && 'depreciationPrinciples' in note).toBe(false)
+  })
+
   it('K2: ignores stated rows under K3, whose note is the register per category', async () => {
     plantMark(130_000)
     const supabase = makeSupabase({

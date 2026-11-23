@@ -13,6 +13,7 @@ import { getConcept, type TaxonomyRegistry } from '../taxonomy/registry'
 import type { FlerarsRow, IxbrlArsredovisningInput, Resultatdisposition } from '../types'
 import type { FactWriter } from './ix'
 import { fmtRange, periodColumnLabel, type Ctx } from './layout'
+import { renderDepreciationPrinciples } from './depreciation-principles'
 import { renderFixedAssetTables } from './fixed-asset-note'
 import { renderRevisorspateckning } from './revisorspateckning-section'
 import { el, escapeText, formatSekAbs, paragraphs } from './xml'
@@ -392,6 +393,10 @@ export function renderNotes(
       // The K2 note on anläggningstillgångar: tagged tables per balance
       // sheet post instead of the text body (fixed-asset-note.ts).
       parts.push(renderFixedAssetTables(writer, registry, input, note.fixedAssets, warnings))
+    } else if (note.depreciationPrinciples && note.depreciationPrinciples.length > 0) {
+      // The K2 note on avskrivningar: each row a tuple of its post's table
+      // of avskrivningsprinciper (depreciation-principles.ts).
+      parts.push(renderDepreciationPrinciples(writer, registry, note.body, note.depreciationPrinciples))
     } else if (isAktiekapital && aktiekapitalNot) {
       // Same sentence as the PDF note (build-data.ts), with the registered
       // amount tagged: it repeats the BR fact Aktiekapital@balans0, and

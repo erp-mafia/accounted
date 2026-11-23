@@ -381,6 +381,9 @@ export async function buildIxbrlInput(
       title: note.title,
       body: note.body,
       ...(note.fixedAssets && note.fixedAssets.length > 0 ? { fixedAssets: note.fixedAssets } : {}),
+      ...(note.depreciationPrinciples && note.depreciationPrinciples.length > 0
+        ? { depreciationPrinciples: note.depreciationPrinciples }
+        : {}),
     })),
     disclosures: {
       longTermDebtOverFiveYears:
