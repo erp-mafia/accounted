@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver, type TableMockResult } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 import type { CoreEvent } from '@/lib/events/types'
-import { linkQuestionOperation, operationsOfRows, questionOperations } from '../operations'
+import { linkQuestionOperation, operationsOfRows, questionFollowUp, questionOperations, takesOperations } from '../operations'
 import { QUESTION_LIMITS } from '../types'
 
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
@@ -539,5 +539,40 @@ describe('operationsOfRows', () => {
     await expect(operationsOfRows(mock.supabase as never, COMPANY, [row(1)])).resolves.toHaveLength(1)
     await expect(operationsOfRows(mock.supabase as never, COMPANY, [])).resolves.toEqual([])
     expect(mock.tables()).toEqual([])
+  })
+})
+
+describe('takesOperations', () => {
+  it('takes an answered question and one closed as settled, and no other', () => {
+    expect(takesOperations({ status: 'answered', close_reason: null })).toBe(true)
+    expect(takesOperations({ status: 'closed', close_reason: 'settled' })).toBe(true)
+    expect(takesOperations({ status: 'open', close_reason: null })).toBe(false)
+    for (const reason of ['dont_know', 'not_relevant', 'withdrawn']) {
+      expect(takesOperations({ status: 'closed', close_reason: reason }), reason).toBe(false)
+    }
+  })
+})
+
+describe('questionFollowUp', () => {
+  const of = (...statuses: string[]) => questionFollowUp(statuses.map((status) => ({ status })))
+
+  it('says nothing was prepared when no operation is linked', () => {
+    expect(of()).toBe('no_operation')
+  })
+
+  it('waits for approval while one is pending or being carried out, whatever the others did', () => {
+    expect(of('pending')).toBe('awaiting_approval')
+    expect(of('committed', 'committing')).toBe('awaiting_approval')
+    expect(of('rejected', 'pending')).toBe('awaiting_approval')
+  })
+
+  it('is done when none waits and one was carried out', () => {
+    expect(of('committed')).toBe('done')
+    expect(of('rejected', 'committed')).toBe('done')
+  })
+
+  it('was not carried out when every one was rejected, failed or ended unknown', () => {
+    expect(of('rejected')).toBe('not_carried_out')
+    expect(of('failed_partial', 'unknown', 'rejected')).toBe('not_carried_out')
   })
 })

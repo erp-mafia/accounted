@@ -10,6 +10,8 @@ import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers
 const mocks = vi.hoisted(() => ({
   companyId: '11111111-1111-4111-8111-111111111111',
   scopes: [] as string[],
+  /** Tables the service client answers beside the membership. */
+  tables: {} as Record<string, { data: unknown }>,
 }))
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -37,6 +39,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       () =>
         tableMock({
           company_members: () => ({ data: { company_id: mocks.companyId, role: 'member' } }),
+          ...mocks.tables,
         }).supabase,
     ),
   }
@@ -57,6 +60,7 @@ import { eventBus } from '@/lib/events/bus'
 import type { CoreEvent } from '@/lib/events/types'
 import { handleMcpRequest, isDefaultCatalogTool, isStagingTool, tools } from '../server'
 import { OPEN_QUESTIONS_HOW, briefingQuestion, questionView } from '../question-tools'
+import { toQuestion } from '@/lib/questions/rows'
 import { isReadOnlyTool } from '../tool-effects'
 import { moduleForTool } from '../tool-modules'
 
@@ -114,6 +118,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
   vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', COMPANY)
+  mocks.tables = {}
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -253,6 +258,99 @@ describe('gnubok_list_questions', () => {
     const mock = createTableMockSupabase()
     await expect(tool('gnubok_list_questions').execute({}, COMPANY, USER, mock.supabase as never, actor)).rejects.toMatchObject({
       code: 'COMPANY_QUESTIONS_OFF',
+    })
+  })
+
+  describe('what an answer led to', () => {
+    const ANSWERED_ID = 'e0000000-0000-4000-8000-000000000002'
+    const UNFOLLOWED_ID = 'e0000000-0000-4000-8000-000000000003'
+    const DONT_KNOW_ID = 'e0000000-0000-4000-8000-000000000004'
+    const operationId = (n: number) => `0b000000-0000-4000-8000-00000000000${n}`
+    const answeredRow = (id: string) =>
+      row({ id, status: 'answered', answer_option: 'annual', answered_at: '2026-11-20T09:00:00.000Z', answered_via: 'app', fact_id: FACT_ID })
+    const staged = (n: number, status: string) => ({
+      id: operationId(n),
+      operation_number: 100 + n,
+      operation_type: 'create_voucher',
+      title: `Förslag ${n}`,
+      status,
+      result_data: null,
+      transaction_id: null,
+      document_name: null,
+      voucher_label: null,
+    })
+    const tables = {
+      company_questions: {
+        data: [
+          row(),
+          answeredRow(ANSWERED_ID),
+          answeredRow(UNFOLLOWED_ID),
+          row({ id: DONT_KNOW_ID, status: 'closed', close_reason: 'dont_know', answered_at: '2026-11-20T09:00:00.000Z' }),
+        ],
+      },
+      company_question_operations: {
+        data: [
+          { question_id: ANSWERED_ID, operation_id: operationId(1), created_at: '2026-11-20T10:00:00.000Z' },
+          { question_id: ANSWERED_ID, operation_id: operationId(2), created_at: '2026-11-20T10:01:00.000Z' },
+        ],
+      },
+      pending_operations: { data: [staged(1, 'committed'), staged(2, 'pending')] },
+    }
+    const byId = (questions: Array<Record<string, unknown>>) => new Map(questions.map((question) => [question.question_id, question]))
+
+    it('carries on an answered question its operations and where its follow-up stands, and leaves an open one as it was', async () => {
+      const mock = createTableMockSupabase(tables)
+
+      const result = (await tool('gnubok_list_questions').execute({}, COMPANY, USER, mock.supabase as never, actor)) as {
+        questions: Array<Record<string, unknown>>
+      }
+      const listed = byId(result.questions)
+
+      expect(listed.get(ANSWERED_ID)).toMatchObject({
+        status: 'answered',
+        operations: [
+          { operation_id: operationId(1), operation_number: 101, title: 'Förslag 1', status: 'committed' },
+          { operation_id: operationId(2), operation_number: 102, title: 'Förslag 2', status: 'pending' },
+        ],
+        follow_up: 'awaiting_approval',
+      })
+      // Answered, and nothing prepared from the answer: the follow-up is still to do.
+      expect(listed.get(UNFOLLOWED_ID)).toMatchObject({ status: 'answered', operations: [], follow_up: 'no_operation' })
+      // An open question and one closed without an answer carry neither key.
+      for (const id of [QUESTION_ID, DONT_KNOW_ID]) {
+        expect(listed.get(id), id).not.toHaveProperty('operations')
+        expect(listed.get(id), id).not.toHaveProperty('follow_up')
+      }
+      expect(listed.get(QUESTION_ID)).toEqual(questionView(toQuestion(row() as never)))
+      // Only the questions that take operations are read for them, in the company.
+      expect(mock.findCalls('company_question_operations', 'in')).toEqual([['question_id', [ANSWERED_ID, UNFOLLOWED_ID]]])
+      expect(mock.findCalls('company_question_operations', 'eq')).toEqual([['company_id', COMPANY]])
+    })
+
+    it('reads no operations for a list of open questions', async () => {
+      const mock = createTableMockSupabase({ company_questions: { data: [row()] } })
+      await tool('gnubok_list_questions').execute({ status: 'open' }, COMPANY, USER, mock.supabase as never, actor)
+      expect(mock.findCalls('company_question_operations', 'select')).toEqual([])
+      expect(mock.findCalls('pending_operations', 'select')).toEqual([])
+    })
+
+    it('shows the operations only to a key that may read pending operations', async () => {
+      const call = async () => {
+        const body = JSON.parse(await (await handleMcpRequest(mcpToolCall('gnubok_list_questions', {}))).text()) as {
+          result: { content: Array<{ text: string }> }
+        }
+        return byId((JSON.parse(body.result.content[0].text) as { questions: Array<Record<string, unknown>> }).questions)
+      }
+      mocks.tables = tables
+
+      mocks.scopes = ['agent:read']
+      const withoutScope = (await call()).get(ANSWERED_ID)
+      expect(withoutScope).toMatchObject({ status: 'answered', fact_id: FACT_ID })
+      expect(withoutScope).not.toHaveProperty('operations')
+      expect(withoutScope).not.toHaveProperty('follow_up')
+
+      mocks.scopes = ['agent:read', 'pending_operations:read']
+      expect((await call()).get(ANSWERED_ID)).toMatchObject({ follow_up: 'awaiting_approval', operations: [{ operation_id: operationId(1) }, { operation_id: operationId(2) }] })
     })
   })
 })

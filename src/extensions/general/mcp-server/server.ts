@@ -32648,6 +32648,8 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
           toolName === 'gnubok_list_pending_operations' ||
           // Names employees and their pay only for a key with payroll:read.
           toolName === 'gnubok_propose_accruals' ||
+          // Shows the operations an answer led to only to a key with pending_operations:read.
+          toolName === 'gnubok_list_questions' ||
           // The cross-company tools check the INNER tool's scope per call.
           isScopedTool(toolName)
         ) {
