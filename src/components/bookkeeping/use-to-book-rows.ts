@@ -3,7 +3,14 @@
 import { useMemo } from 'react'
 import useSWR from 'swr'
 import { itemHeadline, queueFor, type InkorgItem } from '@/lib/inkorg/items'
-import { buildToBookRows, type ToBookBankRow, type ToBookDocument, type ToBookRow } from '@/lib/bookkeeping/to-book'
+import {
+  buildToBookRows,
+  readAllToBookBankRows,
+  type ToBookBankPage,
+  type ToBookBankRow,
+  type ToBookDocument,
+  type ToBookRow,
+} from '@/lib/bookkeeping/to-book'
 
 /**
  * The inbox rows, as Inkommande reads them (components/inkorg/use-inkorg-data.ts):
@@ -15,12 +22,18 @@ const INBOX_ITEMS_URL = '/api/extensions/ext/invoice-inbox/items?scope=inbox'
 const BANK_ROWS_KEY = 'to-book:bank-rows'
 const DOCUMENTS_KEY = 'to-book:documents'
 
-/** The open bank rows: the read Bankrader's Att bokföra tab makes (open_bank_rows). */
+/** The open bank rows, every page of them: the read Bankrader's Att bokföra tab makes (open_bank_rows). */
 async function readBankRows(): Promise<ToBookBankRow[]> {
-  const res = await fetch('/api/transactions?unmatched=true')
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const json = (await res.json()) as { data?: ToBookBankRow[] }
-  return json.data ?? []
+  return readAllToBookBankRows(async (after) => {
+    const params = new URLSearchParams({ unmatched: 'true' })
+    if (after) {
+      params.set('after_date', after.after_date)
+      params.set('after_id', after.after_id)
+    }
+    const res = await fetch(`/api/transactions?${params}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return (await res.json()) as ToBookBankPage
+  })
 }
 
 /**
