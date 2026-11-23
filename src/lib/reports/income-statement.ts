@@ -21,7 +21,8 @@ import {
  *   returned separately, see income-definitions.ts
  * - Rörelsekostnader (4-7xxx): Operating expenses
  * - Finansiella poster (8xxx): Financial items
- * - Årets resultat: Net result
+ * - Resultat före bokslutstransaktioner: Net result (not årets resultat:
+ *   every year-end entry is left out, see below)
  */
 export async function generateIncomeStatement(
   supabase: SupabaseClient,
