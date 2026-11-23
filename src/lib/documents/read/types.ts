@@ -106,6 +106,15 @@ export class ReaderUnavailableError extends Error {
 export const READER_UNAVAILABLE = 'reader_unavailable'
 
 /**
+ * How many documents in a row the reader or its model provider may fail on before a backfill pass stops. One
+ * failure says little: it may be that document (a scan too long for what was left of the run), and stopping on it
+ * let the same document head every run while the ones behind it were never tried. Three in a row is the reader
+ * missing or the provider down, which fails every document the same way: stop and try again next run. The job
+ * worker's run stops on the same count (lib/documents/jobs/queue.ts).
+ */
+export const UNAVAILABLE_IN_A_ROW = 3
+
+/**
  * Minutes to wait after the nth try in a row that the model provider did not
  * answer: 30, 60, 120, 240. One schedule for a queued job's attempts
  * (lib/documents/jobs/queue.ts) and for a document's readings

@@ -7,7 +7,7 @@ import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
 import { readDocumentByPlan, type ReadableDocumentRow } from '@/lib/documents/read/store'
-import { PROVIDER_UNAVAILABLE, READ_GAVE_UP, READER_UNAVAILABLE, outageBackoffMinutes } from '@/lib/documents/read/types'
+import { PROVIDER_UNAVAILABLE, READ_GAVE_UP, READER_UNAVAILABLE, UNAVAILABLE_IN_A_ROW, outageBackoffMinutes } from '@/lib/documents/read/types'
 import { isRunDeadlineCut } from '@/lib/ai/call-limit'
 import { jobHasAttemptsLeft } from './hold'
 import { isActingType, isBooked } from '@/lib/documents/read/lanes'
@@ -62,21 +62,30 @@ export async function enqueueMissingExtractions(supabase: SupabaseClient, limit:
 }
 
 /**
- * Claims due jobs one at a time and runs each, up to `limit`, starting none at
- * or after `deadlineAt` (epoch ms). A job is claimed only when it is about to
- * run: the batch used to be claimed up front, so a run that was killed left
- * the jobs it never started marked running, each with an attempt spent, for
- * the ten minutes before another worker may take them over (the worker was
- * seen at 242 s of its 300 in the 30 days to 2026-11-12). Jobs not reached
- * stay queued, untouched, for the next tick a minute later.
+ * Claims due jobs one at a time and runs each until none is due, starting
+ * none at or after `deadlineAt` (epoch ms): the time is the run's limit, not
+ * a count. A job is claimed only when it is about to run: the batch used to
+ * be claimed up front, so a run that was killed left the jobs it never
+ * started marked running, each with an attempt spent, for the ten minutes
+ * before another worker may take them over (the worker was seen at 242 s of
+ * its 300 in the 30 days to 2026-11-12). Jobs not reached stay queued,
+ * untouched, for the next tick a minute later. Which company's job comes next
+ * is the claim's to decide (claim_document_jobs draws a company per job).
+ *
+ * The run also stops when the reader or the model provider has failed
+ * UNAVAILABLE_IN_A_ROW jobs in a row, as the read backfill does: it is down,
+ * not those documents, and a run with no count to stop it would otherwise
+ * spend an attempt of every due job within minutes, so one long outage would
+ * use up every job's attempts. The next tick tries again.
  */
-export async function runDocumentJobs(supabase: SupabaseClient, opts: { limit: number; worker: string; deadlineAt: number; now?: () => number }): Promise<RunSummary> {
+export async function runDocumentJobs(supabase: SupabaseClient, opts: { worker: string; deadlineAt: number; now?: () => number }): Promise<RunSummary> {
   const now = opts.now ?? Date.now
   await failAbandonedJobs(supabase)
   const summary: RunSummary = { claimed: 0, done: 0, failed: 0 }
   const identities = new Map<string, CompanyIdentity>()
+  let outagesInARow = 0
 
-  while (summary.claimed < opts.limit && now() < opts.deadlineAt) {
+  while (now() < opts.deadlineAt && outagesInARow < UNAVAILABLE_IN_A_ROW) {
     const { data, error } = await supabase.rpc('claim_document_jobs', { p_batch_size: 1, p_worker: opts.worker })
     if (error) throw new Error(`claim failed: ${error.message}`)
     const job = ((data ?? []) as ClaimedJob[])[0]
@@ -85,7 +94,9 @@ export async function runDocumentJobs(supabase: SupabaseClient, opts: { limit: n
     const outcome = await runClaimed(supabase, job, identities, now)
     if ('error' in outcome) summary.failed++
     else summary.done++
+    outagesInARow = 'error' in outcome && waitsOutOutage(outcome.error) ? outagesInARow + 1 : 0
   }
+  if (outagesInARow >= UNAVAILABLE_IN_A_ROW) log.warn('document jobs stopped: the reader or the model provider failed jobs in a row', { inARow: outagesInARow, ...summary })
   return summary
 }
 
