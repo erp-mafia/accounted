@@ -138,11 +138,11 @@ function equitySpecification(previous: TrialBalancePair, mapping: K2MappingResul
 }
 
 /** The report's statements: the two years mapped as buildArsredovisningReport maps them. */
-async function build(previous: TrialBalancePair) {
+async function build(previous: TrialBalancePair, noter: ArsredovisningData['noter'] = []) {
   const mapping = mapTrialBalancesToK2(CURRENT, previous)
   return buildIxbrlInput(makeSupabase() as never, 'co1', 'fp1', {
     report: {
-      data: { ...REPORT, equity_specification: equitySpecification(previous, mapping) },
+      data: { ...REPORT, noter, equity_specification: equitySpecification(previous, mapping) },
       statements: {
         mapping,
         comparison: { id: 'fp0', period_start: '2024-01-01', period_end: '2024-12-31', loaded: true },
@@ -342,5 +342,19 @@ describe('buildIxbrlInput: a K3 year', () => {
     const input = await build(PREVIOUS)
     expect(input.entryPointId).toBe('k2-ab-risbs-2024-09-12')
     expect('k3' in input).toBe(false)
+  })
+})
+
+describe('buildIxbrlInput: the notes', () => {
+  it('carries the rows of the Avskrivningar note, which the document tags as tuples', async () => {
+    const rows = [{ label: 'Inventarier', period: '5 år', post: 'InventarierVerktygInstallationer' }]
+    const input = await build(PREVIOUS, [
+      { number: 1, title: 'Redovisnings- och värderingsprinciper', body: 'K2.' },
+      { number: 2, title: 'Avskrivningar', body: 'Avskrivningar görs linjärt över bedömd nyttjandeperiod:\n• Inventarier: 5 år', depreciationPrinciples: rows },
+    ])
+    expect(input.noter).toEqual([
+      { number: 1, title: 'Redovisnings- och värderingsprinciper', body: 'K2.' },
+      { number: 2, title: 'Avskrivningar', body: 'Avskrivningar görs linjärt över bedömd nyttjandeperiod:\n• Inventarier: 5 år', depreciationPrinciples: rows },
+    ])
   })
 })

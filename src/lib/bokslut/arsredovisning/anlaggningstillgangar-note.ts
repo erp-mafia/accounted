@@ -38,7 +38,7 @@ import { roundOre } from '@/lib/money'
 import { ASSET_ACQUISITION_TYPES, assetAcquisitionType } from '@/lib/bokslut/assets/acquisition-type'
 import type { WriteDownMovement } from '@/lib/bokslut/assets/value-adjustments'
 import type { AssetAcquisitionType } from '@/types'
-import type { NoteEntry } from './types'
+import type { DepreciationPrinciple, NoteEntry } from './types'
 import type { AssetDepreciationFigures } from './asset-note-figures'
 import { formatPdfKronor } from './pdf-format'
 
@@ -105,16 +105,35 @@ export const CATEGORY_LABELS: Record<string, string> = {
   other_tangible: 'Övriga materiella anläggningstillgångar',
 }
 
+const PRINCIPLES_INTRO = 'Avskrivningar görs linjärt över bedömd nyttjandeperiod:'
+const PRINCIPLE_BULLET = '• '
+
+/** How the rows of the "Avskrivningar" note are placed on balance sheet posts (K2). */
+export interface DepreciationPrinciplePosts {
+  /** The balance sheet post of a BAS asset account, null when none covers it. */
+  postOfAccount: (account: string) => string | null
+  /** The label the balance sheet prints the post with. */
+  labelOfPost: (post: string) => string
+}
+
 /**
- * The K2 "Avskrivningar" note: the depreciation period per category of the
- * assets on the books, and that mark is not depreciated. Mark has no
- * limited useful life (useful_life_months 0), so it is never a "0 år" row.
- * Empty when there is nothing to say.
+ * The depreciation period per category of the assets on the books, and
+ * whether the company holds mark (which is not depreciated: it has no
+ * limited useful life, useful_life_months 0, so it is never a "0 år" row).
+ * With `posts` the rows are per category and balance sheet post, for the
+ * document that tags each row as its post's table; a category booked on two
+ * posts is then two rows, each named with its post.
  */
-export function depreciationPrincipleLines(
-  assets: ReadonlyArray<{ category: string; useful_life_months: number; disposed_at: string | null }>,
-): string[] {
-  const byCategory = new Map<string, Set<number>>()
+export function depreciationPrinciples(
+  assets: ReadonlyArray<{
+    category: string
+    useful_life_months: number
+    disposed_at: string | null
+    bas_asset_account?: string
+  }>,
+  posts?: DepreciationPrinciplePosts,
+): { rows: DepreciationPrinciple[]; holdsLand: boolean } {
+  const groups = new Map<string, { category: string; post: string | null; years: Set<number> }>()
   let holdsLand = false
   for (const asset of assets) {
     if (asset.disposed_at) continue
@@ -122,18 +141,40 @@ export function depreciationPrincipleLines(
       holdsLand = true
       continue
     }
-    const years = Math.round(asset.useful_life_months / 12)
-    if (!byCategory.has(asset.category)) byCategory.set(asset.category, new Set())
-    byCategory.get(asset.category)!.add(years)
+    const post = posts && asset.bas_asset_account ? posts.postOfAccount(asset.bas_asset_account) : null
+    const key = `${asset.category}|${post ?? ''}`
+    if (!groups.has(key)) groups.set(key, { category: asset.category, post, years: new Set() })
+    groups.get(key)!.years.add(Math.round(asset.useful_life_months / 12))
   }
-  const lines: string[] = byCategory.size > 0 ? ['Avskrivningar görs linjärt över bedömd nyttjandeperiod:'] : []
-  for (const [category, yearsSet] of byCategory.entries()) {
-    const years = Array.from(yearsSet).sort((a, b) => a - b)
-    const label = years.length === 1 ? `${years[0]} år` : `${years[0]}-${years[years.length - 1]} år`
-    lines.push(`• ${CATEGORY_LABELS[category] ?? category}: ${label}`)
-  }
+  const perCategory = new Map<string, number>()
+  for (const group of groups.values()) perCategory.set(group.category, (perCategory.get(group.category) ?? 0) + 1)
+  const rows = [...groups.values()].map(({ category, post, years }) => {
+    const sorted = [...years].sort((a, b) => a - b)
+    const name = CATEGORY_LABELS[category] ?? category
+    return {
+      label: posts && post && (perCategory.get(category) ?? 0) > 1 ? `${name} (${posts.labelOfPost(post)})` : name,
+      period: sorted.length === 1 ? `${sorted[0]} år` : `${sorted[0]}-${sorted[sorted.length - 1]} år`,
+      post,
+    }
+  })
+  return { rows, holdsLand }
+}
+
+/**
+ * The "Avskrivningar" note as text: the rows under their introduction, and
+ * that mark is not depreciated. Empty when there is nothing to say.
+ */
+export function depreciationPrincipleLines(principles: ReturnType<typeof depreciationPrinciples>): string[] {
+  const { rows, holdsLand } = principles
+  const lines: string[] = rows.length > 0 ? [PRINCIPLES_INTRO] : []
+  for (const row of rows) lines.push(`${PRINCIPLE_BULLET}${row.label}: ${row.period}`)
   if (holdsLand) lines.push(MARK_NOT_DEPRECIATED)
   return lines
+}
+
+/** Whether a line of the note's text is one of its rows (printed as the tagged table in the iXBRL document). */
+export function isDepreciationPrincipleRow(line: string): boolean {
+  return line.startsWith(PRINCIPLE_BULLET)
 }
 
 const zeroPerSatt = (): Record<AssetAcquisitionType, number> => ({

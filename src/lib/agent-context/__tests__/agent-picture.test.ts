@@ -45,11 +45,11 @@ function fakeSupabase(tables: Record<string, Handler>) {
 const filtered = (call: Call, method: string, column: string, value?: unknown) =>
   call.ops.some((op) => op.method === method && op.args[0] === column && (value === undefined || op.args[1] === value))
 
-const { listUnexplainedMock, dataStatusMock, inboxAddressMock, skillRowsMock, enabled } = vi.hoisted(() => ({
+const { listUnexplainedMock, dataStatusMock, inboxAddressMock, knowledgeOptionsMock, enabled } = vi.hoisted(() => ({
   listUnexplainedMock: vi.fn(),
   dataStatusMock: vi.fn(),
   inboxAddressMock: vi.fn(),
-  skillRowsMock: vi.fn(),
+  knowledgeOptionsMock: vi.fn(),
   enabled: new Set<string>(),
 }))
 
@@ -68,9 +68,8 @@ vi.mock('@/lib/reports/data-status', () => ({
 vi.mock('@/lib/documents/inbox-address', () => ({
   resolveInboxAddress: (...args: unknown[]) => inboxAddressMock(...args),
 }))
-vi.mock('@/lib/agent-skills/company-skills', async (original) => ({
-  ...(await original<typeof import('@/lib/agent-skills/company-skills')>()),
-  loadCompanySkillRows: (...args: unknown[]) => skillRowsMock(...args),
+vi.mock('@/lib/agent-skills/knowledge-choices', () => ({
+  loadKnowledgeOptions: (...args: unknown[]) => knowledgeOptionsMock(...args),
 }))
 
 import { limitNotConnected, loadAgentActivity, loadAgentPicture, type PictureSource, type PictureSourceGroup } from '../agent-picture'
@@ -117,8 +116,7 @@ function tables(over: Record<string, Handler> = {}): Record<string, Handler> {
     customers: { count: 38 },
     suppliers: { count: 64 },
     agent_memory: { count: 23 },
-    agent_profiles: { data: { horizontal_atoms: ['horizontal/a', 'horizontal/b'], vertical_atoms: ['vertical/c'], modifier_atoms: null } },
-    agent_atom_registry: { count: 3 },
+    agent_profiles: { data: { vertical_atoms: ['vertical/retired', 'vertical/konsult-it'] } },
     fiscal_periods: { data: [{ id: 'period-1' }] },
     api_keys: (call) =>
       filtered(call, 'eq', 'company_id')
@@ -187,6 +185,16 @@ const OK_QUEUE = {
   ],
 }
 
+const option = (id: string, tier: string) => ({ id, tier, title: id, summary: '', version: 1, reviewed_at: null })
+/** Three of the product's own items, one the community shared and one the company wrote. */
+const KNOWLEDGE = [
+  option('horizontal/swedish-vat', 'horizontal'),
+  option('modifier/holding-ab', 'modifier'),
+  option('vertical/konsult-it', 'vertical'),
+  option('community/shared', 'community'),
+  option('own/0d6f6f0e-0000-4000-8000-000000000001', 'own'),
+]
+
 const FEED_OK = { bank: { feed_status: 'active', last_sync_at: '2026-03-02T05:12:00.000Z', stale: false, reconciled_through: null } }
 
 const skatteverket = vi.fn()
@@ -205,7 +213,7 @@ beforeEach(() => {
   listUnexplainedMock.mockResolvedValue(OK_QUEUE)
   dataStatusMock.mockResolvedValue(FEED_OK)
   inboxAddressMock.mockResolvedValue('exempel-ab12@inbox.example')
-  skillRowsMock.mockResolvedValue([])
+  knowledgeOptionsMock.mockResolvedValue(KNOWLEDGE)
   skatteverket.mockResolvedValue({ state: 'connected', last_sync_at: '2026-03-01T21:14:00.000Z' })
 })
 
@@ -395,28 +403,27 @@ describe('loadAgentPicture: the company', () => {
     expect(broken.company.memory_facts).toBeNull()
   })
 
-  it('counts the knowledge items of the profile that are live, the installed ones and the company\'s own', async () => {
-    skillRowsMock.mockResolvedValue([
-      { id: 'i1', atom_id: 'community/x', name: null, body: null },
-      { id: 'o1', atom_id: null, name: 'Vårt sätt', body: 'text', draft: false },
-      { id: 'o2', atom_id: null, name: 'Utkast', body: 'text', draft: true },
-    ])
-    const { client, calls } = fakeSupabase(tables({ agent_atom_registry: { count: 4 } }))
+  it('counts the catalogue\'s knowledge list: the product\'s own items, not the community\'s and not the company\'s', async () => {
+    const { client, calls } = fakeSupabase(tables())
     const picture = await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
-    // Four live registry items and one own item a person has added; the draft is not counted.
-    expect(picture.company.knowledge.rule_areas).toBe(5)
-    const registry = calls.find((c) => c.table === 'agent_atom_registry')!
-    expect(registry.ops.find((op) => op.method === 'in')!.args).toEqual(['id', ['horizontal/a', 'horizontal/b', 'vertical/c', 'community/x']])
-    expect(filtered(registry, 'eq', 'is_active', true)).toBe(true)
-    expect(filtered(registry, 'eq', 'mcp_exposed', true)).toBe(true)
+    expect(knowledgeOptionsMock).toHaveBeenCalledWith(client, COMPANY)
+    // The first industry item of the profile that the list holds; one that is no longer live is passed over.
+    expect(picture.company.knowledge).toEqual({ items: 3, industry: 'vertical/konsult-it' })
+    expect(calls.find((c) => c.table === 'agent_profiles')!.ops.find((op) => op.method === 'select')!.args[0]).toBe('vertical_atoms')
   })
 
-  it('names the curated workflows and says unknown when the knowledge cannot be counted', async () => {
-    skillRowsMock.mockRejectedValue(new Error('boom'))
+  it('has no industry item for a company whose profile names none, or whose profile cannot be read', async () => {
+    const none = await loadAgentPicture(fakeSupabase(tables({ agent_profiles: { data: null } })).client, COMPANY, USER, ports(), NOW)
+    expect(none.company.knowledge).toEqual({ items: 3, industry: null })
+    const broken = await loadAgentPicture(fakeSupabase(tables({ agent_profiles: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(broken.company.knowledge).toEqual({ items: 3, industry: null })
+  })
+
+  it('says unknown when the knowledge list cannot be read', async () => {
+    knowledgeOptionsMock.mockRejectedValue(new Error('boom'))
     const picture = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
-    expect(picture.company.knowledge.rule_areas).toBeNull()
-    expect(picture.company.knowledge.workflows).toContain('month-end-close')
-    expect(picture.company.knowledge.workflows).toHaveLength(10)
+    expect(picture.company.knowledge).toEqual({ items: null, industry: null })
+    expect(picture.company.counts.vouchers).toBe(4912)
   })
 })
 
@@ -432,6 +439,7 @@ describe('loadAgentPicture: checks', () => {
       name_sv: 'Obokförda banktransaktioner efter sista bokföringsdag',
       name_en: 'EN unbooked_bank_lines_overdue',
       subject: null,
+      subject_tail: null,
       status: 'attention',
       difference: 5,
       unit: 'count',
@@ -450,8 +458,18 @@ describe('loadAgentPicture: checks', () => {
       id: 'bank_balance_vs_bank:cash-1',
       status: 'agrees',
       subject: 'Företagskonto',
+      // The account's last four characters, so two accounts with one name read apart.
+      subject_tail: '7466',
       difference: null,
     })
+  })
+
+  it('leaves a bank account\'s result without its last four characters when the accounts cannot be read', async () => {
+    const cash_accounts: Handler = (call) =>
+      call.ops.some((op) => op.method === 'select' && op.args[0] === 'id, iban, kind, card_last4') ? { error: { message: 'boom' } } : { data: [] }
+    const picture = await loadAgentPicture(fakeSupabase(tables({ cash_accounts })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.company.checks!.lines.find((l) => l.check_id === 'bank_balance_vs_bank')).toMatchObject({ subject: 'Företagskonto', subject_tail: null })
+    expect(JSON.stringify(picture)).not.toContain('5000')
   })
 
   it('adds the bank feed from the report data status, read over the fiscal year up to today', async () => {
@@ -527,11 +545,27 @@ describe('loadAgentPicture: agents', () => {
   it('lists the company\'s connections with what each did today', async () => {
     const picture = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
     expect(picture.agents!.list).toEqual([
-      { id: 'key-claude', kind: 'claude', name: null, last_used_at: '2026-03-02T08:59:30.000Z', calls_today: 2, last_call_at: '2026-03-02T08:59:30.000Z' },
-      { id: 'key-manual', kind: 'key', name: 'Nattjobbet', last_used_at: null, calls_today: 0, last_call_at: null },
+      { id: 'key-claude', kind: 'claude', name: null, service_account: null, last_used_at: '2026-03-02T08:59:30.000Z', calls_today: 2, last_call_at: '2026-03-02T08:59:30.000Z' },
+      { id: 'key-manual', kind: 'key', name: 'Nattjobbet', service_account: null, last_used_at: null, calls_today: 0, last_call_at: null },
     ])
     expect(picture.agents!.more).toBe(0)
-    expect(picture.agents!.activity).toMatchObject({ day: '2026-03-02', now: NOW.toISOString(), capped: false })
+    // The memory count the picture read in its own part rides along with the activity.
+    expect(picture.agents!.activity).toMatchObject({ day: '2026-03-02', now: NOW.toISOString(), capped: false, memory_facts: 23 })
+  })
+
+  it('says whose a service account\'s connection is, by the account\'s name', async () => {
+    const account = (id: string, accountId: string) => ({ id, name: `nyckel ${id}`, client: null, last_used_at: null, created_at: '2026-01-01T00:00:00.000Z', user_id: USER, service_account_id: accountId, company_id: COMPANY })
+    const api_keys: Handler = (call) => (filtered(call, 'eq', 'company_id') ? { data: [account('k1', 'sa-1'), account('k2', 'sa-2')] } : { data: [] })
+    service = fakeSupabase({ service_accounts: { data: [{ id: 'sa-1', name: 'Accounteds agent' }] } })
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.agents!.list.map((a) => [a.id, a.kind, a.service_account])).toEqual([
+      ['k1', 'key', 'Accounteds agent'],
+      // An account whose name could not be read keeps its key's name: the connection is still an account's.
+      ['k2', 'key', 'nyckel k2'],
+    ])
+    const names = service.calls.find((c) => c.table === 'service_accounts')!
+    expect(filtered(names, 'eq', 'company_id', COMPANY)).toBe(true)
+    expect(names.ops.find((op) => op.method === 'in')!.args).toEqual(['id', ['sa-1', 'sa-2']])
   })
 
   it('reads only live keys, and the person\'s own keys by user', async () => {
@@ -607,7 +641,6 @@ describe('loadAgentPicture: the whole answer', () => {
       const byCompany = filtered(call, 'eq', 'company_id', COMPANY)
       if (call.table === 'companies') expect(filtered(call, 'eq', 'id', COMPANY)).toBe(true)
       else if (call.table === 'whatsapp_phone_links') expect(filtered(call, 'eq', 'user_id', USER)).toBe(true)
-      else if (call.table === 'agent_atom_registry') expect(byCompany).toBe(false)
       else if (call.table === 'api_keys') expect(byCompany || filtered(call, 'eq', 'user_id', USER)).toBe(true)
       else expect(byCompany, `${call.table} is read without the company filter`).toBe(true)
     }
@@ -636,6 +669,7 @@ describe('loadAgentPicture: the whole answer', () => {
 describe('loadAgentActivity', () => {
   it('counts today\'s calls per connection by the Stockholm day and keeps each one\'s last call', async () => {
     const { client, calls } = fakeSupabase({
+      agent_memory: { count: 7 },
       event_log: {
         data: [
           { created_at: '2026-03-02T08:59:30.000Z', actor_id: 'a' },
@@ -653,14 +687,17 @@ describe('loadAgentActivity', () => {
       now: NOW.toISOString(),
       day: '2026-03-02',
       capped: false,
+      memory_facts: 7,
       actors: {
         a: { calls_today: 2, last_call_at: '2026-03-02T08:59:30.000Z' },
         b: { calls_today: 1, last_call_at: '2026-03-02T08:00:00.000Z' },
         c: { calls_today: 0, last_call_at: '2026-03-01T10:00:00.000Z' },
       },
     })
-    expect(calls).toHaveLength(1)
-    const read = calls[0]
+    // One read of the log and one count of the memory.
+    expect(calls.map((c) => c.table).sort()).toEqual(['agent_memory', 'event_log'])
+    expect(filtered(calls.find((c) => c.table === 'agent_memory')!, 'eq', 'company_id', COMPANY)).toBe(true)
+    const read = calls.find((c) => c.table === 'event_log')!
     expect(filtered(read, 'eq', 'company_id', COMPANY)).toBe(true)
     expect(filtered(read, 'eq', 'event_type', 'mcp.tool_called')).toBe(true)
     // Only the time and who called: no tool arguments, no results.
@@ -673,10 +710,18 @@ describe('loadAgentActivity', () => {
     const page = (minute: number) => Array.from({ length: 200 }, (_, i) => ({ created_at: new Date(Date.parse('2026-03-02T08:00:00.000Z') - (minute * 200 + i) * 1000).toISOString(), actor_id: 'a' }))
     const { client, calls } = fakeSupabase({ event_log: (call) => ({ data: page((call.ops.find((op) => op.method === 'range')!.args[0] as number) / 200) }) })
     const activity = await loadAgentActivity(client, COMPANY, NOW)
-    expect(calls).toHaveLength(5)
-    expect(calls.map((c) => c.ops.find((op) => op.method === 'range')!.args)).toEqual([[0, 199], [200, 399], [400, 599], [600, 799], [800, 999]])
+    const pages = calls.filter((c) => c.table === 'event_log')
+    expect(pages).toHaveLength(5)
+    expect(pages.map((c) => c.ops.find((op) => op.method === 'range')!.args)).toEqual([[0, 199], [200, 399], [400, 599], [600, 799], [800, 999]])
     expect(activity.actors.a.calls_today).toBe(1000)
     expect(activity.capped).toBe(true)
+  })
+
+  it('says the memory count is unknown when it cannot be read, and still answers the log', async () => {
+    const { client } = fakeSupabase({ event_log: { data: [] }, agent_memory: { error: { message: 'boom' } } })
+    const activity = await loadAgentActivity(client, COMPANY, NOW)
+    expect(activity.memory_facts).toBeNull()
+    expect(activity.actors).toEqual({})
   })
 
   it('throws when the log cannot be read', async () => {

@@ -49,7 +49,7 @@ const PICTURE = {
     name: 'Exempelbolaget AB',
     counts: { vouchers: 1, bank_rows: 2, documents: 3, customers: 4, suppliers: 5 },
     memory_facts: 6,
-    knowledge: { rule_areas: 7, workflows: [] },
+    knowledge: { items: 7, industry: null },
     checks: null,
   },
   agents: null,
