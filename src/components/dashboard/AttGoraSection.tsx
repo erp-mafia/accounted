@@ -14,7 +14,7 @@ import { Dialog, DialogConsequence, DialogContent, DialogFooter, DialogHeader, D
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
-import { GuidedSteps, HemCalm, NeedList, type HemView, type LeadAction, type NeedRow } from './att-gora-views'
+import { GuidedSteps, HemCalm, type HemView, type LeadAction, type NeedRow } from './att-gora-views'
 import { countRowSpecs } from './need-rows'
 import { isAwaitingAttestInList } from '@/lib/supplier-invoices/list-tabs'
 import type { SupplierInvoiceRow } from './StepItems'
@@ -896,7 +896,7 @@ export default function AttGoraSection({
       icon: LightBulbIcon,
       label: s.title,
       detail: s.reason ?? undefined,
-      href: '/?vy=behover#decide',
+      href: '/#decide',
       embed: (
         <ViewerLock>
           <SuggestionCards
@@ -924,7 +924,7 @@ export default function AttGoraSection({
       group: 'review',
       icon: ShieldCheckIcon,
       label: t('band_grant_postings'),
-      href: '/?vy=behover#review',
+      href: '/#review',
       count: grantReview.postings.length,
       embed: (
         <div>
@@ -1125,25 +1125,13 @@ export default function AttGoraSection({
       />
     ) : null
 
-  // The sidebar's Behöver dig row shows the number Hem counts (need-count.ts).
+  // The sidebar's Hem row shows the number Hem counts (need-count.ts).
   usePublishNeedCount(company?.id, countThings(rows))
 
   return (
     <section aria-label={t('att_gora_title')}>
       {view === 'borja' ? (
         <GuidedSteps rows={rows} todayIso={todayIso} stepKey={currentStep} onStep={goToStep} notStarted={notStarted} />
-      ) : view === 'behover' ? (
-        <NeedList
-          rows={rows}
-          todayIso={todayIso}
-          clearTitle={tHem(notStarted ? 'headline_not_started' : 'headline_clear')}
-          // The Kom igång steps are on Hem, not above this list: say where, and lead there.
-          clearBody={emptyState === 'new_ledger' ? tHem('new_ledger_list_body') : clearBody}
-          notStarted={notStarted}
-          lead={emptyState === 'new_ledger' ? { label: tHem('back_home'), href: '/' } : lead}
-          resume={resume}
-          incomplete={countsIncomplete}
-        />
       ) : (
         <HemCalm
           rows={rows}
