@@ -670,6 +670,10 @@ export interface CompanySettings {
   // Invoice PDF settings
   ore_rounding: boolean
   invoice_show_ocr: boolean
+  // The OCR reference carries Bankgirot's length digit before the check
+  // digit (lib/invoices/ocr-reference.ts). Optional in TS: a row read before
+  // the column's migration has it absent, which prints the plain form.
+  invoice_ocr_length_digit?: boolean
   invoice_show_bankgiro: boolean
   invoice_show_plusgiro: boolean
   invoice_show_swish: boolean

@@ -275,6 +275,11 @@ describe('buildBankPaymentQrPayload: reference and identity', () => {
     expect(parsed(build({ invoice: { invoice_number: 'F-2024001' } })).iref).toBe('20240016')
   })
 
+  it("encodes the OCR with Bankgirot's length digit when the invoice prints it", () => {
+    // 10234: seven digits in all, so length digit 7, then the check digit.
+    expect(parsed(build({ company: { invoice_ocr_length_digit: true } })).iref).toBe('1023472')
+  })
+
   it('uses the invoice number when the OCR row is switched off', () => {
     expect(parsed(build({ company: { invoice_show_ocr: false } })).iref).toBe('10234')
   })

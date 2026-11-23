@@ -84,6 +84,17 @@ describe('settings operations: field split', () => {
     expect(field.safeParse('all').success).toBe(false)
   })
 
+  it('lets the API and MCP read and write the OCR length digit switch', () => {
+    expect(keys(settingsUpdate.input)).toContain('invoice_ocr_length_digit')
+    expect(toSettingsResource('c1', { invoice_ocr_length_digit: true } as never).invoice_ocr_length_digit).toBe(true)
+    // A row read before the column exists reports it as unset.
+    expect(toSettingsResource('c1', {} as never).invoice_ocr_length_digit).toBeNull()
+    const field = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape.invoice_ocr_length_digit as z.ZodType
+    expect(field.safeParse(true).success).toBe(true)
+    expect(field.safeParse('yes').success).toBe(false)
+    expect(field.description).toMatch(/length digit/i)
+  })
+
   it('lets the API and MCP read and write the Swedbank payment-file ids, in Swedbank format only (crm#1117)', () => {
     const shape = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape
     for (const [field, valid, invalid] of [

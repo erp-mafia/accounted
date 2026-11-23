@@ -5,7 +5,8 @@
  *
  * The invoice PDF prints the reference the customer pays under, but no door
  * returned it, so an integrator who delivers the invoice in a PDF or mail of
- * their own had to rebuild it (strip the non-digits, add a Luhn check digit)
+ * their own had to rebuild it (strip the non-digits, add a Luhn check digit,
+ * and a length digit when the company prints one)
  * or read it off the PDF. These two fields are the document's own answer:
  *
  *   payment_reference       what the payer writes with the payment
@@ -65,7 +66,7 @@ export interface PaymentReferenceFacts {
  */
 export const PAYMENT_REFERENCE_PITFALL =
   'payment_reference is the reference the invoice asks the payer to quote, the one its PDF prints; payment_reference_type says how it is built. ' +
-  'ocr: the digits of invoice_number followed by a Luhn (10-modulen) check digit, 2 to 25 digits, never a length digit (invoice 2026-0042 gives 202600425). It fits a Bankgirot OCR control of the check digit, soft or hard, not one that also checks the length. ' +
+  'ocr: the digits of invoice_number followed by a Luhn (10-modulen) check digit, 2 to 25 digits (invoice 2026-0042 gives 202600425). When the company setting invoice_ocr_length_digit is true, Bankgirot\'s length digit stands before the check digit (202600425 becomes 2026004206), for a bankgiro whose OCR control also checks the length; without it the reference fits a control of the check digit alone. ' +
   'invoice_number: the invoice number as it is, written as the message of the payment. ' +
   'An invoice carries ocr when it is printed in Swedish with a bankgiro or plusgiro and the company has not turned the OCR reference off, otherwise invoice_number; the value follows those settings, as the PDF does. ' +
   'Both are null when the document asks for no payment under a reference: no number yet (a draft), a credit note, a quote, a proforma, a delivery note, an invoice debited by Autogiro. ' +

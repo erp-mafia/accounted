@@ -33,7 +33,8 @@ import { normalizeOcrReference } from './duplicate-payment-guard'
  * send. `ocr`: those digits plus the Luhn check digit, which is what the
  * invoice actually prints. `ocr_length`: those digits plus Bankgirot's length
  * digit and the Luhn check digit over both, what an invoice printed by
- * another system often carries.
+ * another system often carries, and what the company's own invoices carry
+ * when it prints the length digit (invoiceOcrReference).
  */
 export type InvoiceReferenceForm = 'invoice_number' | 'ocr' | 'ocr_length'
 

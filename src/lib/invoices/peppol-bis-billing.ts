@@ -1,7 +1,6 @@
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { escapeXml } from '@/lib/xml/escape'
 import {
-  generateOcrReference,
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
@@ -12,6 +11,7 @@ import { isValidBic, isValidIban } from '@/lib/payments/payment-details'
 import { resolveInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { computeLineAmounts, computeLineVat, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { invoiceOcrReference } from '@/lib/invoices/ocr-reference'
 import { isPeppolInvoiceLine } from '@/lib/invoices/peppol-lines'
 import { toSingleLine } from '@/lib/utils'
 import { normalizeDeliveryAddress } from '@/lib/invoices/delivery-address'
@@ -460,13 +460,13 @@ function prepareInvoice(input: PeppolInvoiceInput):
     payment = {
       accountId: payee.bankgiro.replace(/\D/g, ''),
       branchId: 'SE:BANKGIRO',
-      paymentId: generateOcrReference(invoice.invoice_number ?? ''),
+      paymentId: invoiceOcrReference(company, invoice.invoice_number ?? ''),
     }
   } else if (hasText(payee?.plusgiro) && validatePlusgiroNumber(payee.plusgiro)) {
     payment = {
       accountId: payee.plusgiro.replace(/\D/g, ''),
       branchId: 'SE:PLUSGIRO',
-      paymentId: generateOcrReference(invoice.invoice_number ?? ''),
+      paymentId: invoiceOcrReference(company, invoice.invoice_number ?? ''),
     }
   } else if (iban && isValidIban(iban)) {
     // PaymentMeansCode stays 30 (credit transfer): the export is SEK-only and
@@ -477,7 +477,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
     payment = {
       accountId: iban,
       branchId: bic && isValidBic(bic) ? bic : null,
-      paymentId: generateOcrReference(invoice.invoice_number ?? ''),
+      paymentId: invoiceOcrReference(company, invoice.invoice_number ?? ''),
     }
   } else {
     issues.push(validationIssue(

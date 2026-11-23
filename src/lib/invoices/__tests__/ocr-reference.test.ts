@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  invoiceOcrReference,
   invoicePaymentReference,
   invoicePrintsBankgiro,
   invoicePrintsPlusgiro,
@@ -72,6 +73,25 @@ describe('invoicePaymentReference', () => {
     expect(invoicePaymentReference(giro, ' 1042 ', 'sv')).toEqual({ type: 'ocr', reference: '10421' })
   })
 
+  it("carries Bankgirot's length digit before the check digit when the company prints one", () => {
+    const withLength = { ...giro, invoice_ocr_length_digit: true }
+    // 1042: six digits in all, so length digit 6, then the check digit over 10426.
+    expect(invoicePaymentReference(withLength, '1042', 'sv')).toEqual({ type: 'ocr', reference: '104265' })
+    expect(invoicePaymentReference(withLength, 'F-2026-0042', 'sv')).toEqual({ type: 'ocr', reference: '2026004206' })
+    // Off, null and never written all print the plain form.
+    expect(invoicePaymentReference({ ...giro, invoice_ocr_length_digit: false }, '1042', 'sv').reference).toBe('10421')
+    expect(invoicePaymentReference({ ...giro, invoice_ocr_length_digit: null }, '1042', 'sv').reference).toBe('10421')
+  })
+
+  it('leaves the invoice number alone when no OCR is shown, whatever the OCR form', () => {
+    const withLength = { ...giro, invoice_ocr_length_digit: true }
+    expect(invoicePaymentReference(withLength, '1042', 'en')).toEqual({ type: 'invoice_number', reference: '1042' })
+    expect(invoicePaymentReference({ ...withLength, invoice_show_ocr: false }, '1042', 'sv')).toEqual({
+      type: 'invoice_number',
+      reference: '1042',
+    })
+  })
+
   it('is the invoice number as it is when no OCR is shown', () => {
     expect(invoicePaymentReference({}, 'F-2026-0042', 'sv')).toEqual({ type: 'invoice_number', reference: 'F-2026-0042' })
     expect(invoicePaymentReference(giro, 'F-2026-0042', 'en')).toEqual({ type: 'invoice_number', reference: 'F-2026-0042' })
@@ -89,5 +109,22 @@ describe('invoicePaymentReference', () => {
     expect(invoicePaymentReference(giro, null, 'sv')).toEqual({ type: 'ocr', reference: null })
     expect(invoicePaymentReference(giro, '   ', 'sv')).toEqual({ type: 'ocr', reference: null })
     expect(invoicePaymentReference({}, undefined, 'sv')).toEqual({ type: 'invoice_number', reference: null })
+  })
+})
+
+describe('invoiceOcrReference', () => {
+  it('is the number and its check digit, with the length digit between them when switched on', () => {
+    expect(invoiceOcrReference({}, '1042')).toBe('10421')
+    expect(invoiceOcrReference({ invoice_ocr_length_digit: false }, '1042')).toBe('10421')
+    expect(invoiceOcrReference({ invoice_ocr_length_digit: true }, '1042')).toBe('104265')
+    // The length digit is the whole reference's length modulo 10: ten digits give 0.
+    expect(invoiceOcrReference({ invoice_ocr_length_digit: true }, '20260042')).toBe('2026004206')
+  })
+
+  it('keeps the plain form for a number the length-digit form cannot carry', () => {
+    // 24 digits: the plain reference is 25 digits, and a length digit would make 26.
+    const number = '123456789012345678901234'
+    expect(invoiceOcrReference({ invoice_ocr_length_digit: true }, number)).toBe(invoiceOcrReference({}, number))
+    expect(invoiceOcrReference({ invoice_ocr_length_digit: true }, number)).toHaveLength(25)
   })
 })
