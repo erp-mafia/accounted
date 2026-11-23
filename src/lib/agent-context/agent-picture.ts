@@ -7,6 +7,7 @@ import { stockholmWallTimeToUtc, todayIsoStockholm } from '@/lib/dates/iso'
 import { listConnections } from '@/lib/digital-mailboxes/connections'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { inboxHref, isInkorgV2Enabled, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { createLogger } from '@/lib/logger'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { connectionKind, type ConnectionKind } from '@/lib/settings/mcp-connections'
@@ -226,7 +227,8 @@ const HREF: Record<PictureSourceKey, string> = {
   bank: '/settings/banking',
   skatteverket: '/settings/skatteverket',
   bolagsverket: '/settings/company',
-  inbox: '/e/general/invoice-inbox',
+  // The workspace's address; loadSources puts the company's own inbox in its place.
+  inbox: LEGACY_INBOX_HREF,
   whatsapp: '/settings/whatsapp',
   kivra: '/settings/connections',
   billo: '/settings/connections',
@@ -491,6 +493,8 @@ async function loadSources(
   ])
 
   const present = (items: Array<PictureSource | null>): PictureSource[] => items.filter((item): item is PictureSource => item !== null)
+  // The inbox card leads to the company's inbox: the new Inkorg page inside its rollout, the workspace outside it.
+  const inboxLink = inboxHref(isInkorgV2Enabled(companyId))
   return limitNotConnected([
     // A failed read is unknown, never "not connected".
     { id: 'bank', items: bank ?? [source('bank', 'unknown')] },
@@ -504,7 +508,7 @@ async function loadSources(
     {
       id: 'documents',
       items: present([
-        has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? (inbox ?? source('inbox', 'unknown')) : null,
+        has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? { ...(inbox ?? source('inbox', 'unknown')), href: inboxLink } : null,
         whatsapp,
         ...(mailboxes ?? []),
         gmail,
