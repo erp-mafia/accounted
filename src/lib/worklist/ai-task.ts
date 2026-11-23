@@ -1,3 +1,4 @@
+import { LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import type { WorklistCategory, WorklistCounts } from './types'
 
 /**
@@ -45,7 +46,9 @@ export const AI_TASK_HREF: Record<AiTaskCategory, string> = {
   // to-book view even for someone whose remembered view is Alla.
   book_transaction: '/transactions?view=inbox',
   book_skattekonto: '/transactions?source=skatteverket&view=inbox',
-  inbox_document: '/e/general/invoice-inbox',
+  // The workspace's address, for an answer that names no inbox (aiTaskHref):
+  // its route leads on to the new Inkorg page for a company that has it.
+  inbox_document: LEGACY_INBOX_HREF,
   // The Registrerade tab: what attest still accepts, the very invoices the
   // count holds (crm#1631).
   supplier_invoice_approval: '/supplier-invoices?tab=registered',
@@ -58,7 +61,9 @@ export const AI_TASK_HREF: Record<AiTaskCategory, string> = {
 /**
  * The page a row opens for this company: the inbox row follows the
  * company's inbox (WorklistCounts.inboxHref: the new Inkorg in the rollout),
- * the rest are fixed.
+ * the rest are fixed. Without an inbox address the row names the workspace,
+ * whose route leads a company with the new page on to it
+ * (lib/inkorg/inbox-page.ts).
  */
 export function aiTaskHref(category: AiTaskCategory, inboxHref?: string | null): string {
   return category === 'inbox_document' && inboxHref ? inboxHref : AI_TASK_HREF[category]

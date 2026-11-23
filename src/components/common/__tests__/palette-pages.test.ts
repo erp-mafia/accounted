@@ -89,6 +89,28 @@ describe('palettePages: the shell tree is the page list', () => {
     expect(v2.map((p) => p.href)).toEqual(['/inkorg'])
     expect(v2[0].extension).toEqual({ sector: 'general', id: 'invoice-inbox' })
   })
+
+  it('offers a company one inbox, never both: the Dokumentinkorg and Inkorg aliases name the same entry', () => {
+    const INBOXES = ['/inkorg', '/e/general/invoice-inbox']
+    const inboxes = (entries: { href: string }[]) => entries.map((entry) => entry.href).filter((href) => INBOXES.includes(href.split('?')[0]))
+    const onNewPage = pagesFor({ inkorgV2Enabled: true })
+    const onWorkspace = pagesFor({ inkorgV2Enabled: false })
+    expect(inboxes(onNewPage)).toEqual(['/inkorg'])
+    expect(inboxes(onWorkspace)).toEqual(['/e/general/invoice-inbox'])
+    // Both aliases stay in the list of words, each for the address its row has.
+    expect(PAGE_ALIASES.filter((alias) => INBOXES.includes(alias.href)).map((alias) => [alias.id, alias.href])).toEqual([
+      ['dokumentinkorg', '/e/general/invoice-inbox'],
+      ['inkorg', '/inkorg'],
+    ])
+    // Typed by either name, one entry answers, on the page the company has.
+    for (const word of ['dokumentinkorg', 'inkorg', 'kvitto']) {
+      expect(inboxes(onNewPage.filter((p) => matches(p, word))), word).toEqual(['/inkorg'])
+      expect(inboxes(onWorkspace.filter((p) => matches(p, word))), word).toEqual(['/e/general/invoice-inbox'])
+    }
+    // No action opens an inbox by a fixed address either.
+    expect(inboxes(actionEntries(null))).toEqual([])
+    expect(inboxes(actionEntries(null, { bookingScreen: true }))).toEqual([])
+  })
 })
 
 describe('palettePages: nothing the old hand-written list found is lost', () => {

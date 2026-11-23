@@ -3,6 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
+import { stripFrontMatter } from '@/lib/agent-skills/front-matter'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { formatDateLong } from '@/lib/utils'
 import { CopyIcon } from './CopyIcon'
@@ -19,7 +20,9 @@ const Markdown = dynamic(() => import('@/components/agent/MarkdownMessage'))
  * One knowledge item, plainly: its folder, its name and one line, who keeps
  * it, and the text the AI reads, shown directly with a copy control. The
  * text is read as the item's page reads it (GET /api/skills?slug=, the same
- * key, so the two share one read).
+ * key, so the two share one read). It is shown from after the file's front
+ * matter (lib/agent-skills/front-matter.ts); the copy control copies the
+ * whole text, front matter included.
  *
  * Nothing about flows: an item is read here, not handed out.
  */
@@ -50,7 +53,7 @@ export function KnowledgeItemView({ option, companyId }: { option: KnowledgeOpti
           <CopyIcon text={body.data} label={t('copy_contents')} />
         </div>
         <div className={styles.mdBody}>
-          {body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
+          {body.data ? <Markdown text={stripFrontMatter(body.data)} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
         </div>
       </section>
     </div>

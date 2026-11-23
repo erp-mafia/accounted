@@ -19679,9 +19679,7 @@
     "help_body": "Inkorgen samlar det som har kommit in och inte är hanterat. Behöver dig är det som väntar på ett beslut, och Brevlådor är vägarna in. Öppna en rad så tar du dem en i taget.",
     "help_missing": "Under Saknar underlag släpper du kvittot på köpet det hör till, eller öppnar köpet och väljer hur underlaget ska hämtas.",
     "help_portals": "Under Portaler står leverantörerna som har fakturorna bakom en inloggning. Välj en så ser du bara köpen hos den. Saknas en leverantör, öppna ett av dess köp och välj Fakturan finns i en portal.",
-    "help_expected": "Det som brukar komma av sig självt ligger under På väg, och Väntas senare visar vad dina återkommande leverantörer brukar skicka de närmaste veckorna.",
-    "help_legacy": "Vill du hellre arbeta i den gamla vyn?",
-    "help_legacy_link": "Öppna Underlag"
+    "help_expected": "Det som brukar komma av sig självt ligger under På väg, och Väntas senare visar vad dina återkommande leverantörer brukar skicka de närmaste veckorna."
   },
   "settings_anpassa": {
     "title": "Anpassa",

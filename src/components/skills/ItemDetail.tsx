@@ -21,6 +21,7 @@ import { SHOWN_FLOWS } from './catalog-setup'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { formatDateLong } from '@/lib/utils'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
+import { stripFrontMatter } from '@/lib/agent-skills/front-matter'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { handoffRoute, pinCompany, startInAi, type ClaudeTarget, type StartOutcome } from './run'
 import { ClaudeStart } from './ClaudeStart'
@@ -340,7 +341,8 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
                   )}
                   {(!isPack || showBody) && (
                     <div id="item-body" className={styles.mdBody} data-ph-mask={item.community ? '' : undefined}>
-                      {body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
+                      {/* Shown from after the file's front matter; the copy control beside the label copies the whole text. */}
+                      {body.data ? <Markdown text={stripFrontMatter(body.data)} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
                     </div>
                   )}
                 </Field>}

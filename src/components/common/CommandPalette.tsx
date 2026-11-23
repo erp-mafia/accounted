@@ -152,7 +152,10 @@ export const PAGE_ALIASES: PageAlias[] = [
   { id: 'löner', label: 'Löner', icon: BanknotesIcon, href: '/salary' },
   { id: 'anställda', label: 'Anställda', icon: UsersIcon, href: '/salary/employees' },
   // The inbox, on whichever page the menu puts it (lib/inkorg/flag.ts): both
-  // rows answer to the old names and to "utlägg" and "kvitto".
+  // rows answer to the old names and to "utlägg" and "kvitto". Each alias
+  // names a menu row, so it lends that row its words and is no entry of its
+  // own: the menu shows a company one of the two rows, and the palette offers
+  // that one inbox (palette-pages.ts).
   { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: InboxIcon, href: LEGACY_INBOX_HREF, keywords: INBOX_SEARCH_KEYWORDS },
   { id: 'inkorg', label: 'Inkorg', icon: InboxIcon, href: INKORG_HREF, keywords: INBOX_SEARCH_KEYWORDS },
   { id: 'nyckeltal', label: 'Nyckeltal', icon: ArrowTrendingUpIcon, href: '/kpi' },

@@ -213,6 +213,7 @@ function sourceOf(picture: { sources: PictureSourceGroup[] }, id: string): Pictu
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('RESEND_INBOUND_DOMAIN', 'inbox.example')
+  vi.stubEnv('INKORG_V2_COMPANY_IDS', '')
   enabled.clear()
   for (const id of ALL_EXTENSIONS) enabled.add(id)
   service = fakeSupabase({ api_key_companies: { data: [] }, oauth_partner_clients: { data: [] } })
@@ -312,6 +313,29 @@ describe('loadAgentPicture: sources', () => {
     const picture = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
     expect(sourceOf(picture, 'inbox')).toBeUndefined()
     expect(inboxAddressMock).not.toHaveBeenCalled()
+  })
+
+  it('leads the inbox card to the workspace for a company outside the new inbox page\'s rollout', async () => {
+    const outside = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(outside, 'inbox')).toMatchObject({ state: 'connected', href: '/e/general/invoice-inbox' })
+    // Another company's place in the rollout moves nothing for this one.
+    vi.stubEnv('INKORG_V2_COMPANY_IDS', 'company-2')
+    const other = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(other, 'inbox')?.href).toBe('/e/general/invoice-inbox')
+  })
+
+  it('leads the inbox card to the new inbox page for a company in its rollout, whatever the card says', async () => {
+    vi.stubEnv('INKORG_V2_COMPANY_IDS', `company-2, ${COMPANY}`)
+    const connected = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(connected, 'inbox')).toMatchObject({ state: 'connected', detail: 'exempel-ab12@inbox.example', href: '/inkorg' })
+    inboxAddressMock.mockResolvedValue(null)
+    const off = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(off, 'inbox')).toMatchObject({ state: 'not_connected', href: '/inkorg' })
+    inboxAddressMock.mockRejectedValue(new Error('address read failed'))
+    const unknown = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(unknown, 'inbox')).toMatchObject({ state: 'unknown', href: '/inkorg' })
+    // No other card moves with it.
+    expect(sourceOf(connected, 'skatteverket')?.href).toBe('/settings/skatteverket')
   })
 
   it('shows the signed-in person\'s WhatsApp link by its masked number', async () => {

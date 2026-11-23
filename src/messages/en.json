@@ -19679,9 +19679,7 @@
     "help_body": "The Inbox holds what has come in and is not handled yet. Needs you is what waits for a decision, and Mailboxes are the ways in. Open a row to take them one at a time.",
     "help_missing": "In Missing documents, drop the receipt on the purchase it belongs to, or open the purchase and choose how to get it.",
     "help_portals": "Portals lists the suppliers that keep their invoices behind a login. Pick one to see only its purchases. Is a supplier missing? Open one of its purchases and choose The invoice is in a portal.",
-    "help_expected": "What usually arrives by itself is listed under On its way, and Expected later shows what your regular suppliers usually send in the coming weeks.",
-    "help_legacy": "Prefer the old view?",
-    "help_legacy_link": "Open Documents"
+    "help_expected": "What usually arrives by itself is listed under On its way, and Expected later shows what your regular suppliers usually send in the coming weeks."
   },
   "settings_anpassa": {
     "title": "Customize",
