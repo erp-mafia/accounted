@@ -21747,9 +21747,10 @@ export const tools: McpTool[] = [
         const ownSubmission = resolveRunAgiSubmission(runForFiling, periodRecord)
         const filingState = deriveAgiFilingState(runForFiling, periodRecord)
         const kvittensnummer = resolveRunAgiKvittensnummer(runForFiling, periodRecord)
-        // Live kvittenser (read-only). A non-ok read (e.g. nothing filed yet)
-        // leaves kvittenser null rather than hard-failing the status check;
-        // auth errors throw and map to SKATTEVERKET_NOT_CONNECTED.
+        // Live kvittenser (read-only). Nothing signed yet is an empty list;
+        // any other non-ok read leaves kvittenser null rather than
+        // hard-failing the status check; auth errors throw and map to
+        // SKATTEVERKET_NOT_CONNECTED.
         let kvittenser: unknown = null
         // Skatteverket's gateway refusing the APIGW client (#2226) is an
         // installation-level state, not this caller's authorisation: failing
