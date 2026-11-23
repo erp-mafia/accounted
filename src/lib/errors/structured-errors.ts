@@ -7739,18 +7739,20 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   // A credit note rests at 'credited' like its original, so its own id once
   // passed for the original's: the preview restored the credit note as an
   // invoice to pay, a write supplier_invoices_credit_note_not_payable refuses.
-  // Most imported credit notes are linked to no original
-  // (credited_invoice_id null), and uncredit finds a credit note only
-  // through that link: the next step differs, so both are said.
+  // The original is the way only while it is credited by this credit note:
+  // most imported credit notes are linked to no original (credited_invoice_id
+  // null, and uncredit finds a credit note only through that link), an
+  // imported original often rests at 'paid', and a reversed credit note's
+  // original may since carry a newer credit. Each case is said.
   SI_UNCREDIT_CREDIT_NOTE: {
     httpStatus: 400,
     message_sv:
-      'En kreditering ångras på originalfakturan, inte på kreditfakturan. Är kreditfakturan kopplad till en originalfaktura, gå till den och välj "Ångra kreditering" där. Annars går krediteringen inte att ångra här.',
+      'En kreditering ångras på originalfakturan, inte på kreditfakturan. Är kreditfakturan kopplad till en krediterad originalfaktura och inte redan ångrad, gå till originalfakturan och välj "Ångra kreditering" där. Annars går krediteringen inte att ångra här.',
     message_en:
-      'This id is a credit note; a credit is undone on its original invoice. Send the original\'s id from details.credited_invoice_id. When that is null, the credit note is linked to no original and its credit cannot be undone here.',
+      'This id is a credit note; a credit is undone on its original invoice. Send the original\'s id from details.credited_invoice_id while this credit note is not reversed (details.credit_note_status). Otherwise its credit cannot be undone here: a null credited_invoice_id links no original, and a reversed credit note is already undone.',
     remediation: {
       description:
-        'Call uncredit again with the original invoice id in details.credited_invoice_id. When it is null, ask the person what to do instead: uncredit finds a credit note only through that link, so calling it on an original picked by hand would restore that invoice and leave this credit note in place.',
+        'Call uncredit again with the original invoice id in details.credited_invoice_id. Not when details.credit_note_status is reversed: that credit is already undone, and uncredit on the original would undo a newer credit instead. When credited_invoice_id is null, ask the person what to do: uncredit finds a credit note only through that link, so calling it on an original picked by hand would restore that invoice and leave this credit note in place. An original that is not credited answers changed=false: nothing is left to undo.',
       tool: 'gnubok_uncredit_supplier_invoice',
     },
   },

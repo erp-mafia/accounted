@@ -74,14 +74,18 @@ describe("uncreditSupplierInvoice: a credit note's own id", () => {
     expect(entry?.retryable).toBeFalsy()
   })
 
-  it('never sends anyone to an original that the credit note is not linked to', () => {
+  it('sends no one to an original that is not the way: none linked, or the credit already undone', () => {
     // Uncredit finds a credit note only through credited_invoice_id, and
     // most imported credit notes have none: undoing the credit on an
-    // original picked by hand would restore it and leave the credit note.
+    // original picked by hand would restore it and leave the credit note. A
+    // reversed credit note's original may carry a newer credit since.
     const entry = getErrorEntry('SI_UNCREDIT_CREDIT_NOTE')
+    expect(entry?.message_sv).toContain('krediterad originalfaktura och inte redan ångrad')
     expect(entry?.message_sv).toContain('Annars går krediteringen inte att ångra här')
-    expect(entry?.message_en).toContain('When that is null')
+    expect(entry?.message_en).toContain('a null credited_invoice_id links no original')
+    expect(entry?.message_en).toContain('a reversed credit note is already undone')
     expect(entry?.remediation?.description).toContain('ask the person')
+    expect(entry?.remediation?.description).toContain('details.credit_note_status is reversed')
   })
 
   it('a dry run refuses it, so neither a preview nor a staged proposal promises a restore', async () => {
@@ -89,7 +93,7 @@ describe("uncreditSupplierInvoice: a credit note's own id", () => {
     expect(await outcome).toEqual({
       ok: false,
       code: 'SI_UNCREDIT_CREDIT_NOTE',
-      details: { credit_note_id: 'credit-1', credited_invoice_id: 'inv-1' },
+      details: { credit_note_id: 'credit-1', credit_note_status: 'credited', credited_invoice_id: 'inv-1' },
     })
     // Refused on the row the id names: no credit note lookup, no verifikat read.
     expect(mock.tables()).toEqual(['supplier_invoices'])
@@ -116,7 +120,13 @@ describe("uncreditSupplierInvoice: a credit note's own id", () => {
 
   it('a credit note already undone (reversed) is refused too, never answered as a no-op on the credit note', async () => {
     const { mock, outcome } = run(creditNote({ status: 'reversed' }), false)
-    expect(await outcome).toMatchObject({ ok: false, code: 'SI_UNCREDIT_CREDIT_NOTE' })
+    // The status says the credit is already undone: its original may carry a
+    // newer credit since, which an uncredit there would undo instead.
+    expect(await outcome).toMatchObject({
+      ok: false,
+      code: 'SI_UNCREDIT_CREDIT_NOTE',
+      details: { credit_note_status: 'reversed', credited_invoice_id: 'inv-1' },
+    })
     expect(mock.payloads('supplier_invoices', 'update')).toEqual([])
   })
 })

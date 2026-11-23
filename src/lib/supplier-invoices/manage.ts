@@ -289,12 +289,18 @@ export async function uncreditSupplierInvoice(
   // the dry run (and with it the MCP staging) promised to restore the credit
   // note as an invoice to pay, and the commit tried a write that
   // supplier_invoices_credit_note_not_payable refuses. Refused before any
-  // other read, so the dry run and every door answer the same.
+  // other read, so the dry run and every door answer the same. The details
+  // say where to go instead: the original, unless there is none or this
+  // credit is already undone (reversed).
   if (original.is_credit_note) {
     return {
       ok: false,
       code: 'SI_UNCREDIT_CREDIT_NOTE',
-      details: { credit_note_id: original.id, credited_invoice_id: original.credited_invoice_id ?? null },
+      details: {
+        credit_note_id: original.id,
+        credit_note_status: original.status,
+        credited_invoice_id: original.credited_invoice_id ?? null,
+      },
     }
   }
 
