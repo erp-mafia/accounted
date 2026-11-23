@@ -39,6 +39,16 @@ vi.mock('@/lib/skatteverket/skattekonto-ocr', () => ({
   readReportedSkattekontoSaldo: (...args: unknown[]) => readReportedSkattekontoSaldoMock(...args),
 }))
 
+const countOpenQuestionsMock = vi.fn()
+vi.mock('@/lib/questions/app-answer', () => ({
+  countOpenQuestions: (...args: unknown[]) => countOpenQuestionsMock(...args),
+}))
+
+const countPendingOperationsMock = vi.fn()
+vi.mock('@/lib/worklist/categories', () => ({
+  countPendingOperations: (...args: unknown[]) => countPendingOperationsMock(...args),
+}))
+
 import { GET } from '../route'
 
 const COMPANY = 'company-1'
@@ -60,6 +70,7 @@ const call = () => GET(createMockRequest('/api/wiki/picture'), { params: Promise
 interface Ports {
   ledgerRead: <T>(read: () => Promise<T>) => Promise<T>
   skatteverket: () => Promise<{ state: string; last_sync_at: string | null }>
+  waiting: () => Promise<{ questions: number; proposals: number }>
 }
 const portsOfLastCall = () => loadAgentPictureMock.mock.calls.at(-1)![3] as Ports
 
@@ -73,6 +84,8 @@ describe('GET /api/wiki/picture', () => {
     withSIEExternalReportMock.mockImplementation((_supabase, _company, _operation, read: () => Promise<unknown>) => read())
     readSkatteverketConnectionMock.mockResolvedValue('connected')
     readReportedSkattekontoSaldoMock.mockResolvedValue({ saldo: 100, fetched_at: '2026-03-01T21:14:00.000Z' })
+    countOpenQuestionsMock.mockResolvedValue(2)
+    countPendingOperationsMock.mockResolvedValue(3)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -135,6 +148,24 @@ describe('GET /api/wiki/picture', () => {
     readSkatteverketConnectionMock.mockResolvedValue('connected')
     readReportedSkattekontoSaldoMock.mockResolvedValue(null)
     await expect(portsOfLastCall().skatteverket()).resolves.toEqual({ state: 'connected', last_sync_at: null })
+  })
+
+  it('counts what waits on the company\'s people with the counters Hem and the menu read, for the company', async () => {
+    await call()
+    // Nothing is counted until the loader asks.
+    expect(countOpenQuestionsMock).not.toHaveBeenCalled()
+    expect(countPendingOperationsMock).not.toHaveBeenCalled()
+    await expect(portsOfLastCall().waiting()).resolves.toEqual({ questions: 2, proposals: 3 })
+    expect(countOpenQuestionsMock).toHaveBeenCalledTimes(1)
+    expect(countOpenQuestionsMock).toHaveBeenCalledWith(supabase, COMPANY)
+    expect(countPendingOperationsMock).toHaveBeenCalledTimes(1)
+    expect(countPendingOperationsMock).toHaveBeenCalledWith(supabase, COMPANY)
+  })
+
+  it('says no question waits where the question counter answers none, as it does for a company without the question list', async () => {
+    countOpenQuestionsMock.mockResolvedValue(0)
+    await call()
+    await expect(portsOfLastCall().waiting()).resolves.toEqual({ questions: 0, proposals: 3 })
   })
 
   it('answers a loader that throws with the canonical 500 envelope', async () => {

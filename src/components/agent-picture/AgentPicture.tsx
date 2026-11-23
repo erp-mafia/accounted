@@ -36,6 +36,7 @@ import type {
 import type { ConnectionKind } from '@/lib/settings/mcp-connections'
 import { withoutPictureRow } from '@/lib/agent-context/wiki-views'
 import { PictureViews, isPictureView, type PictureAgentView, type PictureContext, type PictureView } from './PictureViews'
+import { WaitingLine } from './WaitingLine'
 import { agentCardDetail, type PictureWords } from './agent-card-text'
 import { AgentMark, LogoTile, SourceMark } from './picture-marks'
 
@@ -746,8 +747,9 @@ function initialsOf(name: string): string {
 
 /**
  * The company's card in its shell. The shell's label row carries the host's
- * brand; the card inside has the company's initials and name, when it was
- * last updated, and four rows that are buttons, each opening its own view.
+ * brand; the card inside has the company's initials and name, what waits on
+ * the company's people (WaitingLine), when it was last updated, and four
+ * rows that are buttons, each opening its own view.
  * The sentences are built from the numbers and the check results as they
  * were read; a part that could not be read says so.
  */
@@ -842,6 +844,7 @@ function CompanyCard({
             <span className="truncate text-[13px] font-medium leading-4 text-strong" data-ph-mask="">
               {name}
             </span>
+            <WaitingLine waiting={company.waiting} />
             {updated && <span className="text-xs tabular-nums text-muted-foreground">{t('picture.updated', { when: updated })}</span>}
           </span>
         </div>

@@ -420,6 +420,25 @@ describe('loadAgentPicture: the company', () => {
     expect(filtered(calls.find((c) => c.table === 'document_attachments')!, 'eq', 'admission_state', 'admitted')).toBe(true)
   })
 
+  it('says what waits on the company\'s people from the door\'s counters, and nothing when they are not wired or fail', async () => {
+    const waiting = vi.fn().mockResolvedValue({ questions: 2, proposals: 3 })
+    const { client, calls } = fakeSupabase(tables())
+    const picture = await loadAgentPicture(client, COMPANY, USER, { ...ports(), waiting }, NOW)
+    expect(picture.company.waiting).toEqual({ questions: 2, proposals: 3 })
+    expect(waiting).toHaveBeenCalledTimes(1)
+    // The loader counts nothing itself: no count of open questions or waiting proposals is read here.
+    expect(calls.filter((c) => c.table === 'company_questions' || c.table === 'pending_operations').every((c) => c.ops.some((op) => op.method === 'gte' && op.args[0] === 'created_at'))).toBe(true)
+
+    const unwired = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(unwired.company.waiting).toBeNull()
+
+    const failing = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, { ...ports(), waiting: vi.fn().mockRejectedValue(new Error('boom')) }, NOW)
+    expect(failing.company.waiting).toBeNull()
+    // The rest still answers.
+    expect(failing.company.name).toBe('Exempelbolaget AB')
+    expect(failing.company.counts.vouchers).toBe(4912)
+  })
+
   it('answers a failed count as unknown and keeps the others', async () => {
     const picture = await loadAgentPicture(fakeSupabase(tables({ transactions: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
     expect(picture.company.counts).toEqual({ vouchers: 4912, bank_rows: null, documents: 86, customers: 38, suppliers: 64 })

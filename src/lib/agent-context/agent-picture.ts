@@ -145,8 +145,18 @@ export interface PictureKnowledge {
   active: string[] | null
 }
 
+/** What waits on the company's people: questions to answer and proposals to approve, across every agent. */
+export interface PictureWaiting {
+  /** Open questions; 0 for a company without the question list. */
+  questions: number
+  /** Proposals that wait for approval. */
+  proposals: number
+}
+
 export interface PictureCompany {
   name: string | null
+  /** What waits on the company's people, as Hem and the menu count it; null when it was not counted. */
+  waiting: PictureWaiting | null
   counts: PictureCounts
   /** Active remembered facts; null when the count could not be read. */
   memory_facts: number | null
@@ -252,7 +262,7 @@ export interface AgentPicture {
 
 /**
  * What the door wires in. The loader lives in the agent module and reads
- * the ledger and the registers only through their own readers; the two
+ * the ledger and the registers only through their own readers; the ones
  * below belong to other modules, so the route hands them over.
  */
 export interface AgentPicturePorts {
@@ -260,6 +270,8 @@ export interface AgentPicturePorts {
   ledgerRead?: <T>(read: () => Promise<T>) => Promise<T>
   /** The company's Skatteverket connection and when the skattekonto saldo was last fetched. */
   skatteverket?: () => Promise<{ state: 'connected' | 'not_connected' | 'unknown'; last_sync_at: string | null }>
+  /** What waits on the company's people, from the counters Hem and the menu read. */
+  waiting?: () => Promise<PictureWaiting>
 }
 
 /** A part's deadline. The reads behind it keep running; their answer is just no longer waited for. */
@@ -1087,9 +1099,11 @@ export async function loadAgentPicture(
 ): Promise<AgentPicture> {
   const part = <T>(name: string, read: () => Promise<T>, ms = PART_DEADLINE_MS) => within(name, companyId, ms, read)
 
-  const [sources, name, counts, memoryFacts, knowledge, checks, agents] = await Promise.all([
+  const [sources, name, waiting, counts, memoryFacts, knowledge, checks, agents] = await Promise.all([
     loadSources(supabase, companyId, userId, ports, now),
     part('company', async () => ({ name: await loadCompanyName(supabase, companyId) })),
+    // Not counted without the door's counters: nothing is said about what waits.
+    part('waiting', async () => (ports.waiting ? await ports.waiting() : null)),
     part('counts', () => loadCounts(supabase, companyId)),
     part('memory', async () => ({ facts: await loadMemoryFacts(supabase, companyId) })),
     part('knowledge', () => loadKnowledge(supabase, companyId)),
@@ -1102,6 +1116,7 @@ export async function loadAgentPicture(
     sources,
     company: {
       name: name?.name ?? null,
+      waiting: waiting ?? null,
       counts: counts ?? NO_COUNTS,
       memory_facts: memoryFacts?.facts ?? null,
       knowledge: { items: knowledge?.items ?? null, active: knowledge?.active ?? null },
