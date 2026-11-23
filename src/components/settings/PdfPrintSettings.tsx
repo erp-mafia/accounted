@@ -29,6 +29,7 @@ interface PdfPrintSettingsProps {
 type PdfToggleField =
   | 'ore_rounding'
   | 'invoice_show_ocr'
+  | 'invoice_ocr_length_digit'
   | 'invoice_show_bankgiro'
   | 'invoice_show_plusgiro'
   | 'invoice_show_swish'
@@ -225,6 +226,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
   const toggleRows: Array<{ field: PdfToggleField; label: string; help: string; defaultOn: boolean }> = [
     { field: 'ore_rounding', label: t('ore_rounding_label'), help: t('ore_rounding_help'), defaultOn: true },
     { field: 'invoice_show_ocr', label: t('show_ocr_label'), help: t('show_ocr_help'), defaultOn: true },
+    { field: 'invoice_ocr_length_digit', label: t('ocr_length_digit_label'), help: t('ocr_length_digit_help'), defaultOn: false },
     { field: 'invoice_show_bankgiro', label: t('show_bankgiro_label'), help: t('show_bankgiro_help'), defaultOn: true },
     { field: 'invoice_show_plusgiro', label: t('show_plusgiro_label'), help: t('show_plusgiro_help'), defaultOn: true },
     { field: 'invoice_show_swish', label: t('show_swish_label'), help: t('show_swish_help'), defaultOn: false },

@@ -44,6 +44,18 @@ describe('invoicePaymentReferenceFields', () => {
     })
   })
 
+  it("carries the length digit when the company's OCR prints one, as the PDF does", () => {
+    const company = withGiro({ invoice_ocr_length_digit: true })
+    const fields = invoicePaymentReferenceFields(invoice({ invoice_number: '1042' }), {}, company)
+    expect(fields).toEqual({ payment_reference: '104265', payment_reference_type: 'ocr' })
+    const printed = buildInvoicePaymentRows({
+      company: companyWithInvoicePaymentAccount(company, 'SEK', null),
+      invoice: { invoice_number: '1042', currency: 'SEK', payment_link_url: null },
+      lang: 'sv',
+    }).at(-1)
+    expect(printed).toMatchObject({ key: 'ocr', value: fields.payment_reference })
+  })
+
   it('is the invoice number when the PDF prints no OCR', () => {
     const asNumber = { payment_reference: '0073', payment_reference_type: 'invoice_number' }
     // No giro to pay an OCR to.

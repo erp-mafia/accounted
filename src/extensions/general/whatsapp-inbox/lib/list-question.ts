@@ -1294,8 +1294,10 @@ async function preparedAlreadyTold(supabase: SupabaseClient, questionId: string)
  *   - the question list is switched on for the question's company;
  *   - the question is answered, and the answer came through the chat (a
  *     question closed as settled is never told here);
- *   - the operation is the first one linked to the question, and no such
- *     message went out for the question before;
+ *   - the operation is the first one linked to the question, it still waits
+ *     for approval (one that is already committed or rejected has nothing
+ *     left to approve), and no such message went out for the question
+ *     before;
  *   - the person's phone link is active and not paused, the service window
  *     of their conversation is open, and they still keep the books of the
  *     company.
@@ -1334,6 +1336,16 @@ export async function tellListPrepared(
     if (linkedError) throw new Error(`the linked operations could not be read: ${linkedError.message}`)
     const first = ((firstLinked ?? []) as Array<{ operation_id: string }>)[0]
     if (!first || first.operation_id !== operationId) return
+
+    const { data: stagedRow, error: stagedError } = await supabase
+      .from('pending_operations')
+      .select('status')
+      .eq('id', operationId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (stagedError) throw new Error(`the operation could not be read: ${stagedError.message}`)
+    // The message says the operation waits for approval: one that no longer does is not told.
+    if ((stagedRow as { status: string } | null)?.status !== 'pending') return
 
     const { data: linkRow, error: linkError } = await supabase
       .from('whatsapp_phone_links')

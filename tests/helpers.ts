@@ -539,6 +539,7 @@ export function makeCompanySettings(
     last_supplier_payment_account: null,
     ore_rounding: true,
     invoice_show_ocr: true,
+    invoice_ocr_length_digit: false,
     invoice_show_bankgiro: true,
     invoice_show_plusgiro: true,
     invoice_show_swish: true,

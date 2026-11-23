@@ -138,6 +138,8 @@ export interface InvoicePaymentRowsCompany {
   invoice_show_plusgiro?: boolean | null
   invoice_show_swish?: boolean | null
   invoice_show_ocr?: boolean | null
+  /** The OCR carries Bankgirot's length digit (invoiceOcrReference). */
+  invoice_ocr_length_digit?: boolean | null
 }
 
 export interface InvoicePaymentRowsInvoice {

@@ -376,12 +376,12 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
     item.betaBadge ? tNav('badge_beta') : item.newBadge ? tNav('badge_new') : undefined
 
   // Design convention 18: counts sit only where waiting work is the page's
-  // point: Behöver dig (the things Hem counts), Rutin (the agent's
-  // proposals) and Inkommande (the inbox). Every other page shows its own.
+  // point: Hem (the things it lists), Rutin (the agent's proposals) and
+  // Inkommande (the inbox). Every other page shows its own.
   const badgeFor = (href: string): number | null =>
     cockpitMode
       ? null
-      : href === '/?vy=behover' && needCount !== null && needCount > 0
+      : href === '/' && needCount !== null && needCount > 0
         ? needCount
         : href === '/pending' && pendingOpsCount > 0
           ? pendingOpsCount

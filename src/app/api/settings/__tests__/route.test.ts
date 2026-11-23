@@ -1411,6 +1411,34 @@ describe('PUT /api/settings', () => {
     expect(body.data.invoice_qr_mode).toBe('swish')
   })
 
+  it('accepts the OCR length digit switch', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+      { data: { company_id: 'company-1', invoice_ocr_length_digit: true } }, // update result
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_ocr_length_digit: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { invoice_ocr_length_digit: boolean } }>(response)
+
+    expect(status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ invoice_ocr_length_digit: true })
+    expect(body.data.invoice_ocr_length_digit).toBe(true)
+  })
+
+  it('rejects an OCR length digit switch that is not a boolean', async () => {
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_ocr_length_digit: 'yes' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+  })
+
   it('rejects an invoice QR mode that is not one of the modes', async () => {
     for (const value of ['all', null, true]) {
       enqueueMany([

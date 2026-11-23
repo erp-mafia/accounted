@@ -737,6 +737,19 @@ describe('generatePeppolBisBillingInvoice', () => {
       expect(result.xml).not.toContain('ESSESESS')
     })
 
+    it("writes the PaymentID with Bankgirot's length digit when the company's OCR carries one", () => {
+      const input = makeValidInput()
+      input.company = makeCompanySettings({ ...input.company, invoice_ocr_length_digit: true })
+
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      // F-2026-42: eight digits in all, so length digit 8, then the check digit.
+      expect(paymentMeans(result.xml)).toContain('<cbc:PaymentID>20264289</cbc:PaymentID>')
+      expect(paymentMeans(result.xml)).toContain('<cbc:ID>SE:BANKGIRO</cbc:ID>')
+    })
+
     it('prefers the plusgiro over an IBAN', () => {
       const input = makeValidInput()
       input.company = makeCompanySettings({

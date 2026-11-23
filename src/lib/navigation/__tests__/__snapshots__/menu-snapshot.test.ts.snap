@@ -3,7 +3,7 @@
 exports[`the menu of each representative company > aktiebolag missing ai and bank_sync, bank_sync also turned off, every opt-in surface on 1`] = `
 {
   "areas": [
-    "todo: / /?vy=behover /pending /?vy=gjort",
+    "todo: / /pending /?vy=gjort",
     "money [+ /transactions?new]: /transactions /accounts",
     "sales [+ /invoices/new]: /invoices /sales-orders /customers /articles /kassa /orders",
     "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers /expenses /mileage",
@@ -34,7 +34,7 @@ exports[`the menu of each representative company > aktiebolag missing ai and ban
 exports[`the menu of each representative company > aktiebolag, every plan capability, a paying subscription 1`] = `
 {
   "areas": [
-    "todo [+ /e/general/invoice-inbox]: / /?vy=behover /pending /?vy=gjort",
+    "todo [+ /e/general/invoice-inbox]: / /pending /?vy=gjort",
     "money [+ /transactions?new]: /transactions /accounts",
     "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
     "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers",
@@ -68,7 +68,7 @@ exports[`the menu of each representative company > aktiebolag, every plan capabi
 exports[`the menu of each representative company > archived ekonomisk förening, every plan capability 1`] = `
 {
   "areas": [
-    "todo [+ /e/general/invoice-inbox]: / /?vy=behover /pending /?vy=gjort",
+    "todo [+ /e/general/invoice-inbox]: / /pending /?vy=gjort",
     "money [+ /transactions?new]: /transactions /accounts",
     "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
     "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers",
@@ -100,7 +100,7 @@ exports[`the menu of each representative company > archived ekonomisk förening,
 exports[`the menu of each representative company > enskild firma that pays salaries, every plan capability, ai turned off 1`] = `
 {
   "areas": [
-    "todo: / /?vy=behover /pending /?vy=gjort",
+    "todo: / /pending /?vy=gjort",
     "money [+ /transactions?new]: /transactions /accounts",
     "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
     "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers",
@@ -131,7 +131,7 @@ exports[`the menu of each representative company > enskild firma that pays salar
 exports[`the menu of each representative company > enskild firma without salaries, trial expired (no plan capability) 1`] = `
 {
   "areas": [
-    "todo: / /?vy=behover /pending /?vy=gjort",
+    "todo: / /pending /?vy=gjort",
     "money [+ /transactions?new]: /transactions /accounts",
     "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
     "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers /expenses /mileage",
@@ -160,7 +160,7 @@ exports[`the menu of each representative company > enskild firma without salarie
 exports[`the menu of each representative company > ideell förening on an active trial 1`] = `
 {
   "areas": [
-    "todo [+ /e/general/invoice-inbox]: / /?vy=behover /pending /?vy=gjort",
+    "todo [+ /e/general/invoice-inbox]: / /pending /?vy=gjort",
     "money [+ /transactions?new]: /transactions /accounts",
     "sales [+ /invoices/new]: /invoices /quotes /customers /articles",
     "purchases [+ /supplier-invoices/new]: /supplier-invoices /payments /suppliers",

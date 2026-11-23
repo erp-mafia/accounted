@@ -31,11 +31,15 @@ export interface NeedRowFacts {
   urgentThings?: number
 }
 
-/** The views of Att göra on "/": Hem, and by ?vy= the full list, the walk-through and what was done. */
-export const HEM_VIEWS = ['hem', 'behover', 'borja', 'gjort'] as const
+/**
+ * The views of Att göra on "/": Hem, which lists what needs the person, and
+ * by ?vy= the walk-through and what was done. The list that once had a view
+ * of its own (?vy=behover) is Hem: an old link to it opens Hem.
+ */
+export const HEM_VIEWS = ['hem', 'borja', 'gjort'] as const
 export type HemViewName = (typeof HEM_VIEWS)[number]
 
-/** The view a ?vy= value asks for; anything else (absent, repeated, unknown) is Hem. */
+/** The view a ?vy= value asks for; anything else (absent, repeated, unknown, the old list) is Hem. */
 export function parseHemView(vy: string | string[] | undefined): HemViewName {
   const value = Array.isArray(vy) ? vy[0] : vy
   return HEM_VIEWS.find((view) => view === value) ?? 'hem'

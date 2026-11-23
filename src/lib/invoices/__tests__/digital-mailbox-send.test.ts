@@ -87,6 +87,12 @@ describe('invoiceMailboxPayment', () => {
     })
   })
 
+  it("pays under the OCR with the length digit when the company's invoices print it", () => {
+    const invoice = makeInvoice({ status: 'sent', invoice_number: '1042', total: 100, remaining_amount: 100 })
+    const withLength = makeCompanySettings({ bankgiro: '991-2346', plusgiro: null, invoice_ocr_length_digit: true })
+    expect(invoiceMailboxPayment(invoice, withLength, 'sv')).toMatchObject({ reference: '104265', referenceType: 'ocr' })
+  })
+
   it('uses the invoice number when the PDF prints no OCR, and nothing without a giro', () => {
     const invoice = makeInvoice({ status: 'sent', invoice_number: '1042', total: 100, remaining_amount: 100 })
     expect(invoiceMailboxPayment(invoice, settings, 'en')).toMatchObject({ reference: '1042', referenceType: 'invoice_number' })

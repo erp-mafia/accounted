@@ -4142,6 +4142,10 @@ export const UpdateSettingsSchema = z.object({
   // Invoice PDF settings
   ore_rounding: z.boolean().optional(),
   invoice_show_ocr: z.boolean().optional(),
+  invoice_ocr_length_digit: z
+    .boolean()
+    .optional()
+    .describe("true: the OCR reference on invoices carries Bankgirot's length digit before the check digit (invoice 1042 is paid as 104265, not 10421). For a bankgiro whose OCR control at the bank checks the reference's length; such a bankgiro refuses a reference without it. Default false."),
   invoice_show_bankgiro: z.boolean().optional(),
   invoice_show_plusgiro: z.boolean().optional(),
   invoice_show_swish: z.boolean().optional(),
