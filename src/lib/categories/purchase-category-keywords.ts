@@ -62,7 +62,12 @@ export const PURCHASE_CATEGORY_KEYWORDS: Partial<Record<PurchaseCategoryCode, Ca
     weak: ['cloud', 'moln'],
   },
   'expense.software.domains': {
-    strong: ['domän', 'domännamn', 'domänregistrering', 'domain', 'domain name', 'domain registration', 'dns'],
+    strong: [
+      'domän', 'domännamn', 'domänregistrering', 'domain', 'domain name', 'domain registration', 'dns',
+      // A domain registrar's own line names its action; "registrar" alone also names
+      // company, share and land registries.
+      'registrar registration', 'registrar renewal', 'registrar transfer',
+    ],
   },
   'expense.software.services': {
     strong: [
@@ -463,8 +468,12 @@ export const PURCHASE_CATEGORY_KEYWORDS: Partial<Record<PurchaseCategoryCode, Ca
   'expense.fees.authorities': {
     strong: [
       'registreringsavgift', 'ansökningsavgift', 'tillsynsavgift', 'myndighetsavgift', 'expeditionsavgift',
-      'tillståndsavgift', 'government fee', 'registration fee', 'filing fee',
+      'tillståndsavgift', 'government fee', 'filing fee', 'registrar of companies',
+      // Longer than the domain registrar's "registrar registration".
+      'company registrar registration', 'companies registrar registration',
     ],
+    // Generic: a domain registrar, a conference and an authority all charge one.
+    weak: ['registration fee'],
   },
   'expense.fees.royalties': {
     strong: ['royalty', 'royalties', 'licensavgift', 'licensavgifter', 'upphovsrätt'],
