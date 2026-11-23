@@ -37,8 +37,9 @@ import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
  *   inbox               GET /api/extensions/ext/invoice-inbox/items?limit=200, the
  *                       read Inkommande makes, in its Behöver dig queue order
  *   bank_rows, matches  transactions not yet booked (and with a proposed match)
- *   to_book             the same bank rows, each opening the booking screen
- *                       (Att bokföra's row, with the booking screen switched on)
+ *   to_book             the open bank rows Att bokföra lists (open_bank_rows),
+ *                       each opening the booking screen (Att bokföra's row,
+ *                       with the booking screen switched on)
  *   skattekonto         skattekonto_transactions booked at Skatteverket, no verifikat
  *   settlements, collected_payments, collection_decision, collection_attention
  *                       the collection tables, by the statuses the counts use
@@ -256,8 +257,29 @@ async function loadFromTables(kind: StepItemsKind, companyId: string, href: stri
     return (data ?? []) as Row[]
   }
   switch (kind) {
+    case 'to_book': {
+      // Att bokföra's bank rows: the open_bank_rows view the list reads.
+      const back = stepBack()
+      return (
+        await rows(
+          supabase
+            .from('open_bank_rows')
+            .select('id, date, description, amount, currency')
+            .eq('company_id', companyId)
+            .order('date', { ascending: true })
+            .order('id', { ascending: true })
+            .limit(STEP_ITEMS_CAP),
+        )
+      ).map((r) => ({
+        id: String(r.id),
+        name: text(r.description),
+        date: text(r.date) || null,
+        amount: num(r.amount),
+        currency: text(r.currency) || null,
+        href: bookingScreenHref({ kind: 'transaction', transactionId: String(r.id), account: null }, back),
+      }))
+    }
     case 'bank_rows':
-    case 'to_book':
     case 'matches': {
       let query = supabase
         .from('transactions')
@@ -274,10 +296,7 @@ async function loadFromTables(kind: StepItemsKind, companyId: string, href: stri
         date: text(r.date) || null,
         amount: num(r.amount),
         currency: text(r.currency) || null,
-        href:
-          kind === 'to_book'
-            ? bookingScreenHref({ kind: 'transaction', transactionId: String(r.id), account: null }, stepBack())
-            : `/transactions?highlight=${r.id}`,
+        href: `/transactions?highlight=${r.id}`,
       }))
     }
     case 'skattekonto': {

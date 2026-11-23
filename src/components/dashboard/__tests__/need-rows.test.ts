@@ -28,6 +28,12 @@ describe('countRowSpecs: with the booking screen switched on', () => {
     expect(spec(on({ book_transaction: 5, inbox_document: 9 }, { hasAi: false }), 'to-book')).toMatchObject({ count: 5 })
   })
 
+  it('counts with the list\'s own figures when it has them: every open bank row, a found receipt once', () => {
+    const spec = countRowSpecs(on({ book_transaction: 498, book_skattekonto: 4, inbox_document: 43 }, { toBook: { bankRows: 510, foundPairs: 1 } }))
+    expect(spec[0]).toMatchObject({ key: 'to-book', count: 510 + 4 + 42 })
+    expect(countRowSpecs(on({ inbox_document: 9 }, { hasAi: false, toBook: { bankRows: 3, foundPairs: 2 } }))[0]).toMatchObject({ count: 3 })
+  })
+
   it('counts the skattekonto events in the same row', () => {
     const specs = countRowSpecs(on({ book_transaction: 498, book_skattekonto: 4, inbox_document: 43 }))
     expect(specs.map((s) => s.key)).toEqual(['to-book'])

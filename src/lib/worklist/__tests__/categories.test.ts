@@ -27,6 +27,8 @@ import {
   countSupplierInvoicesAwaitingApproval,
   countUnbookedSkattekontoRows,
   countUnbookedTransactions,
+  countOpenBankRows,
+  countFoundPairs,
   countVerifikatMissingDocument,
   listExpensePayoutsDue,
   listExpensePayoutSuggestions,
@@ -115,6 +117,37 @@ describe('countUnbookedTransactions', () => {
   it('soft-fails to 0 on query error', async () => {
     enqueue({ error: { message: 'boom' } })
     await expect(countUnbookedTransactions(supabase, COMPANY)).resolves.toBe(0)
+  })
+})
+
+describe('countOpenBankRows', () => {
+  it('counts every open bank row of the company, from the view Att bokföra lists', async () => {
+    enqueue({ count: 510 })
+    await expect(countOpenBankRows(supabase, COMPANY)).resolves.toBe(510)
+    expect(mockSupabase.from).toHaveBeenCalledWith('open_bank_rows')
+    expect(findCalls('open_bank_rows', 'eq')).toContainEqual(['company_id', COMPANY])
+  })
+
+  it('soft-fails to 0 on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(countOpenBankRows(supabase, COMPANY)).resolves.toBe(0)
+  })
+})
+
+describe('countFoundPairs', () => {
+  it('counts the open bank rows without underlag that an open inbox item looks paid by, each once', async () => {
+    enqueue({ data: [{ bank_match_transaction_id: 'tx-1' }, { bank_match_transaction_id: 'tx-1' }, { bank_match_transaction_id: 'tx-2' }] })
+    enqueue({ count: 1 })
+    await expect(countFoundPairs(supabase, COMPANY)).resolves.toBe(1)
+    expect(findCalls('open_bank_rows', 'in')).toEqual([['id', ['tx-1', 'tx-2']]])
+    expect(findCalls('open_bank_rows', 'is')).toContainEqual(['document_id', null])
+    expect(findCalls('invoice_inbox_items', 'is')).toContainEqual(['matched_transaction_id', null])
+  })
+
+  it('reads no bank rows when nothing was matched', async () => {
+    enqueue({ data: [] })
+    await expect(countFoundPairs(supabase, COMPANY)).resolves.toBe(0)
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('open_bank_rows')
   })
 })
 

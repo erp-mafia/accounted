@@ -627,6 +627,14 @@ export interface WorklistCounts {
    */
   inboxHref?: string
   /**
+   * Att bokföra's own figures, where the booking screen is switched on:
+   * every open bank row (open_bank_rows, rows triaged as business but never
+   * booked included) and the receipts the list shows on their bank row.
+   * Hem's Att bokföra row counts with them as the list does. Absent elsewhere
+   * and from older payloads.
+   */
+  toBook?: { bankRows: number; foundPairs: number }
+  /**
    * True when at least one count could not be read and answered zero
    * (lib/worklist/categories.ts watchCountFailures): a zero total then does
    * not mean nothing waits. Absent from older payloads.

@@ -186,6 +186,53 @@ export async function countUnbookedTransactions(
 }
 
 /**
+ * Att bokföra's bank rows: every open bank row (the open_bank_rows view the
+ * list reads), the rows triaged as business that never got a verifikat
+ * included, where countUnbookedTransactions counts only the rows still
+ * waiting for a triage decision.
+ */
+export async function countOpenBankRows(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('open_bank_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+  if (error) return logAndZero('book_transaction', companyId, error)
+  return count ?? 0
+}
+
+/**
+ * The inbox documents Att bokföra shows on their bank row (Kvitto hittat)
+ * instead of as rows of their own: one per open bank row without underlag
+ * that an open inbox item looks paid by (bank_match_transaction_id), as
+ * lib/bookkeeping/to-book.ts buildToBookRows pairs them. Subtracted from
+ * the documents so a receipt and its bank row count once.
+ */
+export async function countFoundPairs(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { data, error } = await whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select('bank_match_transaction_id')
+      .eq('company_id', companyId)
+      .not('document_id', 'is', null)
+      .not('bank_match_transaction_id', 'is', null),
+  ).limit(INBOX_SCAN_CAP)
+  if (error) return logAndZero('inbox_document', companyId, error)
+  const ids = [...new Set(((data ?? []) as { bank_match_transaction_id: string | null }[]).map((r) => r.bank_match_transaction_id).filter((id): id is string => !!id))]
+  let pairs = 0
+  for (let i = 0; i < ids.length; i += IN_CLAUSE_CHUNK) {
+    const { count, error: rowError } = await supabase
+      .from('open_bank_rows')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('id', ids.slice(i, i + IN_CLAUSE_CHUNK))
+      .is('document_id', null)
+    if (rowError) return logAndZero('inbox_document', companyId, rowError)
+    pairs += count ?? 0
+  }
+  return pairs
+}
+
+/**
  * Unbooked skattekonto rows: the open rows of lib/skatteverket/skattekonto-open-rows.ts,
  * the same reading the Transaktioner inbox lists. A row dated before the
  * ingående balans on the skattekonto account is carried by it and never
