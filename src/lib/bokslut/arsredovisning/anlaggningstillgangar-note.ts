@@ -35,7 +35,9 @@
  */
 
 import { roundOre } from '@/lib/money'
+import { ASSET_ACQUISITION_TYPES, assetAcquisitionType } from '@/lib/bokslut/assets/acquisition-type'
 import type { WriteDownMovement } from '@/lib/bokslut/assets/value-adjustments'
+import type { AssetAcquisitionType } from '@/types'
 import type { NoteEntry } from './types'
 import type { AssetDepreciationFigures } from './asset-note-figures'
 import { formatPdfKronor } from './pdf-format'
@@ -47,15 +49,28 @@ export interface AnlaggningAsset {
   salvage_value: number
   useful_life_months: number
   disposed_at: string | null
+  /** How the asset came onto the books (assets.acquisition_type); absent: a purchase. */
+  acquisition_type?: AssetAcquisitionType
+  /** The BAS account the asset is booked on: the K2 note groups by its balance sheet post. */
+  bas_asset_account?: string
   figures: AssetDepreciationFigures
   /** The year's movement in accumulated write-downs (writeDownMovement); absent: none. */
   writeDowns?: WriteDownMovement
 }
 
-interface CategoryRollforward {
+export interface CategoryRollforward {
+  /** The group the row sums: the register category, or the caller's own key. */
   category: string
   ibAnskaffning: number
   tillkommande: number
+  /** The year's new assets by how they came in (assets.acquisition_type); they sum to `tillkommande`. */
+  tillkommandePerSatt: Record<AssetAcquisitionType, number>
+  /**
+   * Accumulated avskrivningar the year's new assets carried when they came
+   * in (an asset's opening amount), by how they came in. Not part of `ibAck`:
+   * the asset was not on the books at the start of the year.
+   */
+  overtagnaAck: Record<AssetAcquisitionType, number>
   avgaende: number
   ubAnskaffning: number
   ibAck: number
@@ -78,7 +93,7 @@ interface CategoryRollforward {
  */
 export const MARK_NOT_DEPRECIATED = 'Mark skrivs inte av.'
 
-const CATEGORY_LABELS: Record<string, string> = {
+export const CATEGORY_LABELS: Record<string, string> = {
   immaterial: 'Immateriella anläggningstillgångar',
   building: 'Byggnader',
   land: 'Mark',
@@ -121,33 +136,52 @@ export function depreciationPrincipleLines(
   return lines
 }
 
-function buildRollforward(
+const zeroPerSatt = (): Record<AssetAcquisitionType, number> => ({
+  purchase: 0,
+  business_acquisition: 0,
+  merger: 0,
+  reclassification: 0,
+})
+
+/** A group nothing has moved in. */
+export function emptyRollforward(category: string): CategoryRollforward {
+  return {
+    category,
+    ibAnskaffning: 0,
+    tillkommande: 0,
+    tillkommandePerSatt: zeroPerSatt(),
+    overtagnaAck: zeroPerSatt(),
+    avgaende: 0,
+    ubAnskaffning: 0,
+    ibAck: 0,
+    aretsAvskrivning: 0,
+    avgaendeAck: 0,
+    ubAck: 0,
+    ibNed: 0,
+    aretsNed: 0,
+    aterfordaNed: 0,
+    avgaendeNed: 0,
+    ubNed: 0,
+    ubRedovisat: 0,
+  }
+}
+
+/**
+ * The year's roll-forward per group of assets: per register category, or
+ * per `keyOf` (the K2 note groups per balance sheet post).
+ */
+export function buildRollforward(
   assets: AnlaggningAsset[],
   periodStart: string,
   periodEnd: string,
+  keyOf: (asset: AnlaggningAsset) => string = (asset) => asset.category,
 ): CategoryRollforward[] {
   const byCategory = new Map<string, CategoryRollforward>()
 
   const getRow = (category: string): CategoryRollforward => {
     let row = byCategory.get(category)
     if (!row) {
-      row = {
-        category,
-        ibAnskaffning: 0,
-        tillkommande: 0,
-        avgaende: 0,
-        ubAnskaffning: 0,
-        ibAck: 0,
-        aretsAvskrivning: 0,
-        avgaendeAck: 0,
-        ubAck: 0,
-        ibNed: 0,
-        aretsNed: 0,
-        aterfordaNed: 0,
-        avgaendeNed: 0,
-        ubNed: 0,
-        ubRedovisat: 0,
-      }
+      row = emptyRollforward(category)
       byCategory.set(category, row)
     }
     return row
@@ -168,7 +202,7 @@ function buildRollforward(
     if (disposedBeforePeriod) continue
     if (!acquiredBeforePeriod && !acquiredDuringPeriod) continue
 
-    const row = getRow(asset.category)
+    const row = getRow(keyOf(asset))
 
     if (acquiredBeforePeriod) {
       // Was on the books at the start of the period
@@ -176,7 +210,12 @@ function buildRollforward(
       row.ibAck += asset.figures.ibAck
     }
     if (acquiredDuringPeriod) {
+      const satt = assetAcquisitionType(asset)
       row.tillkommande += asset.acquisition_cost
+      row.tillkommandePerSatt[satt] += asset.acquisition_cost
+      // What was depreciated on it before it came onto these books (its
+      // opening amount; nothing is posted here before the year).
+      row.overtagnaAck[satt] += asset.figures.ibAck
     }
     if (disposedDuringPeriod) {
       row.avgaende += asset.acquisition_cost
@@ -204,6 +243,8 @@ function buildRollforward(
       ...r,
       ibAnskaffning: Math.round(r.ibAnskaffning * 100) / 100,
       tillkommande: Math.round(r.tillkommande * 100) / 100,
+      tillkommandePerSatt: roundedPerSatt(r.tillkommandePerSatt),
+      overtagnaAck: roundedPerSatt(r.overtagnaAck),
       avgaende: Math.round(r.avgaende * 100) / 100,
       ubAnskaffning: ub,
       ibAck: Math.round(r.ibAck * 100) / 100,
@@ -219,6 +260,12 @@ function buildRollforward(
   const order = Object.keys(CATEGORY_LABELS)
   rows.sort((a, b) => order.indexOf(a.category) - order.indexOf(b.category))
   return rows
+}
+
+function roundedPerSatt(values: Record<AssetAcquisitionType, number>): Record<AssetAcquisitionType, number> {
+  const rounded = zeroPerSatt()
+  for (const satt of ASSET_ACQUISITION_TYPES) rounded[satt] = roundOre(values[satt])
+  return rounded
 }
 
 /**

@@ -262,6 +262,36 @@ describe('POST /api/v1/companies/{companyId}/assets', () => {
     })
   })
 
+  // How the asset came onto the books decides its row of the årsredovisning
+  // note: the register carries it, a purchase unless stated.
+  describe('acquisition type', () => {
+    it('returns 400 VALIDATION_ERROR on an unknown acquisition type', async () => {
+      const res = await POST(postRequest(LIST_URL, { ...validBody, acquisition_type: 'gift' }), params)
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+      expect(vi.mocked(createAsset)).not.toHaveBeenCalled()
+    })
+
+    it('passes a stated acquisition type to the register and echoes it in the row', async () => {
+      vi.mocked(createAsset).mockResolvedValue({ ...ASSET, acquisition_type: 'merger' } as never)
+      const res = await POST(postRequest(LIST_URL, { ...validBody, acquisition_type: 'merger' }), params)
+      expect(res.status).toBe(201)
+      expect(vi.mocked(createAsset)).toHaveBeenCalledWith(
+        expect.anything(),
+        COMPANY_ID,
+        'user-1',
+        expect.objectContaining({ acquisition_type: 'merger' }),
+      )
+      expect((await res.json()).data.acquisition_type).toBe('merger')
+    })
+
+    it('reads a row without the column as a purchase', async () => {
+      vi.mocked(createAsset).mockResolvedValue(ASSET as never)
+      const res = await POST(postRequest(LIST_URL, validBody), params)
+      expect((await res.json()).data.acquisition_type).toBe('purchase')
+    })
+  })
+
   // Migration from another system (desk crm#104): an asset that arrives
   // partly depreciated. The amount is registered, never posted.
   describe('opening accumulated depreciation', () => {

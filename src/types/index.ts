@@ -4278,6 +4278,13 @@ export type DepreciationMethod =
 
 export type WritableDepreciationMethod = 'linear'
 export type AssetDisposalType = 'sale' | 'scrap' | 'business_transfer'
+/**
+ * How the asset came onto the books: bought, taken over in a rörelseförvärv
+ * (inkråmsförvärv) or a fusion, or moved in from another balance sheet post
+ * (varulager, pågående nyanläggningar). The note on anläggningstillgångar
+ * (ÅRL 5 kap. 8 §) shows each on its own row.
+ */
+export type AssetAcquisitionType = 'purchase' | 'business_acquisition' | 'merger' | 'reclassification'
 export type AssetJamkningDirection = 'increase' | 'decrease' | 'none' | 'transferred'
 
 /**
@@ -4399,6 +4406,9 @@ export interface Asset {
   /** Deprecated legacy field. New tax depreciation is pooled per fiscal
    *  period and ordinary per-asset depreciation is linear. */
   restvarde_target: number | null
+  /** How the asset came onto the books. Absent on rows read before the
+   *  column existed: a purchase. */
+  acquisition_type?: AssetAcquisitionType
   disposed_at: string | null
   disposed_proceeds: number | null
   /** How the asset left the register. Null for legacy disposal records. */

@@ -40,6 +40,7 @@ import { cancelSigningForSupersededVersions, slotCoveredByBankIdSigning } from '
 import { getAnnualReportCapabilities } from './capabilities'
 import { getAnnualReportProfile, upsertAnnualReportProfile } from './profile-service'
 import { getNarrative, upsertNarrative, type NarrativeOverrides, type NarrativeRow } from './narrative-service'
+import { mergeFixedAssetNoteRows, type FixedAssetNoteRowsPatch } from './k2-fixed-asset-note'
 import {
   annualReportContentHash,
   createAnnualReportVersion,
@@ -61,6 +62,7 @@ import type {
 } from './workflow-schemas'
 import { isAuditorRole } from './workflow-schemas'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { getFiscalPeriodFramework } from '@/lib/company/accounting-framework'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -112,8 +114,8 @@ async function withMergedKeyedFields(
   fiscalPeriodId: string,
   input: NarrativeUpdateInput,
 ): Promise<Partial<NarrativeOverrides>> {
-  const { disclosure_answers, equity_movement_overrides, ...rest } = input
-  if (disclosure_answers === undefined && equity_movement_overrides === undefined) {
+  const { disclosure_answers, equity_movement_overrides, fixed_asset_note_rows, ...rest } = input
+  if (disclosure_answers === undefined && equity_movement_overrides === undefined && fixed_asset_note_rows === undefined) {
     return rest as Partial<NarrativeOverrides>
   }
   const stored = await getNarrative(ctx.supabase, ctx.companyId, fiscalPeriodId)
@@ -128,7 +130,21 @@ async function withMergedKeyedFields(
     equity_movement_overrides as Record<string, unknown> | undefined,
   )
   if (overrides !== undefined) out.equity_movement_overrides = overrides as NarrativeOverrides['equity_movement_overrides']
+  // Row by row: a row sent replaces that row; null removes a row, a post or everything.
+  if (fixed_asset_note_rows !== undefined) {
+    out.fixed_asset_note_rows = mergeFixedAssetNoteRows(
+      stored?.fixed_asset_note_rows,
+      fixed_asset_note_rows as FixedAssetNoteRowsPatch,
+    )
+  }
   return out
+}
+
+/** Whether a save states at least one row of the K2 anläggningstillgångar note (clearing states nothing). */
+function statesFixedAssetNoteRows(rows: NarrativeUpdateInput['fixed_asset_note_rows']): boolean {
+  return Object.values(rows ?? {}).some((post) =>
+    Object.values(post ?? {}).some((amount) => typeof amount === 'number' && amount !== 0),
+  )
 }
 
 export async function updateArsredovisningNarrative(
@@ -152,6 +168,24 @@ export async function updateArsredovisningNarrative(
       .maybeSingle()
     if (registeredError) throw new Error(`Failed to check submission status: ${registeredError.message}`)
     if (registered) return { ok: false, code: 'ARSREDOVISNING_REGISTERED' }
+
+    // The stated rows belong to the K2 note. Under K3 the note is the
+    // register's per category and nothing reads them, so stating one is
+    // refused instead of being accepted and ignored.
+    if (statesFixedAssetNoteRows(input.fixed_asset_note_rows)) {
+      const { framework } = await getFiscalPeriodFramework(ctx.supabase, ctx.companyId, fiscalPeriodId)
+      if (framework === 'k3') {
+        return {
+          ok: false,
+          code: 'VALIDATION_ERROR',
+          details: { field: 'fixed_asset_note_rows', reason: 'k2_only' },
+          messageSv:
+            'Raderna i fixed_asset_note_rows hör till K2-noten om anläggningstillgångar. Räkenskapsåret redovisas enligt K3, där noten hämtas ur anläggningsregistret.',
+          messageEn:
+            'The rows in fixed_asset_note_rows belong to the K2 note on fixed assets. This fiscal year is reported under K3, where the note comes from the asset register.',
+        }
+      }
+    }
 
     if (dryRun) {
       return {

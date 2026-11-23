@@ -28,7 +28,7 @@ import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 import { validateOpeningDepreciation } from '@/lib/bokslut/assets/opening-depreciation'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import type { Asset, AssetCategory, AssetComponent } from '@/types'
+import type { Asset, AssetAcquisitionType, AssetCategory, AssetComponent } from '@/types'
 import {
   AssetComponentsEditor,
   componentDraftsTotal,
@@ -49,6 +49,8 @@ import {
   saveAssetIdentification,
   useAssetIdentification,
 } from './AssetIdentificationFields'
+import { AssetAcquisitionTypeField } from './AssetAcquisitionTypeField'
+import { arrivesDepreciated, assetAcquisitionType } from '@/lib/bokslut/assets/acquisition-type'
 
 /** The list route annotates each asset with whether any depreciation has been
  *  posted against it. When true, the acquisition-basis fields are locked. */
@@ -110,9 +112,20 @@ export function EditAssetDialog({
   const [category, setCategory] = useState<AssetCategory>(asset.category)
   const [acquisitionDate, setAcquisitionDate] = useState(asset.acquisition_date)
   const [acquisitionCost, setAcquisitionCost] = useState(String(asset.acquisition_cost))
+  const [acquisitionType, setAcquisitionType] = useState<AssetAcquisitionType>(assetAcquisitionType(asset))
   const [usefulLifeYears, setUsefulLifeYears] = useState(
     String(Math.round(asset.useful_life_months / 12)),
   )
+  // An asset taken over in a fusion or an omklassificering states what
+  // remains of its life from the day it came in, in months (create dialog).
+  // An asset that becomes a taken-over one here must state it: the stored
+  // life was entered as the full one.
+  const storedTakenOver = arrivesDepreciated(assetAcquisitionType(asset))
+  const [remainingLifeMonths, setRemainingLifeMonths] = useState(storedTakenOver ? String(asset.useful_life_months) : '')
+  const takenOver = arrivesDepreciated(acquisitionType)
+  // The life is sent only when its field was changed: a stored life that is
+  // not whole years would otherwise be rounded by a save of anything else.
+  const [lifeTouched, setLifeTouched] = useState(false)
   const storedOpeningAmount = roundOre(Number(asset.opening_accumulated_depreciation ?? 0) || 0)
   const storedOpeningDate = asset.opening_depreciation_date ?? ''
   const [openingAmount, setOpeningAmount] = useState(
@@ -170,6 +183,8 @@ export function EditAssetDialog({
     const patch: Record<string, unknown> = {}
 
     if (trimmedName !== asset.name) patch.name = trimmedName
+    // Not part of the depreciation basis: editable whatever has been posted.
+    if (acquisitionType !== assetAcquisitionType(asset)) patch.acquisition_type = acquisitionType
     if (canMarkOwnDevelopment && ownDevelopment !== (asset.own_development === true)) {
       patch.own_development = ownDevelopment
     }
@@ -236,13 +251,14 @@ export function EditAssetDialog({
       }
 
       // Mark has no useful life: the server keeps it at 0 months.
-      const years = isLand ? 0 : parseInt(usefulLifeYears, 10)
-      if (!isLand && (!Number.isFinite(years) || years <= 0)) {
-        setError('Ange en avskrivningstid (minst 1 år).')
-        return
+      if (!isLand && (lifeTouched || (takenOver && !storedTakenOver))) {
+        const months = takenOver ? Number(remainingLifeMonths) : parseInt(usefulLifeYears, 10) * 12
+        if (!Number.isInteger(months) || months <= 0 || (takenOver && months > 600)) {
+          setError(takenOver ? t('remaining_life.error') : 'Ange en avskrivningstid (minst 1 år).')
+          return
+        }
+        if (months !== asset.useful_life_months) patch.useful_life_months = months
       }
-      const months = years * 12
-      if (!isLand && months !== asset.useful_life_months) patch.useful_life_months = months
     }
 
     const identificationChanges = identification.available
@@ -353,6 +369,13 @@ export function EditAssetDialog({
             </div>
           </div>
 
+          <AssetAcquisitionTypeField
+            id="edit-asset-acquisition-type"
+            value={acquisitionType}
+            onChange={setAcquisitionType}
+            disabled={!canWrite}
+          />
+
           <AssetIdentificationFields
             category={category}
             value={identificationValue}
@@ -437,7 +460,9 @@ export function EditAssetDialog({
 
           {!useComponents && !isLand && (
           <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
-            <p className="text-sm font-medium">{t('opening.title')}</p>
+            <p className="text-sm font-medium">
+              {t(takenOver ? 'opening.title_taken_over' : 'opening.title')}
+            </p>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label htmlFor="edit-asset-opening-amount">{t('opening.amount_label')}</Label>
@@ -471,7 +496,7 @@ export function EditAssetDialog({
               </p>
             )}
             <p className="text-xs text-muted-foreground">
-              {basisLocked ? t('opening.locked') : t('opening.hint')}
+              {basisLocked ? t('opening.locked') : t(takenOver ? 'opening.hint_taken_over' : 'opening.hint')}
             </p>
           </div>
           )}
@@ -479,7 +504,28 @@ export function EditAssetDialog({
           {isLand && <p className="text-xs text-muted-foreground">{t('land_hint')}</p>}
 
           {!useComponents && !isLand && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 items-end gap-4">
+          {takenOver ? (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="edit-asset-remaining-life">{t('remaining_life.label')}</Label>
+              <HelpPopover>{t('remaining_life.help')}</HelpPopover>
+            </div>
+            <Input
+              id="edit-asset-remaining-life"
+              type="number"
+              min="1"
+              max="600"
+              step="1"
+              value={remainingLifeMonths}
+              onChange={(e) => {
+                setRemainingLifeMonths(e.target.value)
+                setLifeTouched(true)
+              }}
+              className="tabular-nums"
+            />
+          </div>
+          ) : (
           <div className="space-y-1.5">
             <Label htmlFor="edit-asset-life">Avskrivningstid (år)</Label>
             <Input
@@ -489,10 +535,14 @@ export function EditAssetDialog({
               max="50"
               step="1"
               value={usefulLifeYears}
-              onChange={(e) => setUsefulLifeYears(e.target.value)}
+              onChange={(e) => {
+                setUsefulLifeYears(e.target.value)
+                setLifeTouched(true)
+              }}
               className="tabular-nums"
             />
           </div>
+          )}
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
               <Label htmlFor="edit-asset-start">{t('start.label')}</Label>

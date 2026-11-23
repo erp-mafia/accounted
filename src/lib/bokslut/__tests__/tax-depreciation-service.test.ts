@@ -121,6 +121,35 @@ describe('buildTaxDepreciationPopulation', () => {
   })
 })
 
+describe('assets taken over during the year', () => {
+  const periods = [
+    period('period-2024', '2024', '2024-01-01', '2024-12-31'),
+    period('period-2025', '2025', '2025-01-01', '2025-12-31'),
+  ]
+  const population = (assets: Asset[]) => buildTaxDepreciationPopulation(assets, periods[1], periods, 1)
+
+  it('reports the part of the additions that came in by fusion or omklassificering, at registered cost', () => {
+    const result = population([
+      asset({ id: 'bought', acquisition_date: '2025-03-01', acquisition_cost: 40_000 }),
+      asset({ id: 'merged', acquisition_date: '2025-07-01', acquisition_cost: 100_000, acquisition_type: 'merger' }),
+      asset({ id: 'moved-in', acquisition_date: '2025-09-01', acquisition_cost: 25_000, acquisition_type: 'reclassification' }),
+      asset({ id: 'business', acquisition_date: '2025-10-01', acquisition_cost: 10_000, acquisition_type: 'business_acquisition' }),
+    ])
+    // The plan itself is unchanged: every asset acquired in the year is an addition at cost.
+    expect(result.additions).toBe(175_000)
+    expect(result.takenOverAdditions).toBe(125_000)
+  })
+
+  it('reports nothing for an asset taken over in an earlier year, outside the pool, or already sold', () => {
+    const result = population([
+      asset({ id: 'merged-before', acquisition_date: '2024-07-01', acquisition_type: 'merger' }),
+      asset({ id: 'merged-building', category: 'building', acquisition_date: '2025-07-01', acquisition_type: 'merger' }),
+      asset({ id: 'merged-sold', acquisition_date: '2025-02-01', disposed_at: '2025-11-01', acquisition_type: 'merger' }),
+    ])
+    expect(result.takenOverAdditions).toBe(0)
+  })
+})
+
 describe('findImmediatePreviousTaxPeriod', () => {
   it('does not skip an unsaved immediate period to reuse an older saved snapshot', () => {
     const saved2024 = {

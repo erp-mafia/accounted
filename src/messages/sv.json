@@ -2513,8 +2513,23 @@
     "count_footer": "{count, plural, one {1 tillgång} other {# tillgångar}}",
     "life_help": "K2-schablon för redovisning: datorer 3 år, inventarier 5 år, byggnader 25 år. För skattemässig avskrivning kan annan livslängd gälla (IL 18-20 kap).",
     "register_help": "Anskaffningen måste redan vara bokförd (debet på 1xxx-kontot mot t.ex. 1930/2440): registret bokför inte själva köpet. Det här registret styr enbart de planenliga avskrivningarna under bokslutet.",
+    "acquisition": {
+      "label": "Anskaffad genom",
+      "help": "Hur tillgången kom in i bolaget. Valet styr vilken rad den hamnar på i årsredovisningens not om anläggningstillgångar: Inköp, Rörelseförvärv, Fusion eller Omklassificeringar. Vid fusion eller omklassificering anger du dagen tillgången kom in som anskaffningsdag, de avskrivningar som följde med under \"Redan avskrivet\" och den avskrivningstid som återstår från den dagen. Inget bokförs av valet.",
+      "purchase": "Köp",
+      "business_acquisition": "Rörelseförvärv (inkråm)",
+      "merger": "Fusion",
+      "reclassification": "Omklassificering"
+    },
+    "remaining_life": {
+      "label": "Återstående avskrivningstid (månader)",
+      "help": "Den tid som återstår av tillgångens avskrivningstid från dagen den kom in, inte hela tiden från att den en gång anskaffades. Det som inte redan är avskrivet skrivs av linjärt över den.",
+      "error": "Ange återstående avskrivningstid i hela månader (minst 1)."
+    },
     "opening": {
       "title": "Redan avskrivet (flytt från annat system)",
+      "title_taken_over": "Redan avskrivet (följde med tillgången)",
+      "hint_taken_over": "Ange de ackumulerade avskrivningar som följde med tillgången, per dagen den kom in. Ingen verifikation skapas: övertagandet bokförs för sig. Årsredovisningens not visar beloppet på raden Fusion eller Omklassificeringar bland avskrivningarna. Det som återstår skrivs av linjärt över den återstående avskrivningstiden.",
       "disclosure": "Flyttar du från ett tidigare register?",
       "amount_label": "Ackumulerad avskrivning (kr)",
       "date_label": "Per datum",
@@ -22064,6 +22079,9 @@
       "bank_missing": "Välj bank så anpassar vi checklistan.",
       "unnamed": "personen"
     }
+  },
+  "tax_depreciation_plan": {
+    "taken_over_additions": "{amount} av årets anskaffningar är tillgångar som tagits över genom fusion eller omklassificering. Planen räknar dem till sitt anskaffningsvärde, som årets övriga anskaffningar: kontrollera att det är rätt skattemässigt underlag för dem."
   },
   "year_end_accruals": {
     "empty_title": "Inga perioder att periodisera",

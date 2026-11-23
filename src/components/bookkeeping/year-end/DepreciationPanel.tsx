@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import {
   Table,
   TableBody,
@@ -89,6 +90,7 @@ interface TaxView {
   excludedCategories: string[]
   cohortHistoryComplete: boolean
   incompleteCohortCount: number
+  takenOverAdditions?: number
   result: TaxResult | null
   snapshot: { deduction: number } | null
   isStale: boolean
@@ -312,6 +314,7 @@ function TaxDepreciationCard({
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const { toast } = useToast()
+  const tTaxPlan = useTranslations('tax_depreciation_plan')
   const [method, setMethod] = useState<TaxMethod>(view.method ?? 'rakenskapsenlig')
   const [rule, setRule] = useState<TaxRule>(view.selectedRule ?? 'huvudregel_30')
   const [openingValue, setOpeningValue] = useState(
@@ -665,6 +668,11 @@ function TaxDepreciationCard({
           <p className="text-xs text-muted-foreground">
             {view.excludedAssetCount} tillgång{view.excludedAssetCount === 1 ? '' : 'ar'} i andra
             kategorier ingår inte i inventariepoolen och måste bedömas separat.
+          </p>
+        )}
+        {((calculation ?? view).takenOverAdditions ?? 0) > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {tTaxPlan('taken_over_additions', { amount: formatCurrency((calculation ?? view).takenOverAdditions ?? 0) })}
           </p>
         )}
         {result && result.excessDisposals > 0 && (
