@@ -309,6 +309,29 @@ describe('runDocumentJobs', () => {
     expect(rpc.mock.calls.filter(([name]) => name === 'claim_document_jobs')).toHaveLength(13)
   })
 
+  it('stops the run when the provider fails three jobs in a row, instead of spending an attempt of every due job', async () => {
+    const outage = { status: 'error', reason: 'provider_unavailable: 503 Bedrock is unable to process your request.' }
+    claim(...Array.from({ length: 6 }, (_, i) => job({ id: `job-${i + 1}`, document_id: `doc-${i + 1}`, kind: 'classify' })))
+    mocked(classifyDocument).mockResolvedValue(outage)
+    await expect(run()).resolves.toEqual({ claimed: 3, done: 0, failed: 3 })
+    // The other three were never claimed: their attempts are whole for when the provider is back.
+    expect(due).toHaveLength(3)
+    expect(log.warn).toHaveBeenCalledWith('document jobs stopped: the reader or the model provider failed jobs in a row', expect.objectContaining({ inARow: 3 }))
+  })
+
+  it('keeps going past provider failures that are not in a row: a job that ran resets the count', async () => {
+    const outage = { status: 'error', reason: 'provider_unavailable: 503 Bedrock is unable to process your request.' }
+    claim(...Array.from({ length: 6 }, (_, i) => job({ id: `job-${i + 1}`, document_id: `doc-${i + 1}`, kind: 'classify' })))
+    mocked(classifyDocument)
+      .mockResolvedValueOnce(outage)
+      .mockResolvedValueOnce(outage)
+      .mockResolvedValueOnce({ status: 'skipped', reason: 'already_typed' })
+      .mockResolvedValue(outage)
+    // Two failures, a job that ran, then three failures in a row: the sixth claim is the third in a row.
+    await expect(run()).resolves.toEqual({ claimed: 6, done: 1, failed: 5 })
+    expect(due).toEqual([])
+  })
+
   it('queues a derivation after extracting an agreement, and runs it', async () => {
     claim(job({ kind: 'extract' }), job({ id: 'job-2', kind: 'derive', document_id: 'doc-2' }))
     mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'agreement.loan', reviewFields: [] })

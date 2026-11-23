@@ -26,7 +26,8 @@
 --
 -- Cost: one short range scan of idx_document_jobs_open_by_company
 -- (20261123093000) per company with a due job, each stopping at that
--- company's first due job, however long its queue. On a copy shaped like
+-- company's first due job, however long its queue; jobs not due yet are
+-- passed over in the index without reading the table. On a copy shaped like
 -- production on 2026-11-23 (374 000 jobs, 22 000 open, 139 companies with a
 -- due job, one with 17 000): 1.4 ms a claim against 0.35 ms for the old one,
 -- and 300 claims reached 132 companies against 6.

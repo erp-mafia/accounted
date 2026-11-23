@@ -63,6 +63,8 @@ describe('document_jobs', () => {
     expect(await claim(1, 'worker-2', '2000-01-03')).toEqual([expect.objectContaining({ document_id: newer })])
     const { rows } = await getPool().query(`SELECT status, locked_by FROM public.document_jobs WHERE document_id = $1`, [older])
     expect(rows[0]).toEqual({ status: 'running', locked_by: 'worker-1' })
+    // Settled, as the worker would settle them: locked as of 2000-01-03, a claim as of now would take them over as abandoned.
+    await getPool().query(`UPDATE public.document_jobs SET status = 'done', locked_at = NULL, locked_by = NULL WHERE document_id = ANY ($1)`, [[older, newer]])
     expect((await claim(500, 'worker-3')).filter((r) => r.document_id === later)).toEqual([])
   })
 

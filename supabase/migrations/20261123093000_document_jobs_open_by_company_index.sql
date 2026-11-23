@@ -3,9 +3,11 @@
 -- claim_document_jobs finds each company's longest-due job and takes one of
 -- them at random (20261123093100_claim_document_jobs_fair_per_company). It
 -- walks this index company by company, and in each company stops at the first
--- due job, so a company with 17 000 queued jobs costs what one with a single
--- job does. The only index on company_id holds every job ever run (375 000
--- rows in production on 2026-11-23, 22 000 of them open), and the due index
+-- due job, so a company with 17 000 due jobs costs what one with a single job
+-- does. Jobs not due yet (a backoff ahead) are passed over in the index
+-- itself, without reading the table: about 0.7 ms for 14 000 of them on a
+-- copy. The only index on company_id holds every job ever run (375 000 rows
+-- in production on 2026-11-23, 22 000 of them open), and the due index
 -- (idx_document_jobs_due) is ordered by run_after across all companies.
 --
 -- The predicate is the claim's own: not done, and attempts left. A job that
