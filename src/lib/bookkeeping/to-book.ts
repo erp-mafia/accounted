@@ -11,6 +11,8 @@
  * hidden. Pure, so the page and the tests read the same rows.
  */
 
+import { formatRowAmount } from '@/lib/utils'
+
 /** An open bank row, as GET /api/transactions?unmatched=true answers it. */
 export interface ToBookBankRow {
   id: string
@@ -129,6 +131,21 @@ export function toBookCounts(rows: readonly ToBookRow[]): Record<ToBookFilter, n
     ToBookFilter,
     number
   >
+}
+
+/**
+ * A row's amount as the list and the booking screen write it: money in on a
+ * bank row carries a "+" (it shows green beside it), a document's amount has
+ * no sign of its own, no amount is no text.
+ */
+export function toBookAmountLabel(row: Pick<ToBookRow, 'kind' | 'amount' | 'currency'>): string {
+  if (row.amount == null) return ''
+  return `${toBookIsMoneyIn(row) ? '+' : ''}${formatRowAmount(row.amount, row.currency)}`
+}
+
+/** Money in on a bank row: the list shows its amount green. */
+export function toBookIsMoneyIn(row: Pick<ToBookRow, 'kind' | 'amount'>): boolean {
+  return row.kind === 'bank' && row.amount != null && row.amount > 0
 }
 
 /** The list's page. */

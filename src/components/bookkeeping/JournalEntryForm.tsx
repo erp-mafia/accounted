@@ -57,7 +57,7 @@ import {
   formatFailedDocumentNames,
   type DocumentLinkFailure,
 } from '@/lib/documents/link-documents'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatAmount, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre, formatAmountInput } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
@@ -178,6 +178,21 @@ function headerColumns(date: boolean, series: boolean): string {
   if (series) return 'sm:grid-cols-[minmax(0,1fr)_14rem]'
   return ''
 }
+
+/**
+ * What the form holds, for the leave warning and Rensa: its texts and every
+ * row that says something (the trailing blank row says nothing).
+ */
+function formContentKey(description: string, notes: string, lines: FormLine[]): string {
+  return JSON.stringify([
+    description,
+    notes,
+    lines
+      .filter((l) => !isBlankVoucherRow(l) || l.line_description !== '')
+      .map((l) => [l.account_number, l.debit_amount, l.credit_amount, l.line_description]),
+  ])
+}
+const BLANK_FORM_CONTENT = formContentKey('', '', [])
 
 export default function JournalEntryForm({
   onCreated,
@@ -353,9 +368,12 @@ export default function JournalEntryForm({
 
   const isUploading = uploadedFiles.some((f) => f.status === 'uploading')
 
-  const hasContent = description !== '' || notes !== '' ||
-    lines.some(l => l.account_number !== '' || l.debit_amount !== '' || l.credit_amount !== '') ||
-    uploadedFiles.length > 0
+  // Unsaved input is a change from how the form opened, or a file: a bank
+  // row's prefilled lines or a copied verifikat are not the person's input,
+  // so leaving one untouched asks nothing and offers nothing to clear.
+  const contentKey = formContentKey(description, notes, lines)
+  const [openedWith, setOpenedWith] = useState(contentKey)
+  const hasContent = contentKey !== openedWith || uploadedFiles.length > 0
   useUnsavedChanges(hasContent)
   useEffect(() => {
     onHasContentChange?.(hasContent)
@@ -872,7 +890,7 @@ export default function JournalEntryForm({
     // Row counts as incomplete if exactly one of (account, amount) is present.
     return hasAccount !== hasAmount
   }).length
-  const { totalDebit, totalCredit, balanced } = lineBalance(submittableLines)
+  const { totalDebit, balanced } = lineBalance(submittableLines)
   const isBalanced = balanced && submittableLines.length >= 2 && incompleteLineCount === 0
 
   // Each line with the lines its momskod generates (crm#1096). Derived on every
@@ -897,8 +915,12 @@ export default function JournalEntryForm({
     },
     { debit: 0, credit: 0 },
   )
-  const bookedTotalDebit = roundOre(totalDebit + generatedTotals.debit)
-  const bookedTotalCredit = roundOre(totalCredit + generatedTotals.credit)
+  // Summa adds up every amount on the rows, so it agrees with what they show
+  // (an amount on a row still without an account counts); whether the
+  // verifikat can be booked stays on the submittable lines above.
+  const shownBalance = lineBalance(lines)
+  const shownTotalDebit = roundOre(shownBalance.totalDebit + generatedTotals.debit)
+  const shownTotalCredit = roundOre(shownBalance.totalCredit + generatedTotals.credit)
   const vatCodeConflicts = vatCodeConflictAccounts(lineGroups)
   const hasVatCodeConflict = vatCodeConflicts.length > 0
 
@@ -989,6 +1011,7 @@ export default function JournalEntryForm({
   // would tag it into the moms series and skip the manual-entry underlag
   // tracking. Posted entries are immutable, so that mistag is storno-only.
   const handleClearAll = () => {
+    setOpenedWith(BLANK_FORM_CONTENT)
     setDescription('')
     setNotes('')
     setUploadedFiles([])
@@ -1325,6 +1348,7 @@ export default function JournalEntryForm({
       }
       setLastPostedMonth(entryDate.slice(0, 7))
       setShowReview(false)
+      setOpenedWith(BLANK_FORM_CONTENT)
       setDescription('')
       setNotes('')
       setLines([{ ...BLANK_LINE }, { ...BLANK_LINE }])
@@ -1447,6 +1471,7 @@ export default function JournalEntryForm({
           description: t('toast_draft_saved_description'),
         })
       }
+      setOpenedWith(BLANK_FORM_CONTENT)
       setDescription('')
       setNotes('')
       setLines([{ ...BLANK_LINE }, { ...BLANK_LINE }])
@@ -1663,7 +1688,8 @@ export default function JournalEntryForm({
             <span className="text-muted-foreground">
               {t('fiscal_year')}:{' '}
               <span className="text-foreground">{fiscalYearShortName(selectedPeriodObj.name)}</span>
-              {nextVoucherNumber != null && (
+              {/* Creating, the footer states the number (Skapar verifikat). */}
+              {nextVoucherNumber != null && editEntryId && (
                 <span className="ml-2 font-mono text-foreground">
                   {voucherSeries}{nextVoucherNumber}
                 </span>
@@ -1874,13 +1900,15 @@ export default function JournalEntryForm({
             if (bal === null || bal === undefined) {
               return <Skeleton className="ml-auto h-4 w-20" />
             }
+            // No "kr" in rows, and no wrap: a long saldo never makes its row
+            // taller than two short lines.
             const delta = draftDeltas[accountNumber]
-            if (!delta) return formatCurrency(bal)
+            if (!delta) return <span className="whitespace-nowrap">{formatAmount(bal)}</span>
             const after = roundOre(bal + delta)
             return (
-              <span className="inline-flex flex-col items-end leading-tight">
-                <span className="text-xs">{formatCurrency(bal)}</span>
-                <span className="text-foreground">→ {formatCurrency(after)}</span>
+              <span className="inline-flex flex-col items-end whitespace-nowrap leading-tight">
+                <span className="text-xs">{formatAmount(bal)}</span>
+                <span className="text-foreground">→ {formatAmount(after)}</span>
               </span>
             )
           },
@@ -1890,6 +1918,15 @@ export default function JournalEntryForm({
           const vatGroup = lineGroups[index]
           return (
             <>
+              {/* The momskod menu shows on some rows only: first, so the
+                  dimension button and the bin stay in line on every row. */}
+              {vatGroup && vatGroup.rule.mode !== 'none' && (
+                <LineVatCodeMenu
+                  rule={vatGroup.rule}
+                  code={vatGroup.code}
+                  onChange={(code) => updateLineVatCode(index, code)}
+                />
+              )}
               {dimensionsEnabled && (
                 <div
                   className="relative"
@@ -1938,13 +1975,6 @@ export default function JournalEntryForm({
                   )}
                 </div>
               )}
-              {vatGroup && vatGroup.rule.mode !== 'none' && (
-                <LineVatCodeMenu
-                  rule={vatGroup.rule}
-                  code={vatGroup.code}
-                  onChange={(code) => updateLineVatCode(index, code)}
-                />
-              )}
             </>
           )
         }}
@@ -1959,9 +1989,9 @@ export default function JournalEntryForm({
         }}
         totals={{
           label: t('sum'),
-          debit: bookedTotalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
-          credit: bookedTotalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
-          amountClassName: isBalanced ? 'text-success' : 'text-destructive',
+          debit: shownTotalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+          credit: shownTotalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+          amountClassName: isBalanced ? 'text-success' : undefined,
         }}
         toolbar={
           <>
@@ -1969,15 +1999,12 @@ export default function JournalEntryForm({
               onApply={handleTemplateApply}
               entityType={company?.entity_type}
             />
-            <Button
-              variant="outline"
-              onClick={() => setShowSaveTemplate(true)}
-              disabled={derivedTemplateLines.length < 2}
-              title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
-            >
-              <BookmarkIcon className="h-3 w-3" />
-              {t('save_as_template')}
-            </Button>
+            {derivedTemplateLines.length >= 2 && (
+              <Button variant="outline" onClick={() => setShowSaveTemplate(true)}>
+                <BookmarkIcon className="h-3 w-3" />
+                {t('save_as_template')}
+              </Button>
+            )}
           </>
         }
         labels={{
@@ -2000,13 +2027,14 @@ export default function JournalEntryForm({
             files={uploadedFiles}
             onFilesChange={setUploadedFiles}
             dropSurfaceRef={uploadDropSurfaceRef}
+            compact={onPage}
           />
         </div>
       )}
 
-      {!isBalanced && totalDebit > 0 && (
-        <p className="text-sm text-destructive">
-          {t('difference', { amount: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
+      {shownBalance.difference !== 0 && (
+        <p className="text-sm text-foreground/80">
+          {t('difference', { amount: formatCurrency(Math.abs(shownBalance.difference)) })}
         </p>
       )}
 
@@ -2028,11 +2056,11 @@ export default function JournalEntryForm({
             </Button>
           ) : (
             <>
-              {!embedded && (
+              {!embedded && hasContent && (
                 <Button
                   variant="ghost"
                   onClick={() => setShowClearConfirm(true)}
-                  disabled={!hasContent || isSubmitting || isSavingDraft}
+                  disabled={isSubmitting || isSavingDraft}
                   title={t('clear_all_tooltip')}
                 >
                   <BackspaceIcon className="h-4 w-4" />

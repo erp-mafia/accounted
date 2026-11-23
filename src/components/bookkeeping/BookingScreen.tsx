@@ -21,9 +21,9 @@ import { bankRowInitialLines } from '@/components/transactions/bank-row-lines'
 import { HeldUnderlagRows } from '@/components/transactions/HeldUnderlagRows'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
-import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { BOOKING_SCREEN_PATH, bookingScreenHref, bookingScreenOrigin } from '@/lib/bookkeeping/booking-screen'
-import { bookingWalk, toBookFilterOfBack, type ToBookRow } from '@/lib/bookkeeping/to-book'
+import { bookingWalk, toBookAmountLabel, toBookFilterOfBack, type ToBookRow } from '@/lib/bookkeeping/to-book'
 import { focusKeyAction, focusPosition, neighbour } from '@/lib/inkorg/focus'
 import { isEditableTarget, isOverlayBlocking } from '@/lib/hooks/detail-pager-guards'
 import { categorizeBodyFor, type BookingProposal } from '@/lib/bookkeeping/proposal'
@@ -362,8 +362,9 @@ function TransactionBooking({
     onDone()
   }
 
+  // The inbox is another way in beside "Ladda upp", on the zone's own line.
   const pickFromInbox = (
-    <Button variant="ghost" className="-ml-2.5 self-start" onClick={() => setInboxPickerOpen(true)}>
+    <Button variant="ghost" onClick={() => setInboxPickerOpen(true)}>
       <InboxIcon className="h-4 w-4" />
       {t('doc_pick_inbox')}
     </Button>
@@ -399,12 +400,7 @@ function TransactionBooking({
             onUploaded={claimUpload}
             compact
             dropSurfaceRef={dropSurfaceRef}
-            actions={
-              <Button variant="ghost" onClick={() => setInboxPickerOpen(true)}>
-                <InboxIcon className="h-4 w-4" />
-                {t('doc_pick_inbox')}
-              </Button>
-            }
+            actions={pickFromInbox}
           />
         </section>
       )}
@@ -425,9 +421,8 @@ function TransactionBooking({
                 attachments={attachments}
                 onDetachEarlier={() => void detachEarlierUnderlag()}
                 dropSurfaceRef={dropSurfaceRef}
-              >
-                {pickFromInbox}
-              </HeldUnderlagRows>
+                actions={pickFromInbox}
+              />
             </>
           ) : null
         }
@@ -468,6 +463,8 @@ function TransactionBooking({
                         currency: transaction.currency,
                         foreignAmount: Math.abs(transaction.amount),
                         exchangeRate: transaction.exchange_rate,
+                        businessLineDescription: used.proposal.name_sv,
+                        settlementLineDescription: bankAccountName ?? t('bank_line_description'),
                       })
                     : bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)
                 }
@@ -491,7 +488,7 @@ function TransactionBooking({
                   {t('walk_next_up', {
                     name: nextUp.name,
                     date: nextUp.date ? formatDate(nextUp.date) : '',
-                    amount: nextUp.amount == null ? '' : formatRowAmount(nextUp.amount, nextUp.currency),
+                    amount: toBookAmountLabel(nextUp),
                   })}
                 </p>
               )}
