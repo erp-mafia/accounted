@@ -79,9 +79,9 @@ describe('listWebshopStores', () => {
     const stores = await listWebshopStores(supabase, 'company-1')
 
     expect(stores.map((s) => `${s.platform}:${s.store_scope}`)).toEqual(['woocommerce:a.se', 'woocommerce:b.se', 'zettle:pos-1'])
-    // Every read asks for one row; three platforms each end on an empty read.
+    // Every read asks for one row; four platforms each end on an empty read.
     expect(reads.every((n) => n <= 1)).toBe(true)
-    expect(reads).toHaveLength(3 + 3)
+    expect(reads).toHaveLength(3 + 4)
   })
 
   it('keeps one entry per platform and store, other companies and refund-only rows out', async () => {

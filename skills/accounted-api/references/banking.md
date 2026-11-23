@@ -5059,7 +5059,7 @@ Lists the rows the Shopify, WooCommerce and Zettle syncs store: one per paid ord
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `booked` | query | `"booked" \| "unbooked"` | no | booked: booked here or marked as booked outside; unbooked: the rest. |
-| `platform` | query | `"woocommerce" \| "shopify" \| "zettle"` | no |  |
+| `platform` | query | `"woocommerce" \| "shopify" \| "zettle" \| "kustom"` | no |  |
 | `row_type` | query | `"order" \| "refund"` | no |  |
 | `from` | query | `string` | no | First order date, inclusive. |
 | `to` | query | `string` | no | Last order date, inclusive. |
@@ -5071,7 +5071,7 @@ Response `200`:
 ```ts
 {
   data: {
-    orders: { webshop_order_id: string, platform: "woocommerce" | "shopify" | "zettle", store_scope: string, store_label: string | null, row_type: "order" | "refund", parent_webshop_order_id: string | null, order_number: string, platform_status: string, is_paid: boolean, order_date: string, paid_date: string | null, currency: string, total: number, total_tax: number, total_sek: number | null, exchange_rate: number | null, vat_breakdown: { rate: number, net: number, tax: number }[], customer_country: string | null, customer_name: string | null, customer_company: string | null, payment_method: string | null, payment_method_title: string | null, refunded_total: number, booking_status: "booked" | "marked_booked" | "invoiced" | "in_transactions" | "unpaid" | "to_book", journal_entry_id: string | null, invoice_id: string | null, manually_booked_journal_entry_id: string | null, remote_changed_after_freeze: boolean }[],
+    orders: { webshop_order_id: string, platform: "woocommerce" | "shopify" | "zettle" | "kustom", store_scope: string, store_label: string | null, row_type: "order" | "refund", parent_webshop_order_id: string | null, order_number: string, platform_status: string, is_paid: boolean, order_date: string, paid_date: string | null, currency: string, total: number, total_tax: number, total_sek: number | null, exchange_rate: number | null, vat_breakdown: { rate: number, net: number, tax: number }[], customer_country: string | null, customer_name: string | null, customer_company: string | null, payment_method: string | null, payment_method_title: string | null, refunded_total: number, booking_status: "booked" | "marked_booked" | "invoiced" | "in_transactions" | "unpaid" | "to_book", journal_entry_id: string | null, invoice_id: string | null, manually_booked_journal_entry_id: string | null, remote_changed_after_freeze: boolean }[],
     total: number
   },
   meta: {
@@ -5164,7 +5164,7 @@ Response `200`:
 {
   data: {
     webshop_order_id: string,
-    platform: "woocommerce" | "shopify" | "zettle",
+    platform: "woocommerce" | "shopify" | "zettle" | "kustom",
     store_scope: string,
     store_label: string | null,
     row_type: "order" | "refund",
@@ -5428,7 +5428,7 @@ Posts one verifikat (source_type webshop_order, dated the day) for every unbooke
 Request body:
 ```ts
 {
-  platform: "woocommerce" | "shopify" | "zettle",
+  platform: "woocommerce" | "shopify" | "zettle" | "kustom",
   store_scope: string,
   date: string,
   payment_method: string,
