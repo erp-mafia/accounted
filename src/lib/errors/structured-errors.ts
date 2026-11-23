@@ -13249,8 +13249,12 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
   },
   SHARE_REGISTER_RANGE_TAKEN: {
     httpStatus: 409,
-    message_sv: 'Aktienumren finns redan i aktieboken. Nya aktier får nästa lediga nummer.',
-    message_en: 'The share numbers are already held. New shares take the next free numbers.',
+    message_sv: 'Aktienumren finns redan i aktieboken. Nya aktier får nästa lediga nummer. Har en införd anteckning fel nummer rättas den först.',
+    message_en: 'The share numbers are already held. New shares take the next free numbers. When an entry holds the numbers by mistake, that entry is voided first.',
+    remediation: {
+      description: 'For new shares, omit the range and send share_count. When an entry holds these numbers by mistake, void it with kind rattelse, and send this entry again once the rattelse is in the register.',
+      tool: 'gnubok_register_share_event',
+    },
     thrown_message_sv: true,
   },
   SHARE_REGISTER_NOT_HELD: {

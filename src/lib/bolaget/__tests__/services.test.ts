@@ -369,6 +369,75 @@ describe('the two phases of the register', () => {
     const again = await registerShareEvent(ctx, { kind: 'anteckning', note: 'Kontrollerad', completes_setup: true }, { dryRun: true })
     expect(again).toMatchObject({ ok: false, code: 'SHARE_REGISTER_SETUP_COMPLETE' })
   })
+
+  it('completes a register that needs no further entry with the register\'s own note, and no other', async () => {
+    enqueueEntry()
+    const preview = await registerShareEvent(ctx, { kind: 'anteckning', completes_setup: true }, { dryRun: true })
+    expect(preview.ok && preview.dryRun).toBe(true)
+    if (!preview.ok || !preview.dryRun) return
+    expect(preview.preview).toMatchObject({ kind: 'anteckning', completes_setup: true, last_event_number: 1 })
+    expect(preview.preview.warning_codes).toContain('SHARE_REGISTER_SETUP_COMPLETES')
+
+    reset()
+    const completionNote = { ...founding, id: 'e2', event_number: 2, event_date: '2026-10-29', kind: 'anteckning', share_class_id: null, to_party_id: null, range_start: null, range_end: null, note: 'Aktieboken är upplagd.', created_at: '2026-10-29T09:00:00Z' }
+    // A note somebody made right after the completion: not the one that is answered.
+    const laterNote = { ...completionNote, id: 'e3', event_number: 3, note: 'Kontrollerad', created_at: '2026-10-29T09:00:02Z' }
+    enqueueEntry()
+    enqueue({ data: { role: 'owner' } }) // completeShareRegisterSetup: company_members
+    enqueue({ data: { is_avstamningsbolag: false, setup_completed_at: null } }) // share_register_settings
+    enqueue({ data: [classA] }) // share_classes
+    enqueue({ data: [founding] }) // share_register_events
+    enqueue({ data: { aktiekapital: 25000, antal_aktier: 100 } }) // company_settings
+    enqueue({ data: { setup_completed_at: '2026-10-29T09:00:00Z' } }) // upsert
+    enqueue({ data: [founding, completionNote, laterNote] }) // share_register_events, the note the database wrote in it
+    const outcome = await registerShareEvent(ctx, { kind: 'anteckning', completes_setup: true }, { dryRun: false })
+    expect(outcome).toMatchObject({
+      ok: true,
+      data: { share_register_event_id: 'e2', event_number: 2, kind: 'anteckning', event_date: '2026-10-29', setup_completed_at: '2026-10-29T09:00:00Z' },
+    })
+    expect(findCall('share_register_events', 'insert')).toBeUndefined()
+    expect(findCall('share_register_settings', 'upsert')?.[0]).toMatchObject({ company_id: 'company-1', setup_completed_by: 'user-1' })
+  })
+
+  it('still asks for the text of a note that completes nothing, and of a rättelse', async () => {
+    enqueueEntry()
+    expect(await registerShareEvent(ctx, { kind: 'anteckning' }, { dryRun: true })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', messageSv: 'Skriv anteckningen.' })
+    reset()
+    enqueueEntry()
+    expect(await registerShareEvent(ctx, { kind: 'rattelse', corrects_event_id: 'e1', completes_setup: true }, { dryRun: true })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+  })
+
+  it('leaves the register as it was when the completion is refused because it has moved on', async () => {
+    enqueueEntry()
+    enqueue({ data: { role: 'owner' } }) // completeShareRegisterSetup: company_members
+    enqueue({ data: { is_avstamningsbolag: false, setup_completed_at: null } }) // share_register_settings
+    enqueue({ data: [classA] }) // share_classes
+    enqueue({ data: [founding, { ...founding, id: 'e2', event_number: 2, kind: 'anteckning', share_class_id: null, to_party_id: null, range_start: null, range_end: null, note: 'Kontrollerad' }] }) // an entry got in between
+    enqueue({ data: { aktiekapital: 25000, antal_aktier: 100 } }) // company_settings
+    const outcome = await registerShareEvent(ctx, { kind: 'anteckning', completes_setup: true }, { dryRun: false })
+    expect(outcome).toMatchObject({ ok: false, code: 'SHARE_REGISTER_STALE' })
+    expect(findCall('share_register_settings', 'upsert')).toBeUndefined()
+    expect(findCall('share_register_events', 'insert')).toBeUndefined()
+  })
+
+  it('says of an opening holding that it carries the share numbers of the earlier register', async () => {
+    enqueueEntry([])
+    enqueue({ data: [annaParty] })
+    const preview = await registerShareEvent(ctx, { kind: 'ingaende', to_party_id: ANNA, range_start: 201, range_end: 300 }, { dryRun: true })
+    if (!preview.ok || !preview.dryRun) throw new Error('expected a preview')
+    expect(preview.preview).toMatchObject({ range_start: 201, range_end: 300 })
+    const at = (preview.preview.warning_codes as string[]).indexOf('SHARE_REGISTER_KEEP_EARLIER_REGISTER')
+    expect((preview.preview.warnings as string[])[at]).toMatch(/med de aktienummer som står där/)
+  })
+
+  it('says of taken share numbers that an entry that holds them by mistake is voided first', async () => {
+    enqueueEntry()
+    enqueue({ data: [annaParty] })
+    const outcome = await registerShareEvent(ctx, { kind: 'ingaende', to_party_id: ANNA, range_start: 50, range_end: 150 }, { dryRun: true })
+    expect(outcome).toMatchObject({ ok: false, code: 'SHARE_REGISTER_RANGE_TAKEN' })
+    if (outcome.ok) return
+    expect(outcome.messageSv).toMatch(/50-100 finns redan i aktieboken.*rättas den först/)
+  })
 })
 
 describe('completeShareRegisterSetup', () => {
