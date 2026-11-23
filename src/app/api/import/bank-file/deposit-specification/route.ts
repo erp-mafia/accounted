@@ -2,9 +2,8 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
-import { detectBgMax, parseBgMax } from '@/lib/import/bgmax/parser'
-import { attachBgMaxDeposits, type AttachableDeposit } from '@/lib/import/bgmax/attach'
-import { detectCamt054, parseCamt054 } from '@/lib/import/camt054/parser'
+import { attachDepositSpecificationFile } from '@/lib/import/deposit-specification'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 // A year's file attaches a few hundred deposits, each a delete, an insert and
 // a marker; give it the bank-file import's budget.
@@ -20,7 +19,8 @@ export const maxDuration = 300
  * amount), and each payment gets the open customer invoice its reference
  * names. Never creates or changes a bank row; a deposit with no stored row
  * is reported and attaches when the same file is uploaded after the next
- * bank sync.
+ * bank sync. The rules live in lib/import/deposit-specification.ts, shared
+ * with the v1 operation imports.deposit-specification.
  *
  * FormData: `file` (the BG Max or camt.054 file), `apply` ("true" writes;
  * anything else is the preview, which reads and matches only).
@@ -42,51 +42,15 @@ export const POST = withRouteContext(
       })
     }
 
-    const content = decodeFileContent(await file.arrayBuffer())
-    const source = detectBgMax(content) ? 'bgmax' : detectCamt054(content) ? 'camt054' : null
-    if (!source) {
-      return errorResponseFromCode('BGMAX_NOT_DEPOSIT_FILE', log, { requestId })
-    }
-    const parsed = source === 'bgmax' ? parseBgMax(content) : parseCamt054(content)
-    if ('test_file' in parsed && parsed.test_file) {
-      return errorResponseFromCode('BGMAX_TEST_FILE', log, { requestId })
-    }
-    const deposits: readonly AttachableDeposit[] = parsed.deposits
-    if (deposits.length === 0) {
-      return errorResponseFromCode(source === 'bgmax' ? 'BGMAX_NO_DEPOSITS' : 'CAMT054_NO_DEPOSITS', log, {
-        requestId,
-        details: { issues: parsed.issues.slice(0, 5).map((i) => i.message) },
-      })
-    }
+    const outcome = await attachDepositSpecificationFile(
+      { supabase, companyId, userId: user.id, log },
+      { filename: file.name, content: decodeFileContent(await file.arrayBuffer()) },
+      { dryRun: !apply },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
 
-    const summary = await attachBgMaxDeposits(supabase, {
-      companyId,
-      userId: user.id,
-      deposits,
-      apply,
-      source,
-    })
-    if (apply) {
-      log.info('deposit specification attached', {
-        source,
-        deposits: summary.deposits,
-        matched: summary.matched_deposits,
-        noRow: summary.no_row,
-        ambiguous: summary.ambiguous,
-        ready: summary.ready_rows,
-      })
-    }
-
-    return NextResponse.json({
-      data: {
-        filename: file.name,
-        date_from: parsed.date_from,
-        date_to: parsed.date_to,
-        rejected_deposits: parsed.rejected_deposits,
-        issues: parsed.issues,
-        ...summary,
-      },
-    })
+    // The preview and the applied answer are the same summary; `applied` tells them apart.
+    return NextResponse.json({ data: outcome.dryRun ? outcome.preview : outcome.data })
   },
   { requireWrite: true },
 )
