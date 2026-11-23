@@ -14320,7 +14320,9 @@
     "cashflow_omit": "Utelämna kassaflödesanalys",
     "cashflow_confirm": "Jag bekräftar att bolaget inte är ett större företag enligt ÅRL 1 kap. 3 §.",
     "cashflow_omitted_notice": "Dokumentet följer K3-mallen: förändring av eget kapital som egen räkning och noter enligt K3. Kassaflödesanalysen är utelämnad enligt ert val.",
-    "cashflow_withheld": "Kassaflödesanalysen ingår inte: den är frivillig för ett mindre företag (ÅRL 2 kap. 1 §) och Accounteds kassaflödesanalys uppfyller ännu inte K3 kapitel 7."
+    "cashflow_withheld": "Kassaflödesanalysen ingår inte: den är frivillig för ett mindre företag (ÅRL 2 kap. 1 §) och Accounteds kassaflödesanalys uppfyller ännu inte K3 kapitel 7.",
+    "overview_tkr": "Visa flerårsöversikten i tusental kronor (tkr)",
+    "overview_tkr_hint": "Nettoomsättning och resultat efter finansiella poster avrundas till hela tusental kronor i flerårsöversikten, både i PDF:en och i filen som lämnas till Bolagsverket. Resultaträkningen, balansräkningen och noterna visas alltid i hela kronor."
   },
   "annualReportStudio": {
     "choose": "Välj",
