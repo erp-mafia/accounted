@@ -4243,6 +4243,11 @@ async function resolveSieToolContent(
     if (!fileName) {
       throw codedError('VALIDATION_ERROR', 'filename is required together with upload_id')
     }
+    // The same check as gnubok_complete_document_upload: an upload_id is the
+    // UUID gnubok_create_sie_upload returned, nothing else.
+    if (!isUuid(args.upload_id)) {
+      throw badArgument('upload_id', 'upload_id must be the upload_id gnubok_create_sie_upload returned.')
+    }
     const service = createServiceClientNoCookies()
     const pendingPath = buildPendingDocumentStoragePath(companyId, userId, args.upload_id, fileName)
     const { data, error } = await service.storage.from(DOCUMENTS_BUCKET).download(pendingPath)
