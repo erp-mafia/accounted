@@ -791,7 +791,7 @@ describe('POST batch-categorize', () => {
     expect(body.data.results[0].error.message).toBe(
       'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
     )
-    expect(body.data.results[0].error.details.cause).toBe('BOOKKEEPING_DATABASE_ERROR')
+    expect(body.data.results[0].error.details.cause).toBe('PERIOD_LOCKED')
     expect(body.data.results[1].ok).toBe(true)
     expect(body.data.results[1].data.journal_entry_id).toBe('je-fresh')
     expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })

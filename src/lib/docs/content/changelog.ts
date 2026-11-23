@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Journal entries: a locked period is a refusal, not a server error (2026-11)
+
+- **Fix: a journal write the period-lock triggers refuse, because its period is locked or closed or its date is on or before the company lock date, answers \`400 PERIOD_LOCKED\`** (2026-11-23) on the endpoints that post through the bookkeeping engine and answer its errors themselves; \`message\` and \`recovery_hint\` are the code's own. **Before**, a request that passed the endpoint's own lock check and was then refused by the trigger (the period locked in between) answered \`500 BOOKKEEPING_DATABASE_ERROR\`, which is retryable, so a retry met the same lock. Approving a staged operation answers as before. The API version date is unchanged.
+
 ### Invoices: zero and negative quantities (2026-11)
 
 - **Behaviour change: an invoice line's \`quantity\` may be 0 or negative** (#3553, 2026-11-20), on \`POST /invoices\`, \`PATCH /invoices/{id}\` and the MCP invoice tools, as \`unit_price\` already could be. A 0 x 0 line carries information on a Peppol invoice, where text rows do not travel, and a negative quantity at a positive price is a deduction Peppol accepts (BR-27 refuses only a negative item price). A line with a skattereduktion (\`deduction_type\` rot, rut or gron_teknik) still needs a positive quantity, since the claim counts only positive lines; a line linked to a sales order line still refuses a negative quantity; and \`quantity\` must still be a number. **Before**, a quantity of 0 or less was refused with \`400 VALIDATION_ERROR\`.

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { DimensionValidationError, MandatoryDimensionMissingError } from './dimension-errors'
-import { conflictCode } from '@/lib/errors/structured-errors'
+import { conflictCode, getErrorEntry } from '@/lib/errors/structured-errors'
+import { databaseRefusal, type DatabaseRefusalCode } from '@/lib/errors/database-refusal'
 
 // ============================================================================
 // Dimension validation errors: the classes live in ./dimension-errors.ts
@@ -1082,6 +1083,7 @@ export class BookkeepingDatabaseError extends Error {
     | typeof BOOKKEEPING_DATABASE_ERROR
     | typeof BANK_BOOKING_CONTEXT_REQUIRED
     | ReturnType<typeof conflictCode>
+    | DatabaseRefusalCode
   constructor(
     public readonly operation: BookkeepingOperation,
     public readonly cause: string | undefined,
@@ -1093,13 +1095,18 @@ export class BookkeepingDatabaseError extends Error {
     // user reads what was refused rather than a generic conflict. So does
     // the bank-booking guard's 23514 for a bank row's verifikat that does not
     // name its row: no retry posts it, and "Verifikationen kunde inte sparas.
-    // Försök igen." sent a person round that loop (2026-11-16).
+    // Försök igen." sent a person round that loop (2026-11-16). And so does a
+    // write behind a period lock, a closed year or the lock date: the lock
+    // holds, so it is PERIOD_LOCKED, not a retryable 500 (2026-11-22).
+    const refusal = cause ? databaseRefusal(cause) : null
     this.code =
       pgCode === 'PT409'
         ? conflictCode(cause)
         : isBankBookingContextRefusal(pgCode, cause)
           ? BANK_BOOKING_CONTEXT_REQUIRED
-          : BOOKKEEPING_DATABASE_ERROR
+          : refusal
+            ? refusal.code
+            : BOOKKEEPING_DATABASE_ERROR
   }
 }
 
@@ -1261,7 +1268,7 @@ export function accountsNotInChartResponse(err: AccountsNotInChartError) {
  *
  * Response shape: { error: { code, message, details? } }
  * HTTP status: 404 for *_NOT_FOUND, 409 for concurrent/duplicate conflicts,
- * 500 for BOOKKEEPING_DATABASE_ERROR, 400 otherwise.
+ * 500 for BOOKKEEPING_DATABASE_ERROR, 400 for a lock refusal and otherwise.
  */
 export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof AccountsNotInChartError) {
@@ -1651,6 +1658,9 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
   }
 
   if (err instanceof BookkeepingDatabaseError) {
+    // A refusal the database raised on purpose answers with its code's
+    // registry status: 409 for a conflict or the bank-booking guard, 400 for
+    // a lock (PERIOD_LOCKED, as the doors that check the lock first answer).
     return NextResponse.json(
       {
         error: {
@@ -1659,7 +1669,7 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           details: { operation: err.operation },
         },
       },
-      { status: err.code === BOOKKEEPING_DATABASE_ERROR ? 500 : 409 }
+      { status: err.code === BOOKKEEPING_DATABASE_ERROR ? 500 : (getErrorEntry(err.code)?.httpStatus ?? 409) }
     )
   }
 
