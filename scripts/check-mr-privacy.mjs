@@ -21,7 +21,9 @@
  *                  ticket on a line of its own in the description, as
  *                  <!-- crm#N -->, which GitHub does not show and the desk
  *                  tooling reads from the raw body. Commit messages are not
- *                  checked for it: the squash subject is the title.
+ *                  checked for it: branches opened before this rule carry it
+ *                  in their commits, and a merge squashes them under the
+ *                  title.
  *
  * The name list is kept outside the repo, one name per line (or a JSON array):
  *   MR_PRIVACY_CUSTOMER_NAMES      the list itself, or the path GitLab gives a
@@ -284,7 +286,11 @@ function findNames(text, names) {
 const TICKET_REF_RE = /crm#\d+/gi
 const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g
 
-/** The text with each HTML comment blanked out; line breaks stay, so line numbers hold. */
+/**
+ * The text with each HTML comment blanked out; line breaks stay, so line
+ * numbers hold. A comment written inside code shows on GitHub but is blanked
+ * here too: only a pull request about this convention writes one.
+ */
 function hideHtmlComments(text) {
   return String(text ?? '').replace(HTML_COMMENT_RE, (comment) => comment.replace(/[^\n]/g, ' '))
 }
@@ -412,7 +418,7 @@ export async function run(options = {}, env = process.env) {
   if (failures.length > 0) {
     if (failures.some((f) => f.rule === 'ticket_ref')) {
       console.error(
-        'A ticket reference shows in the pull request: drop it from the title and the visible description, and put <!-- crm#N --> on its own line in the description instead, which GitHub does not show.',
+        'A ticket reference shows in the pull request: drop it from the title and the visible description, and put <!-- crm#N --> on its own line in the description instead, which GitHub does not show. A rerun reads the old title and description, so push again after the edit.',
       )
     }
     console.error(

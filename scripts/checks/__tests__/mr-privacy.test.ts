@@ -283,7 +283,8 @@ describe('scan mode', () => {
     fs.writeFileSync(
       file,
       JSON.stringify([
-        'Pipeline 3034721906 green',
+        // A ticket reference is no finding here: that rule reads only a pull request's title and description.
+        'Pipeline 3034721906 green for crm#2151',
         { label: 'MR!1 description', text: `Employee ${TEST_PNR_OLD.slice(2, 8)}+${TEST_PNR_OLD.slice(8)} moved` },
         { label: 'MR!2 title', text: 'fix: reply to kontakt@acme-havsbad.se' },
       ]),
