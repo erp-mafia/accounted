@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // The period's unlinked IB verifikat has its own tests
@@ -21,7 +23,7 @@ vi.mock('@/lib/import/opening-balance/unlinked', () => ({
 // so the report's own grouping and sorting are what is tested).
 // ============================================================
 
-type MockResult = { data?: unknown; error?: unknown }
+type MockResult = { data?: unknown; error?: unknown; count?: number }
 let mockResults: Record<string, MockResult[]>
 
 function consume(key: string): MockResult {
@@ -32,7 +34,7 @@ function consume(key: string): MockResult {
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'order', 'range', 'contains']) {
+  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'order', 'range', 'contains', 'limit']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => consume(tableName))
@@ -85,6 +87,7 @@ import {
   generateGeneralLedgerArrangedPage,
   generateGeneralLedgerOverview,
   GENERAL_LEDGER_INLINE_LINES,
+  LEDGER_READ_LIMITS,
 } from '../general-ledger'
 
 let supabase: ReturnType<typeof makeClient>
@@ -510,6 +513,358 @@ describe('generateGeneralLedger', () => {
     const acc = report.accounts[0]
     expect(acc.total_debit).toBe(33.33)
     expect(acc.closing_balance).toBe(33.33)
+  })
+})
+
+describe('generateGeneralLedger over the single-read limit', () => {
+  // The lines as the ledger RPCs return them. Same day and number in two
+  // series on 1930 (rows 3 and 4), so line id decides their order.
+  const lineId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
+  type Row = {
+    line_id: string; account_number: string; debit_amount: number; credit_amount: number
+    dimensions: Record<string, string>; journal_entry_id: string; entry_date: string
+    voucher_series: string; voucher_number: number; description: string; source_type: string
+  }
+  const row = (i: number, account: string, date: string, series: string, voucher: number, debit: number, credit: number): Row => ({
+    line_id: lineId(i), account_number: account, debit_amount: debit, credit_amount: credit,
+    dimensions: i % 2 === 0 ? { '6': 'P1' } : {}, journal_entry_id: `e${voucher}${series}`, entry_date: date,
+    voucher_series: series, voucher_number: voucher, description: `Ver ${series}${voucher}`, source_type: 'manual',
+  })
+  const BASE: Row[] = [
+    row(1, '1510', '2026-01-10', 'A', 1, 1000, 0),
+    row(2, '1930', '2026-01-10', 'A', 1, 0, 1000),
+    row(3, '1930', '2026-02-01', 'A', 2, 250.5, 0),
+    row(4, '1930', '2026-02-01', 'B', 2, 0, 99.99),
+    row(5, '1930', '2026-03-05', 'A', 3, 10, 0),
+    row(6, '3001', '2026-02-01', 'A', 2, 0, 250.5),
+    row(7, '1930', '2026-04-01', 'A', 4, 0.01, 0),
+    row(8, '2440', '2026-02-01', 'B', 2, 99.99, 0),
+    row(9, '1930', '2026-05-01', 'A', 5, 0, 5),
+  ]
+  /** The ledger as the database holds it now; a test books into it to play a write during the read. */
+  let ROWS: Row[] = []
+  const compare = (a: Row, b: Row) =>
+    a.account_number.localeCompare(b.account_number) || a.entry_date.localeCompare(b.entry_date) ||
+    a.voucher_number - b.voucher_number || a.line_id.localeCompare(b.line_id)
+  /** The rows in the call's window and under its filter (jsonb @>). */
+  const scoped = (args: Record<string, unknown>) => ROWS.filter((r) =>
+    !(args.p_from_date && r.entry_date < (args.p_from_date as string)) &&
+    !(args.p_to_date && r.entry_date > (args.p_to_date as string)) &&
+    Object.entries((args.p_dimensions ?? {}) as Record<string, string>).every(([k, v]) => r.dimensions[k] === v))
+  const perAccount = (rows: Row[]) => {
+    const byAccount = new Map<string, { n: number; debit: number; credit: number }>()
+    for (const r of rows) {
+      const a = byAccount.get(r.account_number) ?? { n: 0, debit: 0, credit: 0 }
+      byAccount.set(r.account_number, { n: a.n + 1, debit: a.debit + r.debit_amount, credit: a.credit + r.credit_amount })
+    }
+    return [...byAccount].sort(([a], [b]) => a.localeCompare(b))
+  }
+
+  // Answers the ledger RPCs the way the SQL does (pinned by
+  // tests/pg/ledger-account-days.pg.test.ts): the counts and the trial
+  // balance per account, the single call every line in report order, a page
+  // call one account's lines after the cursor.
+  function ledgerRpc(fn: string, args: Record<string, unknown>) {
+    if (fn === 'get_ledger_line_counts') {
+      return { data: perAccount(scoped(args)).map(([account_number, a]) => ({ account_number, line_count: a.n })), error: null }
+    }
+    if (fn === 'get_trial_balance_aggregates') {
+      return {
+        data: perAccount(scoped(args)).map(([account_number, a]) => ({ bucket: 'period', account_number, debit: a.debit, credit: a.credit })),
+        error: null,
+      }
+    }
+    if (fn === 'get_general_ledger_lines') {
+      const inRange = (r: Row) =>
+        !(args.p_account_from && r.account_number < (args.p_account_from as string)) &&
+        !(args.p_account_to && r.account_number > (args.p_account_to as string))
+      return { data: scoped(args).filter(inRange).sort(compare), error: null }
+    }
+    if (fn === 'get_general_ledger_account_page') {
+      const after = args.p_after_date
+        ? [args.p_after_date as string, args.p_after_voucher as number, args.p_after_line_id as string] as const
+        : null
+      const lines = scoped(args)
+        .filter((r) => r.account_number === args.p_account_number)
+        .sort(compare)
+        .filter((r) => !after || compare(r, { ...r, entry_date: after[0], voucher_number: after[1], line_id: after[2] }) > 0)
+        .slice(0, args.p_limit as number)
+      return { data: { before_debit: 0, before_credit: 0, lines }, error: null }
+    }
+    return { data: [], error: null }
+  }
+
+  function ledgerMocks() {
+    ROWS = [...BASE]
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }, error: null },
+        { data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      chart_of_accounts: [
+        { data: [{ account_number: '1930', account_name: 'Företagskonto' }], error: null },
+        { data: [{ account_number: '1930', account_name: 'Företagskonto' }], error: null },
+      ],
+    }
+    supabase.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) => ledgerRpc(fn, args))
+  }
+
+  const pageCalls = () =>
+    (supabase.rpc.mock.calls as Array<[string, Record<string, unknown>]>).filter(([fn]) => fn === 'get_general_ledger_account_page')
+
+  it('reads a ledger over the limit account by account, a page at a time, into the report one call gives', async () => {
+    ledgerMocks()
+    const once = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: ROWS.length, page: 2 },
+    })
+    expect(pageCalls()).toHaveLength(0)
+
+    const paged = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: ROWS.length - 1, page: 2 },
+    })
+    expect(JSON.stringify(paged)).toBe(JSON.stringify(once))
+    expect(once.accounts.find((a) => a.account_number === '1930')!.lines.map((l) => l.voucher_series + l.voucher_number))
+      .toEqual(['A1', 'A2', 'B2', 'A3', 'A4', 'A5'])
+
+    // 1930's six lines in pages of two: the third page is full, so a fourth
+    // (empty) one ends the account; each page starts after the last line.
+    const on1930 = pageCalls().filter(([, a]) => a.p_account_number === '1930').map(([, a]) => [a.p_after_date, a.p_after_voucher, a.p_after_line_id, a.p_limit])
+    expect(on1930).toEqual([
+      [null, null, null, 2],
+      ['2026-02-01', 2, lineId(3), 2],
+      ['2026-03-05', 3, lineId(5), 2],
+      ['2026-05-01', 5, lineId(9), 2],
+    ])
+    expect(new Set(pageCalls().map(([, a]) => a.p_account_number))).toEqual(new Set(['1510', '1930', '2440', '3001']))
+  })
+
+  it('reads and counts only the accounts in the range', async () => {
+    ledgerMocks()
+    // 1930 alone holds six lines: within a limit of six, one call for the range.
+    await generateGeneralLedger(supabase, 'company-1', 'period-1', '1900', '1999', { readLimits: { singleRead: 6, page: 2 } })
+    expect(pageCalls()).toHaveLength(0)
+    expect(supabase.rpc).toHaveBeenCalledWith('get_general_ledger_lines', expect.objectContaining({ p_account_from: '1900', p_account_to: '1999' }))
+
+    const paged = await generateGeneralLedger(supabase, 'company-1', 'period-1', '1900', '1999', { readLimits: { singleRead: 5, page: 2 } })
+    expect(new Set(pageCalls().map(([, a]) => a.p_account_number))).toEqual(new Set(['1930']))
+    expect(paged.accounts.map((a) => a.account_number)).toEqual(['1930'])
+  })
+
+  it('counts without the dimension filter and reads the pages under it, in the window', async () => {
+    ledgerMocks()
+    await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      dimensions: { '6': 'P1' },
+      fromDate: '2026-02-01',
+      toDate: '2026-04-30',
+      readLimits: { singleRead: 0, page: 2 },
+    })
+    expect(supabase.rpc).toHaveBeenCalledWith('get_ledger_line_counts', expect.objectContaining({
+      p_from_date: null, p_to_date: '2026-04-30', p_dimensions: null,
+    }))
+    expect(pageCalls().length).toBeGreaterThan(0)
+    for (const [, args] of pageCalls()) {
+      // Lines before the window still roll into the opening balance: read from the period start.
+      expect(args).toMatchObject({ p_from_date: null, p_to_date: '2026-04-30', p_dimensions: { '6': 'P1' } })
+    }
+  })
+
+  it('never asks a page for more lines than the call returns', async () => {
+    ledgerMocks()
+    await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: 0, page: 100_000 },
+    })
+    expect(new Set(pageCalls().map(([, a]) => a.p_limit))).toEqual(new Set([5000]))
+  })
+
+  it('throws when a page cannot be read', async () => {
+    ledgerMocks()
+    supabase.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) =>
+      fn === 'get_general_ledger_account_page' && args.p_account_number === '3001'
+        ? { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+        : ledgerRpc(fn, args))
+    await expect(generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: 0, page: 2 },
+    })).rejects.toThrow(/get_general_ledger_account_page/)
+  })
+
+  it('throws when the lines cannot be counted', async () => {
+    ledgerMocks()
+    supabase.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) =>
+      fn === 'get_ledger_line_counts'
+        ? { data: null, error: { code: '57014', message: 'timeout' } }
+        : ledgerRpc(fn, args))
+    await expect(generateGeneralLedger(supabase, 'company-1', 'period-1')).rejects.toThrow(/get_ledger_line_counts/)
+  })
+
+  // Pages are separate statements: a verifikat booked between them can land
+  // in some accounts' pages and not in others'. Played here by booking one
+  // (1930 and 3001) once 1930 has been read and before 3001 is.
+  function bookDuringTheRead(times: number) {
+    let booked = 0
+    supabase.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) => {
+      if (fn === 'get_general_ledger_account_page' && args.p_account_number === '3001' && !args.p_after_date && booked < times) {
+        booked++
+        const voucher = 10 + booked
+        ROWS.push(row(100 + 2 * booked, '1930', '2026-06-01', 'A', voucher, 40, 0), row(101 + 2 * booked, '3001', '2026-06-01', 'A', voucher, 0, 40))
+      }
+      return ledgerRpc(fn, args)
+    })
+  }
+
+  it('reads again when the ledger changes under the pages, and gives the ledger as it then stands', async () => {
+    ledgerMocks()
+    bookDuringTheRead(1)
+    const paged = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: 0, page: 2 },
+    })
+    // The first read had the new verifikat on 3001 but not on 1930; the
+    // check saw it and the second read has it on both.
+    const lines = (account: string) => paged.accounts.find((a) => a.account_number === account)!.lines.map((l) => l.voucher_number)
+    expect(lines('1930')).toContain(11)
+    expect(lines('3001')).toContain(11)
+    expect((supabase.rpc.mock.calls as Array<[string]>).filter(([fn]) => fn === 'get_trial_balance_aggregates')).toHaveLength(2)
+    // The report one call gives of the ledger as it now stands.
+    const once = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: 1000, page: 2 },
+    })
+    expect(JSON.stringify(paged)).toBe(JSON.stringify(once))
+  })
+
+  it('answers a retryable conflict when the ledger changes under both reads', async () => {
+    ledgerMocks()
+    bookDuringTheRead(2)
+    const failure = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: 0, page: 2 },
+    }).catch((err: unknown) => err)
+    expect(failure).toMatchObject({ code: '40001' })
+  })
+
+  /** The period's verifikat as the marks read them: how many, and the last write. One per read of the marks. */
+  function entryMarks(...marks: Array<[number, string]>) {
+    mockResults.journal_entries = marks.map(([count, at]) => ({ count, data: [{ updated_at: at }] }))
+  }
+
+  it('checks one dimension value against the summaries, and two by the marks alone', async () => {
+    ledgerMocks()
+    await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      dimensions: { '6': 'P1' }, readLimits: { singleRead: 0, page: 2 },
+    })
+    expect(supabase.rpc).toHaveBeenCalledWith('get_trial_balance_aggregates', expect.objectContaining({
+      p_closing_mode: 'include', p_from_date: null, p_to_date: null, p_dimensions: { '6': 'P1' },
+    }))
+
+    // Under two values the summaries cannot answer: a verifikat booked during
+    // the first read shows in the marks, and the ledger is read again.
+    ledgerMocks()
+    supabase.rpc.mockClear()
+    entryMarks([9, '2026-11-23T10:00:00Z'], [10, '2026-11-23T10:00:04Z'], [10, '2026-11-23T10:00:04Z'], [10, '2026-11-23T10:00:04Z'])
+    await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      dimensions: { '1': 'KS01', '6': 'P1' }, readLimits: { singleRead: 0, page: 2 },
+    })
+    const calls = supabase.rpc.mock.calls as Array<[string, Record<string, unknown>]>
+    expect(calls.filter(([fn]) => fn === 'get_trial_balance_aggregates')).toHaveLength(0)
+    const onePass = new Set(pageCalls().map(([, a]) => `${a.p_account_number} ${a.p_after_line_id}`)).size
+    expect(pageCalls()).toHaveLength(2 * onePass)
+  })
+
+  it('reads the accounts as they stand once the marks are read, not as first counted', async () => {
+    ledgerMocks()
+    // A verifikat on a new account lands right after the first count; the
+    // marks read after it already include it, so its account must be read too.
+    let counts = 0
+    supabase.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) => {
+      const answer = ledgerRpc(fn, args)
+      if (fn === 'get_ledger_line_counts' && ++counts === 1) {
+        const tags = { '1': 'KS01', '6': 'P1' }
+        ROWS.push({ ...row(200, '2610', '2026-07-01', 'A', 20, 0, 25), dimensions: tags }, { ...row(201, '1510', '2026-07-01', 'A', 20, 25, 0), dimensions: tags })
+      }
+      return answer
+    })
+    const paged = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      dimensions: { '1': 'KS01', '6': 'P1' }, readLimits: { singleRead: 0, page: 2 },
+    })
+    expect(paged.accounts.map((a) => a.account_number)).toContain('2610')
+  })
+
+  it('marks the posted and reversed verifikat only: a draft is not the ledger', async () => {
+    ledgerMocks()
+    await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, { readLimits: { singleRead: 0, page: 2 } })
+    const from = supabase.from.mock as { calls: Array<[string]>; results: Array<{ value: { in: { mock: { calls: unknown[][] } } } }> }
+    const marked = from.calls.flatMap(([table], i) => (table === 'journal_entries' ? [from.results[i].value] : []))
+    expect(marked.length).toBeGreaterThan(0)
+    for (const builder of marked) expect(builder.in.mock.calls).toContainEqual(['status', ['posted', 'reversed']])
+  })
+
+  it('reads again when a verifikat is deleted and booked again the same during the read', async () => {
+    ledgerMocks()
+    // As many verifikat and the same totals after, but a later write.
+    entryMarks([9, '2026-11-23T10:00:00Z'], [9, '2026-11-23T10:00:07Z'], [9, '2026-11-23T10:00:07Z'], [9, '2026-11-23T10:00:07Z'])
+    await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: 0, page: 2 },
+    })
+    const onePass = new Set(pageCalls().map(([, a]) => `${a.p_account_number} ${a.p_after_line_id}`)).size
+    expect(pageCalls()).toHaveLength(2 * onePass)
+  })
+
+  it('stops an account whose page does not move past the one before', async () => {
+    ledgerMocks()
+    supabase.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) =>
+      // 1930 answers its first page again for every page after it.
+      fn === 'get_general_ledger_account_page' && args.p_account_number === '1930'
+        ? ledgerRpc(fn, { ...args, p_after_date: null, p_after_voucher: null, p_after_line_id: null })
+        : ledgerRpc(fn, args))
+    await expect(generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: 0, page: 2 },
+    })).rejects.toThrow(/did not move past/)
+    // The second page is the first again: stopped there.
+    expect(pageCalls().filter(([, a]) => a.p_account_number === '1930')).toHaveLength(2)
+  })
+
+  it('reads again when a line is retagged or corrected during the read', async () => {
+    for (const log of ['dimension_retag_log', 'journal_entry_rattelse_log']) {
+      ledgerMocks()
+      supabase.rpc.mockClear()
+      // Counted before and after each read: one retag or rättelse lands during the first.
+      mockResults[log] = [{ count: 3 }, { count: 4 }, { count: 4 }, { count: 4 }]
+      const paged = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+        readLimits: { singleRead: 0, page: 2 },
+      })
+      const onePass = new Set(pageCalls().map(([, a]) => `${a.p_account_number} ${a.p_after_line_id}`)).size
+      expect(pageCalls(), log).toHaveLength(2 * onePass)
+      const once = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+        readLimits: { singleRead: 1000, page: 2 },
+      })
+      expect(JSON.stringify(paged), log).toBe(JSON.stringify(once))
+    }
+  })
+
+  it('stops the accounts beside a failed one at their next page', async () => {
+    ledgerMocks()
+    supabase.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) =>
+      fn === 'get_general_ledger_account_page' && args.p_account_number === '2440'
+        ? { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+        : ledgerRpc(fn, args))
+    await expect(generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      readLimits: { singleRead: 0, page: 1 },
+    })).rejects.toThrow(/get_general_ledger_account_page/)
+    // 1930 is read beside 2440 and has six lines: read to its end it takes seven calls.
+    expect(pageCalls().filter(([, a]) => a.p_account_number === '1930').length).toBeLessThan(7)
+    expect(pageCalls().filter(([, a]) => a.p_account_number === '3001')).toHaveLength(0)
+  })
+
+  it('pages no larger than the page call returns, as its newest definition caps it', () => {
+    // A page shorter than asked for ends an account, so the cap must not fall below the page size.
+    const dir = resolve(__dirname, '../../../../supabase/migrations')
+    let cap: number | null = null
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+      const sql = readFileSync(resolve(dir, file), 'utf8')
+      const at = sql.search(/CREATE (?:OR REPLACE )?FUNCTION public\.get_general_ledger_account_page\(/)
+      if (at < 0) continue
+      const limit = /least\(greatest\(coalesce\(p_limit, \d+\), 1\), (\d+)\)/.exec(sql.slice(at))
+      cap = limit ? Number(limit[1]) : null
+    }
+    expect(cap).not.toBeNull()
+    expect(cap!).toBeGreaterThanOrEqual(LEDGER_READ_LIMITS.page)
   })
 })
 
