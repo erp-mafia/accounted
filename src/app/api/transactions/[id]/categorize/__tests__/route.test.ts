@@ -2744,6 +2744,87 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(expected)
   })
 
+  // The utlägg's rule (reverseChargeAccountConflict): an account that
+  // declares another box itself takes no reverse charge, or the basis pair
+  // beside it would declare the purchase a second time (ruta 50 and ruta 21).
+  it.each([
+    ['4545', null],
+    ['6550', 'import_goods'],
+  ] as const)('400 TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT on override %s (momskod %s), nothing posted', async (account, treatment) => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Google Play', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 62.5, credit_amount: 0, description: '' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 62.5, description: '' },
+        { account_number: '4535', debit_amount: 250, credit_amount: 0, description: '' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 250, description: '' },
+      ],
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { account_number: account, account_class: Number(account[0]), is_active: true }, error: null })
+    enqueue({ data: treatment ? [{ account_number: account, default_vat_treatment: treatment, default_vat_rate: 0.25 }] : [], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', account_override: account },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT')
+    expect(body.error.message).toContain(`Konto ${account} redovisar själv en annan momsruta än 20-24`)
+    expect(body.error.details).toMatchObject({ reason: 'other_box', account_number: account })
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  // The review names the box an account with its own ruta 20-24 reports and
+  // offers no other, so the box the body still carries is not compared: the
+  // account's box is booked, as the review said.
+  it('books an own-box account in its own box whatever box the review body carries', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Vercel', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 62.5, credit_amount: 0, description: '' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 62.5, description: '' },
+        { account_number: '4535', debit_amount: 250, credit_amount: 0, description: '' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 250, description: '' },
+      ],
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { account_number: '4531', account_class: 4, is_active: true }, error: null })
+    enqueue({ data: [], error: null }) // the company's momskoder: none
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'eu_services', account_override: '4531' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status, JSON.stringify(body)).toBe(200)
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+    expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+  })
+
   it('posts no basis pair when the category account itself has a reverse-charge momskod (crm#1096)', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Google Play', journal_entry_id: null })
     mockBuildMappingResultFromCategory.mockReturnValue({

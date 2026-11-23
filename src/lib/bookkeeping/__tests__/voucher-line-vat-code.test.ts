@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   foldGeneratedVatLines,
   groupVoucherLinesWithVatCodes,
+  reverseChargeAccountConflict,
   vatCodeAfterAccountChange,
   vatCodeBasisBox,
   vatCodeConflictAccounts,
@@ -265,6 +266,35 @@ describe('vatCodeRuleForAccount', () => {
         dynamicFor(account, row ?? {}),
       )
       expect(rutor[rule.box]).toBe(1000)
+    }
+  })
+})
+
+describe('reverseChargeAccountConflict', () => {
+  it('refuses a purchase cost account that declares another box itself, whatever box is stated', () => {
+    const cases: Array<[string, VoucherVatCodeAccountRow | undefined]> = [
+      ['4598', undefined], ['4512', undefined], ['4545', undefined], ['4547', undefined],
+      ['6540', treatment('triangulation_eu_goods')], ['6540', treatment('import_goods')],
+      ['6540', treatment('reverse_charge_eu_services', 0)],
+    ]
+    for (const [account, row] of cases) {
+      expect(reverseChargeAccountConflict(account, row), account).toEqual({ reason: 'other_box' })
+      expect(reverseChargeAccountConflict(account, row, 'eu_services'), account).toEqual({ reason: 'other_box' })
+    }
+  })
+
+  it('refuses an own-box account only for another box than the one stated', () => {
+    expect(reverseChargeAccountConflict('4531', null, 'eu_services'))
+      .toEqual({ reason: 'other_kind', box: 'ruta22', kind: 'non_eu_services' })
+    expect(reverseChargeAccountConflict('6540', treatment('reverse_charge_eu_goods'), 'eu_services'))
+      .toEqual({ reason: 'other_kind', box: 'ruta20', kind: 'eu_goods' })
+    expect(reverseChargeAccountConflict('4531', null, 'non_eu_services')).toBeNull()
+    expect(reverseChargeAccountConflict('4531', null)).toBeNull()
+  })
+
+  it('lets an ordinary cost account and one outside class 4-6 take the purchase with its pair', () => {
+    for (const account of ['6540', '5420', '7610', '1630', '2893']) {
+      expect(reverseChargeAccountConflict(account, undefined, 'eu_services'), account).toBeNull()
     }
   })
 })

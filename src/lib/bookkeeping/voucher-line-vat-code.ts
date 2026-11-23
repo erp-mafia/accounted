@@ -199,6 +199,42 @@ export function vatCodeRuleForAccount(
   return code ? { mode: 'fixed', code, box: box as RcBasisBox } : NO_VAT_CODE
 }
 
+/**
+ * Why a reverse-charge purchase cannot have its cost booked on `account`, or
+ * null when it can. Every door that books one asks this (the utlägg, bank
+ * categorization), read from the account's chart row as vatCodeRuleForAccount
+ * reads it:
+ *
+ *  - other_box: a purchase cost account (BAS class 4-6) that takes no
+ *    momskod: the 4598 offset, an account that reports a box outside ruta
+ *    20-24 (trepartshandel ruta 37, the import basis ruta 50), or one whose
+ *    reverse-charge momskod has no momssats of 25, 12 or 6 %. The basis pair
+ *    beside it would declare the purchase a second time.
+ *  - other_kind: the account reports its own ruta 20-24 (`box`) for another
+ *    purchase (`kind`) than the one stated, so the purchase would land in a
+ *    box other than the one asked. Only a `statedKind` is compared: without
+ *    one the account's own box is the purchase's.
+ *
+ * Any other account takes the purchase: an ordinary cost account, or one
+ * outside class 4-6, with the basis pair; one with its own box without it.
+ */
+export type ReverseChargeAccountConflict =
+  | { reason: 'other_box' }
+  | { reason: 'other_kind'; box: RcBasisBox; kind: ReverseChargeKind }
+
+/** See ReverseChargeAccountConflict. `row` is the account's chart row; null or undefined when the chart holds none. */
+export function reverseChargeAccountConflict(
+  account: string,
+  row: VoucherVatCodeAccountRow | null | undefined,
+  statedKind?: ReverseChargeKind,
+): ReverseChargeAccountConflict | null {
+  const rule = vatCodeRuleForAccount(account, row)
+  if (rule.mode === 'fixed') {
+    return statedKind && statedKind !== rule.code.kind ? { reason: 'other_kind', box: rule.box, kind: rule.code.kind } : null
+  }
+  return rule.mode === 'none' && COST_ACCOUNT.test(account) ? { reason: 'other_box' } : null
+}
+
 /** The box the purchase's base lands in: the account's own on a fixed account, the kind's basis box otherwise. */
 export function vatCodeBasisBox(rule: VoucherLineVatCodeRule, code: VoucherLineVatCode): RcBasisBox {
   return rule.mode === 'fixed' ? rule.box : reverseChargeKindRuta(code.kind)

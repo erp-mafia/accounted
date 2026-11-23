@@ -41,7 +41,8 @@ import {
   type BookingTemplate,
 } from '@/lib/bookkeeping/booking-templates'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
-import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { reconcileRcBasisWithCostLines, reverseChargeCostAccounts } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { reverseChargeAccountConflict, type ReverseChargeAccountConflict } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { applySettlementAccount, saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -113,7 +114,12 @@ import type {
   TransactionCategory,
   VatTreatment,
 } from '@/types'
-import { isReverseChargeBasisAccount, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
+import {
+  isReverseChargeBasisAccount,
+  RC_BASIS_OFFSET_ACCOUNT,
+  reverseChargeKindRuta,
+  type ReverseChargeKind,
+} from '@/lib/bookkeeping/vat-entries'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import {
   purchaseSellerRegion,
@@ -513,6 +519,64 @@ export interface CategorizeMappingOptions {
    * re-checks it.
    */
   preview?: boolean
+  /**
+   * The box an agent or API door's caller named for a reverse-charge
+   * category booking (reverseChargeBoxParam), and the parameter it came in:
+   * a cost account that reports another ruta 20-24 itself is then refused
+   * instead of declaring the purchase in its own box. A box read off the
+   * underlag is no such statement (the account's own box decides, and the
+   * preview says so), nor is the dashboard's: its review names the account's box.
+   */
+  statedReverseChargeBox?: StatedReverseChargeBox
+}
+
+/** See CategorizeMappingOptions.statedReverseChargeBox. */
+interface StatedReverseChargeBox {
+  kind: ReverseChargeKind
+  parameter: ReverseChargeBoxParam
+}
+
+/**
+ * The refusal of a reverse-charge purchase on a cost account that cannot take
+ * it (reverseChargeAccountConflict).
+ */
+function reverseChargeAccountRefusal(
+  account: string,
+  conflict: ReverseChargeAccountConflict,
+  stated: StatedReverseChargeBox | undefined,
+): CategorizeRefusal {
+  const code = 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT'
+  if (conflict.reason === 'other_kind' && stated) {
+    const own = conflict.box.replace('ruta', '')
+    const asked = reverseChargeKindRuta(stated.kind).replace('ruta', '')
+    return refuse(code, {
+      reason: conflict.reason,
+      account_number: account,
+      account_box: conflict.box,
+      requested_box: reverseChargeKindRuta(stated.kind),
+      parameter: stated.parameter,
+    }, {
+      message: {
+        sv: `Konto ${account} redovisar själv ruta ${own}, men ${stated.parameter} anger ruta ${asked}: köpet skulle deklareras i en annan ruta än den angivna. ` +
+          `Stämmer kontot, ange ruta ${own} eller ingen ruta, så gäller kontots egen. Annars bokför köpet på ett vanligt kostnadskonto, där underlagsparet bokför den angivna rutan.`,
+        en: `Account ${account} reports box ${own} itself, but ${stated.parameter} names box ${asked}: the purchase would be declared in another box than the one named. ` +
+          `If the account is right, name box ${own} or no box, and the account's own applies. Otherwise book the purchase on an ordinary cost account, where the basis pair books the box named.`,
+      },
+    })
+  }
+  return refuse(code, { reason: 'other_box', account_number: account }, {
+    message: account === RC_BASIS_OFFSET_ACCOUNT
+      ? {
+        sv: `Konto ${account} är motkontot till underlaget för omvänd skattskyldighet (ruta 20-24), inte ett kostnadskonto. Bokför köpet på det kostnadskonto som köpet avser.`,
+        en: `Account ${account} is the offset of the reverse-charge basis (boxes 20-24), not a cost account. Book the purchase on the cost account it is for.`,
+      }
+      : {
+        sv: `Konto ${account} redovisar själv en annan momsruta än 20-24 (trepartshandel ruta 37 eller import ruta 50), eller så saknar dess momskod för omvänd skattskyldighet en momssats på 25, 12 eller 6 % i kontoplanen. ` +
+          'Med omvänd skattskyldighet skulle köpet då deklareras två gånger. Bokför köpet på ett vanligt kostnadskonto, eller rätta kontots momskod och momssats i kontoplanen.',
+        en: `Account ${account} reports a VAT box outside 20-24 itself (triangulation box 37 or import box 50), or its reverse-charge momskod has no rate of 25, 12 or 6 % in the chart of accounts. ` +
+          "Booked with reverse charge, the purchase would be declared twice. Book it on an ordinary cost account, or correct the account's momskod and rate in the chart of accounts.",
+      },
+  })
 }
 
 /**
@@ -608,7 +672,8 @@ export async function buildCategorizeMapping(
   // The override replaces the business side of a category booking, never a
   // template's or a learned template's accounts. Re-validated at every
   // booking: the account can be deactivated between staging and approval.
-  if (input.account_override && !template && !(input.counterparty_template_id && isBusiness)) {
+  const categoryBooking = !template && !(input.counterparty_template_id && isBusiness)
+  if (input.account_override && categoryBooking) {
     if (!isBusiness) {
       return refuse(
         'VALIDATION_ERROR',
@@ -637,13 +702,25 @@ export async function buildCategorizeMapping(
     }
   }
 
-  // A reverse-charge purchase keeps its 45xx/4598 basis pair only when the
-  // account its cost line lands on (after any account_override) does not
-  // report ruta 20-24 itself, by the company's momskoder (crm#1096, #2919).
-  mappingResult = await reconcileRcBasisWithChart(
-    mappingResult,
-    options.loadChart ?? chartVatTreatmentsLoader(supabase, companyId),
-  )
+  // A reverse-charge purchase, read on the set the builder booked and the
+  // account its cost line lands on (after any account_override), by the
+  // company's momskoder. An account that cannot take it is refused, as the
+  // utlägg refuses it (reverseChargeAccountConflict): one that declares
+  // another box itself, where the basis pair would declare the purchase a
+  // second time (import ruta 50 beside ruta 22), and, for a box an agent or
+  // API caller named, one whose own ruta 20-24 is another. Otherwise the set
+  // keeps its 45xx/4598 basis pair only when the account does not report
+  // ruta 20-24 itself (crm#1096, #2919).
+  const rcCostAccounts = reverseChargeCostAccounts(mappingResult)
+  if (rcCostAccounts) {
+    const chart = await (options.loadChart ?? chartVatTreatmentsLoader(supabase, companyId))()
+    const stated = categoryBooking ? options.statedReverseChargeBox : undefined
+    for (const account of rcCostAccounts) {
+      const conflict = reverseChargeAccountConflict(account, chart.get(account), stated?.kind)
+      if (conflict) return reverseChargeAccountRefusal(account, conflict, stated)
+    }
+    mappingResult = reconcileRcBasisWithCostLines(mappingResult, chart)
+  }
 
   // An explicit bag tags the business lines (bank/VAT legs stay untagged); it
   // wins over a learned counterparty-template bag.
@@ -929,6 +1006,12 @@ export async function categorizeTransaction(
     }
   }
 
+  // The box the caller named, at an agent or API door: checked against a cost
+  // account that reports its own (buildCategorizeMapping). One read off the
+  // underlag below is not checked, the account's own box decides.
+  const statedReverseChargeBox = options.reverseChargeBoxParam && input.reverse_charge_kind
+    ? { kind: input.reverse_charge_kind, parameter: options.reverseChargeBoxParam }
+    : undefined
   // A reverse charge without its box, at an agent or API door (#94): the box
   // its underlag's seller and the category give, never ruta 21 by default.
   // Read only for a category booking: a template states its own lines.
@@ -953,6 +1036,7 @@ export async function categorizeTransaction(
   const mapped = await buildCategorizeMapping(supabase, companyId, transaction, input, context, {
     log: txLog,
     loadChart: options.loadChart,
+    statedReverseChargeBox,
   })
   if (!mapped.ok) return { ...mapped, transaction }
   const { mappingResult, settlementAccount } = mapped

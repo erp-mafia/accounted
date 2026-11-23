@@ -1179,6 +1179,25 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
         'Resend with reverse_charge_kind eu_services, non_eu_services or eu_goods (MCP: vat_treatment reverse_charge_eu_services, reverse_charge_non_eu_services or reverse_charge_eu_goods), read off the seller country on the invoice. details.reason says why the box could not be read.',
     },
   },
+  // A reverse charge on a cost account that cannot take it
+  // (reverseChargeAccountConflict, the rule the utlägg books by): one that
+  // declares another box itself, where the basis pair would declare the
+  // purchase twice, or one whose own ruta 20-24 is another than the box the
+  // caller named. The service names the account and the boxes; this is the
+  // fallback.
+  TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Omvänd skattskyldighet kan inte bokföras på det valda kostnadskontot: kontot redovisar själv en annan momsruta än den köpet hör till, så köpet skulle deklareras två gånger eller i fel ruta. Bokför köpet på ett vanligt kostnadskonto.',
+    message_en:
+      'Reverse charge cannot be booked on the chosen cost account: the account reports a VAT box of its own other than the one the purchase belongs in, so the purchase would be declared twice or in the wrong box. Book the purchase on an ordinary cost account.',
+    thrown_message_sv: true,
+    remediation: {
+      description:
+        'details.reason "other_box": details.account_number reports a box outside 20-24 itself (triangulation 37, import 50), is the 4598 basis offset, or has a reverse-charge momskod without a rate of 25, 12 or 6 %; book the purchase on an ordinary cost account, or correct the account\'s momskod and rate in the chart of accounts. details.reason "other_kind": the account reports details.account_box itself, not details.requested_box; resend with that box or none, or book the purchase on an ordinary cost account.',
+      resource: 'Accounted://chart-of-accounts',
+    },
+  },
   TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT: {
     httpStatus: 400,
     message_sv:

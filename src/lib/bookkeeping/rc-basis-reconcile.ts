@@ -116,6 +116,17 @@ function costLinesOf(mappingResult: MappingResult, set: RcSet): Array<{ account:
     .map((line) => ({ account: line.account_number, amount: legAmount(line) }))
 }
 
+/**
+ * The accounts of the cost lines a builder's reverse-charge set stands beside
+ * (costLinesOf), or null when the result carries no such set. Read before
+ * the set is settled: a door refuses an account that cannot take the purchase
+ * (reverseChargeAccountConflict) instead of settling it.
+ */
+export function reverseChargeCostAccounts(mappingResult: MappingResult): string[] | null {
+  const set = rcSetOf(mappingResult)
+  return set ? costLinesOf(mappingResult, set).map((line) => line.account) : null
+}
+
 /** See the module comment. Returns `mappingResult` itself when the set stays as it is. */
 export function reconcileRcBasisWithCostLines(
   mappingResult: MappingResult,
