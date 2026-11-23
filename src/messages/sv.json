@@ -5557,6 +5557,7 @@
     "back_home": "Hem",
     "payment_label": "Betalning",
     "underlag_found_held": "Hittat i Inkorgen. Bifogas när du bokför.",
+    "underlag_found_failed": "Kvittot som hittades i Inkorgen kunde inte hämtas. Välj det från Inkorgen eller ladda om sidan.",
     "payment_none": "Ingen bankrad. En som stämmer paras ihop, nu eller när den kommer.",
     "underlag_label": "Underlag",
     "kontering_label": "Kontering",

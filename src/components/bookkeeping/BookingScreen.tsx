@@ -56,11 +56,13 @@ export interface BookingScreenProps {
   account: string | null
   /** The inbox document found for the bank row (Kvitto hittat), held as its underlag until Bokför. */
   found: AvailableInboxDoc | null
+  /** The found document was asked for but could not be read: the screen says so. */
+  foundFailed?: boolean
   /** The page to return to (the list with its filters), checked by safeReturnPath. */
   back: string | null
 }
 
-export function BookingScreen({ transaction, account, found, back }: BookingScreenProps) {
+export function BookingScreen({ transaction, account, found, foundFailed = false, back }: BookingScreenProps) {
   const t = useTranslations('booking_screen')
   const router = useRouter()
   const { canWrite, lockedTitle } = useViewerLock()
@@ -167,6 +169,7 @@ export function BookingScreen({ transaction, account, found, back }: BookingScre
           transaction={transaction}
           account={account}
           found={found}
+          foundFailed={foundFailed}
           amountLabel={amountLabel ?? ''}
           nextUp={walk.afterRow}
           onTouched={() => setTouched(true)}
@@ -288,6 +291,7 @@ function TransactionBooking({
   transaction,
   account,
   found,
+  foundFailed,
   amountLabel,
   nextUp,
   onTouched,
@@ -296,6 +300,7 @@ function TransactionBooking({
   transaction: Transaction
   account: string | null
   found: AvailableInboxDoc | null
+  foundFailed: boolean
   amountLabel: string
   /** The row Bokför opens next, named under the form. */
   nextUp: ToBookRow | null
@@ -419,6 +424,7 @@ function TransactionBooking({
             dropSurfaceRef={dropSurfaceRef}
             actions={pickFromInbox}
           />
+          {foundFailed && <p className="text-sm text-foreground/80">{t('underlag_found_failed')}</p>}
         </section>
       )}
 

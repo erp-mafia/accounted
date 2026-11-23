@@ -23,7 +23,7 @@ export const GET = withRouteContext('document.inbox_available', async (_request,
 
   const read = await readAvailableInboxDocs(supabase, companyId)
   if (read.error !== null) {
-    log.error(read.stage === 'items' ? 'inbox-available item query failed' : 'inbox-available document query failed', read.error)
+    log.error(`inbox-available ${read.stage} query failed`, read.error)
     return errorResponse(read.error, log, { requestId })
   }
   return NextResponse.json({ data: read.data })

@@ -55,10 +55,14 @@ export default async function BookingScreenRoute({
   const transaction = data as Transaction
   // The found document is held, never pinned: only while it is still free
   // (no verifikat, no other bank row) and the row is open without underlag.
+  // A read that fails is said on the screen, so the row is not booked
+  // without the receipt by mistake; one taken meanwhile is simply not held.
   let found: AvailableInboxDoc | null = null
+  let foundFailed = false
   if (subject.foundItemId && !transaction.journal_entry_id && !transaction.document_id) {
     const read = await readAvailableInboxDocs(supabase, companyId, { inboxItemId: subject.foundItemId })
     found = read.data?.[0] ?? null
+    foundFailed = read.error !== null
   }
   return (
     <BookingScreen
@@ -66,6 +70,7 @@ export default async function BookingScreenRoute({
       transaction={transaction}
       account={subject.account}
       found={found}
+      foundFailed={foundFailed}
       back={back}
     />
   )

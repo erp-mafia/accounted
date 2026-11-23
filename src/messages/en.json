@@ -5557,6 +5557,7 @@
     "back_home": "Home",
     "payment_label": "Payment",
     "underlag_found_held": "Found in the inbox. Attached when you book.",
+    "underlag_found_failed": "The receipt found in the inbox could not be loaded. Pick it from the inbox or reload the page.",
     "payment_none": "No bank row. A matching one is paired, now or when it arrives.",
     "underlag_label": "Document",
     "kontering_label": "Lines",
