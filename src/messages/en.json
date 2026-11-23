@@ -21588,6 +21588,13 @@
     "closed_not_relevant": "Closed. We have noted that you don't want questions like this.",
     "settled": "Settled without you",
     "settled_evidence_label": "Records that answered the question",
+    "you_answered": "You answered: {answer}",
+    "operations_label": "Proposals linked to the question",
+    "operation_prepared": "Prepared: {title}",
+    "operation_booked": "Booked: {title}",
+    "operation_rejected": "Rejected: {title}",
+    "operation_review": "Review",
+    "operation_open_voucher": "View voucher",
     "undo": "Undo",
     "undo_failed": "Could not undo.",
     "action_failed": "Could not save."

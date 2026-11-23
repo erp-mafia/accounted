@@ -21588,6 +21588,13 @@
     "closed_not_relevant": "Stängd. Vi har noterat att du inte vill ha sådana frågor.",
     "settled": "Löst utan dig",
     "settled_evidence_label": "Underlag som besvarade frågan",
+    "you_answered": "Du svarade: {answer}",
+    "operations_label": "Förslag kopplade till frågan",
+    "operation_prepared": "Förberett: {title}",
+    "operation_booked": "Bokfört: {title}",
+    "operation_rejected": "Avvisat: {title}",
+    "operation_review": "Granska",
+    "operation_open_voucher": "Visa verifikat",
     "undo": "Ångra",
     "undo_failed": "Det gick inte att ångra.",
     "action_failed": "Det gick inte att spara."

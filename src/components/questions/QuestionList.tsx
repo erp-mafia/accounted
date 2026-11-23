@@ -4,8 +4,9 @@ import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { EllipsisHorizontalIcon } from '@/components/icons'
+import { ATTN_ACTION_CLASS } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
-import { LIST_BLEED_CLASS } from '@/components/ui/dry-table'
+import { LIST_BLEED_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -22,8 +23,10 @@ import {
   answeredState,
   closedState,
   listItems,
+  operationLines,
   ownWordsBody,
   type AppCloseChoice,
+  type OperationLine,
   type QuestionItem,
 } from './question-items'
 
@@ -73,6 +76,39 @@ function EvidenceRow({ line, t }: { line: EvidenceLine; t: T }) {
   )
 }
 
+function operationText(line: OperationLine, t: T): string {
+  switch (line.state) {
+    case 'prepared':
+      return t('operation_prepared', { title: line.title })
+    case 'booked':
+      return t('operation_booked', { title: line.title })
+    case 'rejected':
+      return t('operation_rejected', { title: line.title })
+  }
+}
+
+/** One line per staged operation linked to the question: how it stands, its title, and where it opens. */
+function OperationRows({ lines, t }: { lines: OperationLine[]; t: T }) {
+  if (lines.length === 0) return null
+  return (
+    <ul aria-label={t('operations_label')} className="space-y-1">
+      {lines.map((line) => (
+        <li key={line.operation_id} className="text-[13px] text-foreground">
+          <span data-ph-mask="">{operationText(line, t)}</span>
+          {line.href && (
+            <>
+              {' '}
+              <Link href={line.href} className={line.state === 'prepared' ? ATTN_ACTION_CLASS : QUIET_LINK_CLASS}>
+                {line.state === 'prepared' ? t('operation_review') : t('operation_open_voucher')}
+              </Link>
+            </>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function QuestionBlock({
   item,
   canWrite,
@@ -92,6 +128,22 @@ function QuestionBlock({
   const [ownText, setOwnText] = useState('')
   const { question, ended, busy, error } = item
   const own = ownWordsBody(ownText)
+
+  if (ended?.kind === 'answered_earlier') {
+    return (
+      <li className="space-y-1 border-b-hairline px-2 py-3">
+        <h2 className="text-[13px] text-foreground" data-ph-mask="">
+          {question.question}
+        </h2>
+        {ended.answer && (
+          <p className="text-[13px] text-muted-foreground" data-ph-mask="">
+            {t('you_answered', { answer: ended.answer })}
+          </p>
+        )}
+        <OperationRows lines={operationLines(question.operations)} t={t} />
+      </li>
+    )
+  }
 
   if (ended?.kind === 'settled') {
     return (
@@ -115,6 +167,7 @@ function QuestionBlock({
             ))}
           </ul>
         )}
+        <OperationRows lines={operationLines(question.operations)} t={t} />
       </li>
     )
   }
@@ -229,10 +282,12 @@ function QuestionBlock({
 /**
  * The question list: each open question as a block with the records it rests
  * on, why it is asked and its answers. One press answers; the block then
- * shows what was saved, with Ångra. A question that was closed as settled
- * comes after them as its text, the line saying so, the note of its close
- * and the records the close named. `initial` is null when the server could
- * not read the list.
+ * shows what was saved, with Ångra. A question that was answered before the
+ * page was read comes after them as a quiet row: its text, the answer as the
+ * person gave it, and one line per staged operation linked to it. A question
+ * that was closed as settled follows as its text, the line saying so, the
+ * note of its close, the records the close named and the same operation
+ * lines. `initial` is null when the server could not read the list.
  */
 export function QuestionList({ initial }: { initial: AppQuestion[] | null }) {
   const t = useTranslations('questions')
