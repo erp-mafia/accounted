@@ -46,26 +46,46 @@ const KINDS: readonly Kind[] = ['fact', 'preference', 'pattern', 'correction']
 type KindFilter = 'all' | Kind
 
 /**
+ * The query of the panel's read (GET /api/agent/memory). `given` asks for
+ * the facts an agent is given, which leaves out a row a later fact replaced;
+ * the plain list reads so.
+ */
+export function memoryListQuery({ given, includeDismissed, kind }: { given: boolean; includeDismissed: boolean; kind: KindFilter }): string {
+  const params = new URLSearchParams()
+  if (given) params.set('given', 'true')
+  if (includeDismissed) params.set('include_dismissed', 'true')
+  if (kind !== 'all') params.set('kind', kind)
+  return params.toString()
+}
+
+/**
  * What the assistant remembers about the company, to read, add to, edit, pin
  * and hide. `plain` is the same panel as one list, newest first, with no
  * kind filter, no help and no count line. Everything that changes a memory
  * stays: adding one, each row's pin, edit and hide, and showing the hidden
  * rows so one can be brought back.
  *
+ * The plain list is the facts an agent is given (the read asks for
+ * `given`): a row a later fact replaced is not in it, shown or hidden, as it
+ * is not in the count on the agent picture's company card. The full list
+ * keeps every row that is not hidden, which is what the built-in assistant
+ * reads and what its own count line counts.
+ *
  * Every text is read from the message files (settings.memory_*, the kind
  * names from agentKnowledge), so the panel follows the reader's language.
  */
 export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
-  const memory = useAgentMemory()
+  const memory = useAgentMemory(plain)
   return <AgentMemoryView plain={plain} memory={memory} />
 }
 
 /**
  * The panel's state and its requests: the memory list as read, what the
  * person has open, and the calls that add, change, pin, hide and restore a
- * memory. AgentMemoryView draws it.
+ * memory. AgentMemoryView draws it. With `given`, the list is read as the
+ * facts an agent is given (memoryListQuery).
  */
-function useAgentMemory() {
+function useAgentMemory(given: boolean) {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const errorLocale = useLocale() as ErrorLocale
@@ -99,11 +119,8 @@ function useAgentMemory() {
 
     async function load() {
       setLoadError(null)
-      const params = new URLSearchParams()
-      if (includeDismissed) params.set('include_dismissed', 'true')
-      if (kindFilter !== 'all') params.set('kind', kindFilter)
       try {
-        const res = await fetch(`/api/agent/memory?${params.toString()}`)
+        const res = await fetch(`/api/agent/memory?${memoryListQuery({ given, includeDismissed, kind: kindFilter })}`)
         if (!res.ok) {
           // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
           // getErrorMessage falls back to the status map.
@@ -141,7 +158,7 @@ function useAgentMemory() {
     return () => {
       cancelled = true
     }
-  }, [includeDismissed, kindFilter, errorLocale, reloadKey])
+  }, [given, includeDismissed, kindFilter, errorLocale, reloadKey])
 
   async function patch(id: string, body: Partial<Pick<AgentMemoryRow, 'content' | 'is_pinned' | 'is_active'>>) {
     setBusyId(id)
