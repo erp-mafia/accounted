@@ -59,7 +59,8 @@ export function BolagetOverview({ access }: { access: BolagetHubAccess }) {
     let cancelled = false
     void Promise.all([
       access.registers ? read<RegisterAnswer>('/api/bolaget/share-register') : Promise.resolve(closed),
-      access.registers ? read<MeetingAnswer>('/api/bolaget/meetings') : Promise.resolve(closed),
+      // The meetings follow the whole rollout (hub.ts): a company with the registers alone has none to read.
+      access.money ? read<MeetingAnswer>('/api/bolaget/meetings') : Promise.resolve(closed),
       access.agreements ? read<CommitmentsAnswer>('/api/commitments') : Promise.resolve(closed),
     ]).then(([register, meetings, commitments]) => {
       if (cancelled) return
@@ -73,7 +74,7 @@ export function BolagetOverview({ access }: { access: BolagetHubAccess }) {
     return () => {
       cancelled = true
     }
-  }, [access.registers, access.agreements, attempt])
+  }, [access.registers, access.money, access.agreements, attempt])
 
   const facts = useMemo(
     () => (loaded ? overviewFacts({ today: todayIsoStockholm(), register: loaded.register, meetings: loaded.meetings, commitments: loaded.commitments }) : null),
@@ -95,7 +96,9 @@ export function BolagetOverview({ access }: { access: BolagetHubAccess }) {
             {t('owners_summary', { count: o.holders, shares: o.shares })}
             {o.allocation === 'all' && <span className="text-muted-foreground">, {t('owners_all_allocated')}</span>}
             {o.allocation === 'part' && o.settings_shares != null && (
-              <span className="text-attn">, {t('owners_part_allocated', { register: o.register_shares, settings: o.settings_shares })}</span>
+              <span className="text-attn">
+                , {t(o.register_shares > o.settings_shares ? 'owners_over_allocated' : 'owners_part_allocated', { register: o.register_shares, settings: o.settings_shares })}
+              </span>
             )}
           </>
         ),

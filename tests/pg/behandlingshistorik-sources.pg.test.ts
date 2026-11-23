@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { AUDITED_TABLES, GLOBAL_ACTIONS } from '@/lib/reports/behandlingshistorik'
-import { getPool, runAsServiceRole, withUserContext } from './setup'
+import { getClient, getPool, runAsServiceRole, withUserContext } from './setup'
 import {
   insertAuthUser,
   insertCompany,
@@ -208,6 +208,10 @@ beforeAll(async () => {
   for (const action of GLOBAL_ACTIONS) {
     audit[`action:${action}`] = await insertAudit({ action, table: 'parties', at: '2020-02-11T08:00:00Z', description: action })
   }
+  // A global action on an audited table, and one on no table: the window read
+  // keeps each once, through the global actions (20261123104000).
+  audit.globalOnAudited = await insertAudit({ action: 'RETENTION_BLOCK', table: 'journal_entries', recordId: e.e1, at: '2020-02-11T09:00:00Z' })
+  audit.globalOnNoTable = await insertAudit({ action: 'SECURITY_EVENT', table: null, at: '2020-02-11T09:00:01Z' })
   audit.register = await insertAudit({ action: 'INSERT', table: 'parties', at: '2020-02-12T08:00:00Z' })
   audit.entryInsert = await insertAudit({ action: 'INSERT', table: 'journal_entries', recordId: e.e1, at: '2020-03-01T10:00:00Z' })
   audit.entryCommit = await insertAudit({ action: 'COMMIT', table: 'journal_entries', recordId: e.e1, at: '2020-03-01T10:00:00Z' })
@@ -275,6 +279,7 @@ describe('behandlingshistorik_sources', () => {
       ...AUDITED_TABLES.map((t) => `table:${t}`),
       ...GLOBAL_ACTIONS.map((a) => `action:${a}`),
       'postedEdit', 'mayReverse', 'mayGuard', 'lateReverse', 'lateGuard', 'chunk', 'earlyEdit', 'mayCommitLateReverse',
+      'globalOnAudited', 'globalOnNoTable',
     ]) {
       expect(all.has(audit[key]), key).toBe(true)
     }
@@ -391,6 +396,167 @@ describe('behandlingshistorik_decisions', () => {
     const member = await withUserContext(userId, (client) => decisions(client, FROM, TO, true))
     for (const key of ['rows', 'entries', 'operations', 'legacy_by_entry', 'legacy_by_registration'] as const) {
       expect(ids(service[key]), key).toEqual(ids(member[key]))
+    }
+  })
+})
+
+/**
+ * idx_audit_log_history_window and idx_audit_log_history_entry (migrations
+ * 20261123091600 and 20261123091700) hold only the audit rows an event can
+ * come from, so the function's two audit reads stop fetching a verifikat's
+ * INSERT and COMMIT rows from the heap only to drop them (production,
+ * 2026-11-23: a month and a fiscal year of the largest company past the 8 s
+ * statement timeout). The planner can use a partial index only when it
+ * proves the index's predicate from the statement's own WHERE clause, and
+ * each predicate is that statement's exclusion word for word: an edit to one
+ * without the other leaves the index unusable, and the first test fails.
+ * Which index production's planner prefers is a matter of size and is not
+ * asked here: these tables are nearly empty, so each call runs with only one
+ * side's indexes (the other audit_log indexes dropped, or the history ones)
+ * and sequential scans priced out.
+ */
+describe('behandlingshistorik_sources: the history indexes', () => {
+  const HISTORY_INDEXES = ['idx_audit_log_history_window', 'idx_audit_log_history_entry']
+  /** Kept on both sides: the primary key, and the action index the window's other arm (global actions) reads. */
+  const SHARED_INDEXES = ['audit_log_pkey', 'idx_audit_log_action']
+
+  interface PlanNode {
+    'Index Name'?: string
+    'Index Cond'?: string
+    'Recheck Cond'?: string
+    Filter?: string
+    Plans?: PlanNode[]
+  }
+  /** Every index scan in the plan, with its index condition. */
+  const indexScans = (node: PlanNode): Array<{ index: string; cond: string }> => [
+    ...(node['Index Name'] ? [{ index: node['Index Name'], cond: node['Index Cond'] ?? '' }] : []),
+    ...(node.Plans ?? []).flatMap(indexScans),
+  ]
+  /** Every condition in the plan: index conditions, rechecks and filters. */
+  const conditions = (node: PlanNode): string[] => [
+    ...[node['Index Cond'], node['Recheck Cond'], node.Filter].filter((c): c is string => !!c),
+    ...(node.Plans ?? []).flatMap(conditions),
+  ]
+
+  /**
+   * One call as the member, in a transaction that is rolled back, with only
+   * the history indexes on audit_log or only the others: the function's
+   * result, and each statement it ran with the indexes its plan names
+   * (auto_explain reports the nested statements to the client).
+   */
+  async function call(from: string, to: string, fiscalYear: boolean, side: 'history' | 'others', settings: string[] = []) {
+    const client = await getClient()
+    const notices: string[] = []
+    const onNotice = (notice: { message?: string }) => {
+      if (notice.message) notices.push(notice.message)
+    }
+    client.on('notice', onNotice)
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'audit_log'`,
+      )
+      const drop = rows
+        .map((r) => r.indexname)
+        .filter((name) => !SHARED_INDEXES.includes(name) && HISTORY_INDEXES.includes(name) === (side === 'others'))
+      for (const index of drop) await client.query(`DROP INDEX public.${index}`)
+      for (const setting of ['enable_seqscan = off', ...settings]) await client.query(`SET LOCAL ${setting}`)
+      for (const setting of ['log_min_duration = 0', 'log_nested_statements = on', 'log_format = json', 'log_level = notice']) {
+        await client.query(`SET LOCAL auto_explain.${setting}`)
+      }
+      await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify({ sub: userId, role: 'authenticated' })])
+      await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
+      await client.query('SET LOCAL ROLE authenticated')
+      const result = await sources(client, from, to, fiscalYear)
+      const plans = notices
+        .filter((message) => message.includes('"Plan"'))
+        .map((message) => JSON.parse(message.slice(message.indexOf('{'))) as { 'Query Text': string; Plan: PlanNode })
+        .map((explained) => {
+          const scans = indexScans(explained.Plan)
+          return { query: explained['Query Text'], scans, indexes: scans.map((scan) => scan.index), conditions: conditions(explained.Plan) }
+        })
+      return { result, plans }
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.off('notice', onNotice)
+      client.release()
+    }
+  }
+
+  /** The one statement whose text contains `marker`. */
+  const find = <T extends { query: string }>(plans: T[], marker: string): T => {
+    const found = plans.filter((p) => p.query.includes(marker))
+    expect(found, marker).toHaveLength(1)
+    return found[0]
+  }
+  /** The indexes of the one statement whose text contains `marker`. */
+  const statement = (plans: Array<{ query: string; indexes: string[] }>, marker: string) => find(plans, marker).indexes
+
+  it("can read the window's rows through idx_audit_log_history_window and the year's verifikat through idx_audit_log_history_entry", async () => {
+    // Fiscal-year mode: the window, then the rows about the year's verifikat
+    // logged after it (the fixtures' trigger rows are logged now).
+    const year = await call(FROM, TO, true, 'history')
+    expect(statement(year.plans, 'SELECT coalesce(json_agg(a)')).toContain('idx_audit_log_history_window')
+    expect(statement(year.plans, 'outside_window AS')).toContain('idx_audit_log_history_entry')
+    const month = await call(MAY_FROM, MAY_TO, false, 'history')
+    expect(statement(month.plans, 'SELECT coalesce(json_agg(a)')).toContain('idx_audit_log_history_window')
+  })
+
+  it('reads the audited tables apart from the global actions, so the table list is an index condition', async () => {
+    // The planner can read a large company's year with a plain index scan of
+    // idx_audit_log_history_window. With the table list in one OR with the
+    // global actions, only the company and the dates were index conditions
+    // there, and the rows of every other table were fetched and dropped, past
+    // the statement timeout. Read apart (20261123104000), the table list is an
+    // index condition in a bitmap plan and in a plain one alike.
+    // PostgreSQL 15, which pg-real runs, may still plan a lower-order IN list
+    // as a filter when the table is nearly empty; 17, which production runs,
+    // always makes it an index condition. So the plan's index condition is
+    // checked on 17, and on every version that no condition holds the table
+    // list together with the global actions. (A bitmap heap scan's recheck
+    // repeats the index predicate, which names INSERT and COMMIT: the global
+    // actions are told apart by their own list.)
+    const { rows } = await getPool().query<{ server_version_num: string }>('SHOW server_version_num')
+    const indexCondition = Number(rows[0].server_version_num) >= 170000
+    const globalActions = `action = ANY ('{${GLOBAL_ACTIONS.join(',')}}'`
+    for (const settings of [['enable_indexscan = off'], ['enable_bitmapscan = off']]) {
+      for (const [from, to, fiscalYear] of [[FROM, TO, true], [MAY_FROM, MAY_TO, false]] as const) {
+        const { plans } = await call(from, to, fiscalYear, 'history', settings)
+        const window = find(plans, 'SELECT coalesce(json_agg(a)')
+        const label = `${settings.join()} ${fiscalYear ? 'year' : 'month'}`
+        expect(window.conditions.filter((c) => c.includes('table_name = ANY') && c.includes(globalActions)), label).toEqual([])
+        const scans = window.scans.filter((scan) => scan.index === 'idx_audit_log_history_window')
+        expect(scans.length, label).toBeGreaterThan(0)
+        if (indexCondition) for (const scan of scans) expect(scan.cond, label).toContain('table_name = ANY')
+      }
+    }
+  })
+
+  it('returns the same rows through the history indexes as through the others', async () => {
+    // Each array comes in the order its plan reads the rows (the function's
+    // json_agg has no ORDER BY, before these indexes as after), so they are
+    // compared by id. The report orders its events itself, by time, source
+    // and id: behandlingshistorik.test.ts pins that the database's order does
+    // not reach it.
+    const byId = (rows: Array<{ id: string }>) => [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    for (const [from, to, fiscalYear] of [[FROM, TO, true], [MAY_FROM, MAY_TO, false]] as const) {
+      const history = await call(from, to, fiscalYear, 'history')
+      const others = await call(from, to, fiscalYear, 'others')
+      expect(others.plans.flatMap((p) => p.indexes).filter((i) => HISTORY_INDEXES.includes(i))).toEqual([])
+      for (const key of ['entries', 'audit', 'audit_outside', 'rattelse'] as const) {
+        expect(byId(history.result[key]), key).toEqual(byId(others.result[key]))
+      }
+      // What the indexes leave out is what the function drops: the noise is
+      // absent and the rows the report shows are there.
+      const got = new Set([...history.result.audit, ...history.result.audit_outside].map((r) => r.id))
+      for (const key of ['entryInsert', 'entryCommit', 'draftEdit', 'documentInsert', 'documentUpdate', 'lateCommit']) {
+        expect(got.has(audit[key]), key).toBe(false)
+      }
+      for (const key of fiscalYear
+        ? ['postedEdit', 'mayReverse', 'mayGuard', 'lateReverse', 'mayCommitLateReverse', 'globalOnAudited', 'globalOnNoTable']
+        : ['mayReverse', 'mayGuard']) {
+        expect(got.has(audit[key]), key).toBe(true)
+      }
     }
   })
 })

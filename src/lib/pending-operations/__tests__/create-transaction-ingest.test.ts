@@ -40,7 +40,7 @@ vi.mock('@/lib/cash-accounts/service', async () => {
 import { commitPendingOperation } from '../commit'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { cashAccountCurrencyMismatch, ensureManualCashAccount, reenableIfUnused } from '@/lib/cash-accounts/service'
 
 const mockIngest = vi.mocked(ingestTransactions)
 
@@ -168,6 +168,118 @@ describe('commitPendingOperation: create_transaction through ingestTransactions'
     expect(ensureManualCashAccount).toHaveBeenCalledWith(expect.anything(), 'company-1', '1935', 'SEK')
     expect(mockIngest.mock.calls[0][4]).toEqual({ settlementAccount: '1935', skipAutoCategorization: true })
     expect(result.data).toMatchObject({ transaction_id: 'tx-42', cash_account_id: 'ca-1935' })
+  })
+
+  describe('ledger_account whose kassakonto is in another currency', () => {
+    it('409 CASH_ACCOUNT_CURRENCY_MISMATCH in Swedish, closing the proposal as one to stage again, before ingest', async () => {
+      vi.mocked(fetchExchangeRate).mockResolvedValueOnce({ currency: 'GBP', rate: 13.4, date: '2026-11-20' } as never)
+      vi.mocked(ensureManualCashAccount).mockRejectedValueOnce(cashAccountCurrencyMismatch('1948', 'EUR', 'GBP'))
+
+      const result = await commitPendingOperation(
+        claimedSupabase(null) as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ date: '2026-11-20', amount: -42.5, description: 'Kortköp London', currency: 'GBP', ledger_account: '1948' }),
+        // The app's own approval: still closed, since the proposal itself
+        // names the account (fixable-refusals.ts keeps only fixes outside it).
+        { keepFixableRefusals: true },
+      )
+
+      expect(result).toMatchObject({
+        status: 'rejected',
+        auto_rejected: true,
+        http_status: 409,
+        code: 'CASH_ACCOUNT_CURRENCY_MISMATCH',
+        data: { ledger_account: '1948', account_currency: 'EUR', currency: 'GBP' },
+        operation_status: 'rejected',
+      })
+      expect(result.error).toBe(
+        'Bankkontot på 1948 är i EUR, men transaktionen är i GBP. Ett bankkonto har bara en valuta, så inget sparades. ' +
+          'Lägg transaktionen på ett bankkonto i GBP.',
+      )
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
+
+    it('any other kassakonto failure stays a failure', async () => {
+      vi.mocked(ensureManualCashAccount).mockRejectedValueOnce(new Error('ensureManualCashAccount lookup failed: timeout'))
+
+      const result = await commitPendingOperation(
+        claimedSupabase(null) as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ date: '2026-10-01', amount: -200, description: 'WISE KORT', currency: 'SEK', ledger_account: '1935' }),
+      )
+
+      expect(result).toMatchObject({ status: 'failed', http_status: 500 })
+      expect(result.code).toBeUndefined()
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('ledger_account whose bank account is a turned-off invoice payee', () => {
+    // The refusal as ensureManualCashAccount throws it: reenableIfUnused's
+    // own, which refuses before it touches the database.
+    async function disabledPayeeRefusal(): Promise<unknown> {
+      return reenableIfUnused({} as never, 'company-1', {
+        id: 'ca-1930',
+        enabled: false,
+        bank_connection_id: null,
+        invoice_payee: true,
+      }).catch((err: unknown) => err)
+    }
+
+    async function commitOnDisabledPayee(opts: { keepFixableRefusals?: boolean }) {
+      vi.mocked(ensureManualCashAccount).mockRejectedValueOnce(await disabledPayeeRefusal())
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-7f3a' }, error: null }) // CAS claim
+      enqueue({ data: null, error: null }) // the dispatcher's status write
+      const result = await commitPendingOperation(
+        supabase as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ date: '2026-11-20', amount: -1250, description: 'Hyra november', currency: 'SEK', ledger_account: '1930' }),
+        opts,
+      )
+      return { result, statusWrites: findCalls('pending_operations', 'update').map(([payload]) => payload) }
+    }
+
+    it('the app\'s single approval: 409 CASH_ACCOUNT_DISABLED_PAYEE in Swedish, the proposal kept pending, before ingest', async () => {
+      const { result, statusWrites } = await commitOnDisabledPayee({ keepFixableRefusals: true })
+
+      expect(result).toMatchObject({
+        status: 'failed',
+        http_status: 409,
+        code: 'CASH_ACCOUNT_DISABLED_PAYEE',
+        data: { ledger_account: '1930' },
+        operation_status: 'pending',
+      })
+      expect(result.error).toBe(
+        'Bankkontot på 1930 är avstängt och markerat att visas på fakturor, så transaktionen sparades inte. ' +
+          'En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) ' +
+          'eller dölja det på fakturor under Inställningar → Fakturering.',
+      )
+      expect(statusWrites.at(-1)).toEqual({ status: 'pending' })
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
+
+    it('every other door (bulk, keys, agents): the same refusal closes the proposal as one to stage again', async () => {
+      const { result, statusWrites } = await commitOnDisabledPayee({})
+
+      expect(result).toMatchObject({
+        status: 'rejected',
+        auto_rejected: true,
+        http_status: 409,
+        code: 'CASH_ACCOUNT_DISABLED_PAYEE',
+        data: { ledger_account: '1930' },
+        operation_status: 'rejected',
+      })
+      expect(statusWrites.at(-1)).toMatchObject({
+        status: 'rejected',
+        rejection_category: 'failed',
+        result_data: { auto_rejected: true, error_code: 'CASH_ACCOUNT_DISABLED_PAYEE', details: { ledger_account: '1930' } },
+      })
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
   })
 
   describe('ledger_account on a company card', () => {

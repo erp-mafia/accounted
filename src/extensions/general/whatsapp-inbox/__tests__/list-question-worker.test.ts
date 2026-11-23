@@ -162,6 +162,18 @@ describe('a written reply in the worker', () => {
     expect(done.processing_status).toBe('done')
   })
 
+  it('leaves a written reply alone when another worker already took the message', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeTextRow('Kontoret på Storgatan', { error_message: REPLY_MARKER }) })
+    enqueue({ data: null }) // claim: the row is no longer 'received'
+
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-t1')
+
+    expect(outcome).toEqual({ kind: 'none' })
+    expect(textMock).not.toHaveBeenCalled()
+    expect(findCalls('whatsapp_messages', 'update')).toHaveLength(1)
+  })
+
   it('does not announce an ended question again when the message is processed a second time', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeTextRow('Kontoret', { attempts: 1, error_message: REPLY_MARKER }) })

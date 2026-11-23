@@ -33,12 +33,22 @@ const log = createLogger('mcp-questions')
 export const OPEN_QUESTIONS_HOW =
   'open_questions wait for the person. When the conversation touches one, ask it in passing, in their language; never ask them all at once. Save the answer with gnubok_remember_fact and answers_question_id: that closes the question.'
 
-/** A question as every door hands it out: qualified ids, evidence as <kind>:<id> references. */
+/**
+ * A question as every door hands it out: qualified ids, evidence as
+ * <kind>:<id> references. A closed question also carries close_note and
+ * close_evidence: where the answer is, when it was closed as settled.
+ */
 export function questionView(question: CompanyQuestion) {
   return {
     question_id: question.question_id,
     status: question.status,
     close_reason: question.close_reason,
+    ...(question.status === 'closed'
+      ? {
+          close_note: question.close_note ?? null,
+          close_evidence: (question.close_evidence ?? []).map((ref) => `${ref.kind}:${ref.id}`),
+        }
+      : {}),
     question: question.question,
     why: question.why,
     options: question.options.map((option) => ({ option_id: option.id, label: option.label })),
@@ -121,6 +131,12 @@ const QUESTION_PROPERTIES = {
   question_id: { type: 'string' },
   status: { type: 'string', enum: [...QUESTION_STATUSES] },
   close_reason: { type: ['string', 'null'], description: 'Set on a closed question.' },
+  close_note: { type: ['string', 'null'], description: 'On a question closed as settled: where the answer is.' },
+  close_evidence: {
+    type: 'array',
+    items: { type: 'string' },
+    description: 'On a question closed as settled: the records that hold the answer, as <kind>:<id>.',
+  },
   question: { type: 'string' },
   why: { type: ['string', 'null'] },
   options: {
@@ -260,6 +276,17 @@ export function createQuestionTools(deps: {
         properties: {
           question_id: { type: 'string' },
           reason: { type: 'string', enum: [...QUESTION_CLOSE_REASONS] },
+          note: {
+            type: 'string',
+            maxLength: QUESTION_LIMITS.maxCloseNote,
+            description: 'With settled: where the answer is, in one sentence. Needs evidence.',
+          },
+          evidence: {
+            type: 'array',
+            maxItems: QUESTION_LIMITS.maxEvidence,
+            items: { type: 'string' },
+            description: 'With settled: the records that hold the answer, each <kind>:<id>.',
+          },
         },
         required: ['question_id', 'reason'],
       },
@@ -276,6 +303,8 @@ export function createQuestionTools(deps: {
           companyId,
           questionId,
           reason: args.reason,
+          note: args.note,
+          evidence: evidenceRefs(args.evidence),
           userId,
           via: doorOf(actor),
         })

@@ -9,6 +9,7 @@ import {
   type UnlinkedGLLine,
 } from './bank-reconciliation'
 import { findStaleBankAnchors, type StaleAnchorRow } from '@/lib/transactions/stale-bank-anchor'
+import { isBankMovementEntry } from '@/lib/transactions/bank-link'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import { proposeCoveringSets } from './covering-set-candidate'
 import {
@@ -677,7 +678,9 @@ export async function listAccountItems(
             periodStarts.has(l.entry_date) &&
             (l.source_type === 'manual' || l.source_type === 'import') &&
             l.remaining_amount == null,
-          actions: ['match', 'review'],
+          // A verifikat labelled opening_balance off a year start is listed
+          // so the bridge can name it, but no link may name it.
+          actions: isBankMovementEntry(l) ? ['match', 'review'] : ['review'],
         })
       }
       for (const it of byEntry.values()) push(it)

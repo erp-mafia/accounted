@@ -90,9 +90,6 @@ import {
   resolveStoredMimeType,
   PENDING_DOCUMENT_UPLOAD_RETENTION_MS,
   SIGNED_DOCUMENT_UPLOAD_TTL_MS,
-  isCompanyScopedDocumentPath,
-  companyScopedDocumentPath,
-  legacyDocumentPath,
   documentStoragePathCandidates,
   downloadDocumentObject,
   _resetBucketVerified,
@@ -121,6 +118,8 @@ describe('receipt image upload metadata', () => {
   const pairs = receiptImageFormats.flatMap((actual) =>
     receiptImageFormats.map((declared) => ({ actual, declared })),
   )
+  // A signed upload's id, as createPendingDocumentUpload issues it.
+  const UPLOAD = '77777777-7777-4777-8777-777777777777'
 
   it.each([...receiptImageFormats, 'embedded-pdf'] as const)('uses a decodable %s fixture', async (format) => {
     const decoded = await sharp(Buffer.from(receiptImage(format))).raw().toBuffer({ resolveWithObject: true })
@@ -223,10 +222,10 @@ describe('receipt image upload metadata', () => {
   it.each(pairs)('completes and retries $actual declared $declared with canonical Storage metadata', async ({ actual, declared }) => {
     const buffer = receiptImage(actual)
     const fileName = `receipt.${declared}`
-    const permanentPath = buildReservedDocumentStoragePath('company-1', 'user-1', 'upload-1', fileName)
-    const pendingPath = buildPendingDocumentStoragePath('company-1', 'user-1', 'upload-1', fileName)
+    const permanentPath = buildReservedDocumentStoragePath('company-1', 'user-1', UPLOAD, fileName)
+    const pendingPath = buildPendingDocumentStoragePath('company-1', 'user-1', UPLOAD, fileName)
     const document = makeDocumentAttachment({
-      id: 'upload-1', file_name: fileName, mime_type: `image/${actual}`,
+      id: UPLOAD, file_name: fileName, mime_type: `image/${actual}`,
       storage_path: permanentPath, sha256_hash: await computeSHA256(buffer),
     })
     results = [{ data: null, error: null }, { data: document, error: null }]
@@ -238,7 +237,7 @@ describe('receipt image upload metadata', () => {
     serviceClientOverride = makeClient({ upload, download, remove })
     const client = makeClient()
     const complete = () => completePendingDocumentUpload(
-      client as never, 'company-1', 'user-1', 'upload-1', fileName, `image/${declared}`,
+      client as never, 'company-1', 'user-1', UPLOAD, fileName, `image/${declared}`,
     )
 
     const completed = await complete()
@@ -247,7 +246,7 @@ describe('receipt image upload metadata', () => {
       contentType: `image/${actual}`, upsert: false,
     })
     expect(client.from.mock.results[1].value.insert).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'upload-1', file_name: fileName, mime_type: `image/${actual}`,
+      id: UPLOAD, file_name: fileName, mime_type: `image/${actual}`,
       sha256_hash: document.sha256_hash,
     }))
     expect(remove).toHaveBeenCalledWith([pendingPath])
@@ -259,9 +258,9 @@ describe('receipt image upload metadata', () => {
 
   it('keeps a finalized object on an insert failure and resumes without pending bytes', async () => {
     const buffer = receiptImage('jpeg')
-    const permanentPath = buildReservedDocumentStoragePath('company-1', 'user-1', 'upload-1', 'receipt.png')
+    const permanentPath = buildReservedDocumentStoragePath('company-1', 'user-1', UPLOAD, 'receipt.png')
     const document = makeDocumentAttachment({
-      id: 'upload-1', file_name: 'receipt.png', mime_type: 'image/jpeg',
+      id: UPLOAD, file_name: 'receipt.png', mime_type: 'image/jpeg',
       storage_path: permanentPath, sha256_hash: await computeSHA256(buffer),
     })
     results = [
@@ -274,7 +273,7 @@ describe('receipt image upload metadata', () => {
     const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
     serviceClientOverride = makeClient({ download, upload, remove })
     const complete = () => completePendingDocumentUpload(
-      makeClient() as never, 'company-1', 'user-1', 'upload-1', 'receipt.png', 'image/png',
+      makeClient() as never, 'company-1', 'user-1', UPLOAD, 'receipt.png', 'image/png',
     )
     await expect(complete()).rejects.toThrow('connection lost')
     expect(remove).not.toHaveBeenCalledWith([permanentPath])
@@ -303,7 +302,7 @@ describe('receipt image upload metadata', () => {
     })
     const client = makeClient()
     await expect(completePendingDocumentUpload(
-      client as never, 'company-1', 'user-1', 'upload-1', 'receipt.png', 'image/png',
+      client as never, 'company-1', 'user-1', UPLOAD, 'receipt.png', 'image/png',
     )).rejects.toThrow(/different file content|different content type/)
     expect(remove).not.toHaveBeenCalled()
     expect(client.from).toHaveBeenCalledOnce()
@@ -312,8 +311,8 @@ describe('receipt image upload metadata', () => {
   it('concurrent signed completions converge without replacing or deleting archived bytes', async () => {
     const buffer = receiptImage('jpeg')
     const objects = new Map<string, Blob>()
-    const pendingPath = buildPendingDocumentStoragePath('company-1', 'user-1', 'upload-1', 'receipt.png')
-    const permanentPath = buildReservedDocumentStoragePath('company-1', 'user-1', 'upload-1', 'receipt.png')
+    const pendingPath = buildPendingDocumentStoragePath('company-1', 'user-1', UPLOAD, 'receipt.png')
+    const permanentPath = buildReservedDocumentStoragePath('company-1', 'user-1', UPLOAD, 'receipt.png')
     objects.set(pendingPath, new Blob([buffer], { type: 'image/png' }))
     const upload = vi.fn(async (path: string, bytes: ArrayBuffer, options: { contentType: string }) => {
       if (objects.has(path)) return { data: null, error: { message: 'already exists' } }
@@ -350,7 +349,7 @@ describe('receipt image upload metadata', () => {
     const handler = vi.fn()
     eventBus.on('document.uploaded', handler)
     const completed = await Promise.all(['image/png', 'image/webp'].map((type) =>
-      completePendingDocumentUpload(client as never, 'company-1', 'user-1', 'upload-1', 'receipt.png', type),
+      completePendingDocumentUpload(client as never, 'company-1', 'user-1', UPLOAD, 'receipt.png', type),
     ))
     expect(completed[0].document).toEqual(completed[1].document)
     expect(completed[0].document.mime_type).toBe('image/jpeg')
@@ -365,7 +364,7 @@ describe('receipt image upload metadata', () => {
 
   it('accepts a lost final upload response only after verifying the object', async () => {
     const buffer = receiptImage('jpeg')
-    const document = makeDocumentAttachment({ id: 'upload-1', mime_type: 'image/jpeg' })
+    const document = makeDocumentAttachment({ id: UPLOAD, mime_type: 'image/jpeg' })
     results = [{ data: null, error: null }, { data: document, error: null }]
     serviceClientOverride = makeClient({
       upload: vi.fn().mockResolvedValue({ data: null, error: { message: 'response lost' } }),
@@ -374,7 +373,7 @@ describe('receipt image upload metadata', () => {
         .mockResolvedValueOnce({ data: new Blob([buffer], { type: 'image/jpeg' }), error: null }),
     })
     const completed = await completePendingDocumentUpload(
-      makeClient() as never, 'company-1', 'user-1', 'upload-1', 'receipt.png', 'image/png',
+      makeClient() as never, 'company-1', 'user-1', UPLOAD, 'receipt.png', 'image/png',
     )
     expect(completed).toEqual({ document, buffer })
   })
@@ -389,7 +388,7 @@ describe('receipt image upload metadata', () => {
       remove,
     })
     await expect(completePendingDocumentUpload(
-      makeClient() as never, 'company-1', 'user-1', 'upload-1', 'receipt.png', 'application/pdf',
+      makeClient() as never, 'company-1', 'user-1', UPLOAD, 'receipt.png', 'application/pdf',
     )).rejects.toMatchObject({ code: 'DOC_UPLOAD_INVALID_CONTENT' })
     expect(remove).not.toHaveBeenCalled()
   })
@@ -1104,6 +1103,18 @@ describe('model-free signed document uploads', () => {
       // A folder entry (no id) is not an upload.
       await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toBeNull()
     })
+
+    it('answers null for an upload id in any other form than the server issues, without a lookup', async () => {
+      const client = makeClient()
+      const list = vi.fn()
+      serviceClientOverride = makeClient({ list })
+
+      for (const given of ['upload-1', `${uploadId}_x`, `x${uploadId}`]) {
+        await expect(findPendingDocumentUploadName(client as never, company, user, given)).resolves.toBeNull()
+      }
+      expect(client.from).not.toHaveBeenCalled()
+      expect(list).not.toHaveBeenCalled()
+    })
   })
 
   it('creates a company-scoped signed upload reservation with a two-hour expiry', async () => {
@@ -1534,36 +1545,32 @@ describe('storage key layout helpers', () => {
     )
   })
 
-  it('recognises company-scoped keys', () => {
-    expect(isCompanyScopedDocumentPath(`documents/${company}/${user}/1_a.pdf`, company)).toBe(true)
-    expect(isCompanyScopedDocumentPath(`documents/${user}/1_a.pdf`, company)).toBe(false)
+  it('builds a pending or permanent key only for an upload id in the form the server issues', () => {
+    const uploadId = '33333333-3333-4333-8333-333333333333'
+    const outcome = (build: () => string): unknown => {
+      try {
+        return { built: build() }
+      } catch (error) {
+        return error
+      }
+    }
+    for (const given of ['upload-1', '', `${uploadId} `, `${uploadId}_x`, `${uploadId}/x`, `x${uploadId}`]) {
+      for (const build of [buildPendingDocumentStoragePath, buildReservedDocumentStoragePath]) {
+        expect(outcome(() => build(company, user, given, 'faktura.pdf'))).toMatchObject({
+          code: 'DOCUMENT_UPLOAD_NOT_FOUND',
+        })
+      }
+    }
   })
 
-  it('translates legacy to company-scoped and back', () => {
-    const legacy = `documents/${user}/1_a.pdf`
-    const scoped = `documents/${company}/${user}/1_a.pdf`
-    expect(companyScopedDocumentPath(legacy, company)).toBe(scoped)
-    expect(legacyDocumentPath(scoped, company)).toBe(legacy)
-    // Already in the target layout: no translation offered.
-    expect(companyScopedDocumentPath(scoped, company)).toBeNull()
-    expect(legacyDocumentPath(legacy, company)).toBeNull()
-  })
-
-  it('offers no alternate for keys outside the documents/ root', () => {
-    // The MCP audit-package tool writes `{userId}/audit-packages/...`, which
-    // is not a document_attachments key and must never be rewritten.
-    const foreign = `${user}/audit-packages/1_archive.zip`
-    expect(companyScopedDocumentPath(foreign, company)).toBeNull()
-    expect(documentStoragePathCandidates(foreign, company)).toEqual([foreign])
-  })
-
-  it('lists the stored pointer first, then the alternate layout', () => {
+  it('re-exports the stored-key rule of storage-key.ts', () => {
+    // The rule's own cases are in storage-key.test.ts; the service keeps its exports.
     const legacy = `documents/${user}/1_a.pdf`
     const scoped = `documents/${company}/${user}/1_a.pdf`
     expect(documentStoragePathCandidates(legacy, company)).toEqual([legacy, scoped])
-    expect(documentStoragePathCandidates(scoped, company)).toEqual([scoped, legacy])
-    // No companyId: nothing to derive, stored pointer only.
-    expect(documentStoragePathCandidates(legacy, null)).toEqual([legacy])
+    expect(documentStoragePathCandidates(scoped, company)).toEqual([scoped])
+    // A key outside the documents/ root (the MCP audit-package keys) is never a document's.
+    expect(documentStoragePathCandidates(`${user}/audit-packages/1_archive.zip`, company)).toEqual([])
   })
 })
 
@@ -1589,7 +1596,7 @@ describe('dual-layout read helpers', () => {
     expect(download.mock.calls[0]![0]).toBe(legacy)
   })
 
-  it('downloadDocumentObject falls back to the legacy key', async () => {
+  it('downloadDocumentObject never falls back from a company-scoped key to another folder', async () => {
     const download = vi.fn(async (path: string) =>
       path === legacy
         ? { data: new Blob(['ok']), error: null }
@@ -1598,7 +1605,8 @@ describe('dual-layout read helpers', () => {
     const supabase = makeClient({ download })
 
     const result = await downloadDocumentObject(supabase as never, scoped, company)
-    expect(result.resolvedPath).toBe(legacy)
+    expect(result.resolvedPath).toBeNull()
+    expect(download.mock.calls.map((call) => call[0])).toEqual([scoped])
   })
 
   it('downloadDocumentObject reports the stored-pointer error when both fail', async () => {
@@ -2064,6 +2072,27 @@ describe('validated mime type persistence (stored type is what the bytes are)', 
 
     expect(completed.document).toEqual(document)
     expect(move).not.toHaveBeenCalled()
+  })
+
+  it('completePendingDocumentUpload retry reads no completed row whose key is not inside the company', async () => {
+    const buffer = isoBmff('heic')
+    const document = makeDocumentAttachment({
+      id: uploadId,
+      user_id: user,
+      company_id: company,
+      file_name: 'IMG_0001.heif',
+      mime_type: 'image/heic',
+      storage_path: 'documents/another-company/user-9/IMG_0001.heif',
+      sha256_hash: await computeSHA256(buffer),
+    })
+    results = [{ data: document, error: null }]
+    const download = vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null })
+    serviceClientOverride = makeClient({ download })
+
+    await expect(
+      completePendingDocumentUpload(makeClient() as never, company, user, uploadId, 'IMG_0001.heif', 'image/heif'),
+    ).rejects.toThrow(/Failed to read completed document upload/)
+    expect(download).not.toHaveBeenCalled()
   })
 
   it('completePendingDocumentUpload retry still rejects a genuinely different stored type', async () => {

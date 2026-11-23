@@ -17,6 +17,9 @@
  *     with a credit note (BFL 5 kap 5 §).
  *
  * Uncredit:
+ *   - only from the original: a credit note's own id is refused, whatever
+ *     its status (it rests at 'credited' too, so the status alone cannot
+ *     tell the two apart);
  *   - the credit note's posted verifikat is cancelled with a storno
  *     (reverseEntry, through the posting port), never edited or deleted; an
  *     already reversed or never posted verifikat is fine and the row cleanup
@@ -40,7 +43,7 @@ import type { SupplierInvoice, SupplierInvoicePayment } from '@/types'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events'
 import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
-import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import {
@@ -55,6 +58,7 @@ import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/
 import {
   canMarkSupplierInvoiceBankEntered,
   payableSupplierInvoiceStatuses,
+  resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -224,9 +228,14 @@ type OriginalWithPayments = SupplierInvoice & { payments?: SupplierInvoicePaymen
 /**
  * The status and remaining amount the original returns to once its credit
  * is undone, from what is actually paid. Pure.
+ *
+ * With nothing paid it rests where resolveUnsettledStatus puts it: the
+ * attest mark (approved_at) decides 'approved', never the registration
+ * verifikat, which is posted before attest. Reading the verifikat sent a
+ * never attested invoice back as 'approved', past attest (crm#2165).
  */
 export function restoredAfterUncredit(
-  original: Pick<SupplierInvoice, 'total' | 'due_date' | 'registration_journal_entry_id'>,
+  original: Pick<SupplierInvoice, 'total' | 'due_date' | 'approved_at'>,
   payments: ReadonlyArray<Pick<SupplierInvoicePayment, 'amount'>>,
   now: Date = new Date(),
 ): { status: SupplierInvoice['status']; remaining_amount: number } {
@@ -239,16 +248,11 @@ export function restoredAfterUncredit(
     status = 'paid'
   } else if (paidSum > 0) {
     status = 'partially_paid'
-  } else if (original.due_date && isPastDue(original.due_date, todayIsoStockholm(now))) {
-    status = 'overdue'
-  } else if (original.registration_journal_entry_id) {
-    // A posted verifikat exists: safe to restore to 'approved'.
-    status = 'approved'
   } else {
-    // No registration verifikat (kontantmetoden, or an inconsistent row):
-    // 'approved' without a verifikat would break sambandskravet (BFL 4 kap
-    // 2 §), so fall back to 'registered'.
-    status = 'registered'
+    status = resolveUnsettledStatus(
+      { due_date: original.due_date, remaining_amount: remaining, approved_at: original.approved_at },
+      todayIsoStockholm(now),
+    )
   }
   return { status, remaining_amount: remaining }
 }
@@ -279,6 +283,26 @@ export async function uncreditSupplierInvoice(
     .single()
   if (fetchError || !row) return NOT_FOUND
   const original = row as OriginalWithPayments
+
+  // A credit is undone on the original, never on the credit note. The
+  // credit note rests at 'credited' too, so its id passed the gate below:
+  // the dry run (and with it the MCP staging) promised to restore the credit
+  // note as an invoice to pay, and the commit tried a write that
+  // supplier_invoices_credit_note_not_payable refuses. Refused before any
+  // other read, so the dry run and every door answer the same. The details
+  // say where to go instead: the original, unless there is none or this
+  // credit is already undone (reversed).
+  if (original.is_credit_note) {
+    return {
+      ok: false,
+      code: 'SI_UNCREDIT_CREDIT_NOTE',
+      details: {
+        credit_note_id: original.id,
+        credit_note_status: original.status,
+        credited_invoice_id: original.credited_invoice_id ?? null,
+      },
+    }
+  }
 
   // Idempotent no-op: an already-uncredited or never-credited invoice just
   // answers the row, so a client retry can call this blindly.

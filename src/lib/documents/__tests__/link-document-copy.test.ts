@@ -41,7 +41,7 @@ const CORRECTION = {
 }
 const OPEN_PERIOD = { id: PERIOD, period_start: '2025-09-01', is_closed: false, locked_at: null, closed_externally: false, closing_entry_id: null }
 const SOURCE = {
-  id: DOC, storage_path: 'company-1/user-1/faktura.pdf', sha256_hash: SHA, file_name: 'faktura.pdf',
+  id: DOC, storage_path: 'documents/company-1/user-1/faktura.pdf', sha256_hash: SHA, file_name: 'faktura.pdf',
   mime_type: 'application/pdf', upload_source: 'api',
 }
 
@@ -73,6 +73,20 @@ describe('checkDocumentLink with asCopy', () => {
 })
 
 describe('linkDocumentCopyToVoucher', () => {
+  it('copies nothing from a source row whose key is not inside the company', async () => {
+    const { supabase } = supabaseFor([
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: OPEN_PERIOD },
+      { data: { ...SOURCE, storage_path: 'documents/company-2/user-9/faktura.pdf' } },
+      { data: [] },
+    ])
+
+    await expect(
+      linkDocumentCopyToVoucher(asClient(supabase), 'company-1', 'user-1', { document_id: DOC, journal_entry_id: JE }),
+    ).rejects.toThrow(/failed to read the source file/)
+    expect(download).not.toHaveBeenCalled()
+    expect(uploadDocument).not.toHaveBeenCalled()
+  })
+
   it('archives a byte-identical copy on the verifikat, provenance kept, the source untouched', async () => {
     const { supabase, findCall } = supabaseFor([
       { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: OPEN_PERIOD }, // the link rules

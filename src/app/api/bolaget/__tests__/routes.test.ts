@@ -17,6 +17,7 @@ vi.mock('@/lib/bolaget/share-register', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bolaget/share-register')>()),
   loadShareRegisterData: vi.fn(),
   registerShareEvent: vi.fn(),
+  completeShareRegisterSetup: vi.fn(),
 }))
 vi.mock('@/lib/bolaget/roles', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bolaget/roles')>()),
@@ -28,6 +29,7 @@ vi.mock('@/lib/bolaget/people', async (importOriginal) => ({
   loadRegisterParties: vi.fn().mockResolvedValue(new Map()),
   loadFullIdentity: vi.fn().mockResolvedValue(new Map()),
   savePersonPrivate: vi.fn(),
+  renameRegisterParty: vi.fn(),
 }))
 vi.mock('@/lib/bolaget/beneficial-owners', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bolaget/beneficial-owners')>()),
@@ -41,9 +43,9 @@ vi.mock('@/lib/bolaget/session', async (importOriginal) => ({
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { bolagetGate } from '@/lib/bolaget/gate'
-import { loadShareRegisterData, registerShareEvent } from '@/lib/bolaget/share-register'
+import { completeShareRegisterSetup, loadShareRegisterData, registerShareEvent } from '@/lib/bolaget/share-register'
 import { addCompanyRole, loadRoles } from '@/lib/bolaget/roles'
-import { loadFullIdentity, loadRegisterParties, savePersonPrivate } from '@/lib/bolaget/people'
+import { loadFullIdentity, loadRegisterParties, renameRegisterParty, savePersonPrivate } from '@/lib/bolaget/people'
 import { confirmBeneficialOwners } from '@/lib/bolaget/beneficial-owners'
 import { replayShareRegister, summarizeHoldings } from '@/lib/bolaget/register-state'
 import { reconcileWithSettings } from '@/lib/bolaget/reconcile'
@@ -51,6 +53,7 @@ import type { ShareRegisterData } from '@/lib/bolaget/share-register'
 import type { RolesView } from '@/lib/bolaget/roles'
 import { GET as getRegister } from '../share-register/route'
 import { POST as postEvent } from '../share-register/events/route'
+import { POST as postSetup } from '../share-register/setup/route'
 import { PATCH as patchPerson } from '../people/[partyId]/route'
 import { POST as postRole } from '../roles/route'
 import { POST as postAssessment } from '../beneficial-owners/assessments/route'
@@ -76,6 +79,7 @@ function registerData(): ShareRegisterData {
   return {
     as_of: '2026-10-29',
     is_avstamningsbolag: false,
+    setup_completed_at: null,
     classes,
     events,
     replay,
@@ -216,6 +220,87 @@ describe('PATCH /api/bolaget/people/{partyId}', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ party_id: ANNA, personnummer_masked: 'XXXXXXXX-1234' })
     expect(savePersonPrivate).toHaveBeenCalledWith('company-1', ANNA, { personnummer: '19800101-1234', city: 'Lund' })
+    // No name was sent: the party is not touched.
+    expect(renameRegisterParty).not.toHaveBeenCalled()
+  })
+
+  it('checks the name, saves the particulars, then writes the name', async () => {
+    const renamed = { ok: true as const, party_id: ANNA, name: 'Ek Holding AB', org_number: '5560000001', changed: true }
+    vi.mocked(renameRegisterParty).mockResolvedValue(renamed)
+    vi.mocked(savePersonPrivate).mockResolvedValueOnce({ ok: true, personnummer_masked: null })
+    const res = await patch({ name: 'Ek Holding AB', org_number: '556000-0001', city: 'Lund' })
+    expect(res.status).toBe(200)
+    const calls = vi.mocked(renameRegisterParty).mock.calls
+    expect(calls.map((call) => call.slice(1))).toEqual([
+      [ANNA, { name: 'Ek Holding AB', org_number: '556000-0001' }, { dryRun: true }],
+      [ANNA, { name: 'Ek Holding AB', org_number: '556000-0001' }],
+    ])
+    expect(savePersonPrivate).toHaveBeenCalledWith('company-1', ANNA, { city: 'Lund' })
+    // The check runs before the particulars are saved, the write after.
+    const order = [calls.length > 0 ? vi.mocked(renameRegisterParty).mock.invocationCallOrder[0]! : 0, vi.mocked(savePersonPrivate).mock.invocationCallOrder[0]!, vi.mocked(renameRegisterParty).mock.invocationCallOrder[1]!]
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+  })
+
+  it('saves nothing when the name is refused, and says why', async () => {
+    vi.mocked(renameRegisterParty).mockResolvedValueOnce({ ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: 'Organisationsnumret är inte giltigt.' })
+    const res = await patch({ org_number: '1234', city: 'Lund' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatchObject({ code: 'BOLAGET_PARTY_INVALID', message: 'Organisationsnumret är inte giltigt.' })
+    expect(savePersonPrivate).not.toHaveBeenCalled()
+  })
+
+  it('leaves the name alone when the particulars are refused', async () => {
+    vi.mocked(renameRegisterParty).mockResolvedValue({ ok: true, party_id: ANNA, name: 'Anna Berg', org_number: null, changed: true })
+    vi.mocked(savePersonPrivate).mockResolvedValueOnce({ ok: false, code: 'BOLAGET_PERSONNUMMER_INVALID' })
+    const res = await patch({ name: 'Anna Berg', personnummer: '123' })
+    expect(res.status).toBe(400)
+    // Checked, never written.
+    expect(vi.mocked(renameRegisterParty).mock.calls.map((call) => call[3])).toEqual([{ dryRun: true }])
+  })
+
+  it('refuses an empty name before anything is read', async () => {
+    expect((await patch({ name: '  ' })).status).toBe(400)
+    expect(renameRegisterParty).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/bolaget/share-register/setup', () => {
+  const post = (body: unknown = {}, q = '') => postSetup(createMockRequest(`/api/bolaget/share-register/setup${q}`, { method: 'POST', body }), noParams)
+
+  it('returns 401 when not authenticated', async () => {
+    unauthenticated()
+    expect((await post()).status).toBe(401)
+    expect(completeShareRegisterSetup).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 outside the rollout and refuses an unknown field', async () => {
+    vi.mocked(bolagetGate).mockResolvedValueOnce('BOLAGET_DISABLED')
+    expect((await post()).status).toBe(404)
+    expect((await post({ setup_completed_at: '2020-01-01' })).status).toBe(400)
+    expect(completeShareRegisterSetup).not.toHaveBeenCalled()
+  })
+
+  it('previews with dry_run and completes the setup otherwise', async () => {
+    vi.mocked(completeShareRegisterSetup).mockResolvedValueOnce({ ok: true, dryRun: true, preview: { total_shares: 100, holders: 1, last_event_number: 1, warnings: [] } })
+    const preview = await post({}, '?dry_run=true')
+    expect(preview.status).toBe(200)
+    expect((await preview.json()).data).toMatchObject({ total_shares: 100, holders: 1 })
+    expect(vi.mocked(completeShareRegisterSetup).mock.calls[0]![2]).toEqual({ dryRun: true })
+
+    vi.mocked(completeShareRegisterSetup).mockResolvedValueOnce({ ok: true, data: { setup_completed_at: '2026-10-29T09:00:00Z', total_shares: 100, holders: 1, completed_now: true } })
+    const res = await post({ expected_last_event_number: 1 })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.setup_completed_at).toBe('2026-10-29T09:00:00Z')
+    expect(vi.mocked(completeShareRegisterSetup).mock.calls[1]![1]).toEqual({ expected_last_event_number: 1 })
+  })
+
+  it('answers an empty register and a register that has moved on with their codes', async () => {
+    vi.mocked(completeShareRegisterSetup).mockResolvedValueOnce({ ok: false, code: 'SHARE_REGISTER_EMPTY' })
+    const empty = await post()
+    expect(empty.status).toBe(409)
+    expect((await empty.json()).error.code).toBe('SHARE_REGISTER_EMPTY')
+    vi.mocked(completeShareRegisterSetup).mockResolvedValueOnce({ ok: false, code: 'SHARE_REGISTER_STALE', details: { last_event_number: 2 } })
+    expect((await post({ expected_last_event_number: 1 })).status).toBe(409)
   })
 })
 

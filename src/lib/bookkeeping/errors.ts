@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { DimensionValidationError, MandatoryDimensionMissingError } from './dimension-errors'
-import { conflictCode } from '@/lib/errors/structured-errors'
+import { conflictCode, getErrorEntry } from '@/lib/errors/structured-errors'
+import { databaseRefusal, type DatabaseRefusalCode } from '@/lib/errors/database-refusal'
 
 // ============================================================================
 // Dimension validation errors: the classes live in ./dimension-errors.ts
@@ -589,6 +590,7 @@ export type MeaninglessCorrectionReason =
   | 'identical_to_original'
   | 'no_date_change'
   | 'negates_original'
+  | 'currency_incomplete'
 
 export class MeaninglessCorrectionError extends Error {
   readonly code = MEANINGLESS_CORRECTION
@@ -600,7 +602,9 @@ export class MeaninglessCorrectionError extends Error {
           ? 'New date equals the current date: nothing to move.'
           : reason === 'negates_original'
             ? 'Correction lines are the original with debit and credit swapped: the storno already reverses the original, so this would reverse it a second time. To only cancel the entry, reverse it (storno). Pass sides_swapped=true only when the original itself was booked with debit and credit swapped.'
-            : 'Correction lines are identical to the original entry: nothing to correct.'
+            : reason === 'currency_incomplete'
+              ? "Correction changes only currency, and a line's currency is incomplete: a line whose original is in a foreign currency would post in kronor without it, and a foreign-currency line needs its amount in currency and rate. State currency, amount_in_currency and exchange_rate on every such line, or currency 'SEK' to post it in kronor."
+              : 'Correction lines are identical to the original entry: nothing to correct.'
     )
     this.name = 'MeaninglessCorrectionError'
   }
@@ -1082,6 +1086,7 @@ export class BookkeepingDatabaseError extends Error {
     | typeof BOOKKEEPING_DATABASE_ERROR
     | typeof BANK_BOOKING_CONTEXT_REQUIRED
     | ReturnType<typeof conflictCode>
+    | DatabaseRefusalCode
   constructor(
     public readonly operation: BookkeepingOperation,
     public readonly cause: string | undefined,
@@ -1093,14 +1098,54 @@ export class BookkeepingDatabaseError extends Error {
     // user reads what was refused rather than a generic conflict. So does
     // the bank-booking guard's 23514 for a bank row's verifikat that does not
     // name its row: no retry posts it, and "Verifikationen kunde inte sparas.
-    // Försök igen." sent a person round that loop (2026-11-16).
+    // Försök igen." sent a person round that loop (2026-11-16). And so does a
+    // write behind a period lock, a closed year or the lock date: the lock
+    // holds, so it is PERIOD_LOCKED, not a retryable 500 (2026-11-22).
+    const refusal = cause ? databaseRefusal(cause) : null
     this.code =
       pgCode === 'PT409'
         ? conflictCode(cause)
-        : pgCode === '23514' && cause === BANK_BOOKING_CONTEXT_REQUIRED
+        : isBankBookingContextRefusal(pgCode, cause)
           ? BANK_BOOKING_CONTEXT_REQUIRED
-          : BOOKKEEPING_DATABASE_ERROR
+          : refusal
+            ? refusal.code
+            : BOOKKEEPING_DATABASE_ERROR
   }
+}
+
+/**
+ * guard_bank_booking_context's refusal as the database raises it: 23514,
+ * named BANK_BOOKING_CONTEXT_REQUIRED. An answer, not a failure: the doors
+ * reply 409 with where to book the bank row instead.
+ */
+export function isBankBookingContextRefusal(pgCode: unknown, message: unknown): boolean {
+  return pgCode === '23514' && message === BANK_BOOKING_CONTEXT_REQUIRED
+}
+
+/**
+ * An SIE voucher chunk refused by journal_import_source_owned_idx: one of its
+ * vouchers has the source series and number of a posted imported verifikat
+ * of the same fiscal year. The chunk is refused the same way on every try,
+ * so the SIE worker stops the job instead of retrying it. `voucherRef` names
+ * the voucher ("A762") when the refusal's key does.
+ */
+export class SIESourceVoucherTakenError extends BookkeepingDatabaseError {
+  constructor(cause: string, readonly voucherRef: string | null) {
+    super('import_sie_chunk', cause, '23505')
+    this.name = 'SIESourceVoucherTakenError'
+  }
+}
+
+/**
+ * The journal_import_source_owned_idx refusal in an import_sie_chunk error,
+ * or null for any other failure. The unique violation's detail names the key:
+ * "Key (company_id, fiscal_period_id, source_voucher_series,
+ * source_voucher_number)=(<uuid>, <uuid>, A, 762) already exists."
+ */
+export function sieSourceVoucherTaken(error: { code?: string; message: string; details?: string | null }): SIESourceVoucherTakenError | null {
+  if (error.code !== '23505' || !error.message.includes('"journal_import_source_owned_idx"')) return null
+  const key = /=\([0-9a-f-]{36}, [0-9a-f-]{36}, (.*), (-?\d+)\) already exists/.exec(error.details ?? '')
+  return new SIESourceVoucherTakenError(error.message, key ? `${key[1]!.trim()}${key[2]}` : null)
 }
 
 export interface UnusedVoucherAllocation {
@@ -1226,7 +1271,7 @@ export function accountsNotInChartResponse(err: AccountsNotInChartError) {
  *
  * Response shape: { error: { code, message, details? } }
  * HTTP status: 404 for *_NOT_FOUND, 409 for concurrent/duplicate conflicts,
- * 500 for BOOKKEEPING_DATABASE_ERROR, 400 otherwise.
+ * 500 for BOOKKEEPING_DATABASE_ERROR, 400 for a lock refusal and otherwise.
  */
 export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof AccountsNotInChartError) {
@@ -1616,6 +1661,9 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
   }
 
   if (err instanceof BookkeepingDatabaseError) {
+    // A refusal the database raised on purpose answers with its code's
+    // registry status: 409 for a conflict or the bank-booking guard, 400 for
+    // a lock (PERIOD_LOCKED, as the doors that check the lock first answer).
     return NextResponse.json(
       {
         error: {
@@ -1624,7 +1672,7 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           details: { operation: err.operation },
         },
       },
-      { status: err.code === BOOKKEEPING_DATABASE_ERROR ? 500 : 409 }
+      { status: err.code === BOOKKEEPING_DATABASE_ERROR ? 500 : (getErrorEntry(err.code)?.httpStatus ?? 409) }
     )
   }
 

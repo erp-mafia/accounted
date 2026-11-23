@@ -22,7 +22,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { useFormat } from '@/lib/hooks/use-format'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
-import { useCapability, useCompany } from '@/contexts/CompanyContext'
+import { useBookingScreenEnabled, useCapability, useCompany } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
 import type { DocumentToSignDue, PaymentFailedDue, PaymentsVerificationDue, SuggestedMatch, SupplierPayeeChangeDue } from '@/lib/worklist/types'
@@ -388,6 +388,7 @@ export default function AttGoraSection({
   // must not offer a row that jumps to the gated workspace. Mirrors the sidebar
   // + command palette gate; the page itself enforces it server-side.
   const hasAi = useCapability(CAPABILITY.ai)
+  const bookingScreen = useBookingScreenEnabled()
   const { canWrite } = useViewerLock()
 
   const [counts, setCounts] = useState(worklist.counts)
@@ -581,6 +582,7 @@ export default function AttGoraSection({
       invoiceSetRows: invoiceSetRows.length,
       personAttestRows: attestSteps.length,
       openQuestions,
+      bookingScreen,
     }).map((spec) => [spec.key, spec]),
   )
   // A step that is many things names them: its heading says how many of what
@@ -758,7 +760,9 @@ export default function AttGoraSection({
     })
   }
 
-  // Bokför
+  // Bokför: with the booking screen, one row for the bank rows and the
+  // documents, the list that holds both.
+  specRow('to-book', ArrowsRightLeftIcon)
   specRow('book-transactions', ArrowsRightLeftIcon)
   specRow('book-skattekonto', BuildingLibraryIcon)
   // One row per bank row that settles several invoices of one counterparty

@@ -13,6 +13,7 @@ vi.mock('@/lib/extensions/registry', () => ({
 }))
 
 import { ensureTicSnapshot } from '../tic-fetch'
+import { FISCAL_YEAR_REOPEN_REGISTRY_KEYS } from '@/lib/core/bookkeeping/fiscal-year-reopen'
 
 // `ensureTicSnapshot` is the single chokepoint between core and the TIC
 // extension's profile service. Every snapshot fetch goes
@@ -307,6 +308,7 @@ describe('ensureTicSnapshot: degraded paths', () => {
     })
 
     expect(result.source).toBe('fallback')
+    expect(result.reason).toBe('not_found')
     // Degrade to the stale snapshot rather than crash: callers depend on
     // this contract so a TIC outage never blocks them.
     expect(result.snapshot).toEqual(staleSnapshot)
@@ -331,6 +333,7 @@ describe('ensureTicSnapshot: degraded paths', () => {
     })
 
     expect(result.source).toBe('fallback')
+    expect(result.reason).toBe('unavailable')
     expect(result.snapshot).toEqual(staleSnapshot)
   })
 })
@@ -350,7 +353,7 @@ describe('ensureTicSnapshot: no TIC provider', () => {
 
     const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
 
-    expect(result).toEqual({ snapshot: staleSnapshot, source: 'fallback' })
+    expect(result).toEqual({ snapshot: staleSnapshot, source: 'fallback', reason: 'unavailable' })
     expect(updateCalls).toHaveLength(0)
   })
 
@@ -363,6 +366,206 @@ describe('ensureTicSnapshot: no TIC provider', () => {
 
     const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID, timeoutMs: 10 })
 
-    expect(result).toEqual({ snapshot: null, source: 'fallback' })
+    expect(result).toEqual({ snapshot: null, source: 'fallback', reason: 'unavailable' })
+  })
+})
+
+// A detail call that failed (budget spent, timeout) leaves its section empty.
+// The profile names those keys in incompleteSections, so an empty board reads
+// as "could not ask", never as "no board".
+describe('ensureTicSnapshot: incomplete sections', () => {
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000).toISOString()
+
+  it('reuses an incomplete snapshot for an hour, then asks again', async () => {
+    const cached = { statuses: [], representatives: [], incompleteSections: ['representatives', 'statuses'] }
+    const recent = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: cached, tic_snapshot_fetched_at: hoursAgo(0.5) },
+      error: null,
+    })
+    expect((await ensureTicSnapshot({ supabase: recent.supabase, companyId: COMPANY_ID })).source).toBe('cached')
+    expect(profileService).not.toHaveBeenCalled()
+
+    const complete = { statuses: [{ code: 'isActive' }], representatives: [{ name: 'Anna' }], incompleteSections: [] }
+    profileService.mockResolvedValue(complete)
+    const older = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: cached, tic_snapshot_fetched_at: hoursAgo(2) },
+      error: null,
+    })
+    const result = await ensureTicSnapshot({ supabase: older.supabase, companyId: COMPANY_ID })
+    expect(result.source).toBe('fetched')
+    expect(result.snapshot).toEqual(complete)
+  })
+
+  it('keeps a complete snapshot for the full week', async () => {
+    const cached = { statuses: [], incompleteSections: [] }
+    const { supabase } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: cached, tic_snapshot_fetched_at: hoursAgo(48) },
+      error: null,
+    })
+    expect((await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })).source).toBe('cached')
+    expect(profileService).not.toHaveBeenCalled()
+  })
+
+  it('keeps the last answered board and statuses when a refetch cannot fetch them', async () => {
+    const previous = {
+      orgNumber: '5560125790',
+      companyName: 'Old AB',
+      statuses: [{ code: 'isActive' }],
+      board: { numberOfBoardMembers: 2 },
+      representatives: [{ name: 'Anna' }],
+      payrolls: [],
+      incompleteSections: [],
+    }
+    const partial = {
+      orgNumber: '5560125790',
+      companyName: 'New AB',
+      statuses: [],
+      board: null,
+      representatives: [],
+      payrolls: [],
+      incompleteSections: ['board', 'representatives', 'statuses', 'payrolls'],
+    }
+    profileService.mockResolvedValue(partial)
+    const { supabase, updateCalls } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: previous, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    const expected = {
+      orgNumber: '5560125790',
+      companyName: 'New AB',
+      statuses: [{ code: 'isActive' }],
+      board: { numberOfBoardMembers: 2 },
+      representatives: [{ name: 'Anna' }],
+      payrolls: [],
+      // An empty previous value is no answer to keep: it stays missing.
+      incompleteSections: ['payrolls'],
+    }
+    expect(result.source).toBe('fetched')
+    expect(result.snapshot).toEqual(expected)
+    expect((updateCalls[0][0] as Record<string, unknown>).tic_snapshot).toEqual(expected)
+  })
+
+  it('does not keep a section the previous snapshot could not fetch either', async () => {
+    const previous = { orgNumber: '5560125790', statuses: [{ code: 'old' }], incompleteSections: ['statuses'] }
+    const partial = { orgNumber: '5560125790', statuses: [], incompleteSections: ['statuses'] }
+    profileService.mockResolvedValue(partial)
+    const { supabase } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: previous, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    expect(result.snapshot).toEqual(partial)
+  })
+
+  // The reopen gate reads the report list as of tic_snapshot_fetched_at, which
+  // a refetch sets to now: a list carried from an older fetch would read as
+  // fresh, and an empty one as "no report registered". Every key in
+  // FISCAL_YEAR_REOPEN_REGISTRY_KEYS, and the two the gate's SQL reads today
+  // whatever that list says, is answered in the previous fetch and missing
+  // from this one, so a key added to the list later is held to the same rule.
+  it.each([
+    ['a known report', [{ periodEnd: '2025-12-31', isInterimReport: false }]],
+    ['no report', []],
+  ])('never carries a key the closed-year reopen gate reads (%s)', async (_label, reports) => {
+    const gateKeys = [...new Set<string>([...FISCAL_YEAR_REOPEN_REGISTRY_KEYS, 'financialReports', 'financialReportsComplete'])]
+    const answered: Record<string, unknown> = { financialReports: reports, financialReportsComplete: true }
+    const unanswered: Record<string, unknown> = { financialReports: [], financialReportsComplete: false }
+    // A section no gate reads is still carried, so the test cannot pass by
+    // carrying nothing.
+    const kept = 'sectionNoGateReads'
+    const previous: Record<string, unknown> = { orgNumber: '5560125790', [kept]: [{ answered: true }], incompleteSections: [] }
+    const partial: Record<string, unknown> = { orgNumber: '5560125790', [kept]: [], incompleteSections: [...gateKeys, kept] }
+    for (const key of gateKeys) {
+      previous[key] = key in answered ? answered[key] : [{ answeredBy: 'the previous fetch' }]
+      partial[key] = key in unanswered ? unanswered[key] : null
+    }
+    profileService.mockResolvedValue(partial)
+    const { supabase, updateCalls } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: previous, tic_snapshot_fetched_at: hoursAgo(24 * 8) },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+    const snapshot = result.snapshot as Record<string, unknown>
+
+    // What the gate will read: the saved row, not just the returned value.
+    expect((updateCalls[0][0] as Record<string, unknown>).tic_snapshot).toEqual(snapshot)
+    for (const key of gateKeys) expect(snapshot[key]).toEqual(partial[key])
+    expect(snapshot.incompleteSections).toEqual(gateKeys)
+    expect(snapshot[kept]).toEqual([{ answered: true }])
+  })
+
+  it('takes nothing from a snapshot of another firm', async () => {
+    // The number was corrected since (tic-refresh): the old snapshot's board
+    // belongs to another company.
+    const previous = {
+      orgNumber: '5566778899',
+      board: { numberOfBoardMembers: 3 },
+      representatives: [{ name: 'Someone Else' }],
+      incompleteSections: [],
+    }
+    const partial = {
+      orgNumber: '5560125790',
+      board: null,
+      representatives: [],
+      incompleteSections: ['board', 'representatives'],
+    }
+    profileService.mockResolvedValue(partial)
+    const { supabase } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: previous, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    expect(result.snapshot).toEqual(partial)
+  })
+
+  // A person can register an enskild firma more than once. Lens holds each
+  // registration as its own company (...0001, ...0002), all under the one
+  // personnummer the company is stored with, and the search picks one of them.
+  it('takes nothing from another registration of the same sole trader', async () => {
+    const previous = {
+      orgNumber: '2002010112360001',
+      statuses: [{ code: 'deregistered', isCeased: true }],
+      fiscalYear: { startMonthDay: '05-01', endMonthDay: '04-30' },
+      payrolls: [{ periodEnd: '2012-12-31', numberOfEmployees: 3 }],
+      incompleteSections: [],
+    }
+    const partial = {
+      orgNumber: '2002010112360002',
+      statuses: [],
+      fiscalYear: null,
+      payrolls: [],
+      incompleteSections: ['statuses', 'fiscalYear', 'payrolls'],
+    }
+    profileService.mockResolvedValue(partial)
+    const { supabase } = buildSupabase({
+      data: { org_number: '0201011236', tic_snapshot: previous, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    expect(result.snapshot).toEqual(partial)
+  })
+
+  it('keeps the last answered sections of the same sole-trader registration', async () => {
+    const previous = { orgNumber: '2002010112360002', statuses: [{ code: 'isActive' }], incompleteSections: [] }
+    const partial = { orgNumber: '2002010112360002', statuses: [], incompleteSections: ['statuses'] }
+    profileService.mockResolvedValue(partial)
+    const { supabase } = buildSupabase({
+      data: { org_number: '0201011236', tic_snapshot: previous, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    expect(result.snapshot).toEqual({ ...partial, statuses: [{ code: 'isActive' }], incompleteSections: [] })
   })
 })

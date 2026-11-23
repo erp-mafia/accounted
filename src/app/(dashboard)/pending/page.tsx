@@ -178,6 +178,7 @@ const FIXABLE_REFUSAL_COPY: Record<string, { note: string; link: string; noteInT
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: { note: 'refusal_fix_payment_details', link: 'refusal_fix_invoicing_link' },
   INVOICE_SEND_VAT_NUMBER_MISSING: { note: 'refusal_fix_vat_number', link: 'refusal_fix_tax_link' },
   SIE_IMPORT_UNFINISHED: { note: 'refusal_fix_sie_import', link: 'refusal_fix_sie_import_link', noteInToast: true },
+  CASH_ACCOUNT_DISABLED_PAYEE: { note: 'refusal_fix_disabled_payee', link: 'refusal_fix_bookkeeping_link' },
 }
 
 function bulkActionKey(op: PendingOperation): string {

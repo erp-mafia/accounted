@@ -8,6 +8,8 @@ import { cleanProviderPayload } from '../provider-text';
 
 const log = createLogger('bokio-client');
 
+// Per attempt, sized for one record. The migration worker passes its own for
+// whole register pages (MIGRATION_LIST_TIMEOUT_MS in provider-data-fetcher.ts).
 const FETCH_TIMEOUT_MS = 15_000;
 
 export class BokioApiError extends Error {
@@ -146,7 +148,7 @@ export class BokioClient {
     this.rateLimiter = new TokenBucketRateLimiter(BOKIO_RATE_LIMIT, 'ratelimit:bokio');
   }
 
-  async get<T>(accessToken: string, path: string): Promise<T> {
+  async get<T>(accessToken: string, path: string, options: { timeoutMs?: number } = {}): Promise<T> {
     return withRetry(
       async () => {
         await this.rateLimiter.acquire(connectionRateKey(accessToken));
@@ -156,7 +158,7 @@ export class BokioClient {
             Authorization: bokioAuthorizationHeader(accessToken),
             Accept: 'application/json',
           },
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          signal: AbortSignal.timeout(options.timeoutMs ?? FETCH_TIMEOUT_MS),
         });
 
         if (!response.ok) {
@@ -191,6 +193,7 @@ export class BokioClient {
       page?: number;
       pageSize?: number;
       query?: string;
+      timeoutMs?: number;
     },
   ): Promise<{ items: T[]; page: number; totalPages: number; totalCount: number }> {
     const params = new URLSearchParams();
@@ -201,7 +204,7 @@ export class BokioClient {
     }
 
     const path = `/companies/${companyId}${relativePath}?${params.toString()}`;
-    const response = await this.get<BokioPaginatedResponse<T>>(accessToken, path);
+    const response = await this.get<BokioPaginatedResponse<T>>(accessToken, path, { timeoutMs: options?.timeoutMs });
 
     // Bokio uses 'items' for most endpoints but 'data' for some (e.g., credit notes)
     const items = Array.isArray(response.items)

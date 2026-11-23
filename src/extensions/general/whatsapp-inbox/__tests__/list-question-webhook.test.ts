@@ -273,6 +273,18 @@ describe('POST /webhook: replies to a list question', () => {
     expect(sendTextMock).not.toHaveBeenCalled()
   })
 
+  it('hands a written reply to the worker once: a second delivery of the same message is dropped', async () => {
+    const mock = mockSupabase()
+    mock.enqueue({ data: makeLink() })
+    mock.enqueue({ data: conversationWithListQuestion() })
+    mock.enqueue({ error: { code: '23505', message: 'duplicate key value' } }) // message insert: seen before
+
+    await route.handler(signedRequest(textMessage('Kontoret på Storgatan')))
+
+    expect(kickMock).toHaveBeenCalledWith([])
+    expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
   it('does not take a written reply as the answer once the 48 hours have passed', async () => {
     const mock = mockSupabase()
     mock.enqueue({ data: makeLink() })
@@ -372,9 +384,8 @@ describe('POST /webhook: a text that would get the fallback reply', () => {
 
     expect(response.status).toBe(200)
     expect(onTextMock).toHaveBeenCalledTimes(1)
-    const [, conversationId, link] = onTextMock.mock.calls[0]
-    expect(conversationId).toBe('conv-1')
-    expect(link.id).toBe('link-1')
+    // The offer reads the conversation and its link itself, as they stand now.
+    expect(onTextMock.mock.calls[0].slice(1)).toEqual(['conv-1'])
     expect(rowsBeforeOffer).toBe(1)
     expect(windowWritesBeforeOffer).toBe(1)
     const windowWrite = mock.findCalls('whatsapp_conversations', 'update')[0][0] as { service_window_expires_at: string }

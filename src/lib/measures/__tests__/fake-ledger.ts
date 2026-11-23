@@ -13,6 +13,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { reskontraRpcPorts } from '@/tests/reskontra-rpc-port'
+import { roundOre } from '@/lib/money'
 
 type Row = Record<string, unknown>
 
@@ -424,6 +425,30 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
           .map((e) => ({ id: e.id, status: e.status, entry_date: e.entry_date })),
       }
     },
+    // public.account_ib_floor: the latest posted opening_balance verifikat on
+    // a fiscal year's first day with a line on the account, through a date,
+    // skipping a date whose two or more IB verifikat cancel on the account.
+    account_ib_floor(args) {
+      const through = (args.p_through as string | null) ?? null
+      const yearStarts = new Set(data.fiscalPeriods.map((p) => p.period_start as string))
+      const byDate = new Map<string, { amount: number; ids: Set<string> }>()
+      for (const e of entries) {
+        if (e.source_type !== 'opening_balance' || e.status !== 'posted') continue
+        if ((through && e.entry_date > through) || !yearStarts.has(e.entry_date)) continue
+        for (const l of e.lines) {
+          if (l.account_number !== args.p_account_number) continue
+          const group = byDate.get(e.entry_date) ?? { amount: 0, ids: new Set<string>() }
+          group.amount += (l.debit ?? 0) - (l.credit ?? 0)
+          group.ids.add(e.id)
+          byDate.set(e.entry_date, group)
+        }
+      }
+      const floors = [...byDate]
+        .map(([date, g]) => ({ floor_date: date, amount: roundOre(g.amount), entry_ids: [...g.ids] }))
+        .filter((g) => !(g.entry_ids.length >= 2 && g.amount === 0))
+        .sort((a, b) => compare(b.floor_date, a.floor_date))
+      return floors.slice(0, 1)
+    },
     get_vat_ruta_source_lines(args) {
       const accounts = new Set(args.p_accounts as string[])
       return vatLines(args)
@@ -466,11 +491,16 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
     from(table: string) {
       return permissive(new FakeQuery(tables[table] ?? [], failures.tables?.[table]))
     },
-    async rpc(name: string, args: Record<string, unknown> = {}) {
+    rpc(name: string, args: Record<string, unknown> = {}) {
       const failure = failures.rpcs?.[name]
-      if (failure) return { data: null, error: failure }
-      const fn = rpcs[name]
-      return { data: fn ? fn(args) : null, error: null }
+      const result = Promise.resolve(failure ? { data: null, error: failure } : { data: rpcs[name] ? rpcs[name](args) : null, error: null })
+      // PostgREST's .maybeSingle() on a set-returning RPC: its one row, or null.
+      return Object.assign(result, {
+        maybeSingle: async () => {
+          const { data: rows, error } = await result
+          return { data: Array.isArray(rows) ? (rows[0] ?? null) : rows, error }
+        },
+      })
     },
   }
 

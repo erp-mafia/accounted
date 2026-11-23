@@ -9,14 +9,19 @@ import { withAiDeadline } from '@/lib/ai/call-limit'
  * GET /api/documents/jobs/cron
  * Arkiv phase 3 worker, every minute: queues extract jobs for admitted
  * documents that never had one, then claims due document jobs (read,
- * classify, extract) one at a time and runs them. Ticks may overlap; the
- * claim skips locked rows, so no job runs twice.
+ * classify, extract) one at a time and runs them until none is due or the
+ * time budget is spent. Ticks may overlap; the claim skips locked rows, so no
+ * job runs twice.
  */
 export const maxDuration = 300
 
-const BATCH = 8
 const BACKFILL_LIMIT = 20
-/** No job is claimed past this point, counted from when the request arrived; the rest stays queued for the next tick. */
+/**
+ * No job is claimed past this point, counted from when the request arrived; the rest stays queued for the next tick.
+ * It is the only stop while jobs are due. A cap of 8 jobs a run held the worker to 480 jobs an hour while each run
+ * used 3 to 5 s of this budget, and a migration import's 17 000 read jobs held every company's documents for about
+ * 35 hours (production, 2026-11-22).
+ */
 const TIME_BUDGET_MS = 180_000
 /**
  * No model call is still open past this point (lib/ai/call-limit.ts), so the
@@ -42,7 +47,6 @@ export const GET = withCronContext('documents.jobs', async (_request, ctx) => {
   try {
     const summary = await withAiDeadline(ctx.startedAt + MODEL_STOP_MS, () =>
       runDocumentJobs(supabase, {
-        limit: BATCH,
         worker: `cron:${process.env.VERCEL_DEPLOYMENT_ID ?? 'local'}`,
         deadlineAt: ctx.startedAt + TIME_BUDGET_MS,
       }),

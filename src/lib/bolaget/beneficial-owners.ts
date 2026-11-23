@@ -83,6 +83,8 @@ export interface BoAssessment {
   control_agreements: boolean
   control_note: string | null
   changed: boolean
+  /** A change that was filed: its "Anmäl verklig huvudman" reminder is marked done. */
+  filed?: boolean
   created_at: string
 }
 
@@ -121,6 +123,30 @@ export async function loadBoAssessments(ctx: OperationContext, limit = 20): Prom
   }))
 }
 
+/** The reminder a changed assessment files (confirmBeneficialOwners) carries this key. */
+export function beneficialOwnerReminderKey(assessmentId: string): string {
+  return `bolaget:verklig-huvudman:${assessmentId}`
+}
+
+/**
+ * Mark the changed assessments whose reminder is done: the person filed the
+ * change with Bolagsverket and said so on the deadline (or, for a company
+ * set up from a formation, it was filed with the registration).
+ */
+export async function withFiled(ctx: OperationContext, assessments: BoAssessment[]): Promise<BoAssessment[]> {
+  const keys = assessments.filter((a) => a.changed).map((a) => beneficialOwnerReminderKey(a.beneficial_owner_assessment_id))
+  if (keys.length === 0) return assessments
+  const { data, error } = await ctx.supabase
+    .from('deadlines')
+    .select('source_key')
+    .eq('company_id', ctx.companyId)
+    .in('source_key', keys)
+    .eq('is_completed', true)
+  if (error) throw new Error(`deadlines read failed: ${error.message}`)
+  const done = new Set(((data ?? []) as Array<{ source_key: string }>).map((d) => d.source_key))
+  return assessments.map((a) => (a.changed ? { ...a, filed: done.has(beneficialOwnerReminderKey(a.beneficial_owner_assessment_id)) } : a))
+}
+
 /** The proposal, the confirmed set and the record of earlier assessments. */
 export async function loadBeneficialOwnerView(ctx: OperationContext, asOf: string | null = null): Promise<BoView> {
   const register = await loadShareRegisterData(ctx, asOf)
@@ -138,7 +164,7 @@ export async function loadBeneficialOwnerView(ctx: OperationContext, asOf: strin
   const proposed = new Set(proposal.owners.map((o) => o.party_id))
   const current = new Set(confirmed.map((c) => c.party_id))
   const differs = proposed.size !== current.size || [...proposed].some((id) => !current.has(id)) || (assessments.length === 0 && register.summary.total_shares > 0)
-  return { proposal, confirmed, assessments, differs, filing_url: BENEFICIAL_OWNER_FILING_URL }
+  return { proposal, confirmed, assessments: await withFiled(ctx, assessments), differs, filing_url: BENEFICIAL_OWNER_FILING_URL }
 }
 
 export interface ConfirmBoInput {
@@ -283,7 +309,7 @@ export async function confirmBeneficialOwners(
 
     let sourceKey: string | null = null
     if (changed) {
-      sourceKey = `bolaget:verklig-huvudman:${assessmentId}`
+      sourceKey = beneficialOwnerReminderKey(assessmentId)
       const due = input.assessed_on < today ? today : input.assessed_on
       const { error: deadlineError } = await createServiceClient().from('deadlines').insert({
         company_id: ctx.companyId,

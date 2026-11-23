@@ -40,6 +40,8 @@ export interface NavGateFlags {
   requiresBolagetHub?: boolean
   /** A Bolaget register page (aktiebok, styrelse): the rollout and a form that keeps an aktiebok (lib/bolaget/hub.ts `registers`). */
   requiresBolagetRegisters?: boolean
+  /** A Bolaget page for meetings, capital or owner tax: the rollout alone (lib/bolaget/hub.ts `money`). */
+  requiresBolagetMoney?: boolean
   /** Avtal och åtaganden (/bolaget/avtal): the commitments rollout, any form (lib/bolaget/hub.ts `agreements`). */
   requiresCommitments?: boolean
   /** A page of the MCP server extension (/settings/api): shown only where that extension is built in. */
@@ -54,6 +56,8 @@ export interface NavGateFlags {
   requiresArkivBrain?: boolean
   /** The new Inkorg page (/inkorg): shown only for companies in the INKORG_V2_COMPANY_IDS rollout (lib/inkorg/flag.ts). */
   requiresInkorgV2?: boolean
+  /** Att bokföra (/att-bokfora): shown only for companies in the BOOKING_SCREEN_COMPANY_IDS rollout (lib/env/booking-screen-switch.ts). */
+  requiresBookingScreen?: boolean
   /** What the new Inkorg page replaces (Underlag under Inköp): hidden for the companies in that rollout. */
   hiddenWithInkorgV2?: boolean
   /** The Autogiro page (/invoices/autogiro): shown only for companies in the AUTOGIRO_COMPANY_IDS rollout (lib/invoices/autogiro/flag.ts). */

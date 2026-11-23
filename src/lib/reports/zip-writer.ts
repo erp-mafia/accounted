@@ -16,10 +16,29 @@
  * readable instead of wrapping its 32-bit offsets.
  */
 
+/**
+ * A part whose bytes are made when the writer reads it, not held as they are
+ * written (archive-folder's DeflatedBytes). The writer reads every part twice,
+ * once for the entry's CRC and size and once to write it, and each read must
+ * give `length` new bytes: the reader of the ZIP may take a chunk over.
+ */
+export interface ZipPartSource {
+  readonly length: number
+  bytes(): Uint8Array
+}
+
+export type ZipPart = Uint8Array | ZipPartSource
+
 export interface ZipEntry {
   /** Path inside the archive, '/'-separated. */
   name: string
-  data: Uint8Array
+  /** The bytes, whole or in parts written one after another. */
+  data: Uint8Array | readonly ZipPart[]
+}
+
+/** Told apart by the method, so a Uint8Array from another realm still reads as bytes. */
+function partBytes(part: ZipPart): Uint8Array {
+  return typeof (part as ZipPartSource).bytes === 'function' ? (part as ZipPartSource).bytes() : (part as Uint8Array)
 }
 
 export interface ZipWriterOptions {
@@ -129,15 +148,22 @@ export async function* writeZip(
   let offset = 0
 
   for await (const entry of entries) {
-    const size = entry.data.length
-    // Each entry is held in memory before it is written, so none comes near
-    // this; the check keeps a size from wrapping silently if one ever does.
+    const parts: readonly ZipPart[] = Array.isArray(entry.data) ? entry.data : [entry.data as Uint8Array]
+    let size = 0
+    let crc = 0
+    for (const part of parts) {
+      const bytes = partBytes(part)
+      size += bytes.length
+      crc = crc32(bytes, crc)
+    }
+    // An entry this large needs ZIP64 sizes in its headers, which this writer
+    // does not write: refused rather than wrapped silently. Held deflated, a
+    // long enough behandlingshistorik could get there.
     if (size >= UINT32_MARKER) throw new Error(`ZIP entry too large: ${entry.name}`)
     const name = utf8.encode(entry.name)
     // Any character outside ASCII encodes to more bytes than UTF-16 units.
     const isUtf8 = name.length !== entry.name.length
     const extra = isUtf8 ? unicodePathField(name) : new Uint8Array(0)
-    const crc = crc32(entry.data)
     const flags = isUtf8 ? FLAG_UTF8 : 0
 
     const local = record(30 + name.length + extra.length, (view) => {
@@ -156,7 +182,16 @@ export async function* writeZip(
     local.set(name, 30)
     local.set(extra, 30 + name.length)
     yield local
-    if (size > 0) yield entry.data
+    let written = 0
+    for (const part of parts) {
+      const bytes = partBytes(part)
+      // Counted before it is handed on: a reader that takes the chunk over leaves it empty.
+      const length = bytes.length
+      written += length
+      if (length > 0) yield bytes
+    }
+    // A part that read back other bytes would leave the header's size and every later offset wrong.
+    if (written !== size) throw new Error(`ZIP entry changed while it was written: ${entry.name}`)
 
     const zip64 = offset >= zip64From32
     const centralExtra = zip64 ? concat([extra, zip64OffsetField(offset)]) : extra

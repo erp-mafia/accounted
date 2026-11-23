@@ -271,6 +271,137 @@ describe('gnubok_close_question', () => {
   })
 })
 
+describe('gnubok_close_question as settled, saying where the answer is', () => {
+  const NOTE = 'Betalningen på 4 990 kr är bokförd mot leverantörens faktura.'
+  const transactions = { data: [{ id: TX, amount: -4990, amount_sek: -4990, instructed_amount: null }] }
+  const settled = (overrides: Record<string, unknown> = {}) =>
+    row({ status: 'closed', close_reason: 'settled', answered_at: '2026-11-19T09:00:00.000Z', answered_via: 'claude', ...overrides })
+  const close = (supabase: unknown, args: Record<string, unknown>) =>
+    tool('gnubok_close_question').execute({ question_id: QUESTION_ID, reason: 'settled', ...args }, COMPANY, USER, supabase as never, actor)
+
+  it('declares the two inputs, each in one sentence, beside the two it had', () => {
+    const schema = tool('gnubok_close_question').inputSchema as {
+      additionalProperties: boolean
+      required: string[]
+      properties: Record<string, { type: string; description?: string; maxLength?: number; maxItems?: number; items?: { type: string } }>
+    }
+    expect(Object.keys(schema.properties)).toEqual(['question_id', 'reason', 'note', 'evidence'])
+    expect(schema.required).toEqual(['question_id', 'reason'])
+    expect(schema.additionalProperties).toBe(false)
+    expect(schema.properties.note).toEqual({
+      type: 'string',
+      maxLength: 300,
+      description: 'With settled: where the answer is, in one sentence. Needs evidence.',
+    })
+    expect(schema.properties.evidence).toEqual({
+      type: 'array',
+      maxItems: 8,
+      items: { type: 'string' },
+      description: 'With settled: the records that hold the answer, each <kind>:<id>.',
+    })
+  })
+
+  it('declares close_note and close_evidence in the result, and still requires what it required', () => {
+    for (const name of ['gnubok_close_question', 'gnubok_list_questions']) {
+      const output = tool(name).outputSchema as { properties: Record<string, unknown>; required: string[] }
+      const question = (name === 'gnubok_list_questions' ? (output.properties.questions as { items: typeof output }).items : output) as typeof output
+      expect(Object.keys(question.properties), name).toEqual(expect.arrayContaining(['close_reason', 'close_note', 'close_evidence']))
+      expect(question.required, name).toEqual(['question_id', 'status', 'question', 'options', 'evidence', 'asked_at'])
+    }
+    expect(tool('gnubok_close_question').description.length).toBeLessThanOrEqual(280)
+    expect(tool('gnubok_close_question').catalogVisibility).toBe('search')
+  })
+
+  it('hands the note and the records to the close, and answers them on the question', async () => {
+    const written = settled({ close_note: NOTE, close_evidence: [{ kind: 'transaction', id: TX }] })
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), written), transactions })
+
+    const result = await close(mock.supabase, { note: NOTE, evidence: [`transaction:${TX}`] })
+
+    expect(result).toMatchObject({
+      question_id: QUESTION_ID,
+      status: 'closed',
+      close_reason: 'settled',
+      close_note: NOTE,
+      close_evidence: [`transaction:${TX}`],
+      answered_via: 'claude',
+    })
+    expect(mock.payloads('company_questions', 'update')[0]).toMatchObject({
+      status: 'closed',
+      close_reason: 'settled',
+      close_note: NOTE,
+      close_evidence: [{ kind: 'transaction', id: TX }],
+      answered_by: USER,
+    })
+    expect(mock.findCalls('transactions', 'eq')).toEqual([['company_id', COMPANY]])
+  })
+
+  it('takes a record as an object in place of a reference, and records without a note', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questionsTable(row(), settled({ close_evidence: [{ kind: 'transaction', id: TX }] })),
+      transactions,
+    })
+
+    const result = await close(mock.supabase, { evidence: [{ kind: 'transaction', id: TX }] })
+
+    expect(result).toMatchObject({ close_note: null, close_evidence: [`transaction:${TX}`] })
+    expect(mock.payloads('company_questions', 'update')[0]).toMatchObject({ close_note: null, close_evidence: [{ kind: 'transaction', id: TX }] })
+  })
+
+  it('answers close_note and close_evidence on every closed question, empty when the close said nothing', async () => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()) })
+
+    const result = (await close(mock.supabase, {})) as Record<string, unknown>
+
+    expect(result.close_note).toBeNull()
+    expect(result.close_evidence).toEqual([])
+    const payload = mock.payloads('company_questions', 'update')[0] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('close_note')
+    expect(payload).not.toHaveProperty('close_evidence')
+  })
+
+  it('refuses what the core refuses, and writes nothing', async () => {
+    const tables = (extra: Record<string, unknown> = {}) =>
+      createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions, ...extra } as never)
+    const refused = async (args: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+      const mock = tables(extra)
+      const error = (await close(mock.supabase, args).catch((e: unknown) => e)) as { code?: string; message?: string; issues?: Array<{ field: string }> }
+      expect(mock.findCalls('company_questions', 'update')).toEqual([])
+      return error
+    }
+
+    expect(await refused({ note: NOTE })).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'evidence' }] })
+    expect(await refused({ reason: 'dont_know', note: NOTE, evidence: [`transaction:${TX}`] })).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      issues: [{ field: 'note' }],
+    })
+    expect(await refused({ note: 'a'.repeat(301), evidence: [`transaction:${TX}`] })).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'note' }] })
+    expect(await refused({ evidence: [TX] })).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'evidence.0' }] })
+
+    const foreign = await refused({ evidence: [`transaction:${TX}`] }, { transactions: { data: [] } })
+    expect(foreign).toMatchObject({ code: 'VALIDATION_ERROR' })
+    expect(foreign.message).toContain(`no transaction ${TX} in this company`)
+
+    const wrongAmount = await refused({ note: 'Betalningen på 5 990 kr är bokförd.', evidence: [`transaction:${TX}`] })
+    expect(wrongAmount).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'note' }] })
+    expect(wrongAmount.message).toContain('"5 990 kr"')
+  })
+
+  it('lists a settled question with where its answer is, and an open one without the two keys', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: { data: [row(), settled({ id: 'e0000000-0000-4000-8000-000000000002', close_note: NOTE, close_evidence: [{ kind: 'transaction', id: TX }] })] },
+    })
+
+    const result = (await tool('gnubok_list_questions').execute({ status: 'closed' }, COMPANY, USER, mock.supabase as never, actor)) as {
+      questions: Array<Record<string, unknown>>
+    }
+
+    expect(result.questions[0]).not.toHaveProperty('close_note')
+    expect(result.questions[0]).not.toHaveProperty('close_evidence')
+    expect(result.questions[1]).toMatchObject({ close_reason: 'settled', close_note: NOTE, close_evidence: [`transaction:${TX}`] })
+  })
+})
+
 describe('gnubok_remember_fact with answers_question_id', () => {
   const saved = { id: FACT_ID, kind: 'fact', content: 'Leverantören faktureras per år från november 2026.', created_at: '2026-11-19T09:00:00Z' }
   /** agent_memory: the duplicate scan reads nothing similar, the insert answers the saved fact. */

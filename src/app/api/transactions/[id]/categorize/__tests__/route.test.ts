@@ -1187,9 +1187,10 @@ describe('POST /api/transactions/[id]/categorize', () => {
       // errorResponseFromCode contract (provide both or neither): the English
       // side must not stay on the generic registry text while the Swedish
       // side names the period lock, and must never carry envelope-field prose.
-      expect(body.error.message_en).toBe('Bookkeeping database operation failed.')
+      // The lock refusal is PERIOD_LOCKED, so both name the lock.
+      expect(body.error.message_en).toBe('Period is locked or closed; entries cannot be added.')
       expect(body.error.message_en).not.toContain('details.cause')
-      expect(body.error.details?.cause).toBe('BOOKKEEPING_DATABASE_ERROR')
+      expect(body.error.details?.cause).toBe('PERIOD_LOCKED')
       // Nothing persisted: is_business/category stay NULL so the row keeps
       // matching the worklist predicate and stays in "Att bokföra".
       expect(findCalls('transactions', 'update')).toEqual([])

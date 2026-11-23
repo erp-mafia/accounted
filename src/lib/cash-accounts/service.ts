@@ -1088,6 +1088,80 @@ export async function reenableIfUnused(
   return true
 }
 
+export type CashAccountDisabledPayee = Error & { code: 'CASH_ACCOUNT_DISABLED_PAYEE' }
+
+/**
+ * reenableIfUnused's refusal of a turned-off invoice payee, so a caller can
+ * answer it as a refusal instead of a failure (the create_transactions
+ * approval in commit.ts).
+ */
+export function isCashAccountDisabledPayee(err: unknown): err is CashAccountDisabledPayee {
+  return err instanceof Error && (err as { code?: unknown }).code === 'CASH_ACCOUNT_DISABLED_PAYEE'
+}
+
+/** What CASH_ACCOUNT_CURRENCY_MISMATCH names: the ledger, the currency its account holds, the row's. */
+export interface CashAccountCurrencyMismatchDetails {
+  ledger_account: string
+  account_currency: string
+  currency: string
+}
+
+export type CashAccountCurrencyMismatch = Error & {
+  code: 'CASH_ACCOUNT_CURRENCY_MISMATCH'
+  details: CashAccountCurrencyMismatchDetails
+}
+
+/**
+ * A ledger holds one currency: (company_id, ledger_account) is UNIQUE, so a
+ * row in another currency can never be bound to the kassakonto already on
+ * its ledger. The refusal for that (CASH_ACCOUNT_CURRENCY_MISMATCH), or null
+ * when the account is in the row's currency or has none recorded. The one
+ * definition (scripts/checks/one-definition/cash-account-one-currency.mjs):
+ * ensureManualCashAccount refuses with it, and a door asks it before it
+ * stages (findCashAccountCurrencyMismatch).
+ */
+export function cashAccountCurrencyMismatch(
+  ledgerAccount: string,
+  accountCurrency: string | null,
+  currency: string,
+): CashAccountCurrencyMismatch | null {
+  if (!accountCurrency || accountCurrency.toUpperCase() === currency.toUpperCase()) return null
+  return Object.assign(
+    new Error(`Cash account ${ledgerAccount} is denominated in ${accountCurrency}, not ${currency.toUpperCase()}`),
+    {
+      code: 'CASH_ACCOUNT_CURRENCY_MISMATCH' as const,
+      details: { ledger_account: ledgerAccount, account_currency: accountCurrency, currency: currency.toUpperCase() },
+    },
+  )
+}
+
+export function isCashAccountCurrencyMismatch(err: unknown): err is CashAccountCurrencyMismatch {
+  return err instanceof Error && (err as { code?: unknown }).code === 'CASH_ACCOUNT_CURRENCY_MISMATCH'
+}
+
+/**
+ * The refusal ensureManualCashAccount would give a row in `currency` on
+ * `ledgerAccount`, read without writing anything. Null when the ledger has
+ * no kassakonto yet (the approval creates one in the row's currency) or has
+ * one in that currency. A failed read answers null: the approval checks
+ * again before it stores anything.
+ */
+export async function findCashAccountCurrencyMismatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  ledgerAccount: string,
+  currency: string,
+): Promise<CashAccountCurrencyMismatch | null> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('currency')
+    .eq('company_id', companyId)
+    .eq('ledger_account', ledgerAccount)
+    .maybeSingle()
+  if (error || !data) return null
+  return cashAccountCurrencyMismatch(ledgerAccount, (data as { currency: string | null }).currency, currency)
+}
+
 /**
  * Find (or create) a manual cash account for a BAS ledger slot, so transactions
  * ingested outside the PSD2 flow (create_transactions / CSV) can carry a real
@@ -1124,14 +1198,12 @@ export async function ensureManualCashAccount(
   // (company_id, ledger_account) is UNIQUE, so a ledger holds exactly one
   // currency. A different-currency transaction pointing at the same ledger is
   // a real conflict (e.g. a SEK row landing on a ledger already claimed for
-  // USD): fail loudly instead of binding it to the wrong-currency account.
+  // USD): refuse with CASH_ACCOUNT_CURRENCY_MISMATCH instead of binding it to
+  // the wrong-currency account, so a caller can answer it as a refusal.
   // Applied to the row found up front and to the winner of a 23505 race alike.
   const idIfSameCurrency = (row: { id: string; currency: string | null }): string => {
-    if (row.currency && row.currency.toUpperCase() !== currency.toUpperCase()) {
-      throw new Error(
-        `Cash account ${ledgerAccount} is denominated in ${row.currency}, not ${currency.toUpperCase()}`,
-      )
-    }
+    const mismatch = cashAccountCurrencyMismatch(ledgerAccount, row.currency, currency)
+    if (mismatch) throw mismatch
     return row.id
   }
   if (existing.data) {

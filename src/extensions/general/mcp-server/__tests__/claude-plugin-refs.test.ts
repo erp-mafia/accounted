@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { workflowSkills } from '../skills'
 import { dataResources, findCompanyScopedResource } from '../resources'
 import { toCanonicalToolName } from '../tool-namespace'
+import { tools } from '../server'
 import { discoverAtoms } from '@/scripts/lib/atom-discovery'
 
 const COMPANY_PREFIX = 'Accounted://company/{company_id}/'
@@ -36,10 +37,9 @@ function readPluginCommands(): { file: string; body: string }[] {
 }
 
 const pluginSkills = [...readPluginSkills(), ...readPluginCommands()]
-const serverSource = readFileSync(join(__dirname, '..', 'server.ts'), 'utf8')
 
 describe('claude-plugin wrapper references', () => {
-  it('ships the eight skills and the setup and use commands', () => {
+  it('ships the nine skills and the setup and use commands', () => {
     expect(pluginSkills.map((s) => s.file).sort()).toEqual([
       'bookkeep/SKILL.md',
       'check/SKILL.md',
@@ -48,6 +48,7 @@ describe('claude-plugin wrapper references', () => {
       'commands/use.md',
       'month-close/SKILL.md',
       'payroll/SKILL.md',
+      'start-company/SKILL.md',
       'start/SKILL.md',
       'vat/SKILL.md',
       'year-end/SKILL.md',
@@ -80,13 +81,13 @@ describe('claude-plugin wrapper references', () => {
   })
 
   it('every accounted_* tool name resolves to a canonical server tool', () => {
+    // The registry, not server.ts's text: tools also come from their own
+    // files (formation-tools.ts, question-tools.ts, arkiv-tools.ts, ...).
+    const toolNames = new Set(tools.map((t) => t.name))
     for (const { file, body } of pluginSkills) {
       for (const [tool] of body.matchAll(/accounted_[a-z_]+/g)) {
         const canonicalTool = toCanonicalToolName(tool)
-        expect(
-          serverSource.includes(`name: '${canonicalTool}'`),
-          `${file} references unknown tool "${tool}"`,
-        ).toBe(true)
+        expect(toolNames.has(canonicalTool), `${file} references unknown tool "${tool}"`).toBe(true)
       }
     }
   })

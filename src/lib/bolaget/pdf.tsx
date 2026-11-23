@@ -214,6 +214,7 @@ export function AktiebrevPDF({ data }: { data: AktiebrevData }) {
         <Text style={styles.certSub}>Nr {data.number}</Text>
         <View style={styles.certBox}>
           <Text style={styles.certLine}>Bolag: {companyLine(data.company)}</Text>
+          <Text style={styles.certLine}>Bolagskategori: {data.company_category}</Text>
           <Text style={styles.certLine}>
             Aktieägare: {data.holder.name}{data.holder.identity ? `, ${data.holder.identity}` : ''}
           </Text>

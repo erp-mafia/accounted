@@ -63,10 +63,18 @@ import {
   scopeTransactionsToAccount,
   ledgerLineAmountIn,
   openAmountByEntry,
+  fetchUnlinkedGLLines,
+  fetchGLLinesForMatching,
 } from '../bank-reconciliation'
 import type { UnlinkedGLLine } from '../bank-reconciliation'
 import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '../limits'
-import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
+import {
+  createQueuedMockSupabase,
+  createTableMockSupabase,
+  makeTransaction,
+  type TableMockResolver,
+  type TableMockResult,
+} from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
 /** The basis a person's own link records (src/lib/links/link-basis.ts). */
@@ -92,6 +100,15 @@ function makeGLLine(overrides: Partial<UnlinkedGLLine> = {}): UnlinkedGLLine {
     source_type: 'import',
     ...overrides,
   }
+}
+
+/**
+ * The two answers a candidate list is read with, in the order it asks for
+ * them: its narrowing names the lines' verifikat, then its predicate answers
+ * the lines of that slice.
+ */
+function candidateReads(lines: UnlinkedGLLine[]): Array<{ data: unknown }> {
+  return [{ data: [...new Set(lines.map((line) => line.journal_entry_id))] }, { data: lines }]
 }
 
 // ============================================================
@@ -618,7 +635,7 @@ describe('runReconciliation', () => {
     })
 
     // RPC returns GL lines
-    enqueue({ data: [glLine] })
+    enqueue(...candidateReads([glLine]))
     // from('open_bank_rows') returns unmatched transactions
     enqueue({ data: [tx] })
 
@@ -633,10 +650,10 @@ describe('runReconciliation', () => {
   // second verifikat. The view keeps such a row out; the database decides,
   // tests/pg/bank-row-open-read.pg.test.ts proves it.
   it('matches what open_bank_rows answers, free of a pointer and with no embed', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const { supabase, enqueue, enqueueMany, findCalls } = createQueuedMockSupabase()
     const free = makeTransaction({ id: 'tx-free', amount: 700, date: '2024-06-15', currency: 'SEK' })
 
-    enqueue({ data: [makeGLLine({ line_id: 'line-1', journal_entry_id: 'je-1', debit_amount: 700, entry_date: '2024-06-15' })] })
+    enqueueMany(candidateReads([makeGLLine({ line_id: 'line-1', journal_entry_id: 'je-1', debit_amount: 700, entry_date: '2024-06-15' })]))
     enqueue({ data: [free] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
@@ -662,7 +679,7 @@ describe('runReconciliation', () => {
       remaining_amount: -200,
     })
 
-    enqueue({ data: [partial] })
+    enqueue(...candidateReads([partial]))
     enqueue({ data: [tx] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
@@ -682,7 +699,7 @@ describe('runReconciliation', () => {
     })
 
     // RPC returns GL lines
-    enqueue({ data: [glLine] })
+    enqueue(...candidateReads([glLine]))
     // from('open_bank_rows') returns unmatched transactions
     enqueue({ data: [tx] })
     // Update transaction with link: .select('id') returns the updated row
@@ -708,7 +725,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [glLine] }) // RPC: GL lines
+    enqueue(...candidateReads([glLine])) // RPC: GL lines
     enqueue({ data: [tx] }) // transactions
     enqueue({ data: [{ id: 'tx-1' }] }) // suggestion update .select('id')
 
@@ -734,7 +751,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [glLine] })
+    enqueue(...candidateReads([glLine]))
     enqueue({ data: [tx] })
     // A concurrent writer booked the row: .is('journal_entry_id', null) → 0 rows.
     enqueue({ data: [] })
@@ -759,7 +776,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [glLine] })
+    enqueue(...candidateReads([glLine]))
     enqueue({ data: [tx] })
     // Optimistic-lock guard: a concurrent linker got there first: the
     // .is('journal_entry_id', null) filter matches zero rows.
@@ -789,7 +806,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [line1, line2] })
+    enqueue(...candidateReads([line1, line2]))
     enqueue({ data: [tx1, tx2] })
     // Only ONE update should run: for the single selected pair.
     enqueue({ data: [{ id: 'tx-2' }] })
@@ -817,7 +834,7 @@ describe('runReconciliation', () => {
     const line1 = makeGLLine({ line_id: 'line-1', journal_entry_id: 'je-1', debit_amount: 1000, entry_date: '2024-06-15' })
     const line2 = makeGLLine({ line_id: 'line-2', journal_entry_id: 'je-2', credit_amount: 500, entry_date: '2024-06-15' })
 
-    enqueue({ data: [line1, line2] })
+    enqueue(...candidateReads([line1, line2]))
     enqueue({ data: [tx1, tx2] })
     // Only ONE update should run: the named verifikat's pair.
     enqueue({ data: [{ id: 'tx-2' }] })
@@ -847,7 +864,7 @@ describe('runReconciliation', () => {
       makeGLLine({ line_id: `line-${id}`, journal_entry_id: id, credit_amount: 500, entry_date: '2024-06-15', voucher_number: i + 1 }),
     )
 
-    enqueue({ data: lines })
+    enqueue(...candidateReads(lines))
     enqueue({ data: [tx] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
@@ -867,7 +884,7 @@ describe('runReconciliation', () => {
     const tx2 = makeTransaction({ id: 'tx-2', amount: -500, date: '2024-06-15', currency: 'SEK' })
     const named = makeGLLine({ line_id: 'line-named', journal_entry_id: 'je-named', credit_amount: 500, entry_date: '2024-06-15' })
 
-    enqueue({ data: [named] })
+    enqueue(...candidateReads([named]))
     enqueue({ data: [tx1, tx2] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
@@ -889,7 +906,7 @@ describe('runReconciliation', () => {
     const named = makeGLLine({ line_id: 'line-named', journal_entry_id: 'je-named', credit_amount: 500, entry_date: '2024-06-15' })
     const nearVoucher = makeGLLine({ line_id: 'line-near', journal_entry_id: 'je-near', credit_amount: 500, entry_date: '2024-06-14' })
 
-    enqueue({ data: [nearVoucher, named] })
+    enqueue(...candidateReads([nearVoucher, named]))
     enqueue({ data: [tx, nearRow] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -912,7 +929,7 @@ describe('runReconciliation', () => {
     const tx2 = makeTransaction({ id: 'tx-2', amount: -500, date: '2024-06-15', currency: 'SEK' })
     const line = makeGLLine({ line_id: 'line-1', journal_entry_id: 'je-1', credit_amount: 500, entry_date: '2024-06-15' })
 
-    enqueue({ data: [line] })
+    enqueue(...candidateReads([line]))
     enqueue({ data: [tx1, tx2] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
@@ -941,7 +958,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [lineExact, lineFuzzy] })
+    enqueue(...candidateReads([lineExact, lineFuzzy]))
     enqueue({ data: [txExact, txFuzzy] })
     // Exactly ONE update runs: the exact match. If the fuzzy match were
     // applied too, the queue would be short and this enqueue insufficient.
@@ -974,7 +991,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [line] })
+    enqueue(...candidateReads([line]))
     enqueue({ data: [tx] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -998,7 +1015,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [lineFuzzy] })
+    enqueue(...candidateReads([lineFuzzy]))
     enqueue({ data: [txFuzzy] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
@@ -1025,7 +1042,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [lineFuzzy] })
+    enqueue(...candidateReads([lineFuzzy]))
     enqueue({ data: [txFuzzy] })
     enqueue({ data: [{ id: 'tx-fuzzy' }] })
 
@@ -1049,7 +1066,7 @@ describe('runReconciliation', () => {
       entry_date: '2024-06-15',
     })
 
-    enqueue({ data: [line1] })
+    enqueue(...candidateReads([line1]))
     enqueue({ data: [tx1] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
@@ -1066,7 +1083,7 @@ describe('runReconciliation', () => {
   it('hands the applied links to the learner as automatic, in one batch (crm#1746)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const tx = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
-    enqueue({ data: [makeGLLine({ journal_entry_id: 'je-1', credit_amount: 500, entry_date: '2024-06-15' })] })
+    enqueue(...candidateReads([makeGLLine({ journal_entry_id: 'je-1', credit_amount: 500, entry_date: '2024-06-15' })]))
     enqueue({ data: [tx] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -1080,7 +1097,7 @@ describe('runReconciliation', () => {
   it('teaches nothing from a dry run (crm#1746)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const tx = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
-    enqueue({ data: [makeGLLine({ journal_entry_id: 'je-1', credit_amount: 500, entry_date: '2024-06-15' })] })
+    enqueue(...candidateReads([makeGLLine({ journal_entry_id: 'je-1', credit_amount: 500, entry_date: '2024-06-15' })]))
     enqueue({ data: [tx] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
@@ -1089,6 +1106,179 @@ describe('runReconciliation', () => {
     expect(learnManySpy).not.toHaveBeenCalled()
   })
 
+})
+
+// ============================================================
+// The candidate lists: each verifikat judged once (crm#2150)
+// ============================================================
+
+describe('the candidate lists (fetchUnlinkedGLLines, fetchGLLinesForMatching)', () => {
+  type Call = { fn: string; args: Record<string, unknown>; ranges: Array<[number, number]> }
+
+  /**
+   * The two halves of a candidate RPC over `lines`, as PostgREST answers
+   * them: the narrowing names the verifikat, the predicate answers the lines
+   * of the ones it is handed in its own order (entry_date, voucher_number,
+   * line_id) and cuts .range() out of that. `calls()` lists every RPC call
+   * with its args and the range asked of it, in the order they were made.
+   */
+  function candidateDb(
+    lines: UnlinkedGLLine[],
+    fail: { narrowing?: object; predicate?: object; firstSlice?: object } = {},
+  ) {
+    const key = (l: UnlinkedGLLine) => `${l.entry_date}|${String(l.voucher_number).padStart(9, '0')}|${l.line_id}`
+    const narrowing: TableMockResult = fail.narrowing
+      ? { error: fail.narrowing }
+      : { data: [...new Set(lines.map((l) => l.journal_entry_id))] }
+    let answered = 0
+    const predicate: TableMockResolver = (chain) => {
+      if (fail.predicate) return { error: fail.predicate }
+      if (fail.firstSlice && answered++ === 0) return { error: fail.firstSlice }
+      const handed = new Set((chain[0].args[0] as { p_entry_ids: string[] }).p_entry_ids)
+      const rows = lines
+        .filter((l) => handed.has(l.journal_entry_id))
+        .sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+      const [from, to] = (chain.find((c) => c.method === 'range')?.args ?? [0, rows.length - 1]) as [number, number]
+      return { data: rows.slice(from, to + 1) }
+    }
+    const db = createTableMockSupabase({
+      'rpc:bank_account_unlinked_entries': narrowing,
+      'rpc:bank_account_candidate_entries': narrowing,
+      'rpc:bank_account_unlinked_lines': predicate,
+      'rpc:bank_account_candidate_lines': predicate,
+    })
+    // A chain is built in one go (rpc, then its order and range), so each
+    // call's range follows it directly in the recorded calls.
+    const calls = (): Call[] => {
+      const out: Call[] = []
+      for (const c of db.calls) {
+        if (c.method === 'rpc') out.push({ fn: c.table.slice('rpc:'.length), args: c.args[0] as Record<string, unknown>, ranges: [] })
+        else if (c.method === 'range') out.at(-1)!.ranges.push(c.args as [number, number])
+      }
+      return out
+    }
+    return { supabase: db.supabase as never, calls }
+  }
+
+  const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
+
+  /** One line on the account for each of `count` verifikat, dated and numbered out of id order. */
+  function oneLineEach(count: number): UnlinkedGLLine[] {
+    return Array.from({ length: count }, (_, i) =>
+      makeGLLine({
+        line_id: uuid(100_000 + ((i * 7919) % count)),
+        journal_entry_id: uuid(i),
+        entry_date: `2026-${String(1 + (i % 12)).padStart(2, '0')}-${String(1 + (i % 28)).padStart(2, '0')}`,
+        voucher_number: 1 + ((i * 31) % 97),
+        debit_amount: 100 + i,
+      }),
+    )
+  }
+
+  /** The candidate RPCs' order, written out: ORDER BY entry_date, voucher_number, line_id. */
+  const rpcOrder = (lines: UnlinkedGLLine[]) =>
+    [...lines].sort((a, b) =>
+      a.entry_date !== b.entry_date
+        ? (a.entry_date < b.entry_date ? -1 : 1)
+        : a.voucher_number !== b.voucher_number
+          ? a.voucher_number - b.voucher_number
+          : a.line_id < b.line_id ? -1 : a.line_id > b.line_id ? 1 : 0,
+    )
+
+  it('reads the narrowing once and hands each verifikat to the predicate once, in slices of at most 500', async () => {
+    const lines = oneLineEach(1201)
+    const { supabase, calls } = candidateDb(lines)
+
+    const read = await fetchUnlinkedGLLines(supabase, 'company-1', '1940', '2026-01-01', '2026-12-31')
+
+    const window = { p_company_id: 'company-1', p_account_number: '1940', p_date_from: '2026-01-01', p_date_to: '2026-12-31' }
+    const narrowings = calls().filter((c) => c.fn === 'bank_account_unlinked_entries')
+    const slices = calls().filter((c) => c.fn === 'bank_account_unlinked_lines')
+    expect(narrowings.map((c) => c.args)).toEqual([window])
+    expect(calls().map((c) => c.fn)).not.toContain('get_unlinked_gl_lines')
+    expect(slices.map((c) => (c.args.p_entry_ids as string[]).length)).toEqual([500, 500, 201])
+    for (const slice of slices) expect(slice.args).toMatchObject(window)
+    const handed = slices.flatMap((c) => c.args.p_entry_ids as string[])
+    expect(handed).toHaveLength(1201)
+    expect(new Set(handed)).toEqual(new Set(lines.map((l) => l.journal_entry_id)))
+    expect(read).toHaveLength(1201)
+  })
+
+  it("answers every line in the RPC's order: entry_date, voucher_number, then line_id", async () => {
+    const lines = oneLineEach(1201)
+    // Two series on one day with the same number: line_id decides, as in Postgres.
+    lines.push(
+      makeGLLine({ line_id: uuid(900_002), journal_entry_id: uuid(5000), entry_date: '2026-03-03', voucher_number: 4, voucher_series: 'B' }),
+      makeGLLine({ line_id: uuid(900_001), journal_entry_id: uuid(5001), entry_date: '2026-03-03', voucher_number: 4, voucher_series: 'A' }),
+    )
+    const { supabase } = candidateDb(lines)
+
+    const read = await fetchUnlinkedGLLines(supabase, 'company-1')
+
+    expect(read).toEqual(rpcOrder(lines))
+  })
+
+  it('reads on past a full page when one slice holds a verifikat with more lines than a page', async () => {
+    const big = Array.from({ length: 1200 }, (_, i) =>
+      makeGLLine({ line_id: uuid(200_000 + i), journal_entry_id: uuid(7000), entry_date: '2026-05-05', voucher_number: 9, debit_amount: 1 }),
+    )
+    const lines = [...oneLineEach(10), ...big]
+    const { supabase, calls } = candidateDb(lines)
+
+    const read = await fetchUnlinkedGLLines(supabase, 'company-1')
+
+    expect(read).toEqual(rpcOrder(lines))
+    const slices = calls().filter((c) => c.fn === 'bank_account_unlinked_lines')
+    expect(slices).toHaveLength(2)
+    expect(slices.flatMap((c) => c.ranges)).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  it('asks nothing more when the window has no verifikat on the account', async () => {
+    const { supabase, calls } = candidateDb([])
+
+    expect(await fetchUnlinkedGLLines(supabase, 'company-1')).toEqual([])
+    expect(calls().map((c) => c.fn)).toEqual(['bank_account_unlinked_entries'])
+  })
+
+  it('throws a failed read with its SQLSTATE, so a run counts an error instead of "nothing to match" (accounted#115)', async () => {
+    const timeout = { message: 'canceling statement due to statement timeout', code: '57014' }
+
+    const atNarrowing = candidateDb(oneLineEach(3), { narrowing: timeout })
+    await expect(fetchUnlinkedGLLines(atNarrowing.supabase, 'company-1')).rejects.toMatchObject({ code: '57014' })
+    expect(atNarrowing.calls().map((c) => c.fn)).toEqual(['bank_account_unlinked_entries'])
+
+    const atSlice = candidateDb(oneLineEach(3), { predicate: timeout })
+    await expect(fetchUnlinkedGLLines(atSlice.supabase, 'company-1')).rejects.toMatchObject({ code: '57014' })
+  })
+
+  it('asks for no further slice once one has failed', async () => {
+    const lines = oneLineEach(3001)
+    const { supabase, calls } = candidateDb(lines, { firstSlice: { message: 'connection reset', code: '08006' } })
+
+    await expect(fetchUnlinkedGLLines(supabase, 'company-1')).rejects.toMatchObject({ code: '08006' })
+    // Seven slices of 500; three were on their way when the first failed.
+    expect(calls().filter((c) => c.fn === 'bank_account_unlinked_lines')).toHaveLength(3)
+  })
+
+  it('reads the matching candidates through their own halves, include_matched on both, the count a number', async () => {
+    const lines = oneLineEach(600).map((l, i) => ({ ...l, linked_transaction_count: String(i % 3) as unknown as number }))
+    const { supabase, calls } = candidateDb(lines)
+
+    const read = await fetchGLLinesForMatching(supabase, 'company-1', '1930', undefined, '2026-12-31', true)
+
+    expect(new Set(calls().map((c) => c.fn))).toEqual(new Set(['bank_account_candidate_entries', 'bank_account_candidate_lines']))
+    for (const call of calls()) {
+      expect(call.args).toMatchObject({ p_company_id: 'company-1', p_account_number: '1930', p_date_from: null, p_date_to: '2026-12-31', p_include_matched: true })
+    }
+    expect(read.map((l) => l.line_id)).toEqual(rpcOrder(lines).map((l) => l.line_id))
+    expect(read.map((l) => l.linked_transaction_count)).toEqual(rpcOrder(lines).map((l) => Number(l.linked_transaction_count)))
+  })
+
+  it('keeps the matching read lenient: a failed read is no candidates, as before', async () => {
+    const { supabase } = candidateDb(oneLineEach(3), { narrowing: { message: 'boom', code: 'XX000' } })
+
+    expect(await fetchGLLinesForMatching(supabase, 'company-1')).toEqual([])
+  })
 })
 
 // ============================================================

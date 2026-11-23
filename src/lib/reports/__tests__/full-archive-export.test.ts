@@ -585,6 +585,10 @@ describe('generateFullArchive', () => {
         await zip.file('revision/behandlingshistorik.json')!.async('text')
       ) as Array<{ id: string }>
 
+      // The same bytes JSON.stringify wrote when the history was one string.
+      expect(await zip.file('revision/behandlingshistorik.json')!.async('text')).toBe(
+        JSON.stringify([lineRow, outOfWindowCommit, inWindow], null, 2)
+      )
       // Deduped: audit-1 appears once despite arriving via both fetches.
       expect(history).toHaveLength(3)
       const ids = history.map((h) => h.id)
@@ -609,7 +613,7 @@ describe('generateFullArchive', () => {
           data: Array.from({ length: DOC_COUNT }, (_, i) => ({
             id: `doc-${i}`,
             file_name: `kvitto-${i}.pdf`,
-            storage_path: `company-1/doc-${i}.pdf`,
+            storage_path: `documents/company-1/user-1/doc-${i}.pdf`,
             journal_entry_id: 'entry-1',
             journal_entries: { voucher_number: i + 1, voucher_series: 'A', entry_date: '2024-03-15' },
           })),
@@ -652,7 +656,7 @@ describe('generateFullArchive', () => {
       expect(readInsideLease).toBe(false)
       expect(maxInFlight).toBeLessThanOrEqual(7)
       const archive = await JSZip.loadAsync(Buffer.concat(chunks))
-      expect(await archive.file('dokument/2024/A20_kvitto-19.pdf')!.async('text')).toBe('company-1/doc-19.pdf')
+      expect(await archive.file('dokument/2024/A20_kvitto-19.pdf')!.async('text')).toBe('documents/company-1/user-1/doc-19.pdf')
       const manifest = JSON.parse(await archive.file('dokument/manifest.json')!.async('text'))
       expect(manifest.map((m: { document_id: string }) => m.document_id)).toEqual(
         Array.from({ length: DOC_COUNT }, (_, i) => `doc-${i}`),
@@ -663,7 +667,7 @@ describe('generateFullArchive', () => {
     it('records a failed read in the manifest, in document order, and leaves the file out', async () => {
       enqueueDocuments()
       supabase.storage.from = vi.fn().mockReturnValue({
-        download: vi.fn(async (path: string) => path === 'company-1/doc-3.pdf'
+        download: vi.fn(async (path: string) => path === 'documents/company-1/user-1/doc-3.pdf'
           ? { data: null, error: { message: 'Object not found' } }
           : { data: new Blob([path]), error: null }),
       })
@@ -689,7 +693,7 @@ describe('generateFullArchive', () => {
         period:{start:'2024-01-01',end:'2024-12-31'}} as any)
       enqueueMany([
         {data:COMPANY_ROW},{data:[PERIOD_2024]},
-        {data:[{id:'retained-doc',file_name:'retained.pdf',storage_path:'p/retained.pdf',journal_entry_id:entry.id,
+        {data:[{id:'retained-doc',file_name:'retained.pdf',storage_path:'documents/company-1/user-1/retained.pdf',journal_entry_id:entry.id,
           journal_entries:{voucher_number:17,voucher_series:'A',entry_date:'2024-06-01'}}]},
         {data:[{id:entry.id,fiscal_period_id:PERIOD_2024.id}]},
         {data:[]}, // no original SIE source file
@@ -782,14 +786,14 @@ describe('generateFullArchive', () => {
             {
               id: 'doc-2023',
               file_name: 'r23.pdf',
-              storage_path: 'p/r23.pdf',
+              storage_path: 'documents/company-1/user-1/r23.pdf',
               journal_entry_id: 'e-2023',
               journal_entries: { voucher_number: 7, voucher_series: 'A', entry_date: '2023-06-01' },
             },
             {
               id: 'doc-2024',
               file_name: 'r24.pdf',
-              storage_path: 'p/r24.pdf',
+              storage_path: 'documents/company-1/user-1/r24.pdf',
               journal_entry_id: 'e-2024',
               journal_entries: { voucher_number: 12, voucher_series: 'B', entry_date: '2024-08-20' },
             },
@@ -846,7 +850,7 @@ describe('generateFullArchive', () => {
             {
               id: 'doc-orphan',
               file_name: 'inbox.pdf',
-              storage_path: 'p/inbox.pdf',
+              storage_path: 'documents/company-1/user-1/inbox.pdf',
               journal_entry_id: null,
               journal_entries: null,
             },
@@ -854,7 +858,7 @@ describe('generateFullArchive', () => {
             {
               id: 'doc-draft',
               file_name: 'invoice.pdf',
-              storage_path: 'p/invoice.pdf',
+              storage_path: 'documents/company-1/user-1/invoice.pdf',
               journal_entry_id: 'e-draft',
               journal_entries: { voucher_number: null, voucher_series: 'A', entry_date: null },
             },
@@ -862,14 +866,14 @@ describe('generateFullArchive', () => {
             {
               id: 'doc-collide-1234abcd-ee',
               file_name: 'kvitto.pdf',
-              storage_path: 'p/kvitto-1.pdf',
+              storage_path: 'documents/company-1/user-1/kvitto-1.pdf',
               journal_entry_id: 'e-posted',
               journal_entries: { voucher_number: 5, voucher_series: 'A', entry_date: '2024-05-01' },
             },
             {
               id: 'doc-collide-5678efgh-ff',
               file_name: 'kvitto.pdf',
-              storage_path: 'p/kvitto-2.pdf',
+              storage_path: 'documents/company-1/user-1/kvitto-2.pdf',
               journal_entry_id: 'e-posted',
               journal_entries: { voucher_number: 5, voucher_series: 'A', entry_date: '2024-05-01' },
             },
@@ -1341,7 +1345,7 @@ describe('generateBaseDataArchive', () => {
           {
             id: 'doc-orphan',
             file_name: 'inbox.pdf',
-            storage_path: 'p/inbox.pdf',
+            storage_path: 'documents/company-1/user-1/inbox.pdf',
             journal_entry_id: null,
             journal_entries: null,
           },
@@ -1349,7 +1353,7 @@ describe('generateBaseDataArchive', () => {
           {
             id: 'doc-linked',
             file_name: 'kvitto.pdf',
-            storage_path: 'p/kvitto.pdf',
+            storage_path: 'documents/company-1/user-1/kvitto.pdf',
             journal_entry_id: 'e-1',
             journal_entries: { voucher_number: 5, voucher_series: 'A', entry_date: '2024-05-01' },
           },
@@ -1361,8 +1365,20 @@ describe('generateBaseDataArchive', () => {
       ...masterDataQueue,
     ])
 
+    // Two rows in one page: the history is written a row at a time.
+    const history = [
+      { id: 'audit-2', action: 'UPDATE', old_state: { name: 'Acme' }, new_state: { name: 'Acme € Ny' }, created_at: '2024-06-02T10:00:00Z' },
+      { id: 'audit-1', action: 'INSERT', old_state: null, new_state: { name: 'Acme' }, created_at: '2024-06-01T10:00:00Z' },
+    ] as unknown as AuditLogEntry[]
+    mockGetAuditLog.mockResolvedValueOnce({ data: history, count: 0 })
+
     const buffer = await generateBaseDataArchive(supabase as any, 'company-1')
     const zip = await JSZip.loadAsync(buffer)
+
+    // The same bytes JSON.stringify wrote when the history was one string.
+    expect(await zip.file('revision/behandlingshistorik.json')!.async('text')).toBe(
+      JSON.stringify(history, null, 2)
+    )
 
     const manifest = JSON.parse(await zip.file('dokument/manifest.json')!.async('text'))
     expect(manifest).toHaveLength(1)

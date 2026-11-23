@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { botCopy } from '@/extensions/general/whatsapp-inbox/lib/messages'
+import { botCopy, TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 
 /**
  * Copy contracts that a rewrite must not quietly break. These assert the
@@ -68,10 +68,45 @@ describe('list question wording', () => {
   for (const locale of ['sv', 'en'] as const) {
     const copy = botCopy(locale)
 
-    it(`${locale}: sends the question as filed, then the why on a line of its own`, () => {
-      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' })).toBe('Gäller hyran kontoret?\nDet avgör kontot.')
-      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: null })).toBe('Gäller hyran kontoret?')
-      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' })).toBe('Gäller hyran kontoret?')
+    const closing = locale === 'sv' ? 'Du kan också svara med egna ord.' : 'You can also answer in your own words.'
+
+    it(`${locale}: sends the question as filed, the why on a line of its own, then the line about a written answer`, () => {
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.' })).toBe(
+        `Gäller hyran kontoret?\nDet avgör kontot.\n\n${closing}`,
+      )
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: null })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+    })
+
+    it(`${locale}: starts with the company's name in bold on a line of its own when one is given`, () => {
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.', company: 'Bolag A AB' })).toBe(
+        `*Bolag A AB*\nGäller hyran kontoret?\nDet avgör kontot.\n\n${closing}`,
+      )
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', company: 'Bolag A AB' })).toBe(
+        `*Bolag A AB*\nGäller hyran kontoret?\n\n${closing}`,
+      )
+    })
+
+    it(`${locale}: has no name line without a name, and keeps the name on one bold line`, () => {
+      for (const company of [null, undefined, '', '  ']) {
+        expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', company })).toBe(`Gäller hyran kontoret?\n\n${closing}`)
+      }
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', company: ' Bolag *A*\nAB ' }).split('\n')[0]).toBe('*Bolag A AB*')
+    })
+
+    it(`${locale}: leaves the closing line out when told to, and keeps the name and the question`, () => {
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', why: 'Det avgör kontot.', company: 'Bolag A AB', closing: false })).toBe(
+        '*Bolag A AB*\nGäller hyran kontoret?\nDet avgör kontot.',
+      )
+      expect(copy.m23ListQuestion({ question: 'Gäller hyran kontoret?', closing: false })).toBe('Gäller hyran kontoret?')
+    })
+
+    it(`${locale}: closes the question with one line saying a written answer is welcome, without a dash`, () => {
+      const lines = copy.m23ListQuestion({ question: 'Gäller hyran kontoret?' }).split('\n')
+      expect(lines.at(-1)).toBe(closing)
+      expect(closing).toMatch(locale === 'sv' ? /egna ord/ : /own words/)
+      expect(closing).not.toMatch(/[–—]/)
+      expect(closing.length).toBeLessThanOrEqual(60)
     })
 
     it(`${locale}: fits the "Vet inte" button in a reply button title`, () => {
@@ -98,3 +133,73 @@ describe('list question wording', () => {
     expect(botCopy('sv').m25ListEnded()).toMatch(/inget nytt svar/)
   })
 })
+
+describe('replies that leave a list question open', () => {
+  it('has its own message ids for "later" and for a question back', () => {
+    expect(TEMPLATE.m27ListLater).toBe('m27_list_later')
+    expect(TEMPLATE.m28ListQuestionBack).toBe('m28_list_question_back')
+    const ids = Object.values(TEMPLATE)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('says the question stays and that an answer is welcome here, in one line without a dash', () => {
+    expect(botCopy('sv').m27ListLater()).toBe('Okej, frågan ligger kvar. Svara här när du vet.')
+    expect(botCopy('en').m27ListLater()).toBe('Okay, the question stays open. Answer here when you know.')
+    for (const locale of ['sv', 'en'] as const) {
+      const line = botCopy(locale).m27ListLater()
+      expect(line).not.toMatch(/\n/)
+      expect(line).not.toMatch(/[–—]/)
+      expect(line.length).toBeLessThanOrEqual(120)
+    }
+  })
+
+  it('sends a question back in the words it was given, in either locale', () => {
+    for (const locale of ['sv', 'en'] as const) {
+      expect(botCopy(locale).m28ListQuestionBack({ reply: 'Menar du kontoret på Storgatan?' })).toBe('Menar du kontoret på Storgatan?')
+    }
+  })
+})
+
+describe('m29FileTooLarge, a file over the intake size limit', () => {
+  for (const locale of ['sv', 'en'] as const) {
+    it(`${locale}: says the file is too large and names the limit, without asking for the same file again`, () => {
+      const msg = botCopy(locale).m29FileTooLarge({ maxMb: 10 })
+      expect(msg).toMatch(locale === 'sv' ? /för stor/ : /too large/)
+      expect(msg).toMatch(/\b10 MB\b/)
+      // "Try again" is what M18 said, and the same file can never pass.
+      expect(msg).not.toMatch(locale === 'sv' ? /försök igen/i : /try again/i)
+      expect(msg).not.toMatch(/[–—]/)
+    })
+  }
+
+  it('has its own message id', () => {
+    expect(TEMPLATE.m29FileTooLarge).toBe('m29_file_too_large')
+  })
+})
+
+describe('m30ListSettled, a question in flight that was closed as settled', () => {
+  const sentence = { sv: 'Den här frågan är löst, du behöver inte svara.', en: 'This question is settled, you do not need to answer.' } as const
+
+  it('has its own message id, shared with no other message', () => {
+    expect(TEMPLATE.m30ListSettled).toBe('m30_list_settled')
+    const ids = Object.values(TEMPLATE)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  for (const locale of ['sv', 'en'] as const) {
+    it(`${locale}: says the question is settled and that no answer is needed, in one sentence without a dash`, () => {
+      const line = botCopy(locale).m30ListSettled({})
+      expect(line).toBe(sentence[locale])
+      expect(botCopy(locale).m30ListSettled({ note: null })).toBe(sentence[locale])
+      expect(botCopy(locale).m30ListSettled({ note: '' })).toBe(sentence[locale])
+      expect(line).not.toMatch(/\n/)
+      expect(line).not.toMatch(/[–—]/)
+      expect(line.length).toBeLessThanOrEqual(120)
+    })
+
+    it(`${locale}: puts the note of the close on a line of its own after the sentence`, () => {
+      expect(botCopy(locale).m30ListSettled({ note: 'Betalningen är bokförd mot fakturan.' })).toBe(`${sentence[locale]}\nBetalningen är bokförd mot fakturan.`)
+    })
+  }
+})
+

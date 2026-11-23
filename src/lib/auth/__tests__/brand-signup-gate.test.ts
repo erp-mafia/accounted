@@ -221,6 +221,95 @@ describe('evaluateBrandSignupGate', () => {
 
     expect(result.allowed).toBe(false)
   })
+
+  // A byrå owner invites staff under Inställningar → Teamet; those rows live
+  // in team_invitations, not company_invitations. A new colleague opening
+  // that link on the byrå's invite-only domain must be able to sign up.
+  it('allows a pending byrå-team invite for the same email', async () => {
+    resolveBrandByHostMock.mockResolvedValue(makeBrand())
+    mock.enqueueMany([
+      { data: null }, // allowlist miss
+      { data: null }, // no company invite for this token
+      {
+        data: {
+          email: 'colleague@example.com',
+          status: 'pending',
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+          teams: { kind: 'byra' },
+        },
+      },
+    ])
+
+    const result = await evaluateBrandSignupGate({
+      host: 'app.testbrand.example',
+      email: 'Colleague@Example.com',
+      inviteToken: 'gnubok_inv_team',
+    })
+
+    expect(result.allowed).toBe(true)
+    expect(result.allowed && result.via).toBe('invite')
+    expect(mock.findCall('team_invitations', 'eq')).toEqual([
+      'token_hash',
+      hashInviteToken('gnubok_inv_team'),
+    ])
+  })
+
+  it.each([
+    ['a different email', { email: 'someone-else@example.com' }],
+    ['an expired invite', { expires_at: new Date(Date.now() - 60_000).toISOString() }],
+    ['an accepted invite', { status: 'accepted' }],
+    ['a team that is not a byrå', { teams: { kind: 'personal' } }],
+  ])('blocks a team invite with %s', async (_label, override) => {
+    resolveBrandByHostMock.mockResolvedValue(makeBrand())
+    mock.enqueueMany([
+      { data: null },
+      { data: null },
+      {
+        data: {
+          email: 'colleague@example.com',
+          status: 'pending',
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+          teams: { kind: 'byra' },
+          ...override,
+        },
+      },
+    ])
+
+    const result = await evaluateBrandSignupGate({
+      host: 'app.testbrand.example',
+      email: 'colleague@example.com',
+      inviteToken: 'gnubok_inv_team',
+    })
+
+    expect(result.allowed).toBe(false)
+  })
+
+  it('fails closed when the team invite lookup errors', async () => {
+    resolveBrandByHostMock.mockResolvedValue(makeBrand())
+    mock.enqueueMany([{ data: null }, { data: null }, { data: null, error: { message: 'boom' } }])
+
+    const result = await evaluateBrandSignupGate({
+      host: 'app.testbrand.example',
+      email: 'colleague@example.com',
+      inviteToken: 'gnubok_inv_team',
+    })
+
+    expect(result.allowed).toBe(false)
+  })
+
+  it('does not fall through to team invites when the company invite lookup errors', async () => {
+    resolveBrandByHostMock.mockResolvedValue(makeBrand())
+    mock.enqueueMany([{ data: null }, { data: null, error: { message: 'boom' } }])
+
+    const result = await evaluateBrandSignupGate({
+      host: 'app.testbrand.example',
+      email: 'colleague@example.com',
+      inviteToken: 'gnubok_inv_team',
+    })
+
+    expect(result.allowed).toBe(false)
+    expect(mock.findCall('team_invitations', 'eq')).toBeUndefined()
+  })
 })
 
 describe('isEmailOnBrandAllowlist', () => {

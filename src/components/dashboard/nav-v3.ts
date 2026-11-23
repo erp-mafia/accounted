@@ -33,6 +33,7 @@ import {
   HashtagIcon,
   HomeIcon,
   InboxIcon,
+  InboxStackIcon,
   ListBulletIcon,
   PencilSquareIcon,
   PercentBadgeIcon,
@@ -166,6 +167,8 @@ export const NAV_V3_AREAS: NavV3Area[] = [
       {
         items: [
           { href: '/', module: 'platform', labelKey: 'home', icon: HomeIcon, match: ['/onboarding/books'] },
+          // One list of what waits to be booked, beside the queues it gathers, while the booking screen rolls out.
+          { href: '/att-bokfora', module: 'platform', labelKey: 'v3_to_book', icon: InboxStackIcon, requiresBookingScreen: true },
           { href: '/?vy=behover', module: 'platform', labelKey: 'v3_needs_you', icon: InboxIcon, match: ['/arkiv/granska'] },
           { href: '/pending', module: 'platform', labelKey: 'v3_routine', icon: ArrowPathIcon },
           { href: '/questions', module: 'platform', labelKey: 'v3_questions', icon: QuestionMarkCircleIcon, requiresCompanyQuestions: true },
@@ -281,7 +284,8 @@ export const NAV_V3_AREAS: NavV3Area[] = [
     groups: [
       {
         items: [
-          { href: '/bookkeeping', module: 'ledger', labelKey: 'v3_vouchers', icon: BookOpenIcon, match: ['/dimensions/tagging'] },
+          // The booking screen (/bokfor) sits under Verifikat: it makes one.
+          { href: '/bookkeeping', module: 'ledger', labelKey: 'v3_vouchers', icon: BookOpenIcon, match: ['/dimensions/tagging', '/bokfor'] },
           { href: '/chart-of-accounts', module: 'ledger', labelKey: 'chart_of_accounts', icon: QueueListIcon },
           { href: '/dimensions', module: 'ledger', labelKey: 'dimensions', icon: HashtagIcon, requiresDimensions: true },
           { href: '/bookkeeping/periodiseringar', module: 'ledger', labelKey: 'periodiseringar', icon: CalendarDateRangeIcon },
@@ -391,9 +395,9 @@ export const NAV_V3_AREAS: NavV3Area[] = [
           },
           { href: '/bolaget/aktiebok', module: 'corporate', labelKey: 'v3_share_register', icon: BookOpenIcon, requiresBolagetRegisters: true },
           { href: '/bolaget/styrelse', module: 'corporate', labelKey: 'v3_board', icon: UserIcon, requiresBolagetRegisters: true },
-          { href: '/bolaget/moten', module: 'corporate', labelKey: 'v3_meetings', icon: CalendarDateRangeIcon, requiresBolagetRegisters: true },
-          { href: '/bolaget/kapital', module: 'corporate', labelKey: 'v3_capital', icon: BanknotesIcon, requiresBolagetRegisters: true },
-          { href: '/bolaget/agarskatt', module: 'corporate', labelKey: 'v3_owner_tax', icon: PercentBadgeIcon, requiresBolagetRegisters: true },
+          { href: '/bolaget/moten', module: 'corporate', labelKey: 'v3_meetings', icon: CalendarDateRangeIcon, requiresBolagetMoney: true },
+          { href: '/bolaget/kapital', module: 'corporate', labelKey: 'v3_capital', icon: BanknotesIcon, requiresBolagetMoney: true },
+          { href: '/bolaget/agarskatt', module: 'corporate', labelKey: 'v3_owner_tax', icon: PercentBadgeIcon, requiresBolagetMoney: true },
         ],
       },
     ],

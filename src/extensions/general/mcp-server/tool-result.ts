@@ -51,15 +51,24 @@ export interface AgentToolError {
  * that puts the same underlag on it (crm#1813).
  * RATE_LIMITED carries details.retry_after_seconds and
  * details.limit_per_minute when a key is over its per-minute limit (#225).
+ * VALIDATION_ERROR from an operation names the rule that refused it
+ * (details.field, details.reason, e.g. not_bank_connected for a ledger change
+ * on an account no bank connection syncs), which the generic message cannot;
+ * operation contracts promise it, and v1 carries it (crm#2158). An argument
+ * refusal carries no details: its fields are in message_en already.
+ * SI_UNCREDIT_CREDIT_NOTE names the original to undo the credit on instead
+ * (details.credited_invoice_id, crm#2171).
  */
 const CODES_WITH_DETAILS = new Set([
   'DOC_ATTACH_OTHER_VERIFIKAT',
   'FORBIDDEN',
   'PREVIEW_STALE',
   'RATE_LIMITED',
+  'SI_UNCREDIT_CREDIT_NOTE',
   'TRANSACTION_ALREADY_STAGED',
   'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE',
   'SALARY_RUN_VACATION_PAY_UNDETERMINED',
+  'VALIDATION_ERROR',
   'VOUCHER_NEEDS_CONFIRMATION',
 ])
 

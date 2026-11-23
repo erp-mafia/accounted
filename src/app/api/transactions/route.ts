@@ -6,10 +6,12 @@ import { CreateTransactionSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { transactionTextSearchFilter } from '@/lib/transactions/text-search'
 import { resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
+import { isSaneDateString } from '@/lib/invariants'
+import { isUuid } from '@/lib/invariants/uuid'
 
 const MAX_ROWS = 500
 const LIST_COLUMNS =
-  'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id'
+  'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, document_id'
 
 // withRouteContext enforces auth (MFA on hosted) and resolves companyId; the
 // previous hand-rolled session lookup in this handler skipped the MFA gate.
@@ -40,6 +42,14 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
   // cash_account_id hasn't been backfilled yet. This is what stops two
   // same-currency accounts from showing each other's transactions.
   const accountNumberParam = searchParams.get('account_number') || undefined
+  // The page after one that had more: the `next` of the answer before, the
+  // date and id of its last row. Both are interpolated into the .or() filter
+  // below, so each must be exactly a date and a uuid.
+  const afterDate = searchParams.get('after_date')
+  const afterId = searchParams.get('after_id')
+  if ((afterDate !== null || afterId !== null) && !(afterDate && isSaneDateString(afterDate) && isUuid(afterId))) {
+    return NextResponse.json({ error: 'Ogiltig fortsättning: after_date (ÅÅÅÅ-MM-DD) och after_id anges tillsammans' }, { status: 400 })
+  }
 
   let derivedCurrency = currency
   let cashAccountId: string | undefined
@@ -87,9 +97,14 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
   if (dateFrom) query = query.gte('date', dateFrom)
   if (dateTo) query = query.lte('date', dateTo)
   if (textFilter) query = query.or(textFilter)
+  // Keyset, not offset: a row booked between two pages moves no other row
+  // past the caller.
+  if (afterDate && afterId) query = query.or(`date.lt.${afterDate},and(date.eq.${afterDate},id.gt.${afterId})`)
 
-  // Fetch one extra row so we can tell the caller whether the result was truncated.
-  query = query.order('date', { ascending: false }).limit(MAX_ROWS + 1)
+  // Newest first, then id, so the order is total and a page continues exactly
+  // where the one before ended. Fetch one extra row so we can tell the caller
+  // whether the result was truncated.
+  query = query.order('date', { ascending: false }).order('id', { ascending: true }).limit(MAX_ROWS + 1)
 
   const { data, error } = await query
 
@@ -100,8 +115,12 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
   const rows = data || []
   const hasMore = rows.length > MAX_ROWS
   const truncated = hasMore ? rows.slice(0, MAX_ROWS) : rows
+  // Where the next page starts, sent back as after_date and after_id. The
+  // select is chosen at run time, so the client cannot type the rows.
+  const last = truncated[truncated.length - 1] as unknown as { date: string; id: string } | undefined
+  const next = hasMore && last ? { after_date: last.date, after_id: last.id } : null
 
-  return NextResponse.json({ data: truncated, has_more: hasMore, limit: MAX_ROWS })
+  return NextResponse.json({ data: truncated, has_more: hasMore, limit: MAX_ROWS, next })
 })
 
 // Manual bank-transaction creation. This is the server-side boundary the form

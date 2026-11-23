@@ -118,6 +118,20 @@ describe('behandlingshistorik_sources: the rows it selects', () => {
     expect(arrayLiteral(sql, 'action')).toEqual([...GLOBAL_ACTIONS])
   })
 
+  // The window is read in two parts (20261123104000): the audited tables'
+  // rows that are not a global action, then the global actions. The two
+  // lists of actions must be the same, or a row is read twice or not at all.
+  it('splits the window on the same global actions in both parts', () => {
+    const sql = liveSourcesMigration()
+    const lists = [...sql.matchAll(/a\.action (?:= ANY|<> ALL) \(ARRAY\[([^\]]*)\]\)/g)].map((m) =>
+      [...m[1].matchAll(/'([^']+)'/g)].map((literal) => literal[1]),
+    )
+    expect(lists).toEqual([[...GLOBAL_ACTIONS], [...GLOBAL_ACTIONS]])
+    // The global actions are read without the exclusion, whose cases all name
+    // an INSERT, COMMIT or UPDATE: none of them may be a global action.
+    expect(GLOBAL_ACTIONS.filter((action) => ['INSERT', 'COMMIT', 'UPDATE'].includes(action))).toEqual([])
+  })
+
   // The function leaves these rows in the database because no event can come
   // from them; if a normaliser ever renders one, the SQL must stop excluding it.
   it('leaves out only rows auditRowToEvent turns into nothing', () => {
@@ -1204,6 +1218,60 @@ describe('generateBehandlingshistorik', () => {
       user_id: 'user-2',
       label: 'Inloggad användare: bo@example.se',
     })
+  })
+
+  it('shows the same events in the same order whatever order the database returns its rows in', async () => {
+    // behandlingshistorik_sources aggregates each source without ORDER BY, so
+    // its arrays come in the order the plan reads them, and an index can
+    // change that order (20261123091600). The report orders every event by
+    // time, source and id, bursts included, so what it shows cannot change.
+    const at = (iso: string) => `2026-${iso}.000Z`
+    const entries = [
+      baseEntry,
+      { ...baseEntry, id: 'entry-2', voucher_number: 13 },
+      { ...baseEntry, id: 'entry-3', voucher_number: 14, source_type: 'storno', reverses_id: 'entry-1', committed_at: at('04-01T08:00:00') },
+      { ...baseEntry, id: 'entry-4', voucher_number: 15, committed_at: at('05-01T08:00:00') },
+    ]
+    const accounts = Array.from({ length: 12 }, (_, i) =>
+      auditRow({ id: `acc-${i}`, table_name: 'chart_of_accounts', action: 'INSERT', created_at: at(`02-01T08:00:0${Math.min(i, 9)}`), new_state: { account_number: String(4000 + i), account_name: `Konto ${i}` } }),
+    )
+    const documents = ['a.pdf', 'b.pdf', 'c.pdf'].map((file_name, i) =>
+      auditRow({ id: `doc-${i}`, table_name: 'document_attachments', action: 'DELETE', created_at: at('06-01T08:00:00'), old_state: { file_name } }),
+    )
+    const audit = [
+      ...accounts,
+      ...documents,
+      // At the same instant as two commits: the source decides, then the id.
+      auditRow({ id: 'settings', table_name: 'company_settings', action: 'UPDATE', created_at: baseEntry.committed_at, old_state: { moms_period: 'quarterly' }, new_state: { moms_period: 'monthly' } }),
+      auditRow({ id: 'reverse', record_id: 'entry-1', action: 'REVERSE', created_at: at('04-01T08:00:00'), old_state: { voucher_series: 'A', voucher_number: 12, status: 'posted' }, new_state: { voucher_series: 'A', voucher_number: 12, status: 'reversed', reversed_by_id: 'entry-3' } }),
+      // The trigger's twin of the metadata rättelse below: suppressed.
+      auditRow({ id: 'twin', record_id: 'entry-2', action: 'UPDATE', created_at: at('03-11T08:00:00'), old_state: { status: 'posted', description: 'Hyra' }, new_state: { status: 'posted', description: 'Hyra mars' } }),
+    ]
+    const rattelse = [
+      { id: 'r1', journal_entry_id: 'entry-2', rattelse_type: 'metadata', old_description: 'Hyra', new_description: 'Hyra mars', old_entry_date: null, new_entry_date: null, struck_lines: null, added_lines: null, actor: 'user-1', created_at: at('03-11T08:00:00') },
+      { id: 'r2', journal_entry_id: 'entry-4', rattelse_type: 'metadata', old_description: 'Hyra', new_description: 'Hyra maj', old_entry_date: null, new_entry_date: null, struck_lines: null, added_lines: null, actor: 'user-1', created_at: at('05-02T08:00:00') },
+    ]
+    const report = async (order: <T>(rows: T[]) => T[]) => {
+      rpcResults = { behandlingshistorik_sources: ledger({ entries: order(entries), audit: order(audit), rattelse: order(rattelse) }) }
+      mockResults = {
+        fiscal_periods: [{ data: period }],
+        company_settings: [{ data: { company_name: 'T', org_number: null } }],
+        company_migration_resets: [{ data: [] }, { data: [] }],
+        app_releases: [{ data: [] }],
+        sie_imports: [{ data: [] }],
+        bank_file_imports: [{ data: [] }],
+      }
+      return generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' }, { now: new Date('2026-08-21T12:00:00.000Z') })
+    }
+
+    const asRead = await report((rows) => rows)
+    expect(asRead!.events.map((e) => e.id)).toEqual([
+      'audit:acc-0:bulk', 'entry:entry-1', 'entry:entry-2', 'audit:settings', 'rattelse:r1', 'entry:entry-3', 'audit:reverse',
+      'entry:entry-4', 'rattelse:r2', 'audit:doc-0:bulk',
+    ])
+    expect(await report((rows) => [...rows].reverse())).toEqual(asRead)
+    expect(await report((rows) => [...rows.slice(2), ...rows.slice(0, 2)])).toEqual(asRead)
+    expect(await report((rows) => [...rows].sort((a, b) => JSON.stringify(b).localeCompare(JSON.stringify(a))))).toEqual(asRead)
   })
 
   it('fails with the SQLSTATE when a read fails', async () => {
@@ -2410,6 +2478,83 @@ describe('auditRowToEvent: employee pay basis (accounted#30)', () => {
     }))
     expect(leaked?.details).toEqual(['Timlön: (tomt) → 250'])
     expect(JSON.stringify(leaked)).not.toMatch(/ciphertext|1111|2222/)
+  })
+})
+
+describe('auditRowToEvent: bank-anchor moves (#2407)', () => {
+  // What write_audit_log stores: the whole bank row, and the whole link row.
+  const tx = {
+    id: 'tx-1',
+    company_id: 'company-1',
+    date: '2026-03-10',
+    description: 'Kortköp Kontorsvaror',
+    amount: -700,
+    currency: 'SEK',
+    journal_entry_id: 'entry-1',
+    is_business: true,
+  }
+  const link = {
+    id: 'link-1',
+    company_id: 'company-1',
+    transaction_id: 'tx-1',
+    journal_entry_id: 'entry-1',
+    allocated_amount: -700,
+    role: 'bank_line',
+  }
+  const entries = new Map([
+    ['entry-1', { id: 'entry-1', voucher_series: 'A', voucher_number: 12, source_type: 'bank_transaction', source_id: 'tx-1' }],
+    ['entry-2', { id: 'entry-2', voucher_series: 'A', voucher_number: 14, source_type: 'manual', source_id: null }],
+  ])
+  const ctx = { rattelseMetadataAt: new Map(), entryById: new Map(), linkedEntryById: entries }
+  const audit = (
+    table_name: 'transactions' | 'transaction_voucher_links',
+    old_state: Record<string, unknown> | null,
+    new_state: Record<string, unknown> | null,
+    action: AuditLogEntry['action'] = 'UPDATE',
+  ) => auditRow({ table_name, record_id: String((old_state ?? new_state)?.id), action, old_state, new_state })
+
+  it('both anchors are audited tables', () => {
+    expect(AUDITED_TABLES).toContain('transactions')
+    expect(AUDITED_TABLES).toContain('transaction_voucher_links')
+  })
+
+  it('a correction moving the bank row names the row and both verifikat', () => {
+    expect(auditRowToEvent(audit('transactions', tx, { ...tx, journal_entry_id: 'entry-2' }), ctx)).toMatchObject({
+      category: 'verifikation',
+      code: 'bank_transaction.moved',
+      event: 'Bankhändelse flyttad till annat verifikat',
+      object: '2026-03-10 Kortköp Kontorsvaror',
+      details: ['Verifikat: A12 → A14', 'Belopp: −700,00 SEK'],
+      actor: { type: 'user', user_id: 'user-1' },
+    })
+  })
+
+  it('a storno releasing the bank row names the verifikat it left', () => {
+    expect(auditRowToEvent(audit('transactions', tx, { ...tx, journal_entry_id: null, is_business: null }), ctx)).toMatchObject({
+      code: 'bank_transaction.released',
+      event: 'Bankhändelsens koppling till verifikat borttagen',
+      details: ['Verifikat: A12', 'Belopp: −700,00 SEK'],
+    })
+  })
+
+  it('a moved link and a removed link carry the bank row, the role and the allocated amount', () => {
+    expect(auditRowToEvent(audit('transaction_voucher_links', link, { ...link, journal_entry_id: 'entry-2' }), ctx)).toMatchObject({
+      category: 'verifikation',
+      code: 'bank_link.moved',
+      event: 'Bankkoppling flyttad till annat verifikat',
+      details: ['Verifikat: A12 → A14', 'Bankhändelse: tx-1', 'Roll: bankrad', 'Belopp: −700,00'],
+    })
+    expect(auditRowToEvent(audit('transaction_voucher_links', { ...link, role: 'clearing' }, null, 'DELETE'), ctx)).toMatchObject({
+      code: 'bank_link.released',
+      event: 'Bankkoppling borttagen',
+      details: ['Verifikat: A12', 'Bankhändelse: tx-1', 'Roll: clearing', 'Belopp: −700,00'],
+    })
+  })
+
+  it('renders nothing for a first booking, an insert, or a bank-row delete', () => {
+    expect(auditRowToEvent(audit('transactions', { ...tx, journal_entry_id: null }, tx), ctx)).toBeNull()
+    expect(auditRowToEvent(audit('transaction_voucher_links', null, link, 'INSERT'), ctx)).toBeNull()
+    expect(auditRowToEvent(audit('transactions', tx, null, 'DELETE'), ctx)).toBeNull()
   })
 })
 

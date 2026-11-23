@@ -29,6 +29,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { PAYMENTS_OPERATIONS, PAYMENTS_WRITE_OPERATIONS, type PaymentsOperation, type PaymentsParty } from '@accounted/connect-contract'
 import { CONNECTOR_UNREACHABLE_CODE, ConnectorCallError, callConnectorOperation } from '@/lib/connect/instance/connector-fetch'
 import { paymentsConnectorMode, type ConnectorUpstream } from '@/lib/connect/instance/upstreams'
+import { createLogger } from '@/lib/logger'
 import {
   PAYMENT_NOT_FOUND,
   PaymentProviderError,
@@ -247,6 +248,23 @@ function toChallenge(challenge: {
   }
 }
 
+const log = createLogger('payments/connect')
+
+/**
+ * A failed call no retry fixes that is not the bank's answer: a
+ * configuration, scope, key, contract or request error, or an exception on
+ * our side of the service. A person or an operator must act, so it is logged
+ * at error here, whatever the door answers: a door answers a final failure
+ * as PAYMENT_PROVIDER_REFUSED, a 4xx, which is right for the bank's own
+ * refusal (CONNECTOR_PAYMENTS_REFUSED) and its not-found, and would leave an
+ * outage of the integration at warn.
+ */
+function operatorMustAct(error: unknown, failure: PaymentProviderError): boolean {
+  if (failure.retryable || failure.outcomeUnknown) return false
+  return !(error instanceof ConnectorCallError
+    && (error.code === 'CONNECTOR_PAYMENTS_REFUSED' || error.code === 'CONNECTOR_PAYMENTS_NOT_FOUND'))
+}
+
 export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps: ConnectPaymentsProviderDeps = {}): PaymentInitiationProvider {
   const timeoutMs = deps.timeoutMs ?? PAYMENTS_CONNECT_TIMEOUT_MS
 
@@ -262,7 +280,12 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
         fetch: deps.fetch,
       })
     } catch (error) {
-      throw toPaymentProviderError(error, operation)
+      const failure = toPaymentProviderError(error, operation)
+      if (operatorMustAct(error, failure)) {
+        log.error('payments connector call failed; a person or an operator must act',
+          { alert: true, companyId, operation, code: failure.code, status: failure.httpStatus })
+      }
+      throw failure
     }
   }
 

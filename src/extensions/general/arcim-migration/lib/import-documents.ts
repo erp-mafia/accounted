@@ -53,7 +53,10 @@
  * by default) without its invoice (crm#1146, PH 176). A supplier-invoice file
  * is linked to the verifikat that booked the invoice, which Fortnox names on
  * the invoice (series, number, financial year) and the SIE import preserved
- * as the source ref: the same resolution as a voucher file. That source is
+ * as the source ref: the same resolution as a voucher file. Under
+ * kontantmetoden Fortnox books the invoice only when it is paid, so that
+ * verifikat is its one payment, taken only in a year Fortnox marks CASH and
+ * only once the invoice is paid in full (crm#2112). That source is
  * additive: a refusal on it (scope or licence) is reported in
  * `unreachableSources` and never stops the voucher files.
  *
@@ -143,7 +146,13 @@ import {
   recordImportedInvoiceDelivery,
 } from '@/lib/invoices/invoice-deliveries'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
+import { dbError } from '@/lib/errors/db-error'
+import {
+  checkExecutionBudget,
+  currentExecutionBudget,
+  ExecutionBudgetExceeded,
+  withExecutionDeadline,
+} from '@/lib/http/execution-budget'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { createLogger } from '@/lib/logger'
@@ -243,7 +252,9 @@ export interface ImportDocumentsOptions {
    * Also stop the sweep at this moment (on `now`'s clock), whichever comes
    * first. The server's continuation (document-import-continuation.ts) sweeps
    * until its function's deadline instead of 30 s: a large Fortnox listing
-   * alone takes about two minutes, paid again by every slice (crm#1581).
+   * alone takes about two minutes, paid again by every slice (crm#1581). The
+   * listing's supplier-invoice index gets half the time left to it at most
+   * (SUPPLIER_INVOICE_INDEX_MAX_MS).
    */
   sweepDeadline?: number
   /** A server continuation re-checks the run and connection between files. */
@@ -253,6 +264,16 @@ export interface ImportDocumentsOptions {
 }
 
 export const DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS = 30_000
+
+/**
+ * The longest a call reads Fortnox's supplier-invoice list as its index of
+ * booking vouchers; with a sweep deadline, also no more than half the time
+ * left to it. Every slice reads the list again. Without it each invoice is
+ * asked on its own detail form, as when the list times out (crm#1642), so its
+ * files still link. One company's list outlasted the server's whole slice on
+ * most tries (2026-11-22), so the slice ended in its listing.
+ */
+const SUPPLIER_INVOICE_INDEX_MAX_MS = 60_000
 
 export interface ImportDocumentsResult {
   provider: string
@@ -564,9 +585,13 @@ function fortnoxSource(
   companyId: string,
   /** The migration's account key for this connection (migration_source_records.account_key). */
   accountKey: string,
+  /** How long the supplier-invoice index may be read from now (SUPPLIER_INVOICE_INDEX_MAX_MS). */
+  indexBudgetMs: () => number,
 ): ProviderAttachmentSource {
   // Read by resolveRef on later attachments of the same call.
   let financialYearById = new Map<number, FortnoxFinancialYear>()
+  /** Fortnox's kontantmetod years: a supplier invoice's payment there booked it. */
+  let cashYearIds = new Set<number>()
 
   /**
    * The register's list form, read as an index of booking vouchers, or null
@@ -578,13 +603,22 @@ function fortnoxSource(
    * register's list timed out on 3 of 65 slices over three runs, and each
    * such slice ended its run with its supplier-invoice files unreached
    * (crm#1642). A refusal still propagates: the detail form would be refused
-   * the same way, and the caller names the scope.
+   * the same way, and the caller names the scope. So does the end of the
+   * slice's own time; a list that outlasts its share (indexBudgetMs) is
+   * given up on like one that timed out.
    */
   const supplierInvoiceBookingIndex = async () => {
+    const shareEnd = Date.now() + indexBudgetMs()
+    const sliceEnd = currentExecutionBudget()?.deadline ?? Infinity
     try {
-      return await fetchFortnoxSupplierInvoiceBookings(client, accessToken())
+      return await withExecutionDeadline(shareEnd, 'fortnox-supplier-invoice-index', () =>
+        fetchFortnoxSupplierInvoiceBookings(client, accessToken()),
+      )
     } catch (error) {
-      if (isFortnoxPermissionError(error) || error instanceof ExecutionBudgetExceeded) throw error
+      if (isFortnoxPermissionError(error)) throw error
+      // Cut where the slice itself ends: the slice's time, not the list's share.
+      if (error instanceof ExecutionBudgetExceeded && sliceEnd <= shareEnd) throw error
+      checkExecutionBudget()
       log.warn('fortnox supplier-invoice list not read: each file asks its invoice instead', {
         providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
         providerMessage: fortnoxErrorMessage(error),
@@ -598,7 +632,10 @@ function fortnoxSource(
    * Files on supplier invoices, linked through each invoice's booking
    * voucher. Additive to the voucher files: any refusal or failure here is
    * reported and the voucher files carry on, because this source must never
-   * take away what the voucher sweep already delivers.
+   * take away what the voucher sweep already delivers. The end of the
+   * slice's time is neither: it ends the slice, as in the voucher listing.
+   * Reported as an unreachable source, it let the sweep start past the hard
+   * stop, which cut the first file and counted it failed (2026-11-22).
    */
   const supplierInvoiceAttachments = async (
     voucherFileKeys: Set<string>,
@@ -637,6 +674,7 @@ function fortnoxSource(
       }
       return { attachments, unreachable: [] }
     } catch (error) {
+      if (error instanceof ExecutionBudgetExceeded) throw error
       log.error('fortnox supplier-invoice files not listed', error as Error, {
         scope,
         providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
@@ -735,6 +773,7 @@ function fortnoxSource(
           financialYears.map((year) => year.id),
         )
         financialYearById = new Map(financialYears.map((year) => [year.id, year]))
+        cashYearIds = new Set(financialYears.filter((year) => year.accountingMethod === 'CASH').map((year) => year.id))
 
         voucherAttachments = connections.map((connection): ProviderAttachment => {
           voucherFileKeys.add(fortnoxFileVoucherKey(connection.fileId, connection))
@@ -788,9 +827,54 @@ function fortnoxSource(
         client,
         accessToken(),
         attachment.supplierInvoiceNumber,
+        cashYearIds,
       )
       return voucher ? fortnoxRef(voucher, financialYearById) : null
     },
+  }
+}
+
+/** One page of the existing-attachments read: what one PostgREST response carries. */
+const EXISTING_ATTACHMENTS_PAGE = 1000
+
+interface ExistingAttachmentRow {
+  id: string
+  sha256_hash: string
+  journal_entry_id: string | null
+  upload_source: string | null
+}
+
+/**
+ * Every document_attachments row of the company, in id order, for the dedup
+ * sets each slice builds. Keyset pages: each page is the next thousand ids
+ * after the last one read, a range of idx_document_attachments_company_id_id.
+ * The offset pages this replaces made every page fetch and sort all of the
+ * company's rows again (27 pages of 26 000 rows in 7 300 heap blocks for the
+ * largest archive), and a page that met a cold cache passed the 8 s
+ * statement timeout at the start of every slice. The order is the same total
+ * id order, so the rows are the same rows.
+ */
+async function fetchExistingAttachments(supabase: SupabaseClient, companyId: string): Promise<ExistingAttachmentRow[]> {
+  const rows: ExistingAttachmentRow[] = []
+  let after: string | null = null
+  while (true) {
+    let query = supabase
+      .from('document_attachments')
+      .select('id, sha256_hash, journal_entry_id, upload_source')
+      .eq('company_id', companyId)
+    if (after !== null) query = query.gt('id', after)
+    const { data, error } = await query.order('id', { ascending: true }).limit(EXISTING_ATTACHMENTS_PAGE)
+    // dbError keeps the SQLSTATE, as fetchAllRows does: a statement timeout
+    // stays a 57014 for the continuation's retry.
+    if (error) throw dbError(error, null)
+    const page = (data ?? []) as ExistingAttachmentRow[]
+    rows.push(...page)
+    if (page.length < EXISTING_ATTACHMENTS_PAGE) return rows
+    const last = page[page.length - 1].id
+    // A full page that does not move past the last id would ask for the same
+    // page for ever.
+    if (!last || last === after) throw new Error('existing attachments: a full page gave no id to continue after')
+    after = last
   }
 }
 
@@ -862,7 +946,17 @@ export async function importProviderDocuments(
     String(resolved.consent.org_number ?? '').replace(/[^a-z0-9]/gi, '') || resolved.providerCompanyId || ''
   const fortnox =
     provider === 'fortnox'
-      ? fortnoxSource(new FortnoxClient(), () => resolved.accessToken, supabase, companyId, fortnoxAccountKey)
+      ? fortnoxSource(
+          new FortnoxClient(),
+          () => resolved.accessToken,
+          supabase,
+          companyId,
+          fortnoxAccountKey,
+          () =>
+            sweepDeadline === undefined
+              ? SUPPLIER_INVOICE_INDEX_MAX_MS
+              : Math.min(SUPPLIER_INVOICE_INDEX_MAX_MS, (sweepDeadline - now()) / 2),
+        )
       : null
   const source = (): ProviderAttachmentSource =>
     provider === 'bokio'
@@ -931,22 +1025,7 @@ export async function importProviderDocuments(
     withUnauthorizedRefresh(() => source().list()),
     fetchFiscalPeriods(supabase, companyId),
     fetchSourceRefVouchers(supabase, companyId),
-    // A stable `.order('id')` is required: fetchAllRows pages with `.range()`,
-    // and PostgREST paging without a deterministic order can skip or repeat
-    // rows once a table exceeds one page, which would defeat the hash dedup.
-    fetchAllRows<{
-      id: string
-      sha256_hash: string
-      journal_entry_id: string | null
-      upload_source: string | null
-    }>(({ from, to }) =>
-      supabase
-        .from('document_attachments')
-        .select('id, sha256_hash, journal_entry_id, upload_source')
-        .eq('company_id', companyId)
-        .order('id', { ascending: true })
-        .range(from, to),
-    ),
+    fetchExistingAttachments(supabase, companyId),
   ])
 
   // Stable order across calls: a provider may page its listing differently
@@ -1398,6 +1477,9 @@ export async function importProviderDocuments(
   // The listing above is paid again by every slice; it must not eat the
   // slice itself (or cut the in-memory dry run short).
   const sweepStartedAt = now()
+  // The listing ran up to the sweep deadline: the first file gets only the
+  // time to the hard stop, no sweep of its own.
+  const sweepStartedLate = sweepDeadline !== undefined && sweepStartedAt >= sweepDeadline
 
   for (let index = startIndex; index < attachments.length; index++) {
     if (shouldContinue && !(await shouldContinue())) {
@@ -1423,9 +1505,14 @@ export async function importProviderDocuments(
     // it, so the next slice retries it with a full budget. A file that a fresh
     // slice could not finish either is counted failed and passed, as before,
     // so one slow file never holds the run (the server refuses a slice that
-    // does not advance).
+    // does not advance). Not one whose slice began past its sweep deadline:
+    // it never had a sweep to fail in, so the slice ends out of time and the
+    // file stays next in line. Counting it failed skipped 11 receipts on
+    // 2026-11-22, one per slice whose listing had eaten the slice.
     const cutInFlight = (error: unknown): boolean => {
-      if (!(error instanceof ExecutionBudgetExceeded) || index === startIndex) return false
+      if (!(error instanceof ExecutionBudgetExceeded)) return false
+      if (index === startIndex && sweepStartedLate) throw error
+      if (index === startIndex) return false
       result.scanned--
       result.partial = true
       result.nextCursor = attachments[index - 1].id

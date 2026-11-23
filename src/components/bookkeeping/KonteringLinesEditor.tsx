@@ -1,13 +1,14 @@
 'use client'
 
-import type { ComponentProps, ReactNode } from 'react'
+import { useState, type ComponentProps, type ReactNode } from 'react'
+import { useLocale } from 'next-intl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn, formatAmount } from '@/lib/utils'
-import { negativeAmountMove } from '@/lib/bookkeeping/kontering-amount-entry'
-import { KONTERING_ICON_WIDTH_CLASS, konteringGridColumns } from '@/components/bookkeeping/kontering-grid'
+import { konteringAmountText, konteringAmountValue, negativeAmountMove } from '@/lib/bookkeeping/kontering-amount-entry'
+import { KONTERING_EXTRA_CONTAINER_CLASS, KONTERING_ICON_WIDTH_CLASS, konteringGridColumns } from '@/components/bookkeeping/kontering-grid'
 import { PlusIcon, TrashIcon } from '@/components/icons'
 import type { BASAccount } from '@/types'
 import type { SearchableAccount } from '@/lib/bookkeeping/account-search'
@@ -48,6 +49,52 @@ export interface KonteringReadOnlyLine {
   credit_amount: string
 }
 
+/**
+ * One amount field. It is a text field, not a number field: Chrome reads a
+ * number field by the browser's own language, not the page's, so in an
+ * English Chrome "100,50" became 10050 and the verifikat would not balance,
+ * or balanced on a hundred times the amount (PH 305). The line keeps the dot
+ * string a number field handed over (konteringAmountValue), so no reader of
+ * the lines changes. What the person types stays as typed while they type;
+ * once the field is left, and for a value set from outside (a proposal, a
+ * fill, a minus figure moved to the other side), it shows the figure the
+ * line holds, to the öre, with the language's decimal mark. Text that is not
+ * an amount stays, marked invalid, and counts as no figure.
+ */
+function KonteringAmountInput({
+  value,
+  onValueChange,
+  onBlur,
+  ...props
+}: Omit<ComponentProps<typeof Input>, 'type' | 'value' | 'onChange'> & {
+  value: string
+  onValueChange: (value: string) => void
+}) {
+  const decimal = useLocale().startsWith('sv') ? ',' : '.'
+  const [typed, setTyped] = useState<{ text: string; value: string } | null>(null)
+  const current = typed && typed.value === value ? typed : null
+  const refused = current !== null && current.value === '' && current.text.trim() !== ''
+  return (
+    <Input
+      {...props}
+      type="text"
+      inputMode="decimal"
+      autoComplete="off"
+      aria-invalid={refused || undefined}
+      value={current ? current.text : konteringAmountText(value, decimal)}
+      onChange={(e) => {
+        const next = konteringAmountValue(e.target.value, decimal)
+        setTyped({ text: e.target.value, value: next })
+        onValueChange(next)
+      }}
+      onBlur={(e) => {
+        if (current && !refused) setTyped(null)
+        onBlur?.(e)
+      }}
+    />
+  )
+}
+
 interface KonteringLinesEditorProps {
   lines: readonly KonteringEditorLine[]
   accounts: BASAccount[]
@@ -56,6 +103,8 @@ interface KonteringLinesEditorProps {
   notActivatedLabel?: string
   /** The account name shown under a picked account. */
   accountName?: (accountNumber: string) => string | undefined
+  /** The account name sits inside the field after the number instead, so every row keeps one height. */
+  accountNameInline?: boolean
   onAccountChange: (index: number, accountNumber: string) => void
   onAmountChange: (index: number, field: 'debit_amount' | 'credit_amount', value: string) => void
   /** Shows the description column; leave it out for account-and-amount rows. */
@@ -116,6 +165,7 @@ export function KonteringLinesEditor({
   catalog,
   notActivatedLabel,
   accountName,
+  accountNameInline = false,
   onAccountChange,
   onAmountChange,
   onDescriptionChange,
@@ -140,8 +190,14 @@ export function KonteringLinesEditor({
 }: KonteringLinesEditorProps) {
   const withDescription = onDescriptionChange !== undefined
   const columns = konteringGridColumns(withDescription, extraColumn !== undefined, renderRowActions !== undefined)
-  // The cells a sum or a generated row leaves empty after the amounts.
-  const trailingCells = (extraColumn ? 1 : 0) + 1
+  // The cells a sum or a generated row leaves empty after the amounts: the
+  // extra column's only where it has a track (a wide editor, kontering-grid.ts).
+  const trailingCells = (
+    <>
+      {extraColumn && <span className="hidden @3xl:block" />}
+      <span className="hidden sm:block" />
+    </>
+  )
 
   const amountInput = (index: number, field: KonteringAmountField, label: string) => (
     <div className="min-w-0 space-y-1 sm:space-y-0">
@@ -150,20 +206,16 @@ export function KonteringLinesEditor({
           {label}
         </label>
       )}
-      <Input
+      <KonteringAmountInput
         id={`kontering-${index}-${field}`}
-        type="number"
-        step="0.01"
-        min="0"
-        inputMode="decimal"
         placeholder={header ? '0,00' : label}
         aria-label={label}
         value={lines[index][field]}
-        onChange={(e) => onAmountChange(index, field, e.target.value)}
-        onBlur={(e) => {
+        onValueChange={(value) => onAmountChange(index, field, value)}
+        onBlur={() => {
           // Both sides are written as positive figures: a minus figure is
           // the same figure on the other side, moved when the field is left.
-          const move = negativeAmountMove(field, e.target.value)
+          const move = negativeAmountMove(field, lines[index][field])
           if (!move) return
           onAmountChange(index, field, '')
           onAmountChange(index, move.side, move.value)
@@ -174,6 +226,24 @@ export function KonteringLinesEditor({
       />
     </div>
   )
+
+  // A narrow editor gives the saldo a line of its own under the row, labelled
+  // as on a phone, and none when there is nothing to show (no account yet); a
+  // wide one, its own column, empty or not, so the columns stay aligned.
+  const extraCell = (column: NonNullable<KonteringLinesEditorProps['extraColumn']>, index: number) => {
+    const value = column.render(index)
+    return (
+      <div
+        className={cn(
+          'col-span-2 flex items-baseline justify-end gap-1 text-xs tabular-nums text-muted-foreground sm:order-last sm:col-[1/-2] @3xl:order-none @3xl:col-span-1 @3xl:block @3xl:self-center @3xl:text-right @3xl:text-sm',
+          value == null && 'hidden @3xl:block',
+        )}
+      >
+        {header && <span className="@3xl:hidden">{column.label}</span>}
+        {value}
+      </div>
+    )
+  }
 
   const readOnlyRows = (index: number) => {
     const generated = readOnlyLines?.(index)
@@ -198,9 +268,7 @@ export function KonteringLinesEditor({
             <span className="hidden text-right tabular-nums sm:block">
               {line.credit_amount ? formatAmount(parseFloat(line.credit_amount)) : ''}
             </span>
-            {Array.from({ length: trailingCells }, (_, i) => (
-              <span key={i} className="hidden sm:block" />
-            ))}
+            {trailingCells}
           </div>
         ))}
       </div>
@@ -208,7 +276,7 @@ export function KonteringLinesEditor({
   }
 
   return (
-    <div className={cn('space-y-2', KONTERING_ICON_WIDTH_CLASS)}>
+    <div className={cn('space-y-2', KONTERING_ICON_WIDTH_CLASS, extraColumn && KONTERING_EXTRA_CONTAINER_CLASS)}>
       {header && (
         <div
           aria-hidden="true"
@@ -218,7 +286,7 @@ export function KonteringLinesEditor({
           {withDescription && <span>{labels.description}</span>}
           <span className="text-right">{labels.debit}</span>
           <span className="text-right">{labels.credit}</span>
-          {extraColumn && <span className="text-right">{extraColumn.label}</span>}
+          {extraColumn && <span className="text-right @max-3xl:hidden">{extraColumn.label}</span>}
           <span />
         </div>
       )}
@@ -243,7 +311,8 @@ export function KonteringLinesEditor({
               onCreateAccount={onCreateAccount ? (prefill) => onCreateAccount(index, prefill) : undefined}
               onCommit={onAccountCommit ? () => onAccountCommit(index) : undefined}
               inputRef={accountInputRef ? (el) => accountInputRef(index, el) : undefined}
-              selectedName={accountName?.(line.account_number)}
+              selectedName={accountNameInline ? undefined : accountName?.(line.account_number)}
+              inlineName={accountNameInline ? accountName?.(line.account_number) : undefined}
               disabled={accountsDisabled}
             />
           </div>
@@ -263,12 +332,7 @@ export function KonteringLinesEditor({
             {amountInput(index, 'debit_amount', labels.debit)}
             {amountInput(index, 'credit_amount', labels.credit)}
           </div>
-          {extraColumn && (
-            <div className="col-span-2 flex items-baseline justify-end gap-1 text-xs tabular-nums text-muted-foreground sm:col-span-1 sm:block sm:self-center sm:text-right sm:text-sm">
-              {header && <span className="sm:hidden">{extraColumn.label}</span>}
-              {extraColumn.render(index)}
-            </div>
-          )}
+          {extraColumn && extraCell(extraColumn, index)}
           <div className="col-start-2 row-start-1 flex items-center justify-end sm:col-start-auto sm:row-start-auto">
             {renderRowActions?.(index)}
             <Button
@@ -303,9 +367,7 @@ export function KonteringLinesEditor({
             <span className="sm:hidden">{labels.credit} </span>
             {totals.credit}
           </span>
-          {Array.from({ length: trailingCells }, (_, i) => (
-            <span key={i} className="hidden sm:block" />
-          ))}
+          {trailingCells}
         </div>
       )}
 

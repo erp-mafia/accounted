@@ -1,0 +1,24 @@
+name: Start Postgres in the background
+description: >-
+  Pulls and starts the Supabase Postgres image as the container ci-postgres on
+  host port 5432 without waiting for it, so the image downloads while the job
+  installs its toolchain. The job waits for it later (the "Wait for Postgres"
+  loop) and ends with a step that removes the container (if: always()): a
+  composite action has no step that runs after the job's own steps, and on a
+  self-hosted runner nothing else removes a container started with docker run.
+
+runs:
+  using: composite
+  steps:
+    - name: Start Postgres in the background
+      shell: bash
+      run: |
+        # A container left by a job that did not reach its cleanup step would
+        # hold the name and the port.
+        docker rm -f -v ci-postgres >/dev/null 2>&1 || true
+        # Ships the auth schema, auth.uid() and the extensions the migrations
+        # need. The wait loop prints this log if Postgres never answers.
+        nohup docker run -d --name ci-postgres -p 5432:5432 \
+          -e POSTGRES_PASSWORD=postgres \
+          supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc \
+          > "$RUNNER_TEMP/postgres-start.log" 2>&1 &

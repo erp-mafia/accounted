@@ -1228,7 +1228,9 @@ let doorSeq = 0
 
 async function prepareDoors(seed: Seed, date: string): Promise<DoorSet> {
   const n = ++doorSeq
-  const invoice = async () => register(seed, domesticInvoice(seed, `FAIL-${n}-${randomUUID().slice(0, 4)}`, date))
+  // Counted, not random: the four invoices share one supplier, and a supplier's invoice number is unique.
+  let invoiceSeq = 0
+  const invoice = async () => register(seed, domesticInvoice(seed, `FAIL-${n}-${++invoiceSeq}`, date))
   const [markPaid, v1MarkPaid, match, v1Match] = [await invoice(), await invoice(), await invoice(), await invoice()]
   // Distinct amounts and days, so no door reads another's row as a duplicate.
   const matchRow = await insertRow(seed, { date, description: `Betalning ${n} a`, amount: -1500 })

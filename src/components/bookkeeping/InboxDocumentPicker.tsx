@@ -29,6 +29,7 @@ import {
   SpinnerIcon,
 } from '@/components/icons'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import type { AvailableInboxDoc } from '@/lib/documents/inbox-available'
 
 // InboxDocumentPicker
 //
@@ -57,19 +58,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 // so picking one opens a confirm and links a byte-identical copy (POST link
 // with copy: true); the original stays where it is.
 
-export interface AvailableInboxDoc {
-  inbox_item_id: string
-  document_id: string
-  file_name: string
-  mime_type: string | null
-  file_size_bytes: number
-  source: string | null
-  created_at: string
-  supplier_name: string | null
-  amount: number | null
-  currency: string | null
-  invoice_date: string | null
-}
+export type { AvailableInboxDoc } from '@/lib/documents/inbox-available'
 
 interface Props {
   open: boolean

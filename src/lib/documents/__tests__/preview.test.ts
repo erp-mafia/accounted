@@ -84,4 +84,13 @@ describe('ensurePreview', () => {
     expect(await ensurePreview(makeStorage({}).client, doc)).toBeNull()
     expect(await ensurePreview({} as never, doc)).toBeNull()
   })
+
+  it('reads no original whose key is not inside the document company, and keeps nothing', async () => {
+    const elsewhere = { ...doc, storage_path: 'documents/co-2/u/doc-9.jpg' }
+    const { client, bucket, uploads } = makeStorage({ [elsewhere.storage_path]: await photo(3000, 2000) })
+    expect(await ensurePreview(client, elsewhere)).toBeNull()
+    // Only the company's own previews/ key was looked at.
+    expect(bucket.download.mock.calls.map((call) => call[0])).toEqual(['previews/co-1/doc-1-v1.jpg'])
+    expect(uploads).toEqual([])
+  })
 })

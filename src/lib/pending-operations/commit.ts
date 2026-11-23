@@ -43,7 +43,13 @@ import {
 } from '@/lib/invoices/issue-and-book-invoice'
 import { findCardCashAccount } from '@/lib/cash-accounts/load-card-ledgers'
 import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
-import { ensureManualCashAccount, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
+import {
+  ensureManualCashAccount,
+  isCashAccountCurrencyMismatch,
+  isCashAccountDisabledPayee,
+  resolveDefaultCashAccount,
+  type CashAccountCurrencyMismatch,
+} from '@/lib/cash-accounts/service'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { findFiscalPeriod, validateBalance } from '@/lib/bookkeeping/engine'
 import { postingPort } from '@/lib/posting/port'
@@ -2014,6 +2020,47 @@ async function commitRetagLineDimensions(
 }
 
 /**
+ * CASH_ACCOUNT_CURRENCY_MISMATCH as an approval's answer, naming the ledger
+ * and both currencies. A 409 closes the proposal as one to stage again, as
+ * TX_CREATE_DUPLICATE does: the proposal itself names an account in another
+ * currency, so the same approval can never go through (fixable-refusals.ts
+ * keeps only refusals fixed outside the proposal).
+ */
+function cashAccountCurrencyRefusal(mismatch: CashAccountCurrencyMismatch): ExecutorResult {
+  const { ledger_account, account_currency, currency } = mismatch.details
+  return {
+    error:
+      `Bankkontot på ${ledger_account} är i ${account_currency}, men transaktionen är i ${currency}. ` +
+      `Ett bankkonto har bara en valuta, så inget sparades. Lägg transaktionen på ett bankkonto i ${currency}.`,
+    errorCode: mismatch.code,
+    status: getErrorEntry(mismatch.code)?.httpStatus ?? 409,
+    data: { ...mismatch.details },
+  }
+}
+
+/**
+ * CASH_ACCOUNT_DISABLED_PAYEE as an approval's answer, naming the ledger:
+ * the bank account on ledger_account is turned off and marked to be printed
+ * on invoices, which rows never turn back on (reenableIfUnused). Refused
+ * before anything is stored. What is wrong lies outside the proposal (an
+ * owner or admin turns the account on, or hides it on invoices), so the
+ * app's single approval keeps it pending for the same approval once that is
+ * done (fixable-refusals.ts); every other door closes it, as any 409 does.
+ */
+function cashAccountDisabledPayeeRefusal(ledgerAccount: string): ExecutorResult {
+  const code = 'CASH_ACCOUNT_DISABLED_PAYEE'
+  return {
+    error:
+      `Bankkontot på ${ledgerAccount} är avstängt och markerat att visas på fakturor, så transaktionen sparades inte. ` +
+      'En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) ' +
+      'eller dölja det på fakturor under Inställningar → Fakturering.',
+    errorCode: code,
+    status: getErrorEntry(code)?.httpStatus ?? 409,
+    data: { ledger_account: ledgerAccount },
+  }
+}
+
+/**
  * An approved gnubok_create_transactions row. Stored through
  * ingestTransactions, the pipeline every other door that stores a bank row
  * runs (PSD2 sync, bank-file import, v1 POST /transactions/ingest): its
@@ -2133,11 +2180,25 @@ async function commitCreateTransaction(
   // that currency (crm#1171): a bank-feed or bank-file row is never stored
   // unbound, and an unbound one dropped out of every per-account view.
   // Ingest then settles the batch on the account's ledger number.
-  const cashAccount = card && ledgerAccount
-    ? { id: card.id, ledger_account: ledgerAccount }
-    : ledgerAccount
-      ? { id: await ensureManualCashAccount(supabase, companyId, ledgerAccount, currency), ledger_account: ledgerAccount }
-      : await resolveDefaultCashAccount(supabase, companyId, currency, bankConnectionId)
+  let cashAccount: { id: string; ledger_account: string } | null
+  if (card && ledgerAccount) {
+    cashAccount = { id: card.id, ledger_account: ledgerAccount }
+  } else if (ledgerAccount) {
+    try {
+      cashAccount = { id: await ensureManualCashAccount(supabase, companyId, ledgerAccount, currency), ledger_account: ledgerAccount }
+    } catch (err) {
+      // Two refusals before anything is stored, which used to reach the
+      // dispatcher's catch as a 500 that told the approver to try again: the
+      // kassakonto on ledger_account is in another currency (a ledger holds
+      // one), or it is a turned-off invoice payee that only an owner or admin
+      // turns on.
+      if (isCashAccountCurrencyMismatch(err)) return cashAccountCurrencyRefusal(err)
+      if (isCashAccountDisabledPayee(err)) return cashAccountDisabledPayeeRefusal(ledgerAccount)
+      throw err
+    }
+  } else {
+    cashAccount = await resolveDefaultCashAccount(supabase, companyId, currency, bankConnectionId)
+  }
 
   // Auto-categorization stays off: the row lands uncategorized and the agent
   // books it with gnubok_categorize_transaction, as the staging promised.

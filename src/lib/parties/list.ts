@@ -303,6 +303,9 @@ export async function getCounterpartList(
 ): Promise<CounterpartList> {
   const period = options.period ?? '12m'
   const since = periodStart(period)
+  // Both reads page on a total order: Postgres sorts each page on its own, so
+  // rows that tie on the sort (the bank rows of one day) came back twice or
+  // never past 1,000 rows, and a counterpart's figures with them (crm#2146).
   const [register, aliases, transactions] = await Promise.all([
     getRegister(supabase, companyId, { view: 'all', period }),
     fetchAllRows<AliasRecord>(({ from, to }) =>
@@ -311,6 +314,8 @@ export async function getCounterpartList(
         .select('alias_key, party_id, display_name, kind, rail, country, what, band, source')
         .eq('company_id', companyId)
         .is('superseded_at', null)
+        // Unique among live readings (idx_counterparty_aliases_live_key).
+        .order('alias_key', { ascending: true })
         .range(from, to),
     ).catch(() => [] as AliasRecord[]),
     fetchAllRows<TxRecord>(({ from, to }) => {
@@ -320,7 +325,11 @@ export async function getCounterpartList(
         .eq('company_id', companyId)
         .eq('is_ignored', false)
       if (since) query = query.gte('date', since)
-      return query.order('date', { ascending: false }).range(from, to)
+      // Oldest first: a row a bank sync adds during the read, dated after the
+      // pages already read, sorts after them. The pages share no snapshot, so
+      // a row added mid-read that sorts before a page boundary (dated back, or
+      // the same day with a lower id) reads the row on that boundary twice.
+      return query.order('date', { ascending: true }).order('id', { ascending: true }).range(from, to)
     }),
   ])
   const composed = composeCounterparts({ parties: register.rows, aliases, bank: bankStatsByKey(transactions), q: options.q })

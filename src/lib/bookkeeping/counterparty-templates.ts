@@ -7,11 +7,14 @@ import {
   bankRowVatLines,
   generateReverseChargePurchaseLines,
   DEFAULT_REVERSE_CHARGE_KIND,
+  isImportBasisAccount,
   isReverseChargeBasisAccount,
   isReverseChargeVatAccount,
   outputVatTreatmentOfAccount,
   RC_BASIS_OFFSET_ACCOUNT,
   reverseChargeKindForBasisAccount,
+  reverseChargePurchasesOn,
+  resolveReverseChargeRate,
   vatAccountNature,
   type ReverseChargeKind,
   type ReverseChargePurchase,
@@ -29,6 +32,7 @@ import {
 } from './dimension-resolver'
 import { DimensionValidationError, type DimensionValidationIssue } from './dimension-errors'
 import { resolveSekAmount } from './currency-utils'
+import { roundOre } from '@/lib/money'
 import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { bankSideOf, isMoneyLedger, learnableBankPair, settleBankLeg, type BankSide } from './bank-leg'
@@ -1832,6 +1836,8 @@ interface VoucherLinePattern {
   settlementAccount: string
   settlementSide: 'debit' | 'credit'
   hasReverseCharge: boolean
+  /** The voucher's fiktiv-moms accounts, sorted and joined; '' for none. */
+  fiktivMoms: string
 }
 
 /**
@@ -1845,7 +1851,7 @@ function extractVoucherLinePattern(
   const settlement: PatternLine[] = []
   const vat: PatternLine[] = []
   const business: PatternLine[] = []
-  let hasReverseCharge = false
+  const fiktivMoms = new Set<string>()
 
   for (const line of lines) {
     if (isSettlementAccount(line.account)) {
@@ -1856,8 +1862,8 @@ function extractVoucherLinePattern(
     } else if (REVERSE_CHARGE_VAT_ACCOUNTS.has(line.account)) {
       // Fiktiv moms nets to zero inside the voucher: exclude it from the VAT
       // total (it must not shrink the base the business ratios use) and only
-      // remember that the counterparty is reverse-charge.
-      hasReverseCharge = true
+      // remember which accounts it was on.
+      fiktivMoms.add(line.account)
       continue
     } else if (isVatAccount(line.account)) {
       vat.push(line)
@@ -1931,8 +1937,78 @@ function extractVoucherLinePattern(
     entries,
     settlementAccount: settlement[0].account,
     settlementSide,
-    hasReverseCharge,
+    hasReverseCharge: fiktivMoms.size > 0,
+    fiktivMoms: [...fiktivMoms].sort().join(','),
   }
+}
+
+/** The amount a replay is simulated on (replayedFiktivMomsKey): large enough that no ratio rounds away. */
+const REPLAY_PROBE_AMOUNT = 10000
+
+/**
+ * The fiktiv-moms accounts a learned shape books when it is replayed, sorted
+ * and joined, '' when it books none. A simple shape replays the legacy set
+ * (learnedReverseChargeLines), and only on a purchase without a deductible
+ * moms line beside it (learnedPairVatLines, templateFieldsFromVoucherPatterns);
+ * a line pattern replays its basis pair's set (patternReverseChargeLines), none
+ * without a pair. Both settled on their cost lines as the booking door settles
+ * them (reverseChargePurchasesOn), with no momskod known: a cost line on a
+ * basis account takes its own sats. null when the replay would book the
+ * purchase's basis twice: a cost line on an import account (4545-4547, ruta
+ * 50) gets a reverse-charge basis pair (ruta 20-24) beside it.
+ */
+function replayedFiktivMomsKey(
+  entries: readonly LinePatternEntry[],
+  settlementSide: 'debit' | 'credit',
+): string | null {
+  let purchase: { base: number; rate: number; kind: ReverseChargeKind }
+  let costLines: { account: string; amount: number }[]
+  if (isSimpleShape(entries)) {
+    const business = entries.find((e) => e.type === 'business')
+    // A business line on the credit side is a sale or a credit note, and so
+    // is a template whose settlement (its first settlement line) is debited:
+    // the simple builder books reverse charge on neither sign of them.
+    if (
+      !business || business.side !== 'debit' || settlementSide !== 'credit' ||
+      entries.some((e) => e.type === 'vat')
+    ) return ''
+    purchase = { base: REPLAY_PROBE_AMOUNT, rate: resolveReverseChargeRate({}), kind: DEFAULT_REVERSE_CHARGE_KIND }
+    costLines = [{ account: business.account, amount: REPLAY_PROBE_AMOUNT }]
+  } else {
+    // As buildMultiLineMappingResult shares a payment with no moms line.
+    const { rcPair, entries: rest, ratioScale } = patternReplayPlan(entries)
+    if (!rcPair) return ''
+    costLines = rest
+      .filter((e) => e.type === 'business' && e.side === rcPair.basis.side && (e.ratio ?? 0) > 0)
+      .map((e) => ({ account: e.account, amount: roundOre(REPLAY_PROBE_AMOUNT * (e.ratio ?? 0) * ratioScale) }))
+    purchase = { base: REPLAY_PROBE_AMOUNT, rate: rcPair.rate, kind: rcPair.kind }
+  }
+  if (costLines.some((line) => isImportBasisAccount(line.account))) return null
+  const accounts = reverseChargePurchasesOn(purchase, costLines, new Map())
+    .flatMap(generateReverseChargePurchaseLines)
+    .map((line) => line.account_number)
+    .filter((account) => REVERSE_CHARGE_VAT_ACCOUNTS.has(account))
+  return [...new Set(accounts)].sort().join(',')
+}
+
+/** Whether an account occurs on more than one of the entries. */
+function repeatsAccount(entries: readonly Pick<LinePatternEntry, 'account'>[]): boolean {
+  return new Set(entries.map((e) => e.account)).size !== entries.length
+}
+
+/**
+ * A shape the simple builder books from the legacy fields: one business line,
+ * at most one VAT line, no tax line. Any other is stored as a line_pattern.
+ */
+function isSimpleShape(entries: readonly LinePatternEntry[]): boolean {
+  let business = 0
+  let vat = 0
+  for (const e of entries) {
+    if (e.type === 'tax') return false
+    if (e.type === 'business') business++
+    if (e.type === 'vat') vat++
+  }
+  return business === 1 && vat <= 1
 }
 
 // ── Counterparty group types ─────────────────────────────────
@@ -2056,18 +2132,45 @@ function averageLinePatterns(voucherPatterns: VoucherLinePattern[]): LinePattern
  */
 function templateFieldsFromVoucherPatterns(
   voucherPatterns: VoucherLinePattern[],
-): Pick<TemplateUpsertParams, 'debitAccount' | 'creditAccount' | 'vatTreatment' | 'vatAccount'> & {
+): (Pick<TemplateUpsertParams, 'debitAccount' | 'creditAccount' | 'vatTreatment' | 'vatAccount'> & {
   linePattern: LinePatternEntry[] | null
-} {
+}) | null {
   // Average the line patterns from all vouchers in the group
   const avgPattern = averageLinePatterns(voucherPatterns)
+
+  // A replay regenerates the fiktiv moms instead of reading it back, so a
+  // group whose fiktiv moms the replay of what it teaches would book on other
+  // accounts teaches nothing (#997): import VAT (2615, ruta 60) came back as
+  // 2614 (ruta 30) beside a 4535 basis (ruta 21), domestic reverse charge's
+  // basis in ruta 21 instead of 24, 12 % as 25 %, and a pattern with an import
+  // pair (4545) lost its moms. Judged on the averaged pattern, which is what
+  // is stored and replayed. Averaging keeps one line per account, so a line
+  // pattern whose voucher books a basis or offset account twice (two basis
+  // pairs on one 4598, one per sats) replays another split of the sats and
+  // teaches nothing either; a cost account booked on several lines merges as
+  // it does without reverse charge. A line pattern with a basis pair replays
+  // fiktiv moms whether or not its vouchers booked any, so it is judged too,
+  // and a replay that would book the basis twice (an import account beside a
+  // generated pair) teaches nothing. A categorize booking whose replay would
+  // land in another ruta teaches nothing too (crm#1028).
   const { settlementAccount, settlementSide } = voucherPatterns[0]
+  const rcPair = isSimpleShape(avgPattern) ? null : patternReplayPlan(avgPattern).rcPair
+  if (rcPair !== null || voucherPatterns.some((vp) => vp.fiktivMoms !== '')) {
+    const replayed = replayedFiktivMomsKey(avgPattern, settlementSide)
+    const isPairLeg = (account: string) =>
+      reverseChargeKindForBasisAccount(account) !== null ||
+      account === rcPair?.basis.account ||
+      account === rcPair?.offset.account
+    if (replayed === null || voucherPatterns.some((vp) =>
+      vp.fiktivMoms !== replayed ||
+      (rcPair !== null && repeatsAccount(vp.entries.filter((e) => isPairLeg(e.account)))),
+    )) return null
+  }
 
   // Decide: simple (1 business + 0-1 VAT) → legacy fields; otherwise → line_pattern
   const businessEntries = avgPattern.filter(e => e.type === 'business')
   const vatEntries = avgPattern.filter(e => e.type === 'vat')
-  const taxEntries = avgPattern.filter(e => e.type === 'tax')
-  const isSimple = businessEntries.length === 1 && taxEntries.length === 0 && vatEntries.length <= 1
+  const isSimple = isSimpleShape(avgPattern)
 
   // Determine primary business account and settlement for debit/credit fields
   const primaryBusiness = businessEntries.sort((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0))[0]
@@ -2115,7 +2218,7 @@ function patternAccountSet(entries: readonly Pick<LinePatternEntry, 'account'>[]
 }
 
 /** A verifikat's template fields plus its shape key (verifikatTemplateShape). */
-export type VerifikatTemplateShape = ReturnType<typeof templateFieldsFromVoucherPatterns> & {
+export type VerifikatTemplateShape = NonNullable<ReturnType<typeof templateFieldsFromVoucherPatterns>> & {
   accountSet: string
 }
 
@@ -2123,17 +2226,21 @@ export type VerifikatTemplateShape = ReturnType<typeof templateFieldsFromVoucher
  * What one posted verifikat teaches as a counterparty template, read the way
  * the SIE learner reads an imported voucher (extractVoucherLinePattern):
  * pension plus särskild löneskatt stays one multi-line template. `lines` are
- * signed like SIE amounts (debit positive). `accountSet` is the shape's key,
- * the same one the SIE learner groups vouchers by. null when the verifikat
+ * signed like SIE amounts (debit positive). `accountSet` is the shape's
+ * account key, the one the SIE learner groups vouchers by beside their
+ * fiktiv-moms accounts (populateTemplatesFromSieVouchers). null when the verifikat
  * cannot be a pattern (no business line, no settlement line, more than five
- * business accounts, nothing left beside the VAT).
+ * business accounts, nothing left beside the VAT), or when its replay would
+ * book its fiktiv moms on other accounts (templateFieldsFromVoucherPatterns).
  */
 export function verifikatTemplateShape(
   lines: { account: string; amount: number; dimensions?: Record<string, string> }[],
 ): VerifikatTemplateShape | null {
   const pattern = extractVoucherLinePattern(lines)
   if (!pattern) return null
-  return { accountSet: patternAccountSet(pattern.entries), ...templateFieldsFromVoucherPatterns([pattern]) }
+  const fields = templateFieldsFromVoucherPatterns([pattern])
+  if (!fields) return null
+  return { accountSet: patternAccountSet(pattern.entries), ...fields }
 }
 
 /**
@@ -2203,9 +2310,12 @@ export async function populateTemplatesFromSieVouchers(
     const linePattern = extractVoucherLinePattern(voucher.lines)
     if (!linePattern) continue
 
-    // Group key: sorted set of non-settlement accounts
+    // Group key: sorted set of non-settlement accounts, and the fiktiv-moms
+    // accounts, which the pattern leaves out: import VAT and EU reverse
+    // charge on the same cost account are two shapes, and the dominant one
+    // decides (#997).
     const accountSet = patternAccountSet(linePattern.entries)
-    const groupKey = `${normalized}|${accountSet}`
+    const groupKey = `${normalized}|${accountSet}|${linePattern.fiktivMoms}`
 
     let group = groups.get(normalized)
     if (!group) {
@@ -2233,6 +2343,7 @@ export async function populateTemplatesFromSieVouchers(
     normalizedName: string
     aliases: string[]
     pattern: MultiLinePatternCount
+    fields: NonNullable<ReturnType<typeof templateFieldsFromVoucherPatterns>>
     confidence: number
   }[] = []
 
@@ -2251,12 +2362,18 @@ export async function populateTemplatesFromSieVouchers(
     const dominance = dominant.count / group.totalCount
     if (dominance < 0.6) continue
 
+    // A dominant shape that teaches nothing leaves the counterparty untaught:
+    // a minority shape never stands in for it.
+    const fields = templateFieldsFromVoucherPatterns(dominant.voucherPatterns)
+    if (!fields) continue
+
     const confidence = Math.round(Math.min(0.95, dominance * (1 - 1 / dominant.count)) * 100) / 100
 
     accepted.push({
       normalizedName: group.normalizedName,
       aliases: [...group.aliases],
       pattern: dominant,
+      fields,
       confidence,
     })
   }
@@ -2286,7 +2403,7 @@ export async function populateTemplatesFromSieVouchers(
     const written = await insertOrUpdateTemplate(supabase, companyId, {
       counterpartyName: item.normalizedName,
       aliases: item.aliases,
-      ...templateFieldsFromVoucherPatterns(item.pattern.voucherPatterns),
+      ...item.fields,
       category: null,
       occurrenceCount: item.pattern.count,
       confidence: item.confidence,

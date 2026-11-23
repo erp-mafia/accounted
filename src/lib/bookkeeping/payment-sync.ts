@@ -5,6 +5,7 @@ import { invoiceCustomerOutstanding } from '@/lib/bookkeeping/customer-share'
 import type { JournalEntry } from '@/types'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
+import { resolveUnsettledStatus } from '@/lib/bookkeeping/supplier-invoice-rest-status'
 
 const log = createLogger('payment-sync')
 
@@ -166,7 +167,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
     // as paid that was never paid.
     const { data: supplierInvoice, error: supplierInvoiceError } = await supabase
       .from('supplier_invoices')
-      .select('paid_amount, total, due_date')
+      .select('paid_amount, total, due_date, approved_at')
       .eq('id', entry.source_id)
       .eq('company_id', companyId)
       .single()
@@ -199,14 +200,14 @@ export async function syncInvoiceStatusFromPaymentEntry(
       const paymentAmount = reversedAmount ?? supplierInvoice.paid_amount
       const newPaidAmount = roundOre(supplierInvoice.paid_amount - paymentAmount)
       const newRemaining = roundOre(supplierInvoice.total - Math.max(0, newPaidAmount))
-      let newStatus: string
-      if (newPaidAmount > 0) {
-        newStatus = 'partially_paid'
-      } else if (supplierInvoice.due_date && isPastDue(supplierInvoice.due_date, todayIsoStockholm())) {
-        newStatus = 'overdue'
-      } else {
-        newStatus = 'approved'
-      }
+      // Nothing paid: the attest mark decides 'approved', so an invoice paid
+      // before anyone attested it waits for attest again (crm#2165).
+      const newStatus = newPaidAmount > 0
+        ? 'partially_paid'
+        : resolveUnsettledStatus(
+            { due_date: supplierInvoice.due_date, remaining_amount: newRemaining, approved_at: supplierInvoice.approved_at },
+            todayIsoStockholm(),
+          )
 
       const { error: supplierUpdateError } = await supabase
         .from('supplier_invoices')

@@ -901,6 +901,27 @@ describe('mapping-engine', () => {
       expect(result.requires_review).toBe(false)
     })
 
+    // PBB 2027 is 59 600 kr (regeringen.se, 2026-09-24), so half is 29 800.
+    // Without a 2027 row the threshold fell back to 2026's 29 600 and this
+    // purchase was capitalised although it is an inventarie av mindre värde.
+    it('expenses a SEK 29 700 purchase in 2027 (under the 2027 half-PBB of 29 800)', async () => {
+      const { evaluateMappingRules, getCapitalizationThreshold } = await import('../mapping-engine')
+
+      expect(getCapitalizationThreshold(2027)).toBe(29800)
+
+      const tx = makeTransaction({
+        amount: -29700,
+        currency: 'SEK',
+        date: '2027-01-15',
+        merchant_name: 'Equipment Store',
+      })
+      mockResult({ data: [makeRule()], error: null })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
+
+      expect(result.debit_account).toBe('5410')
+    })
+
     it('capitalizes a 3000 EUR laptop when an exchange_rate is present', async () => {
       const { evaluateMappingRules } = await import('../mapping-engine')
 

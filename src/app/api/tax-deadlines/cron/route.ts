@@ -21,14 +21,6 @@ export const maxDuration = 300
 const RUN_BUDGET_MS = 240_000
 
 /**
- * The most the helårsmoms pass (alignYearlyVatDeadlinesWithBooks) may take,
- * after the repair pass and inside the run budget. It reads one period's
- * declaration per open helårsmoms period and takes the companies read
- * longest ago first, so a short pass still reaches every company in turn.
- */
-const EU_TRADE_PASS_BUDGET_MS = 60_000
-
-/**
  * GET /api/tax-deadlines/cron: daily recovery plus annual horizon extension.
  *
  * Both passes stop starting companies at the time budget. A company not
@@ -64,12 +56,15 @@ export const GET = withServiceCronContext('cron.tax_deadlines', async (_request,
 
   // Helårsmoms periods whose books now show EU trade with the setting off:
   // recorded, and their rows moved to the earlier date. Missing rows come
-  // first: this pass only moves dates.
+  // first: this pass only moves dates. It has what is left of the run budget,
+  // not a minute of it: a minute read about a third of the companies queued
+  // each night, so a company's books were read every third night and EU trade
+  // booked close to the earlier date could be read after it (crm#2167). It
+  // takes the companies read longest ago first, so a night that runs short is
+  // caught up by the next.
   let euTrade = { companiesChecked: 0, companiesMoved: 0, companiesNotReached: 0 }
   try {
-    euTrade = await alignYearlyVatDeadlinesWithBooks(supabase, {
-      deadline: Math.min(deadline, Date.now() + EU_TRADE_PASS_BUDGET_MS),
-    })
+    euTrade = await alignYearlyVatDeadlinesWithBooks(supabase, { deadline })
   } catch (err) {
     // The repair above has committed; a pass that only moves dates earlier
     // must not turn the run into a failure or hide its summary.

@@ -10,8 +10,9 @@
  * Every write stages over MCP and a person approves it. Every write is an
  * owner's or admin's (FORBIDDEN for a member), staged or approved.
  *
- * Every door is dark outside BOLAGET_COMPANY_IDS and for a legal form that
- * keeps no aktiebok (BOLAGET_DISABLED, BOLAGET_NOT_FOR_LEGAL_FORM).
+ * Every door is dark outside BOLAGET_COMPANY_IDS and
+ * BOLAGET_REGISTERS_COMPANY_IDS, and for a legal form that keeps no aktiebok
+ * (BOLAGET_DISABLED, BOLAGET_NOT_FOR_LEGAL_FORM).
  */
 import { z } from 'zod'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
@@ -27,7 +28,8 @@ import { defineOperation, type OperationContext, type OperationOutcome } from '.
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
 
 async function gated<T>(ctx: OperationContext, run: () => Promise<OperationOutcome<T>>): Promise<OperationOutcome<T>> {
-  const code = await bolagetGate(ctx.supabase, ctx.companyId)
+  // The register operations (aktiebok, roles, signatory rules, beneficial owners).
+  const code = await bolagetGate(ctx.supabase, ctx.companyId, 'registers')
   if (code) return { ok: false, code }
   return run()
 }
@@ -64,6 +66,7 @@ const RangeOut = z.object({ range_start: z.number().int(), range_end: z.number()
 const ShareRegisterOut = z.object({
   as_of: z.string(),
   is_avstamningsbolag: z.boolean().describe('The central securities depository keeps the aktiebok; this register takes no entries.'),
+  setup_completed_at: z.string().nullable().describe('When every share had been entered and the register was taken into use; null while it is set up. In use, an entry carries the day it is made and no ingaende entry is taken.'),
   total_shares: z.number().int(),
   total_votes: z.number(),
   next_free_share_number: z.number().int().describe('Where the next issue starts.'),
@@ -138,7 +141,8 @@ const ShareRegisterOut = z.object({
 const ShareEventOut = z.object({
   share_register_event_id: z.string(),
   event_number: z.number().int(),
-  event_date: z.string(),
+  event_date: z.string().describe('The day the entry belongs to in the register: the day of the event while the register is set up, the day the entry was made once it is in use.'),
+  occurred_on: z.string().nullable().describe('The day of the event when it is earlier than event_date.'),
   entered_at: z.string(),
   kind: z.enum(SHARE_EVENT_KINDS),
   kind_label: z.string(),
@@ -392,8 +396,10 @@ export const beneficialOwnersGet = defineOperation({
 
 const ShareEventIn = z
   .object({
-    kind: z.enum(SHARE_EVENT_KINDS).describe('bildande, nyemission, fondemission, overlatelse, indragning, omvandling, split, sammanlaggning, aktiebrev, pant, nyttjanderatt, anteckning or rattelse.'),
-    event_date: saneIsoDateSchema.describe('The day the change took effect (YYYY-MM-DD); never in the future.'),
+    kind: z.enum(SHARE_EVENT_KINDS).describe('bildande, ingaende (a holding carried over from the register the company kept before, as it stood on event_date; only while the register is set up), nyemission, fondemission, overlatelse, indragning, omvandling, split, sammanlaggning, aktiebrev, pant, nyttjanderatt, anteckning or rattelse.'),
+    event_date: saneIsoDateSchema.nullish().describe('The day of the event (YYYY-MM-DD); never in the future, today when left out. For ingaende: the day the holding stood; the register shows the holding from that day on. Once the register is in use (setup_completed_at set) the entry carries today, and an earlier day given here is kept as occurred_on.'),
+    occurred_on: saneIsoDateSchema.nullish().describe('The day of the event, when the entry carries a later day. Seldom needed: an earlier event_date becomes this by itself once the register is in use.'),
+    completes_setup: z.boolean().nullish().describe('True on the entry that makes the register complete: every share of the company is then entered, the register is taken into use, entries carry the day they are made from then on, and no ingaende entry is taken. Cannot be undone. To complete a register that needs no further entry, send it with kind anteckning.'),
     share_class_code: z.string().trim().max(12).nullish().describe('The class, e.g. A. Optional when the company has one class; the first issue creates class A.'),
     to_share_class_code: z.string().trim().max(12).nullish().describe('omvandling: the class the shares become.'),
     from_party_id: PARTY_ID.nullish().describe('overlatelse, indragning, omvandling: the current holder (party_id from gnubok_get_share_register).'),
@@ -436,13 +442,16 @@ export const shareRegisterEventsCreate = defineOperation({
     summary: 'Add a dated entry to the aktiebok: an issue, a transfer, a cancellation, a conversion, a split, an aktiebrev, a pledge or a note.',
     description:
       'Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided with kind rattelse and entered again. The register refuses an entry its history cannot hold: no share held twice, a transfer only of shares the transferor holds on that date. ' +
-      'A new holder is named by to_name; their personnummer and address are completed in Accounted. Dry-runnable: the preview shows holdings before and after.',
+      'A register is first set up: the history is entered with the day of each event, or, for a company that kept its aktiebok elsewhere, its holdings as kind ingaende, each dated the day it stood. The entry with completes_setup true takes the register into use; from then on an entry carries the day it is made (a shareholder has rights from the day they are entered, ABL 4:37 and 7:2) and the day of the event is kept as occurred_on. ' +
+      'A new holder is named by to_name; their personnummer and address are completed in Accounted. Dry-runnable: the preview shows holdings before and after and the day the entry will carry.',
     useWhen: 'Shares were issued, sold, given, inherited, cancelled, split, pledged, or an aktiebrev was issued or returned.',
     doNotUseFor: 'Booking the money of an emission or a dividend (a voucher), or changing votes per share (PATCH /share-classes/{id}).',
     pitfalls: [
       'SHARE_REGISTER_NOT_HELD: the from-holder does not hold all of the shares on event_date.',
       'SHARE_REGISTER_RANGE_TAKEN: an issue overlaps shares already held; omit the range and send share_count.',
       'SHARE_REGISTER_STALE: the register got an entry after the one you saw; read it again and retry.',
+      'SHARE_REGISTER_SETUP_COMPLETE: the register is in use; kind ingaende and completes_setup belong to the setup only.',
+      'A company with a history never enters its current holdings as bildande: use ingaende dated the day the holdings stood, or enter the history as it happened.',
       'A range_start with a share_count names the whole block (range_start to range_start + share_count - 1).',
       'FORBIDDEN: only the company\'s owner or an administrator adds to the aktiebok.',
       'BOLAGET_PERSONNUMMER_IN_APP_ONLY: a personnummer was sent; name the person and complete them in the app.',
@@ -450,7 +459,7 @@ export const shareRegisterEventsCreate = defineOperation({
     ],
     example: {
       request: { kind: 'overlatelse', event_date: '2026-10-01', from_party_id: '9c1e…', to_name: 'Bo Ek', share_count: 100, transfer_reason: 'gava' },
-      response: { data: { share_register_event_id: '7a2b…', event_number: 4, kind: 'overlatelse', event_date: '2026-10-01', range_start: 1, range_end: 100 }, meta: META },
+      response: { data: { share_register_event_id: '7a2b…', event_number: 4, kind: 'overlatelse', event_date: '2026-10-01', occurred_on: null, range_start: 1, range_end: 100 }, meta: META },
     },
   },
   input: ShareEventIn,
@@ -458,12 +467,14 @@ export const shareRegisterEventsCreate = defineOperation({
     share_register_event_id: z.string(),
     event_number: z.number().int(),
     kind: z.enum(SHARE_EVENT_KINDS),
-    event_date: z.string(),
+    event_date: z.string().describe('The day the entry carries.'),
+    occurred_on: z.string().nullable().optional().describe('The day of the event when it is earlier than event_date.'),
     range_start: z.number().int().nullable(),
     range_end: z.number().int().nullable(),
     share_class_id: z.string().nullable(),
     from_party_id: z.string().nullable(),
     to_party_id: z.string().nullable(),
+    setup_completed_at: z.string().nullable().optional().describe('Set when this entry completed the setup of the register.'),
   }),
   errorCodes: [
     ...ADMIN_WRITE_CODES,
@@ -475,6 +486,8 @@ export const shareRegisterEventsCreate = defineOperation({
     'SHARE_REGISTER_CORRECTION_INVALID',
     'SHARE_REGISTER_AVSTAMNINGSBOLAG',
     'SHARE_REGISTER_STALE',
+    'SHARE_REGISTER_SETUP_COMPLETE',
+    'SHARE_REGISTER_EMPTY',
     'SHARE_CLASS_NOT_FOUND',
     'SHARE_CLASS_REQUIRED',
     'BOLAGET_PARTY_NOT_FOUND',
@@ -487,9 +500,9 @@ export const shareRegisterEventsCreate = defineOperation({
     name: 'gnubok_register_share_event',
     title: 'Register Share Event',
     description:
-      'Stage an aktiebok entry: issue, transfer (reason, price), cancellation, conversion, split, aktiebrev, pledge, usufruct, note or rattelse. Name new holders; personnummer is added in Accounted only.',
+      'Stage an aktiebok entry: issue, opening holding (ingaende), transfer (reason, price), cancellation, conversion, split, aktiebrev, pledge, usufruct, note or rattelse. completes_setup takes the register into use. Name new holders; personnummer is added in Accounted only.',
     visibility: 'search',
-    keywords: ['aktiebok', 'överlåtelse', 'köp av aktier', 'gåva aktier', 'arv aktier', 'nyemission', 'fondemission', 'aktiebrev', 'pantsättning', 'aktieägare', 'bildande'],
+    keywords: ['aktiebok', 'överlåtelse', 'köp av aktier', 'gåva aktier', 'arv aktier', 'nyemission', 'fondemission', 'aktiebrev', 'pantsättning', 'aktieägare', 'bildande', 'ingående innehav', 'lägga upp aktiebok'],
     stage: {
       pendingType: 'register_share_event',
       title: (input) => {
@@ -512,6 +525,7 @@ export const shareRegisterEventsCreate = defineOperation({
 
 const SHARE_EVENT_LABEL_FOR_TITLE: Record<string, string> = {
   bildande: 'bildande',
+  ingaende: 'ingående innehav',
   nyemission: 'nyemission',
   fondemission: 'fondemission',
   overlatelse: 'överlåtelse',

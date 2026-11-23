@@ -19,7 +19,7 @@ import { userFacingCode } from './user-facing'
 import { toError } from './to-error'
 import { ZodError } from 'zod'
 import { getErrorMessage } from './get-error-message'
-import { DOCUMENT_PERIOD_LOCK_REFUSAL } from './document-period-lock-refusal'
+import { databaseRefusal } from './database-refusal'
 import { foreignKeyRefusal } from './foreign-key-refusal'
 import { fieldValidationError, zodErrorFieldIssues } from './refusal'
 import {
@@ -123,6 +123,9 @@ const TRANSIENT_MESSAGE_PATTERNS = [
   /rate limit/i,
   /timed out/i,
   /aborted due to timeout/i,
+  // Cloudflare's 524 page by its title, which is what a gateway page keeps
+  // (lib/supabase/gateway-error-page.ts); its body's "timed out" is gone.
+  /a timeout occurred/i,
 ]
 
 /**
@@ -208,30 +211,8 @@ function extractCode(error: unknown): string | null {
   return null
 }
 
-/**
- * Refusals the database raises as plain text (RAISE EXCEPTION with no code of
- * ours): the period-lock triggers (migration 017: a verifikat, and a document
- * on one), the company lock date, and the locked period's tax adjustment and
- * tax depreciation election triggers. Every one of them is a lock. Triggers
- * are never edited, so their sentences are read here, once, for every door:
- * routes and services ask isPeriodLockRefusal/isLockDateRefusal instead of
- * matching them. Application code throws a code instead (codedRefusal,
- * userFacing): a sentence is never how the app tells a door what failed.
- */
-const DATABASE_REFUSALS: ReadonlyArray<{ pattern: RegExp; code: string; lockDate?: true }> = [
-  // First: the generic pattern below matches the document trigger's text too.
-  // A document refused on a locked year was a 500 on v1 upload and three
-  // different sentences elsewhere; every door now answers this one code.
-  { pattern: DOCUMENT_PERIOD_LOCK_REFUSAL, code: 'DOC_UPLOAD_PERIOD_LOCKED' },
-  { pattern: /locked\/closed fiscal period/i, code: 'PERIOD_LOCKED' },
-  { pattern: /Bokföringen är låst/, code: 'PERIOD_LOCKED', lockDate: true },
-  { pattern: /Fiscal period is locked for tax (adjustments|depreciation elections)/i, code: 'PERIOD_LOCKED' },
-]
-
-function databaseRefusal(message: string) {
-  return DATABASE_REFUSALS.find(({ pattern }) => pattern.test(message)) ?? null
-}
-
+// The lock refusals the database raises as plain text are read in
+// lib/errors/database-refusal.ts, once, for every door.
 function databaseRefusalCode(message: string): string | null {
   return databaseRefusal(message)?.code ?? null
 }
@@ -873,6 +854,17 @@ function buildResponse(
 }
 
 /**
+ * The bank's or provider's own code a refusal carries in its details: the log
+ * line names it too, not only the response (a generic PAYMENT_PROVIDER_REFUSED
+ * says nothing about which refusal it was).
+ */
+function providerCodeOf(details: unknown): { provider_code?: string } {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return {}
+  const code = (details as { provider_code?: unknown }).provider_code
+  return typeof code === 'string' && code !== '' ? { provider_code: code } : {}
+}
+
+/**
  * Construct an envelope-shaped error directly from a code (when the route
  * already knows the failure mode). Skips dispatch: useful inside a handler
  * that wants the standard shape without throwing.
@@ -892,7 +884,7 @@ export function errorResponseFromCode(
 ): NextResponse {
   const entry = entryFor(code)
   const status = ctx.status ?? entry.httpStatus
-  logAtLevel(log, status, code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId })
+  logAtLevel(log, status, code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId, ...providerCodeOf(ctx.details) })
   return buildResponse(
     code,
     {

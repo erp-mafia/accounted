@@ -16,6 +16,7 @@ import {
   AssetOpeningChangedError,
   AssetValueAdjustmentBlockedError,
   BookkeepingDatabaseError,
+  sieSourceVoucherTaken,
   ContractRevenueRefusedError,
   contractRevenueRefusalFromRpc,
   DeferredTaxAlreadyPostedError,
@@ -38,6 +39,7 @@ import {
   JournalEntryNotFoundError,
   UnattendedCommitLimitExceededError,
   AccrualDraftPostedByScheduleError,
+  isBankBookingContextRefusal,
   valueAdjustmentBlockFromRpc,
   type BookkeepingOperation,
 } from '@/lib/bookkeeping/errors'
@@ -97,7 +99,9 @@ export async function commitSIEImportChunk(supabase: SupabaseClient, job: SIEJob
     p_company_id: job.company_id, p_import_id: job.id, p_worker_id: job.worker_id,
     p_attempt: job.job_attempt, p_phase: phase, p_chunk_no: chunk,
   })
-  if (error) throw new BookkeepingDatabaseError('import_sie_chunk', error.message)
+  // A voucher whose source series and number the year already holds is
+  // refused on every try: its own error, so the worker stops the job.
+  if (error) throw sieSourceVoucherTaken(error) ?? new BookkeepingDatabaseError('import_sie_chunk', error.message)
   if (!data) throw new BookkeepingDatabaseError('import_sie_chunk', 'Missing completion receipt')
   return data as SIEChunkResult
 }
@@ -121,12 +125,16 @@ const log = createLogger('bookkeeping.engine')
  * Log a failed journal write. A refusal the database raises on purpose is a
  * warning: a PT409 conflict (a busy bank account, a bank row that changed
  * under the booking), which the doors answer as a 409 to retry or refresh,
- * and a write behind a period lock or the lock date, answered as a 4xx.
+ * a write behind a period lock or the lock date, answered as a 4xx, and the
+ * bank-booking guard's refusal of a draft that does not name its bank row,
+ * answered as a 409 that says where to book it instead.
  * Logged at error they filled Vercel's runtime errors with expected
  * answers. Anything else stays an error.
  */
 function logWriteFailure(message: string, error: unknown, context: Record<string, unknown>): void {
-  const expected = (error as { code?: unknown } | null)?.code === 'PT409' || isPeriodLockRefusal(error)
+  const raised = error as { code?: unknown; message?: unknown } | null
+  const expected = raised?.code === 'PT409' || isPeriodLockRefusal(error) ||
+    isBankBookingContextRefusal(raised?.code, raised?.message)
   if (expected) log.warn(message, error, context)
   else log.error(message, error, context)
 }

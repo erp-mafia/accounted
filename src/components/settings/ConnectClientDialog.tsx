@@ -25,7 +25,7 @@ const connectorName = branding.appName.toLowerCase()
 export const CLAUDE_CONNECTORS_HOME = AI_CLIENTS.find((c) => c.id === 'claude')?.home ?? 'https://claude.ai/customize/connectors'
 
 /** The clients the Settings tiles offer, in display order. */
-export const CONNECT_TARGETS = ['claude', 'chatgpt', 'grok', 'gemini', 'claude-code', 'cursor', 'other'] as const
+export const CONNECT_TARGETS = ['claude', 'chatgpt', 'grok', 'gemini', 'copilot', 'claude-code', 'cursor', 'other'] as const
 export type ConnectTarget = (typeof CONNECT_TARGETS)[number]
 
 /**
@@ -40,6 +40,8 @@ type StepSet =
   | 'chatgpt'
   | 'grok'
   | 'gemini'
+  | 'copilot'
+  | 'copilot_key'
   | 'code_plugin'
   | 'code_signin'
   | 'code_key'
@@ -125,6 +127,29 @@ const MODES: Record<ConnectTarget, Mode[]> = {
       snippetLabel: 'gemini_availability_label',
     },
   ],
+  // Copilot Studio adds the server as a tool in an agent (Model Context
+  // Protocol in its onboarding wizard). With OAuth 2.0 and Dynamic discovery
+  // it registers itself and each user signs in; the eager flag answers its
+  // tokenless discovery call with the 401 challenge. With an API key it sends
+  // the key in the header the maker names, so no challenge is needed. The last
+  // step of each mode keeps the tool on User authentication: with Agent author
+  // authentication every person who chats with the agent acts on the maker's
+  // sign-in or key (learn.microsoft.com/microsoft-copilot-studio/
+  // configure-no-maker-authentication).
+  copilot: [
+    {
+      set: 'copilot',
+      steps: 5,
+      label: 'mode_signin',
+      snippet: (origin) => mcpServerUrl({ origin, client: 'copilot', eagerAuth: true }),
+    },
+    {
+      set: 'copilot_key',
+      steps: 4,
+      label: 'mode_key',
+      snippet: (origin) => mcpServerUrl({ origin, client: 'copilot' }),
+    },
+  ],
   'claude-code': [
     {
       set: 'code_plugin',
@@ -179,6 +204,8 @@ function openHref(target: ConnectTarget, origin: string): string | null {
       return AI_CLIENTS.find((c) => c.id === target)?.home ?? null
     case 'gemini':
       return 'https://gemini.google.com/'
+    case 'copilot':
+      return 'https://copilotstudio.microsoft.com/'
     default:
       return null
   }

@@ -1,6 +1,7 @@
 import type { CustomerType } from '@/types'
 import type { ImportNotice } from '@/lib/import/notices'
 import type { RegisterMatchKey } from '@/lib/import/shared/register-match'
+import type { TypeStated } from '@/lib/import/shared/stated-fields'
 
 /** Result of auto-detecting columns in a customer register file. */
 export interface DetectedCustomerColumns {
@@ -26,7 +27,21 @@ export interface DetectedCustomerColumns {
 export interface ParsedCustomerRow {
   row_index: number
   name: string
+  /** Read from the file, or filled in when it gives none (see customer_type_stated). */
   customer_type: CustomerType
+  /**
+   * What the row states about the type: 'type' when its cell in a type column
+   * names one (yes in a private-person column names a private person) or the
+   * user picks one in the review step; 'business' when the cell says only that
+   * the customer is a company (no in a private-person column, a word like
+   * Företag); null when it says nothing. country_stated: the row's cell in a
+   * country column has a value. What the row does not state is filled in from
+   * the rest of the row (classifyCustomer, defaultCountryForParty) for a new
+   * customer only: an update keeps the customer's own, and a 'business' row
+   * changes only a private person.
+   */
+  customer_type_stated: TypeStated
+  country_stated: boolean
   customer_number: string | null
   org_number: string | null
   email: string | null

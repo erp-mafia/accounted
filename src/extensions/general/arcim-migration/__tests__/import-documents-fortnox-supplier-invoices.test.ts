@@ -16,6 +16,7 @@ import {
   detectFileMagic,
   isArchivedForOwnJournalEntry,
 } from '@/lib/core/documents/document-service'
+import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { importProviderDocuments } from '../lib/import-documents'
 
 vi.mock('@/lib/providers/bokio/client', () => ({ BokioClient: class {} }))
@@ -136,7 +137,16 @@ const SUPPLIER_INVOICE_113 = {
   },
 }
 
-type Route = { status?: number; json?: unknown; bytes?: string; body?: string; timeout?: true }
+type Route = {
+  status?: number
+  json?: unknown
+  bytes?: string
+  body?: string
+  timeout?: true
+  hang?: true
+  /** Cut by the slice's hard stop, a moment before the slice's own clock reaches it. */
+  cut?: true
+}
 
 function forbidden(message: string, code: number): Route {
   return { status: 403, body: JSON.stringify({ ErrorInformation: { error: 1, message, code } }) }
@@ -157,7 +167,7 @@ function stubFortnox(overrides: Record<string, Route> = {}) {
     [`/archive/${FILE_SI_113}`]: { bytes: 'PDF-SI-113' },
     ...overrides,
   }
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     const path = `${url.pathname.replace(/^\/3/, '')}${url.search}`
     const route = routes[path]
@@ -165,6 +175,16 @@ function stubFortnox(overrides: Record<string, Route> = {}) {
     if (!route) return new Response(`unrouted ${path}`, { status: 418 })
     // What AbortSignal.timeout throws when Fortnox outlasts the 15 s limit.
     if (route.timeout) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    if (route.cut) throw new ExecutionBudgetExceeded('underlag-continuation')
+    // Still answering when the caller gives up on it: only the abort ends it.
+    if (route.hang) {
+      return new Promise<Response>((_, reject) => {
+        const signal = init?.signal
+        const abort = () => reject(signal?.reason ?? new DOMException('The operation was aborted', 'AbortError'))
+        if (signal?.aborted) abort()
+        else signal?.addEventListener('abort', abort, { once: true })
+      })
+    }
     if (route.bytes !== undefined) {
       return new Response(new TextEncoder().encode(route.bytes), {
         status: 200,
@@ -195,10 +215,13 @@ function rangeMockSupabase(byTable: Record<string, Row[]>): SupabaseClient {
     const node = {
       select: () => node,
       eq: () => node,
+      gt: () => node,
       not: () => node,
       in: () => node,
       order: () => node,
       range: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
+      // The existing-attachments read pages by keyset and ends in .limit().
+      limit: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
     }
     return node
   }
@@ -278,6 +301,85 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
     expect(requested().filter((path) => path.startsWith('/supplierinvoices/'))).toEqual(['/supplierinvoices/113'])
     expect(requested()).not.toContain(`/archive/${FILE_SI_114}`)
     expect(requested()).not.toContain(`/archive/${FILE_SI_115}`)
+  })
+
+  describe('kontantmetoden (crm#2112)', () => {
+    const FILE_SI_130 = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
+    const PAYMENT_E9 = { Number: 9, Series: 'E', ReferenceType: 'SUPPLIERPAYMENT', Year: 5 }
+
+    // Financial year 5 kept by kontantmetoden unless a test says otherwise.
+    function cashCompany(method = 'CASH', overrides: Record<string, Route> = {}) {
+      return stubFortnox({
+        '/financialyears?page=1&limit=500': {
+          json: {
+            ...FINANCIAL_YEARS,
+            FinancialYears: FINANCIAL_YEARS.FinancialYears.map((year) => (year.Id === 5 ? { ...year, AccountingMethod: method } : year)),
+          },
+        },
+        '/voucherfileconnections?financialyear=5&page=1&limit=500': { json: NO_VOUCHER_FILES },
+        '/supplierinvoicefileconnections?page=1&limit=500': {
+          json: {
+            MetaInformation: meta(1),
+            SupplierInvoiceFileConnections: [
+              { FileId: FILE_SI_130, Name: 'faktura-telefoni.pdf', SupplierInvoiceNumber: '130', SupplierName: 'Leverantören AB' },
+            ],
+          },
+        },
+        // No SUPPLIERINVOICE voucher: the purchase is booked at payment (E9).
+        '/supplierinvoices?page=1&limit=100': {
+          json: { MetaInformation: meta(1), SupplierInvoices: [listItem('130', { Booked: false, Vouchers: [PAYMENT_E9] })] },
+        },
+        '/supplierinvoices/130': {
+          json: { SupplierInvoice: { GivenNumber: '130', Booked: false, Cancelled: false, Balance: 0, Total: 1250, Vouchers: [PAYMENT_E9] } },
+        },
+        [`/archive/${FILE_SI_130}`]: { bytes: 'PDF-SI-130' },
+        ...overrides,
+      })
+    }
+    const withPayment = () => supabaseWith({ entries: [...ENTRIES, entry('je-e9-2024', 'fp-2024', '2024-04-15', 'E', 9)] })
+
+    it('links the file of a fully paid invoice to the payment verifikat that booked it', async () => {
+      const { requested } = cashCompany()
+
+      const result = await importProviderDocuments({ supabase: withPayment(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ total: 1, linked: 1, unmatched: 0, failed: 0 })
+      expect(linkedEntries()).toEqual(['je-e9-2024'])
+      expect(requested()).toContain('/supplierinvoices/130')
+    })
+
+    it('counts the file as unmatched, never on the payment, in a faktureringsmetod year', async () => {
+      const { requested } = cashCompany('ACCRUAL')
+
+      const result = await importProviderDocuments({ supabase: withPayment(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      // It used to be dropped before it was counted: a complete run showing 0 unmatched.
+      expect(result).toMatchObject({ total: 1, linked: 0, unmatched: 1, failed: 0 })
+      expect(mockUpload).not.toHaveBeenCalled()
+      expect(requested()).not.toContain(`/archive/${FILE_SI_130}`)
+    })
+
+    it('counts a part-paid invoice as unmatched: its first instalment does not take the file', async () => {
+      cashCompany('CASH', {
+        '/supplierinvoices/130': {
+          json: { SupplierInvoice: { GivenNumber: '130', Booked: false, Cancelled: false, Balance: 500, Total: 1250, Vouchers: [PAYMENT_E9] } },
+        },
+      })
+
+      const result = await importProviderDocuments({ supabase: withPayment(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ total: 1, linked: 0, unmatched: 1 })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('links through the detail form alone when the invoice list times out', async () => {
+      cashCompany('CASH', { '/supplierinvoices?page=1&limit=100': { timeout: true } })
+
+      const result = await importProviderDocuments({ supabase: withPayment(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ total: 1, linked: 1, unmatched: 0 })
+      expect(linkedEntries()).toEqual(['je-e9-2024'])
+    })
   })
 
   it('previews without downloads or detail reads: the list-resolved file counts, the pending one is found', async () => {
@@ -541,5 +643,94 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
       '(supplier invoice 114)',
       '(supplier invoice 115)',
     ])
+  })
+
+  // Every slice lists Fortnox again before it sweeps. On 2026-11-22 one
+  // company's supplier-invoice list outlasted the server's whole slice on
+  // most tries: the hard stop landed in it, and the slice either counted the
+  // file at its cursor failed and moved past it (11 receipts) or handed its
+  // own cursor back (UNDERLAG_RUN_NOT_ADVANCING).
+  describe('a slice whose time runs out in the supplier-invoice listing', () => {
+    const DETAIL_FORMS: Record<string, Route> = {
+      '/supplierinvoices/112': {
+        json: { SupplierInvoice: { GivenNumber: '112', Booked: true, Cancelled: false, VoucherSeries: 'D', VoucherNumber: 17, VoucherYear: 5 } },
+      },
+      '/supplierinvoices/114': {
+        json: { SupplierInvoice: { GivenNumber: '114', Booked: false, Cancelled: false, VoucherSeries: 'D', VoucherNumber: 0, VoucherYear: 6 } },
+      },
+      '/supplierinvoices/115': {
+        json: { SupplierInvoice: { GivenNumber: '115', Booked: false, Cancelled: true, VoucherSeries: 'D', VoucherNumber: 0, VoucherYear: 6 } },
+      },
+    }
+
+    /** One slice as the server runs it: swept to its deadline, cut at its hard stop. */
+    function serverSlice(opts: { cursor?: string; sweepMs: number; hardStopMs: number }) {
+      const startedAt = Date.now()
+      const deadline = startedAt + opts.sweepMs
+      return withExecutionDeadline(startedAt + opts.hardStopMs, 'underlag-continuation', () =>
+        importProviderDocuments({
+          supabase: supabaseWith(),
+          companyId: COMPANY,
+          userId: USER,
+          consentId: 'c1',
+          cursor: opts.cursor ?? null,
+          timeBudgetMs: deadline - Date.now(),
+          sweepDeadline: deadline,
+        }),
+      )
+    }
+
+    it('ends the slice out of time, and starts no file, when its hard stop lands in the invoice list', async () => {
+      const { requested } = stubFortnox({ '/supplierinvoices?page=1&limit=100': { hang: true } })
+
+      // The slice's own time runs out first, while the list still has its share.
+      const slice = withExecutionDeadline(Date.now() + 300, 'underlag-continuation', () =>
+        importProviderDocuments({ supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1' }),
+      )
+
+      // It answered { scanned: 1, failed: 1, nextCursor: A34 }: the cut read
+      // as an unreachable source, the sweep began past the hard stop with
+      // A34, counted it failed and moved the run past it.
+      await expect(slice).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
+      expect(requested()).not.toContain(`/archive/${FILE_A34}`)
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('takes a cut of the list where the slice ends as the slice running out, even before its own clock does', async () => {
+      const { requested } = stubFortnox({ '/supplierinvoices?page=1&limit=100': { cut: true } })
+
+      // The list's share reaches past the slice's end, so only the slice can
+      // have cut it, though the slice's deadline is not yet past by its clock.
+      const slice = withExecutionDeadline(Date.now() + 5_000, 'underlag-continuation', () =>
+        importProviderDocuments({ supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1' }),
+      )
+
+      await expect(slice).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
+      expect(requested()).not.toContain(`/archive/${FILE_A34}`)
+    })
+
+    it('ends the slice out of time past the voucher files, instead of handing its cursor back', async () => {
+      stubFortnox({ '/supplierinvoicefileconnections?page=1&limit=500': { hang: true } })
+
+      // It answered { scanned: 0, partial: true, nextCursor: A34 }: the
+      // cursor it was given, as if its supplier-invoice files were out of
+      // reach, which the server refuses as a run that does not advance.
+      await expect(serverSlice({ cursor: FILE_A34, sweepMs: 200, hardStopMs: 300 })).rejects.toBeInstanceOf(
+        ExecutionBudgetExceeded,
+      )
+    })
+
+    it('gives up on an invoice list that outlasts its share of the slice, and links every file through its invoice', async () => {
+      const { requested } = stubFortnox({ '/supplierinvoices?page=1&limit=100': { hang: true }, ...DETAIL_FORMS })
+
+      const result = await serverSlice({ sweepMs: 1_000, hardStopMs: 1_500 })
+
+      // The list is an index that only saves calls: without it each invoice
+      // is asked on its own detail form, within the same slice. It used to
+      // hold the slice to its hard stop and blame A34 (failed: 1).
+      expect(result).toMatchObject({ total: 5, linked: 3, unmatched: 2, failed: 0, partial: false, unreachableSources: [] })
+      expect(linkedEntries()).toEqual(['je-a34', 'je-d17-2024', 'je-d3-2025'])
+      expect(requested()).toContain('/supplierinvoices/112')
+    })
   })
 })

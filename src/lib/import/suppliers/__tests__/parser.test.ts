@@ -56,6 +56,44 @@ describe('parseSuppliersFile', () => {
     expect(result.rows[0].default_currency).toBe('SEK')
     expect(result.rows[1].default_currency).toBe('SEK')
     expect(result.rows[2].default_currency).toBe('EUR')
+    // Filled in for a new supplier only: an update writes a stated currency.
+    expect(result.rows.map((r) => r.default_currency_stated)).toEqual([false, false, true])
+  })
+
+  // What each row states, as against what the parser fills in for a new
+  // supplier: an update writes only the former.
+  it('says what each row states of the type and the country', async () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Typ', 'Land'],
+      ['Acme AB', 'EU', 'DE'],
+      ['Beta AB', 'Företag', ''],
+      ['Gamma AB', '', 'SE'],
+      ['Delta AB', 'Leverantör', ''],
+    ])
+    const result = await parseSuppliersFile(buffer, 'typ.xlsx')
+
+    expect(result.rows.map((r) => [r.supplier_type, r.supplier_type_stated, r.country, r.country_stated])).toEqual([
+      ['eu_business', 'type', 'DE', true],
+      // Företag says only that it is a company: a new supplier is Swedish.
+      ['swedish_business', 'business', 'SE', false],
+      ['swedish_business', null, 'SE', true],
+      ['swedish_business', null, 'SE', false],
+    ])
+  })
+
+  it('states neither the type nor the country without their columns', async () => {
+    const buffer = buildXlsx([
+      ['Namn', 'VAT'],
+      ['Müller GmbH', 'DE123456789'],
+    ])
+    const result = await parseSuppliersFile(buffer, 'eu.xlsx')
+
+    expect(result.rows[0]).toMatchObject({
+      supplier_type: 'eu_business',
+      supplier_type_stated: null,
+      country_stated: false,
+      default_currency_stated: false,
+    })
   })
 
   it('skips rows with empty name', async () => {

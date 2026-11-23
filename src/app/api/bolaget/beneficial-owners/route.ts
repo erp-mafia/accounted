@@ -7,7 +7,7 @@ import { readAsOf } from '../as-of'
 
 /** GET /api/bolaget/beneficial-owners?as_of=: the proposal, the confirmed set and the assessments (operation beneficial-owners.get). */
 export const GET = withRouteContext('bolaget.beneficial_owners', async (request, ctx) => {
-  const gate = await bolagetGateResponse(ctx)
+  const gate = await bolagetGateResponse(ctx, 'registers')
   if (gate) return gate
   const asOf = readAsOf(request)
   if (asOf === null) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, details: { field: 'as_of' } })

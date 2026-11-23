@@ -13,6 +13,7 @@ import en from '@/messages/en.json'
 import { BOLAGET_TABS } from '@/lib/bolaget/hub'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags } from '../nav-v2'
 import { NAV_V3_AREAS, areaCreate, areaCreatePage, areaItems, createOpenForRole, gateAreas, resolveNavPlace, type NavAreaId } from '../nav-v3'
+import { BOOKING_SCREEN_PATH, BOOKING_SCREEN_RETURN_PATHS } from '@/lib/bookkeeping/booking-screen'
 
 const DASHBOARD = join(process.cwd(), 'src/app/(dashboard)')
 
@@ -55,6 +56,13 @@ describe('every dashboard route belongs to an area', () => {
 
 describe('resolveNavPlace', () => {
   const place = (pathname: string, search = '', claim: string | null = null) => resolveNavPlace(pathname, search, claim)
+
+  it('keeps the menu row the booking screen was opened from lit: each page it returns to is a row', () => {
+    for (const origin of BOOKING_SCREEN_RETURN_PATHS) {
+      expect(place(BOOKING_SCREEN_PATH, '', origin)?.href, origin).toBe(origin)
+    }
+    expect(place(BOOKING_SCREEN_PATH, '', '/att-bokfora')?.area).toBe('todo')
+  })
 
   it('lets the longest row win, so a carved-out page lights its own area', () => {
     expect(place('/reports/vat-declaration')).toEqual({ area: 'tax', href: '/reports/vat-declaration' })
@@ -212,7 +220,7 @@ describe('the tree', () => {
     expect(NAV_V3_AREAS.map((a) => nav[a.labelKey])).toEqual([
       'Att göra', 'Pengar', 'Försäljning', 'Inköp', 'Dokument', 'Bokföring', 'Skatt', 'Rapporter', 'Löner', 'Företaget', 'Agenter', 'Inställningar', 'Byrå',
     ])
-    expect(labels('todo')).toEqual(['Hem', 'Behöver dig', 'Rutin', 'Frågor', 'Gjort'])
+    expect(labels('todo')).toEqual(['Hem', 'Att bokföra', 'Behöver dig', 'Rutin', 'Frågor', 'Gjort'])
     expect(labels('money')).toEqual(['Bankrader', 'Konton och saldo'])
     expect(labels('tax')).toEqual(['Moms', 'Skattekonto', 'Frister'])
     expect(labels('reports')).toEqual(['Resultat', 'Balans', 'Huvudbok', 'Nyckeltal', 'Budget', 'Fler rapporter'])

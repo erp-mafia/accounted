@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
 const { supabase, reset } = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
@@ -190,6 +191,21 @@ describe('POST /api/assets/[id]/components/[componentId]/replace', () => {
     )
     const res = await REPLACE(createMockRequest('/x', { method: 'POST', body }), componentParams)
     expect(res.status).toBe(409)
+  })
+
+  it('answers a replacement its posting function refuses behind a lock as 400 PERIOD_LOCKED, not a 500', async () => {
+    vi.mocked(replaceAssetComponent).mockRejectedValue(
+      new BookkeepingDatabaseError(
+        'commit_asset_component_replacement',
+        'Cannot derecognise a component in a locked or closed fiscal period',
+        '23514',
+      ),
+    )
+    const { status, body: json } = await parseJsonResponse<{ error: { code: string } }>(
+      await REPLACE(createMockRequest('/x', { method: 'POST', body }), componentParams),
+    )
+    expect(status).toBe(400)
+    expect(json.error.code).toBe('PERIOD_LOCKED')
   })
 
   it('posts the replacement', async () => {

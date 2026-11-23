@@ -66,6 +66,7 @@ import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types
 import { parseEntityType } from '@/lib/company/entity-type'
 import { invoicerPageRedirect, isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { isSupportAssistantEnabled } from '@/lib/agent/support/rollout'
+import { isBookingScreenEnabled } from '@/lib/env/booking-screen-switch'
 import { createCompanyScopedClient } from '@/lib/auth/company-scoped-client'
 import {
   getDashboardAuthContext,
@@ -585,7 +586,7 @@ export default async function DashboardLayout({
     hasMileage,
     hasExpenseClaims: navFlags.hasExpenseClaims,
     hasPosSales: navFlags.hasPosSales,
-    ...navRollouts(companyId),
+    ...navRollouts(companyId, { bolagetRegisters: (companyRow as { bolaget_registers_enabled?: boolean }).bolaget_registers_enabled === true }),
   }
 
   const isSandbox = settings?.is_sandbox === true
@@ -682,6 +683,8 @@ export default async function DashboardLayout({
     // company, so never for the invoicing-only role, and never in the sandbox.
     supportAssistant:
       isSupportAssistantEnabled(companyId) && getAiStatus().configured && !isInvoicer && !isSandbox,
+    // Manual booking on the booking screen (/bokfor) instead of the dialogs.
+    bookingScreen: isBookingScreenEnabled(companyId),
   }
 
   // Signpost gate (WL-01): a company is opened ONLY on its home domain. When

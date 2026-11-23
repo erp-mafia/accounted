@@ -35,6 +35,8 @@ import type {
  * Note: skvRequest already maps 401/403/429 to SkatteverketAuthError. AGI
  * 400/404/409 carry the SkatteverketAGIErrorBody envelope, which we surface
  * via Result.error so callers can render meddelandeTillAnvandare verbatim.
+ * The kvittenser read is the exception: its 404 is no receipt yet
+ * (agiGetKvittenser).
  *
  * Audit: every function passes its own endpoint label to the transport,
  * which writes one skatteverket_api_audit_log row per call. 'agi/submit' is
@@ -233,6 +235,11 @@ export async function agiSkapaGranskningsunderlag(
  *
  * Returns an empty kvittenser array until the user has signed in Mina Sidor.
  * Once signed, each receipt carries uuidKvittens + signeradAv + signeradTid.
+ * Until then Skatteverket answers 404 ({"message": "Resource not found"}),
+ * not an empty list: in production every 404 for a period came before its
+ * first receipt and none after (2026-11-22). That is nothing on file yet, as
+ * /inlamnat reads its 404 (declaration-status.ts), so it is the empty list
+ * and the audit row records a normal answer.
  *
  * Takes SkvAuth (not supabase+userId): kvittens polling is a background
  * read, so the crons can run it on system credentials when the company has
@@ -249,10 +256,12 @@ export async function agiGetKvittenser(
     auth,
     'GET',
     `${periodPath(arbetsgivare, period)}/kvittenser`,
-    { endpoint: 'kvittenser', ...actor, ...periodScope(arbetsgivare, period) },
+    { endpoint: 'kvittenser', ...actor, ...periodScope(arbetsgivare, period), okStatuses: [404] },
     undefined,
     { baseUrl: getHanteraBaseUrl() },
   )
+
+  if (response.status === 404) return { ok: true, status: response.status, data: { kvittenser: [] } }
 
   if (!response.ok) {
     const { error, body } = await readErrorBody(response)

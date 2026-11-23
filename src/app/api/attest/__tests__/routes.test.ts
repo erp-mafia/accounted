@@ -183,4 +183,20 @@ describe('the attest link token door', () => {
     service.setTable('supplier_invoices', { data: { document_id: null } })
     expect((await readDocument(createMockRequest('/api/attest/t/document'), params())).status).toBe(404)
   })
+
+  it('serves the invoice document from the company folder, and nothing from a key outside it', async () => {
+    const download = vi.fn(async () => ({ data: new Blob(['%PDF-1.7']), error: null }))
+    Object.assign(service.supabase, { storage: { from: vi.fn(() => ({ download })) } })
+    service.setTable('supplier_invoice_attest_links', { data: link() })
+    service.setTable('supplier_invoices', { data: { document_id: 'doc-1' } })
+
+    service.setTable('document_attachments', { data: { id: 'doc-1', file_name: 'faktura.pdf', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/faktura.pdf' } })
+    expect((await readDocument(createMockRequest('/api/attest/t/document'), params())).status).toBe(200)
+    expect(download).toHaveBeenCalledWith('documents/company-1/user-1/faktura.pdf')
+
+    download.mockClear()
+    service.setTable('document_attachments', { data: { id: 'doc-1', file_name: 'faktura.pdf', mime_type: 'application/pdf', storage_path: 'documents/company-2/user-9/faktura.pdf' } })
+    expect((await readDocument(createMockRequest('/api/attest/t/document'), params())).status).toBe(404)
+    expect(download).not.toHaveBeenCalled()
+  })
 })

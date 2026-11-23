@@ -13,20 +13,11 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
-import { badArgument, codedRefusal, fieldValidationError, type FieldIssue } from '@/lib/errors/refusal'
-import { amountsNotAmong } from './amounts'
+import { badArgument, codedRefusal } from '@/lib/errors/refusal'
 import { emitQuestionEvent } from './events'
-import { resolveEvidence } from './evidence'
+import { assertStandsOnEvidence, evidenceRefsOf } from './evidence'
 import { assertCompanyQuestionsOn, toQuestion, type QuestionRow } from './rows'
-import {
-  EVIDENCE_KINDS,
-  QUESTION_LIMITS,
-  type CompanyQuestion,
-  type EvidenceKind,
-  type EvidenceRef,
-  type QuestionActor,
-  type QuestionOption,
-} from './types'
+import { QUESTION_LIMITS, type CompanyQuestion, type EvidenceRef, type QuestionActor, type QuestionOption } from './types'
 
 export interface FileQuestionInput {
   companyId: string
@@ -102,30 +93,7 @@ function evidenceOf(value: unknown): EvidenceRef[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw badArgument('evidence', 'evidence is required: at least one record the question rests on')
   }
-  if (value.length > QUESTION_LIMITS.maxEvidence) {
-    throw badArgument(
-      'evidence',
-      `${value.length} evidence references; at most ${QUESTION_LIMITS.maxEvidence}`,
-      `Högst ${QUESTION_LIMITS.maxEvidence} underlag.`,
-    )
-  }
-  const refs: EvidenceRef[] = []
-  value.forEach((entry, index) => {
-    const kind = isRecord(entry) ? entry.kind : undefined
-    const rawId = isRecord(entry) && typeof entry.id === 'string' ? entry.id.trim() : ''
-    if (!(EVIDENCE_KINDS as readonly unknown[]).includes(kind)) {
-      throw badArgument(
-        `evidence.${index}`,
-        `evidence.${index}.kind must be one of ${EVIDENCE_KINDS.join(', ')}`,
-        `Underlagets typ måste vara en av ${EVIDENCE_KINDS.join(', ')}.`,
-      )
-    }
-    if (!rawId) throw badArgument(`evidence.${index}`, `evidence.${index}.id is required`)
-    // Ids are stored in lower case; an account number has no case.
-    const ref: EvidenceRef = { kind: kind as EvidenceKind, id: rawId.toLowerCase() }
-    if (!refs.some((seen) => seen.kind === ref.kind && seen.id === ref.id)) refs.push(ref)
-  })
-  return refs
+  return evidenceRefsOf(value)
 }
 
 /** A provenance text within the length its column holds, or null. */
@@ -206,25 +174,7 @@ export async function fileQuestion(supabase: SupabaseClient, input: FileQuestion
   const existing = await existingQuestion(supabase, input.companyId, fingerprint)
   if (existing) throw alreadyAsked(existing)
 
-  const resolved = await resolveEvidence(supabase, input.companyId, evidence)
-  if (resolved.missing.length > 0) {
-    const issues: FieldIssue[] = resolved.missing.map((ref) => ({
-      field: `evidence.${evidence.findIndex((e) => e.kind === ref.kind && e.id === ref.id)}`,
-      en: `no ${ref.kind} ${ref.id} in this company`,
-      sv: `Underlaget ${ref.kind} ${ref.id} finns inte i företaget.`,
-    }))
-    throw fieldValidationError('Evidence not found', issues)
-  }
-
-  const notOnEvidence = amountsNotAmong([question, why], resolved.amounts)
-  if (notOnEvidence.length > 0) {
-    const issues: FieldIssue[] = notOnEvidence.map((amount) => ({
-      field: 'question',
-      en: `the amount "${amount}" is on none of the evidence records; write amounts as they stand on the records, or cite the record that carries it`,
-      sv: `Beloppet "${amount}" finns inte på något av underlagen.`,
-    }))
-    throw fieldValidationError('Amount not on the evidence', issues)
-  }
+  await assertStandsOnEvidence(supabase, input.companyId, evidence, [question, why], 'question')
 
   await assertWithinLimits(supabase, input.companyId)
 
@@ -246,7 +196,7 @@ export async function fileQuestion(supabase: SupabaseClient, input: FileQuestion
       client: clip(actor?.client, 100),
     })
     .select(
-      'id, status, close_reason, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
+      'id, status, close_reason, close_note, close_evidence, question, why, options, evidence, actor_label, client, answer_option, answer_text, answered_at, answered_via, fact_id, created_at',
     )
     .single()
   if (error) {
@@ -261,7 +211,13 @@ export async function fileQuestion(supabase: SupabaseClient, input: FileQuestion
   const filed = toQuestion(data as QuestionRow)
   await emitQuestionEvent({
     type: 'company_question.filed',
-    payload: { questionId: filed.question_id, userId: input.userId, companyId: input.companyId },
+    payload: {
+      questionId: filed.question_id,
+      status: 'open',
+      createdAt: filed.created_at,
+      userId: input.userId,
+      companyId: input.companyId,
+    },
   })
   return filed
 }

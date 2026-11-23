@@ -73,6 +73,23 @@ function horizonEndFor(type: TaxDeadlineType, today: Date): Date {
 }
 
 /**
+ * The years the generator dates and detection expects, as of `fromDate`:
+ * last year, this year and the next. The monthly and quarterly configs are
+ * keyed by the year of the period (generateDates), and a December or Q4
+ * period falls due in the next calendar year (AGI and moms for December in
+ * January and February). Without last year, every regeneration from 1 January
+ * leaves them out of the set, and replace_system_tax_deadlines deletes their
+ * pending rows while they are still ahead. The configs keyed by the year a
+ * deadline falls due add nothing from last year but a notice's kvarskatt,
+ * which is kept past its date as in any year; every other row already past
+ * is skipped.
+ */
+export function deadlineWindowYears(fromDate: Date = new Date()): number[] {
+  const year = stockholmYearMonth(fromDate).year
+  return [year - 1, year, year + 1]
+}
+
+/**
  * Fields in company_settings that affect tax deadline generation
  */
 export const TAX_RELEVANT_FIELDS = [
@@ -494,11 +511,10 @@ export async function generateTaxDeadlinesForUser(
   // also include their own due-date years so a newly entered overdue notice is
   // represented instead of disappearing only because its exact date has passed.
   if (years.length === 0) {
-    const currentYear = stockholmYearMonth().year
     const noticeYears = (settings.tax_assessment_notices ?? [])
       .map((notice) => Number(notice.paymentDueDate.slice(0, 4)))
       .filter(Number.isInteger)
-    years = Array.from(new Set([currentYear, currentYear + 1, ...noticeYears]))
+    years = Array.from(new Set([...deadlineWindowYears(), ...noticeYears]))
   }
 
   // The begäran deadline is data-dependent: a row for year Y only exists
@@ -919,8 +935,7 @@ export async function regenerateTaxDeadlinesForUser(
   companyId: string,
   newSettings: CompanySettingsForDeadlines
 ): Promise<{ created: number; deleted: number }> {
-  const currentYear = stockholmYearMonth().year
-  return generateTaxDeadlinesForUser(supabase, companyId, newSettings, [currentYear, currentYear + 1])
+  return generateTaxDeadlinesForUser(supabase, companyId, newSettings, deadlineWindowYears())
 }
 
 interface DeadlineSettingsRow extends Partial<CompanySettingsForDeadlines> {
@@ -962,10 +977,7 @@ export function getExpectedUpcomingDeadlineKeys(
   years: number[] = [],
   fromDate: Date = new Date(),
 ): Set<string> {
-  if (years.length === 0) {
-    const currentYear = stockholmYearMonth(fromDate).year
-    years = [currentYear, currentYear + 1]
-  }
+  if (years.length === 0) years = deadlineWindowYears(fromDate)
 
   const today = parseDate(todayIsoStockholm(fromDate))
   // Keyed by type:period, last one wins, exactly like the generator's own
@@ -1085,8 +1097,7 @@ export function findSettingsWithStaleUpcomingDeadlines(
   years: number[] = [],
   fromDate: Date = new Date(),
 ): DeadlineSettingsRow[] {
-  const currentYear = stockholmYearMonth(fromDate).year
-  const windowYears = years.length > 0 ? years : [currentYear, currentYear + 1]
+  const windowYears = years.length > 0 ? years : deadlineWindowYears(fromDate)
   const todayIso = todayIsoStockholm(fromDate)
   // The generator's delete window (generateTaxDeadlinesForUser's endDate).
   const windowEnd = `${Math.max(...windowYears) + 1}-12-31`
@@ -1155,7 +1166,6 @@ export async function generateNewYearDeadlines(
   supabase: SupabaseClient,
   options: DeadlinePassOptions = {},
 ): Promise<{ usersProcessed: number; totalCreated: number; companiesNotReached: number }> {
-  const newYear = stockholmYearMonth().year
   const allSettings = await hydrateRecordedEuTradeYears(
     supabase,
     await hydrateSalariedEmployeeSince(
@@ -1181,7 +1191,7 @@ export async function generateNewYearDeadlines(
         supabase,
         settings.company_id,
         toDeadlineSettings(settings),
-        [newYear, newYear + 1]
+        deadlineWindowYears(),
       )
       usersProcessed++
       totalCreated += result.created
@@ -1218,8 +1228,8 @@ export async function backfillMissingTaxDeadlines(
   // (already passed) due date must still count as satisfied, otherwise the
   // repair loop flags the company forever while the generator (correctly)
   // refuses to recreate a filed obligation. Matches the generator's own
-  // completed-row floor.
-  const pastFloor = `${stockholmYearMonth().year - 1}-01-01`
+  // completed-row floor for the window regeneration uses.
+  const pastFloor = `${Math.min(...deadlineWindowYears()) - 1}-01-01`
   const [rawSettings, upcomingDeadlineRows] = await Promise.all([
     fetchAllDeadlineSettings(supabase),
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
@@ -1411,8 +1421,7 @@ export async function alignYearlyVatDeadlinesWithBooks(
   if (pastDeadline(options)) return nothing
 
   const todayIso = todayIsoStockholm()
-  const currentYear = stockholmYearMonth().year
-  const years = [currentYear, currentYear + 1]
+  const years = deadlineWindowYears()
   const queue = (await hydrateFiscalYears(supabase, candidates))
     .map((row) => {
       const settings = toDeadlineSettings(row)

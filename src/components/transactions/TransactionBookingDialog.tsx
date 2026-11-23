@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, holdEscapeWhileUnsaved, useDashShellInert, useEditedSinceOpen } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -11,15 +11,11 @@ import { InboxIcon } from '@/components/icons'
 import JournalEntryForm from '@/components/bookkeeping/JournalEntryForm'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
-import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import type { UploadedFilesUpdate } from '@/components/bookkeeping/upload-list'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
-import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import { linkDocuments } from '@/lib/documents/link-documents'
-import { heldUnderlag, removedUpload, underlagLinkTargets } from './review-underlag'
-import { useTransactionUnderlag } from './use-transaction-underlag'
-import UnderlagFileRow from './UnderlagFileRow'
+import { useHeldUnderlag } from './use-held-underlag'
+import { bankRowInitialLines } from './bank-row-lines'
+import { HeldUnderlagRows } from './HeldUnderlagRows'
 import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { bankSideOf, templateBankLeg } from '@/lib/bookkeeping/bank-leg'
@@ -29,7 +25,6 @@ import type { BookingTemplateLibrary } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
-import { roundOre, formatAmountInput } from '@/lib/money'
 
 interface TransactionBookingDialogProps {
   open: boolean
@@ -60,48 +55,6 @@ interface TransactionBookingDialogProps {
   preselectedAccount?: string | null
   /** The row's own underlag was pinned here, or taken off (null): the page keeps its rows in step. */
   onUnderlagChange?: (transactionId: string, documentId: string | null) => void
-}
-
-function buildInitialLines(
-  transaction: TransactionWithInvoice,
-  bankLineDescription: string,
-  bankAccount: string = '1930',
-  counterAccount?: string | null,
-): FormLine[] {
-  const sekAmount = roundOre(Math.abs(resolveSekAmount(
-    transaction.amount,
-    transaction.amount_sek,
-    transaction.currency,
-    transaction.exchange_rate
-  )))
-  const amountStr = formatAmountInput(sekAmount, '.')
-  const isExpense = transaction.amount < 0
-
-  const isForeign = !!transaction.currency && transaction.currency !== 'SEK'
-  const currencyMeta = isForeign
-    ? buildCurrencyMetadata(
-        transaction.currency,
-        Math.abs(transaction.amount),
-        transaction.exchange_rate
-      )
-    : {}
-
-  const bankLine: FormLine = {
-    account_number: bankAccount,
-    debit_amount: isExpense ? '' : amountStr,
-    credit_amount: isExpense ? amountStr : '',
-    line_description: bankLineDescription,
-    ...currencyMeta,
-  }
-
-  const counterLine: FormLine = {
-    account_number: counterAccount ?? '',
-    debit_amount: isExpense ? amountStr : '',
-    credit_amount: isExpense ? '' : amountStr,
-    line_description: '',
-  }
-
-  return isExpense ? [bankLine, counterLine] : [bankLine, counterLine]
 }
 
 function buildInitialLinesFromTemplate(
@@ -152,27 +105,21 @@ export default function TransactionBookingDialog({
   onUnderlagChange,
 }: TransactionBookingDialogProps) {
   const t = useTranslations('tx_booking_dialog')
-  const tUnderlag = useTranslations('tx_booking_underlag')
-  const tDetach = useTranslations('tx_detach')
   const { toast } = useToast()
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   // The whole dialog takes a dropped file, not only the dashed box.
   const dropSurfaceRef = useRef<HTMLDivElement>(null)
-  const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
-  // The transaction's own underlag, as in the Bokför review (one hook for
-  // both): the first document attached here is pinned to the row at once,
-  // so closing the dialog keeps it (crm#1101).
-  const underlag = useTransactionUnderlag({
+  // The transaction's own underlag and everything attached here, as on the
+  // booking screen (one hook for both): the first document attached here is
+  // pinned to the row at once, so closing the dialog keeps it (crm#1101).
+  const attachments = useHeldUnderlag({
     transactionId: transaction?.id ?? null,
     rowDocumentId: transaction?.document_id ?? null,
     open,
     onChange: onUnderlagChange,
   })
-  const { claim: claimUnderlag, withdraw: withdrawUnderlag, settled: underlagSettled } = underlag
-  const claimUpload = useCallback((file: UploadedFile) => {
-    if (file.id) void claimUnderlag(file.id, file.fileName)
-  }, [claimUnderlag])
+  const { underlag, held, claimUpload } = attachments
+  const uploadedFiles = attachments.attached.files
   // Settlement account for the bank line: resolved from the session-cached
   // cash accounts (seeded by the dashboard layout), so the form below mounts
   // on the first paint instead of after a /api/cash-accounts round trip on
@@ -204,8 +151,6 @@ export default function TransactionBookingDialog({
   if (!transaction) return null
 
   const isIncome = transaction.amount > 0
-  // What only this dialog holds beyond the row's own underlag.
-  const held = heldUnderlag({ files: uploadedFiles, inboxDocs: pickedInboxDocs }, underlag.documentId)
 
   const handleBooked = async (transactionId: string, journalEntryId: string, matched = false) => {
     // Everything attached here goes onto the verifikat: the new one, or the
@@ -219,11 +164,7 @@ export default function TransactionBookingDialog({
     // them to a row without underlag so the list shows the indicator. A pin
     // or a take-off still on its way lands first, and a document the person
     // removed here is left out.
-    const ownUnderlag = await underlagSettled()
-    const targets = underlagLinkTargets({ files: uploadedFiles, inboxDocs: pickedInboxDocs }, transactionId).filter(
-      (target) => !underlag.isLetGo(target.documentId),
-    )
-    const { failed, firstLinkedId } = await linkDocuments(targets, journalEntryId)
+    const { failed, firstLinkedId, ownUnderlag } = await attachments.link(journalEntryId, transactionId)
     if (failed.length > 0) {
       toast({
         title: t('doc_link_failed_title'),
@@ -246,66 +187,31 @@ export default function TransactionBookingDialog({
       )
     }
 
-    setUploadedFiles([])
-    setPickedInboxDocs([])
+    attachments.clear()
     onBooked(transactionId, journalEntryId, pinnedDocId, matched)
   }
 
   // The receipt to show beside the form: the row's own underlag (from before
   // this dialog, or the first document attached in it), else the first one
-  // held here, as soon as it is available.
-  const heldUpload = held.files.find((f) => f.status === 'uploaded' && f.id)
-  const heldPick = held.inboxDocs[0]
-  const viewerDocId = underlag.documentId ?? heldUpload?.id ?? heldPick?.document_id ?? null
-  // A file uploaded here still knows its type and name: no metadata round trip.
-  const viewerFile = uploadedFiles.find((f) => f.id === viewerDocId)
-  const viewerMime = viewerFile?.file.type || null
-  const viewerName =
-    viewerFile?.fileName ?? pickedInboxDocs.find((d) => d.document_id === viewerDocId)?.file_name ?? underlag.fileName
-  // The row's underlag from before this dialog is in neither list: it gets a
-  // row (and an x) of its own.
-  const ownFromBefore = !!underlag.documentId && underlag.documentId !== underlag.attachedHere
-
-  // The x on a document attached here lets it go: off the row when the row
-  // holds it or a pin for it is on its way (the file stays in the archive),
-  // then out of the lists. Listed until the row has let it go: a refused
-  // take-off keeps it, as does attaching it again meanwhile.
-  async function letGo(docId: string) {
-    if (!(await withdrawUnderlag(docId))) return
-    setUploadedFiles((prev) => prev.filter((f) => f.id !== docId))
-    setPickedInboxDocs((prev) => prev.filter((d) => d.document_id !== docId))
-  }
-
-  // Every change from the upload zones is an update of the list as it is
-  // when it lands, so an upload finishing after another drop or a removal
-  // keeps both, also when the zone it started in gave way to the viewer.
-  // The x on a finished upload is the one change the dialog takes over:
-  // the document goes through letGo above.
-  function handleFilesChange(update: UploadedFilesUpdate) {
-    const removed = removedUpload(uploadedFiles, update(uploadedFiles))
-    if (removed?.id) {
-      void letGo(removed.id)
-      return
-    }
-    setUploadedFiles(update)
-  }
+  // held here, as soon as it is available (shownUnderlag).
+  const { documentId: viewerDocId, mime: viewerMime, fileName: viewerName } = attachments.shown
+  // Every change from the upload zones goes through the hook: the x on a
+  // finished upload lets it go, every other change lands on the latest list.
+  const handleFilesChange = attachments.onFilesChange
 
   // The underlag the row had before this dialog is confirmed off, as the
   // row's own "Ta bort underlag" is: it may be a match someone else made.
-  const detachEarlierUnderlag = async () => {
-    const released = await underlag.detachEarlier({
+  const detachEarlierUnderlag = () =>
+    attachments.detachEarlier({
       description: transaction.description,
       amount: formatCurrency(transaction.amount, transaction.currency),
     })
-    if (!released) return
-    setUploadedFiles((prev) => prev.filter((f) => f.id !== released))
-    setPickedInboxDocs((prev) => prev.filter((d) => d.document_id !== released))
-  }
 
   // Secondary intake path beside the upload zone: underlag already in the
   // inkorg, picked instead of uploaded again.
+  // The inbox is another way in beside "Ladda upp", on the zone's own line.
   const pickFromInbox = (
-    <Button variant="ghost" className="-ml-2.5 self-start" onClick={() => setInboxPickerOpen(true)}>
+    <Button variant="ghost" onClick={() => setInboxPickerOpen(true)}>
       <InboxIcon className="h-4 w-4" />
       {t('doc_pick_inbox')}
     </Button>
@@ -323,8 +229,7 @@ export default function TransactionBookingDialog({
   return (
     <Dialog open={open} onOpenChange={(o) => {
       if (!o) {
-        setUploadedFiles([])
-        setPickedInboxDocs([])
+        attachments.clear()
         setInboxPickerOpen(false)
       }
       onOpenChange(o)
@@ -407,39 +312,18 @@ export default function TransactionBookingDialog({
                   onUploaded={claimUpload}
                   compact
                   dropSurfaceRef={dropSurfaceRef}
+                  actions={pickFromInbox}
                 />
               </>
             )}
 
-            {viewerDocId ? (
-              <div className="flex shrink-0 flex-col gap-2">
-                {ownFromBefore && (
-                  <UnderlagFileRow
-                    name={underlag.fileName ?? tUnderlag('file_fallback')}
-                    removeLabel={tDetach('menu_item')}
-                    disabled={underlag.busy}
-                    onRemove={() => void detachEarlierUnderlag()}
-                  />
-                )}
-                <DocumentUploadZone
-                  files={uploadedFiles}
-                  onFilesChange={handleFilesChange}
-                  onUploaded={claimUpload}
-                  compact
-                  dropSurfaceRef={dropSurfaceRef}
-                />
-                {pickedInboxDocs.map((doc) => (
-                  <UnderlagFileRow
-                    key={doc.document_id}
-                    name={doc.supplier_name ?? doc.file_name}
-                    removeLabel={t('doc_picked_remove')}
-                    onRemove={() => void letGo(doc.document_id)}
-                  />
-                ))}
-                {pickFromInbox}
-              </div>
-            ) : (
-              pickFromInbox
+            {viewerDocId && (
+              <HeldUnderlagRows
+                attachments={attachments}
+                onDetachEarlier={() => void detachEarlierUnderlag()}
+                dropSurfaceRef={dropSurfaceRef}
+                actions={pickFromInbox}
+              />
             )}
           </div>
 
@@ -457,11 +341,12 @@ export default function TransactionBookingDialog({
                         currency: transaction.currency,
                         foreignAmount: Math.abs(transaction.amount),
                         exchangeRate: transaction.exchange_rate,
-                        businessLineDescription: proposalLineDescription ?? undefined,
+                        lineDescription: proposalLineDescription ?? undefined,
+                        settlementLineDescription: bankAccountName ?? t('bank_line_description'),
                       })
                     : preselectedTemplate
                       ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-                      : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, preselectedAccount)
+                      : bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, preselectedAccount)
                 }
                 initialDate={transaction.date}
                 initialDescription={transaction.description}
@@ -493,13 +378,7 @@ export default function TransactionBookingDialog({
         <InboxDocumentPicker
           open={inboxPickerOpen}
           onClose={() => setInboxPickerOpen(false)}
-          onSelect={(doc) => {
-            if (pickedInboxDocs.some((d) => d.document_id === doc.document_id)) return
-            setPickedInboxDocs((prev) =>
-              prev.some((d) => d.document_id === doc.document_id) ? prev : [...prev, doc],
-            )
-            void claimUnderlag(doc.document_id, doc.supplier_name ?? doc.file_name)
-          }}
+          onSelect={attachments.pickInboxDoc}
         />
         <DestructiveConfirmDialog {...underlag.confirmProps} />
       </DialogContent>

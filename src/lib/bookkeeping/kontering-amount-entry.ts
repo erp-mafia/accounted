@@ -8,7 +8,58 @@
  * to stand in the column it belonged to.
  */
 
+import { formatAmountInput, parseAmountInput, parseSwedishAmount } from '@/lib/money'
+
 export type KonteringAmountSide = 'debit_amount' | 'credit_amount'
+
+/**
+ * The line's value for what a person typed in an amount field: the figure as
+ * a dot string ("100.5"), which is what the field handed over while it was a
+ * number input, so every reader of the lines reads what it always read. The
+ * field is text because Chrome reads a number field by the browser's own
+ * language, not the page's: in an English Chrome "100,50" became 10050
+ * (PH 305). The text is read by the app's language, `decimal` being its
+ * decimal mark:
+ * - Swedish (','): as parseAmountInput reads it, a comma or a dot decimal and
+ *   space-grouped thousands, so "10,000" is ten kronor.
+ * - English ('.'): a dot decimal and comma-grouped thousands, so "10,000" is
+ *   ten thousand, as an English Chrome's number field read it. A comma that
+ *   cannot group thousands ("100,50", "1.234,56") is a decimal comma, the
+ *   only decimal key a phone set to a Swedish region offers.
+ * Text that is not one amount is no figure ('').
+ *
+ * A minus figure is the same figure on the other side (negativeAmountMove),
+ * so it is read and rounded without its sign: roundOre rounds a negative
+ * half öre toward zero, and "-2,675" would move as 2.67 where "2,675" typed
+ * on the other side is 2.68. The sign is a hyphen, a Unicode minus or a
+ * dash lookalike, the signs parseSwedishAmount reads.
+ */
+export function konteringAmountValue(text: string, decimal: ',' | '.'): string {
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+  const minus = /^[-−‐-—]/.test(trimmed)
+  const n = readKonteringAmount(minus ? trimmed.slice(1) : trimmed, decimal)
+  if (n === null || (minus && n < 0)) return ''
+  return String(minus && n !== 0 ? -n : n)
+}
+
+function readKonteringAmount(text: string, decimal: ',' | '.'): number | null {
+  if (decimal === ',') return parseAmountInput(text)
+  // A first group that starts with a zero ("0,500") groups no thousands, so
+  // its comma is a decimal comma: 0.50, not 500.
+  if (/^0\d{0,2},/.test(text.replace(/\s/g, ''))) return parseAmountInput(text)
+  return parseSwedishAmount(text, '.') ?? parseAmountInput(text)
+}
+
+/**
+ * What an amount field shows for a line's value while nobody is typing in
+ * it: the figure to the öre with the decimal mark of the app's language
+ * ("100,50"), so a figure read another way than it was meant shows once the
+ * field is left. A value that is not a plain figure is shown as it is.
+ */
+export function konteringAmountText(value: string, decimal: ',' | '.'): string {
+  return /^-?\d+(\.\d+)?$/.test(value) ? formatAmountInput(Number(value), decimal) : value
+}
 
 function otherSide(side: KonteringAmountSide): KonteringAmountSide {
   return side === 'debit_amount' ? 'credit_amount' : 'debit_amount'

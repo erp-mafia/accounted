@@ -11,6 +11,7 @@ import type {
 import { documentPayment, documentState, type DocumentState } from '../document-state';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 import { sourceVoucherFromParts } from '../source-voucher';
+import { fortnoxSupplierInvoiceBookingParts } from './supplier-invoice-voucher';
 import { splitGrossVat } from '@/lib/bookkeeping/gross-split';
 import { ORE_TOLERANCE, roundOre } from '@/lib/money';
 
@@ -110,6 +111,17 @@ function isFullyPaid(raw: Record<string, unknown>): boolean {
   return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
 }
 
+/**
+ * Whether a Fortnox supplier invoice or credit note is settled: its stated
+ * Balance is zero to the öre. Not isFullyPaid: a credit note's balance is
+ * never positive, so a part-refunded one would read as paid. An absent
+ * Balance says nothing and is not settled.
+ */
+export function fortnoxSupplierInvoiceSettled(raw: Record<string, unknown>): boolean {
+  const balance = readNumber(raw, ['Balance']);
+  return balance !== undefined && Math.abs(balance) < ORE_TOLERANCE;
+}
+
 /** The supplier list form spells cancellation `Cancel`, every detail form `Cancelled`. */
 function isCancelled(raw: Record<string, unknown>): boolean {
   return raw['Cancel'] === true || raw['Cancelled'] === true;
@@ -145,8 +157,7 @@ export function fortnoxSupplierInvoiceNotOpen(
 ): 'cancelled' | 'unbooked' | 'paid' | null {
   if (isCancelled(raw)) return 'cancelled';
   if (raw['Booked'] === false) return 'unbooked';
-  const balance = readNumber(raw, ['Balance']);
-  return balance !== undefined && Math.abs(balance) < ORE_TOLERANCE ? 'paid' : null;
+  return fortnoxSupplierInvoiceSettled(raw) ? 'paid' : null;
 }
 
 /**
@@ -493,10 +504,16 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
     legalMonetaryTotal,
     paymentStatus,
     ocrNumber: raw['OCR'] as string | undefined,
-    sourceVoucher: sourceVoucherFromParts(raw['VoucherSeries'], raw['VoucherNumber']) ?? undefined,
+    sourceVoucher: supplierSourceVoucher(raw),
     updatedAt: raw['@LastModified'] as string | undefined,
     _raw: raw,
   };
+}
+
+/** The booking verifikat a supplier invoice names (see supplier-invoice-voucher.ts). */
+function supplierSourceVoucher(raw: Record<string, unknown>) {
+  const parts = fortnoxSupplierInvoiceBookingParts(raw);
+  return (parts && sourceVoucherFromParts(parts.series, parts.number)) ?? undefined;
 }
 
 export function mapFortnoxToCustomer(raw: Record<string, unknown>): CustomerDto {

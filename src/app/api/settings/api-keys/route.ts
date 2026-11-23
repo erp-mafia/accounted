@@ -12,6 +12,7 @@ import { validateQuery } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ApiKeyMode, ApiKeyScope } from '@/lib/auth/api-keys'
+import { partnerClientNames, partnerSlugOf } from '@/lib/auth/oauth-partner-clients'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { listUserCompaniesForPicker, resolveCompanySelection } from '@/lib/company/company-picker'
 
@@ -34,16 +35,23 @@ const listQuerySchema = z.object({ scope: z.enum(['mine']).optional() })
 
 /**
  * GET /api/settings/api-keys: list the company's API keys (key value never
- * returned). With `scope=mine`, the caller's own keys in every company they
- * still belong to instead: a connection belongs to its owner and reaches the
- * companies picked when it was made, so the byrå cockpit, which sits above
- * the clients, lists a person's connections rather than the keys that
- * happen to be homed in the company left open.
+ * returned): the keys homed in the active company, plus the caller's own
+ * person keys homed in another company they belong to that reach the active
+ * one too (no allowlist, or the active company on it). A sign-in made while
+ * one company was open reaches every company it was given, so it is listed
+ * in each of them, not only where it was made. With `scope=mine`, the
+ * caller's own keys in every company they still belong to instead: a
+ * connection belongs to its owner and reaches the companies picked when it
+ * was made, so the byrå cockpit, which sits above the clients, lists a
+ * person's connections rather than the keys that happen to be homed in the
+ * company left open.
  *
  * Each row carries `source`: 'signin' for a key the MCP OAuth token route
  * minted (an AI client that signed in: claude.ai, ChatGPT, Cursor, ...),
  * 'manual' for one created here. `client` names the built-in client behind a
- * sign-in (null for older rows, registered clients and manual keys). The
+ * sign-in (null for older rows, registered clients and manual keys), and
+ * `client_label` the partner's name when `client` is 'partner:<slug>' (null
+ * otherwise, and when the partner table cannot be read). The
  * reserved OAuth key name is the marker, the same one the Hem checklist reads.
  * Each row also carries `company_ids` (null = unrestricted) and
  * `read_only_company_ids` (null = none), and the response adds
@@ -71,12 +79,14 @@ export const GET = withRouteContext(
     // api_keys select policy already lets an owner read their own rows. Two
     // literal queries rather than one built at runtime, so the schema guard
     // (tests/schema/no-phantom-columns) still checks every column.
+    const ownKeys = () =>
+      supabase
+        .from('api_keys')
+        .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id, service_account_id, company_id')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
     const { data, error } = mine
-      ? await supabase
-          .from('api_keys')
-          .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id, service_account_id, company_id')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
+      ? await ownKeys()
       : await supabase
           .from('api_keys')
           .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id, service_account_id, company_id')
@@ -86,6 +96,23 @@ export const GET = withRouteContext(
     if (error) {
       log.error('api_keys list failed', error)
       return errorResponse(error, log, { requestId })
+    }
+
+    // The caller's own person keys homed in another company: candidates for
+    // the active company's list when they reach it (decided below, once the
+    // allowlists are read). A service-account key reaches only its account's
+    // company, so it never follows its sponsor here.
+    let ownElsewhere: NonNullable<typeof data> = []
+    if (!mine) {
+      const { data: ownRows, error: ownError } = await ownKeys()
+      if (ownError) {
+        log.error('own api_keys list failed', ownError)
+        return errorResponse(ownError, log, { requestId })
+      }
+      const listedIds = new Set((data ?? []).map((key) => key.id))
+      ownElsewhere = (ownRows ?? []).filter(
+        (key) => key.company_id !== companyId && !key.service_account_id && !listedIds.has(key.id),
+      )
     }
 
     let companies
@@ -100,17 +127,19 @@ export const GET = withRouteContext(
     // manage any more (revoking it needs a role there), so the own list
     // keeps only keys homed in a live membership.
     const memberIds = new Set(companies.map((company) => company.company_id))
-    const keys = (data ?? []).filter((key) => !mine || memberIds.has(key.company_id))
+    const homed = (data ?? []).filter((key) => !mine || memberIds.has(key.company_id))
+    const elsewhere = ownElsewhere.filter((key) => memberIds.has(key.company_id))
+    const candidates = [...homed, ...elsewhere]
 
     // api_key_companies is service-role only: the session client would read
     // zero rows and every key would look unrestricted.
     const allowlists = new Map<string, string[]>()
     const readOnlyLists = new Map<string, string[]>()
-    if (keys.length > 0) {
+    if (candidates.length > 0) {
       const { data: rows, error: allowlistError } = await createServiceClient()
         .from('api_key_companies')
         .select('api_key_id, company_id, access')
-        .in('api_key_id', keys.map((key) => key.id))
+        .in('api_key_id', candidates.map((key) => key.id))
       if (allowlistError) {
         log.error('api_key_companies list failed', allowlistError)
         return errorResponse(allowlistError, log, { requestId })
@@ -126,6 +155,18 @@ export const GET = withRouteContext(
         }
       }
     }
+
+    // An own key homed elsewhere joins the list when it reaches the active
+    // company: unrestricted (no allowlist rows), or this company on its
+    // allowlist. Newest first across both sources, like each query.
+    const reachingHere = elsewhere.filter((key) => {
+      const allowlist = allowlists.get(key.id)
+      return !allowlist || allowlist.includes(companyId)
+    })
+    const keys =
+      reachingHere.length === 0
+        ? homed
+        : [...homed, ...reachingHere].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
 
     // The account names of service-account keys (lib/service-accounts),
     // through the service client like the allowlist: a sponsor or admin can
@@ -171,9 +212,16 @@ export const GET = withRouteContext(
       }
     }
 
+    // Keys minted through a partner row carry 'partner:<slug>'; the list
+    // names them by the partner. The partner table is service-role only, and
+    // the name only decorates the row, so a failed read leaves it unnamed.
+    const partnerSlugs = keys.map((key) => partnerSlugOf(key.client)).filter((slug): slug is string => slug !== null)
+    const partnerNames = partnerSlugs.length > 0 ? await partnerClientNames(createServiceClient(), partnerSlugs) : new Map<string, string>()
+
     return NextResponse.json({
       data: keys.map(({ user_id: ownerId, service_account_id: serviceAccountId, company_id: _keyCompanyId, ...key }) => ({
         ...key,
+        client_label: partnerNames.get(partnerSlugOf(key.client) ?? '') ?? null,
         is_own: ownerId === user.id,
         owner_name: ownerId === user.id ? null : ownerNames.get(ownerId) ?? null,
         service_account:

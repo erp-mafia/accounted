@@ -55,6 +55,8 @@ export const OBSERVED_PARTIES_MAX = 1000
 /**
  * The top `limit` observed keys by money (at most OBSERVED_PARTIES_MAX), plus
  * every key named in `keys` whatever its rank (migration 20261015160000).
+ * `limit: 0` ranks nothing: only the named keys come back, and the RPC reads
+ * only their vouchers instead of every voucher in the window (20261123005000).
  */
 export async function getObservedParties(
   supabase: SupabaseClient,

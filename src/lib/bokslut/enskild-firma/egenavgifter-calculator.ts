@@ -1,9 +1,14 @@
 import { roundOre, wholeKronaPercentage } from '@/lib/money'
 import type { EfDeclarationItem } from './types'
 
-/** Full egenavgifter rate (born 1959 or later, active business, 7 karensdagar). */
+/** Full egenavgifter rate (active business, 7 karensdagar, below the age limit of EGENAVGIFTER_PENSIONER). */
 export const EGENAVGIFTER_FULL = 0.2897
-/** Reduced rate for pensioners born 1938-1958. */
+/**
+ * Reduced rate, ålderspensionsavgift only, for someone who has turned 67 at
+ * the start of the beskattningsår (socialavgiftslagen 3 kap 15 §); someone
+ * born 1937 or earlier pays none. Inkomstår 2026: born 1938-1958
+ * (Skatteverket, belopp och procent).
+ */
 export const EGENAVGIFTER_PENSIONER = 0.1021
 /** Passive business uses SLP rate instead. */
 export const SLP_FOR_PASSIVE = 0.2426

@@ -23,7 +23,8 @@
 
 const OUT_OF_BOUNDS_TOTAL = /only (\d+) rows?\b/
 
-function isPostgrestRequest(input: RequestInfo | URL): boolean {
+/** True for a request to PostgREST (/rest/v1/); a relative URL is none. */
+export function isPostgrestRequest(input: RequestInfo | URL): boolean {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   try {
     return new URL(url).pathname.includes('/rest/v1/')

@@ -39,7 +39,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **Digital mailboxes**: Kivra and Billo: read incoming mail into the Inkorg, send invoices and payslips
 - **Document signing**: Send a PDF for signing with BankID; every signature gets a signeringsbevis
 - **SIE import/export**: Standard Swedish accounting interchange format
-- **Agent access (MCP)**: 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini and Cursor over OAuth 2.1
+- **Agent access (MCP)**: 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini, Microsoft Copilot Studio and Cursor over OAuth 2.1
 - **Claude connector and plugin**: Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md); the same plugin installs in Codex and Cursor
 - **Command line**: `npm install -g accounted` runs every tool from a terminal, a script or a coding agent's shell, with the same permissions and staged approvals
 - **Extension system**: Opt-in plugins for AI document extraction, bank sync, email, calendar, and more
@@ -55,6 +55,7 @@ The [Accounted plugin](packages/claude-plugin/README.md) bundles the MCP connect
 | Skill | What it does |
 | --- | --- |
 | `start` | Connect, orient, and surface what needs attention |
+| `start-company` | Start a new aktiebolag: interview, documents, verksamt.se, setup after registration |
 | `bookkeep` | Clear unbooked bank transactions and receipts |
 | `check` | Read-only health check with a prioritized fix list |
 | `month-close` | Close the month against the product's checklist |
@@ -83,6 +84,7 @@ For building against Accounted, or driving it from a shell. They live in [`skill
 | `accounted-api` | Build against the REST API: auth, conventions and every endpoint |
 | `accounted-cli` | Work in the books from a shell with the `accounted` command |
 | `accounted-gather` | Find and upload the documents the archive says are missing |
+| `accounted-start-company` | Start a Swedish aktiebolag: the verksamt.se steps, the board and naming rules, and what to file after registration |
 | `openapi-to-skill` | Turn any OpenAPI spec into an agent skill |
 
 ```bash
@@ -134,7 +136,7 @@ You need a Supabase project and must apply the database migrations before first 
 
 ## Development Setup
 
-Prerequisites: Node.js 20 or newer (CI runs Node 20; the Docker image ships Node 22), Docker, and the [Supabase CLI](https://supabase.com/docs/guides/local-development). No Supabase account is needed.
+Prerequisites: Node.js 20 or newer (CI and the hosted app run Node 24; the Docker image ships Node 22), Docker, and the [Supabase CLI](https://supabase.com/docs/guides/local-development). No Supabase account is needed.
 
 ```bash
 npm install
@@ -195,7 +197,22 @@ Your first pull request asks you to accept the [Contributor License Agreement](C
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE) with an **extension exception**: third-party extensions that interact solely through the documented Extension API may be licensed under any terms, including proprietary. See [LICENSE](LICENSE) for details and [NOTICE](NOTICE) for third-party attributions.
+[AGPL-3.0-or-later](LICENSE). See [NOTICE](NOTICE) for third-party attributions.
+
+```text
+gnubok - Swedish bookkeeping software
+Copyright (C) 2025-2026 Jakob Wennberg
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+```
 
 If the AGPL's obligations don't work for you, for example because you want to embed Accounted in a closed product, contact us at [support@accounted.se](mailto:support@accounted.se) for a commercial license from Arcim Technology AB.
 

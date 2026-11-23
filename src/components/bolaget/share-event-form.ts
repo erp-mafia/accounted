@@ -24,8 +24,10 @@ export const RANGED_KINDS: readonly ShareEventKind[] = [...COUNTED_KINDS, ...NUM
 export const RECEIVER_KINDS: readonly ShareEventKind[] = [...ISSUE_KINDS, 'overlatelse']
 /** Kinds with a pledgee or a holder of a right (form fields counter_party, counterparty_*). */
 export const COUNTERPARTY_KINDS: readonly ShareEventKind[] = ['pant', 'nyttjanderatt']
-/** Kinds that can carry a price or a subscription amount. */
-export const PRICED_KINDS: readonly ShareEventKind[] = [...ISSUE_KINDS, 'overlatelse', 'indragning']
+/** Kinds that can carry a price or a subscription amount. A holding carried over from an earlier register has neither. */
+export const PRICED_KINDS: readonly ShareEventKind[] = [...ISSUE_KINDS.filter((k) => k !== 'ingaende'), 'overlatelse', 'indragning']
+/** Kinds that can be the entry that makes a register complete while it is set up. */
+export const SETUP_KINDS: readonly ShareEventKind[] = ISSUE_KINDS
 /** Kinds Bolagsverket registers. */
 export const REGISTERED_KINDS: readonly ShareEventKind[] = ['nyemission', 'fondemission', 'indragning']
 
@@ -63,6 +65,7 @@ export const EMPTY_EVENT: FormState = {
   registered_on: '',
   note: '',
   forbehall_cleared: '',
+  completes_setup: '',
 }
 
 /** Why a field cannot be sent. The page has one sentence per code (messages: err_<code>). */
@@ -203,14 +206,26 @@ function readShareNumbers(form: FormState, kind: ShareEventKind, body: Record<st
  * `today` (YYYY-MM-DD) refuses a date ahead of it, as the server does.
  * `expectedLastEventNumber` is the preview's last_event_number, sent with the
  * real write so the server refuses it when the register has moved on.
+ *
+ * `inUse`: the register's setup is completed. An entry then carries the day
+ * it is made, which the server sets: the form's date is the day of the event
+ * and optional, sent as occurred_on when it is an earlier day. While the
+ * register is set up the date is the entry's own and required.
  */
-export function buildEventBody(form: FormState, options: { today: string; expectedLastEventNumber?: number }): EventBodyResult {
+export function buildEventBody(form: FormState, options: { today: string; expectedLastEventNumber?: number; inUse?: boolean }): EventBodyResult {
   const kind = form.kind as ShareEventKind
   const errors: FieldErrors = {}
-  const body: Record<string, unknown> = { kind, event_date: form.event_date }
+  const body: Record<string, unknown> = { kind }
 
-  if (!form.event_date) errors.event_date = 'date_required'
-  else if (form.event_date > options.today) errors.event_date = 'date_future'
+  if (options.inUse) {
+    if (form.event_date > options.today) errors.event_date = 'date_future'
+    else if (form.event_date && form.event_date < options.today && kind !== 'rattelse') body.occurred_on = form.event_date
+  } else {
+    body.event_date = form.event_date
+    if (!form.event_date) errors.event_date = 'date_required'
+    else if (form.event_date > options.today) errors.event_date = 'date_future'
+    if (SETUP_KINDS.includes(kind) && form.completes_setup === 'true') body.completes_setup = true
+  }
 
   const note = (form.note ?? '').trim()
   if (note) body.note = note
@@ -263,7 +278,13 @@ export function buildEventBody(form: FormState, options: { today: string; expect
 export interface EventPreview {
   kind: ShareEventKind
   kind_label: string
+  /** The day the entry will carry: the day of the event while the register is set up, today once it is in use. */
   event_date: string
+  /** The day of the event when it is earlier than the day the entry carries. */
+  occurred_on: string | null
+  register_in_use: boolean
+  /** The entry makes the register complete and takes it into use. */
+  completes_setup: boolean
   share_class: string | null
   creates_share_class: string | null
   range_start: number | null

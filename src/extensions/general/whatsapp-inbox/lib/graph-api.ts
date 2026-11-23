@@ -36,6 +36,13 @@ export class GraphApiError extends Error {
   }
 }
 
+/** Our own MAX_MEDIA_BYTES refused the file: the sender's file is too large, nothing failed. */
+export class MediaTooLargeError extends GraphApiError {
+  constructor() {
+    super('Media exceeds the size limit')
+  }
+}
+
 function getAccessToken(): string {
   const token = process.env.WHATSAPP_ACCESS_TOKEN
   if (!token) throw new GraphApiError('WHATSAPP_ACCESS_TOKEN is not configured')
@@ -197,9 +204,12 @@ export interface ChoiceOption {
   title: string
 }
 
-/** WhatsApp hard limits: button titles 20 chars, list row titles 24. */
+/** WhatsApp hard limits: button titles 20 chars, list row titles 24, the
+ *  body text of an interactive message 1024, the body of a text message 4096. */
 export const BUTTON_TITLE_MAX = 20
 export const LIST_ROW_TITLE_MAX = 24
+export const INTERACTIVE_BODY_MAX = 1024
+export const TEXT_BODY_MAX = 4096
 export const MAX_REPLY_BUTTONS = 3
 export const MAX_LIST_ROWS = 10
 
@@ -496,7 +506,8 @@ export function isMediaGone(status: number): boolean {
  * body (a missing or lying header must not let an oversized file through).
  *
  * Throws GraphApiError / TimeoutError: the caller owns error handling here,
- * unlike sends, because a failed download IS a failed intake.
+ * unlike sends, because a failed download IS a failed intake. A file over
+ * the cap throws MediaTooLargeError, so the sender can be told why.
  */
 export async function downloadMedia(mediaId: string): Promise<DownloadedMedia> {
   const token = getAccessToken()
@@ -506,7 +517,7 @@ export async function downloadMedia(mediaId: string): Promise<DownloadedMedia> {
     throw new GraphApiError(lookup.message, lookup.status)
   }
   if (lookup.fileSize !== null && lookup.fileSize > MAX_MEDIA_BYTES) {
-    throw new GraphApiError('Media exceeds the size limit')
+    throw new MediaTooLargeError()
   }
 
   const download = await fetchWithTimeout(
@@ -520,7 +531,7 @@ export async function downloadMedia(mediaId: string): Promise<DownloadedMedia> {
 
   const declaredLength = Number.parseInt(download.headers.get('content-length') ?? '', 10)
   if (Number.isFinite(declaredLength) && declaredLength > MAX_MEDIA_BYTES) {
-    throw new GraphApiError('Media exceeds the size limit')
+    throw new MediaTooLargeError()
   }
 
   // Stream with a running byte count so a body larger than its content-length
@@ -536,7 +547,7 @@ export async function downloadMedia(mediaId: string): Promise<DownloadedMedia> {
         total += value.byteLength
         if (total > MAX_MEDIA_BYTES) {
           await reader.cancel().catch(() => undefined)
-          throw new GraphApiError('Media exceeds the size limit')
+          throw new MediaTooLargeError()
         }
         chunks.push(value)
       }

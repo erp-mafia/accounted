@@ -66,9 +66,33 @@ export const TEMPLATE = {
   m24ListClosed: 'm24_list_closed',
   m25ListEnded: 'm25_list_ended',
   m26ListAnswerTooLong: 'm26_list_answer_too_long',
+  m27ListLater: 'm27_list_later',
+  m28ListQuestionBack: 'm28_list_question_back',
+  m29FileTooLarge: 'm29_file_too_large',
+  m30ListSettled: 'm30_list_settled',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
+
+export interface ListQuestionCopyArgs {
+  question: string
+  why?: string | null
+  /** The company's name: shown first, in bold, on a line of its own. */
+  company?: string | null
+  /** False leaves the closing line out. */
+  closing?: boolean
+}
+
+/**
+ * A list question's message: the company's name in bold when one is given,
+ * the question as it was filed, why it is asked on a line of its own, then
+ * the closing line.
+ */
+function listQuestionMessage({ question, why, company, closing = true }: ListQuestionCopyArgs, closingLine: string): string {
+  const name = (company ?? '').replace(/[*\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const lines = [...(name ? [`*${name}*`] : []), question, ...(why ? [why] : [])]
+  return closing ? `${lines.join('\n')}\n\n${closingLine}` : lines.join('\n')
+}
 
 const SV = {
   m1Unlinked: () =>
@@ -241,11 +265,13 @@ const SV = {
   m22LookupRetry: () =>
     'Jag kunde inte ta emot ditt meddelande just nu. Skicka det igen om en liten stund.',
 
-  // A question from the company's question list (lib/list-question.ts): the
-  // question as it was filed, then why it is asked on a line of its own. Its
-  // options go out as reply buttons beside it.
-  m23ListQuestion: ({ question, why }: { question: string; why?: string | null }) =>
-    why ? `${question}\n${why}` : question,
+  // A question from a company's question list (lib/list-question.ts): the
+  // company's name in bold when the person keeps the books of several, the
+  // question as it was filed, why it is asked on a line of its own, then a
+  // closing line saying a written answer is welcome. Its options go out as
+  // reply buttons beside it. listQuestionBody (lib/list-question.ts) keeps
+  // the whole within the length an interactive body holds.
+  m23ListQuestion: (args: ListQuestionCopyArgs) => listQuestionMessage(args, 'Du kan också svara med egna ord.'),
 
   // The reply button that closes a list question without an answer. A button
   // title holds at most 20 characters.
@@ -260,6 +286,28 @@ const SV = {
 
   m26ListAnswerTooLong: ({ max }: { max: number }) =>
     `Svaret blev för långt. Skriv det gärna kortare, högst ${max} tecken.`,
+
+  // A written reply the reply reader (lib/questions/reply-reader.ts) read as
+  // "later": the question stays open and in flight.
+  m27ListLater: () => 'Okej, frågan ligger kvar. Svara här när du vet.',
+
+  // A written reply the reply reader read as a question back: its own reply
+  // goes out as it came, already cleaned and cut (readReply). The question
+  // stays open and in flight.
+  m28ListQuestionBack: ({ reply }: { reply: string }) => reply,
+
+  // A file over our own intake cap (graph-api.ts MAX_MEDIA_BYTES). M18's
+  // "försök igen" can never come true for it, and the app's Underlag upload
+  // has the same cap, so the way forward is a smaller file.
+  m29FileTooLarge: ({ maxMb }: { maxMb: number }) =>
+    `Filen är för stor. Jag tar emot filer på högst ${maxMb} MB. Skicka en mindre fil, till exempel ett foto av dokumentet eller en PDF med färre sidor.`,
+
+  // A list question in flight that was closed as settled through another
+  // door: one sentence, then the note of the close on a line of its own when
+  // it has one. listSettledBody (lib/list-question.ts) cleans and cuts the
+  // note.
+  m30ListSettled: ({ note }: { note?: string | null }) =>
+    note ? `Den här frågan är löst, du behöver inte svara.\n${note}` : 'Den här frågan är löst, du behöver inte svara.',
 }
 
 const EN: typeof SV = {
@@ -402,8 +450,7 @@ const EN: typeof SV = {
   m22LookupRetry: () =>
     'I could not receive your message just now. Please send it again in a moment.',
 
-  m23ListQuestion: ({ question, why }: { question: string; why?: string | null }) =>
-    why ? `${question}\n${why}` : question,
+  m23ListQuestion: (args: ListQuestionCopyArgs) => listQuestionMessage(args, 'You can also answer in your own words.'),
 
   m23ListDontKnow: () => 'Do not know',
 
@@ -415,6 +462,16 @@ const EN: typeof SV = {
 
   m26ListAnswerTooLong: ({ max }: { max: number }) =>
     `That answer is too long. Please write it shorter, at most ${max} characters.`,
+
+  m27ListLater: () => 'Okay, the question stays open. Answer here when you know.',
+
+  m28ListQuestionBack: ({ reply }: { reply: string }) => reply,
+
+  m29FileTooLarge: ({ maxMb }: { maxMb: number }) =>
+    `The file is too large. I accept files of at most ${maxMb} MB. Send a smaller file, for example a photo of the document or a PDF with fewer pages.`,
+
+  m30ListSettled: ({ note }: { note?: string | null }) =>
+    note ? `This question is settled, you do not need to answer.\n${note}` : 'This question is settled, you do not need to answer.',
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }

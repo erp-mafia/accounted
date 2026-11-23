@@ -53,6 +53,10 @@ interface AccountComboboxProps {
   // Optional always-visible label for compact editors where the selected
   // account name must remain readable after the dropdown closes.
   selectedName?: string
+  // The picked account's name inside the field, after the number, for rows
+  // that must keep one height (the kontering grid). Hidden while the person
+  // types, like selectedName; the full name is the field's title.
+  inlineName?: string
   // Renders the trigger in the flat row language (SettingsRows): no box, a
   // dashed underline on hover, solid on focus. For hosts that compose
   // SettingsRow, where a bordered Input would be the only box in the form.
@@ -66,7 +70,7 @@ interface AccountComboboxProps {
   id?: string
 }
 
-export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, flat = false, placeholder = 'Sök konto…', id }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, inlineName, flat = false, placeholder = 'Sök konto…', id }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -186,12 +190,13 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     listRef,
     insideRefs,
   })
-  const { highlightedIndex, setHighlightedIndex } = navigation
+  const { highlightedIndex, setHighlightedIndex, resetHighlight } = navigation
 
-  // Reset highlight when filtered results change
+  // Reset highlight when filtered results change. Through resetHighlight:
+  // this runs after every keystroke in the search.
   useEffect(() => {
-    setHighlightedIndex(0)
-  }, [filteredAccounts, setHighlightedIndex])
+    resetHighlight(0)
+  }, [filteredAccounts, resetHighlight])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isOpen && e.key === 'Enter' && /^\d{4}$/.test(search)) {
@@ -261,6 +266,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   }
 
   const showSelectedName = Boolean(selectedName && value && search === value)
+  const showInlineName = Boolean(!flat && inlineName && value && search === value)
 
   // Flat mode keeps the dropdown as an absolute child that follows the
   // trigger's width: inside a SettingsRow a fixed width would overflow the
@@ -357,7 +363,8 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     placeholder,
     autoComplete: 'off',
     disabled,
-    'aria-describedby': showSelectedName ? selectedNameId : undefined,
+    'aria-describedby': showSelectedName || showInlineName ? selectedNameId : undefined,
+    title: showInlineName ? inlineName : undefined,
     className: flat
       ? cn(
           'min-w-0 flex-1 rounded-none border-0 border-b border-dashed border-transparent bg-transparent px-0 py-1 font-mono text-sm text-foreground',
@@ -372,6 +379,19 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   return (
     <div ref={containerRef} className="relative">
       {flat ? <input {...triggerProps} /> : <Input {...triggerProps} />}
+
+      {/* The name sits after the number on the field's own line: an
+          invisible copy of the number in the field's font keeps it aligned. */}
+      {showInlineName ? (
+        <span className="pointer-events-none absolute inset-x-0 top-0 flex h-8 items-center overflow-hidden px-2.5 text-[13px] pointer-coarse:h-10">
+          <span aria-hidden="true" className="invisible shrink-0 whitespace-pre font-mono">
+            {search}
+          </span>
+          <span id={selectedNameId} className="ml-2 min-w-0 truncate text-muted-foreground">
+            {inlineName}
+          </span>
+        </span>
+      ) : null}
 
       {showSelectedName ? (
         <p id={selectedNameId} className="mt-1 break-words px-1 text-sm leading-snug text-foreground">

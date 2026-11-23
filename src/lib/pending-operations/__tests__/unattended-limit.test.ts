@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { generateReverseChargePurchaseLines } from '@/lib/bookkeeping/vat-entries'
+import { buildBatchAllocationPreview } from '@/lib/invoices/batch-allocation-preview'
 import { exceedsUnattendedLimit, priceOperation } from '../unattended-limit'
+
+/**
+ * A staged match_batch_allocate preview carrying the lines the real preview
+ * builder computes (expected_lines), and the debit side those lines post.
+ */
+function stagedBatch(input: Parameters<typeof buildBatchAllocationPreview>[0]) {
+  const { lines } = buildBatchAllocationPreview(input)
+  const totalAllocated = input.allocations.reduce((sum, allocation) => sum + allocation.amount, 0)
+  const posted = lineBalance(lines.map((line) => ({ debit_amount: line.debit, credit_amount: line.credit })))
+  return {
+    previewData: { total_allocated: totalAllocated, transaction_amount: input.transaction.amount, expected_lines: lines },
+    posted: posted.totalDebit,
+  }
+}
+
+/** A EUR invoice the ledger carries at 110 000 kr (10 000 EUR at 11). */
+const EUR_INVOICE = { currency: 'EUR', exchange_rate: 11, remaining_amount: 10000, total: 10000 }
 
 describe('priceOperation', () => {
   it('prices the three operation types that carry an amount before dispatch', () => {
@@ -30,6 +50,99 @@ describe('priceOperation', () => {
     expect(priceOperation('link_supplier_invoice_voucher', { payment_amount: 4300 })).toBe(4300)
     expect(priceOperation('match_batch_allocate', { total_allocated: 99000 })).toBe(99000)
     expect(priceOperation('mark_invoice_paid', { total: 6250 })).toBe(6250)
+  })
+
+  it('prices a batch allocation staged without lines on its bank amount or its invoices, whichever is larger', () => {
+    // Supplier payment: allocations + fees + supplier debts = |transaction_amount|.
+    // The debt row (244x, no invoice) is far larger than the invoice.
+    expect(
+      priceOperation('match_batch_allocate', {
+        total_allocated: 1000,
+        total_fees: 25,
+        total_debts: 50000,
+        transaction_amount: -51025,
+      }),
+    ).toBe(51025)
+    // Customer payment net of a fee: the invoices' total is the larger side.
+    expect(
+      priceOperation('match_batch_allocate', { total_allocated: 1250, total_fees: 50, transaction_amount: 1200 }),
+    ).toBe(1250)
+    // A row staged without transaction_amount is priced on total_allocated.
+    expect(priceOperation('match_batch_allocate', { total_allocated: 99000 })).toBe(99000)
+    expect(priceOperation('match_batch_allocate', { transaction_amount: '-4300' })).toBe(4300)
+    expect(priceOperation('match_batch_allocate', { total_allocated: null })).toBeNull()
+  })
+
+  it('prices a batch allocation on the debit side of the lines it posts, where that is more than both sums', () => {
+    // Supplier, kursvinst: the invoice carried at 110 000 kr on 2440, paid
+    // with 100 000 kr. D 2440 110 000, C 3960 10 000, C 1930 100 000.
+    const supplierGain = stagedBatch({
+      transaction: { amount: -100000, date: '2026-11-02' },
+      bankAccount: '1930',
+      allocations: [{ kind: 'supplier_invoice', supplier_invoice_id: 'si-1', amount: 100000 }],
+      invoices: { 'si-1': EUR_INVOICE },
+    })
+    expect(supplierGain.posted).toBe(110000)
+    expect(priceOperation('match_batch_allocate', supplierGain.previewData)).toBe(110000)
+
+    // Customer, kursförlust: carried at 110 000 kr on 1510, 100 000 kr received.
+    // D 1930 100 000, D 7960 10 000, C 1510 110 000.
+    const customerLoss = stagedBatch({
+      transaction: { amount: 100000, date: '2026-11-02' },
+      bankAccount: '1930',
+      allocations: [{ kind: 'customer_invoice', invoice_id: 'inv-1', amount: 100000 }],
+      invoices: { 'inv-1': EUR_INVOICE },
+    })
+    expect(customerLoss.posted).toBe(110000)
+    expect(priceOperation('match_batch_allocate', customerLoss.previewData)).toBe(110000)
+
+    // Öresavrundning: 1 000,40 kr owed, 1 000 kr paid. D 2440 1 000,40, C 3740 0,40.
+    const ore = stagedBatch({
+      transaction: { amount: -1000, date: '2026-11-02' },
+      bankAccount: '1930',
+      allocations: [{ kind: 'supplier_invoice', supplier_invoice_id: 'si-2', amount: 1000 }],
+      invoices: { 'si-2': { currency: 'SEK', remaining_amount: 1000.4, total: 1000.4 } },
+    })
+    expect(ore.posted).toBe(1000.4)
+    expect(priceOperation('match_batch_allocate', ore.previewData)).toBe(1000.4)
+
+    // Kontantmetoden, one supplier invoice with omvänd betalningsskyldighet:
+    // its cost and moms rows post at payment (batch-cash-single-supplier.ts).
+    const reverseCharge = [
+      { account_number: '4010', debit_amount: 80000, credit_amount: 0 },
+      ...generateReverseChargePurchaseLines({ base: 80000, kind: 'domestic_services', basisBase: 0 }),
+      { account_number: '1930', debit_amount: 0, credit_amount: 80000 },
+    ]
+    expect(lineBalance(reverseCharge)).toMatchObject({ totalDebit: 100000, balanced: true })
+    expect(
+      priceOperation('match_batch_allocate', {
+        total_allocated: 80000,
+        transaction_amount: -80000,
+        expected_lines: reverseCharge.map((line) => ({
+          account_number: line.account_number,
+          debit: line.debit_amount,
+          credit: line.credit_amount,
+        })),
+      }),
+    ).toBe(100000)
+  })
+
+  it('prices a batch allocation on its sums when the lines cannot be read', () => {
+    // The sums sit below every figure in these lines (the 7, the 1 500 credit,
+    // the figures in the text), so reading one of them shows in the price
+    // instead of hiding under the floor.
+    const sums = { total_allocated: 4, total_debts: 1, transaction_amount: -5 }
+    const unreadable = [undefined, null, 'D 2440 1500', [], [null, 7, { debit: 'n/a' }], [{ debit: 0, credit: 1500 }], [{ credit: 1500 }]]
+    for (const expected_lines of unreadable) {
+      expect(priceOperation('match_batch_allocate', { ...sums, expected_lines })).toBe(5)
+      // With no sums to fall back on, the row stays unpriced: any number read
+      // from these lines, 0 included, would show here.
+      expect(priceOperation('match_batch_allocate', { expected_lines })).toBeNull()
+    }
+    // Lines stored with jsonb string numerics are read as numbers.
+    expect(
+      priceOperation('match_batch_allocate', { ...sums, expected_lines: [{ debit: '1500.25' }, { debit: '0' }] }),
+    ).toBe(1500.25)
   })
 
   it('leaves genuinely unpriceable types unpriced rather than inventing a number', () => {
@@ -149,6 +262,27 @@ describe('exceedsUnattendedLimit', () => {
     })
     expect(result.exceeded).toBe(true)
     expect(result.attempted).toBe(10_000_000)
+  })
+
+  it('blocks a supplier batch whose debt row takes the verifikat over the ceiling', () => {
+    const result = exceedsUnattendedLimit({
+      ...over,
+      operationType: 'match_batch_allocate',
+      previewData: { total_allocated: 500, total_debts: 20000, transaction_amount: -20500 },
+    })
+    expect(result.exceeded).toBe(true)
+    expect(result.attempted).toBe(20500)
+  })
+
+  it('blocks a batch whose kursdifferens takes the verifikat over the ceiling, both sums under it', () => {
+    const { previewData } = stagedBatch({
+      transaction: { amount: -100000, date: '2026-11-02' },
+      bankAccount: '1930',
+      allocations: [{ kind: 'supplier_invoice', supplier_invoice_id: 'si-1', amount: 100000 }],
+      invoices: { 'si-1': EUR_INVOICE },
+    })
+    const result = exceedsUnattendedLimit({ ...over, limit: 105000, operationType: 'match_batch_allocate', previewData })
+    expect(result).toEqual({ exceeded: true, attempted: 110000, limit: 105000 })
   })
 })
 

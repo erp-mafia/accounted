@@ -335,13 +335,13 @@ export const reportsInk3 = defineOperation({
   docs: {
     summary: 'INK3 underlag (ideell förening): INK3R, INK3S and INK3SUF values per ruta for a räkenskapsår.',
     description:
-      "The figures an ideell förening types into Skatteverket's e-tjänst Inkomstdeklaration 2, 3 och 4, by field code: INK3R (balance sheet from the closed books; income statement in two columns, enligt redovisningen from the books before the resultatavslut and som ska tas upp/dras av from the company's per-account treatment), INK3S (7.1/7.2, 7.5a and 7.9/7.10 computed, the rest entered) and INK3SUF (entered; part of filing only when the company states the förening is allmännyttig). Overrides the company saved replace the computed figure. filing holds every field with a value. Only beskattningsperiod 2026P4 is pinned. Read-only: nothing is filed and no SRU file exists; the user signs the first page in the e-tjänst.",
+      "The figures an ideell förening types into Skatteverket's e-tjänst Inkomstdeklaration 2, 3 och 4, by field code: INK3R (balance sheet from the closed books; income statement in two columns, enligt redovisningen from the books before the resultatavslut and som ska tas upp/dras av from the company's per-account treatment), INK3S (7.1/7.2, 7.5a and 7.9/7.10 computed, the rest entered) and INK3SUF (entered; part of filing only when the company states the förening is allmännyttig). Overrides the company saved replace the computed figure. filing holds every field with a value. Field codes from Skatteverket's 2026P4 edition, which covers beskattningsperiod 2026P4 to 2027P3. Read-only: nothing is filed and no SRU file exists; the user signs the first page in the e-tjänst.",
     useWhen: "Preparing or checking an ideell förening's INK3 after bokslut, or answering what goes in a ruta.",
     doNotUseFor:
       'Aktiebolag or ekonomisk förening (GET /reports/ink2), enskild firma (GET /reports/ne-bilaga), deciding whether the förening is allmännyttig (the company states it), or submitting anything to Skatteverket.',
     pitfalls: [
       'Only for ideell förening: another legal form answers 400 TAX_DECL_INK3_WRONG_LEGAL_FORM.',
-      'Only räkenskapsår in a pinned beskattningsperiod (2026P4: ending 2026-09-01 to 2026-12-31); others answer 422 TAX_DECL_INK3_PERIOD_NOT_SUPPORTED.',
+      'Only räkenskapsår in a covered beskattningsperiod (2026P4 to 2027P3: ending 2026-09-01 to 2027-08-31); others answer 422 TAX_DECL_INK3_PERIOD_NOT_SUPPORTED.',
       'A field with needsInput true has no final figure yet: a shared or unclassified account feeds it. The treatments and overrides are set in the app, not over v1 or MCP.',
       'allmannyttig null means the company has not stated it; INK3SUF is left out of filing until it says yes.',
       'Amounts are whole kronor with öre dropped.',

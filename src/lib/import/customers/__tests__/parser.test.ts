@@ -186,6 +186,48 @@ describe('parseCustomersFile', () => {
     expect(result.rows[3].country).toBe('SE')
     expect(result.rows[3].is_valid).toBe(true)
   })
+
+  // An update writes only a stated type and country (the execute route).
+  it('marks the type and the country the row states, not the ones it fills in', async () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Kundtyp', 'Land', 'VAT-nummer'],
+      ['Muster GmbH', 'eu_business', 'DE', 'DE811234567'],
+      ['Müller GmbH', '', '', 'DE811234567'],
+      ['Acme AB', '', '', ''],
+      ['Okänd AB', 'B2B', 'Sverige', ''],
+      ['Bolaget AB', 'Aktiebolag', '', ''],
+      ['Någon firma', 'Företag', '', ''],
+    ])
+    const flags = buildXlsx([
+      ['Namn', 'Privatperson'],
+      ['Lars Öberg', 'Ja'],
+      ['Ekfirman', 'Nej'],
+      ['Vem AB', ''],
+    ])
+
+    const typed = await parseCustomersFile(buffer, 'kunder.xlsx')
+    const flagged = await parseCustomersFile(flags, 'kunder.xlsx')
+
+    const marks = (r: { customer_type: string; customer_type_stated: string | null; country: string; country_stated: boolean }) =>
+      [r.customer_type, r.customer_type_stated, r.country, r.country_stated]
+    expect(typed.rows.map(marks)).toEqual([
+      ['eu_business', 'type', 'DE', true],
+      // Read from the VAT number, which states neither.
+      ['eu_business', null, 'DE', false],
+      ['swedish_business', null, 'SE', false],
+      // A type the parser does not know states none.
+      ['swedish_business', null, 'SE', true],
+      ['swedish_business', 'type', 'SE', false],
+      // Any company: a new customer is read as Swedish, an update keeps a company's kind.
+      ['swedish_business', 'business', 'SE', false],
+    ])
+    expect(typed.rows.every((r) => r.is_valid)).toBe(true)
+    expect(flagged.rows.map(marks)).toEqual([
+      ['individual', 'type', 'SE', false],
+      ['swedish_business', 'business', 'SE', false],
+      ['swedish_business', null, 'SE', false],
+    ])
+  })
   // Detection now reports -1 rather than claiming column 0 as the name (#2548),
   // so the preview must still parse: confidence is 0, so the UI shows the
   // mapping step with these rows and the user picks the real name column.

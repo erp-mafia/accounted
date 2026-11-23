@@ -5,18 +5,44 @@ import { CustomerImportExecuteSchema } from '@/lib/api/schemas'
 import { createRegisterMatcher, customerMatchRow } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
+import { diffUpdatedRows, recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
+import { syncDraftVatHeadersForChangedCustomers } from '@/lib/invoices/sync-draft-vat-headers'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import {
+  isOrgNumberRefusedOnIndividual,
+  isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
 } from '@/lib/invariants/personal-number-shape'
+import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { typeAndCountryForUpdate, type TypeStated } from '@/lib/import/shared/stated-fields'
 import { invoiceTermsFor } from '@/lib/invoices/due-date'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
+
+/**
+ * A large register goes in as several requests (lib/import/register-import-flow.ts
+ * executeBatches); one batch's merges and the drafts they move fit well
+ * inside this, as on the article import.
+ */
+export const maxDuration = 300
+
+/**
+ * How far into the request the draft sync may run ahead of the run record,
+ * and how far at all. Past the first the run is recorded first, so a slow
+ * sync can never cost the import its undo; the customers the sync had not
+ * reached are synced after the record, and the undo keeps those as used since
+ * the import. Past the second nothing new is started, so the answer goes out
+ * before the platform ends the request (a 504 would make the wizard send the
+ * batch again, and that attempt changes nothing and so syncs nothing); the
+ * customers still left are logged.
+ */
+const DRAFT_SYNC_BEFORE_RECORD_MS = (maxDuration - 60) * 1000
+const DRAFT_SYNC_END_MS = (maxDuration - 10) * 1000
 
 interface ExistingCustomer {
   id: string
@@ -39,12 +65,73 @@ interface ExistingCustomer {
 }
 
 /**
+ * What an update does to a matched customer's type and country: the fields to
+ * write, or why the row is not imported.
+ *
+ * It writes what the row states (typeAndCountryForUpdate,
+ * lib/import/shared/stated-fields.ts): the parser fills a type and a country
+ * in for a new customer, and an update keeps the customer's own. The customer
+ * form's rules (the country rule, #2025; an org number on a private person; a
+ * personnummer on a foreign business) are judged on the result, each only when
+ * the update touches a field it reads, as in updateCustomer. A result that
+ * still breaks one after the row's own reading has filled in what it could
+ * refuses the row.
+ */
+function customerTypeAndCountry(
+  row: {
+    customer_type: string
+    customer_type_stated: TypeStated
+    country: string
+    country_stated: boolean
+    vat_number: string | null
+    org_number: string | null
+    personal_number: string | null
+  },
+  customer: ExistingCustomer,
+): { write: { customer_type?: string; country?: string } } | { refusal: string } {
+  // The file's org number: the schema moves a personnummer out of it when
+  // the row reads as a private person.
+  const fileOrgNumber = row.org_number || row.personal_number
+  const brokenRule = (customerType: string, country: string | null, writesTypeOrCountry: boolean) => {
+    if (writesTypeOrCountry || row.vat_number) {
+      const issue = checkCountryConsistency({ partyType: customerType, country, vatNumber: row.vat_number || customer.vat_number })
+      if (issue) return COUNTRY_CONSISTENCY_MESSAGES[issue].sv
+    }
+    if (isOrgNumberRefusedOnIndividual(customerType, fileOrgNumber)) {
+      return getErrorEntry('CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL')?.message_sv ?? null
+    }
+    // A company keeps its org number when the file has none; that one is
+    // judged only against a type the update changes.
+    const orgNumber = fileOrgNumber || (customerType !== customer.customer_type ? customer.org_number : null)
+    if (isPersonalNumberOrgNumberDisallowed(customerType, orgNumber)) {
+      return getErrorEntry('CUSTOMER_ORG_NUMBER_IS_PERSONAL')?.message_sv ?? null
+    }
+    return null
+  }
+
+  const update = typeAndCountryForUpdate(
+    { type: row.customer_type, type_stated: row.customer_type_stated, country: row.country, country_stated: row.country_stated },
+    { type: customer.customer_type, country: customer.country },
+    brokenRule,
+  )
+  if ('broken' in update) return { refusal: update.broken }
+  const { type, country } = update.write
+  return {
+    write: {
+      ...(type !== undefined ? { customer_type: type } : {}),
+      ...(country !== undefined ? { country } : {}),
+    },
+  }
+}
+
+/**
  * POST /api/import/customers/execute
  *
  * Imports validated customer rows. Duplicates (matched by customer number,
  * org number or e-mail, or a same-name customer the user confirmed: see
  * lib/import/shared/register-match.ts) are either updated (merge: only
- * non-empty file fields overwrite) or skipped based on `update_duplicates`.
+ * non-empty file fields overwrite, and the type and country only when the
+ * file states them) or skipped based on `update_duplicates`.
  *
  * An individual's personnummer arrives in the org number column; the schema
  * moves it into personal_number and this route stores it encrypted, with
@@ -55,6 +142,7 @@ interface ExistingCustomer {
 export const POST = withRouteContext(
   'register_import.customers.execute',
   async (request, ctx) => {
+    const startedAt = Date.now()
     const { user, supabase, companyId, log, requestId } = ctx
 
     const result = await validateBody(request, CustomerImportExecuteSchema, {
@@ -105,12 +193,17 @@ export const POST = withRouteContext(
             continue
           }
 
+          const typeAndCountry = customerTypeAndCountry(row, match)
+          if ('refusal' in typeAndCountry) {
+            errors.push({ row_index: row.row_index, name: row.name, reason: typeAndCountry.refusal })
+            continue
+          }
           // Merge mode: only overwrite fields where the file has a non-empty value.
-          const merged: Record<string, unknown> = {}
+          const merged: Record<string, unknown> = { ...typeAndCountry.write }
+          const customerType = typeAndCountry.write.customer_type ?? match.customer_type
           if (row.name) merged.name = row.name
-          if (row.customer_type) merged.customer_type = row.customer_type
           if (row.customer_number) merged.customer_number = row.customer_number
-          if (row.customer_type === 'individual') {
+          if (customerType === 'individual') {
             // An individual has no org number, so whatever the matched row
             // carried there goes. A personnummer an earlier import stored
             // there is kept, encrypted in personal_number, unless the file
@@ -121,8 +214,12 @@ export const POST = withRouteContext(
                 ? normalizeReroutedPersonalNumber(match.org_number!)
                 : null)
             if (personalNumber) merged.personal_number = encryptCustomerPersonalNumber(personalNumber)
-          } else if (row.org_number) {
-            merged.org_number = row.org_number
+          } else {
+            // A business's org number may be a personnummer (an enskild
+            // firma's): one the schema moved out because the file did not
+            // type the row and it read as a private person goes back.
+            const orgNumber = row.org_number || row.personal_number
+            if (orgNumber) merged.org_number = orgNumber
           }
           if (row.email) merged.email = row.email
           if (row.phone) merged.phone = row.phone
@@ -130,7 +227,6 @@ export const POST = withRouteContext(
           if (row.address_line2) merged.address_line2 = row.address_line2
           if (row.postal_code) merged.postal_code = row.postal_code
           if (row.city) merged.city = row.city
-          if (row.country) merged.country = row.country
           if (row.vat_number) merged.vat_number = row.vat_number
           if (row.default_payment_terms !== null) merged.default_payment_terms = row.default_payment_terms
           if (row.notes) merged.notes = row.notes
@@ -226,7 +322,35 @@ export const POST = withRouteContext(
         }
       }
 
-      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
+      // A merge that changed a field the VAT header is derived from moves the
+      // header of that customer's open drafts, as the customer form does
+      // (updateCustomer). Before the run is recorded: the undo reads a draft
+      // written after the run as the customer used since the import. Within
+      // DRAFT_SYNC_BEFORE_RECORD_MS, so the run is always recorded.
+      const draftSync = await syncDraftVatHeadersForChangedCustomers(
+        supabase,
+        companyId,
+        diffUpdatedRows(beforeImport, new Set(created.map((c) => c.id)), updated),
+        { deadline: startedAt + DRAFT_SYNC_BEFORE_RECORD_MS },
+      )
+
+      const runId = await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
+
+      if (draftSync.unsynced.length > 0) {
+        const late = await syncDraftVatHeadersForChangedCustomers(
+          supabase,
+          companyId,
+          draftSync.unsynced,
+          { deadline: startedAt + DRAFT_SYNC_END_MS },
+        )
+        opLog.warn('draft VAT sync ran past the import run record', {
+          registerImportRunId: runId,
+          // Their customers' undo keeps them, as used since the import.
+          draftsUpdatedAfterRecord: late.updated,
+          // Their open drafts keep the header they had before the import.
+          customersNotSynced: late.unsynced.map((change) => change.id),
+        })
+      }
 
       const response: CustomerImportExecuteResult = {
         success: errors.length === 0,

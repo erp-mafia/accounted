@@ -201,3 +201,205 @@ describe('closeQuestion', () => {
     ).rejects.toMatchObject({ code: 'COMPANY_QUESTION_NOT_FOUND' })
   })
 })
+
+describe('closeQuestion as settled, saying where the answer is', () => {
+  const TX = '10000000-0000-4000-8000-000000000001'
+  const INVOICE = '20000000-0000-4000-8000-000000000001'
+  const NOTE = 'Betalningen på 4 990 kr är bokförd mot leverantörens faktura.'
+  const transactions = { data: [{ id: TX, amount: -4990, amount_sek: -4990, instructed_amount: null }] }
+  const settled = (overrides: Record<string, unknown> = {}) =>
+    row({ status: 'closed', close_reason: 'settled', answered_at: '2026-11-19T09:00:00.000Z', answered_via: 'claude', ...overrides })
+  const close = (supabase: unknown, input: { reason?: unknown; note?: unknown; evidence?: unknown }) =>
+    closeQuestion(supabase as never, { companyId: COMPANY, questionId: QUESTION_ID, reason: 'settled', userId: USER, via: 'claude', ...input })
+  const refusal = async (promise: Promise<unknown>): Promise<{ code?: string; message?: string; issues?: Array<{ field: string }> }> =>
+    promise.then(
+      () => ({}),
+      (error: unknown) => error as { code?: string; message?: string; issues?: Array<{ field: string }> },
+    )
+
+  beforeEach(() => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('stores the note and the records with the close, and returns them on the question', async () => {
+    const written = settled({ close_note: NOTE, close_evidence: [{ kind: 'transaction', id: TX }] })
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), written), transactions })
+
+    const result = await close(mock.supabase, { note: `  ${NOTE}  `, evidence: [{ kind: 'transaction', id: TX.toUpperCase() }] })
+
+    expect(result).toMatchObject({
+      status: 'closed',
+      close_reason: 'settled',
+      close_note: NOTE,
+      close_evidence: [{ kind: 'transaction', id: TX }],
+    })
+    expect(mock.payloads('company_questions', 'update')[0]).toMatchObject({
+      status: 'closed',
+      close_reason: 'settled',
+      close_note: NOTE,
+      close_evidence: [{ kind: 'transaction', id: TX }],
+      answered_by: USER,
+      answered_via: 'claude',
+    })
+    // The records are looked up in this company, and the write is still for an open question only.
+    expect(mock.findCalls('transactions', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCalls('company_questions', 'eq')).toContainEqual(['status', 'open'])
+  })
+
+  it('takes records without a note', async () => {
+    const written = settled({ close_evidence: [{ kind: 'transaction', id: TX }] })
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), written), transactions })
+
+    const result = await close(mock.supabase, { evidence: [{ kind: 'transaction', id: TX }] })
+
+    expect(result).toMatchObject({ close_note: null, close_evidence: [{ kind: 'transaction', id: TX }] })
+    expect(mock.payloads('company_questions', 'update')[0]).toMatchObject({ close_note: null, close_evidence: [{ kind: 'transaction', id: TX }] })
+  })
+
+  it('keeps each record once, in the order given', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questionsTable(row(), settled()),
+      transactions,
+      invoices: { data: [{ id: INVOICE, total: 4990, total_sek: 4990, subtotal: 3992, subtotal_sek: 3992, vat_amount: 998, vat_amount_sek: 998, remaining_amount: 0, paid_amount: 4990 }] },
+    })
+
+    await close(mock.supabase, {
+      evidence: [
+        { kind: 'invoice', id: INVOICE },
+        { kind: 'transaction', id: TX },
+        { kind: 'invoice', id: INVOICE },
+      ],
+    })
+
+    expect((mock.payloads('company_questions', 'update')[0] as { close_evidence: unknown }).close_evidence).toEqual([
+      { kind: 'invoice', id: INVOICE },
+      { kind: 'transaction', id: TX },
+    ])
+  })
+
+  it('refuses a note without a record, before reading', async () => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions })
+
+    for (const evidence of [undefined, null, []]) {
+      expect(await refusal(close(mock.supabase, { note: NOTE, evidence }))).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        message: 'a note needs evidence: cite at least one record that holds the answer',
+        issues: [{ field: 'evidence' }],
+      })
+    }
+    expect(mock.tables()).toEqual([])
+  })
+
+  it('refuses a record that is not in the company, and writes nothing', async () => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions: { data: [] } })
+
+    const refused = await refusal(close(mock.supabase, { note: 'Betalningen är bokförd.', evidence: [{ kind: 'transaction', id: TX }] }))
+
+    expect(refused).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'evidence.0' }] })
+    expect(refused.message).toContain(`no transaction ${TX} in this company`)
+    expect(mock.findCalls('company_questions', 'update')).toEqual([])
+  })
+
+  it('refuses a record with a malformed id as one that is not in the company', async () => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions })
+
+    const refused = await refusal(close(mock.supabase, { evidence: [{ kind: 'transaction', id: 'not-an-id' }] }))
+
+    expect(refused).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'evidence.0' }] })
+    expect(mock.findCalls('company_questions', 'update')).toEqual([])
+  })
+
+  it('refuses an amount in the note that none of the cited records carries, and writes nothing', async () => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions })
+
+    const refused = await refusal(
+      close(mock.supabase, { note: 'Betalningen på 5 990 kr är bokförd.', evidence: [{ kind: 'transaction', id: TX }] }),
+    )
+
+    expect(refused).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'note' }] })
+    expect(refused.message).toContain('"5 990 kr"')
+    expect(mock.findCalls('company_questions', 'update')).toEqual([])
+  })
+
+  it('takes an amount in the note that stands on a cited record, and a note without an amount', async () => {
+    for (const note of [NOTE, 'Avtalet är uppladdat och bokfört.', 'Bokfört 2026-11-03, se verifikation 113.']) {
+      const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled({ close_note: note })), transactions })
+      await close(mock.supabase, { note, evidence: [{ kind: 'transaction', id: TX }] })
+      expect(mock.payloads('company_questions', 'update')[0]).toMatchObject({ close_note: note })
+    }
+  })
+
+  const otherReasons = ['dont_know', 'not_relevant', 'withdrawn'] as const
+
+  it.each(otherReasons)('refuses a note or a record with the reason %s, before reading', async (reason) => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions })
+
+    expect(await refusal(close(mock.supabase, { reason, note: NOTE, evidence: [{ kind: 'transaction', id: TX }] }))).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: `note and evidence are taken only with the reason settled, not with ${reason}`,
+      issues: [{ field: 'note' }],
+    })
+    expect(await refusal(close(mock.supabase, { reason, note: NOTE }))).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'note' }] })
+    expect(await refusal(close(mock.supabase, { reason, evidence: [{ kind: 'transaction', id: TX }] }))).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      issues: [{ field: 'evidence' }],
+    })
+    expect(mock.tables()).toEqual([])
+  })
+
+  it('refuses a note over 300 characters and takes one of exactly 300', async () => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions })
+
+    expect(await refusal(close(mock.supabase, { note: 'a'.repeat(301), evidence: [{ kind: 'transaction', id: TX }] }))).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: 'note is 301 characters; at most 300',
+      issues: [{ field: 'note' }],
+    })
+    expect(mock.tables()).toEqual([])
+
+    // The length is counted after trimming.
+    await close(mock.supabase, { note: ` ${'a'.repeat(300)} `, evidence: [{ kind: 'transaction', id: TX }] })
+    expect(mock.payloads('company_questions', 'update')[0]).toMatchObject({ close_note: 'a'.repeat(300) })
+  })
+
+  const malformed: Array<[string, { note?: unknown; evidence?: unknown }, string]> = [
+    ['a note that is not text', { note: 7, evidence: [{ kind: 'transaction', id: TX }] }, 'note'],
+    ['records that are not a list', { evidence: `transaction:${TX}` }, 'evidence'],
+    ['a record of an unknown kind', { evidence: [{ kind: 'receipt', id: TX }] }, 'evidence.0'],
+    ['a record without an id', { evidence: [{ kind: 'transaction', id: ' ' }] }, 'evidence.0'],
+    ['more than eight records', { evidence: Array.from({ length: 9 }, (_, n) => ({ kind: 'account', id: `19${10 + n}` })) }, 'evidence'],
+  ]
+
+  it.each(malformed)('refuses %s, before reading', async (_name, input, field) => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions })
+    expect(await refusal(close(mock.supabase, input))).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field }] })
+    expect(mock.tables()).toEqual([])
+  })
+
+  it('closes as before without a note and without records: neither is written, and no record is read', async () => {
+    for (const input of [{}, { note: undefined, evidence: undefined }, { note: null, evidence: [] }, { note: '   ' }]) {
+      const mock = createTableMockSupabase({ company_questions: questionsTable(row(), settled()), transactions })
+
+      const result = await close(mock.supabase, input)
+
+      expect(result).toMatchObject({ status: 'closed', close_reason: 'settled', close_note: null, close_evidence: [] })
+      const payload = mock.payloads('company_questions', 'update')[0] as Record<string, unknown>
+      expect(payload).not.toHaveProperty('close_note')
+      expect(payload).not.toHaveProperty('close_evidence')
+      expect(mock.tables().filter((table) => table !== 'company_questions')).toEqual([])
+    }
+  })
+
+  it('says a question has already ended before it looks any record up', async () => {
+    const mock = createTableMockSupabase({ company_questions: questionsTable(row({ status: 'answered' })), transactions })
+
+    expect(await refusal(close(mock.supabase, { note: NOTE, evidence: [{ kind: 'transaction', id: TX }] }))).toMatchObject({
+      code: 'COMPANY_QUESTION_ALREADY_ENDED',
+    })
+    expect(mock.tables()).toEqual(['company_questions'])
+  })
+})
+

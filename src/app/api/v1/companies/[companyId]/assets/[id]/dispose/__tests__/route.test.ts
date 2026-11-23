@@ -35,6 +35,7 @@ import {
   AssetDisposalBlockedError,
   AssetJamkningDataRequiredError,
 } from '@/lib/bokslut/assets/asset-service'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { POST } from '../route'
 import { createTableMockSupabase } from '@/tests/helpers'
 
@@ -173,6 +174,16 @@ describe('POST /api/v1/companies/{companyId}/assets/{id}/dispose', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error.code).toBe('ASSET_DISPOSAL_BLOCKED')
+  })
+
+  it('returns 400 PERIOD_LOCKED, not a retryable 500, when commit_asset_disposal refuses behind a lock', async () => {
+    vi.mocked(disposeAsset).mockRejectedValue(
+      new BookkeepingDatabaseError('commit_asset_disposal', 'Cannot dispose asset in a locked or closed fiscal period', '23514'),
+    )
+    const res = await POST(postRequest(URL_, SALE), routeParams)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('PERIOD_LOCKED')
   })
 
   it('returns 422 ASSET_JAMKNING_DATA_REQUIRED on dry-run too', async () => {

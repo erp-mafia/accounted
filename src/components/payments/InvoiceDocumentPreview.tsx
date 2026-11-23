@@ -98,7 +98,10 @@ export function DocumentCheckLine({
   const facts = payment.facts
   const parts: Array<{ key: string; text: string; differs: boolean }> = []
   if (facts) {
-    const checks = checkAgainstDocument({ payee: payment.payee, reference: payment.reference.value }, facts)
+    const checks = checkAgainstDocument(
+      { payee: payment.payee, reference: payment.reference.value, referenceType: payment.reference.type },
+      facts,
+    )
     if (checks.payee === 'same' && checks.reference === 'same') {
       parts.push({ key: 'both', text: t('both_same'), differs: false })
     } else {

@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps 
 import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
@@ -117,7 +117,8 @@ import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/bookkeeping/matchable-statuses'
-import { useAssistantReadsAvailable, useCompany } from '@/contexts/CompanyContext'
+import { useAssistantReadsAvailable, useBookingScreenEnabled, useCompany } from '@/contexts/CompanyContext'
+import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { collectPages } from '@/lib/lists/collect-pages'
@@ -477,6 +478,8 @@ export default function TransactionsPage() {
   const { company } = useCompany()
   const companyId = company?.id ?? null
   const canAskAssistant = useAssistantReadsAvailable()
+  const bookingScreen = useBookingScreenEnabled()
+  const router = useRouter()
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
   const errorLocale = useLocale() as ErrorLocale
@@ -4494,16 +4497,23 @@ export default function TransactionsPage() {
     openReview(tx, proposalFromTemplate(template, 'manual'), true)
   }
 
+  // With the booking screen switched on, Bokför on a row opens the row there,
+  // as from Att bokföra and Hem: the screen offers the row's suggestion.
+  function openRowOnBookingScreen(transaction: TransactionWithInvoice) {
+    router.push(bookingScreenHref({ kind: 'transaction', transactionId: transaction.id, account: null }, `/transactions${window.location.search}`))
+  }
+
   // Bokför on a row that carries a proposal goes straight to the
   // review with that template set; no picker in between.
   function bookProposal(transaction: TransactionWithInvoice) {
     const s = rowProposalFor(transaction)
-    if (!s) return openCategoryDialog(transaction)
+    if (!s) return bookingScreen ? openRowOnBookingScreen(transaction) : openCategoryDialog(transaction)
     // A decision the company already made (a rule, a settled counterpart, a
     // sure read of a receipt) books from the row; Ångra sits on the toast.
     // The company's switch and the rule's own say come first
     // (lib/transactions/direct-booking.ts), and the server judges it again.
     if (directBooking && !reviewRequired(s, directBooking)) return void bookDirect(transaction, s)
+    if (bookingScreen) return openRowOnBookingScreen(transaction)
     openReview(transaction, s, false)
   }
 
@@ -4579,6 +4589,13 @@ export default function TransactionsPage() {
 
   function handleManualBooking() {
     setTemplatePickerOpen(false)
+    // With the booking screen switched on, "Bokför manuellt" opens the row
+    // there (betalning, underlag and kontering on one page) instead of the
+    // dialog.
+    if (templatePickerTransaction && bookingScreen) {
+      router.push(bookingScreenHref({ kind: 'transaction', transactionId: templatePickerTransaction.id, account: null }, `/transactions${window.location.search}`))
+      return
+    }
     if (templatePickerTransaction) {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
@@ -4612,6 +4629,11 @@ export default function TransactionsPage() {
   // prefilled on the counter line of the journal entry form.
   function handlePickAccount(accountNumber: string) {
     if (!templatePickerTransaction) return
+    if (bookingScreen) {
+      setTemplatePickerOpen(false)
+      router.push(bookingScreenHref({ kind: 'transaction', transactionId: templatePickerTransaction.id, account: accountNumber }, `/transactions${window.location.search}`))
+      return
+    }
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(null)
     setBookingDialogProposalLines(null)
@@ -4788,7 +4810,8 @@ export default function TransactionsPage() {
           value={mode}
           onChange={handleModeChange}
           options={[
-            { value: 'inbox', label: t('mode_inbox'), count: inboxScope.inScope },
+            // With Att bokföra in the menu the name means that list: this tab is the register's unbooked rows.
+            { value: 'inbox', label: t(bookingScreen ? 'mode_inbox_unbooked' : 'mode_inbox'), count: inboxScope.inScope },
             { value: 'history', label: t('mode_all') },
             // Review tab exists only while suggestions do (or while the user is
             // standing in it after emptying the list): a permanent third tab
@@ -5063,6 +5086,7 @@ export default function TransactionsPage() {
                         accountLogo={accountLogoFor(item.data)}
                         proposal={proposalFor(item.data)}
                         onBookProposal={bookProposal}
+                        onOpenBookingScreen={bookingScreen ? openRowOnBookingScreen : undefined}
                         salaryRunPeriod={salaryPayoutFor(item.data)?.period ?? null}
                         giroCounterparty={giroCounterpartyFor(item.data)}
                       />

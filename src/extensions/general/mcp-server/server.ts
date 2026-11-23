@@ -1,5 +1,6 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { CASH_OR_CARD_LEDGER_PATTERN } from '@/lib/cash-accounts/card-ledger'
+import { CASH_OR_CARD_LEDGER_PATTERN, isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA, sieAppendSummary } from './sie-import-status'
 import { MIGRATION_PROVIDER_IDS } from '@/lib/providers/catalog'
 import { isAnyUnattended, markUnattended, unattendedMarks, unattendedScopes } from './unattended'
@@ -252,12 +253,21 @@ import { resolveAgentWorklist } from '@/lib/receipt-hunt/agent-worklist'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { expandParty } from '@/lib/parties/party-api'
-import { listForCompany as listCashAccountsForCompany, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
+import {
+  cashAccountCurrencyMismatch,
+  findCashAccountCurrencyMismatch,
+  listForCompany as listCashAccountsForCompany,
+  resolveDefaultCashAccount,
+} from '@/lib/cash-accounts/service'
 import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
 } from '@/lib/invariants/personal-number-shape'
-import { agentCustomerIdentifiers, isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
+import {
+  agentCustomerIdentifiers,
+  isMaskedPersonalNumber,
+  UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+} from '@/lib/customers/mask-personal-number'
 import {
   encryptCustomerPersonalNumber,
   maskStoredCustomerPersonalNumber,
@@ -730,6 +740,7 @@ import {
   paymentFeeShortfall,
 } from '@/lib/bookkeeping/payment-fee'
 import { isLedgerCurrency, resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { storedLineValues } from '@/lib/bookkeeping/line-balance'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError, capabilityBlockedRefusal } from '@/lib/entitlements/has-capability'
 import { CAPABILITY, MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -752,6 +763,7 @@ import {
   DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageRequest } from '@/lib/core/documents/storage-proxy'
+import { isDocumentKeyOfCompany, signDocumentObject } from '@/lib/core/documents/storage-key'
 import {
   appUrl,
   auditPackageAppUrl,
@@ -769,6 +781,7 @@ import { apiKeyArrivalActor, readInboxItemArrivals, recordDocumentArrival, type 
 import { DOCUMENT_DETAIL_PARTS, parseDocumentDetailParts, readDocumentDetail } from '@/lib/documents/read/document-detail'
 import { readTransactionWithVouchers } from '@/lib/transactions/read-with-vouchers'
 import { createArkivTools } from './arkiv-tools'
+import { createFormationTools } from './formation-tools'
 import { createPurchaseCategoryTools } from './purchase-category-tools'
 import { createFeedTools } from './feed-tools'
 import { OPEN_QUESTIONS_HOW, answerQuestionWithFact, briefingQuestion, createQuestionTools } from './question-tools'
@@ -848,6 +861,7 @@ import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/li
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 import { noteCompletionLog } from '@/lib/extensions/completion-log'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
+import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
 import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 
 // ── Actor context ────────────────────────────────────────────
@@ -983,7 +997,12 @@ function resolveInvoiceLineFromArticle(
       vat_rate: 0,
     }
   }
-  if (!item.quantity || item.quantity <= 0) throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: quantity must be positive`)
+  // The web's quantity rule (lib/invoices/line-quantity.ts): zero and
+  // negative are valid, except on a skattereduktion row.
+  const quantityIssue = lineQuantityIssue(item)
+  if (quantityIssue) {
+    throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: ${LINE_QUANTITY_MESSAGES[quantityIssue]}`)
+  }
   // Strict typeof: a host that skips inputSchema validation could send a
   // string, which JS comparisons would coerce past a bare range check while
   // hasLineDiscount (typeof === 'number') then ignores it in the totals.
@@ -4233,6 +4252,11 @@ async function resolveSieToolContent(
     if (!fileName) {
       throw codedError('VALIDATION_ERROR', 'filename is required together with upload_id')
     }
+    // The same check as gnubok_complete_document_upload: an upload_id is the
+    // UUID gnubok_create_sie_upload returned, nothing else.
+    if (!isUuid(args.upload_id)) {
+      throw badArgument('upload_id', 'upload_id must be the upload_id gnubok_create_sie_upload returned.')
+    }
     const service = createServiceClientNoCookies()
     const pendingPath = buildPendingDocumentStoragePath(companyId, userId, args.upload_id, fileName)
     const { data, error } = await service.storage.from(DOCUMENTS_BUCKET).download(pendingPath)
@@ -4896,6 +4920,74 @@ function pageTail(rows: unknown[], total: number, offset: number) {
     has_more: hasMore,
     ...(hasMore ? { next_offset: offset + rows.length } : {}),
   }
+}
+
+/**
+ * Bytes a tools/call result costs on the wire. handleMcpRequest answers with
+ * one buffered JSON body that carries the result twice: pretty-printed in
+ * content[0].text, a JSON string, so its quotes and newlines are escaped
+ * again, and compact as structuredContent.
+ */
+export function toolResultWireBytes(result: unknown): number {
+  const text = JSON.stringify(result, null, 2)
+  return Buffer.byteLength(JSON.stringify({ content: [{ type: 'text', text }], structuredContent: result }), 'utf8')
+}
+
+/**
+ * What one tools/call answer may weigh on the hosted service. The route
+ * answers with a buffered body (NextResponse.json), and Vercel refuses a
+ * buffered function response over 4.5 MB (4 500 000 bytes, the stricter
+ * reading); the 20 000 left over are room for the JSON-RPC envelope, _meta
+ * and the company block the text carries for a key that reaches several
+ * companies, together well under 2 000 bytes.
+ */
+export const MCP_ANSWER_BUDGET_BYTES = 4_480_000
+
+/**
+ * Whether a result fits one answer. Self-hosted Docker has no such limit, so
+ * there everything fits, as it always did. Each of the two copies is at
+ * least the compact JSON, so a register far over the budget is not printed
+ * twice to find that out.
+ */
+function fitsOneAnswer(result: unknown): boolean {
+  if (isSelfHosted()) return true
+  if (2 * Buffer.byteLength(JSON.stringify(result), 'utf8') > MCP_ANSWER_BUDGET_BYTES) return false
+  return toolResultWireBytes(result) <= MCP_ANSWER_BUDGET_BYTES
+}
+
+// A page of 100 customers is about 42 000 characters of text, under the
+// 25 000 tokens at which some MCP hosts cut a tool result.
+const REGISTER_PAGE_SIZE = 100
+
+/**
+ * The answer of a register list (customers, articles), cut from the whole
+ * register in its display order (crm#2151). With limit or offset: that page,
+ * at most 100 rows. Without either: the whole register, as these tools have
+ * always answered, when it fits one answer; a register too large for one
+ * answer, which could not be answered at all before, gets its first page,
+ * with has_more, next_offset and total_count saying there is more. `present`
+ * shapes the rows answered and runs on them alone (the customer list opens
+ * personnummer there). Whether the whole register fits is measured on
+ * `measure`, which must answer rows at least as large as `present`'s without
+ * opening anything.
+ */
+function registerAnswer<Row, Out>(
+  key: string,
+  sorted: Row[],
+  args: Record<string, unknown>,
+  present: (rows: Row[]) => Out[],
+  measure: (rows: Row[]) => unknown[] = present,
+): Record<string, unknown> {
+  if (args.limit == null && args.offset == null) {
+    if (fitsOneAnswer({ [key]: measure(sorted), ...pageTail(sorted, sorted.length, 0) })) {
+      const rows = present(sorted)
+      return { [key]: rows, ...pageTail(rows, rows.length, 0) }
+    }
+  }
+  const limit = Math.min(Math.max(1, Math.floor(Number(args.limit)) || REGISTER_PAGE_SIZE), REGISTER_PAGE_SIZE)
+  const offset = Math.max(0, Math.floor(Number(args.offset)) || 0)
+  const rows = present(sorted.slice(offset, offset + limit))
+  return { [key]: rows, ...pageTail(rows, sorted.length, offset) }
 }
 
 // Shared by the report tools' optional `dimensions` filter arg: parse the raw
@@ -7147,6 +7239,13 @@ export const tools: McpTool[] = [
     },
   }),
 
+  ...createFormationTools({
+    annotations: annotationsForEffect('additive', { idempotentHint: true, openWorldHint: true }),
+    appOrigin: connectLinkBaseUrl,
+    defaultTeamForUser,
+    newCompanyReach,
+  }),
+
   {
     name: 'gnubok_connect_bank',
     keywords: ['bankkoppling', 'koppla bank', 'banksynk'],
@@ -8680,52 +8779,60 @@ export const tools: McpTool[] = [
         | undefined
       if (dimensionRows.length > 0) {
         try {
-          const { data: valueRows, error: valueErr } = await supabase
-            .from('dimension_values')
-            .select('dimension_id, code, name')
-            .eq('company_id', companyId)
-            .eq('is_active', true)
-            .order('code', { ascending: true })
-          if (!valueErr) {
-            const byDimension = new Map<string, Array<{ code: string; name: string }>>()
-            for (const v of (valueRows ?? []) as Array<{ dimension_id: string; code: string; name: string }>) {
-              const bucket = byDimension.get(v.dimension_id) ?? []
-              bucket.push({ code: v.code, name: v.name })
-              byDimension.set(v.dimension_id, bucket)
-            }
-            // Account dimension rules (PR10): tell the agent up front which
-            // accounts refuse postings without a value (required) and which
-            // auto-apply one (default/fixed) - so gnubok_create_voucher calls
-            // self-correct instead of bouncing off MANDATORY_DIMENSION_MISSING.
-            const requiredByDimension = new Map<string, string[]>()
-            const defaultByDimension = new Map<string, string[]>()
-            const { data: ruleRows, error: ruleErr } = await supabase
-              .from('account_dimension_rules')
-              .select('account_number, rule_type, dimension_id')
+          // Every active value, paged past PostgREST's 1,000-row cap: the
+          // count and the top values per dimension come from this set, and a
+          // read cut at 1,000 rows across all dimensions showed a dimension
+          // whose codes sort late as empty (crm#2152). A code is unique only
+          // inside its dimension, so id completes the order. A failed read
+          // throws into the catch below.
+          const valueRows = await fetchAllRows<{ dimension_id: string; code: string; name: string }>(({ from, to }) =>
+            supabase
+              .from('dimension_values')
+              .select('dimension_id, code, name')
               .eq('company_id', companyId)
               .eq('is_active', true)
-            if (!ruleErr) {
-              for (const r of (ruleRows ?? []) as Array<{ account_number: string; rule_type: string; dimension_id: string }>) {
-                const target = r.rule_type === 'required' ? requiredByDimension : defaultByDimension
-                const bucket = target.get(r.dimension_id) ?? []
-                bucket.push(r.account_number)
-                target.set(r.dimension_id, bucket)
+              .order('code', { ascending: true })
+              .order('id', { ascending: true })
+              .range(from, to),
+          )
+          const byDimension = new Map<string, Array<{ code: string; name: string }>>()
+          for (const v of valueRows) {
+            const bucket = byDimension.get(v.dimension_id) ?? []
+            bucket.push({ code: v.code, name: v.name })
+            byDimension.set(v.dimension_id, bucket)
+          }
+          // Account dimension rules (PR10): tell the agent up front which
+          // accounts refuse postings without a value (required) and which
+          // auto-apply one (default/fixed) - so gnubok_create_voucher calls
+          // self-correct instead of bouncing off MANDATORY_DIMENSION_MISSING.
+          const requiredByDimension = new Map<string, string[]>()
+          const defaultByDimension = new Map<string, string[]>()
+          const { data: ruleRows, error: ruleErr } = await supabase
+            .from('account_dimension_rules')
+            .select('account_number, rule_type, dimension_id')
+            .eq('company_id', companyId)
+            .eq('is_active', true)
+          if (!ruleErr) {
+            for (const r of (ruleRows ?? []) as Array<{ account_number: string; rule_type: string; dimension_id: string }>) {
+              const target = r.rule_type === 'required' ? requiredByDimension : defaultByDimension
+              const bucket = target.get(r.dimension_id) ?? []
+              bucket.push(r.account_number)
+              target.set(r.dimension_id, bucket)
+            }
+          }
+          dimensionsBlock = {
+            enabled: settingsRow?.dimensions_enabled === true,
+            dimensions: dimensionRows.map((d) => {
+              const values = byDimension.get(d.id) ?? []
+              return {
+                sie_dim_no: d.sie_dim_no,
+                name: d.name,
+                active_value_count: values.length,
+                required_on_accounts: (requiredByDimension.get(d.id) ?? []).sort(),
+                default_on_accounts: (defaultByDimension.get(d.id) ?? []).sort(),
+                top_values: values.slice(0, 10),
               }
-            }
-            dimensionsBlock = {
-              enabled: settingsRow?.dimensions_enabled === true,
-              dimensions: dimensionRows.map((d) => {
-                const values = byDimension.get(d.id) ?? []
-                return {
-                  sie_dim_no: d.sie_dim_no,
-                  name: d.name,
-                  active_value_count: values.length,
-                  required_on_accounts: (requiredByDimension.get(d.id) ?? []).sort(),
-                  default_on_accounts: (defaultByDimension.get(d.id) ?? []).sort(),
-                  top_values: values.slice(0, 10),
-                }
-              }),
-            }
+            }),
           }
         } catch {
           // Best-effort: a values-read failure just omits the block.
@@ -9042,10 +9149,37 @@ export const tools: McpTool[] = [
       // refused here instead of at approval. A row without external_id is
       // previewed under a placeholder: the commit's generated
       // mcp:<operation id> can match no stored row either.
+      // A ledger holds one currency: the approval refuses a row in another
+      // currency than the kassakonto on its ledger_account
+      // (ensureManualCashAccount), whether the account is there already or the
+      // approval of an earlier row of this call creates it. Said now, before
+      // anything is staged. A card's currency is checked at approval, with the
+      // card.
+      const firstOnLedger = new Map<string, { currency: string; index: number }>()
       for (let i = 0; i < staging.length; i++) {
         const params = staging[i].params as {
           date: string; amount: number; description: string; currency: string
           ledger_account: string | null; bank_connection_id: string | null; external_id: string | null
+        }
+        if (params.ledger_account && !isCardLedgerAccount(params.ledger_account)) {
+          const mismatch = await findCashAccountCurrencyMismatch(supabase, companyId, params.ledger_account, params.currency)
+          if (mismatch) {
+            throw codedRefusal(
+              mismatch.code,
+              `transactions[${i}]: the bank account on ${mismatch.details.ledger_account} is in ${mismatch.details.account_currency}, not ${mismatch.details.currency}, and a ledger account holds one currency. ` +
+                'Send the row with the ledger_account of a bank account in its currency (gnubok_list_cash_accounts), or a free BAS 19xx account. Nothing was staged.',
+            )
+          }
+          const earlier = firstOnLedger.get(params.ledger_account)
+          const clash = earlier ? cashAccountCurrencyMismatch(params.ledger_account, earlier.currency, params.currency) : null
+          if (earlier && clash) {
+            throw codedRefusal(
+              clash.code,
+              `transactions[${i}] is in ${params.currency} and transactions[${earlier.index}] in ${earlier.currency}, both on ledger_account ${params.ledger_account}, and a ledger account holds one currency. ` +
+                'Send each currency on a ledger_account of its own. Nothing was staged.',
+            )
+          }
+          if (!earlier) firstOnLedger.set(params.ledger_account, { currency: params.currency, index: i })
         }
         const [decision] = await previewIngestDedup(
           supabase,
@@ -9882,13 +10016,20 @@ export const tools: McpTool[] = [
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: { include_archived: { type: 'boolean' } },
+      properties: {
+        include_archived: { type: 'boolean' },
+        limit: { type: 'integer' },
+        offset: { type: 'integer' },
+      },
     },
     outputSchema: {
       type: 'object',
       properties: {
         customers: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
+        next_offset: { type: 'number' },
       },
       required: ['customers', 'count'],
     },
@@ -9931,15 +10072,24 @@ export const tools: McpTool[] = [
       // number built on one is nulled: that covers a Swedish enskild firma
       // (its org number is the owner's personnummer) and the legacy rows
       // that carry one in org_number under another customer type.
-      const customers = rows.map(({ personal_number, ...customer }) => {
-        const identifiers = agentCustomerIdentifiers(customer, maskStoredCustomerPersonalNumber(personal_number))
-        const masksNothing =
-          identifiers.org_number === customer.org_number && identifiers.vat_number === customer.vat_number
-        if (customer.customer_type !== 'individual' && masksNothing) return customer
-        return { ...customer, ...identifiers }
-      })
-
-      return { customers, count: customers.length }
+      //
+      // Only the customers answered are opened. Whether the whole register
+      // fits one answer is measured without opening anything: a mask is
+      // always as long as UNDECRYPTABLE_PERSONAL_NUMBER_MASK ('********-1234'
+      // or '********-????') or null, so that mask stands in for each stored
+      // number (crm#2151).
+      const shape = (answered: ListedCustomer[], open: boolean) =>
+        answered.map(({ personal_number, ...customer }) => {
+          const masked = open
+            ? maskStoredCustomerPersonalNumber(personal_number)
+            : personal_number ? UNDECRYPTABLE_PERSONAL_NUMBER_MASK : null
+          const identifiers = agentCustomerIdentifiers(customer, masked)
+          const masksNothing =
+            identifiers.org_number === customer.org_number && identifiers.vat_number === customer.vat_number
+          if (customer.customer_type !== 'individual' && masksNothing) return customer
+          return { ...customer, ...identifiers }
+        })
+      return registerAnswer('customers', rows, args, (answered) => shape(answered, true), (all) => shape(all, false))
     },
   },
 
@@ -10218,13 +10368,15 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_articles',
     keywords: ['artikel', 'artiklar', 'produkter', 'artikelregister'],
     title: 'List Articles',
-    description: "List the active company's catalog articles (artikelregister). Use to look up an article to add to an invoice line. Active articles only by default.",
+    description: 'List the catalog articles (artikelregister) to put on invoice lines; active only unless include_inactive.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        query: { type: 'string', description: 'Optional case-insensitive filter on name or article_number.' },
-        include_inactive: { type: 'boolean', description: 'Include deactivated articles (default false).' },
+        query: { type: 'string', description: 'Case-insensitive filter on name or article_number.' },
+        include_inactive: { type: 'boolean' },
+        limit: { type: 'integer' },
+        offset: { type: 'integer' },
       },
     },
     outputSchema: {
@@ -10232,6 +10384,9 @@ export const tools: McpTool[] = [
       properties: {
         articles: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
+        next_offset: { type: 'number' },
       },
       required: ['articles', 'count'],
     },
@@ -10263,7 +10418,7 @@ export const tools: McpTool[] = [
       }
       articles.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
-      return { articles, count: articles.length }
+      return registerAnswer('articles', articles, args, (answered) => answered)
     },
   },
 
@@ -12704,7 +12859,8 @@ export const tools: McpTool[] = [
           .eq('company_id', companyId)
           .maybeSingle()
         if (docError) throw dbError(docError)
-        if (!doc) throw codedRefusal('INVOICE_RESEND_ARCHIVE_UNAVAILABLE', 'The archived copy of the sent invoice could not be read.')
+        // A row whose key is not inside the company has no archived copy here (storage-key.ts).
+        if (!doc || !isDocumentKeyOfCompany(doc.storage_path, companyId)) throw codedRefusal('INVOICE_RESEND_ARCHIVE_UNAVAILABLE', 'The archived copy of the sent invoice could not be read.')
         return {
           invoice_id: invoiceId,
           invoice_number: invoice.invoice_number ?? null,
@@ -19915,9 +20071,7 @@ export const tools: McpTool[] = [
       if (!doc) throw documentNotFound(documentId)
 
       const ttlSeconds = 300
-      const { data: signed, error: signError } = await supabase.storage
-        .from('documents')
-        .createSignedUrl(doc.storage_path, ttlSeconds)
+      const { data: signed, error: signError } = await signDocumentObject(supabase, doc.storage_path, companyId, ttlSeconds)
 
       if (signError || !signed) {
         throw new Error(`Failed to create signed URL: ${signError?.message ?? 'unknown error'}`)
@@ -21718,9 +21872,10 @@ export const tools: McpTool[] = [
         const ownSubmission = resolveRunAgiSubmission(runForFiling, periodRecord)
         const filingState = deriveAgiFilingState(runForFiling, periodRecord)
         const kvittensnummer = resolveRunAgiKvittensnummer(runForFiling, periodRecord)
-        // Live kvittenser (read-only). A non-ok read (e.g. nothing filed yet)
-        // leaves kvittenser null rather than hard-failing the status check;
-        // auth errors throw and map to SKATTEVERKET_NOT_CONNECTED.
+        // Live kvittenser (read-only). Nothing signed yet is an empty list;
+        // any other non-ok read leaves kvittenser null rather than
+        // hard-failing the status check; auth errors throw and map to
+        // SKATTEVERKET_NOT_CONNECTED.
         let kvittenser: unknown = null
         // Skatteverket's gateway refusing the APIGW client (#2226) is an
         // installation-level state, not this caller's authorisation: failing
@@ -23770,9 +23925,7 @@ export const tools: McpTool[] = [
       if (!archived.linked) log.error('rot/rut file archived but not linked to its begäran', { requestId, documentId: archived.documentId })
       // One hour, as gnubok_audit_package: long enough to save the file.
       const SIGNED_URL_TTL_SECONDS = 3600
-      const { data: signed, error: signError } = await supabase.storage
-        .from('documents')
-        .createSignedUrl(archived.storagePath, SIGNED_URL_TTL_SECONDS)
+      const { data: signed, error: signError } = await signDocumentObject(supabase, archived.storagePath, companyId, SIGNED_URL_TTL_SECONDS)
       if (signError || !signed) {
         warnings.push('Filen är arkiverad men länken kunde inte skapas: hämta en ny med gnubok_get_document_content (file_document_id) eller med Hämta fil under Fakturor > Begär utbetalning.')
       }
@@ -24233,6 +24386,9 @@ export const tools: McpTool[] = [
     name: 'gnubok_import_rot_rut_beslut',
     keywords: ['rotavdrag', 'rutavdrag', 'beslutsfil', 'skatteverket'],
     title: 'Import Rot/Rut Decision File',
+    // Search-only: tools/list is frozen. The rot/rut page and a raw
+    // tools/call import a beslutsfil.
+    catalogVisibility: 'search',
     description:
       'Import Skatteverkets beslutsfil (decision JSON from the rot/rut e-tjänst) and record godkänt belopp on the matching begäran. Exact matching only; per-beslut outcomes in results. Book the payout afterwards via the settle endpoint hint in next.',
     inputSchema: {
@@ -25995,10 +26151,13 @@ export const tools: McpTool[] = [
         }
         for (const [i, item] of rawItems.entries()) {
           // Text rows are stored with quantity 0 and legitimately come back
-          // that way from gnubok_get_invoice (web parity: the canonical
-          // CreateInvoiceItemSchema exempts them from the quantity rule).
+          // that way from gnubok_get_invoice. Product rows follow the web's
+          // quantity rule (lib/invoices/line-quantity.ts).
           if (item.line_type === 'text') continue
-          if (!item.quantity || item.quantity <= 0) throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: quantity must be positive`)
+          const quantityIssue = lineQuantityIssue(item)
+          if (quantityIssue) {
+            throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: ${LINE_QUANTITY_MESSAGES[quantityIssue]}`)
+          }
         }
       }
 
@@ -27353,7 +27512,8 @@ export const tools: McpTool[] = [
         )
       }
 
-      const previewLines = bookedLines.map((l) => ({
+      const storedBookedLines = storedLineValues(bookedLines, new Map())
+      const previewLines = bookedLines.map((l, i) => ({
         account_number: l.account_number,
         // Fallback to the BAS catalog name for a seedable account that is not
         // in the chart yet, so the approver still reads a named line.
@@ -27364,6 +27524,13 @@ export const tools: McpTool[] = [
         debit_amount: l.debit_amount,
         credit_amount: l.credit_amount,
         line_description: l.line_description ?? null,
+        // As the line will store them (storedLineValues), so the approver and
+        // the agent see a line that posts in kronor before it is approved: a
+        // 1510 line without the invoice's currency cannot be linked to a
+        // foreign-currency invoice afterwards (crm#2161).
+        currency: storedBookedLines[i].currency,
+        amount_in_currency: storedBookedLines[i].amount_in_currency,
+        exchange_rate: storedBookedLines[i].exchange_rate,
         dimensions: l.dimensions ?? null,
       }))
 
@@ -27432,7 +27599,6 @@ export const tools: McpTool[] = [
       // Read-only and never throws: a failed read says unavailable.
       const vatDeclaration = await previewVoucherVatDeclaration(supabase, companyId, {
         entryDate,
-        fiscalPeriodId,
         lines: bookedLines,
         isOpeningBalance,
       })

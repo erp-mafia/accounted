@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { HEIC_MIME_TYPES, IMAGE_MAX_DIMENSION, decodeHeicToJpeg } from '@/lib/documents/read/image'
 import { createLogger } from '@/lib/logger'
 
@@ -69,9 +70,10 @@ export async function ensurePreview(service: SupabaseClient, doc: PreviewDocumen
   try {
     let bytes = original
     if (!bytes) {
-      const { data, error } = await bucket.download(doc.storage_path)
-      if (error || !data) return null
-      bytes = Buffer.from(await data.arrayBuffer())
+      // The original through the one door for a row's key: only a key inside the document's company is read.
+      const { blob } = await downloadDocumentObject(service, doc.storage_path, doc.company_id)
+      if (!blob) return null
+      bytes = Buffer.from(await blob.arrayBuffer())
     }
     const preview = await makePreview(bytes, doc.mime)
     const { error: uploadError } = await bucket.upload(path, preview, { contentType: 'image/jpeg', upsert: true })

@@ -7,6 +7,7 @@
  */
 import { createHash } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { isSignableMimeType } from './signable-file'
 import { SIGNING_MAX_DOCUMENT_BYTES } from './types'
 
@@ -39,11 +40,11 @@ export function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-/** The stored bytes of an archived document, or null when storage has none. */
-export async function downloadDocumentBytes(service: SupabaseClient, storagePath: string): Promise<Uint8Array | null> {
-  const { data, error } = await service.storage.from('documents').download(storagePath)
-  if (error || !data) return null
-  return new Uint8Array(await data.arrayBuffer())
+/** The stored bytes of an archived document, or null when storage has none or the key is not inside the company (storage-key.ts). */
+export async function downloadDocumentBytes(service: SupabaseClient, storagePath: string, companyId: string): Promise<Uint8Array | null> {
+  const { blob } = await downloadDocumentObject(service, storagePath, companyId)
+  if (!blob) return null
+  return new Uint8Array(await blob.arrayBuffer())
 }
 
 /** Whether pdf-lib opens the PDF without a password. */
@@ -95,7 +96,7 @@ export async function loadSignableDocument(
     }
   }
 
-  const bytes = await downloadDocumentBytes(service, row.storage_path)
+  const bytes = await downloadDocumentBytes(service, row.storage_path, row.company_id)
   if (!bytes) return { ok: false, code: 'SIGNING_DOCUMENT_NOT_FOUND' }
   if (bytes.byteLength > SIGNING_MAX_DOCUMENT_BYTES) return { ok: false, code: 'SIGNING_DOCUMENT_UNSUPPORTED' }
   const hash = sha256Hex(bytes)

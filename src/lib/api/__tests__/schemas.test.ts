@@ -502,18 +502,20 @@ describe('CreateInvoiceSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('rejects item with zero quantity', () => {
+  // #3553: a 0 x 0 information row and a deduction as a negative quantity
+  // ride beside a billable row.
+  it('accepts an item with zero quantity beside a billable one', () => {
     const result = CreateInvoiceSchema.safeParse(validInvoice({
-      items: [validInvoiceItem({ quantity: 0 })],
+      items: [validInvoiceItem(), validInvoiceItem({ quantity: 0, unit_price: 0 })],
     }))
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
   })
 
-  it('rejects item with negative quantity', () => {
+  it('accepts an item with negative quantity beside a billable one', () => {
     const result = CreateInvoiceSchema.safeParse(validInvoice({
-      items: [validInvoiceItem({ quantity: -5 })],
+      items: [validInvoiceItem({ quantity: 10 }), validInvoiceItem({ quantity: -5 })],
     }))
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
   })
 
   it('rejects vat_rate > 100', () => {
@@ -650,8 +652,35 @@ describe('CreateInvoiceItemSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('rejects a product row with non-positive quantity', () => {
-    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: 0 }))
+  // #3553: a 0 x 0 information row (Peppol carries no text rows) and a
+  // deduction as a negative quantity at a positive price.
+  it('accepts a product row with zero quantity and price', () => {
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: 0, unit_price: 0 }))
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts a product row with a negative quantity', () => {
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: -2, unit_price: 1000 }))
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects a negative quantity on a sales order line', () => {
+    const result = CreateInvoiceItemSchema.safeParse(
+      validInvoiceItem({ quantity: -1, sales_order_item_id: '00000000-0000-4000-8000-000000000001' }),
+    )
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects a negative quantity on a ROT row: the claim sums positive rows only', () => {
+    const result = CreateInvoiceItemSchema.safeParse(
+      validInvoiceItem({ quantity: -2, unit_price: 500, deduction_type: 'rot', work_type: 'bygg', labor_hours: 2 }),
+    )
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues.map((i) => i.path.join('.'))).toContain('quantity')
+  })
+
+  it('rejects a product row whose quantity is not a number', () => {
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: Number.NaN }))
     expect(result.success).toBe(false)
   })
 

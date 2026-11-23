@@ -125,12 +125,12 @@ export const supplierInvoicesUncredit = defineOperation({
   docs: {
     summary: 'Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note\'s verifikat and restore the invoice.',
     description:
-      'For an original supplier invoice with status credited: posts a storno cancelling the live credit note\'s verifikat (dated on that verifikat\'s date, never an edit or delete), marks the credit note reversed (the row is kept for the archive and the ankomstnummer series), and restores the original\'s status and remaining amount from its payments (paid, partially_paid, overdue, approved, or registered when it has no verifikat). The invoice can be credited again afterwards. An invoice that is not credited is an idempotent no-op (changed=false). Dry-runnable: the preview names the storno and the restored status.',
+      'For an original supplier invoice with status credited: posts a storno cancelling the live credit note\'s verifikat (dated on that verifikat\'s date, never an edit or delete), marks the credit note reversed (the row is kept for the archive and the ankomstnummer series), and restores the original\'s status and remaining amount from its payments (paid, partially_paid, overdue, approved when it was attested, else registered, where it waits for attest again). The invoice can be credited again afterwards. An original that is not credited is an idempotent no-op (changed=false); a credit note\'s own id is refused. Dry-runnable: the preview names the storno and the restored status.',
     useWhen: 'A supplier invoice was credited by mistake and the credit should be taken back.',
     doNotUseFor:
       'Crediting an invoice (POST /supplier-invoices/{id}/credit), deleting an unbooked invoice (DELETE /supplier-invoices/{id}) or reversing an arbitrary verifikat.',
     pitfalls: [
-      'Pass the ORIGINAL invoice id, not the credit note\'s.',
+      'Pass the ORIGINAL invoice id, not the credit note\'s: a credit note\'s id answers 400 SI_UNCREDIT_CREDIT_NOTE, on a dry run too. details.credited_invoice_id names its original; when it is null the credit note is linked to none and its credit cannot be undone here, so ask the person instead of picking an original. A credit note whose details.credit_note_status is reversed is already undone.',
       'The credit note\'s verifikat must lie in an open, unlocked period: otherwise the dry run answers 400 PERIOD_LOCKED and the commit 400 SI_UNCREDIT_FAILED.',
       'A credit verifikat already reversed by hand is fine: the row cleanup still runs and reversal_entry_id is null.',
     ],
@@ -164,7 +164,7 @@ export const supplierInvoicesUncredit = defineOperation({
     reversed_credit_note_id: z.string().uuid().nullable(),
     changed: z.boolean().describe('False when the invoice was not credited (nothing done).'),
   }),
-  errorCodes: ['SI_NOT_FOUND', 'PERIOD_LOCKED', 'SI_UNCREDIT_FAILED'],
+  errorCodes: ['SI_NOT_FOUND', 'SI_UNCREDIT_CREDIT_NOTE', 'PERIOD_LOCKED', 'SI_UNCREDIT_FAILED'],
   http: {
     method: 'POST',
     path: '/api/v1/companies/:companyId/supplier-invoices/:id/uncredit',
@@ -174,7 +174,7 @@ export const supplierInvoicesUncredit = defineOperation({
     name: 'gnubok_uncredit_supplier_invoice',
     title: 'Uncredit Supplier Invoice',
     description:
-      'Stage undoing a supplier invoice credit: a storno cancels the credit note\'s verifikat, the credit note is kept as reversed and the original is restored from its payments. Pass the original invoice id. No-op when not credited.',
+      'Stage undoing a supplier invoice credit: a storno cancels the credit note\'s verifikat, the credit note is kept as reversed and the original is restored from its payments. Pass the original invoice id; a credit note\'s id is refused. No-op when the original is not credited.',
     keywords: ['ångra kreditering', 'ångra kreditfaktura', 'återställ leverantörsfaktura', 'felaktig kreditering'],
     stage: { pendingType: 'uncredit_supplier_invoice', title: () => 'Ångra kreditering av leverantörsfaktura' },
   },

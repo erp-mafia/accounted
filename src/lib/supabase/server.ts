@@ -8,6 +8,7 @@ import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
 import { userSessionFetch } from '@/lib/supabase/auth-call-budget'
 import { withActorHeader } from '@/lib/supabase/actor-header'
 import { withEmptyPagePastEnd } from '@/lib/supabase/page-past-end'
+import { withShortGatewayErrorPage } from '@/lib/supabase/gateway-error-page'
 
 // During Docker builds, NEXT_PUBLIC_* vars are placeholder sentinels
 // replaced at runtime by docker-entrypoint.sh.
@@ -44,7 +45,9 @@ const safeKey = isBuildPlaceholder ? 'placeholder' : key
  * configured (lib/supabase/auth-forwarding.ts), and a refresh for the same
  * refresh token is asked once, not once per request
  * (lib/supabase/auth-call-budget.ts). A counted page past the last row reads
- * as an empty page, not a 416 (lib/supabase/page-past-end.ts).
+ * as an empty page, not a 416 (lib/supabase/page-past-end.ts), and a
+ * gateway's HTML error page as one short message
+ * (lib/supabase/gateway-error-page.ts).
  */
 export async function createClient() {
   const cookieStore = await cookies()
@@ -56,7 +59,7 @@ export async function createClient() {
     safeUrl,
     safeKey,
     {
-      global: { fetch: withEmptyPagePastEnd(sessionFetch) },
+      global: { fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(sessionFetch)) },
       cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {
@@ -104,6 +107,6 @@ export function createServiceClient() {
   return createServerClient(
     safeUrl,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} }, global: { fetch: withEmptyPagePastEnd(withActorHeader()) } }
+    { cookies: { getAll: () => [], setAll: () => {} }, global: { fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(withActorHeader())) } }
   )
 }

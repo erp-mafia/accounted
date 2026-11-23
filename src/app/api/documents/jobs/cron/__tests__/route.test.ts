@@ -43,7 +43,9 @@ describe('GET /api/documents/jobs/cron', () => {
     }
     expect(enqueueMissingExtractions).toHaveBeenCalledWith({ tag: 'service' }, 20)
     // Counted from when the request arrived: no job is claimed after 180 s, no model call is open after 280 s.
-    expect(runDocumentJobs).toHaveBeenCalledWith({ tag: 'service' }, expect.objectContaining({ limit: 8, deadlineAt: 1_180_000 }))
+    expect(runDocumentJobs).toHaveBeenCalledWith({ tag: 'service' }, expect.objectContaining({ deadlineAt: 1_180_000 }))
+    // The time is the only stop: a cap of 8 a run held every company's documents behind one import (crm#2166).
+    expect((runDocumentJobs as ReturnType<typeof vi.fn>).mock.calls[0][1]).not.toHaveProperty('limit')
     expect(modelStop).toBe(1_280_000)
   })
 

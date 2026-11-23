@@ -18,6 +18,7 @@ import { normalizeSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
 import { formatOrgNumberDisplay, isValidOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { OperationContext } from '@/lib/operations/types'
 import type { PartyAddress, PartyKind, RegisterParty } from './types'
 
@@ -96,30 +97,87 @@ export async function assertPartiesInCompany(supabase: SupabaseClient, companyId
 }
 
 /**
- * The one person in the Bolaget registers with this name, or null. Only
+ * A person's name as the words in it, lower case and sorted: "Lindqvist,
+ * Karl Erik" is erik, karl, lindqvist. A word that stands twice is kept
+ * twice: "Anna Anna" is not "Anna".
+ */
+export function personNameWords(name: string): string[] {
+  return name.toLocaleLowerCase('sv').split(/[\s,]+/).filter(Boolean).sort()
+}
+
+/** Whether every word of `part` is in `whole`, as many times as it stands in `part`. */
+function wordsWithin(part: readonly string[], whole: readonly string[]): boolean {
+  const left = [...whole]
+  return part.every((word) => {
+    const at = left.indexOf(word)
+    if (at === -1) return false
+    left.splice(at, 1)
+    return true
+  })
+}
+
+/**
+ * Which of the register people a typed name means, or null when it means
+ * nobody or could mean two. Three readings, the strictest that names
+ * exactly one person wins:
+ *   1. the same name, whatever the case;
+ *   2. the same words in another order: the company register writes
+ *      "Lindqvist, Karl Erik", a person writes "Karl Erik Lindqvist";
+ *   3. one name's words all found in the other, when the shorter has at least
+ *      two: the registry carries every given name, a person the one in use
+ *      ("Karl Lindqvist").
+ * The caller shows the match before anything is saved, and the person can
+ * say it is somebody else.
+ */
+export function matchRegisterPerson<T extends { display_name: string }>(people: readonly T[], name: string): T | null {
+  const typed = name.trim().toLocaleLowerCase('sv')
+  if (!typed) return null
+  const words = personNameWords(typed)
+  const only = (found: T[]): T | null | undefined => (found.length === 1 ? found[0]! : found.length > 1 ? null : undefined)
+  const exact = only(people.filter((p) => p.display_name.trim().toLocaleLowerCase('sv') === typed))
+  if (exact !== undefined) return exact
+  const sameWords = only(people.filter((p) => personNameWords(p.display_name).join(' ') === words.join(' ')))
+  if (sameWords !== undefined) return sameWords
+  const within = (a: string[], b: string[]) => a.length >= 2 && wordsWithin(a, b)
+  const contained = only(
+    people.filter((p) => {
+      const theirs = personNameWords(p.display_name)
+      return within(words, theirs) || within(theirs, words)
+    }),
+  )
+  return contained ?? null
+}
+
+/**
+ * The one person in the Bolaget registers a name means, or null. Only
  * register people count (parties of origin 'bolaget': the board members
  * seeded from the registry and holders entered here), so a shareholder an
  * agent names is the board member already there, and never a private
- * customer or supplier who happens to share the name. Two register people
- * with the name answer null: the caller picks one by id.
+ * customer or supplier who happens to share the name. A name that could
+ * mean two register people answers null: the caller picks one by id.
  */
 export async function findRegisterPersonByName(
   supabase: SupabaseClient,
   companyId: string,
   name: string,
 ): Promise<{ party_id: string; name: string } | null> {
-  const { data, error } = await supabase
-    .from('parties')
-    .select('id, display_name')
-    .eq('company_id', companyId)
-    .eq('kind', 'person')
-    .eq('origin', 'bolaget')
-    .is('merged_into', null)
-    .ilike('display_name', name.trim().replace(/[%_\\]/g, (c) => `\\${c}`))
-    .limit(2)
-  if (error) throw new Error(`parties read failed: ${error.message}`)
-  const rows = (data ?? []) as Array<{ id: string; display_name: string }>
-  return rows.length === 1 ? { party_id: rows[0]!.id, name: rows[0]!.display_name } : null
+  // Every register person, read in pages: a name is compared against all of
+  // them, and a read cut at one page would call a person in the rest new.
+  const people = await fetchAllRows<{ id: string; display_name: string }>(
+    ({ from, to }) =>
+      supabase
+        .from('parties')
+        .select('id, display_name')
+        .eq('company_id', companyId)
+        .eq('kind', 'person')
+        .eq('origin', 'bolaget')
+        .is('merged_into', null)
+        .order('id')
+        .range(from, to),
+    { dedupeBy: (row) => row.id },
+  )
+  const match = matchRegisterPerson(people, name)
+  return match ? { party_id: match.id, name: match.display_name } : null
 }
 
 /**
@@ -156,6 +214,83 @@ export async function createRegisterParty(ctx: OperationContext, ref: PartyRef):
   })
   if (error || !partyId) throw new Error(`ensure_party failed: ${error?.message ?? 'no id'}`)
   return partyId as string
+}
+
+export interface PartyNameInput {
+  name?: string | null
+  /** A company's organisationsnummer; null removes it. Never a person's. */
+  org_number?: string | null
+}
+
+export type PartyNameOutcome =
+  | { ok: true; party_id: string; name: string; org_number: string | null; changed: boolean }
+  | { ok: false; code: 'BOLAGET_PARTY_NOT_FOUND' | 'BOLAGET_PARTY_INVALID' | 'BOLAGET_PERSONNUMMER_IN_APP_ONLY'; messageSv?: string }
+
+/**
+ * Change the name, or a company's organisationsnummer, of somebody the
+ * registers name (the app's own form only; the door asks for the owner or an
+ * administrator). Written as the signed-in person: for a party the aktiebok
+ * names, the database enters the change in the register as a dated note that
+ * says what the name or number was (parties_share_register_note, ABL 5:3 and
+ * 5:9). Fields left undefined keep their value. A customer or supplier row
+ * of the same party keeps the name it has: this is the name the registers
+ * print.
+ *
+ * `dryRun` checks everything and writes nothing, so a caller that saves
+ * something else with the name can refuse both before either is written.
+ */
+export async function renameRegisterParty(
+  ctx: OperationContext,
+  partyId: string,
+  input: PartyNameInput,
+  { dryRun = false }: { dryRun?: boolean } = {},
+): Promise<PartyNameOutcome> {
+  const found = await partiesInCompany(ctx.supabase, ctx.companyId, [partyId])
+  const current = found.get(partyId)
+  if (!current) return { ok: false, code: 'BOLAGET_PARTY_NOT_FOUND' }
+  const update: { display_name?: string; org_number?: string | null } = {}
+  if (input.name !== undefined) {
+    const name = input.name?.trim() ?? ''
+    if (!name) return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: 'Ange ett namn.' }
+    if (name !== current.display_name) update.display_name = name
+  }
+  if (input.org_number !== undefined) {
+    const typed = input.org_number?.trim() ?? ''
+    if (typed && current.kind === 'person') {
+      return looksLikeSwedishPersonalNumber(typed)
+        ? { ok: false, code: 'BOLAGET_PERSONNUMMER_IN_APP_ONLY' }
+        : { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: 'En person har inget organisationsnummer. Ange personnumret i fältet för personnummer.' }
+    }
+    if (typed && !isValidOrgNumber(typed)) return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: 'Organisationsnumret är inte giltigt.' }
+    const org = typed ? normalizeOrgNumber(typed) : null
+    if (org !== current.org_number) update.org_number = org
+  }
+  const name = update.display_name ?? current.display_name
+  const orgNumber = update.org_number !== undefined ? update.org_number : current.org_number
+  if (Object.keys(update).length === 0) return { ok: true, party_id: partyId, name, org_number: orgNumber, changed: false }
+  const ORG_TAKEN_SV = 'Organisationsnumret finns redan på en annan motpart i företaget.'
+  if (update.org_number) {
+    // One live party per organisationsnummer and company: said before anything is written.
+    const { data: holder, error: lookupError } = await ctx.supabase
+      .from('parties')
+      .select('id')
+      .eq('company_id', ctx.companyId)
+      .eq('org_number', update.org_number)
+      .is('merged_into', null)
+      .neq('id', partyId)
+      .limit(1)
+      .maybeSingle()
+    if (lookupError) throw new Error(`parties read failed: ${lookupError.message}`)
+    if (holder) return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: ORG_TAKEN_SV }
+  }
+  if (dryRun) return { ok: true, party_id: partyId, name, org_number: orgNumber, changed: true }
+  const { error } = await ctx.supabase.from('parties').update(update).eq('company_id', ctx.companyId).eq('id', partyId)
+  if (error) {
+    // Another party took the number between the check above and the write.
+    if (error.code === '23505') return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: ORG_TAKEN_SV }
+    throw new Error(`parties update failed: ${error.message}`)
+  }
+  return { ok: true, party_id: partyId, name, org_number: orgNumber, changed: true }
 }
 
 export interface PersonPrivateInput {

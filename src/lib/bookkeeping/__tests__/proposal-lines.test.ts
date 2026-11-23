@@ -64,6 +64,40 @@ describe('proposalLinesToFormLines', () => {
     ])
   })
 
+  it('writes the radtext on the business and moms lines and the bank text on the bank leg', () => {
+    const formLines = proposalLinesToFormLines(lines, {
+      lineDescription: 'Anthropic',
+      settlementLineDescription: 'Företagskonto',
+    })
+    expect(formLines.map((l) => l.line_description)).toEqual(['Anthropic', 'Anthropic', 'Företagskonto'])
+  })
+
+  it('writes the radtext on the reverse-charge moms and basis legs too', () => {
+    const formLines = proposalLinesToFormLines(
+      [
+        { side: 'debet', account: '5420', amount: 2053.6 },
+        { side: 'debet', account: '4535', amount: 2053.6 },
+        { side: 'kredit', account: '4598', amount: 2053.6 },
+        { side: 'debet', account: '2645', amount: 513.4 },
+        { side: 'kredit', account: '2614', amount: 513.4 },
+        { side: 'kredit', account: '1930', amount: 2053.6, settlement: true },
+      ],
+      { lineDescription: 'Anthropic', settlementLineDescription: 'Företagskonto' },
+    )
+    expect(formLines.map((l) => l.line_description)).toEqual(['Anthropic', 'Anthropic', 'Anthropic', 'Anthropic', 'Anthropic', 'Företagskonto'])
+  })
+
+  it('puts no bank text on a learned non-cash money leg, only the radtext', () => {
+    const formLines = proposalLinesToFormLines(
+      [
+        { side: 'debet', account: '2440', amount: 500 },
+        { side: 'kredit', account: '1510', amount: 500, settlement: true },
+      ],
+      { settlementAccount: '1930', lineDescription: 'Kund AB', settlementLineDescription: 'Företagskonto' },
+    )
+    expect(formLines[1]).toMatchObject({ account_number: '1510', line_description: 'Kund AB' })
+  })
+
   it('formats whole amounts with trailing zeros', () => {
     const formLines = proposalLinesToFormLines([{ side: 'debet', account: '6212', amount: 100 }])
     expect(formLines[0].debit_amount).toBe('100.00')

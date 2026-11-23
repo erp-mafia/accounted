@@ -2783,10 +2783,41 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det här är företagets primära bankkonto och kan inte stängas av. Välj "Gör primärt" på ett annat bankkonto först.',
     message_en: 'This is the company’s primary bank account and cannot be disabled. Choose "Make primary" on another bank account first.',
   },
+  // reenableIfUnused: rows were put on a turned-off account marked to be
+  // printed on invoices, which rows never turn back on (its payment details
+  // may be stale). A turned-off account is printed on no invoice, so the
+  // sentence says "marked". Either fix lets the rows land: turning it on
+  // prints it on invoices again, hiding it on invoices lets the rows turn it
+  // on as an ordinary account.
   CASH_ACCOUNT_DISABLED_PAYEE: {
     httpStatus: 409,
-    message_sv: 'Bankkontot är avstängt och visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar innan transaktioner kan läggas på det.',
-    message_en: 'This bank account is turned off and is printed on invoices. An owner or admin needs to turn it on in Settings before transactions can be put on it.',
+    message_sv:
+      'Bankkontot är avstängt och markerat att visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) eller dölja det på fakturor under Inställningar → Fakturering innan transaktioner kan läggas på det.',
+    message_en:
+      'This bank account is turned off and marked to be printed on invoices. An owner or admin needs to turn it on under Inställningar → Bokföring (Settings → Bookkeeping; it is then printed on invoices again) or hide it on invoices under Inställningar → Fakturering (Settings → Invoicing) before transactions can be put on it.',
+    remediation: {
+      description:
+        'Retrying does not help until an owner or admin turns the account on (it is then printed on invoices again) or hides it on invoices: gnubok_update_cash_account stages either (enabled or invoice_payee). Or send the row with the ledger_account of another bank account (gnubok_list_cash_accounts).',
+    },
+    retryable: false,
+  },
+  // ensureManualCashAccount: the kassakonto already on the row's ledger
+  // account is in another currency, and a ledger holds one (cash_accounts is
+  // UNIQUE on company and ledger). details: ledger_account, account_currency,
+  // currency. The sentence names only the cause: the bank-file import and the
+  // Stripe sync read it through getErrorMessage too, and each caller says its
+  // own next step (the create_transactions approval in commit.ts).
+  CASH_ACCOUNT_CURRENCY_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Bankkontot på det bokföringskontot har en annan valuta än transaktionen, och ett bankkonto har bara en valuta.',
+    message_en:
+      'The bank account on that ledger account is in another currency than the transaction, and a bank account holds one currency.',
+    remediation: {
+      description:
+        'Retrying does not help. Send the row again with ledger_account set to the bank account in its currency (gnubok_list_cash_accounts), or to a free BAS 19xx account: a missing kassakonto is created in the row\'s currency.',
+    },
+    retryable: false,
   },
   CASH_ACCOUNT_PRIMARY_INELIGIBLE: {
     httpStatus: 400,
@@ -5075,9 +5106,9 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
   VAT_SETTLEMENT_ALREADY_BOOKED: {
     httpStatus: 409,
     message_sv:
-      'Momsen för perioden är redan bokförd. Annullera det verifikatet först om perioden behöver bokföras om.',
+      'Momsen för perioden är redan bokförd. Om perioden behöver bokföras om, återför först varje momsredovisning som är bokförd för den.',
     message_en:
-      'The VAT for this period is already booked. Reverse that journal entry first if the period needs to be booked again.',
+      'The VAT for this period is already booked. If the period needs to be booked again, first reverse every VAT settlement booked for it.',
   },
   VAT_SETTLEMENT_EMPTY: {
     httpStatus: 400,
@@ -7722,6 +7753,26 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Krediteringen kunde inte ångras.',
     message_en:
       'The credit could not be undone. A locked or closed period refuses the storno of the credit note; details.reason names the cause.',
+  },
+  // A credit note rests at 'credited' like its original, so its own id once
+  // passed for the original's: the preview restored the credit note as an
+  // invoice to pay, a write supplier_invoices_credit_note_not_payable refuses.
+  // The original is the way only while it is credited by this credit note:
+  // most imported credit notes are linked to no original (credited_invoice_id
+  // null, and uncredit finds a credit note only through that link), an
+  // imported original often rests at 'paid', and a reversed credit note's
+  // original may since carry a newer credit. Each case is said.
+  SI_UNCREDIT_CREDIT_NOTE: {
+    httpStatus: 400,
+    message_sv:
+      'En kreditering ångras på originalfakturan, inte på kreditfakturan. Är kreditfakturan kopplad till en krediterad originalfaktura och inte redan ångrad, gå till originalfakturan och välj "Ångra kreditering" där. Annars går krediteringen inte att ångra här.',
+    message_en:
+      'This id is a credit note; a credit is undone on its original invoice. Send the original\'s id from details.credited_invoice_id while this credit note is not reversed (details.credit_note_status). Otherwise its credit cannot be undone here: a null credited_invoice_id links no original, and a reversed credit note is already undone.',
+    remediation: {
+      description:
+        'Call uncredit again with the original invoice id in details.credited_invoice_id. Not when details.credit_note_status is reversed: that credit is already undone, and uncredit on the original would undo a newer credit instead. When credited_invoice_id is null, ask the person what to do: uncredit finds a credit note only through that link, so calling it on an original picked by hand would restore that invoice and leave this credit note in place. An original that is not credited answers changed=false: nothing is left to undo.',
+      tool: 'gnubok_uncredit_supplier_invoice',
+    },
   },
   SI_ITEM_NOT_FOUND: {
     httpStatus: 404,
@@ -12509,8 +12560,11 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Banken kräver signering på sin egen webbsida, vilket inte stöds här ännu. Betala fakturorna med en betalfil i stället.',
     message_en: 'The bank requires signing on its own website, which is not supported here yet. Pay the invoices with a payment file instead.',
   },
+  // A 4xx, as BANK_PROVIDER_REFUSED: the bank answers the same refusal on
+  // every try (one that may pass on a retry is PAYMENT_PROVIDER_UNAVAILABLE).
+  // As a 502 it was logged at error and counted as an outage.
   PAYMENT_PROVIDER_REFUSED: {
-    httpStatus: 502,
+    httpStatus: 422,
     message_sv: 'Banken tog inte emot betalningen. Kontrollera uppgifterna och försök igen.',
     message_en: 'The bank did not accept the payment. Check the details and try again.',
   },
@@ -13251,6 +13305,22 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
     message_sv: 'Aktieboken har fått en ny anteckning sedan du förhandsgranskade. Förhandsgranska igen, så visas läget som det är nu.',
     message_en: 'The share register has a new entry since your preview. Preview again to see it as it stands now.',
   },
+  SHARE_REGISTER_SETUP_COMPLETE: {
+    httpStatus: 409,
+    message_sv: 'Aktieboken är redan upplagd och i bruk. Ett ingående innehav förs bara in medan aktieboken läggs upp: för in en överlåtelse eller en emission i stället.',
+    message_en: 'The share register is already set up and in use. An opening holding is entered only while the register is set up: enter a transfer or an issue instead.',
+    thrown_message_sv: true,
+  },
+  SHARE_REGISTER_HOLDER_ADMIN_ONLY: {
+    httpStatus: 403,
+    message_sv: 'Bara företagets ägare eller en administratör kan ändra namn eller organisationsnummer på någon som står i aktieboken.',
+    message_en: 'Only the company\'s owner or an administrator can change the name or the organisation number of somebody the share register names.',
+  },
+  SHARE_REGISTER_EMPTY: {
+    httpStatus: 409,
+    message_sv: 'Aktieboken har inga aktier än. För in aktierna först.',
+    message_en: 'The share register holds no shares yet. Enter the shares first.',
+  },
   SHARE_REGISTER_AVSTAMNINGSBOLAG: {
     httpStatus: 409,
     message_sv: 'Bolaget är ett avstämningsbolag: aktieboken förs av den centrala värdepappersförvararen.',
@@ -13907,6 +13977,71 @@ const COMPANY_QUESTIONS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Company formation, "Starta aktiebolag" (company_formations, lib/formation)
+// ─────────────────────────────────────────────────────────────────
+
+const COMPANY_FORMATION: Record<string, StructuredErrorEntry> = {
+  FORMATION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bolagsbildningen hittades inte.',
+    message_en: 'The company formation was not found.',
+    retryable: false,
+  },
+  // The company is already set up from the formation, or it was cancelled.
+  FORMATION_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Bolaget är redan uppsatt, så svaren kan inte längre ändras här.',
+    message_en: 'The company is already set up, so the answers can no longer change here.',
+    retryable: false,
+  },
+  FORMATION_ALREADY_SET_UP: {
+    httpStatus: 409,
+    message_sv: 'Bolaget är redan uppsatt i Accounted.',
+    message_en: 'The company is already set up in Accounted.',
+    retryable: false,
+  },
+  // The answers still break a rule verksamt.se applies; the thrown text names it.
+  FORMATION_INCOMPLETE: {
+    httpStatus: 422,
+    message_sv: 'Några svar saknas eller behöver ändras innan dokumenten kan skapas.',
+    message_en: 'Some answers are missing or need a change before the documents can be made.',
+    retryable: false,
+  },
+  FORMATION_DOCUMENT_UNAVAILABLE: {
+    httpStatus: 404,
+    message_sv: 'Det dokumentet finns inte för det här bolaget.',
+    message_en: 'That document does not exist for this company.',
+    retryable: false,
+  },
+  // The organisation number is already a company in Accounted.
+  FORMATION_ORG_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Organisationsnumret finns redan som företag i Accounted.',
+    message_en: 'The organisation number is already a company in Accounted.',
+    retryable: false,
+  },
+  // The organisation number is not an aktiebolag registered after the formation started.
+  FORMATION_ORG_NUMBER_MISMATCH: {
+    httpStatus: 422,
+    message_sv: 'Organisationsnumret hör inte till ett nyregistrerat aktiebolag.',
+    message_en: 'The organisation number does not belong to a newly registered aktiebolag.',
+    retryable: false,
+  },
+  FORMATION_DEED_DATE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Ange dagen ni skrev under stiftelseurkunden. Den kan inte ligga i framtiden.',
+    message_en: 'Give the day you signed the founding deed. It cannot be in the future.',
+    retryable: false,
+  },
+  FORMATION_SETUP_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Uppsättningen stannade på vägen. Försök igen, det som redan är gjort görs inte om.',
+    message_en: 'The setup stopped part way. Try again; what is already done is not redone.',
+    retryable: true,
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -13990,6 +14125,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...CASH_FORECAST,
   ...SUPPORT_ASSISTANT,
   ...COMPANY_QUESTIONS,
+  ...COMPANY_FORMATION,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

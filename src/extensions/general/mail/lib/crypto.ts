@@ -110,14 +110,28 @@ interface StatePayload {
   e: number
   /** PKCE code verifier. Absent from states minted before PKCE. */
   v?: string
+  /**
+   * The allowlisted origin (the app or a brand domain) the consent started
+   * on. Google redirects to the one registered callback on the canonical
+   * host, which carries no session for someone signed in on a brand domain,
+   * so the callback sends the browser back there. Sealed, so it cannot be
+   * pointed anywhere else. Absent from states minted before it was recorded.
+   */
+  o?: string
 }
 
-export function createOAuthState(userId: string, companyId: string, codeVerifier?: string): string {
+export function createOAuthState(
+  userId: string,
+  companyId: string,
+  codeVerifier?: string,
+  origin?: string,
+): string {
   const payload: StatePayload = {
     u: userId,
     c: companyId,
     e: Date.now() + STATE_TTL_MS,
     ...(codeVerifier ? { v: codeVerifier } : {}),
+    ...(origin ? { o: origin } : {}),
   }
   return encryptToken(JSON.stringify(payload))
 }
@@ -129,10 +143,14 @@ export function createOAuthState(userId: string, companyId: string, codeVerifier
  * browser only ever holds the encrypted state, so an intercepted code is
  * worthless without the state it was issued with.
  */
-export function createOAuthFlow(userId: string, companyId: string): { state: string; codeChallenge: string } {
+export function createOAuthFlow(
+  userId: string,
+  companyId: string,
+  origin?: string,
+): { state: string; codeChallenge: string } {
   const codeVerifier = crypto.randomBytes(32).toString('base64url')
   return {
-    state: createOAuthState(userId, companyId, codeVerifier),
+    state: createOAuthState(userId, companyId, codeVerifier, origin),
     codeChallenge: pkceS256Challenge(codeVerifier),
   }
 }
@@ -149,11 +167,16 @@ export function pkceS256Challenge(codeVerifier: string): string {
 
 export function verifyOAuthState(
   state: string,
-): { userId: string; companyId: string; codeVerifier: string | null } | null {
+): { userId: string; companyId: string; codeVerifier: string | null; origin: string | null } | null {
   try {
     const payload = JSON.parse(decryptToken(state)) as StatePayload
     if (Date.now() > payload.e) return null
-    return { userId: payload.u, companyId: payload.c, codeVerifier: payload.v ?? null }
+    return {
+      userId: payload.u,
+      companyId: payload.c,
+      codeVerifier: payload.v ?? null,
+      origin: payload.o ?? null,
+    }
   } catch {
     return null
   }

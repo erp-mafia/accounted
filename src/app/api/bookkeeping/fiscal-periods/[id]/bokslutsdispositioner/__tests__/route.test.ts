@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
 // Partial: the POST computes each item with the builder's real per-kind
 // functions (the ones the GET preview uses) on the mocked calculators below.
@@ -880,6 +881,22 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
       expect.objectContaining({ id: 'period-1', period_end: '2025-12-31' }),
       { closingDeficit: 100_000 },
     )
+  })
+
+  it('answers deferred tax that commit_deferred_tax refuses behind a lock as 400 PERIOD_LOCKED, not a 500', async () => {
+    // The year was open when the route read it and locked before the commit:
+    // the function's own lock check refuses it (23514), and a retry meets it again.
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: periodClient(openPeriod), error: null })
+    vi.mocked(postDeferredTax).mockRejectedValue(
+      new BookkeepingDatabaseError('commit_deferred_tax', 'Cannot post deferred tax in a locked or closed fiscal period', '23514'),
+    )
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await post({ items: [{ kind: 'uppskjuten_skatt_kap29' }] }),
+    )
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
   })
 
   it('rejects the removed uppskjuten_skatt kind as a validation error (K3 29.37)', async () => {

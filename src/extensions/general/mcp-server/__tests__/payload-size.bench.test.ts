@@ -984,6 +984,13 @@ describe('tools/list payload size guard', () => {
     // here and 529 on the full catalog. Measured 62 989 (full catalog
     // 67 439; main 63 092 and 67 542). 140 listed tools before and after.
     // Ceiling unchanged.
+    // 2026-11-23 (crm#2151): gnubok_list_customers and gnubok_list_articles
+    // page, so a register too large for one answer can be read at all:
+    // limit and offset in, total_count, has_more and next_offset out, all
+    // bare. Wire data on existing tools, paid for in part on
+    // gnubok_list_articles (a shorter description, include_inactive bare).
+    // Measured 63 058 (full catalog 67 487; main 63 011 and 67 441).
+    // Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

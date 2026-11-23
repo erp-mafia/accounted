@@ -3,6 +3,7 @@ import { PRIVATE_PERSON_FLAG_KEYWORDS, detectCustomerColumns } from './column-de
 import { cellOrNull, matchesKeywords, parsePaymentTerms } from '../shared/column-utils'
 import { columnName, unmapColumnsTheDataContradicts, type ColumnShapeCheck } from '../shared/column-checks'
 import { classifyCustomer } from '../shared/classify'
+import { ANY_BUSINESS_WORDS, saysOnlyCompany, statedType } from '../shared/stated-fields'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
   checkCountryConsistency,
@@ -71,7 +72,7 @@ function normalizeCustomerType(value: string | null): CustomerType | null {
   if (lower === 'individual' || lower === 'privat' || lower === 'privatperson' || lower === 'person') {
     return 'individual'
   }
-  if (lower === 'swedish_business' || lower === 'swedish' || lower === 'företag' || lower === 'foretag' || lower === 'business' || lower === 'ab' || lower === 'aktiebolag') {
+  if (lower === 'swedish_business' || lower === 'swedish' || ANY_BUSINESS_WORDS.includes(lower) || lower === 'ab' || lower === 'aktiebolag') {
     return 'swedish_business'
   }
   if (lower === 'eu_business' || lower === 'eu') {
@@ -217,6 +218,9 @@ export async function parseCustomersFile(
     // org number (enskild firma), so the customer is a business.
     const customerType: CustomerType =
       privatePerson === false && classified === 'individual' ? 'swedish_business' : classified
+    // A no in a private-person column, or a word for any company, says only
+    // that the customer is a company, not which kind.
+    const anyBusiness = privatePerson === false || (privatePerson === null && saysOnlyCompany(typeRaw))
 
     // ISO 3166-1 alpha-2 (customers.country is a code). A name the register
     // cannot map is kept as typed so the preview can show it and the row is
@@ -261,6 +265,8 @@ export async function parseCustomersFile(
       row_index: i + 2, // 1-based + header
       name,
       customer_type: customerType,
+      customer_type_stated: statedType(anyBusiness, explicitType !== null),
+      country_stated: countryRaw !== null,
       customer_number: customerNumber,
       org_number: orgNumber,
       email,

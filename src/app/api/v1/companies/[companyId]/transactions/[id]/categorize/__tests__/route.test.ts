@@ -236,7 +236,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     const body = await res.json()
     expect(res.status).toBe(409)
     expect(body.error.code).toBe('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED')
-    expect(body.error.details.cause).toBe('BOOKKEEPING_DATABASE_ERROR')
+    expect(body.error.details.cause).toBe('PERIOD_LOCKED')
     expect(body.error.details.message).toBe(
       'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
     )

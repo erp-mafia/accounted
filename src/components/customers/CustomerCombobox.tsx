@@ -162,7 +162,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   }
 
   const insideRefs = useMemo(() => [containerRef, portalPanelRef], [])
-  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+  const { highlightedIndex, setHighlightedIndex, resetHighlight, handleKeyDown } = useComboboxNavigation({
     count: rowCount,
     isOpen,
     // A text input inside a form submits on Enter; the Select this replaces
@@ -189,14 +189,15 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
 
   // Reset the highlight when the rows change: onto the current selection when
   // browsing (so it scrolls into view), onto the best match when searching.
+  // Through resetHighlight: this runs after every keystroke in the search.
   useEffect(() => {
     if (queryActive) {
-      setHighlightedIndex(0)
+      resetHighlight(0)
       return
     }
     const selectedAt = items.findIndex((c) => c.id === value)
-    setHighlightedIndex(selectedAt >= 0 ? selectedAt + (showNoneRow ? 1 : 0) : 0)
-  }, [items, value, queryActive, showNoneRow, setHighlightedIndex])
+    resetHighlight(selectedAt >= 0 ? selectedAt + (showNoneRow ? 1 : 0) : 0)
+  }, [items, value, queryActive, showNoneRow, resetHighlight])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     hasInteractedRef.current = true

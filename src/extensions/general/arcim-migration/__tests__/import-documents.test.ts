@@ -102,16 +102,22 @@ const mockRecordImportedDelivery = vi.mocked(recordImportedInvoiceDelivery)
 const COMPANY = 'company-1'
 const USER = 'user-1'
 
-/** Supabase mock whose chained `.range()` resolves to the rows for that table. */
+/**
+ * Supabase mock whose chained `.range()` (an offset page) or `.limit()` (a
+ * keyset page) resolves to the rows for that table. Fewer rows than a page,
+ * so a read ends at its first page.
+ */
 function rangeMockSupabase(byTable: Record<string, unknown[]>): SupabaseClient {
   const builder = (table: string) => {
     const node = {
       select: () => node,
       eq: () => node,
+      gt: () => node,
       not: () => node,
       in: () => node,
       order: () => node,
       range: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
+      limit: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
     }
     return node
   }
@@ -285,6 +291,150 @@ describe('importProviderDocuments', () => {
 
     expect(result).toMatchObject({ scanned: 1, linked: 1, skipped: 0 })
     expect(mockUpload).toHaveBeenCalledTimes(1)
+  })
+
+  describe('the read of the documents a company already has, over several pages', () => {
+    type StoredAttachment = ExistingAttachment & { company_id: string }
+
+    /**
+     * document_attachments as PostgREST answers this read: the company's rows
+     * after `gt('id', ...)`, in the order asked for, cut at the page and at
+     * max-rows (1000). Answers an offset page (`.range()`) and a keyset page
+     * (`.limit()`) alike, so a result checked here holds for either read.
+     * `ignoreAfter` answers as a server that drops the keyset filter would.
+     */
+    function pagedAttachments(
+      rows: StoredAttachment[],
+      { failOnPage, ignoreAfter = false }: { failOnPage?: number; ignoreAfter?: boolean } = {},
+    ) {
+      const requests: { after: string | null; order: unknown[]; offset: number; limit: number }[] = []
+      const base = wireBokio()
+      const supabase = {
+        from(table: string) {
+          if (table !== 'document_attachments') return base.from(table)
+          let company: string | null = null
+          let after: string | null = null
+          let order: unknown[] = []
+          const page = (offset: number, limit: number) => {
+            requests.push({ after, order, offset, limit })
+            if (failOnPage === requests.length) {
+              return Promise.resolve({ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } })
+            }
+            const ascending = (order[1] as { ascending?: boolean } | undefined)?.ascending !== false
+            const data = rows
+              .filter((row) => row.company_id === company && (ignoreAfter || after === null || row.id > after))
+              .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) * (ascending ? 1 : -1))
+              .slice(offset, offset + Math.min(limit, 1000))
+              .map(({ company_id: _company, ...row }) => row)
+            return Promise.resolve({ data, error: null })
+          }
+          const node = {
+            select: () => node,
+            eq: (column: string, value: string) => {
+              if (column === 'company_id') company = value
+              return node
+            },
+            gt: (column: string, value: string) => {
+              if (column === 'id') after = value
+              return node
+            },
+            order: (...args: unknown[]) => {
+              order = args
+              return node
+            },
+            range: (from: number, to: number) => page(from, to - from + 1),
+            limit: (count: number) => page(0, count),
+          }
+          return node
+        },
+        rpc: base.rpc,
+      } as unknown as SupabaseClient
+      return { supabase, requests }
+    }
+
+    /**
+     * `size` rows (3 000 unless given), a quarter of them another company's,
+     * interleaved in id order. The company's rows carry no verifikat except
+     * its last one, this import's own copy of the receipt on je-1: found only
+     * by a read that reaches the last page.
+     */
+    function archive(size = 3000): StoredAttachment[] {
+      const rows: StoredAttachment[] = Array.from({ length: size }, (_, index) => ({
+        id: `att-${String(index).padStart(5, '0')}`,
+        company_id: index % 4 === 3 ? 'company-2' : COMPANY,
+        sha256_hash: `sha-${index}`,
+        journal_entry_id: null,
+        upload_source: 'file_upload',
+      }))
+      const last = rows.filter((row) => row.company_id === COMPANY).at(-1)!
+      Object.assign(last, { sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-1', upload_source: 'api' })
+      return rows
+    }
+
+    it('finds the receipt an earlier run archived on the last page and skips it', async () => {
+      const { supabase } = pagedAttachments(archive())
+      mockArchivedForOwnEntry.mockResolvedValue(true)
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ scanned: 1, linked: 0, skipped: 1, failed: 0 })
+      expect(supabase.rpc).toHaveBeenCalledWith('record_bokio_upload', {
+        p_company_id: COMPANY, p_consent_id: 'c1', p_upload_id: 'up-1', p_document_id: 'att-02998',
+      })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('asks each page for the thousand ids after the last one read, never for an offset', async () => {
+      const { supabase, requests } = pagedAttachments(archive())
+      mockArchivedForOwnEntry.mockResolvedValue(true)
+
+      await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      // The company's 1000th and 2000th ids in id order (every fourth id is
+      // the other company's): each page starts after the last row of the one
+      // before, so it reads its own rows and no others. Ascending id order is
+      // what makes "after the last id" the next page.
+      const ascendingById = ['id', { ascending: true }]
+      expect(requests).toEqual([
+        { after: null, order: ascendingById, offset: 0, limit: 1000 },
+        { after: 'att-01332', order: ascendingById, offset: 0, limit: 1000 },
+        { after: 'att-02665', order: ascendingById, offset: 0, limit: 1000 },
+      ])
+    })
+
+    it('ends on the empty page after a last page that was exactly full', async () => {
+      // 2 000 of the company's rows: two full pages, then nothing.
+      const { supabase, requests } = pagedAttachments(archive(2666))
+      mockArchivedForOwnEntry.mockResolvedValue(true)
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(requests.map(({ after }) => after)).toEqual([null, 'att-01332', 'att-02665'])
+      expect(result).toMatchObject({ scanned: 1, linked: 0, skipped: 1 })
+      expect(supabase.rpc).toHaveBeenCalledWith('record_bokio_upload', {
+        p_company_id: COMPANY, p_consent_id: 'c1', p_upload_id: 'up-1', p_document_id: 'att-02665',
+      })
+    })
+
+    it('stops with an error instead of asking for the same full page again', async () => {
+      const { supabase, requests } = pagedAttachments(archive(), { ignoreAfter: true })
+
+      await expect(importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })).rejects.toThrow(
+        'a full page gave no id to continue after',
+      )
+      expect(requests).toHaveLength(2)
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('keeps the statement timeout code when a page fails', async () => {
+      const { supabase } = pagedAttachments(archive(), { failOnPage: 2 })
+
+      await expect(importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })).rejects.toMatchObject({
+        message: 'canceling statement due to statement timeout',
+        code: '57014',
+      })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
   })
 
   describe('a verifikat that already carries underlag from another path (crm#200)', () => {
@@ -1590,6 +1740,45 @@ describe('importProviderDocuments', () => {
       expect(mockDownloadFortnoxArchiveFile.mock.calls.length).toBeGreaterThan(1)
     })
 
+    describe('when the listing ran past the sweep deadline', () => {
+      // The listing "costs" 1000 ms and ends past the server's 900 ms sweep
+      // deadline: the first file only has the time up to the hard stop.
+      const lateSlice = (supabase: SupabaseClient) => {
+        let clock = 0
+        mockFetchFortnoxFileConnections.mockImplementation(async () => {
+          clock += 1_000
+          return THREE_CONNECTIONS
+        })
+        return importProviderDocuments({
+          supabase,
+          companyId: COMPANY,
+          userId: USER,
+          consentId: 'c1',
+          timeBudgetMs: 1_000_000,
+          sweepDeadline: 900,
+          now: () => clock,
+        })
+      }
+
+      it('ends the slice out of time, without counting the file failed, when the hard stop cuts it', async () => {
+        const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+        mockDownloadFortnoxArchiveFile.mockRejectedValue(new ExecutionBudgetExceeded('underlag-test'))
+
+        // It counted file-a failed and moved the run past it, as a file a
+        // whole sweep could not finish, though it never had one.
+        await expect(lateSlice(supabase)).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
+        expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
+      })
+
+      it('still moves the run by the one file when that file finishes before the hard stop', async () => {
+        const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+
+        const result = await lateSlice(supabase)
+
+        expect(result).toMatchObject({ scanned: 1, linked: 1, failed: 0, partial: true, nextCursor: 'file-a' })
+      })
+    })
+
     it('stops before the next file when the continuation loses the run or connection', async () => {
       const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
       const shouldContinue = vi.fn()
@@ -1704,8 +1893,9 @@ describe('Fortnox customer invoice copies (#165)', () => {
             is: () => node,
             not: () => node,
             in: () => node,
+            gt: () => node,
             order: () => node,
-            range: () => Promise.resolve({ data: opts.existingAttachments ?? [], error: null }),
+            limit: () => Promise.resolve({ data: opts.existingAttachments ?? [], error: null }),
           }
           return node
         }

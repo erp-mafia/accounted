@@ -59,6 +59,14 @@ vi.mock('../lib/google-oauth', async (importOriginal) => ({
   revokeGoogleToken: vi.fn(),
 }))
 vi.mock('../lib/gmail-client', () => ({ getMailboxAddress: vi.fn() }))
+// Only this host resolves in the brands table: a registered white-label domain.
+vi.mock('@/lib/branding/resolve', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/branding/resolve')>()),
+  resolveBrandResultByHost: vi.fn(async (host: string) => ({
+    brand: host === 'books.partner.example' ? { domain: host } : null,
+    lookupFailed: false,
+  })),
+}))
 
 import { GET, POST, DELETE } from '@/app/api/extensions/ext/[...path]/route'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -163,6 +171,35 @@ describe('POST /api/extensions/ext/mail/oauth/start', () => {
     expect(url.searchParams.get('code_challenge_method')).toBe('S256')
     expect(url.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(verified!.codeVerifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  })
+
+  it('seals the white-label origin the consent started on, keeping the redirect URI canonical', async () => {
+    const brandRequest = new Request('https://books.partner.example/api/extensions/ext/mail/oauth/start', {
+      method: 'POST',
+      headers: { host: 'books.partner.example' },
+    })
+    const res = await POST(brandRequest, params('oauth', 'start'))
+    expect(res.status).toBe(200)
+
+    const url = new URL((await res.json()).url as string)
+    expect(url.searchParams.get('redirect_uri')).toBe(`${APP_URL}/api/extensions/ext/mail/oauth/callback`)
+    expect(verifyOAuthState(url.searchParams.get('state') as string)).toMatchObject({
+      userId: USER,
+      companyId: COMPANY,
+      origin: 'https://books.partner.example',
+    })
+  })
+
+  it('seals the canonical origin for a host that is not a registered brand', async () => {
+    const res = await POST(
+      new Request('https://evil.example/api/extensions/ext/mail/oauth/start', {
+        method: 'POST',
+        headers: { host: 'evil.example' },
+      }),
+      params('oauth', 'start'),
+    )
+    const url = new URL((await res.json()).url as string)
+    expect(verifyOAuthState(url.searchParams.get('state') as string)?.origin).toBe(APP_URL)
   })
 })
 

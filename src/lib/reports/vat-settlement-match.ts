@@ -168,6 +168,28 @@ export async function clearedByAccount(
   companyId: string,
   ids: readonly string[],
 ): Promise<Map<string, Map<string, number>>> {
+  const moved = await movedByAccount(supabase, companyId, ids)
+  for (const [id, accounts] of moved) {
+    for (const account of VAT_SETTLEMENT_NET_ACCOUNTS) accounts.delete(account)
+    if (accounts.size === 0) moved.delete(id)
+  }
+  return moved
+}
+
+/**
+ * What each verifikat moves on each moms account and on 2650/1650: debit
+ * minus credit per account, by verifikat id. clearedByAccount without the
+ * net accounts left out, for a reader that needs both from one read. Also
+ * reads `alsoAccounts` (the rounding account, for a reader that needs what a
+ * momsredovisning put on 3740). An account a verifikat nets to nothing on is
+ * left out.
+ */
+export async function movedByAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  ids: readonly string[],
+  alsoAccounts: readonly string[] = [],
+): Promise<Map<string, Map<string, number>>> {
   const out = new Map<string, Map<string, number>>()
   if (ids.length === 0) return out
   const lines = await fetchEntryLines<{ journal_entry_id: string; account_number: string; debit_amount: number; credit_amount: number }>({
@@ -176,9 +198,9 @@ export async function clearedByAccount(
     filterEntries: (q: EntryLinesQuery) => q.eq('company_id', companyId).in('id', [...ids]),
     attachEntriesAs: null,
   })
-  const net = new Set(VAT_SETTLEMENT_NET_ACCOUNTS)
+  const net = new Set([...VAT_SETTLEMENT_NET_ACCOUNTS, ...alsoAccounts])
   for (const line of lines) {
-    if (!isMomsAccount(line.account_number) || net.has(line.account_number)) continue
+    if (!isMomsAccount(line.account_number) && !net.has(line.account_number)) continue
     const accounts = out.get(line.journal_entry_id) ?? new Map<string, number>()
     accounts.set(line.account_number, (accounts.get(line.account_number) ?? 0) + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0))
     out.set(line.journal_entry_id, accounts)

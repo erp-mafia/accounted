@@ -968,6 +968,9 @@ export function getErrorMessage(
         if (details?.reason === 'identical_to_original') {
           return 'Rättelsen är identisk med originalverifikationen: inget har ändrats.'
         }
+        if (details?.reason === 'currency_incomplete') {
+          return 'Rättelsen ändrar bara valuta, men en rads valuta är ofullständig. En rad vars original är i utländsk valuta bokförs i kronor om valutan saknas, och en rad i utländsk valuta behöver belopp i valuta och kurs. Ange valuta, belopp i valuta och kurs på raden, eller SEK om den ska bokföras i kronor.'
+        }
         if (details?.reason === 'negates_original') {
           return 'Rättelsen är originalet med debet och kredit omkastade. Stornon nollställer redan originalet, så rättelsen skulle vända beloppen en gång till. Vill du bara ta bort verifikationen: använd Återför (storno). En rättelse innehåller de rader som borde ha bokförts, och omkastade sidor är bara rätt om originalet hade debet och kredit omkastade.'
         }
@@ -988,15 +991,17 @@ export function getErrorMessage(
         return `${depthPart}${rootPart}. Räkna ut nettoeffekten av hela kedjan och gör EN rättelse istället, eller skicka allow_deep_chain=true för att rätta ändå.`
       }
 
-      if (structured.code === 'BOOKKEEPING_DATABASE_ERROR') {
+      if (structured.code === 'BOOKKEEPING_DATABASE_ERROR' || structured.code === 'PERIOD_LOCKED') {
         // A DB-layer error may carry a user-relevant cause (e.g. period lock
-        // trigger). Try the known-pattern map before falling back to the
-        // generic "kunde inte sparas" message.
+        // trigger), and a lock refusal the engine names PERIOD_LOCKED carries
+        // the trigger's own text, the lock date in it. Try the known-pattern
+        // map before falling back to the generic "kunde inte sparas" message,
+        // or, for a lock, to the registry's sentence below.
         if (typeof structured.message === 'string') {
           const matched = tryMatchKnownError(structured.message)
           if (matched) return matched
         }
-        return 'Verifikationen kunde inte sparas. Försök igen.'
+        if (structured.code === 'BOOKKEEPING_DATABASE_ERROR') return 'Verifikationen kunde inte sparas. Försök igen.'
       }
 
       if (locale === 'en' && typeof structured.message_en === 'string' && structured.message_en.trim()) {

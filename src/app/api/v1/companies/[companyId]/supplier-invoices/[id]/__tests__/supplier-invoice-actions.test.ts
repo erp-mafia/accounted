@@ -1,6 +1,7 @@
 /**
  * Supplier-invoice actions through the v1 door of the operation registry
- * (src/lib/operations/supplier-invoice-actions.ts via lib/operations/v1.ts):
+ * (src/lib/operations/supplier-invoice-actions.ts via lib/operations/v1.ts),
+ * and the published shape of GET /supplier-invoices/:id:
  *   DELETE /api/v1/companies/:companyId/supplier-invoices/:id
  *   POST   /api/v1/companies/:companyId/supplier-invoices/:id/uncredit
  *   PATCH  /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
@@ -51,7 +52,8 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { DELETE as deleteInvoice } from '../route'
+import { DELETE as deleteInvoice, GET as getInvoice } from '../route'
+import { generateOpenApiSpec } from '@/lib/api/v1/registry'
 import { POST as uncredit } from '../uncredit/route'
 import { PATCH as moveItem } from '../items/[itemId]/route'
 import { POST as bankEntered } from '../bank-entered/route'
@@ -324,7 +326,8 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/uncredit', () 
       credit_note_id: CREDIT_ID,
       posts_storno: true,
       credit_voucher: 'A42',
-      restored_status: 'approved',
+      // Booked but never attested: it goes back to wait for attest (crm#2165).
+      restored_status: 'registered',
       remaining_amount: 6250,
     })
     expect(reverseEntryMock).not.toHaveBeenCalled()
@@ -347,12 +350,59 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/uncredit', () 
     expect((await res.json()).error.code).toBe('PERIOD_LOCKED')
   })
 
+  // A credit note rests at 'credited' like its original. Its own id was taken
+  // for the original's: the dry run promised to restore the credit note as an
+  // invoice to pay, and the commit tried to write that, which the database
+  // refuses (supplier_invoices_credit_note_not_payable).
+  it.each([
+    ['a dry run', '?dry_run=true'],
+    ['a commit', ''],
+  ])("refuses a credit note's own id on %s (400 SI_UNCREDIT_CREDIT_NOTE) and writes nothing", async (_door, query) => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: [
+        {
+          data: invoice({
+            id: CREDIT_ID,
+            status: 'credited',
+            is_credit_note: true,
+            credited_invoice_id: SI_ID,
+            invoice_date: '2026-09-10',
+            due_date: '2026-09-10',
+            remaining_amount: 0,
+            registration_journal_entry_id: 'credit-je',
+          }),
+        },
+        { data: null },
+        {
+          data: null,
+          error: { code: '23514', message: 'new row for relation "supplier_invoices" violates check constraint "supplier_invoices_credit_note_not_payable"' },
+        },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await uncredit(
+      request(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${CREDIT_ID}/uncredit${query}`, { method: 'POST' }),
+      params(CREDIT_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatchObject({
+      code: 'SI_UNCREDIT_CREDIT_NOTE',
+      details: { credit_note_id: CREDIT_ID, credited_invoice_id: SI_ID },
+    })
+    expect(body.error.message).toMatch(/originalfakturan/)
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(wrote(client)).toBe(false)
+  })
+
   it('cancels the credit verifikat with a storno, keeps the credit row as reversed, restores the original', async () => {
     reverseEntryMock.mockResolvedValue({ id: 'storno-1' })
     const client = makeClient({
       company_members: OWNER,
       supplier_invoices: [
-        { data: invoice({ status: 'credited', registration_journal_entry_id: JE_ID, remaining_amount: 0 }) },
+        // Attested before the credit: it goes back to 'approved'.
+        { data: invoice({ status: 'credited', registration_journal_entry_id: JE_ID, remaining_amount: 0, approved_at: '2026-09-04T08:00:00Z' }) },
         { data: { id: CREDIT_ID, registration_journal_entry_id: 'credit-je' } },
         { data: null, error: null },
         { data: invoice({ status: 'approved', registration_journal_entry_id: JE_ID }) },
@@ -587,5 +637,38 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered',
     expect(res.status).toBe(200)
     expect((await res.json()).data.preview).toMatchObject({ changed: true, entered: true })
     expect(wrote(client)).toBe(false)
+  })
+})
+
+describe('GET /api/v1/companies/:companyId/supplier-invoices/:id', () => {
+  // The handler returns the selected row as it is, so a column it selects but
+  // the schema leaves out is in every answer and missing from openapi.json:
+  // an integration reading the spec cannot know document_id is there.
+  it('declares in the published spec every column it returns (GET and PATCH share the schema)', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['suppliers:read'],
+      mode: 'live',
+    })
+    const client = makeClient({ company_members: OWNER, supplier_invoices: { data: invoice() } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await getInvoice(request(BASE, { method: 'GET' }), params())
+    expect(res.status).toBe(200)
+
+    const select = client.calls.find((c) => c.table === 'supplier_invoices' && c.method === 'select')
+    const returned = String(select?.args[0]).split(',').map((c) => c.trim())
+    expect(returned).toContain('document_id')
+
+    const path = generateOpenApiSpec('https://x.test').paths['/api/v1/companies/{companyId}/supplier-invoices/{id}'] as Record<
+      string,
+      { responses: Record<string, { content: Record<string, { schema: { properties: { data: { properties: Record<string, unknown> } } } }> }> }
+    >
+    for (const method of ['get', 'patch']) {
+      const declared = Object.keys(path[method].responses['200'].content['application/json'].schema.properties.data.properties)
+      expect(returned.filter((column) => !declared.includes(column)), method).toEqual([])
+    }
   })
 })

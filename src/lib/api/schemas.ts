@@ -124,6 +124,7 @@ import {
   PERIOD_PLACEHOLDER_REQUIRES_START_MESSAGE,
 } from '@/lib/invoices/recurring-placeholders'
 import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
+import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
 
 export const SIECreateAccountsSchema = z.object({
   accounts: z.array(z.object({ number: accountNumberSchema, name: z.string().max(500) })).min(1).max(10_000),
@@ -715,8 +716,11 @@ export const CreateInvoiceItemSchema = z
     if (item.description.trim().length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: 'Item description is required' })
     }
-    if (item.quantity <= 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: 'Quantity must be positive' })
+    // Zero and negative quantities are allowed, except on a skattereduktion
+    // row or (negative) a sales order row: lib/invoices/line-quantity.ts.
+    const quantityIssue = lineQuantityIssue(item)
+    if (quantityIssue) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: LINE_QUANTITY_MESSAGES[quantityIssue] })
     }
     if (item.unit.length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: 'Unit is required' })
@@ -4876,10 +4880,19 @@ export const OpeningBalanceSplitApplySchema = z.object({
 // Register import schemas (customers, suppliers)
 // ============================================================
 
+/** What a register row states of the type: TypeStated in lib/import/shared/stated-fields.ts. */
+const statedTypeField = z.enum(['type', 'business']).nullable().default(null)
+
 const ImportedCustomerRowSchema = z.object({
   row_index: z.number().int(),
   name: z.string().min(1),
   customer_type: CustomerTypeSchema,
+  // What the file (or the review step) states of the type and the country
+  // (lib/import/customers/types.ts): an update writes only that. Nothing
+  // stated for a wizard opened before the fields existed, so its update
+  // leaves both.
+  customer_type_stated: statedTypeField,
+  country_stated: z.boolean().default(false),
   // Defaulted so a wizard opened before the field existed can still submit.
   customer_number: z.string().trim().max(32).nullable().default(null),
   org_number: z.string().nullable(),
@@ -4937,6 +4950,13 @@ const ImportedSupplierRowSchema = z.object({
   row_index: z.number().int(),
   name: z.string().min(1),
   supplier_type: SupplierTypeSchema,
+  // What the file (or the review step) states of the type, the country and
+  // the currency (lib/import/suppliers/types.ts): an update writes only that.
+  // Nothing stated for a wizard opened before the fields existed, so its
+  // update leaves all three.
+  supplier_type_stated: statedTypeField,
+  country_stated: z.boolean().default(false),
+  default_currency_stated: z.boolean().default(false),
   org_number: z.string().nullable(),
   email: z.string().nullable(),
   phone: z.string().nullable(),

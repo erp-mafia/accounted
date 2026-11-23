@@ -5,6 +5,8 @@
  * themselves, and classifyError answers PERIOD_LOCKED for every one of them,
  * except a document on a verifikat in a locked year: DOC_UPLOAD_PERIOD_LOCKED.
  */
+import { readdirSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
@@ -16,6 +18,7 @@ import {
 } from '../get-structured-error'
 import { getErrorMessage } from '../get-error-message'
 import { getErrorEntry } from '../structured-errors'
+import { databaseRefusal } from '../database-refusal'
 
 const PERIOD = { code: 'P0001', message: 'Cannot write to locked/closed fiscal period "2025" (is_closed=t, locked_at=2026-01-31)' }
 const LOCK_DATE = new Error('Bokföringen är låst t.o.m. 2025-12-31. Ändringar före detta datum kan inte göras.')
@@ -128,5 +131,61 @@ describe('a document on a verifikat in a locked or closed year', () => {
 
   it('leaves a verifikat refused in a locked period as PERIOD_LOCKED', () => {
     expect(getErrorMessage(PERIOD)).not.toBe(answer.message_sv)
+  })
+})
+
+// The posting functions check the lock themselves before they commit, in
+// their own words, and the engine carries most of those refusals as a
+// BookkeepingDatabaseError: one the reader does not read answers a retryable
+// 500. Read from each function's newest definition, so a later migration
+// that words a refusal of a locked or closed fiscal period, or of the lock
+// date, anew fails here until the reader (lib/errors/database-refusal.ts)
+// reads it, or the function raises a code.
+describe('every lock refusal a posting function raises is read as a lock', () => {
+  const dir = resolve(__dirname, '../../../../supabase/migrations')
+  const newest = new Map<string, string>()
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+    const sql = readFileSync(resolve(dir, file), 'utf8')
+    for (const created of sql.matchAll(/CREATE (?:OR REPLACE )?FUNCTION (?:public\.)?(\w+)\(/gi)) {
+      const rest = sql.slice(created.index)
+      const open = /\bAS\s+(\$\w*\$)/i.exec(rest)
+      if (!open) continue
+      const start = open.index + open[0].length
+      newest.set(created[1], rest.slice(start, rest.indexOf(open[1], start)))
+    }
+  }
+  const postingFunctions = [...newest.keys()]
+    .filter((name) => name.startsWith('commit_') || name === 'split_asset_at_k3_transition')
+    .map((name) => ({
+      name,
+      sentences: [...newest.get(name)!.matchAll(/RAISE EXCEPTION '([^']*)'/g)]
+        .map(([, sentence]) => sentence)
+        // A lock of a fiscal period, or the company lock date: not every
+        // sentence that says "closed" (an invoice, a case) is one.
+        .filter((sentence) => /\b(locked|closed)\b.*\bfiscal (period|year)\b|\blocked through\b/i.test(sentence)),
+    }))
+    .filter(({ sentences }) => sentences.length > 0)
+
+  it('finds the functions that check the lock themselves', () => {
+    expect(postingFunctions.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        'commit_asset_disposal',
+        'commit_asset_component_replacement',
+        'commit_asset_value_adjustment',
+        'commit_deferred_tax',
+        'commit_contract_revenue',
+        'commit_k3_transition',
+        'commit_opening_balance_replacement',
+        'split_asset_at_k3_transition',
+      ]),
+    )
+  })
+
+  it.each(postingFunctions)('$name', ({ sentences }) => {
+    for (const sentence of sentences) {
+      const raised = sentence.replaceAll('%', '2025-12-31')
+      expect(databaseRefusal(raised), raised).toMatchObject({ code: 'PERIOD_LOCKED' })
+      expect(isLockDateRefusal(raised), raised).toBe(/locked through/i.test(raised))
+    }
   })
 })

@@ -6,6 +6,8 @@ import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 import { cleanProviderPayload } from '../provider-text';
 import { todayIsoStockholm } from '@/lib/dates/iso';
 
+// Per attempt, sized for one record. The migration worker passes its own for
+// whole register pages (MIGRATION_LIST_TIMEOUT_MS in provider-data-fetcher.ts).
 const FETCH_TIMEOUT_MS = 15_000;
 
 export class BrioxApiError extends Error {
@@ -66,14 +68,14 @@ export class BrioxClient {
     };
   }
 
-  async get<T>(accessToken: string, path: string): Promise<T> {
+  async get<T>(accessToken: string, path: string, options: { timeoutMs?: number } = {}): Promise<T> {
     return withRetry(
       async () => {
         await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: this.authHeaders(accessToken),
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          signal: AbortSignal.timeout(options.timeoutMs ?? FETCH_TIMEOUT_MS),
         });
 
         if (!response.ok) {
@@ -138,6 +140,7 @@ export class BrioxClient {
       page?: number;
       pageSize?: number;
       fromModifiedDate?: string;
+      timeoutMs?: number;
     },
   ): Promise<{ items: T[]; page: number; totalPages: number; totalCount: number }> {
     const params = new URLSearchParams();
@@ -152,7 +155,7 @@ export class BrioxClient {
     const separator = path.includes('?') ? '&' : '?';
     const fullPath = `${path}${separator}${params.toString()}`;
 
-    const response = await this.get<BrioxListResponse>(accessToken, fullPath);
+    const response = await this.get<BrioxListResponse>(accessToken, fullPath, { timeoutMs: options?.timeoutMs });
 
     const meta = response.data?.metainformation;
     const totalPages = meta?.total_pages ?? 1;

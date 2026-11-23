@@ -1,6 +1,7 @@
 import type { SupplierType } from '@/types'
 import type { ImportNotice } from '@/lib/import/notices'
 import type { RegisterMatchKey } from '@/lib/import/shared/register-match'
+import type { TypeStated } from '@/lib/import/shared/stated-fields'
 
 /** Result of auto-detecting columns in a supplier register file. */
 export interface DetectedSupplierColumns {
@@ -31,7 +32,22 @@ export interface DetectedSupplierColumns {
 export interface ParsedSupplierRow {
   row_index: number
   name: string
+  /** Read from the file, or filled in when it gives none (see supplier_type_stated). */
   supplier_type: SupplierType
+  /**
+   * What the row states (lib/import/shared/stated-fields.ts): of the type,
+   * 'type' when its cell in a type column names one or the user picks one in
+   * the review step, 'business' when the cell says only that the supplier is
+   * a company (a word like Företag), null when it says nothing;
+   * country_stated, the row's cell in a country column has a value;
+   * default_currency_stated, its cell in a currency column names a currency
+   * the register knows. What the row does not state is filled in (the type
+   * from classifySupplier, SE, SEK) for a new supplier only: an update keeps
+   * the supplier's own.
+   */
+  supplier_type_stated: TypeStated
+  country_stated: boolean
+  default_currency_stated: boolean
   org_number: string | null
   email: string | null
   phone: string | null

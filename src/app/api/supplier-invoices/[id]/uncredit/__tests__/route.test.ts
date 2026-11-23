@@ -8,7 +8,7 @@ import {
   makeSupplierInvoice,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -36,6 +36,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 import { CannotReverseNonPostedError } from '@/lib/bookkeeping/errors'
 
 import { eventBus } from '@/lib/events'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 import { POST } from '../route'
 
@@ -89,6 +90,46 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     expect(mockReverseEntry).not.toHaveBeenCalled()
   })
 
+  it("refuses a credit note's own id with 400 SI_UNCREDIT_CREDIT_NOTE, in Swedish, and writes nothing", async () => {
+    // The credit note as Kreditera writes it: 'credited', like its original.
+    const creditNote = makeSupplierInvoice({
+      id: 'credit-1',
+      status: 'credited',
+      is_credit_note: true,
+      credited_invoice_id: 'inv-1',
+      total: 5000,
+      remaining_amount: 0,
+      due_date: '2026-11-02',
+      registration_journal_entry_id: 'je-credit',
+      payments: [],
+    })
+    enqueue({ data: creditNote, error: null })
+    // Before the fix the service went on: no live credit note credits a
+    // credit note, and the database refused restoring it as a payable.
+    enqueue({ data: null, error: null })
+    enqueue({
+      data: null,
+      error: { code: '23514', message: 'new row for relation "supplier_invoices" violates check constraint "supplier_invoices_credit_note_not_payable"' },
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/credit-1/uncredit', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'credit-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details?: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_UNCREDIT_CREDIT_NOTE')
+    expect(body.error.details).toMatchObject({ credit_note_id: 'credit-1', credit_note_status: 'credited', credited_invoice_id: 'inv-1' })
+    // The dashboard toast reads the envelope through getErrorMessage.
+    const sentence =
+      'En kreditering ångras på originalfakturan, inte på kreditfakturan. Är kreditfakturan kopplad till en krediterad originalfaktura och inte redan ångrad, gå till originalfakturan och välj "Ångra kreditering" där. Annars går krediteringen inte att ångra här.'
+    expect(body.error.message).toBe(sentence)
+    expect(getErrorMessage(body, { context: 'supplier_invoice', statusCode: status })).toBe(sentence)
+    expect(findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+  })
+
   it('reverses credit JE, soft-deletes credit row, and restores original to approved when no payments', async () => {
     const original = makeSupplierInvoice({
       id: 'inv-1',
@@ -97,6 +138,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       remaining_amount: 0,
       due_date: '2099-12-31',
       registration_journal_entry_id: 'je-reg-1',
+      approved_at: '2026-01-15T10:00:00Z',
       payments: [],
     })
 
@@ -180,9 +222,8 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
 
   it('handles cash method (credit row without registration_journal_entry_id): skips reverseEntry and restores to registered', async () => {
     // Pure cash-method: neither the original nor the credit row have a
-    // registration JE. The original must not be restored to 'approved':
-    // that would assert a verifikation that never existed (sambandskravet,
-    // BFL 4 kap 2§). 'registered' is the correct state.
+    // registration JE, and kontantmetoden has no attest step, so the original
+    // was never attested: 'registered' is the correct state.
     const original = makeSupplierInvoice({
       id: 'inv-1',
       status: 'credited',
@@ -288,8 +329,9 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     enqueue({ data: original, error: null })
     // Find credit row filters out status='reversed': nothing comes back
     enqueue({ data: null, error: null })
+    // Never attested: it goes back to wait for attest (crm#2165).
     enqueue({
-      data: { ...original, status: 'approved', remaining_amount: 5000 },
+      data: { ...original, status: 'registered', remaining_amount: 5000 },
       error: null,
     })
 
@@ -301,7 +343,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.status).toBe('approved')
+    expect(body.data.status).toBe('registered')
     expect(body.reversal_entry_id).toBeNull()
     expect(mockReverseEntry).not.toHaveBeenCalled()
   })
@@ -325,7 +367,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     mockReverseEntry.mockResolvedValue({ id: 'je-reversal' })
     enqueue({ data: null, error: null })
     enqueue({
-      data: { ...original, status: 'approved', remaining_amount: 5000 },
+      data: { ...original, status: 'registered', remaining_amount: 5000 },
       error: null,
     })
 

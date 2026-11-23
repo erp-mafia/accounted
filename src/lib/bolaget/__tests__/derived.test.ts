@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { proposeBeneficialOwners } from '../beneficial-owners'
 import { aktiebokCsv } from '../csv'
-import { buildAktiebokPdfData, buildAktiebrevData, buildHolderExtractData, describeEvent } from '../pdf-data'
+import { buildAktiebokPdfData, buildAktiebrevData, buildHolderExtractData, companyCategory, describeEvent } from '../pdf-data'
 import { reconcileWithSettings } from '../reconcile'
 import { replayShareRegister, summarizeHoldings } from '../register-state'
 import type { RolesView } from '../roles'
 import type { ShareRegisterData } from '../share-register'
-import { roleFromPosition, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from '../tic-seed'
+import { listsRepresentatives, roleFromPosition, rolesFromTicSnapshot, signatoryRulesFromTicSnapshot } from '../tic-seed'
 import type { RegisterParty, ShareClass, ShareEvent } from '../types'
 import { bolagetRollout, isBolagetEnabled } from '@/lib/env/bolaget-switch'
 
@@ -45,6 +45,7 @@ function registerData(asOf = '2026-10-29'): ShareRegisterData {
   return {
     as_of: asOf,
     is_avstamningsbolag: false,
+    setup_completed_at: null,
     classes: [A],
     events,
     replay,
@@ -98,6 +99,15 @@ describe('tic seed', () => {
     ])
     expect(rolesFromTicSnapshot(null)).toEqual([])
     expect(rolesFromTicSnapshot({ representatives: 'x' })).toEqual([])
+  })
+
+  it('takes only a list with someone on it as an answer about the board', () => {
+    expect(listsRepresentatives({ representatives: [{ name: 'Anna Ek' }] })).toBe(true)
+    // A role a company holds comes without a person's name: still an answer.
+    expect(listsRepresentatives({ representatives: [{ name: null, positionDescription: 'Revisor' }] })).toBe(true)
+    for (const snapshot of [null, 'x', {}, { representatives: [] }, { representatives: 'x' }, { representatives: [], incompleteSections: ['representatives'] }]) {
+      expect(listsRepresentatives(snapshot)).toBe(false)
+    }
   })
 
   it('splits run-on firmateckning clauses and drops the list markers', () => {
@@ -193,6 +203,39 @@ describe('pdf data', () => {
     expect(brev.forbehall).toEqual(['Förköpsförbehåll (4 kap. 18 § ABL)'])
     expect(brev.signers).toEqual([{ name: 'Anna Ek', role: 'Styrelseordförande' }])
     expect(buildAktiebrevData(events[0]!, data, data.replay, roles, { name: 'T AB', org_number: null })).toBeNull()
+    // ABL 6:2 p. 1: the certificate states the bolagskategori.
+    expect(brev.company_category).toBe('Privat aktiebolag')
+  })
+
+  it('reads the bolagskategori from the name: a public company carries (publ) or says it is public', () => {
+    expect(companyCategory('T AB')).toBe('Privat aktiebolag')
+    expect(companyCategory('Republik Media AB')).toBe('Privat aktiebolag')
+    expect(companyCategory('Stora Bolaget AB (publ)')).toBe('Publikt aktiebolag')
+    expect(companyCategory('Stora Publikt Aktiebolag')).toBe('Publikt aktiebolag')
+  })
+
+  it('describes a holding carried over from an earlier register', () => {
+    const text = describeEvent(
+      ev({ id: 'o', event_number: 1, kind: 'ingaende', event_date: '2026-01-01', to_party_id: 'anna', share_class_id: 'class-a', range_start: 1, range_end: 500, note: 'Tidigare aktiebok i pärm hos styrelsen' }),
+      parties,
+      [A],
+      new Map(),
+    )
+    expect(text).toBe('Ingående innehav: aktie 1-500 (500 st, serie A) hos Anna Ek, överfört från bolagets tidigare aktiebok. Tidigare aktiebok i pärm hos styrelsen')
+  })
+
+  it('states the day of the event in an entry that carries the day it was made', () => {
+    const text = describeEvent(
+      ev({ id: 't2', event_number: 10, kind: 'overlatelse', event_date: '2026-11-22', occurred_on: '2026-10-01', from_party_id: 'anna', to_party_id: 'cia', share_class_id: 'class-a', range_start: 1, range_end: 10, transfer_reason: 'gava' }),
+      parties,
+      [A],
+      new Map(),
+    )
+    expect(text).toBe('Överlåtelse (gåva): aktie 1-10 (10 st, serie A) från Anna Ek till Cia Ek. Händelsens dag 2026-10-01')
+    // A free-text note says it too.
+    const note = describeEvent(ev({ id: 'n', event_number: 11, kind: 'anteckning', event_date: '2026-11-22', occurred_on: '2026-10-01', note: 'Hembud avslutat.' }), parties, [A], new Map())
+    expect(note).toBe('Anteckning: Hembud avslutat. Händelsens dag 2026-10-01')
+    expect(describeEvent(ev({ id: 'n2', event_number: 12, kind: 'anteckning', event_date: '2026-11-22', note: 'Hembud avslutat.' }), parties, [A], new Map())).toBe('Anteckning: Hembud avslutat.')
   })
 })
 

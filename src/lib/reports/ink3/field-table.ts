@@ -2,14 +2,17 @@ import { sruIncomeYear, sruPeriodSuffix } from '@/lib/reports/sru/envelope'
 import table2026P4 from './field-table-2026P4.json'
 
 /**
- * Skatteverket's INK3 field codes, pinned per beskattningsperiod.
+ * Skatteverket's INK3 field codes, pinned per SKV269 edition.
  *
  * Each table is derived from the field-name xls files Skatteverket publishes
- * in that period's SKV269 package (INK3R, INK3S, INK3SUF) and records the
- * file names, their sha256 and the package it came from. The engine never
- * guesses a code: a räkenskapsår whose beskattningsperiod has no table here
- * is refused with TAX_DECL_INK3_PERIOD_NOT_SUPPORTED, and the next period is
- * one more JSON file derived the same way, plus one line below.
+ * in an edition's SKV269 package (INK3R, INK3S, INK3SUF) and records the
+ * file names, their sha256 and the package it came from. An edition holds
+ * until the next one is published, and its package lists the
+ * beskattningsperioder it covers (for 2026P4: 2026P4 and 2027P1 to 2027P3);
+ * the table records that list as `covers`. The engine never guesses a code:
+ * a räkenskapsår whose beskattningsperiod no table covers is refused with
+ * TAX_DECL_INK3_PERIOD_NOT_SUPPORTED, and the next edition is one more JSON
+ * file derived the same way, plus one line below.
  *
  * Labels are Skatteverket's form labels and stay Swedish in both locales.
  */
@@ -43,7 +46,10 @@ export interface Ink3FieldDefinition {
 }
 
 export interface Ink3FieldTable {
+  /** The edition: the beskattningsperiod the SKV269 package is published from, e.g. '2026P4'. */
   beskattningsperiod: string
+  /** Every beskattningsperiod the edition's package lists as covered, the edition's own first. */
+  covers: readonly string[]
   source: {
     package: string
     packageSha256: string | null
@@ -59,6 +65,7 @@ export interface Ink3FieldTable {
 interface RawTable {
   beskattningsperiod: string
   source: Ink3FieldTable['source']
+  covers: string[]
   datatypes: Record<string, string>
   notes: Record<string, string>
   fields: Array<Omit<Ink3FieldDefinition, 'blankett' | 'datatyp' | 'sign' | 'column'> & {
@@ -73,6 +80,7 @@ function buildTable(raw: RawTable): Ink3FieldTable {
   const fields = raw.fields as unknown as Ink3FieldDefinition[]
   return {
     beskattningsperiod: raw.beskattningsperiod,
+    covers: raw.covers,
     source: raw.source,
     datatypes: raw.datatypes,
     notes: raw.notes,
@@ -81,7 +89,7 @@ function buildTable(raw: RawTable): Ink3FieldTable {
   }
 }
 
-/** Every pinned table, keyed by beskattningsperiod. Add a period here, never a guess in code. */
+/** Every pinned table, keyed by edition. Add an edition here, never a guess in code. */
 export const INK3_FIELD_TABLES: Readonly<Record<string, Ink3FieldTable>> = {
   '2026P4': buildTable(table2026P4 as RawTable),
 }
@@ -104,10 +112,11 @@ export class Ink3PeriodNotSupportedError extends Error {
   }
 }
 
-/** The pinned table for the räkenskapsår ending `periodEnd`; throws when there is none. */
+/** The pinned table whose edition covers the räkenskapsår ending `periodEnd`; throws when none does. */
 export function resolveInk3FieldTable(periodEnd: string): Ink3FieldTable {
   const period = ink3Beskattningsperiod(periodEnd)
-  const table = INK3_FIELD_TABLES[period]
-  if (!table) throw new Ink3PeriodNotSupportedError(period, Object.keys(INK3_FIELD_TABLES))
+  const tables = Object.values(INK3_FIELD_TABLES)
+  const table = tables.find((candidate) => candidate.covers.includes(period))
+  if (!table) throw new Ink3PeriodNotSupportedError(period, tables.flatMap((candidate) => candidate.covers))
   return table
 }

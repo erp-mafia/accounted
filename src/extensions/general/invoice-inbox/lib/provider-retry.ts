@@ -34,6 +34,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -126,6 +127,7 @@ type RetryOutcome = 'read' | 'unavailable' | 'failed' | 'skipped' | 'gated' | 'r
 
 interface CandidateDocument {
   id: string
+  company_id: string
   storage_path: string | null
   mime_type: string | null
   file_name: string | null
@@ -148,7 +150,7 @@ interface Candidate {
 }
 
 const CANDIDATE_COLUMNS =
-  'id, company_id, document_id, correlation_id, created_at, updated_at, extracted_data, matched_supplier_id, email_subject, email_received_at, document_attachments!inner(id, storage_path, mime_type, file_name, extraction_model, extracted_at)'
+  'id, company_id, document_id, correlation_id, created_at, updated_at, extracted_data, matched_supplier_id, email_subject, email_received_at, document_attachments!inner(id, company_id, storage_path, mime_type, file_name, extraction_model, extracted_at)'
 
 function documentOf(row: Candidate): CandidateDocument | null {
   const doc = row.document_attachments
@@ -228,7 +230,8 @@ async function retryOne(supabase: SupabaseClient, row: Candidate): Promise<Retry
   const selectedAt = doc?.extracted_at ?? null
   const attempt = providerUnavailableAttempt(selectedStamp)
   // Belt and braces: the select asks for exactly this, and the cap holds even if it did not.
-  if (!doc || !selectedStamp || !selectedAt || attempt == null || attempt >= PROVIDER_RETRY_MAX_ATTEMPTS) {
+  // The item's file is read for the item's company only: a document of another company is not this item's.
+  if (!doc || doc.company_id !== row.company_id || !selectedStamp || !selectedAt || attempt == null || attempt >= PROVIDER_RETRY_MAX_ATTEMPTS) {
     return 'ineligible'
   }
   const nextAttempt = attempt + 1
@@ -260,9 +263,10 @@ async function retryOne(supabase: SupabaseClient, row: Candidate): Promise<Retry
     return 'gated'
   }
 
-  const { data: blob, error: downloadError } = doc.storage_path
-    ? await supabase.storage.from('documents').download(doc.storage_path)
-    : { data: null, error: { message: 'no storage path' } }
+  // Only a key inside the item's company is read (storage-key.ts).
+  const { blob, error: downloadError } = doc.storage_path
+    ? await downloadDocumentObject(supabase, doc.storage_path, row.company_id)
+    : { blob: null, error: { message: 'no storage path' } }
   if (downloadError || !blob) {
     // Storage is ours, not the document's: the claimed stamp stands, and the
     // capped attempts still bound how often this is tried.

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest } from '@/tests/helpers'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn().mockResolvedValue('company-1') }))
@@ -98,6 +99,15 @@ describe('POST /api/bookkeeping/contract-revenue/year', () => {
     expect((await res.json()).error.code).toBe('CONTRACT_REVENUE_FIGURES_DATE')
     vi.mocked(bookContractRevenueYear).mockRejectedValueOnce(new ContractRevenueError('CONTRACT_REVENUE_INCOMPLETE'))
     expect((await post({ fiscal_period_id: PERIOD })).status).toBe(409)
+  })
+
+  it('answers a booking commit_contract_revenue refuses behind a lock as 400 PERIOD_LOCKED, not a 500', async () => {
+    vi.mocked(bookContractRevenueYear).mockRejectedValueOnce(
+      new BookkeepingDatabaseError('commit_contract_revenue', 'Cannot post contract revenue in a locked or closed fiscal period', '23514'),
+    )
+    const res = await post({ fiscal_period_id: PERIOD })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('PERIOD_LOCKED')
   })
 
   it('books the year and answers the verifikat, or null when nothing changed', async () => {

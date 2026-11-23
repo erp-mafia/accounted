@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
+import { ensureTicSnapshot, incompleteSectionsOf } from '@/lib/agent/composer/tic-fetch'
 import { writeCompanySettings } from '@/lib/company/settings-writer'
 import { createLogger } from '@/lib/logger'
 import {
@@ -10,15 +10,22 @@ import {
   type OrgNumberRefusalCode,
 } from '@/lib/company/org-number-rule'
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
+import { readTicPurposeSpent } from '@/lib/tic-budget/status'
 
 export interface RefreshCompanyProfileResult {
   ok?: true
   snapshot?: Record<string, unknown> | null
   fetchedAt?: string
+  /**
+   * The day fetching from Bolagsverket works again (YYYY-MM-DD), when this
+   * cycle's fetches are spent: set with error 'paused', and on a success whose
+   * snapshot still has incomplete sections.
+   */
+  resumesOn?: string
   // Error *codes*, translated by the caller (same pattern as company/actions.ts):
   //   unauthorized | org_number_invalid | org_number_locked |
   //   org_number_personnummer_required | org_number_legal_entity_required |
-  //   persist_failed | not_found
+  //   persist_failed | not_found | paused | unavailable
   error?: string
 }
 
@@ -98,7 +105,7 @@ export async function refreshCompanyProfileAction(
     if (!saved.ok) return { error: 'persist_failed' }
   }
 
-  const { snapshot, source } = await ensureTicSnapshot({
+  const { snapshot, source, reason } = await ensureTicSnapshot({
     supabase,
     companyId,
     // The user is watching a spinner; give the ~7-13 call Lens fan-out room to
@@ -109,11 +116,20 @@ export async function refreshCompanyProfileAction(
 
   // 'fetched' = a fresh live fetch was persisted. 'fallback' = TIC returned
   // nothing / errored: surface it and leave the existing snapshot untouched
-  // rather than blanking a good panel on a transient outage.
+  // rather than blanking a good panel on a transient outage. Only a real miss
+  // says "not found"; a fetch that could not run says when it can.
   if (source !== 'fetched' || !snapshot) {
-    return { error: 'not_found' }
+    if (reason === 'not_found') return { error: 'not_found' }
+    const budget = await readTicPurposeSpent('refresh')
+    return budget?.spent ? { error: 'paused', resumesOn: budget.resumesOn } : { error: 'unavailable' }
+  }
+
+  let resumesOn: string | undefined
+  if (incompleteSectionsOf(snapshot).length > 0) {
+    const budget = await readTicPurposeSpent('refresh')
+    if (budget?.spent) resumesOn = budget.resumesOn
   }
 
   revalidatePath('/settings')
-  return { ok: true, snapshot, fetchedAt: new Date().toISOString() }
+  return { ok: true, snapshot, fetchedAt: new Date().toISOString(), ...(resumesOn ? { resumesOn } : {}) }
 }
