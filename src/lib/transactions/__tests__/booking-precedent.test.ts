@@ -129,8 +129,18 @@ describe('loadBookingPrecedents', () => {
 describe('bookedAs', () => {
   it('reads the one business account, and no moms from a verifikat without a moms line', () => {
     expect(bookedAs(booking(noMoms('6570')))).toEqual({ account: '6570', vat_treatment: 'exempt', nature: null })
-    // A payment of a debt books a balance account, like any other single account.
-    expect(bookedAs(booking(noMoms('2440')))).toEqual({ account: '2440', vat_treatment: 'exempt', nature: null })
+    // A balance account that is no receivable or payable is a single account like any other.
+    expect(bookedAs(booking(noMoms('2893')))).toEqual({ account: '2893', vat_treatment: 'exempt', nature: null })
+  })
+
+  it('passes over a verifikat that settles an invoice: a line on a payable or a receivable, whatever stands beside it', () => {
+    // A supplier invoice paid from the bank.
+    expect(bookedAs(booking(noMoms('2440')))).toBeNull()
+    expect(bookedAs(booking(noMoms('2441')))).toBeNull()
+    // A customer invoice paid into the bank.
+    expect(bookedAs(booking([line('1930', 500, 0), line('1510', 0, 500)], { amount: 500 }))).toBeNull()
+    // The payment with a bank fee beside it still clears the debt.
+    expect(bookedAs(booking([line('2440', 480, 0), line('6570', 20, 0), line('1930', 0, 500)]))).toBeNull()
   })
 
   it('reads the rate of ingående moms off the amounts', () => {
@@ -244,6 +254,25 @@ describe('precedentProposal', () => {
     expect(p.seen_count).toBe(1)
   })
 
+  it('passes over a payment that settled a supplier invoice for the next older ordinary booking', () => {
+    const paidInvoice = booking(noMoms('2440'))
+    const p = precedentProposal(row, [paidInvoice, booking(purchase25()), booking(noMoms('2440'))], 'aktiebolag')!
+    expect(p.booking).toMatchObject({ account: '5420', vat_treatment: 'standard_25' })
+    // The settlements are no bookings of the counterparty: they agree with nothing.
+    expect(p.seen_count).toBe(1)
+    expect(precedentProposal(row, [paidInvoice], 'aktiebolag')).toBeNull()
+  })
+
+  it('passes over a payment that settled a customer invoice for the next older ordinary booking', () => {
+    const moneyIn = makeTransaction({ id: 'tx-in', amount: 500 })
+    const paidInvoice = booking([line('1930', 500, 0), line('1510', 0, 500)], { amount: 500 })
+    const sale = booking([line('1930', 500, 0), line('3001', 0, 400), line('2611', 0, 100)], { amount: 500 })
+    const p = precedentProposal(moneyIn, [paidInvoice, sale], 'aktiebolag')!
+    expect(p.booking).toMatchObject({ account: '3001', vat_treatment: 'standard_25' })
+    expect(p.seen_count).toBe(1)
+    expect(precedentProposal(moneyIn, [paidInvoice], 'aktiebolag')).toBeNull()
+  })
+
   it('proposes nothing when no earlier booking says one account, or there is none', () => {
     expect(precedentProposal(row, [], 'aktiebolag')).toBeNull()
     expect(precedentProposal(row, [booking([line('5420', 300, 0), line('6110', 200, 0), line('1930', 0, 500)])], 'aktiebolag')).toBeNull()
@@ -276,9 +305,9 @@ describe('precedentProposal', () => {
       vat_treatment: 'standard_25',
       category: expect.stringMatching(/^income_/),
     })
-    const settled = booking([line('1930', 500, 0), line('1510', 0, 500)], { amount: 500 })
-    expect(precedentProposal(moneyIn, [settled], 'aktiebolag')!.booking).toMatchObject({
-      account: '1510',
+    const lent = booking([line('1930', 500, 0), line('2893', 0, 500)], { amount: 500 })
+    expect(precedentProposal(moneyIn, [lent], 'aktiebolag')!.booking).toMatchObject({
+      account: '2893',
       vat_treatment: 'exempt',
       category: 'income_other',
     })

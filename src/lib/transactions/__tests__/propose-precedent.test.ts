@@ -297,6 +297,20 @@ describe('switch on: the earlier booking leads where no rule proposes', () => {
     expect(list.every((p) => reviewReason(p, DIRECT_BOOKING_ON) === 'evidence')).toBe(true)
   })
 
+  it('passes over a payment that settled a supplier invoice and takes the next older ordinary booking', async () => {
+    const paidInvoice = earlier([line('2440', 500, 0), line('1930', 0, 500)])
+    const { list } = await propose({ booked: { Nordverk: [paidInvoice, software()] } })
+    expect(list.map((p) => [p.source, p.template_id, p.seen_count])).toEqual([['precedent', 'precedent:5420', 1]])
+  })
+
+  it('passes over a payment that settled a customer invoice and takes the next older ordinary booking', async () => {
+    const payment = bankRow('tx-nordverk', 'Nordverk', { amount: 500 })
+    const paidInvoice = earlier([line('1930', 500, 0), line('1510', 0, 500)], { amount: 500 })
+    const sale = earlier([line('1930', 500, 0), line('3001', 0, 400), line('2611', 0, 100)], { amount: 500 })
+    const { list } = await propose({ booked: { Nordverk: [paidInvoice, sale] } }, [payment])
+    expect(list.map((p) => [p.source, p.template_id, p.seen_count])).toEqual([['precedent', 'precedent:3001', 1]])
+  })
+
   it('a clearing proposal still leads above it', async () => {
     // Money in: the rows a clearing proposer is asked about.
     const payout = bankRow('tx-nordverk', 'Nordverk', { amount: 500 })
@@ -379,6 +393,15 @@ describe('switch on: never otherwise', () => {
     const { out, mock } = await propose({ booked: { 'INTERNET BET 4': [software()] } }, [nameless])
     expect(sources(out.proposals['tx-nameless'] ?? [])).not.toContain('precedent')
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a supplier invoice', [line('2440', 500, 0), line('1930', 0, 500)], -500],
+    ['a customer invoice', [line('1930', 500, 0), line('1510', 0, 500)], 500],
+  ] as const)('the only earlier booking settled %s', async (_label, lines, amount) => {
+    const open = bankRow('tx-nordverk', 'Nordverk', { amount })
+    const { list } = await propose({ booked: { Nordverk: [earlier([...lines], { amount })] } }, [open])
+    expect(list).toEqual([])
   })
 
   it('the earlier booking carries several business accounts', async () => {

@@ -7,6 +7,7 @@ import {
 } from '@/lib/bookkeeping/counterparty-templates'
 import { BANK_LEG_PLACEHOLDER, isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
+import { clearsAnInvoice } from '@/lib/bookkeeping/invoice-clearing'
 import { accountProposal, categoryForAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { vatAccountNature, type BankRowNature } from '@/lib/bookkeeping/vat-entries'
@@ -36,6 +37,11 @@ import type { EntityType, Transaction, TransactionCategory, VatTreatment } from 
  *     templates are learned by: a rate, or reverse charge. A booking whose
  *     moms that reading cannot state as one treatment on the same account is
  *     passed over.
+ *
+ * A verifikat that clears a receivable or a payable settles an invoice: it
+ * says how a debt was paid, not how the counterparty is booked, and is
+ * passed over like one with several business accounts (clearsAnInvoice, the
+ * rule the bank-link learner refuses a verifikat by).
  *
  * Only earlier rows where the money moved the same way as on the row count:
  * money in from a counterparty that was only ever paid is not "as last time".
@@ -147,6 +153,7 @@ const READABLE_TREATMENTS: ReadonlySet<string> = new Set(['standard_25', 'reduce
  * say one of each (see the file header).
  */
 export function bookedAs(booking: Pick<PrecedentBooking, 'lines' | 'settlement_ledger'>): BookedAs | null {
+  if (clearsAnInvoice(booking.lines.map((line) => line.account))) return null
   const ledgers = booking.settlement_ledger ? [booking.settlement_ledger] : []
   const account = businessAccountOfLines(booking.lines, ledgers)
   if (!account) return null
