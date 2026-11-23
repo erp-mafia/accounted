@@ -183,6 +183,7 @@ import {
 import {
   importsSkattekontoFile,
 } from './skattekonto-file'
+import { importsDepositSpecification } from './deposit-specification'
 import {
   journalEntriesBatchNoDocumentRequired,
   journalEntriesClearNoDocumentRequired,
@@ -461,6 +462,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   importsOpeningBalanceReviewAcknowledge,
   // skattekonto-file
   importsSkattekontoFile,
+  // deposit-specification
+  importsDepositSpecification,
   // journal-entries
   journalEntriesUpdateDraft,
   journalEntriesCancelDraft,

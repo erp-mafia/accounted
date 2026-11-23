@@ -1152,6 +1152,124 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/imports/deposit-specification`
+
+**Attach a deposit specification (BG Max or camt.054) to the bank rows that are its deposits.**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Reads Bankgirot's BG Max file or the bank's ISO 20022 camt.054 notification of incoming payments (sent as base64) and attaches each deposit's payments to the stored bank row that is that deposit, as the row's parts: payer, organisation number, OCR or invoice number, message and amount per payment. Each payment gets the open customer invoice its reference names as a suggestion; nothing is booked. Never creates a bank row and never changes one's amount, date or text. Uploading the same file again writes the same parts.
+
+**Use when:** A bank row is a deposit of several incoming payments (a bankgiro deposit) or carries no payer and no OCR, and the bank or Bankgirot delivers a file that says who paid what.
+**Do not use for:** Bank statements that should create bank rows (POST /imports/bank), or booking the payments (match the bank row to its invoices after this).
+
+**Pitfalls:**
+- Send the file bytes base64-encoded in content_base64, up to about 3 MB of file. The format is read from the content, not the file name.
+- A deposit whose bank row has not synced yet answers status no_row and attaches nothing: sync the bank and send the same file again.
+- A deposit that fits two bank rows equally well answers status ambiguous and is left for a person.
+- A deposit whose payments do not add up to it is left out and counted in rejected_deposits.
+- A file that is neither format answers 400 BGMAX_NOT_DEPOSIT_FILE; a file with nothing to attach answers 400 BGMAX_NO_DEPOSITS or CAMT054_NO_DEPOSITS with the first issues in details.
+- dry_run=true reads and matches without writing: the same summary with applied false.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ filename: string, content_base64: string }
+```
+
+Example request:
+```json
+{
+  "filename": "camt054_20261201.xml",
+  "content_base64": "PD94bWwgdmVyc2lvbj0i…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    filename: string,
+    format: "bgmax" | "camt054",
+    date_from: string | null,
+    date_to: string | null,
+    rejected_deposits: number,
+    issues: { severity: "info" | "warning" | "error", message: string }[],
+    applied: boolean,
+    deposits: number,
+    payments: number,
+    matched_deposits: number,
+    matched_payments: number,
+    suggested_payments: number,
+    ready_rows: number,
+    no_row: number,
+    ambiguous: number,
+    outcomes: { date: string, amount: number, bankgiro: string | null, payments: number, status: "matched" | "no_row" | "ambiguous", transaction_id: string | null, suggested: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "filename": "camt054_20261201.xml",
+    "format": "camt054",
+    "date_from": "2026-12-01",
+    "date_to": "2026-12-01",
+    "rejected_deposits": 0,
+    "issues": [],
+    "applied": true,
+    "deposits": 2,
+    "payments": 4,
+    "matched_deposits": 1,
+    "matched_payments": 3,
+    "suggested_payments": 3,
+    "ready_rows": 1,
+    "no_row": 1,
+    "ambiguous": 0,
+    "outcomes": [
+      {
+        "date": "2026-12-01",
+        "amount": 1500,
+        "bankgiro": "123-4567",
+        "payments": 3,
+        "status": "matched",
+        "transaction_id": "7c1d…",
+        "suggested": 3
+      },
+      {
+        "date": "2026-12-01",
+        "amount": 250,
+        "bankgiro": null,
+        "payments": 1,
+        "status": "no_row",
+        "transaction_id": null,
+        "suggested": 0
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/imports/sie`
 
 **Import a SIE4 file.**
