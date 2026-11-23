@@ -25,7 +25,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
-import type { AssetCategory, K3Component } from '@/types'
+import type { AssetAcquisitionType, AssetCategory, K3Component } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
 import { validateOpeningDepreciation } from '@/lib/bokslut/assets/opening-depreciation'
@@ -44,6 +44,8 @@ import {
   saveAssetIdentification,
   useAssetIdentification,
 } from './AssetIdentificationFields'
+import { AssetAcquisitionTypeField } from './AssetAcquisitionTypeField'
+import { arrivesDepreciated } from '@/lib/bokslut/assets/acquisition-type'
 
 interface CreateAssetDialogProps {
   open: boolean
@@ -88,7 +90,14 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     todayIsoStockholm(),
   )
   const [acquisitionCost, setAcquisitionCost] = useState('')
+  const [acquisitionType, setAcquisitionType] = useState<AssetAcquisitionType>('purchase')
   const [usefulLifeYears, setUsefulLifeYears] = useState('5')
+  // An asset taken over in a fusion or an omklassificering is depreciated
+  // over what remains of its life from the day it came in, which is seldom
+  // whole years: stated in months, and never prefilled (a default would be
+  // the full life, and the plan would then run far too slowly).
+  const [remainingLifeMonths, setRemainingLifeMonths] = useState('')
+  const takenOver = arrivesDepreciated(acquisitionType)
   // K3 17.18: when the asset can be used, if later than the acquisition.
   const [startDate, setStartDate] = useState('')
   // K3 aktiveringsmodell: the company's own development (1010/1019).
@@ -98,11 +107,13 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
   // K3 components the server splits it over components that state none.
   const [openingAmount, setOpeningAmount] = useState('')
   const [openingDate, setOpeningDate] = useState('')
-  // The opening block concerns a move from another register only, so it
-  // waits behind a disclosure; a value in either field keeps it open, so
+  // The opening block concerns an asset that arrives partly depreciated: a
+  // move from another register, a fusion or an omklassificering. Otherwise
+  // it waits behind a disclosure; a value in either field keeps it open, so
   // nothing entered is ever hidden.
   const [openingExpanded, setOpeningExpanded] = useState(false)
-  const openingOpen = openingExpanded || openingAmount !== '' || openingDate !== ''
+  const openingOpen =
+    openingExpanded || takenOver || openingAmount !== '' || openingDate !== ''
   // K3 component depreciation (17.4): the section is opt-in.
   const [useComponents, setUseComponents] = useState(false)
   const [componentDrafts, setComponentDrafts] = useState<ComponentDraft[]>([])
@@ -142,9 +153,14 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     setError(null)
     const cost = parseFloat(acquisitionCost)
     // Mark has no useful life: 0 months, never depreciated.
-    const years = isLand ? 0 : parseInt(usefulLifeYears, 10)
-    if (!name.trim() || !Number.isFinite(cost) || cost <= 0 || !Number.isFinite(years) || (!isLand && years <= 0)) {
-      setError('Fyll i namn, anskaffningsvärde och avskrivningstid.')
+    const months = isLand ? 0 : takenOver ? Number(remainingLifeMonths) : parseInt(usefulLifeYears, 10) * 12
+    const basicsMissing = !name.trim() || !Number.isFinite(cost) || cost <= 0
+    // The remaining life is at most the 600 months its field allows.
+    const lifeMissing = !isLand && (!Number.isInteger(months) || months <= 0 || (takenOver && months > 600))
+    if (basicsMissing || lifeMissing) {
+      setError(
+        !basicsMissing && takenOver ? t('remaining_life.error') : 'Fyll i namn, anskaffningsvärde och avskrivningstid.',
+      )
       return
     }
     // K3 components: only when both the framework permits (gate at API)
@@ -197,8 +213,9 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
           name: name.trim(),
           category,
           acquisition_date: acquisitionDate,
+          ...(acquisitionType !== 'purchase' ? { acquisition_type: acquisitionType } : {}),
           acquisition_cost: cost,
-          useful_life_months: years * 12,
+          useful_life_months: months,
           ...(!isLand && startDate ? { depreciation_start_date: startDate } : {}),
           ...(category === 'immaterial' && isK3 && internallyGenerated ? { internally_generated: true } : {}),
           ...(componentsPayload !== null ? { k3_components: componentsPayload } : {}),
@@ -230,6 +247,8 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       // Reset form for next entry
       setName('')
       setAcquisitionCost('')
+      setAcquisitionType('purchase')
+      setRemainingLifeMonths('')
       setOpeningAmount('')
       setOpeningDate('')
       setStartDate('')
@@ -328,10 +347,29 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               />
             </div>
           </div>
+          <AssetAcquisitionTypeField id="asset-acquisition-type" value={acquisitionType} onChange={setAcquisitionType} />
           {isLand ? (
             <p className="text-xs text-muted-foreground">{t('land_hint')}</p>
           ) : (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 items-end gap-4">
+          {takenOver ? (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="asset-remaining-life">{t('remaining_life.label')}</Label>
+              <HelpPopover>{t('remaining_life.help')}</HelpPopover>
+            </div>
+            <Input
+              id="asset-remaining-life"
+              type="number"
+              min="1"
+              max="600"
+              step="1"
+              value={remainingLifeMonths}
+              onChange={(e) => setRemainingLifeMonths(e.target.value)}
+              className="tabular-nums"
+            />
+          </div>
+          ) : (
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
               <Label htmlFor="asset-life">Avskrivningstid (år)</Label>
@@ -348,6 +386,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               className="tabular-nums"
             />
           </div>
+          )}
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
               <Label htmlFor="asset-start">{t('start.label')}</Label>
@@ -377,8 +416,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
           ) : (
             <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
               <div className="flex items-center gap-2">
-                <p className="text-sm font-medium">{t('opening.title')}</p>
-                <HelpPopover>{t('opening.hint')}</HelpPopover>
+                <p className="text-sm font-medium">
+                  {t(takenOver ? 'opening.title_taken_over' : 'opening.title')}
+                </p>
+                <HelpPopover>{t(takenOver ? 'opening.hint_taken_over' : 'opening.hint')}</HelpPopover>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">

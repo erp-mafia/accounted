@@ -353,6 +353,114 @@ describe('POST .../arsredovisning/narrative', () => {
     ).toBe(400)
     expect(wrote(client)).toBe(false)
   })
+
+  describe('the stated rows of the K2 anläggningstillgångar note', () => {
+    const stored = {
+      id: 'narr-1',
+      company_id: COMPANY_ID,
+      fiscal_period_id: PERIOD_ID,
+      note_overrides: {},
+      disclosure_answers: {},
+      equity_movement_overrides: {},
+      fixed_asset_note_rows: {
+        ByggnaderMark: { 'cost.omrakningsdifferenser': 100_000, 'impairment.fusion': 50_000 },
+        InventarierVerktygInstallationer: { 'depreciation.omrakningsdifferenser': 20_000 },
+      },
+      updated_at: 'x',
+    }
+    const WITH_STORED = {
+      fiscal_periods: PERIOD,
+      arsredovisning_submissions: NONE,
+      arsredovisning_narratives: { data: stored, error: null },
+    }
+    const saved = (client: Client) =>
+      (client.calls.find((c) => c.table === 'arsredovisning_narratives' && c.method === 'upsert')?.args[0] as Record<string, unknown>)
+        .fixed_asset_note_rows
+
+    it('merges row by row: a row sent replaces that row and the rest of the post stays', async () => {
+      const client = use(WITH_STORED)
+      const res = await post({ fixed_asset_note_rows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 250_000 } } })
+      expect(res.status).toBe(200)
+      expect(saved(client)).toEqual({
+        ByggnaderMark: { 'cost.omrakningsdifferenser': 250_000, 'impairment.fusion': 50_000 },
+        InventarierVerktygInstallationer: { 'depreciation.omrakningsdifferenser': 20_000 },
+      })
+    })
+
+    it('removes one row on null, a post on null and adds a new post in the same save', async () => {
+      const client = use(WITH_STORED)
+      const res = await post({
+        fixed_asset_note_rows: {
+          ByggnaderMark: { 'impairment.fusion': null },
+          InventarierVerktygInstallationer: null,
+          Goodwill: { 'impairment.omklassificeringar': -5_000 },
+        },
+      })
+      expect(res.status).toBe(200)
+      expect(saved(client)).toEqual({
+        ByggnaderMark: { 'cost.omrakningsdifferenser': 100_000 },
+        Goodwill: { 'impairment.omklassificeringar': -5_000 },
+      })
+    })
+
+    it('clears every stated row on a top-level null', async () => {
+      const client = use(WITH_STORED)
+      const res = await post({ fixed_asset_note_rows: null })
+      expect(res.status).toBe(200)
+      expect(saved(client)).toEqual({})
+    })
+
+    it('400 on a post without a note, a row that is not stated, or an amount its row cannot carry', async () => {
+      const client = use({ fiscal_periods: PERIOD, arsredovisning_submissions: NONE })
+      expect((await post({ fixed_asset_note_rows: { Kundfordringar: { 'cost.omrakningsdifferenser': 1 } } })).status).toBe(400)
+      // The register tells how an asset came in: it is not stated here.
+      expect((await post({ fixed_asset_note_rows: { ByggnaderMark: { 'cost.fusion': 1 } } })).status).toBe(400)
+      expect((await post({ fixed_asset_note_rows: { ByggnaderMark: { 'cost.inkop': 1 } } })).status).toBe(400)
+      // Nedskrivningar taken over in a fusion can only add (the taxonomy: "I K2 endast ökning").
+      expect((await post({ fixed_asset_note_rows: { ByggnaderMark: { 'impairment.fusion': -1 } } })).status).toBe(400)
+      expect((await post({ fixed_asset_note_rows: { ByggnaderMark: { 'impairment.forsaljningar': -1 } } })).status).toBe(400)
+      // The note is stated in whole kronor.
+      const decimals = await post({ fixed_asset_note_rows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 100.5 } } })
+      expect(decimals.status).toBe(400)
+      expect(JSON.stringify(await decimals.json())).toContain('hela kronor')
+      expect(wrote(client)).toBe(false)
+    })
+
+    it('accepts null on any row: clearing states nothing', async () => {
+      const client = use({
+        fiscal_periods: PERIOD,
+        arsredovisning_submissions: NONE,
+        arsredovisning_narratives: { data: { id: 'narr-1', company_id: COMPANY_ID, fiscal_period_id: PERIOD_ID, updated_at: 'x' }, error: null },
+      })
+      const res = await post({ fixed_asset_note_rows: { Goodwill: { 'impairment.fusion': null, 'cost.omrakningsdifferenser': 10_000 } } })
+      expect(res.status).toBe(200)
+      expect(saved(client)).toEqual({ Goodwill: { 'cost.omrakningsdifferenser': 10_000 } })
+    })
+
+    it('400 for a K3 year: its note is the register\'s, so a stated row would be ignored', async () => {
+      const k3Year = { data: { fiscal_period_id: PERIOD_ID, framework: 'k3', source: 'user' }, error: null }
+      const client = use({ fiscal_periods: PERIOD, arsredovisning_submissions: NONE, fiscal_period_frameworks: k3Year })
+      const res = await post({ fixed_asset_note_rows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 10_000 } } })
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(JSON.stringify(body)).toContain('K3')
+      expect(wrote(client)).toBe(false)
+    })
+
+    it('lets a K3 year clear rows: clearing states nothing', async () => {
+      const k3Year = { data: { fiscal_period_id: PERIOD_ID, framework: 'k3', source: 'user' }, error: null }
+      const client = use({
+        fiscal_periods: PERIOD,
+        arsredovisning_submissions: NONE,
+        fiscal_period_frameworks: k3Year,
+        arsredovisning_narratives: { data: stored, error: null },
+      })
+      const res = await post({ fixed_asset_note_rows: { ByggnaderMark: null, InventarierVerktygInstallationer: { 'depreciation.omrakningsdifferenser': null } } })
+      expect(res.status).toBe(200)
+      expect(saved(client)).toEqual({})
+    })
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────
@@ -737,6 +845,49 @@ describe('file routes and the iXBRL pre-flight', () => {
     expect(body.data.issues.map((issue: { code: string }) => issue.code)).toContain('1107')
     expect(body.data.annual_report_version_id).toBeNull()
     expect(routeRpcCalls(client.rpc)).toEqual([])
+  })
+
+  it('GET ixbrl/validate reports what the generator left untagged, once', async () => {
+    // A note whose redovisat värde is not its balance sheet post: the
+    // generator prints the figure untagged and says so.
+    const input = makeInput()
+    input.br.ByggnaderMark = { current: 1_500_000, previous: null }
+    input.noter = [
+      ...input.noter,
+      {
+        number: input.noter.length + 1,
+        title: 'Anläggningstillgångar',
+        body: 'Byggnader och mark',
+        fixedAssets: [
+          {
+            post: 'ByggnaderMark',
+            label: 'Byggnader och mark',
+            carrying: 2_000_000,
+            blocks: [
+              {
+                key: 'cost',
+                contra: false,
+                rows: [
+                  { key: 'cost.opening', label: 'Ingående anskaffningsvärden', amount: 2_000_000, effect: 1, kind: 'opening' },
+                  { key: 'cost.closing', label: 'Utgående anskaffningsvärden', amount: 2_000_000, effect: 1, kind: 'closing' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]
+    input.warnings = [...input.warnings, 'En varning som redan finns i underlaget.']
+    vi.mocked(buildIxbrlInput).mockResolvedValue(input)
+    use({})
+    const res = await validateIxbrl(request(`${BASE}/ixbrl/validate`), periodParams)
+    expect(res.status).toBe(200)
+    const messages = ((await res.json()).data.issues as Array<{ severity: string; message: string }>)
+      .filter((issue) => issue.severity === 'warn')
+      .map((issue) => issue.message)
+    expect(messages.filter((message) => message.includes('beloppet i noten är inte taggat'))).toHaveLength(1)
+    // The input's own warnings are issues of the pre-flight already: not repeated.
+    expect(messages.filter((message) => message === 'En varning som redan finns i underlaget.')).toHaveLength(1)
   })
 
   it('GET ixbrl/validate 404 PERIOD_NOT_FOUND for a missing period, 400 for a malformed version id', async () => {

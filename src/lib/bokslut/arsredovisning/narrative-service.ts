@@ -19,6 +19,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NoteOverrides } from './note-overrides'
 import type { DisclosureAnswers } from './disclosures/types'
 import type { EquityMovementKind } from './equity-kinds'
+import { normalizeFixedAssetNoteRows, type FixedAssetNoteRows } from './k2-fixed-asset-note'
+import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
 
 /** The user's classification of equity verifikat, by journal entry id. */
 export type EquityMovementOverridesRow = Record<string, EquityMovementKind>
@@ -84,6 +86,11 @@ export interface NarrativeOverrides {
   equity_movement_overrides: EquityMovementOverridesRow
   /** Print the equity specification as a statement of its own (K3 3.10). */
   equity_statement_separate: boolean
+  /** K2: the rows of the anläggningstillgångar note that neither the
+   *  register nor the ledger can tell apart (omräkningsdifferenser, where a
+   *  nedskrivning outside the register came from or went), per balance sheet
+   *  post (k2-fixed-asset-note.ts). */
+  fixed_asset_note_rows: FixedAssetNoteRows
 }
 
 /**
@@ -130,6 +137,8 @@ export interface NarrativeRow {
   disclosure_answers: DisclosureAnswers
   equity_movement_overrides: EquityMovementOverridesRow
   equity_statement_separate: boolean
+  /** Absent until the column's migration has run (NARRATIVE_API_COLUMNS). */
+  fixed_asset_note_rows?: FixedAssetNoteRows
   updated_at: string
 }
 
@@ -138,8 +147,47 @@ const TABLE = 'arsredovisning_narratives'
 // Explicit projection: keeps user_id and other internal audit fields out
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
-const NARRATIVE_API_COLUMNS =
+const NARRATIVE_BASE_COLUMNS =
   'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, member_count_change, insatser_repayable_next_year, forlagsinsatser_dividend_right, forlagsinsatser_redeemable_two_years, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, note_overrides, omit_kassaflodesanalys, kassaflodesanalys_omission_confirmed, disclosure_answers, equity_movement_overrides, equity_statement_separate, updated_at'
+
+/**
+ * fixed_asset_note_rows is the newest column. The code is live a few minutes
+ * before the migration that adds it runs (it applies after the merge), so a
+ * read or a save that fails on a missing column falls back to the columns
+ * before it: the årsredovisning then has no stated rows, which is what an
+ * unmigrated database holds.
+ */
+const NARRATIVE_API_COLUMNS = `${NARRATIVE_BASE_COLUMNS}, fixed_asset_note_rows`
+
+async function withNewestColumn<T extends { error: { code?: string } | null }>(
+  run: (columns: string) => PromiseLike<T>,
+): Promise<T> {
+  const first = await run(NARRATIVE_API_COLUMNS)
+  return isMissingColumnError(first.error) ? run(NARRATIVE_BASE_COLUMNS) : first
+}
+
+/**
+ * The stated rows of the K2 anläggningstillgångar note of every räkenskapsår
+ * the company has a narrative for, by fiscal period. The note of a year reads
+ * the years before it: an omräkningsdifferens an earlier year stated is still
+ * in the post's opening balances (k2-fixed-asset-note.ts
+ * carriedFromEarlierYears). Empty on a database without the column; another
+ * read error throws, because a note built without the earlier years would
+ * open with the wrong balance.
+ */
+export async function listFixedAssetNoteRows(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Map<string, FixedAssetNoteRows>> {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('fiscal_period_id, fixed_asset_note_rows')
+    .eq('company_id', companyId)
+  if (isMissingColumnError(error)) return new Map()
+  if (error) throw new Error(`Failed to load the stated rows of the anläggningstillgångar note: ${error.message}`)
+  const rows = (data ?? []) as Array<{ fiscal_period_id: string; fixed_asset_note_rows: unknown }>
+  return new Map(rows.map((row) => [row.fiscal_period_id, normalizeFixedAssetNoteRows(row.fixed_asset_note_rows)]))
+}
 
 /**
  * The medelantal anställda override alone, for a period other than the one
@@ -204,12 +252,14 @@ export async function getNarrative(
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<NarrativeRow | null> {
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select(NARRATIVE_API_COLUMNS)
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-    .maybeSingle()
+  const { data, error } = await withNewestColumn((columns) =>
+    supabase
+      .from(TABLE)
+      .select(columns)
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .maybeSingle(),
+  )
   if (error) throw error
   return (data as NarrativeRow | null) ?? null
 }
@@ -236,15 +286,21 @@ export async function upsertNarrative(
   for (const [key, value] of Object.entries(input)) {
     payload[key] = value ?? null
   }
-  const { data, error } = await supabase
-    .from(TABLE)
-    .upsert(payload, { onConflict: 'company_id,fiscal_period_id' })
-    .select(NARRATIVE_API_COLUMNS)
-    .single()
+  // A save that names fixed_asset_note_rows itself fails on an unmigrated
+  // database and is not retried: the rows would be lost silently.
+  const run = (columns: string) =>
+    supabase
+      .from(TABLE)
+      .upsert(payload, { onConflict: 'company_id,fiscal_period_id' })
+      .select(columns)
+      .single()
+  const { data, error } = 'fixed_asset_note_rows' in payload ? await run(NARRATIVE_API_COLUMNS) : await withNewestColumn(run)
   if (error) throw error
   // `.single()` always reports a missing row as an error, so this is a
   // belt-and-braces guard rather than a reachable branch: keep it a plain
   // Error (no SQLSTATE to preserve) so it maps to 500.
   if (!data) throw new Error('Failed to save narrative: no row returned')
-  return data as NarrativeRow
+  // The projection is a runtime string (the newest column may be missing),
+  // so the client cannot type the row.
+  return data as unknown as NarrativeRow
 }

@@ -31,7 +31,7 @@ Response `200`:
 ```ts
 {
   data: {
-    assets: { name: string, category: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_start_date: string | null, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { component_id?: string, name: string, cost: number, useful_life_months: number | null, salvage_value?: number, acquisition_date?: string | null, depreciation_start_date?: string | null, opening_accumulated_depreciation?: number, opening_depreciation_date?: string | null }[] | null, components: { component_id: string, name: string, cost: number, useful_life_months: number | null, salvage_value: number, acquisition_date: string, depreciation_start_date: string, opening_accumulated_depreciation: number, opening_depreciation_date: string | null, replaces_component_id: string | null, derecognised_at: string | null, derecognition_journal_entry_id: string | null }[], opening_accumulated_depreciation: number, opening_depreciation_date: string | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string, handle?: string }[]
+    assets: { name: string, category: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_type: "purchase" | "business_acquisition" | "merger" | "reclassification", acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_start_date: string | null, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { component_id?: string, name: string, cost: number, useful_life_months: number | null, salvage_value?: number, acquisition_date?: string | null, depreciation_start_date?: string | null, opening_accumulated_depreciation?: number, opening_depreciation_date?: string | null }[] | null, components: { component_id: string, name: string, cost: number, useful_life_months: number | null, salvage_value: number, acquisition_date: string, depreciation_start_date: string, opening_accumulated_depreciation: number, opening_depreciation_date: string | null, replaces_component_id: string | null, derecognised_at: string | null, derecognition_journal_entry_id: string | null }[], opening_accumulated_depreciation: number, opening_depreciation_date: string | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string, handle?: string }[]
   },
   meta: {
     request_id: string,
@@ -116,6 +116,7 @@ Request body:
   name: string,
   category: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible",
   acquisition_date: string,
+  acquisition_type?: "purchase" | "business_acquisition" | "merger" | "reclassification",
   acquisition_cost: number,
   salvage_value?: number,
   useful_life_months: number,
@@ -151,6 +152,7 @@ Response `200`:
     name: string,
     category: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible",
     acquisition_date: string,
+    acquisition_type: "purchase" | "business_acquisition" | "merger" | "reclassification",
     acquisition_cost: number,
     salvage_value: number,
     useful_life_months: number,
@@ -249,6 +251,7 @@ Response `200`:
     name: string,
     category: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible",
     acquisition_date: string,
+    acquisition_type: "purchase" | "business_acquisition" | "merger" | "reclassification",
     acquisition_cost: number,
     salvage_value: number,
     useful_life_months: number,
@@ -350,6 +353,7 @@ Request body:
 {
   name?: string,
   notes?: string | null,
+  acquisition_type?: "purchase" | "business_acquisition" | "merger" | "reclassification",
   category?: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible",
   acquisition_date?: string,
   acquisition_cost?: number,
@@ -383,6 +387,7 @@ Response `200`:
     name: string,
     category: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible",
     acquisition_date: string,
+    acquisition_type: "purchase" | "business_acquisition" | "merger" | "reclassification",
     acquisition_cost: number,
     salvage_value: number,
     useful_life_months: number,
@@ -621,7 +626,7 @@ Response `200`:
 ```ts
 {
   data: {
-    asset: { name: string, category: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_start_date: string | null, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { component_id?: string, name: string, cost: number, useful_life_months: number | null, salvage_value?: number, acquisition_date?: string | null, depreciation_start_date?: string | null, opening_accumulated_depreciation?: number, opening_depreciation_date?: string | null }[] | null, components: { component_id: string, name: string, cost: number, useful_life_months: number | null, salvage_value: number, acquisition_date: string, depreciation_start_date: string, opening_accumulated_depreciation: number, opening_depreciation_date: string | null, replaces_component_id: string | null, derecognised_at: string | null, derecognition_journal_entry_id: string | null }[], opening_accumulated_depreciation: number, opening_depreciation_date: string | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string, handle?: string },
+    asset: { name: string, category: "immaterial" | "building" | "land" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_type: "purchase" | "business_acquisition" | "merger" | "reclassification", acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_start_date: string | null, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { component_id?: string, name: string, cost: number, useful_life_months: number | null, salvage_value?: number, acquisition_date?: string | null, depreciation_start_date?: string | null, opening_accumulated_depreciation?: number, opening_depreciation_date?: string | null }[] | null, components: { component_id: string, name: string, cost: number, useful_life_months: number | null, salvage_value: number, acquisition_date: string, depreciation_start_date: string, opening_accumulated_depreciation: number, opening_depreciation_date: string | null, replaces_component_id: string | null, derecognised_at: string | null, derecognition_journal_entry_id: string | null }[], opening_accumulated_depreciation: number, opening_depreciation_date: string | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string, handle?: string },
     disposal_entry: { journal_entry_id: string, voucher_number: number | null } | null,
     gain_or_loss: number
   },

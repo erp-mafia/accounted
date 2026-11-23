@@ -60,6 +60,13 @@ import { replayMaskText } from './replay-masking'
  *    A message the person writes to us is a service they asked for; it never
  *    needed the analytics SDK, so the SDK is not started for it.
  *
+ * 6. What is recorded fits the free plan's 1,000,000 events a month: from
+ *    2026-11-19 the month ran out and PostHog dropped every page view until
+ *    it renewed. Clicks are recorded only in the menu, the top bar and on
+ *    primary actions (ANALYTICS_CLICK_SCOPE; 57% of the events were clicks
+ *    anywhere), no page-leave events, and 70% of sessions are recorded for
+ *    replay (the plan's 5,000 recordings).
+ *
  * 5. The SDK is loaded when analytics starts, not with the page. It is about
  *    62 kB compressed (222 kB of script), and it sat in the first load of
  *    every page, the login page and every page of a person who switched
@@ -71,6 +78,17 @@ import { replayMaskText } from './replay-masking'
  *    A person who never consents never downloads it: the one-definition
  *    rule above keeps every other module from importing it.
  */
+
+/**
+ * Where a click is recorded (autocapture's css_selector_allowlist, matched on
+ * the clicked element or any parent): the menu and the rail (nav, aside), the
+ * top bar (PageHeader's .page-header) and primary actions (Button's default
+ * variant carries data-ph-capture). Choice 6 above.
+ */
+export const ANALYTICS_CLICK_SCOPE = ['nav', 'aside', '.page-header', '[data-ph-capture]'] as const
+
+/** The share of sessions recorded for replay. Choice 6 above. */
+export const REPLAY_SAMPLE_RATE = 0.7
 
 /**
  * Hostnames that get the X-POSTHOG-DISTINCT-ID / X-POSTHOG-SESSION-ID headers,
@@ -132,6 +150,12 @@ export function initAnalytics(): boolean {
           person_profiles: 'identified_only',
           persistence: 'memory',
           capture_exceptions: true,
+          autocapture: {
+            dom_event_allowlist: ['click'],
+            element_allowlist: ['a', 'button'],
+            css_selector_allowlist: [...ANALYTICS_CLICK_SCOPE],
+          },
+          capture_pageleave: false,
           // Every exception event is redacted before it leaves the browser,
           // whichever path raised it (redactExceptionEvent below).
           before_send: redactExceptionEvent,
@@ -142,6 +166,7 @@ export function initAnalytics(): boolean {
           custom_personal_data_properties: ['org_number', 'personnummer', 'personal_number'],
           tracing_headers: tracingHosts(),
           session_recording: {
+            sampleRate: REPLAY_SAMPLE_RATE,
             maskAllInputs: true,
             maskTextSelector: '*',
             maskTextFn: replayMaskText,

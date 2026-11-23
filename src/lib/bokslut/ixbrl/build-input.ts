@@ -374,7 +374,14 @@ export async function buildIxbrlInput(
       resultatdisposition,
       kontrollbalansrakningUpprattad: pdfData.forvaltningsberattelse.kontrollbalans_required === true,
     },
-    noter: pdfData.noter.map((note) => ({ number: note.number, title: note.title, body: note.body })),
+    // fixedAssets is spread only when the note has it, so the content hash
+    // of a document without the tables does not move.
+    noter: pdfData.noter.map((note) => ({
+      number: note.number,
+      title: note.title,
+      body: note.body,
+      ...(note.fixedAssets && note.fixedAssets.length > 0 ? { fixedAssets: note.fixedAssets } : {}),
+    })),
     disclosures: {
       longTermDebtOverFiveYears:
         pdfData.disclosures.long_term_debt_over_five_years ?? 0,

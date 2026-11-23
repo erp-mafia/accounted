@@ -606,6 +606,20 @@ describe('createAsset: framework-aware immaterial defaults', () => {
     useful_life_months: 60,
   }
 
+  it('leaves the acquisition type out of the insert for a purchase and writes any other', async () => {
+    // A purchase is the column's default: an ordinary create does not name
+    // the column, so it works before the column's migration has run.
+    const plain = mockForCreate({ accountingFramework: 'k2' })
+    await createAsset(asSupabase(plain.supabase), 'co', 'user-1', baseInput)
+    expect(plain.captured.insert).not.toHaveProperty('acquisition_type')
+    const stated = mockForCreate({ accountingFramework: 'k2' })
+    await createAsset(asSupabase(stated.supabase), 'co', 'user-1', { ...baseInput, acquisition_type: 'purchase' })
+    expect(stated.captured.insert).not.toHaveProperty('acquisition_type')
+    const merged = mockForCreate({ accountingFramework: 'k2' })
+    await createAsset(asSupabase(merged.supabase), 'co', 'user-1', { ...baseInput, acquisition_type: 'merger' })
+    expect(merged.captured.insert).toMatchObject({ acquisition_type: 'merger' })
+  })
+
   it('books a K2 company immaterial asset on the acquired pair 1090/1099', async () => {
     const { supabase, captured } = mockForCreate({ accountingFramework: 'k2' })
     await createAsset(asSupabase(supabase), 'co', 'user-1', baseInput)

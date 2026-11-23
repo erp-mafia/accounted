@@ -65,7 +65,7 @@ export default function PrivacyPolicyPage() {
               'E-postadress, namn, lösenord (lagras endast som saltad hash), nyckel för tvåfaktorsinloggning, inloggningssessioner, språkval',
               'Skapa och driva ditt konto, logga in dig',
               'Avtal (art. 6.1 b)',
-              'Tills du raderar kontot',
+              'Tills du raderar kontot; namn och e-postadress längre om du har rättat en verifikation (se nedan)',
             ],
             [
               'Vid BankID-inloggning: personnummer (lagras krypterat), namn och vilka företag du har en roll i enligt offentliga register',
@@ -139,9 +139,12 @@ export default function PrivacyPolicyPage() {
           När du raderar ditt konto tar vi direkt bort e-postadress, namn, BankID-uppgifter,
           inloggningssessioner, API-nycklar, inställningar och assistentkonversationer, och
           återkallar de bank-, e-post- och Skatteverketskopplingar du har godkänt. Kvar blir ett
-          spärrat konto-ID utan namn eller e-postadress, som bokföringen i företagen pekar på. Du kan
-          inte radera kontot medan du är ägare till ett aktivt företag; lämna över eller avsluta
-          företaget först.
+          spärrat konto-ID, som bokföringen i företagen pekar på. Har du rättat en verifikation i ett
+          företags bokföring sparas ditt namn och din e-postadress ändå hos det företaget, eftersom
+          bokföringslagen kräver att det framgår vem som har gjort rättelsen (5 kap. 5 §). De raderas
+          när bevarandetiden har gått ut, efter det sjunde året efter det kalenderår då det senaste
+          räkenskapsår du rättade i avslutades (7 kap. 2 §). Du kan inte radera kontot medan du är
+          ägare till ett aktivt företag; lämna över eller avsluta företaget först.
         </p>
       </LegalSection>
 
