@@ -3550,6 +3550,28 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Billo behöver en företrädare som har loggat in med BankID. Logga in med BankID och försök igen.',
     message_en: 'Billo needs a representative who has signed in with BankID. Sign in with BankID and try again.',
   },
+  // Kivra receive: lib/digital-mailboxes/connect.ts, kivraOwnershipRefusal.
+  DIGITAL_MAILBOX_SIGNATORY_BANKID_REQUIRED: {
+    httpStatus: 403,
+    message_sv:
+      'Kivra-brevlådan får bara kopplas av en firmatecknare för företaget, och det ser vi när du loggar in med BankID. Koppla BankID under Inställningar om du inte har gjort det, logga sedan in med BankID och försök igen.',
+    message_en:
+      'Only a signatory of the company may connect the Kivra mailbox, and we see that when you sign in with BankID. Link BankID under Settings if you have not, then sign in with BankID and try again.',
+  },
+  DIGITAL_MAILBOX_NOT_SIGNATORY: {
+    httpStatus: 403,
+    message_sv:
+      'Enligt Bolagsverket, som vi läste när du senast loggade in med BankID, är du inte firmatecknare för företaget. Be en styrelseledamot, vd eller annan firmatecknare att koppla Kivra-brevlådan. Har du nyss blivit firmatecknare: logga in med BankID igen.',
+    message_en:
+      'The companies register, read at your last BankID sign-in, does not list you as a signatory of the company. Ask a board member, the managing director or another signatory to connect the Kivra mailbox. Just became one: sign in with BankID again.',
+  },
+  DIGITAL_MAILBOX_ORG_NUMBER_SHARED: {
+    httpStatus: 409,
+    message_sv:
+      'Ett annat företag i Accounted har samma organisationsnummer, så Kivra-brevlådan kan inte kopplas. Arkivera det företag ni inte använder, eller kontakta oss så hjälper vi till.',
+    message_en:
+      'Another company in Accounted has the same organisation number, so the Kivra mailbox cannot be connected. Archive the company you do not use, or contact us and we will help.',
+  },
   DIGITAL_MAILBOX_ALREADY_CONNECTED: {
     httpStatus: 409,
     message_sv: 'Brevlådan är redan kopplad till Accounted.',
@@ -11307,6 +11329,83 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       "The lines do not book the transaction's amount on its bank account, so it cannot be linked to the order's voucher. Nothing was booked. Book the payment on the transaction's account (details.account_number).",
   },
+  KUSTOM_SETTLEMENT_NO_FILE: {
+    httpStatus: 400,
+    message_sv: 'Ingen fil bifogad. Välj Kustoms settlement-rapport (CSV) och försök igen.',
+    message_en: 'No file attached. Choose the Kustom settlement report (CSV) and try again.',
+  },
+  KUSTOM_SETTLEMENT_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Filen är för stor. Maxstorlek är 10 MB.',
+    message_en: 'File exceeds the 10 MB size limit.',
+  },
+  KUSTOM_SETTLEMENT_NOT_RECOGNIZED: {
+    httpStatus: 400,
+    message_sv:
+      'Filen känns inte igen som en settlement-rapport från Kustom. Ladda ner rapporten för utbetalningen som CSV i Kustoms portal och försök igen.',
+    message_en:
+      'The file was not recognised as a Kustom settlement report. Download the payout report as CSV in the Kustom portal and try again.',
+  },
+  KUSTOM_SETTLEMENT_NO_CONSUMER_VAT: {
+    httpStatus: 400,
+    message_sv:
+      'Rapporten saknar momsen per order. Kryssa i kundmomsen i rapportinställningarna i Kustoms portal, ladda ner rapporten igen och läs in den.',
+    message_en:
+      'The report has no VAT per order. Turn on consumer VAT in the report settings of the Kustom portal, download the report again and upload it.',
+  },
+  KUSTOM_SETTLEMENT_AMOUNT_FORMAT: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppen i rapporten går inte att läsa. Välj belopp med decimaler (till exempel 100.00) i rapportinställningarna i Kustoms portal och ladda ner rapporten igen.',
+    message_en:
+      'The amounts in the report cannot be read. Choose decimal amounts (for example 100.00) in the report settings of the Kustom portal and download the report again.',
+  },
+  KUSTOM_SETTLEMENT_DATE_FORMAT: {
+    httpStatus: 400,
+    message_sv:
+      'Datumen i rapporten går inte att läsa. Välj datum med klockslag (Kustoms standard, till exempel 2026-11-18T09:00:00.000Z) i rapportinställningarna i Kustoms portal och ladda ner rapporten igen. Utan klockslag går det inte att avgöra vilken svensk dag ett köp gjordes.',
+    message_en:
+      "The dates in the report cannot be read. Choose dates with the time (Kustom's default, for example 2026-11-18T09:00:00.000Z) in the report settings of the Kustom portal and download the report again. Without the time, the Swedish day of a sale cannot be told.",
+  },
+  KUSTOM_SETTLEMENT_ID_COLUMNS_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Rapporten saknar kolumnen capture_id eller refund_id, som håller isär köp och returer. Lägg till dem i rapportinställningarna i Kustoms portal och ladda ner rapporten igen.',
+    message_en:
+      'The report lacks the capture_id or refund_id column, which tells sales and returns apart. Add them in the report settings of the Kustom portal and download the report again.',
+  },
+  KUSTOM_SETTLEMENT_DUPLICATE_ROW: {
+    httpStatus: 400,
+    message_sv:
+      'Samma köp eller retur står två gånger i rapporten, så den går inte att läsa in säkert. Ladda ner rapporten igen från Kustom.',
+    message_en:
+      'The same sale or return appears twice in the report, so it cannot be uploaded safely. Download the report again from Kustom.',
+  },
+  KUSTOM_SETTLEMENT_TOTALS_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Raderna i rapporten summerar inte till rapportens totaler, så filen verkar avkortad eller ändrad. Ladda ner rapporten igen från Kustom.',
+    message_en:
+      'The rows of the report do not add up to its totals, so the file looks cut or edited. Download the report again from Kustom.',
+  },
+  KUSTOM_SETTLEMENT_CUT_SHORT: {
+    httpStatus: 400,
+    message_sv: 'Filen tar slut mitt i en rad, så den verkar avkortad. Ladda ner rapporten igen från Kustom.',
+    message_en: 'The file ends in the middle of a row, so it looks cut short. Download the report again from Kustom.',
+  },
+  KUSTOM_SETTLEMENT_TOO_MANY_ROWS: {
+    httpStatus: 400,
+    message_sv:
+      'Rapporten har fler än 10 000 köp och returer, mer än en uppladdning läser in. Ladda ner rapporten för en utbetalning i taget från Kustom.',
+    message_en:
+      'The report holds more than 10,000 sales and returns, more than one upload reads. Download the report for one payout at a time from Kustom.',
+  },
+  KUSTOM_SETTLEMENT_IMPORT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Det gick inte att spara alla ordrar från rapporten. Försök igen: ordrar som redan sparats läses inte in två gånger.',
+    message_en: 'Not every order from the report could be saved. Try again: orders already saved are not imported twice.',
+    retryable: true,
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -13964,6 +14063,21 @@ const COMPANY_QUESTIONS: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Svaret kan inte ångras längre.',
     message_en: 'The answer can no longer be undone.',
+    retryable: false,
+  },
+  // Linking a staged operation to a question that is open, or closed with a
+  // reason other than settled. The thrown text says how the question stands.
+  COMPANY_QUESTION_NOT_ANSWERED: {
+    httpStatus: 409,
+    message_sv: 'Frågan är varken besvarad eller löst av bokföringen, så inget förslag kan kopplas till den.',
+    message_en: 'The question is neither answered nor closed as settled, so no operation can be linked to it.',
+    retryable: false,
+  },
+  // The question already holds the most staged operations one question takes.
+  COMPANY_QUESTION_OPERATION_LIMIT: {
+    httpStatus: 409,
+    message_sv: 'Frågan har redan fem kopplade förslag, vilket är gränsen.',
+    message_en: 'The question already has five linked operations, which is the limit.',
     retryable: false,
   },
 }

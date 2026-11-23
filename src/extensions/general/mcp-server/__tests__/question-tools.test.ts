@@ -1,7 +1,8 @@
 /**
- * The question list at the MCP door: gnubok_ask_question, gnubok_list_questions
- * and gnubok_close_question (question-tools.ts), the scopes they need, the
- * company switch, and gnubok_remember_fact answering a question.
+ * The question list at the MCP door: gnubok_ask_question, gnubok_list_questions,
+ * gnubok_close_question and gnubok_link_question_operation (question-tools.ts),
+ * the scopes they need, the company switch, and gnubok_remember_fact answering
+ * a question.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
@@ -50,10 +51,14 @@ vi.mock('@/lib/entitlements/multi-user', async (importOriginal) => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'entitled', graceEndsAt: null }) }
 })
 
+import { extractBearerToken } from '@/lib/auth/api-keys'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
 import { eventBus } from '@/lib/events/bus'
+import type { CoreEvent } from '@/lib/events/types'
 import { handleMcpRequest, isDefaultCatalogTool, isStagingTool, tools } from '../server'
 import { OPEN_QUESTIONS_HOW, briefingQuestion, questionView } from '../question-tools'
+import { isReadOnlyTool } from '../tool-effects'
+import { moduleForTool } from '../tool-modules'
 
 const COMPANY = mocks.companyId
 const USER = 'a0000000-0000-4000-8000-000000000001'
@@ -541,5 +546,185 @@ describe('the dispatcher', () => {
       expect(body, name).toContain('COMPANY_QUESTIONS_OFF')
       expect(body, name).not.toContain('INSUFFICIENT_SCOPE')
     }
+  })
+})
+
+describe('gnubok_link_question_operation', () => {
+  const LINK = 'gnubok_link_question_operation'
+  const OPERATION_ID = '0b000000-0000-4000-8000-000000000001'
+  /** The connection as the dispatcher hands it to a tool: a key, named by its id. */
+  const connection = { type: 'api_key' as const, id: 'key-1', label: 'Claude', client: 'claude' }
+  const answered = row({ status: 'answered', answer_option: 'annual', answered_at: '2026-11-20T09:00:00.000Z', answered_via: 'app' })
+  const staged = (overrides: Record<string, unknown> = {}) => ({ id: OPERATION_ID, user_id: USER, actor_id: 'key-1', ...overrides })
+  /** company_question_operations: a read answers the operations linked so far, an insert answers no error. */
+  const linksTable =
+    (held: string[] = []): TableMockResolver =>
+    (calls) =>
+      calls.some((c) => c.method === 'insert') ? { data: null } : { data: held.map((id) => ({ operation_id: id })) }
+  const world = (opts: { question?: unknown; operation?: unknown; held?: string[] } = {}) =>
+    createTableMockSupabase({
+      company_questions: { data: opts.question === undefined ? answered : opts.question },
+      pending_operations: { data: opts.operation === undefined ? staged() : opts.operation },
+      company_question_operations: linksTable(opts.held),
+    })
+  const ARGS = { question_id: QUESTION_ID, operation_id: OPERATION_ID }
+  const link = (mock: ReturnType<typeof createTableMockSupabase>, args: Record<string, unknown> = ARGS) =>
+    tool(LINK).execute(args, COMPANY, USER, mock.supabase as never, connection)
+  /** The same call from another caller; undefined is a caller the dispatcher names no connection for. */
+  const linkAs = (mock: ReturnType<typeof createTableMockSupabase>, caller: Parameters<ReturnType<typeof tool>['execute']>[4]) =>
+    tool(LINK).execute(ARGS, COMPANY, USER, mock.supabase as never, caller)
+
+  describe('in the registries', () => {
+    it('is outside tools/list, saves at once, is safe to repeat, and needs the scope its siblings need', () => {
+      expect(tool(LINK)).toBeDefined()
+      expect(tool(LINK).catalogVisibility).toBe('search')
+      expect(isDefaultCatalogTool(tool(LINK))).toBe(false)
+      expect(isStagingTool(tool(LINK))).toBe(false)
+      expect(isReadOnlyTool(tool(LINK))).toBe(false)
+      expect(tool(LINK).annotations.readOnlyHint).toBe(false)
+      expect(tool(LINK).annotations.idempotentHint).toBe(true)
+      expect(TOOL_SCOPE_MAP[LINK]).toBe('agent:write')
+      expect(TOOL_SCOPE_MAP[LINK]).toBe(TOOL_SCOPE_MAP.gnubok_close_question)
+      expect(moduleForTool(LINK)).toBe('agent')
+      expect(moduleForTool(LINK)).toBe(moduleForTool('gnubok_close_question'))
+    })
+
+    it('takes exactly question_id and operation_id, both required, and nothing else', () => {
+      const schema = tool(LINK).inputSchema as {
+        additionalProperties: boolean
+        properties: Record<string, { type: string }>
+        required: string[]
+      }
+      expect(schema.additionalProperties).toBe(false)
+      expect(Object.keys(schema.properties).sort()).toEqual(['operation_id', 'question_id'])
+      expect(schema.properties.question_id.type).toBe('string')
+      expect(schema.properties.operation_id.type).toBe('string')
+      expect([...schema.required].sort()).toEqual(['operation_id', 'question_id'])
+    })
+
+    it('answers question_id, operation_id and the status linked, all three required', () => {
+      const schema = tool(LINK).outputSchema as { properties: Record<string, { type: string; enum?: string[] }>; required: string[] }
+      expect(Object.keys(schema.properties).sort()).toEqual(['operation_id', 'question_id', 'status'])
+      expect(schema.properties.status.enum).toEqual(['linked'])
+      expect([...schema.required].sort()).toEqual(['operation_id', 'question_id', 'status'])
+    })
+
+    it('says what it does within the length a description may have, and has search words in both languages', () => {
+      expect(tool(LINK).description.length).toBeLessThanOrEqual(280)
+      expect(tool(LINK).description).toContain('Saves at once')
+      expect(tool(LINK).keywords).toEqual(expect.arrayContaining(['fråga', 'link operation']))
+    })
+  })
+
+  it('links an operation the connection staged to an answered question, and announces it once', async () => {
+    const emitted: CoreEvent[] = []
+    eventBus.on('company_question.prepared', (payload) => {
+      emitted.push({ type: 'company_question.prepared', payload })
+    })
+    const mock = world()
+
+    const result = await link(mock)
+
+    expect(result).toEqual({ question_id: QUESTION_ID, operation_id: OPERATION_ID, status: 'linked' })
+    expect(mock.payloads('company_question_operations', 'insert')).toEqual([
+      { company_id: COMPANY, question_id: QUESTION_ID, operation_id: OPERATION_ID },
+    ])
+    expect(emitted).toEqual([
+      { type: 'company_question.prepared', payload: { questionId: QUESTION_ID, operationId: OPERATION_ID, userId: USER, companyId: COMPANY } },
+    ])
+  })
+
+  it('links to a question closed as settled, and answers the same pair again without a second row', async () => {
+    const settled = world({ question: row({ status: 'closed', close_reason: 'settled', answered_at: '2026-11-20T09:00:00.000Z' }) })
+    await expect(link(settled)).resolves.toMatchObject({ status: 'linked' })
+
+    const again = world({ held: [OPERATION_ID] })
+    await expect(link(again)).resolves.toEqual({ question_id: QUESTION_ID, operation_id: OPERATION_ID, status: 'linked' })
+    expect(again.payloads('company_question_operations', 'insert')).toEqual([])
+  })
+
+  it('refuses a missing question_id and a missing operation_id, naming the field', async () => {
+    const mock = world()
+    await expect(link(mock, { operation_id: OPERATION_ID })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'question_id' }] })
+    await expect(link(mock, { question_id: QUESTION_ID })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'operation_id' }] })
+    await expect(link(mock, { question_id: 7, operation_id: OPERATION_ID })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'question_id' }] })
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('answers not found for a question or an operation that is not in the company', async () => {
+    const noQuestion = world({ question: null })
+    await expect(link(noQuestion)).rejects.toMatchObject({ code: 'COMPANY_QUESTION_NOT_FOUND' })
+
+    const noOperation = world({ operation: null })
+    await expect(link(noOperation)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(link(noOperation, { question_id: QUESTION_ID, operation_id: 'not-an-id' })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(noOperation.payloads('company_question_operations', 'insert')).toEqual([])
+  })
+
+  it('refuses a question that is open or closed without an answer in the books, and a sixth operation', async () => {
+    await expect(link(world({ question: row() }))).rejects.toMatchObject({ code: 'COMPANY_QUESTION_NOT_ANSWERED' })
+    await expect(
+      link(world({ question: row({ status: 'closed', close_reason: 'dont_know', answered_at: '2026-11-20T09:00:00.000Z' }) })),
+    ).rejects.toMatchObject({ code: 'COMPANY_QUESTION_NOT_ANSWERED' })
+
+    const full = world({ held: [2, 3, 4, 5, 6].map((n) => `0b000000-0000-4000-8000-00000000000${n}`) })
+    await expect(link(full)).rejects.toMatchObject({ code: 'COMPANY_QUESTION_OPERATION_LIMIT' })
+    expect(full.payloads('company_question_operations', 'insert')).toEqual([])
+  })
+
+  it.each([
+    ['another connection', staged({ actor_id: 'key-other' })],
+    ['a person in the app', staged({ actor_id: null })],
+    ['another person\'s connection', staged({ user_id: 'a0000000-0000-4000-8000-000000000002' })],
+  ])('refuses an operation staged by %s', async (_who, operation) => {
+    const mock = world({ operation })
+    await expect(link(mock)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(mock.payloads('company_question_operations', 'insert')).toEqual([])
+  })
+
+  it('refuses a caller that is not a key or a connection: it staged nothing', async () => {
+    for (const caller of [undefined, { type: 'user' as const, id: 'key-1' }, { type: 'api_key' as const }]) {
+      const mock = world()
+      await expect(linkAs(mock, caller)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+      expect(mock.payloads('company_question_operations', 'insert')).toEqual([])
+    }
+  })
+
+  describe('through the dispatcher', () => {
+    const args = ARGS
+    const call = async (callArgs: Record<string, unknown>) => (await handleMcpRequest(mcpToolCall(LINK, callArgs))).text()
+
+    it('challenges a caller without a token with a 401', async () => {
+      vi.mocked(extractBearerToken).mockReturnValueOnce(null)
+      const response = await handleMcpRequest(mcpToolCall(LINK, args))
+      expect(response.status).toBe(401)
+      expect(response.headers.get('WWW-Authenticate')).toContain('Bearer')
+    })
+
+    it('refuses a key without agent:write', async () => {
+      mocks.scopes = ['agent:read', 'pending_operations:read', 'transactions:write']
+      expect(await call(args)).toContain('INSUFFICIENT_SCOPE')
+    })
+
+    it('refuses an argument it does not take', async () => {
+      mocks.scopes = ['agent:read', 'agent:write']
+      const body = await call({ ...args, note: 'because of the answer' })
+      expect(body).toContain('note')
+      expect(body).not.toContain('"status": "linked"')
+    })
+
+    it('answers that the list is not switched on to a key that holds the scope', async () => {
+      vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '')
+      mocks.scopes = ['agent:read', 'agent:write']
+      const body = await call(args)
+      expect(body).toContain('COMPANY_QUESTIONS_OFF')
+      expect(body).not.toContain('INSUFFICIENT_SCOPE')
+    })
+
+    it('answers that the question was not found where the company holds none', async () => {
+      mocks.scopes = ['agent:read', 'agent:write']
+      const body = await call(args)
+      expect(body).toContain('COMPANY_QUESTION_NOT_FOUND')
+    })
   })
 })

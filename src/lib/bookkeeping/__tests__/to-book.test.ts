@@ -2,8 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   toBookAmountLabel,
   toBookIsMoneyIn,
+  bankRowMatchHref,
   bookingWalk,
   buildToBookRows,
+  pickToBookSuggestion,
+  suggestedJournalEntryId,
+  toBookRowDoor,
   inToBookFilter,
   opensInBookingScreen,
   readAllToBookBankRows,
@@ -88,7 +92,7 @@ describe('filters and counts', () => {
   )
 
   it('counts every filter from the same rows', () => {
-    expect(toBookCounts(rows)).toEqual({ all: 4, missing: 1, found: 1, no_bank: 1, skattekonto: 0 })
+    expect(toBookCounts(rows)).toEqual({ all: 4, missing: 1, found: 1, suggested: 0, no_bank: 1, skattekonto: 0 })
   })
 
   it('places each row under the filters it belongs to', () => {
@@ -138,6 +142,108 @@ describe('a receipt found for a bank row', () => {
   it('opens a row without a found document with nothing held', () => {
     const [plain] = buildToBookRows([bank({ id: 'b' })], [])
     expect(toBookScreenSubject(plain)).toEqual({ kind: 'transaction', transactionId: 'b', account: null })
+  })
+})
+
+describe('a bank row the product already has a match for', () => {
+  const rows = buildToBookRows(
+    [
+      bank({ id: 'inv', amount: 5000 }),
+      bank({ id: 'sup' }),
+      bank({ id: 'rot', amount: 9000 }),
+      bank({ id: 'out' }),
+      bank({ id: 'pay' }),
+      bank({ id: 'ver' }),
+      bank({ id: 'led' }),
+      bank({ id: 'plain' }),
+    ],
+    [doc({ id: 'receipt', bankMatchTransactionId: 'led', kind: 'receipt' })],
+    [],
+    {
+      invoices: new Map([['inv', { number: '1042' }]]),
+      supplierInvoices: new Map([['sup', { number: null }]]),
+      rotRut: new Set(['rot']),
+      expensePayouts: new Map([['out', { name: 'Kim Ek' }]]),
+      salary: new Map([['pay', { journalEntryId: 'je-salary', period: '2026-10' }]]),
+      vouchers: new Map([['ver', { journalEntryId: 'je-77', voucher: 'A77' }]]),
+      ledger: new Set(['led']),
+    },
+  )
+  const row = (id: string) => rows.find((r) => r.transactionId === id)!
+
+  it('carries the suggestion on the row, and a row without one carries none', () => {
+    expect(row('inv').suggestion).toEqual({ kind: 'invoice', number: '1042' })
+    expect(row('sup').suggestion).toEqual({ kind: 'supplier_invoice', number: null })
+    expect(row('rot').suggestion).toEqual({ kind: 'rot_rut' })
+    expect(row('out').suggestion).toEqual({ kind: 'expense_payout', name: 'Kim Ek' })
+    expect(row('pay').suggestion).toEqual({ kind: 'salary', journalEntryId: 'je-salary', period: '2026-10' })
+    expect(row('ver').suggestion).toEqual({ kind: 'voucher', journalEntryId: 'je-77', voucher: 'A77' })
+    expect(row('led').suggestion).toEqual({ kind: 'ledger' })
+    expect(row('plain').suggestion).toBeNull()
+  })
+
+  it('never opens on the booking screen, where the row would be booked a second time', () => {
+    for (const id of ['inv', 'sup', 'rot', 'out', 'pay', 'ver', 'led']) expect(opensInBookingScreen(row(id))).toBe(false)
+    expect(opensInBookingScreen(row('plain'))).toBe(true)
+    expect(bookingWalk(rows, 'all')).toEqual(['plain'])
+  })
+
+  it('opens an invoice, a ROT/RUT payout and an utlägg repayment in Bankrader, with the match open', () => {
+    for (const id of ['inv', 'sup', 'rot', 'out']) expect(toBookRowDoor(row(id))).toBe('bank_rows')
+    expect(bankRowMatchHref('inv')).toBe('/transactions?view=inbox&highlight=inv&open=match')
+  })
+
+  it('opens a verifikat suggestion in the matcher, with the verifikat it names picked', () => {
+    for (const id of ['pay', 'ver', 'led']) expect(toBookRowDoor(row(id))).toBe('match_voucher')
+    expect(suggestedJournalEntryId(row('pay'))).toBe('je-salary')
+    expect(suggestedJournalEntryId(row('ver'))).toBe('je-77')
+    // The ledger's own answer names no single verifikat: the matcher ranks them.
+    expect(suggestedJournalEntryId(row('led'))).toBeNull()
+  })
+
+  it('wins over a receipt found for the row: the row is matched, not booked with the receipt', () => {
+    expect(row('led').underlag).toBe('found')
+    expect(toBookRowDoor(row('led'))).toBe('match_voucher')
+  })
+
+  it('leaves the other doors as they were', () => {
+    expect(toBookRowDoor(row('plain'))).toBe('screen')
+    const others = buildToBookRows(
+      [bank({ id: 'paired' })],
+      [doc({ id: 'invoice', bankMatchTransactionId: 'paired', kind: 'supplier_invoice' }), doc({ id: 'loose' })],
+      [{ id: 'skv-1', date: '2026-11-12', text: 'Moms', amount: -100 }],
+    )
+    expect(toBookRowDoor(others.find((r) => r.transactionId === 'paired')!)).toBe('inbox')
+    expect(toBookRowDoor(others.find((r) => r.key === 'doc:loose')!)).toBe('inbox')
+    expect(toBookRowDoor(others.find((r) => r.kind === 'skattekonto')!)).toBe('skattekonto')
+  })
+
+  it('has a filter of its own, with its count', () => {
+    expect(toBookCounts(rows).suggested).toBe(7)
+    expect(rows.filter((r) => inToBookFilter(r, 'suggested')).map((r) => r.transactionId).sort()).toEqual(
+      ['inv', 'led', 'out', 'pay', 'rot', 'sup', 'ver'],
+    )
+    expect(toBookListHref('suggested')).toBe('/att-bokfora?visa=att-matcha')
+  })
+
+  it('names one suggestion per row, in the order Bankrader uses for its button', () => {
+    const everything = {
+      invoices: new Map([['x', { number: '7' }]]),
+      supplierInvoices: new Map([['x', { number: '8' }]]),
+      rotRut: new Set(['x']),
+      expensePayouts: new Map([['x', { name: null }]]),
+      salary: new Map([['x', { journalEntryId: 'je-1', period: '2026-09' }]]),
+      vouchers: new Map([['x', { journalEntryId: 'je-2', voucher: 'A2' }]]),
+      ledger: new Set(['x']),
+    }
+    expect(pickToBookSuggestion('x', everything)?.kind).toBe('invoice')
+    expect(pickToBookSuggestion('x', { ...everything, invoices: new Map() })?.kind).toBe('supplier_invoice')
+    expect(pickToBookSuggestion('x', { ...everything, invoices: new Map(), supplierInvoices: new Map() })?.kind).toBe('rot_rut')
+    expect(pickToBookSuggestion('x', { salary: everything.salary, vouchers: everything.vouchers, ledger: everything.ledger })?.kind).toBe('salary')
+    expect(pickToBookSuggestion('x', { vouchers: everything.vouchers, ledger: everything.ledger })?.kind).toBe('voucher')
+    expect(pickToBookSuggestion('x', { ledger: everything.ledger })?.kind).toBe('ledger')
+    expect(pickToBookSuggestion('other', everything)).toBeNull()
+    expect(pickToBookSuggestion('x', {})).toBeNull()
   })
 })
 

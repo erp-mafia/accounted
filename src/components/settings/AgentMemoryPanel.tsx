@@ -59,7 +59,13 @@ const KIND_FILTER: { value: 'all' | Kind; label: string }[] = [
   { value: 'correction', label: 'Korrigeringar' },
 ]
 
-export function AgentMemoryPanel() {
+/**
+ * What the assistant remembers about the company, to read, add to, edit and
+ * hide. `plain` is the same panel as one list, newest first: no kind filter,
+ * no hidden rows to bring back, no pinning. Adding a memory and each row's
+ * edit and hide stay.
+ */
+export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const errorLocale = useLocale() as ErrorLocale
@@ -257,29 +263,36 @@ export function AgentMemoryPanel() {
     setEditingId(null)
   }
 
+  // The plain list reads newest first, whatever order the read came in.
+  const shownRows = plain && rows ? [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at)) : rows
+
   // One clean list, the way every other v2 register reads: a toolbar (the
   // kind filter, the hidden toggle, the add button), a count line, then rows
   // of content with their meta beneath and quiet actions that show on hover.
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        {/* The segments scroll sideways on a phone instead of pushing the page wide. */}
-        <div className="max-w-full overflow-x-auto rounded-lg">
-          <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
-        </div>
-        <button
-          type="button"
-          onClick={() => setIncludeDismissed((v) => !v)}
-          aria-pressed={includeDismissed}
-          className={cn(QUIET_LINK_CLASS, 'ml-1 text-xs')}
-        >
-          {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
-        </button>
-        <HelpPopover className="shrink-0">
-          Bokföringsassistenten använder dessa anteckningar för att ge dig rätt råd. Fäst det som alltid
-          ska vara med, redigera fel, eller dölj det som inte längre stämmer. Upp till 30 minnen ingår i
-          samtal per tur.
-        </HelpPopover>
+        {!plain && (
+          <>
+            {/* The segments scroll sideways on a phone instead of pushing the page wide. */}
+            <div className="max-w-full overflow-x-auto rounded-lg">
+              <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+            </div>
+            <button
+              type="button"
+              onClick={() => setIncludeDismissed((v) => !v)}
+              aria-pressed={includeDismissed}
+              className={cn(QUIET_LINK_CLASS, 'ml-1 text-xs')}
+            >
+              {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
+            </button>
+            <HelpPopover className="shrink-0">
+              Bokföringsassistenten använder dessa anteckningar för att ge dig rätt råd. Fäst det som alltid
+              ska vara med, redigera fel, eller dölj det som inte längre stämmer. Upp till 30 minnen ingår i
+              samtal per tur.
+            </HelpPopover>
+          </>
+        )}
         {canWrite && (
           <Button className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
             <PlusIcon className="h-3.5 w-3.5" aria-hidden />
@@ -321,7 +334,7 @@ export function AgentMemoryPanel() {
         </div>
       )}
 
-      {rows && rows.length > 0 && (
+      {!plain && rows && rows.length > 0 && (
         <p className="text-xs tabular-nums text-muted-foreground">
           {counts.active} aktiva · {counts.pinned} fästa
           {includeDismissed && counts.dismissed > 0 ? ` · ${counts.dismissed} dolda` : ''}
@@ -359,16 +372,16 @@ export function AgentMemoryPanel() {
         />
       )}
 
-      {rows && rows.length > 0 && (
+      {shownRows && shownRows.length > 0 && (
         <ul>
-          {rows.map((row) => {
+          {shownRows.map((row) => {
             const isEditing = editingId === row.id
             const isBusy = busyId === row.id
             const dimmed = !row.is_active
             const who = savedBy(row)
             return (
               <li key={row.id} className={cn('group flex items-start gap-3 border-b-hairline py-3.5', dimmed && 'opacity-60')}>
-                {canWrite && row.is_active ? (
+                {plain ? null : canWrite && row.is_active ? (
                   <button
                     type="button"
                     onClick={() => patch(row.id, { is_pinned: !row.is_pinned })}

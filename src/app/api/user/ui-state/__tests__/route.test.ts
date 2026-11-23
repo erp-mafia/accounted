@@ -334,4 +334,79 @@ describe('POST /api/user/ui-state', () => {
     const res = await POST(request({ discord_invite_dismissed_at: 'yes' }))
     expect(res.status).toBe(400)
   })
+
+  it('stores the favourite menu rows whole, in the order sent, beside the existing keys', async () => {
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] }, nav_favorites: ['/invoices', '/dimensions'] } } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{ data: { ui_state: Record<string, unknown> } }>(
+      await POST(request({ nav_favorites: ['/accounts', '/reports/vat-declaration', '/wiki?view=map'] })),
+    )
+
+    expect(status).toBe(200)
+    // Replaced, never merged: the rows left out of the new list are gone.
+    expect(body.data.ui_state).toEqual({
+      tx_columns: { hidden: ['date'] },
+      nav_favorites: ['/accounts', '/reports/vat-declaration', '/wiki?view=map'],
+    })
+  })
+
+  it('stores an empty favourites list when the last one is removed', async () => {
+    enqueue({ data: { ui_state: { nav_favorites: ['/accounts'] } } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{ data: { ui_state: Record<string, unknown> } }>(
+      await POST(request({ nav_favorites: [] })),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state).toEqual({ nav_favorites: [] })
+  })
+
+  it('leaves the stored favourites alone when another key is written', async () => {
+    enqueue({ data: { ui_state: { nav_favorites: ['/accounts'] } } })
+    enqueue({ data: null })
+
+    const { body } = await parseJsonResponse<{ data: { ui_state: Record<string, unknown> } }>(
+      await POST(request({ support_fab_hidden: true })),
+    )
+
+    expect(body.data.ui_state).toEqual({ nav_favorites: ['/accounts'], support_fab_hidden: true })
+  })
+
+  it('stores as many favourites as the cap allows', async () => {
+    enqueue({ data: null })
+    enqueue({ data: null })
+    const full = Array.from({ length: 12 }, (_, index) => `/page-${index}`)
+
+    const res = await POST(request({ nav_favorites: full }))
+    expect(res.status).toBe(200)
+  })
+
+  it('returns 400 when nav_favorites is not a list', async () => {
+    const asString = await POST(request({ nav_favorites: '/accounts' }))
+    expect(asString.status).toBe(400)
+    const asObject = await POST(request({ nav_favorites: { hrefs: ['/accounts'] } }))
+    expect(asObject.status).toBe(400)
+  })
+
+  it('returns 400 when nav_favorites holds more than the cap', async () => {
+    const tooMany = Array.from({ length: 13 }, (_, index) => `/page-${index}`)
+    const res = await POST(request({ nav_favorites: tooMany }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 when a nav_favorites entry is not a route path', async () => {
+    const relative = await POST(request({ nav_favorites: ['/accounts', 'invoices'] }))
+    expect(relative.status).toBe(400)
+    const absolute = await POST(request({ nav_favorites: ['https://example.com/accounts'] }))
+    expect(absolute.status).toBe(400)
+    const notText = await POST(request({ nav_favorites: [42] }))
+    expect(notText.status).toBe(400)
+  })
+
+  it('returns 400 when a nav_favorites entry is longer than a route path gets', async () => {
+    const res = await POST(request({ nav_favorites: [`/${'a'.repeat(200)}`] }))
+    expect(res.status).toBe(400)
+  })
 })

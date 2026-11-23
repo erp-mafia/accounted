@@ -51,7 +51,7 @@ const SuggestedLine = z.object({
 
 const OrderSummary = z.object({
   webshop_order_id: z.string().uuid(),
-  platform: z.enum(['woocommerce', 'shopify', 'zettle']),
+  platform: z.enum(['woocommerce', 'shopify', 'zettle', 'kustom']),
   store_scope: z.string(),
   store_label: z.string().nullable(),
   row_type: z.enum(['order', 'refund']),
@@ -175,7 +175,7 @@ export const webshopOrdersList = defineOperation({
   },
   input: z.object({
     booked: z.enum(['booked', 'unbooked']).optional().describe('booked: booked here or marked as booked outside; unbooked: the rest.'),
-    platform: z.enum(['woocommerce', 'shopify', 'zettle']).optional(),
+    platform: z.enum(['woocommerce', 'shopify', 'zettle', 'kustom']).optional(),
     row_type: z.enum(['order', 'refund']).optional(),
     from: isoDateSchema.optional().describe('First order date, inclusive.'),
     to: isoDateSchema.optional().describe('Last order date, inclusive.'),
@@ -200,7 +200,7 @@ export const webshopOrdersList = defineOperation({
     keywords: [
       'webshop', 'webbutik', 'webbshop', 'nätbutik', 'e-handel', 'e-commerce', 'ecommerce', 'online store',
       'order', 'ordrar', 'butiksorder', 'ordernummer', 'order number', 'synkade ordrar',
-      'shopify', 'woocommerce', 'zettle', 'oss', 'leveransland',
+      'shopify', 'woocommerce', 'zettle', 'kustom', 'oss', 'leveransland',
     ],
   },
   run: async (ctx, input) => {
@@ -503,7 +503,7 @@ export const webshopOrdersBookDay = defineOperation({
     },
   },
   input: z.object({
-    platform: z.enum(['woocommerce', 'shopify', 'zettle']),
+    platform: z.enum(['woocommerce', 'shopify', 'zettle', 'kustom']),
     store_scope: z.string().min(1).describe('The store, store_scope from GET /webshop-orders, e.g. exempel.myshopify.com.'),
     date: isoDateSchema.describe('The day: the orders\' paid date, else their order date.'),
     payment_method: z.string().min(1).describe('The orders\' payment_method from GET /webshop-orders, e.g. shopify_payments or paypal.'),
@@ -569,6 +569,16 @@ const QuarterRef = z.object({ year: z.number(), quarter: z.number(), label: z.st
 
 const OssWarning = Warning.extend({ order_numbers: z.array(z.string()) })
 
+const OssVoucher = z.object({
+  journal_entry_id: z.string().uuid(),
+  voucher_series: z.string().nullable(),
+  voucher_number: z.number(),
+  entry_date: z.string(),
+  description: z.string(),
+  net_sek: z.number(),
+  vat_sek: z.number(),
+})
+
 export const webshopOrdersOssUnderlag = defineOperation({
   id: 'webshop-orders.oss-underlag',
   kind: 'read',
@@ -576,29 +586,33 @@ export const webshopOrdersOssUnderlag = defineOperation({
   risk: 'low',
   reversible: false,
   docs: {
-    summary: 'Underlag for the OSS declaration (unionsordningen): a quarter\'s webshop sales to consumers in other EU countries, per country and VAT rate, in euro.',
+    summary: 'Underlag for the OSS declaration (unionsordningen): a quarter\'s sales to consumers in other EU countries, per country and VAT rate, in euro.',
     description:
-      'Adds up the webshop orders booked on the OSS accounts (VAT code oss, the OSS output VAT account, or accounts a Shopify country rule names for OSS) in a calendar quarter: per destination country and VAT rate the sales without VAT and the VAT, in euro at the ECB rate for the last day of the quarter (the next publication day when the ECB published none) and in kronor as booked. Refunds of an earlier quarter\'s sales are corrections of that quarter (country, quarter, VAT). unaccounted lists the OSS-account verifikat that book no order (manual vouchers, stornos): they count in ledger_vat_sek but in no row or total, because the ledger does not say their country or VAT rate. warnings names the orders missing from the underlag. Read-only; nothing is filed.',
+      'Adds up what is booked on the OSS accounts (VAT code oss, the OSS output VAT account, accounts a Shopify country rule names for OSS, and 26xx accounts that name an OSS country) in a calendar quarter: per country and VAT rate the sales without VAT and the VAT, in euro at the ECB rate for the last day of the quarter (the next publication day when the ECB published none) and in kronor as booked. A verifikat that books a webshop order takes country and rate from the order. One that books no order takes them from its accounts, when the sales account names a country and a rate (accounts.oss-countries): the VAT follows the sales it is booked with. Refunds of an earlier quarter\'s orders, and stornos and rättelser of an earlier quarter\'s verifikat, are corrections of that quarter (country, quarter, VAT). unaccounted lists the verifikat with neither an order nor a country on their accounts: they count in ledger_vat_sek but in no row or total. accounts lists the OSS accounts that name a country, those a verifikat waits for (blocks_vouchers) and what their names suggest. warnings names what is missing or needs a look. Read-only; nothing is filed.',
     useWhen: 'Before filing the quarterly OSS declaration in Skatteverket\'s e-tjänst, or to check what the OSS accounts hold per country.',
     doNotUseFor: 'The Swedish momsdeklaration (OSS sales are outside it), EU sales taxed in Sweden below the distance-selling threshold, or invoices (they carry Swedish VAT only).',
     pitfalls: [
       'Only booked orders count, in the quarter of the verifikat that books them: book the quarter\'s orders first (warnings unbooked_orders).',
       'Euro amounts are null until the ECB has published the rate for the last day of the quarter (warnings rate_unavailable); the kronor amounts are final.',
       'The VAT is declared with two decimals, never rounded. A nil_return quarter still needs a declaration.',
-      'nil_return is true only when nothing is left outside the underlag: no unaccounted verifikat, no warning about a missing order, no VAT on the OSS accounts. Empty rows with nil_return false is NOT a nil return: a sale booked as a manual voucher has no order to take its country from (warnings vouchers_without_order), so it is declared by hand from the sales records.',
+      'nil_return is true only when nothing is left outside the underlag: no unaccounted verifikat, no warning about a missing order, no VAT on the OSS accounts. Empty rows with nil_return false is NOT a nil return: a sale booked as a manual voucher on an account that names no country has nothing to take its country from (warnings vouchers_without_order), so the account is given its country or the sale is declared by hand from the sales records.',
       'A correction uses the ECB rate of the quarter it corrects, so a full refund takes back exactly what was declared.',
+      'refund_vouchers are refunds booked as verifikat of their own, placed by their accounts: they are taken off the quarter they are booked in (warnings refund_vouchers_netted). One that belongs to an earlier quarter is declared as a correction of that quarter instead.',
+      'rate_mismatch on a row (warnings vat_rate_mismatch): the VAT its verifikat book is not the row\'s rate of their sales. A wrong rate on the account, a wrong VAT amount, or VAT booked on an account that names no OSS country.',
     ],
     example: {
       request: { year: 2026, quarter: 3 },
       response: {
         data: {
           period: { year: 2026, quarter: 3, start: '2026-07-01', end: '2026-09-30', label: 'Q3 2026', deadline: '2026-10-31' },
-          rows: [{ country: 'DE', vat_rate: 19, net_eur: 88.26, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1 }],
+          rows: [{ country: 'DE', vat_rate: 19, net_eur: 88.26, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1, voucher_count: 0, rate_mismatch: false }],
           corrections: [],
           totals: { net_eur: 88.26, vat_eur: 16.77, corrections_vat_eur: 0, net_sek: 1000, vat_sek: 190, corrections_vat_sek: 0 },
           rates: [{ currency: 'SEK', for_date: '2026-09-30', rate: 11.331, rate_date: '2026-09-30', unavailable: false }],
           ledger_vat_sek: 190,
           unaccounted: [],
+          refund_vouchers: [],
+          accounts: [],
           warnings: [],
           nil_return: false,
         },
@@ -618,6 +632,8 @@ export const webshopOrdersOssUnderlag = defineOperation({
         net_sek: z.number(),
         vat_sek: z.number(),
         order_count: z.number(),
+        voucher_count: z.number(),
+        rate_mismatch: z.boolean(),
       }),
     ),
     corrections: z.array(
@@ -627,6 +643,7 @@ export const webshopOrdersOssUnderlag = defineOperation({
         vat_eur: z.number().nullable(),
         vat_sek: z.number(),
         refund_count: z.number(),
+        voucher_count: z.number(),
       }),
     ),
     totals: z.object({
@@ -647,15 +664,18 @@ export const webshopOrdersOssUnderlag = defineOperation({
       }),
     ),
     ledger_vat_sek: z.number(),
-    unaccounted: z.array(
+    unaccounted: z.array(OssVoucher),
+    refund_vouchers: z.array(OssVoucher),
+    accounts: z.array(
       z.object({
-        journal_entry_id: z.string().uuid(),
-        voucher_series: z.string().nullable(),
-        voucher_number: z.number(),
-        entry_date: z.string(),
-        description: z.string(),
-        net_sek: z.number(),
-        vat_sek: z.number(),
+        account_number: z.string(),
+        account_name: z.string(),
+        kind: z.enum(['sales', 'vat']),
+        country: z.string().nullable(),
+        vat_rate: z.number().nullable(),
+        suggested_country: z.string().nullable(),
+        suggested_vat_rate: z.number().nullable(),
+        blocks_vouchers: z.boolean(),
       }),
     ),
     warnings: z.array(OssWarning),
@@ -667,8 +687,8 @@ export const webshopOrdersOssUnderlag = defineOperation({
     name: 'gnubok_get_oss_underlag',
     title: 'OSS Underlag (One Stop Shop, Unionsordningen)',
     description:
-      "Underlag for the quarterly OSS declaration: webshop sales to consumers in other EU countries per country and VAT rate, in euro at the ECB rate, corrections of earlier quarters, and the OSS vouchers it does not cover. Read-only; to type into Skatteverket's e-tjänst.",
-    keywords: ['oss', 'one stop shop', 'unionsordningen', 'oss-deklaration', 'distansförsäljning', 'eu-moms', 'utländsk moms', 'shopify', 'e-handel'],
+      "Underlag for the quarterly OSS declaration: sales to consumers in other EU countries per country and VAT rate, in euro at the ECB rate, corrections of earlier quarters, the OSS vouchers it does not cover and the accounts that need a country. Read-only.",
+    keywords: ['oss', 'one stop shop', 'unionsordningen', 'oss-deklaration', 'distansförsäljning', 'eu-moms', 'utländsk moms', 'shopify', 'e-handel', 'konto per land'],
   },
   run: async (ctx, input) => (await ossUnderlag()).getOssUnderlag(ctx, input),
 })

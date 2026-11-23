@@ -98,7 +98,7 @@ and matching balances. If the balances still disagree:
 
 - A historical opening balance might be wrong. Compare \`gnubok_get_trial_balance\` for the period start against the bank's opening statement.
 - An entry might sit in a closed period that wasn't fully reconciled before locking. Check \`gnubok_list_fiscal_periods\` and walk backwards.
-- FX accounts (non-SEK) need revaluation before period close: \`gnubok_run_currency_revaluation\`.
+- A bank account in a foreign currency (EUR, USD) is compared in its own currency, so no exchange rate explains a difference on it. \`not_reconcilable_reason: "gl_lines_missing_currency_amount"\` means a verifikat line on the account carries no amount in that currency. \`gnubok_query_journal\` on the account lists its lines with their \`currency\`: a line that is not in the account's currency is such a line. Show it to the user. \`gnubok_run_currency_revaluation\` changes nothing here: it revalues open customer and supplier invoices, not bank accounts.
 
 ### Step 5: Document the reconciliation
 
@@ -114,7 +114,7 @@ ledger after reconciliation:
 - **Never delete a bank transaction**, even if it looks wrong. The PSD2 feed is the source of truth. If the bank made a mistake, the bank reverses it via a new transaction.
 - **Never edit a posted entry to "make it match"**: use \`gnubok_correct_entry\` or \`gnubok_reverse_journal_entry\`. BFL 5 kap 5 § forbids in-place edits.
 - **Reconcile BEFORE locking the period.** Lock-period sealed-off audit can't be re-opened cheaply (it requires \`gnubok_unlock_period\` + storno + relock).
-- **FX accounts must be revalued** at period close. Pre-revaluation reconciliation can show a phantom mismatch that disappears after revaluation: don't chase it.
+- **A foreign-currency bank account is reconciled in its own currency.** A difference on it is real, never an exchange-rate effect that a revaluation clears: work it like any other. \`gnubok_run_currency_revaluation\` revalues open customer and supplier invoices in foreign currency (1510/2440 against 3960/7960) at the closing rate. It does not revalue a bank account's balance in kronor or a loan in foreign currency.
 
 ## Common errors
 
@@ -134,7 +134,7 @@ ledger after reconciliation:
 - \`gnubok_find_voucher_candidates_for_invoice\`, \`gnubok_find_voucher_candidates_for_supplier_invoice\` (read-only: run before the link_\* tools)
 - \`gnubok_attach_document_to_transaction\` (file a receipt against a tx)
 - \`gnubok_reverse_journal_entry\` (storno)
-- \`gnubok_run_currency_revaluation\` (FX accounts only)
+- \`gnubok_run_currency_revaluation\` (open customer and supplier invoices in foreign currency; not bank accounts)
 
 A staged write your client does not list in tools/list (gnubok_search_tools shows callable_via \"stage_tool\") is staged through \`gnubok_stage_tool({ tool, arguments })\` and approved as usual; an unlisted read goes through \`gnubok_call_tool\`.
 - \`gnubok_get_trial_balance\`, \`gnubok_get_ar_ledger\`, \`gnubok_get_supplier_ledger\` (verification; the two ledgers via \`gnubok_call_tool\`)

@@ -27,7 +27,9 @@
  * place of the fallback reply to a text; a tap on its buttons answers it
  * here, and an answer through another door takes it out of the conversation;
  * a question closed as settled is also told in the chat, and the next open
- * question follows (the company_question.* event handlers below).
+ * question follows; a staged operation linked to a question that was
+ * answered in the chat is told to the person who answered (the
+ * company_question.* event handlers below).
  *
  * Deferred to PR5: retention cron, FieldsRail surfacing, booking-notes
  * threading.
@@ -79,6 +81,7 @@ import {
   parseQuestionButtonId,
   pendingListQuestion,
   settleListQuestion,
+  tellListPrepared,
   type ListQuestionRef,
   type QuestionTap,
 } from './lib/list-question'
@@ -824,6 +827,15 @@ export const whatsappInboxExtension: Extension = {
         payload.closeReason === 'settled'
           ? settleListQuestion(eventClient(ctx), { companyId: payload.companyId, questionId: payload.questionId })
           : clearEndedListQuestion(eventClient(ctx), payload.questionId),
+    },
+    {
+      eventType: 'company_question.prepared',
+      handler: (payload: EventPayload<'company_question.prepared'>, ctx?: ExtensionContext) =>
+        tellListPrepared(eventClient(ctx), {
+          companyId: payload.companyId,
+          questionId: payload.questionId,
+          operationId: payload.operationId,
+        }),
     },
   ],
 

@@ -46,13 +46,14 @@ describe('WebhookEventTypeListSchema', () => {
     expect(WebhookEventTypeListSchema.safeParse([]).success).toBe(false)
   })
 
-  it('accepts the four question list types', () => {
+  it('accepts the five question list types', () => {
     expect(
       WebhookEventTypeListSchema.safeParse([
         'company_question.filed',
         'company_question.answered',
         'company_question.closed',
         'company_question.reopened',
+        'company_question.prepared',
       ]).success,
     ).toBe(true)
   })

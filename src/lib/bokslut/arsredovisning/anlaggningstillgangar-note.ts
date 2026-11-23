@@ -35,8 +35,10 @@
  */
 
 import { roundOre } from '@/lib/money'
+import { ASSET_ACQUISITION_TYPES, assetAcquisitionType } from '@/lib/bokslut/assets/acquisition-type'
 import type { WriteDownMovement } from '@/lib/bokslut/assets/value-adjustments'
-import type { NoteEntry } from './types'
+import type { AssetAcquisitionType } from '@/types'
+import type { DepreciationPrinciple, NoteEntry } from './types'
 import type { AssetDepreciationFigures } from './asset-note-figures'
 import { formatPdfKronor } from './pdf-format'
 
@@ -47,15 +49,28 @@ export interface AnlaggningAsset {
   salvage_value: number
   useful_life_months: number
   disposed_at: string | null
+  /** How the asset came onto the books (assets.acquisition_type); absent: a purchase. */
+  acquisition_type?: AssetAcquisitionType
+  /** The BAS account the asset is booked on: the K2 note groups by its balance sheet post. */
+  bas_asset_account?: string
   figures: AssetDepreciationFigures
   /** The year's movement in accumulated write-downs (writeDownMovement); absent: none. */
   writeDowns?: WriteDownMovement
 }
 
-interface CategoryRollforward {
+export interface CategoryRollforward {
+  /** The group the row sums: the register category, or the caller's own key. */
   category: string
   ibAnskaffning: number
   tillkommande: number
+  /** The year's new assets by how they came in (assets.acquisition_type); they sum to `tillkommande`. */
+  tillkommandePerSatt: Record<AssetAcquisitionType, number>
+  /**
+   * Accumulated avskrivningar the year's new assets carried when they came
+   * in (an asset's opening amount), by how they came in. Not part of `ibAck`:
+   * the asset was not on the books at the start of the year.
+   */
+  overtagnaAck: Record<AssetAcquisitionType, number>
   avgaende: number
   ubAnskaffning: number
   ibAck: number
@@ -78,7 +93,7 @@ interface CategoryRollforward {
  */
 export const MARK_NOT_DEPRECIATED = 'Mark skrivs inte av.'
 
-const CATEGORY_LABELS: Record<string, string> = {
+export const CATEGORY_LABELS: Record<string, string> = {
   immaterial: 'Immateriella anläggningstillgångar',
   building: 'Byggnader',
   land: 'Mark',
@@ -90,16 +105,35 @@ const CATEGORY_LABELS: Record<string, string> = {
   other_tangible: 'Övriga materiella anläggningstillgångar',
 }
 
+const PRINCIPLES_INTRO = 'Avskrivningar görs linjärt över bedömd nyttjandeperiod:'
+const PRINCIPLE_BULLET = '• '
+
+/** How the rows of the "Avskrivningar" note are placed on balance sheet posts (K2). */
+export interface DepreciationPrinciplePosts {
+  /** The balance sheet post of a BAS asset account, null when none covers it. */
+  postOfAccount: (account: string) => string | null
+  /** The label the balance sheet prints the post with. */
+  labelOfPost: (post: string) => string
+}
+
 /**
- * The K2 "Avskrivningar" note: the depreciation period per category of the
- * assets on the books, and that mark is not depreciated. Mark has no
- * limited useful life (useful_life_months 0), so it is never a "0 år" row.
- * Empty when there is nothing to say.
+ * The depreciation period per category of the assets on the books, and
+ * whether the company holds mark (which is not depreciated: it has no
+ * limited useful life, useful_life_months 0, so it is never a "0 år" row).
+ * With `posts` the rows are per category and balance sheet post, for the
+ * document that tags each row as its post's table; a category booked on two
+ * posts is then two rows, each named with its post.
  */
-export function depreciationPrincipleLines(
-  assets: ReadonlyArray<{ category: string; useful_life_months: number; disposed_at: string | null }>,
-): string[] {
-  const byCategory = new Map<string, Set<number>>()
+export function depreciationPrinciples(
+  assets: ReadonlyArray<{
+    category: string
+    useful_life_months: number
+    disposed_at: string | null
+    bas_asset_account?: string
+  }>,
+  posts?: DepreciationPrinciplePosts,
+): { rows: DepreciationPrinciple[]; holdsLand: boolean } {
+  const groups = new Map<string, { category: string; post: string | null; years: Set<number> }>()
   let holdsLand = false
   for (const asset of assets) {
     if (asset.disposed_at) continue
@@ -107,47 +141,88 @@ export function depreciationPrincipleLines(
       holdsLand = true
       continue
     }
-    const years = Math.round(asset.useful_life_months / 12)
-    if (!byCategory.has(asset.category)) byCategory.set(asset.category, new Set())
-    byCategory.get(asset.category)!.add(years)
+    const post = posts && asset.bas_asset_account ? posts.postOfAccount(asset.bas_asset_account) : null
+    const key = `${asset.category}|${post ?? ''}`
+    if (!groups.has(key)) groups.set(key, { category: asset.category, post, years: new Set() })
+    groups.get(key)!.years.add(Math.round(asset.useful_life_months / 12))
   }
-  const lines: string[] = byCategory.size > 0 ? ['Avskrivningar görs linjärt över bedömd nyttjandeperiod:'] : []
-  for (const [category, yearsSet] of byCategory.entries()) {
-    const years = Array.from(yearsSet).sort((a, b) => a - b)
-    const label = years.length === 1 ? `${years[0]} år` : `${years[0]}-${years[years.length - 1]} år`
-    lines.push(`• ${CATEGORY_LABELS[category] ?? category}: ${label}`)
-  }
+  const perCategory = new Map<string, number>()
+  for (const group of groups.values()) perCategory.set(group.category, (perCategory.get(group.category) ?? 0) + 1)
+  const rows = [...groups.values()].map(({ category, post, years }) => {
+    const sorted = [...years].sort((a, b) => a - b)
+    const name = CATEGORY_LABELS[category] ?? category
+    return {
+      label: posts && post && (perCategory.get(category) ?? 0) > 1 ? `${name} (${posts.labelOfPost(post)})` : name,
+      period: sorted.length === 1 ? `${sorted[0]} år` : `${sorted[0]}-${sorted[sorted.length - 1]} år`,
+      post,
+    }
+  })
+  return { rows, holdsLand }
+}
+
+/**
+ * The "Avskrivningar" note as text: the rows under their introduction, and
+ * that mark is not depreciated. Empty when there is nothing to say.
+ */
+export function depreciationPrincipleLines(principles: ReturnType<typeof depreciationPrinciples>): string[] {
+  const { rows, holdsLand } = principles
+  const lines: string[] = rows.length > 0 ? [PRINCIPLES_INTRO] : []
+  for (const row of rows) lines.push(`${PRINCIPLE_BULLET}${row.label}: ${row.period}`)
   if (holdsLand) lines.push(MARK_NOT_DEPRECIATED)
   return lines
 }
 
-function buildRollforward(
+/** Whether a line of the note's text is one of its rows (printed as the tagged table in the iXBRL document). */
+export function isDepreciationPrincipleRow(line: string): boolean {
+  return line.startsWith(PRINCIPLE_BULLET)
+}
+
+const zeroPerSatt = (): Record<AssetAcquisitionType, number> => ({
+  purchase: 0,
+  business_acquisition: 0,
+  merger: 0,
+  reclassification: 0,
+})
+
+/** A group nothing has moved in. */
+export function emptyRollforward(category: string): CategoryRollforward {
+  return {
+    category,
+    ibAnskaffning: 0,
+    tillkommande: 0,
+    tillkommandePerSatt: zeroPerSatt(),
+    overtagnaAck: zeroPerSatt(),
+    avgaende: 0,
+    ubAnskaffning: 0,
+    ibAck: 0,
+    aretsAvskrivning: 0,
+    avgaendeAck: 0,
+    ubAck: 0,
+    ibNed: 0,
+    aretsNed: 0,
+    aterfordaNed: 0,
+    avgaendeNed: 0,
+    ubNed: 0,
+    ubRedovisat: 0,
+  }
+}
+
+/**
+ * The year's roll-forward per group of assets: per register category, or
+ * per `keyOf` (the K2 note groups per balance sheet post).
+ */
+export function buildRollforward(
   assets: AnlaggningAsset[],
   periodStart: string,
   periodEnd: string,
+  keyOf: (asset: AnlaggningAsset) => string = (asset) => asset.category,
 ): CategoryRollforward[] {
   const byCategory = new Map<string, CategoryRollforward>()
 
   const getRow = (category: string): CategoryRollforward => {
     let row = byCategory.get(category)
     if (!row) {
-      row = {
-        category,
-        ibAnskaffning: 0,
-        tillkommande: 0,
-        avgaende: 0,
-        ubAnskaffning: 0,
-        ibAck: 0,
-        aretsAvskrivning: 0,
-        avgaendeAck: 0,
-        ubAck: 0,
-        ibNed: 0,
-        aretsNed: 0,
-        aterfordaNed: 0,
-        avgaendeNed: 0,
-        ubNed: 0,
-        ubRedovisat: 0,
-      }
+      row = emptyRollforward(category)
       byCategory.set(category, row)
     }
     return row
@@ -168,7 +243,7 @@ function buildRollforward(
     if (disposedBeforePeriod) continue
     if (!acquiredBeforePeriod && !acquiredDuringPeriod) continue
 
-    const row = getRow(asset.category)
+    const row = getRow(keyOf(asset))
 
     if (acquiredBeforePeriod) {
       // Was on the books at the start of the period
@@ -176,7 +251,12 @@ function buildRollforward(
       row.ibAck += asset.figures.ibAck
     }
     if (acquiredDuringPeriod) {
+      const satt = assetAcquisitionType(asset)
       row.tillkommande += asset.acquisition_cost
+      row.tillkommandePerSatt[satt] += asset.acquisition_cost
+      // What was depreciated on it before it came onto these books (its
+      // opening amount; nothing is posted here before the year).
+      row.overtagnaAck[satt] += asset.figures.ibAck
     }
     if (disposedDuringPeriod) {
       row.avgaende += asset.acquisition_cost
@@ -204,6 +284,8 @@ function buildRollforward(
       ...r,
       ibAnskaffning: Math.round(r.ibAnskaffning * 100) / 100,
       tillkommande: Math.round(r.tillkommande * 100) / 100,
+      tillkommandePerSatt: roundedPerSatt(r.tillkommandePerSatt),
+      overtagnaAck: roundedPerSatt(r.overtagnaAck),
       avgaende: Math.round(r.avgaende * 100) / 100,
       ubAnskaffning: ub,
       ibAck: Math.round(r.ibAck * 100) / 100,
@@ -219,6 +301,12 @@ function buildRollforward(
   const order = Object.keys(CATEGORY_LABELS)
   rows.sort((a, b) => order.indexOf(a.category) - order.indexOf(b.category))
   return rows
+}
+
+function roundedPerSatt(values: Record<AssetAcquisitionType, number>): Record<AssetAcquisitionType, number> {
+  const rounded = zeroPerSatt()
+  for (const satt of ASSET_ACQUISITION_TYPES) rounded[satt] = roundOre(values[satt])
+  return rounded
 }
 
 /**

@@ -24,11 +24,15 @@ const StatusResponse = z.object({
   /** Sum of ignored bank transactions in the window. Informational: not part of bank_transaction_total or difference. */
   ignored_transaction_total: z.number(),
   ignored_transaction_count: z.number().int(),
-  /** Full ledger balance on the account incl. opening balance: matches the balance sheet. */
-  gl_1930_balance: z.number(),
+  /** Full ledger balance on the account incl. opening balance: matches the balance sheet.
+   *  null on a foreign-currency account whose opening balance is not known in that currency. */
+  gl_1930_balance: z.number().nullable(),
   /** Ledger movement excluding opening balance: what `difference` compares against. */
   gl_1930_period_movement: z.number(),
-  gl_1930_opening_balance: z.number(),
+  /** Opening balance in the window, in the account's currency. On a foreign-currency
+   *  account it is booked in SEK and read from the ledger before it; null when that
+   *  ledger does not say (an imported first year, history booked in SEK only). */
+  gl_1930_opening_balance: z.number().nullable(),
   /** Net storno/correction activity in the window. Informational; included in the movement. */
   gl_1930_correction_adjustment: z.number(),
   /** bank_transaction_total minus gl_1930_period_movement: how far apart the two
@@ -102,6 +106,7 @@ registerEndpoint({
     'is_reconciled means |difference| < 0.01 for the window, an aggregate check, not a per-transaction guarantee.',
     'Judge health on unexplained_difference, NOT on difference. difference is just the gap between the two sides and is expected to be large mid-year; it is fully explained while every krona of it sits in unmatched_transaction_total, unmatched_gl_line_total or settled_gl_line_total. A non-zero unexplained_difference is the real finding: a matched pair disagreeing in amount, a voucher with several lines on the account, or a storno/correction line the candidate list hides.',
     'Ignored transactions are excluded from bank_transaction_total and difference (they never get a ledger counterpart); their count and sum are reported separately.',
+    'On a foreign-currency account gl_1930_balance and gl_1930_opening_balance are null when the opening balance is not known in that currency: it is booked in SEK, and the ledger before it does not say what it is in the currency (an imported first year, or history booked in SEK only). The account still reconciles on its movement: difference and is_reconciled do not use the opening balance.',
   ],
   example: {
     response: {

@@ -60,3 +60,13 @@ const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
 export function isEuMemberCountry(code: string): boolean {
   return EU_COUNTRY_CODES.has(code.toUpperCase())
 }
+
+/**
+ * True when the code is an EU member state other than Sweden: the countries
+ * a sale to a consumer can be taxed in through the one-stop shop (OSS), where
+ * Sweden is the state the seller is identified in. Case insensitive.
+ */
+export function isOtherEuCountry(code: string): boolean {
+  const country = code.toUpperCase()
+  return country !== 'SE' && EU_COUNTRY_CODES.has(country)
+}

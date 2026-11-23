@@ -181,6 +181,11 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
         description:
           'an answer or a close was undone and the question is open again. Carries `questionId`, `status` (`open`) and `createdAt` (when it was first filed)',
       },
+      {
+        type: 'company_question.prepared',
+        description:
+          'a staged operation was linked to a question that is answered, or closed as settled: the operation was staged because of the answer. Carries `questionId` and `operationId` (the pending operation, as `GET /pending-operations/{id}` reads it). Sent once per question and operation',
+      },
     ],
   },
 ] as const satisfies ReadonlyArray<PublicWebhookEventGroup>

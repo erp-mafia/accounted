@@ -83,7 +83,7 @@ export const GET = withRouteContext('report.behandlingshistorik', async (request
         categories: category ? [category] : undefined,
       },
       {
-        resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(serviceClient, ids),
+        resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(serviceClient, ids, companyId),
         appVersion: currentAppVersion(),
         globalClient: serviceClient,
       },

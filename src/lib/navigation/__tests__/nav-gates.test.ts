@@ -128,6 +128,30 @@ describe('the invoicer role', () => {
   })
 })
 
+describe('the rows the agent picture moves', () => {
+  const pictureRow = item({ href: '/wiki', module: 'agent', requiresAgentPicture: true })
+  const replacedRow = item({ href: '/wiki?view=memory', module: 'agent', hiddenWithAgentPicture: true })
+
+  it('shows a picture row only where the picture is switched on for the company', () => {
+    expect(passesNavGates(pictureRow, ctx())).toBe(false)
+    expect(passesNavGates(pictureRow, ctx({ agentPictureEnabled: false }))).toBe(false)
+    expect(passesNavGates(pictureRow, ctx({ agentPictureEnabled: true }))).toBe(true)
+  })
+
+  it('hides what the picture replaces only there', () => {
+    expect(passesNavGates(replacedRow, ctx())).toBe(true)
+    expect(passesNavGates(replacedRow, ctx({ agentPictureEnabled: false }))).toBe(true)
+    expect(passesNavGates(replacedRow, ctx({ agentPictureEnabled: true }))).toBe(false)
+  })
+
+  it('keeps a row\'s other gates', () => {
+    const skills = item({ href: '/skills', module: 'agent', requiresAgents: true, hiddenWithAgentPicture: true })
+    expect(passesNavGates(skills, ctx({ agentsEnabled: false }))).toBe(false)
+    expect(passesNavGates(skills, ctx({ agentsEnabled: true }))).toBe(true)
+    expect(passesNavGates(skills, ctx({ agentsEnabled: true, agentPictureEnabled: true }))).toBe(false)
+  })
+})
+
 describe('the Frågor row', () => {
   const questions = item({ href: '/questions', module: 'platform', requiresCompanyQuestions: true })
 

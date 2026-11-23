@@ -85,7 +85,7 @@ describe('resolveNavPlace', () => {
     expect(place('/mileage')).toEqual({ area: 'purchases', href: '/mileage' })
     expect(place('/reports/ink2-declaration')).toEqual({ area: 'ledger', href: '/bookkeeping/year-end' })
     expect(place('/dimensions/tagging')).toEqual({ area: 'ledger', href: '/bookkeeping' })
-    expect(place('/arkiv/granska')).toEqual({ area: 'todo', href: '/?vy=behover' })
+    expect(place('/arkiv/granska')).toEqual({ area: 'todo', href: '/' })
     expect(place('/bolaget/moten')).toEqual({ area: 'company', href: '/bolaget/moten' })
     expect(place('/bolaget')).toEqual({ area: 'company', href: '/bolaget' })
     expect(place('/bolaget/kapital')).toEqual({ area: 'company', href: '/bolaget/kapital' })
@@ -136,8 +136,25 @@ describe('the tree', () => {
   })
 
   it('gives each row one place', () => {
+    // Under either state of the agent picture. The two rows the picture keeps
+    // (Kontext, Bokföringsregler) are listed once for a company with the
+    // picture and once for one without, never twice for the same company.
+    for (const picture of [false, true]) {
+      const hrefs = rows.filter(({ item }) => (picture ? !item.hiddenWithAgentPicture : !item.requiresAgentPicture)).map((r) => r.item.href)
+      expect(hrefs.filter((href, index) => hrefs.indexOf(href) !== index), `agent picture ${picture ? 'on' : 'off'}`).toEqual([])
+    }
+    // A row is doubled only as such a pair, alike but for the gate.
     const hrefs = rows.map((r) => r.item.href)
-    expect(hrefs.filter((href, index) => hrefs.indexOf(href) !== index)).toEqual([])
+    const doubled = [...new Set(hrefs.filter((href, index) => hrefs.indexOf(href) !== index))]
+    expect(doubled.sort()).toEqual(['/rules', '/wiki'])
+    for (const href of doubled) {
+      const pair = rows.filter((r) => r.item.href === href)
+      expect(pair.map((r) => r.area)).toEqual(['agents', 'agents'])
+      expect(pair.map((r) => [!!r.item.requiresAgentPicture, !!r.item.hiddenWithAgentPicture])).toEqual([[true, false], [false, true]])
+      expect(pair[0].item.labelKey).toBe(pair[1].item.labelKey)
+      expect(pair[0].item.module).toBe(pair[1].item.module)
+      expect(pair[0].item.match).toEqual(pair[1].item.match)
+    }
   })
 
   /** Pages the v2 menu listed that the shell reaches from inside another page, and where. */
@@ -220,7 +237,7 @@ describe('the tree', () => {
     expect(NAV_V3_AREAS.map((a) => nav[a.labelKey])).toEqual([
       'Att göra', 'Pengar', 'Försäljning', 'Inköp', 'Dokument', 'Bokföring', 'Skatt', 'Rapporter', 'Löner', 'Företaget', 'Agenter', 'Inställningar', 'Byrå',
     ])
-    expect(labels('todo')).toEqual(['Hem', 'Att bokföra', 'Behöver dig', 'Rutin', 'Frågor', 'Gjort'])
+    expect(labels('todo')).toEqual(['Hem', 'Att bokföra', 'Rutin', 'Frågor', 'Gjort'])
     expect(labels('money')).toEqual(['Bankrader', 'Konton och saldo'])
     expect(labels('tax')).toEqual(['Moms', 'Skattekonto', 'Frister'])
     expect(labels('reports')).toEqual(['Resultat', 'Balans', 'Huvudbok', 'Nyckeltal', 'Budget', 'Fler rapporter'])
@@ -278,8 +295,10 @@ describe('the tree', () => {
     const agents = NAV_V3_AREAS.find((a) => a.id === 'agents')!
     const nav = sv.nav as Record<string, string>
     const enNav = en.nav as Record<string, string>
+    // The menu of a company without the agent picture (the picture's own menu is the next test).
+    const withoutPicture = gateAreas([agents], (item) => !item.requiresAgentPicture)[0]
     const menu = (table: Record<string, string>) =>
-      agents.groups.map((g) => [g.labelKey ? table[g.labelKey] : null, g.items.map((item) => table[item.labelKey])])
+      withoutPicture.groups.map((g) => [g.labelKey ? table[g.labelKey] : null, g.items.map((item) => table[item.labelKey])])
     expect(menu(nav)).toEqual([
       ['Styr', ['Bokföringsregler', 'Arbetssätt']],
       ['Vad agenten vet', ['Kontext', 'Bokföringsprofil', 'Fakta', 'Minne', 'Arbetssätt']],
@@ -300,6 +319,33 @@ describe('the tree', () => {
     expect(areaItems(agents).map((item) => item.href)).not.toEqual(expect.arrayContaining(['/settings/assistant']))
     expect(areaItems(agents).map((item) => item.href)).not.toContain('/settings/api')
     expect(agents.create).toEqual([{ href: '/settings/api', module: 'agent', labelKey: 'v3_connect_agent', requiresMcpExtension: true }])
+  })
+
+  it('has, where the agent picture is on, Koppla en agent, then Kontext and Bokföringsregler with no group label, then Chatt', () => {
+    const agents = NAV_V3_AREAS.find((a) => a.id === 'agents')!
+    const nav = sv.nav as Record<string, string>
+    const enNav = en.nav as Record<string, string>
+    const withPicture = gateAreas([agents], (item) => !item.hiddenWithAgentPicture)[0]
+    const menu = (table: Record<string, string>) =>
+      withPicture.groups.map((g) => [g.labelKey ? table[g.labelKey] : null, g.items.map((item) => table[item.labelKey])])
+    expect(menu(nav)).toEqual([
+      [null, ['Kontext', 'Bokföringsregler']],
+      [null, ['Chatt']],
+    ])
+    expect(menu(enNav)).toEqual([
+      [null, ['Context', 'Bookkeeping rules']],
+      [null, ['Chat']],
+    ])
+    expect(areaItems(withPicture).map((item) => item.href)).toEqual(['/wiki', '/rules', '/chat'])
+    expect(areaCreate(withPicture)?.href).toBe('/settings/api')
+    // What the picture replaces is in no row: Arbetssätt, Bokföringsprofil, Fakta, Minne and the wiki's Arbetssätt view.
+    const hidden = areaItems(agents).filter((item) => item.hiddenWithAgentPicture).map((item) => item.href)
+    expect(hidden).toEqual(['/rules', '/skills', '/wiki', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills'])
+    // Each hidden page still resolves to the area: it is reachable by its address.
+    for (const href of ['/skills', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills']) {
+      const [path, query = ''] = href.split('?')
+      expect(resolveNavPlace(path, query)?.area, href).toBe('agents')
+    }
   })
 
   it('lists the page a create button opens only where the area owns it without a row', () => {

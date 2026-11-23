@@ -23,12 +23,16 @@ describe('bookingScreenHref', () => {
 })
 
 describe('the way back to Hem', () => {
-  it('returns to Hem and to its Behöver dig view, named after each', () => {
+  it('returns to Hem, whatever its view, named Hem', () => {
     expect(safeReturnPath('/')).toBe('/')
+    // An old link to the list view Hem took over still lands on Hem.
     expect(safeReturnPath('/?vy=behover')).toBe('/?vy=behover')
     expect(bookingScreenOrigin('/', true)).toBe('/')
-    expect(bookingScreenOrigin('/?vy=behover', true)).toBe('/?vy=behover')
+    expect(bookingScreenOrigin('/?vy=behover', true)).toBe('/')
     expect(bookingScreenOrigin('/?vy=annat', true)).toBe('/')
+    // A link into one of Hem's groups is Hem too.
+    expect(safeReturnPath('/#decide')).toBe('/#decide')
+    expect(bookingScreenOrigin('/#decide', true)).toBe('/')
   })
 
   it('keeps the Börja step it was opened from, under Hem', () => {
@@ -70,6 +74,14 @@ describe('parseBookingScreenSubject', () => {
     expect(parseBookingScreenSubject({ transaktion: TX, konto: '1930' })).toMatchObject({ account: '1930' })
     expect(parseBookingScreenSubject({ transaktion: TX, konto: '193' })).toMatchObject({ account: null })
     expect(parseBookingScreenSubject({ transaktion: TX, konto: 'abcd' })).toMatchObject({ account: null })
+  })
+
+  it('reads that a picked proposal waits, and nothing else as one', () => {
+    const subject = { kind: 'transaction' as const, transactionId: TX, account: null, picked: true }
+    const query = Object.fromEntries(new URL(`https://x${bookingScreenHref(subject)}`).searchParams)
+    expect(query.vald).toBe('1')
+    expect(parseBookingScreenSubject(query)).toEqual(subject)
+    expect(parseBookingScreenSubject({ transaktion: TX, vald: 'ja' })).not.toHaveProperty('picked')
   })
 
   it('reads the inbox item found for the row, and drops one that is not a uuid', () => {

@@ -3229,7 +3229,7 @@ describe('unlinkReconciliation', () => {
 type FactsInput = {
   ib_floor?: string | null
   effective_from?: string | null
-  gl?: Partial<{ balance: number; opening_balance: number; correction_adjustment: number; unconvertible_line_count: number }>
+  gl?: Partial<{ balance: number; opening_balance: number | null; correction_adjustment: number; unconvertible_line_count: number }>
   bank?: Partial<{
     count: number
     total: number
@@ -3566,6 +3566,50 @@ describe('getReconciliationStatus', () => {
     expect(status.unconvertible_gl_line_count).toBe(1)
     expect(status.not_reconcilable_reason).toBe('gl_lines_missing_currency_amount')
     expect(status.is_reconciled).toBe(false)
+  })
+
+  it('reconciles a foreign account on its movement when its opening balance is not known in the currency', async () => {
+    // The read answers a null opening balance when the IB is booked in kronor
+    // and the lines before it carry no amount in the currency either; the
+    // balance it sends is then the movement alone.
+    const { supabase } = factsSupabase(
+      facts({
+        ib_floor: '2026-01-01',
+        effective_from: '2026-01-01',
+        gl: { balance: 100, opening_balance: null },
+        bank: { count: 1, total: 100, matched_count: 1 },
+      }),
+    )
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1', '2026-01-01', '2026-12-31', '1932', 'EUR')
+
+    expect(status.gl_1930_period_movement).toBe(100)
+    expect(status.difference).toBe(0)
+    expect(status.not_reconcilable_reason).toBeNull()
+    expect(status.is_reconciled).toBe(true)
+    // The movement is known. The balance and the IB are not, and are not stated.
+    expect(status.gl_1930_balance).toBeNull()
+    expect(status.gl_1930_opening_balance).toBeNull()
+  })
+
+  it('states no ledger balance at the bank history start when the opening balance is not known', async () => {
+    const CASH = '11111111-1111-4111-8111-111111111111'
+    const { supabase } = factsSupabase(
+      facts({
+        ib_floor: '2026-01-01',
+        effective_from: '2026-01-01',
+        gl: { balance: 100, opening_balance: null },
+        bank: { count: 1, total: 100, matched_count: 1, history_start: '2026-03-05' },
+        saldo: { balance: 400, balance_updated_at: '2026-10-15T05:00:00Z', balance_date: '2026-10-15', rows_total: 100 },
+      }),
+    )
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1', '2026-01-01', '2026-12-31', '1932', 'EUR', CASH, false)
+
+    expect(status.saldo_at_start).toBe(300)
+    expect(status.ledger_balance_before_start).toBeNull()
+    expect(status.opening_difference).toBeNull()
+    expect(status.is_reconciled).toBe(true)
   })
 
   it('rounds every figure to the öre and coerces the link count off the wire', async () => {

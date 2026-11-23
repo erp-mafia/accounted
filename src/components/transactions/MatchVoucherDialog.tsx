@@ -24,14 +24,23 @@ import { useToast } from '@/components/ui/use-toast'
 import { ArrowDownRightIcon, ArrowUpRightIcon } from '@/components/icons'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { LoadError } from '@/components/ui/empty-state'
-import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { addDaysIso } from '@/lib/dates/iso'
+
+/** What the dialog reads of a bank row, so any list of open rows can open it. */
+export interface MatchVoucherRow {
+  id: string
+  date: string
+  amount: number
+  currency?: string | null
+  description: string
+  cash_account_id?: string | null
+}
 
 interface MatchVoucherDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  transaction: TransactionWithInvoice | null
+  transaction: MatchVoucherRow | null
   /** Called after a successful link. journalEntryId is the (first) picked
    *  verifikat; voucherLabel names every picked one, e.g. "A-42" or, for a
    *  split, "A-42, A-43". */
@@ -89,7 +98,7 @@ export function MatchVoucherDialog({
   const { cashAccounts } = useCashAccounts()
 
   const loadCandidates = useCallback(
-    async (tx: TransactionWithInvoice, wide: boolean, matched: boolean, signal: { cancelled: boolean }) => {
+    async (tx: MatchVoucherRow, wide: boolean, matched: boolean, signal: { cancelled: boolean }) => {
       setLoading(true)
       try {
         // Resolve the settlement account from the company's cash accounts

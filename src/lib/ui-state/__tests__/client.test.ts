@@ -3,7 +3,7 @@
  * silent failure, and last-used split-button mode resolution.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { persistUiState, rememberCreateMode, resolveInitialMode } from '../client'
+import { persistUiState, rememberCreateMode, resolveInitialMode, saveUiState } from '../client'
 
 const fetchMock = vi.fn()
 
@@ -30,6 +30,25 @@ describe('persistUiState', () => {
   it('swallows network failures', () => {
     fetchMock.mockRejectedValue(new Error('offline'))
     expect(() => persistUiState({ create_mode: { bookkeeping: 'mall' } })).not.toThrow()
+  })
+})
+
+describe('saveUiState', () => {
+  it('POSTs the patch to /api/user/ui-state and hands back the response', async () => {
+    const refused = { ok: false, status: 400 }
+    fetchMock.mockResolvedValue(refused)
+
+    await expect(saveUiState({ nav_favorites: ['/accounts', '/invoices'] })).resolves.toBe(refused)
+    expect(fetchMock).toHaveBeenCalledWith('/api/user/ui-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nav_favorites: ['/accounts', '/invoices'] }),
+    })
+  })
+
+  it('lets a network failure reach the caller', async () => {
+    fetchMock.mockRejectedValue(new Error('offline'))
+    await expect(saveUiState({ nav_favorites: [] })).rejects.toThrow('offline')
   })
 })
 

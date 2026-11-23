@@ -24,6 +24,12 @@ import {
 } from './parent-company-identifier'
 import { DISCLOSURE_REQUIREMENTS } from './disclosures'
 import { USER_CLASSIFIABLE_KINDS } from './equity-kinds'
+import {
+  FIXED_ASSET_STATED_ROWS,
+  K2_FIXED_ASSET_NOTE_POSTS,
+  statedRowIssue,
+  type FixedAssetStatedRow,
+} from './k2-fixed-asset-note'
 
 /** Every requirement id of the disclosure matrix (disclosures/index.ts). */
 const DISCLOSURE_IDS = DISCLOSURE_REQUIREMENTS.map((requirement) => requirement.id) as [string, ...string[]]
@@ -198,11 +204,31 @@ export const narrativeShape = {
     .boolean()
     .optional()
     .describe('K3: print the specification of changes in equity as its own statement instead of in the förvaltningsberättelse.'),
+  // K2: the rows of the anläggningstillgångar note that neither the register
+  // nor the ledger can tell apart (k2-fixed-asset-note.ts), per balance sheet
+  // post. Merged per row: only the rows sent change, a null row removes it, a
+  // null post removes the post's rows, null removes everything.
+  fixed_asset_note_rows: z
+    .partialRecord(
+      z.enum(K2_FIXED_ASSET_NOTE_POSTS),
+      z
+        .partialRecord(
+          z.enum(FIXED_ASSET_STATED_ROWS),
+          z.number().min(-1_000_000_000_000).max(1_000_000_000_000).nullable(),
+        )
+        .nullable(),
+    )
+    .nullable()
+    .optional()
+    .describe(
+      'K2 anläggningstillgångar note: the rows neither the anläggningsregister nor the ledger can tell apart, per balance sheet post (for example MaskinerAndraTekniskaAnlaggningar) and row, whole SEK, positive as the taxonomy names the row: cost.omrakningsdifferenser (raises anskaffningsvärden), depreciation.omrakningsdifferenser (lowers accumulated avskrivningar), and for nedskrivningar booked on the post\'s write-down accounts outside the register: impairment.fusion (taken over, never negative), impairment.forsaljningar (left with an asset sold or scrapped, never negative), impairment.omklassificeringar and impairment.omrakningsdifferenser (lower accumulated nedskrivningar). Everything else in the note comes from the register, where each asset says how it was acquired (acquisition_type). Merged per row: a row sent replaces that row, null removes a row, a post or everything.',
+    ),
 }
 
 type NarrativeRuleInput = {
   agm_disposition_outcome?: 'proposal_approved' | 'alternative_decision' | null
   agm_disposition_decision?: string | null
+  fixed_asset_note_rows?: Partial<Record<string, Partial<Record<string, number | null>> | null>> | null
 }
 
 export function narrativeRule(value: NarrativeRuleInput, ctx: z.RefinementCtx): void {
@@ -212,6 +238,16 @@ export function narrativeRule(value: NarrativeRuleInput, ctx: z.RefinementCtx): 
       path: ['agm_disposition_decision'],
       message: 'Årsstämmans alternativa beslut måste beskrivas.',
     })
+  }
+  // An amount its row cannot carry is refused, never dropped: the note is
+  // stated in whole kronor, and a row whose standard label names one
+  // direction takes no negative amount.
+  for (const [post, rows] of Object.entries(value.fixed_asset_note_rows ?? {})) {
+    for (const [row, amount] of Object.entries(rows ?? {})) {
+      // Null clears a row: nothing is stated, so there is nothing to refuse.
+      const issue = typeof amount === 'number' ? statedRowIssue(row as FixedAssetStatedRow, amount) : null
+      if (issue) ctx.addIssue({ code: 'custom', path: ['fixed_asset_note_rows', post, row], message: issue })
+    }
   }
 }
 

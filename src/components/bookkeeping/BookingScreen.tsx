@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -8,6 +9,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useViewerLock } from '@/components/ui/viewer-lock'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import useSWR from 'swr'
 import { BuildingLibraryIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, InboxIcon, LightBulbIcon } from '@/components/icons'
@@ -30,10 +32,17 @@ import { categorizeBodyFor, type BookingProposal } from '@/lib/bookkeeping/propo
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { fetchProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { proposalLinesToFormLines, type ProposalLine } from '@/lib/bookkeeping/proposal-lines'
+import { takePickedProposal } from '@/lib/bookkeeping/booking-screen-pick'
 import { useProposalWhy } from '@/components/transactions/proposal-why'
 import { useToBookRows } from './use-to-book-rows'
 import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
 import type { Transaction } from '@/types'
+
+// The row may already have its verifikat (imported bookkeeping, a salary
+// run): the matcher Bankrader uses, loaded when it is opened.
+const MatchVoucherDialog = dynamic(() =>
+  import('@/components/transactions/MatchVoucherDialog').then((module) => module.MatchVoucherDialog),
+)
 
 /**
  * The booking screen (/bokfor): one full page for booking, in the order the
@@ -58,11 +67,13 @@ export interface BookingScreenProps {
   found: AvailableInboxDoc | null
   /** The found document was asked for but could not be read: the screen says so. */
   foundFailed?: boolean
+  /** A proposal the person picked beside the row waits (booking-screen-pick.ts): the screen opens with it used. */
+  picked?: boolean
   /** The page to return to (the list with its filters), checked by safeReturnPath. */
   back: string | null
 }
 
-export function BookingScreen({ transaction, account, found, foundFailed = false, back }: BookingScreenProps) {
+export function BookingScreen({ transaction, account, found, foundFailed = false, picked = false, back }: BookingScreenProps) {
   const t = useTranslations('booking_screen')
   const router = useRouter()
   const { canWrite, lockedTitle } = useViewerLock()
@@ -77,7 +88,6 @@ export function BookingScreen({ transaction, account, found, foundFailed = false
     '/att-bokfora': t('back_to_book'),
     '/transactions': t('back_transactions'),
     '/bookkeeping': t('back_vouchers'),
-    '/?vy=behover': t('back_needs_you'),
     '/': t('back_home'),
   }[origin]
 
@@ -170,6 +180,7 @@ export function BookingScreen({ transaction, account, found, foundFailed = false
           account={account}
           found={found}
           foundFailed={foundFailed}
+          picked={picked}
           amountLabel={amountLabel ?? ''}
           nextUp={walk.afterRow}
           onTouched={() => setTouched(true)}
@@ -292,6 +303,7 @@ function TransactionBooking({
   account,
   found,
   foundFailed,
+  picked,
   amountLabel,
   nextUp,
   onTouched,
@@ -301,6 +313,7 @@ function TransactionBooking({
   account: string | null
   found: AvailableInboxDoc | null
   foundFailed: boolean
+  picked: boolean
   amountLabel: string
   /** The row Bokför opens next, named under the form. */
   nextUp: ToBookRow | null
@@ -312,6 +325,7 @@ function TransactionBooking({
   const { toast } = useToast()
   const dropSurfaceRef = useRef<HTMLDivElement>(null)
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
+  const [matchOpen, setMatchOpen] = useState(false)
 
   // The row's own underlag and everything attached here, through the same
   // hook as the booking dialog: the first document attached is pinned to the
@@ -348,14 +362,13 @@ function TransactionBooking({
   const [used, setUsed] = useState<{ proposal: BookingProposal; lines: ProposalLine[] } | null>(null)
   const [applying, setApplying] = useState(false)
   const [applyError, setApplyError] = useState<string | null>(null)
-  const applySuggestion = async () => {
-    if (!proposal) return
+  const applyProposal = async (chosen: BookingProposal) => {
     onTouched()
     setApplying(true)
     setApplyError(null)
     try {
-      const lines = await fetchProposalPreview({ transaction_id: transaction.id, booking: categorizeBodyFor(proposal) })
-      if (lines.length > 0) setUsed({ proposal, lines })
+      const lines = await fetchProposalPreview({ transaction_id: transaction.id, booking: categorizeBodyFor(chosen) })
+      if (lines.length > 0) setUsed({ proposal: chosen, lines })
       else setApplyError(t('offer_failed'))
     } catch {
       setApplyError(t('offer_failed'))
@@ -363,6 +376,26 @@ function TransactionBooking({
       setApplying(false)
     }
   }
+  const applySuggestion = () => (proposal ? applyProposal(proposal) : undefined)
+
+  // A template or counterpart picked beside the row in Bankrader: used at
+  // once, as a pick in the quick review was. Taken once, so a reload or the
+  // next row opens with the screen's own suggestion.
+  // The form waits for it: booking before its lines land would skip the pick.
+  const pickTaken = useRef(false)
+  const [pickPending, setPickPending] = useState(picked)
+  useEffect(() => {
+    if (!picked || pickTaken.current) return
+    pickTaken.current = true
+    const chosen = takePickedProposal(transaction.id)
+    if (!chosen) {
+      setPickPending(false)
+      return
+    }
+    void applyProposal(chosen).finally(() => setPickPending(false))
+    // Once, on opening: the pick is the row's when the screen opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const detachEarlierUnderlag = () =>
     attachments.detachEarlier({
@@ -411,7 +444,27 @@ function TransactionBooking({
             {amountLabel}
           </span>
         </div>
+        {/* A row whose verifikat already exists is matched to it, not booked again. */}
+        <p className="text-xs text-muted-foreground">
+          {t('match_existing_lead')}{' '}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setMatchOpen(true)}>
+            {t('match_existing_action')}
+          </button>
+        </p>
       </section>
+      {matchOpen && (
+        <MatchVoucherDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setMatchOpen(false)
+          }}
+          transaction={transaction}
+          onLinked={(_transactionId, journalEntryId) => {
+            setMatchOpen(false)
+            void handleBooked(journalEntryId)
+          }}
+        />
+      )}
 
       {!hasDocument && (
         <section aria-labelledby="booking-screen-underlag-line" className="space-y-2">
@@ -475,38 +528,44 @@ function TransactionBooking({
                   </div>
                   {applyError && <p className="text-xs text-destructive">{applyError}</p>}
                 </div>
+              ) : applying ? (
+                <p className="text-sm text-muted-foreground">{t('offer_applying')}</p>
+              ) : applyError ? (
+                <p className="text-xs text-destructive">{applyError}</p>
               ) : null}
-              <JournalEntryForm
-                key={`${transaction.id}-${bankAccount}-${account ?? 'none'}-${used ? used.proposal.template_id : 'own'}`}
-                embedded
-                onPage
-                initialLines={
-                  used
-                    ? proposalLinesToFormLines(used.lines, {
-                        settlementAccount: bankAccount,
-                        currency: transaction.currency,
-                        foreignAmount: Math.abs(transaction.amount),
-                        exchangeRate: transaction.exchange_rate,
-                        lineDescription: used.proposal.name_sv,
-                        settlementLineDescription: bankAccountName ?? t('bank_line_description'),
-                      })
-                    : bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)
-                }
-                initialDate={transaction.date}
-                initialDescription={transaction.description}
-                submitUrl={`/api/transactions/${transaction.id}/book`}
-                sourceType="bank_transaction"
-                sourceId={transaction.id}
-                seriesPicker
-                cashAccountId={transaction.cash_account_id ?? null}
-                onEntryCreated={(entryId) => void handleBooked(entryId)}
-                duplicateMatchTransaction={{
-                  id: transaction.id,
-                  cash_account_id: transaction.cash_account_id ?? null,
-                  currency: transaction.currency ?? 'SEK',
-                }}
-                onDuplicateMatched={(journalEntryId) => void handleBooked(journalEntryId)}
-              />
+              {!pickPending && (
+                <JournalEntryForm
+                  key={`${transaction.id}-${bankAccount}-${account ?? 'none'}-${used ? used.proposal.template_id : 'own'}`}
+                  embedded
+                  onPage
+                  initialLines={
+                    used
+                      ? proposalLinesToFormLines(used.lines, {
+                          settlementAccount: bankAccount,
+                          currency: transaction.currency,
+                          foreignAmount: Math.abs(transaction.amount),
+                          exchangeRate: transaction.exchange_rate,
+                          lineDescription: used.proposal.name_sv,
+                          settlementLineDescription: bankAccountName ?? t('bank_line_description'),
+                        })
+                      : bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)
+                  }
+                  initialDate={transaction.date}
+                  initialDescription={transaction.description}
+                  submitUrl={`/api/transactions/${transaction.id}/book`}
+                  sourceType="bank_transaction"
+                  sourceId={transaction.id}
+                  seriesPicker
+                  cashAccountId={transaction.cash_account_id ?? null}
+                  onEntryCreated={(entryId) => void handleBooked(entryId)}
+                  duplicateMatchTransaction={{
+                    id: transaction.id,
+                    cash_account_id: transaction.cash_account_id ?? null,
+                    currency: transaction.currency ?? 'SEK',
+                  }}
+                  onDuplicateMatched={(journalEntryId) => void handleBooked(journalEntryId)}
+                />
+              )}
               {nextUp && (
                 <p className="text-xs text-muted-foreground" data-ph-mask="">
                   {t('walk_next_up', {

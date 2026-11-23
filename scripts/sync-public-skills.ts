@@ -34,6 +34,8 @@ SOFTWARE.
 
 /** The public repository the mirror is pushed to, and the name its install lines use. */
 export const PUBLIC_REPO = 'erp-mafia/accounted-skills'
+/** Workflow skills under `skills/` the mirror also publishes, each at `.claude/skills/<name>/SKILL.md`. */
+export const PUBLIC_WORKFLOW_SKILLS = ['accounted-start-company']
 const SUMMARY_MAX = 160
 
 /**
@@ -125,16 +127,44 @@ export function stampMit(body: string): string {
   return normalized.slice(0, end) + HEADER + normalized.slice(end)
 }
 
+/** A skill file the mirror writes: a Swedish reference skill with its references, or a listed workflow skill. */
+function isMirroredSkillPath(path: string): boolean {
+  if (path.includes('..')) return false
+  return /^\.claude\/skills\/swedish-[a-z0-9-]+\/(SKILL\.md|references\/[a-zA-Z0-9_./-]+\.md)$/.test(path)
+    || PUBLIC_WORKFLOW_SKILLS.some((name) => path === `.claude/skills/${name}/SKILL.md`)
+}
+
+/** The name and description in a SKILL.md's frontmatter, or null when either is missing or unreadable. */
+function skillFrontmatter(text: string): { name: string; description: string } | null {
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(text.replace(/\r\n/g, '\n'))
+  if (!frontmatter) return null
+  let meta: unknown
+  try { meta = yaml.load(frontmatter[1]) } catch { return null }
+  const { name, description } = (meta ?? {}) as { name?: unknown; description?: unknown }
+  if (typeof name !== 'string' || typeof description !== 'string' || !description.trim()) return null
+  return { name, description }
+}
+
 export async function publicSkillFiles(root: string, repoOnly: ReadmeSkill[] = []): Promise<Map<string, string>> {
   const atoms = (await discoverAtoms(root)).filter((atom) => atom.tier === 'horizontal')
   const files = new Map<string, string>()
+  const workflows: ReadmeSkill[] = []
+  for (const name of PUBLIC_WORKFLOW_SKILLS) {
+    const body = await readFile(join(root, 'skills', name, 'SKILL.md'), 'utf8')
+    const meta = skillFrontmatter(body)
+    if (meta?.name !== name) throw new Error(`skills/${name}/SKILL.md needs name: ${name} and a description`)
+    const path = `.claude/skills/${name}/SKILL.md`
+    files.set(path, stampMit(body))
+    workflows.push({ name, path, description: meta.description })
+  }
   for (const atom of atoms) {
     const path = atom.body_path.split(sep).join('/')
-    if (!/^\.claude\/skills\/swedish-[a-z0-9-]+\/(SKILL\.md|references\/[a-zA-Z0-9_./-]+\.md)$/.test(path) || path.includes('..')) throw new Error(`Unsafe source path: ${path}`)
+    if (!/^\.claude\/skills\/swedish-/.test(path) || !isMirroredSkillPath(path)) throw new Error(`Unsafe source path: ${path}`)
     files.set(path, stampMit(await readFile(join(root, atom.body_path), 'utf8')))
   }
   files.set('LICENSE', LICENSE)
-  files.set('README.md', publicReadme(atoms.filter((atom) => !atom.parent_atom_id).map((atom) => ({ name: atom.slug, path: atom.body_path.split(sep).join('/'), description: atom.description })), repoOnly))
+  const references = atoms.filter((atom) => !atom.parent_atom_id).map((atom) => ({ name: atom.slug, path: atom.body_path.split(sep).join('/'), description: atom.description }))
+  files.set('README.md', publicReadme([...workflows, ...references], repoOnly))
   files.set(MANIFEST, JSON.stringify([...files.keys()].sort(), null, 2) + '\n')
   return files
 }
@@ -156,19 +186,15 @@ export async function repoOnlySkills(target: string, managed: Set<string>): Prom
     const file = join(skillsDir, entry.name, 'SKILL.md')
     const info = await lstat(file).catch(() => null)
     if (!info?.isFile()) continue
-    const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec((await readFile(file, 'utf8')).replace(/\r\n/g, '\n'))
-    if (!frontmatter) continue
-    let meta: unknown
-    try { meta = yaml.load(frontmatter[1]) } catch { continue }
-    const { name, description } = (meta ?? {}) as { name?: unknown; description?: unknown }
-    if (name !== entry.name || typeof description !== 'string' || !description.trim()) continue
-    found.push({ name: entry.name, path, description })
+    const meta = skillFrontmatter(await readFile(file, 'utf8'))
+    if (meta?.name !== entry.name) continue
+    found.push({ name: entry.name, path, description: meta.description })
   }
   return found.sort((a, b) => a.name.localeCompare(b.name))
 }
 
 async function safePath(target: string, file: string): Promise<string> {
-  if (file !== 'README.md' && file !== 'LICENSE' && file !== MANIFEST && !/^\.claude\/skills\/swedish-[a-z0-9-]+\/(SKILL\.md|references\/[a-zA-Z0-9_./-]+\.md)$/.test(file)) throw new Error(`Unmanaged target: ${file}`)
+  if (file !== 'README.md' && file !== 'LICENSE' && file !== MANIFEST && !isMirroredSkillPath(file)) throw new Error(`Unmanaged target: ${file}`)
   if (file.includes('..')) throw new Error('Unsafe mirror path')
   let part = target
   for (const segment of file.split('/')) {

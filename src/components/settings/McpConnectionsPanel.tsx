@@ -48,6 +48,8 @@ const LOGO: Partial<Record<ConnectionKind | ConnectTarget, string>> = {
   grok: AI_CLIENTS.find((c) => c.id === 'grok')?.logo,
   // Claude Code carries Anthropic's Claude mark; it is the same product family.
   'claude-code': AI_CLIENTS.find((c) => c.id === 'claude')?.logo,
+  // Copilot Studio carries Microsoft's Copilot mark.
+  copilot: '/logos/copilot.webp',
 }
 
 /**
@@ -84,8 +86,6 @@ const ICON = {
   local: CommandLineIcon,
   cursor: CursorMark,
   gemini: GeminiMark,
-  // No vendor mark for Copilot Studio: the generic MCP mark.
-  copilot: McpMark,
   mcp: McpMark,
   other: McpMark,
   key: KeyIcon,

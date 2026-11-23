@@ -157,8 +157,10 @@ export async function sweepDigitalMailboxes(
       if (connection.provider === 'kivra' && connection.receive_state === 'pending' && providers.kivra) {
         const identity = await loadCompanyIdentity(service, connection.company_id)
         if (!identity?.orgNumber) continue
-        connection = await activatePendingKivra(service, providers.kivra, connection, identity.orgNumber, args.log)
-        if (!connection) continue
+        // Held back (the company may not read the inbox) or not listed by Kivra yet: waits for the next run.
+        const activation = await activatePendingKivra(service, providers.kivra, connection, identity.orgNumber, args.log)
+        if (!activation.ok || !activation.data) continue
+        connection = activation.data
         summary.activated++
       }
       const result = await syncConnection(service, {

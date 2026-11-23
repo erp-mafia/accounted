@@ -4,8 +4,10 @@
  * The doors are the app and the WhatsApp chat (PERSON_DOORS); the one an
  * answer or a close came through is recorded on the question.
  *
- * The app's page also lists the questions that were closed as settled, each
- * with the note and the records its close named (listQuestionPage).
+ * The app's page also lists the questions that were answered, each with the
+ * answer as the person gave it, and those that were closed as settled, each
+ * with the note and the records its close named; both with the staged
+ * operations linked to them (listQuestionPage).
  *
  * A person's answer is a saved fact, as it is from every other door: the
  * question and the answer in one sentence ("<question> Svar: <answer>"),
@@ -35,6 +37,7 @@ import { answerQuestion, closeQuestion } from './answer'
 import { emitQuestionEvent } from './events'
 import { evidenceLines, type EvidenceLine } from './evidence-lines'
 import { listQuestions, listSettledQuestions } from './list'
+import { questionOperations, type QuestionOperation } from './operations'
 import { assertCompanyQuestionsOn, questionNotFound, readQuestionRow, toQuestion, type QuestionRow } from './rows'
 import { QUESTION_LIMITS, type CompanyQuestion, type QuestionOption } from './types'
 
@@ -65,6 +68,9 @@ export type AnswerLocale = 'sv' | 'en'
 /** Questions closed as settled that the app's page lists at most. */
 export const SETTLED_SHOWN_MAX = 20
 
+/** Answered questions that the app's page lists at most. */
+export const ANSWERED_SHOWN_MAX = 20
+
 /** How a question closed as settled ended, as the app lists it. */
 export interface AppSettled {
   /** Where the answer is, when the close said. */
@@ -74,7 +80,21 @@ export interface AppSettled {
   closed_at: string | null
 }
 
-/** A question as the app lists it: an open one, or one closed as settled. */
+/** How an answered question ended, as the app lists it. */
+export interface AppAnswered {
+  /**
+   * The answer as the person gave it: the label of the option they chose, or
+   * the text they wrote. Null when the question was answered by a saved fact
+   * alone.
+   */
+  answer: string | null
+  answered_at: string | null
+}
+
+/** A staged operation linked to a question, as the app lists it. */
+export type AppOperation = QuestionOperation
+
+/** A question as the app lists it: an open one, an answered one, or one closed as settled. */
 export interface AppQuestion {
   question_id: string
   question: string
@@ -82,8 +102,16 @@ export interface AppQuestion {
   options: QuestionOption[]
   evidence: EvidenceLine[]
   asked_at: string
-  /** Set on a question closed as settled; absent on an open one. */
+  /** Set on an answered question; absent on every other. */
+  answered?: AppAnswered
+  /** Set on a question closed as settled; absent on every other. */
   settled?: AppSettled
+  /**
+   * On an answered or settled question as the page lists it: the staged
+   * operations linked to it that the reader may read, in the order they were
+   * linked. Absent on an open one.
+   */
+  operations?: AppOperation[]
 }
 
 /** The source_ref of the fact a person's answer saves. */
@@ -141,14 +169,78 @@ export async function listAppSettledQuestions(supabase: SupabaseClient, companyI
   }))
 }
 
+/** The answer as the person gave it: the chosen option's label, else the written text. */
+function answerAsGiven(question: CompanyQuestion): string | null {
+  const option = question.answer_option ? question.options.find((entry) => entry.id === question.answer_option) : undefined
+  if (option) return option.label
+  const text = typeof question.answer_text === 'string' ? question.answer_text.trim() : ''
+  return text || null
+}
+
+/**
+ * The questions answered in the last 90 days, the latest first, at most
+ * ANSWERED_SHOWN_MAX: each with the answer as the person gave it and when.
+ */
+export async function listAppAnsweredQuestions(supabase: SupabaseClient, companyId: string): Promise<AppQuestion[]> {
+  const listed = await listQuestions(supabase, companyId, { status: 'answered', limit: ANSWERED_SHOWN_MAX })
+  // Only what was asked for is handed on, whatever the read answers.
+  const answered = listed.filter((question) => question.status === 'answered')
+  const lines = await evidenceLines(
+    supabase,
+    companyId,
+    answered.map((question) => question.evidence),
+  )
+  return answered.map((question, index) => ({
+    question_id: question.question_id,
+    question: question.question,
+    why: question.why,
+    options: question.options,
+    evidence: lines[index] ?? [],
+    asked_at: question.created_at,
+    answered: { answer: answerAsGiven(question), answered_at: question.answered_at },
+  }))
+}
+
+/**
+ * The staged operations linked to the questions, by question id, as the
+ * reader's own client reads them (questionOperations). Best-effort: none,
+ * with a log line, when the read fails.
+ */
+async function linkedOperations(
+  supabase: SupabaseClient,
+  companyId: string,
+  questions: readonly AppQuestion[],
+): Promise<Map<string, AppOperation[]>> {
+  try {
+    return await questionOperations(
+      supabase,
+      companyId,
+      questions.map((question) => question.question_id),
+    )
+  } catch (error) {
+    log.warn('the operations linked to questions could not be read', {
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return new Map()
+  }
+}
+
 /**
  * What the app's question page lists: the open questions, the oldest first,
- * then the questions closed as settled, the latest first.
+ * then the answered questions, the latest first, then the questions closed
+ * as settled, the latest first. An answered and a settled question carry the
+ * staged operations linked to them, read with `supabase`: a reader gets the
+ * operations their own access to pending_operations gives them, and none
+ * otherwise.
  */
 export async function listQuestionPage(supabase: SupabaseClient, companyId: string): Promise<AppQuestion[]> {
   const open = await listAppQuestions(supabase, companyId)
+  const answered = await listAppAnsweredQuestions(supabase, companyId)
   const settled = await listAppSettledQuestions(supabase, companyId)
-  return [...open, ...settled]
+  const ended = [...answered, ...settled]
+  const operations = await linkedOperations(supabase, companyId, ended)
+  return [...open, ...ended.map((question) => ({ ...question, operations: operations.get(question.question_id) ?? [] }))]
 }
 
 /**

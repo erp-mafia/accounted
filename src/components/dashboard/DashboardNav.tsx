@@ -34,6 +34,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { SidebarFiscalYear } from './SidebarFiscalYear'
 import { passesNavGates, type NavGateContext, type ShellNavGate } from '@/lib/navigation/nav-gates'
+import { resolveFavorites } from '@/lib/navigation/favorites'
 import { isInvoicerPagePath, isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { SettingsRail } from '@/components/settings/SettingsRail'
@@ -46,6 +47,7 @@ import { NAV_ROW_ICON_CLASS } from './nav-row-class'
 import type { NavGateFlags } from './nav-v2'
 import { NAV_V3_AREAS, areaCreate, areaCreatePage, areaItems, createOpenForRole, gateAreas, hrefPath, resolveNavPlace, type NavAreaId, type NavV3Area, type NavV3Item } from './nav-v3'
 import { useNavRowClaim } from './nav-row-claim'
+import { useNavFavorites } from './use-nav-favorites'
 import { openCommandPalette } from '@/components/common/open-command-palette'
 
 /** The phone bar's areas beside "Mer" (the prototype's phone shell). */
@@ -75,6 +77,12 @@ interface DashboardNavProps {
   /** One-time Discord invite above the user menu; the layout decides who
    *  gets it (lib/community/discord-invite.ts). */
   showDiscordInvite?: boolean
+  /**
+   * The person's favourite menu rows as stored (ui_state.nav_favorites), read
+   * by the layout so the Favoriter group is there on first paint. Per person,
+   * not per company: the sidebar draws the ones the menu shows right now.
+   */
+  navFavorites?: readonly string[]
   /**
    * The page panel's content (the layout's <main>). The shell draws the rail
    * on the frame and the area sidebar and the page inside one panel, so the
@@ -134,9 +142,10 @@ const sheetRowClass = (enabled: boolean, active: boolean) =>
       : 'text-muted-foreground',
   )
 
-export default function DashboardNav({ navGate, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, showDiscordInvite = false, children }: DashboardNavProps) {
+export default function DashboardNav({ navGate, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, showDiscordInvite = false, navFavorites, children }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
+  const favorites = useNavFavorites(navFavorites)
   const { company, capabilities, byraTeam, role } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
@@ -367,12 +376,12 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
     item.betaBadge ? tNav('badge_beta') : item.newBadge ? tNav('badge_new') : undefined
 
   // Design convention 18: counts sit only where waiting work is the page's
-  // point: Behöver dig (the things Hem counts), Rutin (the agent's
-  // proposals) and Inkommande (the inbox). Every other page shows its own.
+  // point: Hem (the things it lists), Rutin (the agent's proposals) and
+  // Inkommande (the inbox). Every other page shows its own.
   const badgeFor = (href: string): number | null =>
     cockpitMode
       ? null
-      : href === '/?vy=behover' && needCount !== null && needCount > 0
+      : href === '/' && needCount !== null && needCount > 0
         ? needCount
         : href === '/pending' && pendingOpsCount > 0
           ? pendingOpsCount
@@ -394,6 +403,19 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
     label: group.labelKey ? tNav(group.labelKey as never) : undefined,
     rows: group.items.map(toRow),
   }))
+
+  // Favoriter (lib/navigation/favorites.ts): the stored hrefs that are rows
+  // of the menu right now, each drawn as its own menu row. The menu's rows
+  // are the gated rows of the areas whose sidebar can show here: Byrå's rows
+  // are listed only in the cockpit, and the settings sections are not rows
+  // of the tree. A favourite outside them is not drawn and stays stored, and
+  // so is one whose row cannot be opened here (a shell with no company, a
+  // page that is still coming): the group holds shortcuts, never dead rows.
+  const menuRows = visibleAreas.filter((area) => area.id !== 'byra' || cockpitMode).flatMap(areaItems)
+  const favoriteRows = resolveFavorites(favorites.stored, menuRows)
+    .map(toRow)
+    .filter((row) => row.enabled)
+  const favoriteHrefs = new Set(favorites.stored)
 
   // Byrå owner/admin add a client through the "Nytt klientbolag" confirm,
   // the same dialog the user menu opens (NewClientCompanyDialog).
@@ -491,6 +513,14 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
             }
             create={shownCreate}
             groups={rowGroups}
+            favorites={{
+              label: tNav('v3_favorites'),
+              rows: favoriteRows,
+              hrefs: favoriteHrefs,
+              addLabel: tNav('v3_favorite_add'),
+              removeLabel: tNav('v3_favorite_remove'),
+              onToggle: favorites.toggle,
+            }}
             settingsLabel={tNav('settings')}
             settingsLinks={areaSettingsLinks}
             disabledTitle={tNav('needs_company_tooltip')}

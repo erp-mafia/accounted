@@ -12,9 +12,6 @@ import { safeReturnTo } from '@/lib/auth/safe-return-to'
 
 export const BOOKING_SCREEN_PATH = '/bokfor'
 
-/** Hem's Behöver dig view, the menu row of that name. */
-const HEM_NEEDS_YOU_PATH = '/?vy=behover'
-
 export type BookingScreenSubject =
   | {
       kind: 'transaction'
@@ -22,6 +19,8 @@ export type BookingScreenSubject =
       account: string | null
       /** The inbox item found for the row (Att bokföra's Kvitto hittat), held as its underlag until Bokför. */
       foundItemId?: string | null
+      /** A proposal the person picked waits for the screen (booking-screen-pick.ts): it opens with it used. */
+      picked?: boolean
     }
   | { kind: 'voucher' }
 
@@ -36,22 +35,19 @@ function first(value: QueryValue): string | null {
 /**
  * The pages the screen returns to, with the list's own query (filters,
  * search, page) kept. Each is a menu row: the screen keeps the one it was
- * opened from lit (bookingScreenOrigin). Hem and its Behöver dig view are
- * one page (`/`, `/?vy=behover`), told apart by the view.
+ * opened from lit (bookingScreenOrigin). Hem is one menu row whatever its
+ * view (`/`, a Börja step `/?vy=borja&steg=…`): the address is kept, the
+ * origin is Hem.
  */
-export const BOOKING_SCREEN_RETURN_PATHS = ['/bookkeeping', '/transactions', '/att-bokfora', HEM_NEEDS_YOU_PATH, '/'] as const
+export const BOOKING_SCREEN_RETURN_PATHS = ['/bookkeeping', '/transactions', '/att-bokfora', '/'] as const
 export type BookingScreenOrigin = (typeof BOOKING_SCREEN_RETURN_PATHS)[number]
 
 /** The page a path lands on, of those the screen returns to. */
 function returnPathOf(path: string): BookingScreenOrigin | null {
-  const at = path.indexOf('?')
-  if ((at === -1 ? path : path.slice(0, at)) === '/') {
-    return new URLSearchParams(at === -1 ? '' : path.slice(at + 1)).get('vy') === 'behover' ? HEM_NEEDS_YOU_PATH : '/'
-  }
-  return (
-    BOOKING_SCREEN_RETURN_PATHS.find((p) => !p.startsWith('/?') && p !== '/' && (path === p || path.startsWith(`${p}?`) || path.startsWith(`${p}/`))) ??
-    null
-  )
+  // The page is the path before its query or anchor: Hem's group links (/#decide) are Hem.
+  const base = path.split(/[?#]/)[0]
+  if (base === '/') return '/'
+  return BOOKING_SCREEN_RETURN_PATHS.find((p) => p !== '/' && (base === p || base.startsWith(`${p}/`))) ?? null
 }
 
 /**
@@ -86,6 +82,7 @@ export function bookingScreenHref(subject: BookingScreenSubject, back?: string |
     params.set('transaktion', subject.transactionId)
     if (subject.account) params.set('konto', subject.account)
     if (subject.foundItemId) params.set('underlag', subject.foundItemId)
+    if (subject.picked) params.set('vald', '1')
   }
   const returnTo = safeReturnPath(back)
   if (returnTo) params.set('tillbaka', returnTo)
@@ -103,6 +100,7 @@ export function parseBookingScreenSubject(query: {
   transaktion?: QueryValue
   konto?: QueryValue
   underlag?: QueryValue
+  vald?: QueryValue
 }): BookingScreenSubject {
   const transactionId = first(query.transaktion)
   if (!transactionId || !isUuid(transactionId)) return { kind: 'voucher' }
@@ -113,6 +111,7 @@ export function parseBookingScreenSubject(query: {
     transactionId: transactionId.toLowerCase(),
     account: account && ACCOUNT_NUMBER_RE.test(account) ? account : null,
     ...(found && isUuid(found) ? { foundItemId: found.toLowerCase() } : {}),
+    ...(first(query.vald) === '1' ? { picked: true } : {}),
   }
 }
 

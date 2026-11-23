@@ -1641,11 +1641,14 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     'which suggestions are open, snoozed or declined; the proposals and decisions are pending_operations rows and every package switch an audit_log row',
   company_questions:
     'questions put to the company and how each ended; an answer worth keeping is saved as an agent_memory fact. AI assistant state, not räkenskapsinformation',
+  company_question_operations:
+    'which staged operations were linked to which question; the operations themselves are pending_operations rows. AI assistant state, not räkenskapsinformation',
   company_inbound_domains: 'inbound-mail infrastructure',
   company_inboxes: 'inbound-mail infrastructure',
   company_sending_domains: 'outbound-mail infrastructure (sender domain verification state)',
   company_invitations: 'membership state, meaningless outside the platform',
   company_members: 'membership state, meaningless outside the platform',
+  rattelse_actor_names: 'the name behind a platform user id, kept for the reports\' labels after the account is deleted; user identities are platform state, like company_members',
   company_subscriptions: 'billing state',
   usage_statements: "billing state: Accounted's monthly usage statements and invoice ids, not räkenskapsinformation (the usage itself is in the exported payment orders, deliveries and signings)",
   usage_consents: 'billing state: the charge for use above what the plan includes, opened for the company, by whom and at what price; not räkenskapsinformation',

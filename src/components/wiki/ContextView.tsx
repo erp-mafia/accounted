@@ -21,6 +21,7 @@ import {
   type ContextWindow,
 } from '@/lib/agent-context/context-window'
 import { ContextGraph } from '@/components/context-graph/ContextGraph'
+import { AgentPicture } from '@/components/agent-picture/AgentPicture'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ContextBar, RawText, ScopeStack, Swatch, type ScopeLevel } from './wiki-parts'
 
@@ -47,8 +48,13 @@ const FACT_KINDS = new Set(['fact', 'preference', 'pattern', 'correction'])
  * the window as one bar split by source, every part with its size, every
  * line with its source, who saved it and when, the remembered facts with
  * Glöm and Ångra (the memory API), and the raw text the agent reads.
+ *
+ * `picture`: the company has the agent picture switched on. The view is
+ * then the picture alone (components/agent-picture): no window bar and no
+ * list of sections. The briefing is still loaded here, once, and handed to
+ * the picture, whose Kontext row draws the context graph from it.
  */
-export function ContextView() {
+export function ContextView({ picture = false }: { picture?: boolean }) {
   const t = useTranslations('wiki')
   const locale = useLocale() as ErrorLocale
   const [load, setLoad] = useState<LoadState>({ state: 'loading' })
@@ -74,9 +80,23 @@ export function ContextView() {
     void fetchContext()
   }, [fetchContext])
 
+  // An installation without the agent connection has no picture either.
+  if (load.state === 'unavailable') return <EmptyState title={load.sentence} />
+  if (picture) {
+    return (
+      <AgentPicture
+        context={
+          load.state === 'ok'
+            ? { state: 'ok', text: load.data.text }
+            : load.state === 'failed'
+              ? { state: 'failed', description: load.description, onRetry: () => void fetchContext() }
+              : { state: 'loading' }
+        }
+      />
+    )
+  }
   if (load.state === 'loading') return <ContextSkeleton />
   if (load.state === 'failed') return <LoadError title={t('load_failed_title')} description={load.description} onRetry={() => void fetchContext()} />
-  if (load.state === 'unavailable') return <EmptyState title={load.sentence} />
   return <ContextWindowView window={load.data.window} text={load.data.text} />
 }
 

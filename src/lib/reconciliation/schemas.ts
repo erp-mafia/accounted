@@ -301,8 +301,13 @@ export const ReconciliationItemSchema = z.object({
   bucket: ReconciliationItemBucketSchema,
   date: z.string(),
   description: z.string(),
-  /** Signed amount in the account's natural direction (debit positive on the ledger side). */
+  /** Signed amount in the account's natural direction (debit positive on the ledger side), in `currency`. */
   amount: z.number(),
+  /**
+   * The currency `amount` is in. A bank row is in the account's currency. A
+   * verifikat on a foreign account is too when its lines state their amount
+   * in it; otherwise it is listed in SEK and says so.
+   */
   currency: z.string(),
   voucher_number: z.number().int().nullable().optional(),
   voucher_series: z.string().nullable().optional(),

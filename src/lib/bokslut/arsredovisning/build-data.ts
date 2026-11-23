@@ -11,14 +11,17 @@ import type { DeferredTaxMovement } from '@/lib/bokslut/tax-provision/deferred-t
 import { roundOre } from '@/lib/money'
 import { pickPreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import {
+  K2_BR_MAPPINGS,
+  k2BrPostForAccount,
   k2LegalFormOf,
   mapTrialBalancesToK2,
   type K2LegalForm,
   type K2MappingResult,
   type TrialBalancePair,
 } from '@/lib/bokslut/ixbrl/k2-mapper'
+import { k2AssetPostLabel } from '@/lib/bokslut/ixbrl/document/statements'
 import { buildBrRows, buildRrRows } from './statement-rows'
-import { getNarrative, type NarrativeRow } from './narrative-service'
+import { getNarrative, listFixedAssetNoteRows, type NarrativeRow } from './narrative-service'
 import { loadRegisterNoteTexts } from '@/lib/commitments/disclosures'
 import {
   effectiveDisclosureTexts,
@@ -36,9 +39,22 @@ import {
   buildAnlaggningstillgangarNote,
   computeRollforwardTotals,
   depreciationPrincipleLines,
+  depreciationPrinciples,
   holdsWriteDowns,
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
+import {
+  alignCarryingWithBalanceSheet,
+  buildK2FixedAssetTables,
+  fixedAssetNoteBody,
+  fixedAssetNoteCarryingTotal,
+  normalizeFixedAssetNoteRows,
+  fixedAssetPostTieOut,
+  carriedFromEarlierYears,
+  statedTranslationIssues,
+  statedWriteDownIssues,
+  unstatedWriteDownReleases,
+} from './k2-fixed-asset-note'
 import {
   computeAssetNoteFigures,
   hasComponentRows,
@@ -46,14 +62,18 @@ import {
   loadTransitionSplitOpenings,
   noteAsset,
 } from './asset-note-figures'
-import { k2EquityPosts, loadEquitySpecification } from './equity-specification'
+import { k2EquityPosts, loadEquityEntries, loadEquitySpecification } from './equity-specification'
 import { K3_SPLITS, k3EquityPosts, toK3Presentation } from './k3-presentation'
 import { USER_CLASSIFIABLE_KINDS, type EquityMovementKind } from './equity-kinds'
 import { collectDisclosureFacts, normalizeDisclosureAnswers, type DisclosureAnswers, type DisclosureFacts } from './disclosures'
 import {
   buildFinancialFixedAssetsNote,
   buildTangibleImpairmentNote,
+  grossMovementsByPost,
+  hasBothWriteDownMovements,
   tangibleImpairmentBalance,
+  withoutInternalMovements,
+  writeDownsOutsideRegisterByPost,
 } from './ledger-fixed-asset-notes'
 import { hasMedelantalOverride, resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
 import type {
@@ -210,8 +230,11 @@ export async function buildArsredovisningReport(
     // Load persisted narrative overrides: replaces the URL-query-param
     // carry from earlier phases. Caller-supplied overrides (passed in via
     // the second arg) still win, so the API can layer per-request edits on
-    // top of the saved baseline if needed.
-    getNarrative(supabase, companyId, fiscalPeriodId).catch(() => null),
+    // top of the saved baseline if needed. A failed read fails the build:
+    // the narrative holds what the user wrote and the stated rows of the
+    // anläggningstillgångar note, and a report built without them would be
+    // another document that still ties.
+    getNarrative(supabase, companyId, fiscalPeriodId),
     // The framework of THIS räkenskapsår (BFNAR 2012:4), never the company's
     // current choice: a later switch must not rebuild an earlier year.
     getFiscalPeriodFramework(supabase, companyId, fiscalPeriodId),
@@ -481,6 +504,7 @@ export async function buildArsredovisningReport(
       (periodList ?? []) as PeriodRow[],
       yearFramework.change_reason,
       registerTexts,
+      mapping.br,
     )
     noter = k2Noter.notes
     noterWarnings = k2Noter.warnings
@@ -944,6 +968,8 @@ async function buildRollforwardAssets(
     salvage_value: a.salvage_value,
     useful_life_months: a.useful_life_months,
     disposed_at: a.disposed_at,
+    acquisition_type: a.acquisition_type,
+    bas_asset_account: a.bas_asset_account,
     figures: figures.get(a.id) ?? { ibAck: 0, aretsAvskrivning: 0, avgaendeAck: 0 },
     // ÅRL 5 kap. 8 § p. 5: the year's nedskrivningar, from posted vouchers.
     ...(period ? { writeDowns: writeDownMovement(a, period.period_start, period.period_end) } : {}),
@@ -962,10 +988,11 @@ async function buildRollforwardAssets(
  * before onboarding can differ by design).
  */
 function rollforwardTieOut(
-  rollforwardAssets: AnlaggningAsset[],
+  /** The note's closing redovisat värde over every post. */
+  ubRedovisat: number,
   tbFullRows: TrialBalanceRow[],
-  periodStart: string,
-  periodEnd: string,
+  /** The register holds write-downs (holdsWriteDowns): a mismatch blocks. */
+  registerHoldsWriteDowns: boolean,
   /**
    * Accumulated nedskrivningar booked outside the register, net debit: the
    * ledger note discloses them, so the comparison counts them once
@@ -973,14 +1000,13 @@ function rollforwardTieOut(
    */
   impairments = 0,
 ): { message: string; blocking: boolean } | null {
-  const totals = computeRollforwardTotals(rollforwardAssets, periodStart, periodEnd)
   const tbNet = tbFullRows
     .filter((r) => r.account_number >= '1000' && r.account_number < '1300')
     .reduce((sum, r) => sum + (r.closing_debit || 0) - (r.closing_credit || 0), 0)
-  if (Math.abs(totals.ubRedovisat + impairments - tbNet) <= 1) return null
+  if (Math.abs(ubRedovisat + impairments - tbNet) <= 1) return null
   const fmtKr = (n: number) => Math.round(n).toLocaleString('sv-SE')
-  const message = `Anläggningsnotens utgående redovisade värde (${fmtKr(totals.ubRedovisat + impairments)} kr) stämmer inte med balansräkningens bokförda värde för konto 1000-1299 (${fmtKr(tbNet)} kr). Kontrollera att anläggningsregistret är komplett och att årets avskrivningar är bokförda.`
-  if (!holdsWriteDowns(rollforwardAssets)) return { message, blocking: false }
+  const message = `Anläggningsnotens utgående redovisade värde (${fmtKr(ubRedovisat + impairments)} kr) stämmer inte med balansräkningens bokförda värde för konto 1000-1299 (${fmtKr(tbNet)} kr). Kontrollera att anläggningsregistret är komplett och att årets avskrivningar är bokförda.`
+  if (!registerHoldsWriteDowns) return { message, blocking: false }
   return {
     message: `${message} Anläggningsregistret har nedskrivningar (ÅRL 4 kap. 5 §): noten måste stämma mot balansräkningen innan årsredovisningen kan låsas. Kontrollera att nedskrivningarna och deras återföringar är bokförda på tillgångarnas konton.`,
     blocking: true,
@@ -1000,6 +1026,8 @@ async function buildK2Noter(
   /** BFNAR 2012:4 punkt 3: the stated reasons when the year switched from K3 to K2. */
   frameworkSwitchReason: string | null = null,
   registerTexts: RegisterDisclosureTexts | null = null,
+  /** The balance sheet posts as the document prints them (the mapping's br): the notes repeat them. */
+  balanceSheet: K2MappingResult['br'] | null = null,
 ): Promise<{ notes: NoteEntry[]; warnings: string[]; errors: string[]; shareCapital: ShareCapital | null }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
@@ -1091,13 +1119,25 @@ async function buildK2Noter(
   }
 
   // Avskrivningstider: derive from asset register (supplementary
-  // disclosure; the statutory ÅRL 5:8 § roll-forward follows below).
-  const depreciationLines = depreciationPrincipleLines(assets)
+  // disclosure; the statutory ÅRL 5:8 § roll-forward follows below). Per
+  // balance sheet post, so the iXBRL document can tag each row as its post's
+  // table of avskrivningsprinciper.
+  // The register as it stood on the balance sheet date: an asset bought after
+  // it is not in this year's report, and one sold after it still was.
+  const heldAtYearEnd = assets
+    .filter((asset) => asset.acquisition_date <= periodEnd)
+    .map((asset) => (asset.disposed_at && asset.disposed_at > periodEnd ? { ...asset, disposed_at: null } : asset))
+  const depreciationPeriods = depreciationPrinciples(heldAtYearEnd, {
+    postOfAccount: (account) => k2BrPostForAccount(account, k2LegalFormOf(entityType)),
+    labelOfPost: (post) => k2AssetPostLabel(post) ?? post,
+  })
+  const depreciationLines = depreciationPrincipleLines(depreciationPeriods)
   if (depreciationLines.length > 0) {
     notes.push({
       number: notes.length + 1,
       title: 'Avskrivningar',
       body: depreciationLines.join('\n'),
+      ...(depreciationPeriods.rows.length > 0 ? { depreciationPrinciples: depreciationPeriods.rows } : {}),
     })
   }
 
@@ -1113,28 +1153,134 @@ async function buildK2Noter(
     allPeriods,
     fiscalPeriodId,
   )
-  const rollforwardNote = buildAnlaggningstillgangarNote({
-    noteNumber: notes.length + 1,
+  // One table per balance sheet post (the K2 taxonomy tags the note per
+  // post), every figure from one source (k2-fixed-asset-note.ts): the
+  // register, what the post's write-down accounts hold beyond the register,
+  // and the few rows neither can tell apart as the user stated them.
+  const statedRows = normalizeFixedAssetNoteRows(narrative?.fixed_asset_note_rows)
+  // An omräkningsdifferens stated in an earlier year is still on the post's
+  // accounts: the year opens with what the years before it stated. One read,
+  // and none for a company's first year.
+  const earlierPeriods = allPeriods
+    .filter((earlier) => earlier.period_end < periodStart)
+    .sort((a, b) => a.period_start.localeCompare(b.period_start))
+  const statedByPeriod = earlierPeriods.length > 0 ? await listFixedAssetNoteRows(supabase, companyId) : null
+  const carried = carriedFromEarlierYears(earlierPeriods.flatMap((earlier) => statedByPeriod?.get(earlier.id) ?? []))
+  const legalForm = k2LegalFormOf(entityType)
+  const postOfAccount = (account: string) => k2BrPostForAccount(account, legalForm)
+  const registeredWriteDowns = registerWriteDownsByAccount(assets, periodStart, periodEnd)
+  let outsideWriteDowns = writeDownsOutsideRegisterByPost(tbFullRows, registeredWriteDowns, postOfAccount)
+  // Write-down accounts that were both credited and debited beyond the
+  // register may hold a movement between two accounts of the post, or a
+  // verifikat with its storno: neither is a nedskrivning or an återföring.
+  // The year's verifikat on those accounts say which (one read, and only then).
+  const bothWays = [...outsideWriteDowns.values()].filter(hasBothWriteDownMovements)
+  if (bothWays.length > 0) {
+    const vouchers = await loadEquityEntries(
+      supabase,
+      companyId,
+      { id: fiscalPeriodId, name: '', period_start: periodStart, period_end: periodEnd, opening_balance_entry_id: null },
+      bothWays.flatMap((sum) => sum.accounts),
+    )
+    outsideWriteDowns = withoutInternalMovements(outsideWriteDowns, vouchers)
+  }
+  const labelOfPost = (post: string) => k2AssetPostLabel(post) ?? post
+  const fixedAssetTables = buildK2FixedAssetTables({
     assets: rollforwardAssets,
     periodStart,
     periodEnd,
+    stated: statedRows,
+    postOfAccount,
+    labelOfPost,
+    postOrder: K2_BR_MAPPINGS.map((mapping) => mapping.concept),
+    outsideWriteDowns,
+    carried,
   })
-  // One source per nedskrivning, as under K3: the register's in the
-  // roll-forward, the rest of the ledger's write-down accounts in their own
-  // note (a write-down booked by hand is disclosed, never twice).
-  const registeredWriteDowns = registerWriteDownsByAccount(assets, periodStart, periodEnd)
-  if (rollforwardNote) {
-    notes.push(rollforwardNote)
-    const tieOut = rollforwardTieOut(
-      rollforwardAssets,
-      tbFullRows,
-      periodStart,
-      periodEnd,
-      tangibleImpairmentBalance(tbFullRows, registeredWriteDowns),
+  // A stated nedskrivning row must be booked on the post's write-down accounts.
+  errors.push(...statedWriteDownIssues(statedRows, outsideWriteDowns, labelOfPost))
+  // One source per nedskrivning: a post with a table shows all of its own
+  // there; the write-down accounts of the other posts go in the ledger
+  // note, as under K3 (a write-down booked by hand is disclosed, never twice).
+  const inTables = new Set(
+    fixedAssetTables.flatMap((table) => (table.post ? (outsideWriteDowns.get(table.post)?.accounts ?? []) : [])),
+  )
+  const ledgerNoteRows = tbFullRows.filter((row) => !inTables.has(row.account_number))
+  if (fixedAssetTables.length > 0) {
+    // Each post against the books of its own balance sheet post, at the end
+    // of the year and at its start, then the note as a whole as before. One
+    // message per cause: the whole is not reported on top of a post with
+    // stated rows that closes wrong, and a post the register alone fills is
+    // named for its closing only when the whole ties (the posts then offset
+    // each other). An opening balance the books did not hold is a finding of
+    // its own and is always reported.
+    const postRowsOf = (post: string) => tbFullRows.filter((row) => postOfAccount(row.account_number) === post)
+    const onBooks = (post: string, at: 'opening' | 'closing') =>
+      postRowsOf(post).reduce(
+        (sum, row) =>
+          sum + (at === 'opening'
+            ? (row.opening_debit || 0) - (row.opening_credit || 0)
+            : (row.closing_debit || 0) - (row.closing_credit || 0)),
+        0,
+      )
+    const booked = (at: 'opening' | 'closing') => (post: string) => {
+      // Less what the ledger note discloses for the post, when its
+      // write-downs beyond the register could not go in the table.
+      const inLedgerNote = postRowsOf(post).filter((row) => !inTables.has(row.account_number))
+      return roundOre(onBooks(post, at) - tangibleImpairmentBalance(inLedgerNote, registeredWriteDowns, at))
+    }
+    // A post whose figures a user stated, this year or in one before it.
+    const statedPosts = new Set<string>([...Object.keys(statedRows), ...carried.keys()])
+    const perPost = fixedAssetPostTieOut(fixedAssetTables, statedPosts, {
+      opening: booked('opening'),
+      closing: booked('closing'),
+    })
+    errors.push(...perPost.errors)
+    // A stated omräkningsdifferens must be booked on the post's anskaffnings-
+    // or avskrivningskonton. The tie of the post's value cannot see two rows
+    // that cancel, so the posts that tie are checked block by block.
+    errors.push(
+      ...statedTranslationIssues(
+        fixedAssetTables.filter((table) => table.post === null || !perPost.untiedPosts.has(table.post)),
+        statedRows,
+        grossMovementsByPost(tbFullRows, postOfAccount, {
+          // Mark is never depreciated: the account its row names holds no avskrivningar.
+          accumulated: new Set(
+            assets.filter((asset) => asset.useful_life_months > 0).map((asset) => asset.bas_accumulated_account),
+          ),
+          writeDown: new Set(registeredWriteDowns.keys()),
+        }),
+      ),
     )
-    if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)
+    if (!perPost.closingBlocked) {
+      const tieOut = rollforwardTieOut(
+        fixedAssetNoteCarryingTotal(fixedAssetTables),
+        tbFullRows,
+        holdsWriteDowns(rollforwardAssets),
+        tangibleImpairmentBalance(ledgerNoteRows, registeredWriteDowns),
+      )
+      if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)
+      else warnings.push(...perPost.closingWarnings)
+    }
+    warnings.push(...perPost.openingWarnings)
+    // A debit on the write-down accounts beyond the register prints as an
+    // återföring unless a stated row says it left with an asset: say so.
+    warnings.push(...unstatedWriteDownReleases(fixedAssetTables, statedRows, outsideWriteDowns))
+    // Checked against the books above; a table that ties to its post's
+    // accounts prints the balance sheet's own figure for the post, so the
+    // note and the balance sheet show one number.
+    const tables = alignCarryingWithBalanceSheet(
+      fixedAssetTables,
+      (post) => (postRowsOf(post).length > 0 ? roundOre(onBooks(post, 'closing')) : undefined),
+      (post) => balanceSheet?.[post]?.current,
+    )
+    notes.push({
+      number: notes.length + 1,
+      title: 'Anläggningstillgångar',
+      body: fixedAssetNoteBody(tables),
+      fixedAssets: tables,
+    })
   }
-  const impairmentNote = buildTangibleImpairmentNote(tbFullRows, notes.length + 1, registeredWriteDowns)
+  const impairmentNote = buildTangibleImpairmentNote(ledgerNoteRows, notes.length + 1, registeredWriteDowns)
   if (impairmentNote) notes.push(impairmentNote)
 
   // Medelantal anställda: FTE-weighted average per ÅRL 5:20 §. We fetch the
@@ -1553,10 +1699,9 @@ async function buildK3Noter(
   if (rollforwardNote) {
     notes.push(rollforwardNote)
     const tieOut = rollforwardTieOut(
-      rollforwardAssets,
+      computeRollforwardTotals(rollforwardAssets, periodStartIso, periodEndIso).ubRedovisat,
       tbFullRows,
-      periodStartIso,
-      periodEndIso,
+      holdsWriteDowns(rollforwardAssets),
       tangibleImpairmentBalance(tbFullRows, registeredWriteDowns),
     )
     if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)

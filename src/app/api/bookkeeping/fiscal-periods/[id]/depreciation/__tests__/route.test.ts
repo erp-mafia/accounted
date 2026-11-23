@@ -78,6 +78,7 @@ const tax = {
   excludedCategories: [],
   cohortHistoryComplete: true,
   incompleteCohortCount: 0,
+  takenOverAdditions: 0,
   result: null,
   snapshot: null,
   isStale: false,

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import yaml from 'js-yaml'
 import { discoverAtoms } from '../lib/atom-discovery'
 import { buildMigrationSql } from '../generate-skill-bodies'
-import { PUBLIC_REPO, publicSkillFiles, repoOnlySkills, skillSummary, stampMit, syncPublicSkills } from '../sync-public-skills'
+import { PUBLIC_REPO, PUBLIC_WORKFLOW_SKILLS, publicSkillFiles, repoOnlySkills, skillSummary, stampMit, syncPublicSkills } from '../sync-public-skills'
 import { COMMUNITY_REPO } from '@/lib/agent-skills/community-repo-name'
 
 const directories: string[] = []
@@ -78,7 +78,7 @@ describe('public mirror', () => {
     const readme = files.get('README.md') ?? ''
     expect(PUBLIC_REPO).toBe(COMMUNITY_REPO)
     expect(readme).toContain(`npx skills add ${PUBLIC_REPO}`)
-    const skills = [...files.keys()].filter((file) => /^\.claude\/skills\/swedish-[a-z0-9-]+\/SKILL\.md$/.test(file))
+    const skills = [...files.keys()].filter((file) => /^\.claude\/skills\/[a-z0-9-]+\/SKILL\.md$/.test(file))
     expect(skills.length).toBeGreaterThan(0)
     for (const file of skills) expect(readme).toContain(`](${file}) | `)
     const rows = readme.split('\n').filter((line) => line.startsWith('| [`'))
@@ -88,6 +88,20 @@ describe('public mirror', () => {
       expect(summary.length).toBeGreaterThan(0)
       expect(summary.length).toBeLessThanOrEqual(160)
     }
+  })
+  it('publishes the start-company workflow skill from skills/, stamped MIT and listed first', async () => {
+    expect(PUBLIC_WORKFLOW_SKILLS).toEqual(['accounted-start-company'])
+    const target = await directory()
+    await syncPublicSkills(process.cwd(), target)
+    const source = await readFile(join(process.cwd(), 'skills/accounted-start-company/SKILL.md'), 'utf8')
+    expect(await readFile(join(target, '.claude/skills/accounted-start-company/SKILL.md'), 'utf8')).toBe(stampMit(source))
+    const readme = await readFile(join(target, 'README.md'), 'utf8')
+    const rows = readme.split('\n').filter((line) => line.startsWith('| [`'))
+    expect(rows[0]).toBe('| [`accounted-start-company`](.claude/skills/accounted-start-company/SKILL.md) | Help a founder start a Swedish aktiebolag (limited company) and get it running |')
+    expect(readme).not.toContain('Also in this repository')
+    const manifest = JSON.parse(await readFile(join(target, '.accounted-skills-mirror.json'), 'utf8')) as string[]
+    expect(manifest).toContain('.claude/skills/accounted-start-company/SKILL.md')
+    expect(await syncPublicSkills(process.cwd(), target, true)).toEqual([])
   })
   it('keeps a skill that lives only in the public repository: listed in the README, its files untouched', async () => {
     const target = await directory()

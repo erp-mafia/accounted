@@ -152,6 +152,26 @@ describe('GET /api/transactions', () => {
     expect(findCall('transaction_voucher_links', 'select')).toBeUndefined()
   })
 
+  it('answers what the matcher pointed an open row at, and only for the open rows', async () => {
+    enqueue({ data: [], error: null })
+    await GET(createMockRequest('/api/transactions?unmatched=true'), createMockRouteParams({}))
+
+    const openSelect = String(findCall('open_bank_rows', 'select')?.[0])
+    for (const column of [
+      'is_business',
+      'potential_invoice_id',
+      'potential_supplier_invoice_id',
+      'potential_rot_rut_payout_request_id',
+      'potential_journal_entry_id',
+    ]) {
+      expect(openSelect).toContain(column)
+    }
+
+    enqueue({ data: [], error: null })
+    await GET(createMockRequest('/api/transactions'), createMockRouteParams({}))
+    expect(String(findCall('transactions', 'select')?.[0])).not.toContain('potential_invoice_id')
+  })
+
   it('reads ignored rows off the table with the embed: unmatched=true&only_ignored=true is no open list', async () => {
     enqueue({ data: [], error: null })
 

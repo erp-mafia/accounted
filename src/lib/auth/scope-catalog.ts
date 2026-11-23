@@ -49,7 +49,7 @@ export const API_KEY_SCOPES = {
   'compliance:read':    { label: 'Compliance: läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet; Skatteverket-status (moms + AGI)' },
   'skatteverket:write': { label: 'Skatteverket: skriv', description: 'Lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)' },
   'agent:read':         { label: 'Agent: läs',          description: 'Specialiserad bokföringsassistent: profil, laddade specialister/atomer, minnen (briefing + skill-katalog)' },
-  'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact), ställa och stänga frågor till företaget (ask_question, close_question) och spara, ändra och ta bort egna skills (create_skill)' },
+  'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact), ställa och stänga frågor till företaget och koppla egna förslag till en fråga (ask_question, close_question, link_question_operation) och spara, ändra och ta bort egna skills (create_skill)' },
   // Shown to users as "Agentförslag", the name of the review list under
   // Att göra (issue #3408): "stagade operationer" read as developer jargon.
   'pending_operations:read':    { label: 'Agentförslag: läs',     description: 'Lista agentförslag som väntar på ditt godkännande' },
@@ -642,6 +642,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_delete_account: 'bookkeeping:write',
   gnubok_activate_accounts: 'bookkeeping:write',
   gnubok_deactivate_accounts: 'bookkeeping:write',
+  gnubok_set_oss_account_countries: 'bookkeeping:write',
   gnubok_update_company_tax_profile: 'companies:write',
   gnubok_update_bookkeeping_lock: 'companies:write',
   gnubok_create_dimension:                'bookkeeping:write',
@@ -785,10 +786,12 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // 20260619140000 migration so this does not regress them.
   gnubok_remember_fact:                   'agent:write',
   gnubok_forget_fact:                     'agent:write',
-  // The question list (lib/questions): filing and closing write no
-  // räkenskapsinformation; the list is read with the briefing's scope.
+  // The question list (lib/questions): filing, closing and linking a staged
+  // operation to a question write no räkenskapsinformation; the list is read
+  // with the briefing's scope.
   gnubok_ask_question:                    'agent:write',
   gnubok_close_question:                  'agent:write',
+  gnubok_link_question_operation:         'agent:write',
   gnubok_list_questions:                  'agent:read',
   gnubok_create_skill:                    'agent:write',
   // Pending operations approval (mirrors the /pending web UI)

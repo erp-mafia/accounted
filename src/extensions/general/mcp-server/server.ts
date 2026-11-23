@@ -57,6 +57,7 @@ import {
   listAssets as listFixedAssets,
   previewAssetDisposal,
 } from '@/lib/bokslut/assets/asset-service'
+import { ASSET_ACQUISITION_TYPES } from '@/lib/bokslut/assets/acquisition-type'
 import {
   ASSET_CATEGORIES,
   ASSET_DISPOSAL_TYPES,
@@ -5265,6 +5266,7 @@ const ASSET_TOOL_ITEM_SCHEMA = {
     name: { type: 'string' },
     category: { type: 'string' },
     acquisition_date: { type: 'string' },
+    acquisition_type: { type: 'string' },
     acquisition_cost: { type: 'number', description: 'Excl. VAT, SEK' },
     salvage_value: { type: 'number' },
     useful_life_months: { type: 'number' },
@@ -5275,7 +5277,7 @@ const ASSET_TOOL_ITEM_SCHEMA = {
     bas_expense_account: { type: 'string' },
     k3_components: { type: ['array', 'null'], items: { type: 'object' } },
     components: { type: 'array' },
-    opening_accumulated_depreciation: { type: 'number', description: 'From the previous register, SEK; 0 when none. Never posted here' },
+    opening_accumulated_depreciation: { type: 'number', description: 'Carried into the register, SEK; never posted here' },
     opening_depreciation_date: { type: ['string', 'null'] },
     notes: { type: ['string', 'null'] },
     disposed_at: { type: ['string', 'null'] },
@@ -5298,11 +5300,16 @@ const ASSET_TOOL_ITEM_SCHEMA = {
 
 const ASSET_WRITE_PROPERTIES = {
   name: { type: 'string' },
-  category: { type: 'string', enum: [...ASSET_CATEGORIES], description: 'Sets the default BAS accounts' },
+  category: { type: 'string', enum: [...ASSET_CATEGORIES] },
   acquisition_date: { type: 'string', description: 'yyyy-MM-dd' },
+  acquisition_type: {
+    type: 'string',
+    enum: [...ASSET_ACQUISITION_TYPES],
+    description: 'Default purchase; acquisition_date is the day it came onto these books',
+  },
   acquisition_cost: { type: 'number', description: 'Excl. VAT, SEK, > 0' },
   salvage_value: { type: 'number', description: 'Restvärde, default 0' },
-  useful_life_months: { type: 'number', description: '60 = 5 years; land: 0' },
+  useful_life_months: { type: 'number', description: '60 = 5 years; land: 0; merger or reclassification: what remains' },
   depreciation_start_date: { type: ['string', 'null'] },
   depreciation_method: { type: 'string', enum: [...DEPRECIATION_METHODS] },
   bas_asset_account: { type: 'string', description: 'Override; must be in the category range' },
@@ -5325,11 +5332,11 @@ const ASSET_WRITE_PROPERTIES = {
   },
   opening_accumulated_depreciation: {
     type: 'number',
-    description: 'Accumulated depreciation for this asset from the previous asset register, SEK, 0 to acquisition_cost - salvage_value. No voucher or automatic reconciliation: manually reconcile register totals with the imported ledger before depreciation or disposal. Manual ledger postings do not lock opening edits; depreciation posted through Accounted\'s asset register or disposal does. Split over k3_components.',
+    description: 'Depreciation the asset carried into this register (previous system, merger, reclassification), SEK, 0 to acquisition_cost - salvage_value. Never posted or reconciled: check register totals against the ledger before depreciation or disposal. Locked by depreciation posted through the register and by disposal, not by manual postings. Split over k3_components.',
   },
   opening_depreciation_date: {
     type: ['string', 'null'],
-    description: 'yyyy-MM-dd the opening amount is stated per; required when the amount is above 0, between acquisition_date and today (Europe/Stockholm). Zero amount clears the date.',
+    description: 'yyyy-MM-dd the opening amount is per; required when it is above 0, from acquisition_date to today (Europe/Stockholm). A zero amount clears it.',
   },
   notes: { type: 'string' },
 } as const
@@ -10763,7 +10770,7 @@ export const tools: McpTool[] = [
         paid_amount: { type: 'number' },
         remaining_amount: { type: ['number', 'null'], description: 'Open balance in the ledger, exact öre' },
         payment_reference: { type: ['string', 'null'], description: 'What the payer quotes, as the PDF prints it. null: no number yet, credit note, quote, proforma, delivery note or Autogiro' },
-        payment_reference_type: { type: ['string', 'null'], description: 'ocr: invoice number digits + Luhn check digit, no length digit. invoice_number: the number as the payment message' },
+        payment_reference_type: { type: ['string', 'null'], description: 'ocr: invoice number digits + Luhn check digit, with a length digit before it when the company setting invoice_ocr_length_digit is on. invoice_number: the number as the payment message' },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
         invoice_marking: { type: ['string', 'null'], description: 'Fakturamärkning (buyer marking), separate from your_reference' },
@@ -28336,7 +28343,7 @@ export const tools: McpTool[] = [
     keywords: ['anläggningstillgång', 'anläggningsregister', 'inventarier', 'tillgångar', 'inventarieförteckning', 'avskrivningsunderlag'],
     title: 'List Fixed Assets',
     description:
-      'List the anläggningsregister: category, acquisition basis, useful life, BAS accounts, disposal state and has_posted_depreciation. Use before proposing depreciation or before gnubok_update_asset / gnubok_dispose_asset.',
+      'List the anläggningsregister: category, basis, useful life, BAS accounts, disposal state and has_posted_depreciation. Use before proposing depreciation or before gnubok_update_asset / gnubok_dispose_asset.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -28423,7 +28430,7 @@ export const tools: McpTool[] = [
     keywords: ['ny anläggningstillgång', 'registrera inventarie', 'aktivera tillgång', 'lägg till i anläggningsregistret'],
     title: 'Create Fixed Asset',
     description:
-      'Stage a new row in the anläggningsregister. No voucher is posted: the purchase is already booked (bank row or supplier invoice). BAS accounts default per category, framework-aware. Low risk. Depreciation is then proposed per period via gnubok_propose_annual_depreciation.',
+      'Stage a new row in the anläggningsregister. No voucher is posted: the acquisition is already booked. BAS accounts default per category, framework-aware. Low risk. Depreciation is then proposed per period via gnubok_propose_annual_depreciation.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -28463,6 +28470,7 @@ export const tools: McpTool[] = [
           name: body.name,
           category: body.category,
           acquisition_date: body.acquisition_date,
+          acquisition_type: body.acquisition_type ?? 'purchase',
           acquisition_cost: cost,
           salvage_value: body.salvage_value ?? 0,
           useful_life_months: body.useful_life_months,

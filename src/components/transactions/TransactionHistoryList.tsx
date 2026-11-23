@@ -1,7 +1,6 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useViewerLock } from '@/components/ui/viewer-lock'
@@ -36,6 +35,7 @@ import {
 } from '@/components/icons'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import { WithCorrection } from '@/components/bookkeeping/WithCorrection'
+import { VoucherPeekLink } from '@/components/bookkeeping/VoucherPeekLink'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { canDetachDocument } from './detach-underlag'
 import type { JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -439,14 +439,14 @@ function BankHistoryRow({
               {linkedEntryIds.map((entryId, index) => {
                 const link = voucherLinks.find((l) => l.journal_entry_id === entryId)
                 return (
-                  <Link
+                  <VoucherPeekLink
                     key={entryId}
-                    href={`/bookkeeping/${entryId}`}
+                    entryId={entryId}
                     className={QUIET_LINK_CLASS}
                   >
                     {(link ? embeddedVoucherLabel(link) : null) ??
                       (index === 0 ? t('view_voucher_short') : `+${index}`)}
-                  </Link>
+                  </VoucherPeekLink>
                 )
               })}
             </>
@@ -600,12 +600,12 @@ function SkattekontoHistoryRow({
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
         <span className="inline-flex items-center justify-end gap-2">
-          {isBooked ? (
+          {row.journal_entry_id ? (
             <>
               <span className="text-muted-foreground">{t('posted')}</span>
-              <Link href={`/bookkeeping/${row.journal_entry_id}`} className={QUIET_LINK_CLASS}>
+              <VoucherPeekLink entryId={row.journal_entry_id} className={QUIET_LINK_CLASS}>
                 {t('view_voucher_short')}
-              </Link>
+              </VoucherPeekLink>
             </>
           ) : (
             // The actions say the row is not booked: no chip beside them.

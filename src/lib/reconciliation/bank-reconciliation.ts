@@ -164,8 +164,12 @@ export interface ReconciliationStatus {
    * unrealised kursdifferens and is revalued separately. (Use
    * `gl_1930_period_movement` for the reconciliation diff, since this figure
    * still includes the opening balance.)
+   *
+   * `null` on a foreign account whose opening balance in the window is not
+   * known in the account's currency (see `gl_1930_opening_balance`): the
+   * movement is known, the balance is not.
    */
-  gl_1930_balance: number
+  gl_1930_balance: number | null
   /** Ledger movement on the bank account excluding opening_balance: i.e.
    *  the ledger balance minus IB, less the verifikat dated before the bank's
    *  history (before_history_total, see history_start). Storno/correction
@@ -174,8 +178,16 @@ export interface ReconciliationStatus {
    *  what `difference` compares against. */
   gl_1930_period_movement: number
   /** IB on the bank account within the date range: surfaced separately so
-   *  reconciliation doesn't treat it as an unmatched bank transaction. */
-  gl_1930_opening_balance: number
+   *  reconciliation doesn't treat it as an unmatched bank transaction.
+   *
+   *  On a foreign account the IB is booked in kronor (year-end, SIE import,
+   *  set_opening_balances). Its amount in the account's currency is then
+   *  what stood on the account the day before, when the IB restates that day
+   *  and every line behind it carries the currency (account_ib_in_currency).
+   *  `null` otherwise (an import's first year, history booked in kronor):
+   *  the IB is unknown in the currency. It is never part of `difference`, so
+   *  the account reconciles on its movement either way. */
+  gl_1930_opening_balance: number | null
   /** Net of posted storno/correction lines on the bank account within the date
    *  range. INFORMATIONAL ONLY: it is part of the ledger balance and is included
    *  in gl_1930_period_movement, not subtracted from it. Surfaced so the UI can
@@ -263,7 +275,9 @@ export interface ReconciliationStatus {
    */
   unexplained_difference: number | null
   /** Counted ledger lines on the account that carry no amount in `currency`
-   *  (see {@link ledgerLineAmountIn}). Always 0 on a SEK account. */
+   *  (see {@link ledgerLineAmountIn}). Always 0 on a SEK account. The opening
+   *  balance at the window's floor is not counted: it is outside the movement
+   *  the two sides are compared on. */
   unconvertible_gl_line_count: number
   /**
    * Machine-readable reason the window cannot be reconciled at all, or null
@@ -1049,7 +1063,12 @@ export async function getReconciliationStatus(
   // ONLY: it is part of the ledger balance and is INCLUDED in the movement,
   // never subtracted.
   const glBalance = Number(facts.gl.balance)
-  const glOpeningBalance = Number(facts.gl.opening_balance)
+  // A foreign account's IB is booked in kronor by year-end, SIE import and
+  // set_opening_balances. The read answers it from the lines before it when
+  // the IB restates them and they all carry the currency, and null when not:
+  // the movement is still known then, the balance is not.
+  const openingBalanceKnown = facts.gl.opening_balance !== null
+  const glOpeningBalance = Number(facts.gl.opening_balance ?? 0)
   const glCorrectionAdjustment = Number(facts.gl.correction_adjustment)
   const unconvertibleLineCount = Number(facts.gl.unconvertible_line_count)
   // Period movement = the ledger balance minus the opening balance, less the
@@ -1103,7 +1122,7 @@ export async function getReconciliationStatus(
         historyStart: beforeHistory.splitAt,
         windowFrom: effectiveFrom,
         ibFloor,
-        openingBalanceInWindow: roundOre(glOpeningBalance),
+        openingBalanceInWindow: openingBalanceKnown ? roundOre(glOpeningBalance) : null,
         beforeHistoryTotal,
         saldo: facts.saldo,
       })
@@ -1120,9 +1139,9 @@ export async function getReconciliationStatus(
     bank_transaction_count: Number(facts.bank.count),
     ignored_transaction_total: roundOre(ignoredTotal),
     ignored_transaction_count: Number(facts.bank.ignored_count),
-    gl_1930_balance: Math.round(glBalance * 100) / 100,
+    gl_1930_balance: openingBalanceKnown ? Math.round(glBalance * 100) / 100 : null,
     gl_1930_period_movement: Math.round(glPeriodMovement * 100) / 100,
-    gl_1930_opening_balance: Math.round(glOpeningBalance * 100) / 100,
+    gl_1930_opening_balance: openingBalanceKnown ? Math.round(glOpeningBalance * 100) / 100 : null,
     gl_1930_correction_adjustment: Math.round(glCorrectionAdjustment * 100) / 100,
     difference,
     // Avstämt requires BOTH sides to hold: the totals agree AND nothing is left
@@ -1171,7 +1190,8 @@ interface BankReconciliationFacts {
   effective_from: string | null
   gl: {
     balance: number | string
-    opening_balance: number | string
+    /** Null: a foreign account's IB that states no amount in its currency and that the ledger before it cannot answer. `balance` is then the movement alone. */
+    opening_balance: number | string | null
     correction_adjustment: number | string
     unconvertible_line_count: number | string
   }
@@ -1357,7 +1377,8 @@ async function bankOpeningComparison(input: {
   historyStart: string
   windowFrom: string | null
   ibFloor: string | null
-  openingBalanceInWindow: number
+  /** Null when the IB in the window is not known in the account's currency. */
+  openingBalanceInWindow: number | null
   beforeHistoryTotal: number
   saldo: BankSaldoFacts | null
 }): Promise<OpeningComparison> {
@@ -1372,7 +1393,9 @@ async function bankOpeningComparison(input: {
     before = null
   }
   const ledgerBalanceBeforeStart =
-    before === null ? null : roundOre(before + input.openingBalanceInWindow + input.beforeHistoryTotal)
+    before === null || input.openingBalanceInWindow === null
+      ? null
+      : roundOre(before + input.openingBalanceInWindow + input.beforeHistoryTotal)
   const saldoAtStart = bankSaldoAtStart(input)
   return {
     ledger_balance_before_start: ledgerBalanceBeforeStart,

@@ -443,7 +443,7 @@ export async function getBokslutsbilagor(
   try {
     const report = await generateBokslutsbilagor(ctx.supabase, ctx.companyId, periodId, {
       userId: ctx.userId,
-      resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(ctx.supabase, ids),
+      resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(ctx.supabase, ids, ctx.companyId),
       appVersion: currentAppVersion(),
     })
     if (!report) return { ok: false, code: 'FISCAL_PERIOD_NOT_FOUND', details: { period_id: periodId } }
@@ -490,7 +490,7 @@ export async function getBehandlingshistorik(
         categories: input.category ? [input.category] : undefined,
       },
       {
-        resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(ctx.supabase, ids),
+        resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(ctx.supabase, ids, ctx.companyId),
         appVersion: currentAppVersion(),
         globalClient: ctx.supabase,
       },

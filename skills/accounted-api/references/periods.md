@@ -601,6 +601,103 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/accounts/oss-countries`
+
+**Say which EU country each OSS account is for (unionsordningen).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Sets the country, and for a sales account the VAT rate, that an OSS account is for, so the OSS underlag places the verifikat booked on it per country and rate without a webshop order behind them. A sales account is a class 3 account with VAT code oss: it takes one other EU country and that country's rate in percent. A VAT account is a 26xx account other than 2650: it takes the country whose OSS output VAT it holds, or EU when one account is shared by every country, and no rate. country null clears the account. Every account is checked before any is written: one that cannot take what it is given refuses the call. No verifikat changes. Idempotent. Dry-runnable.
+
+**Use when:** A company books OSS sales on one account per country and rate (invoices, vouchers booked by hand, a ledger imported from another system) and the OSS underlag lists those verifikat as unaccounted. The underlag's accounts list names the accounts and what their names suggest.
+**Do not use for:** Webshop orders booked through a Shopify country rule: the order row carries the country. The Swedish momsdeklaration: set default_vat_treatment or vat_box with PATCH /accounts/{number}.
+
+**Pitfalls:**
+- account_number and country are STRINGS. The country is two capital letters ("DE") and never SE.
+- vat_rate is a percentage (19, 25.5), not a fraction, and belongs to sales accounts only.
+- A class 3 account needs VAT code oss first (PATCH /accounts/{number} default_vat_treatment=oss).
+- A VAT account that names no country is not read as OSS VAT: the sales booked with it then show no VAT.
+- The name of an account is only a suggestion: check the country and the rate before setting them.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ accounts: { account_number: string, country: string | null, vat_rate?: number | null }[] }
+```
+
+Example request:
+```json
+{
+  "accounts": [
+    {
+      "account_number": "3106",
+      "country": "DE",
+      "vat_rate": 19
+    },
+    {
+      "account_number": "2670",
+      "country": "EU"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    accounts: { account_number: string, account_name: string, kind: "sales" | "vat", oss_country: string | null, oss_vat_rate: number | null }[],
+    updated: number,
+    unchanged: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accounts": [
+      {
+        "account_number": "3106",
+        "account_name": "Försäljning OSS Tyskland 19 %",
+        "kind": "sales",
+        "oss_country": "DE",
+        "oss_vat_rate": 19
+      },
+      {
+        "account_number": "2670",
+        "account_name": "Utgående moms OSS",
+        "kind": "vat",
+        "oss_country": "EU",
+        "oss_vat_rate": null
+      }
+    ],
+    "updated": 2,
+    "unchanged": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/accrual-schedules`
 
 **Create a periodisering by hand for an amount on 17xx/29xx that no invoice line in Accounted carries, with monthly catch-up.**
@@ -3151,7 +3248,7 @@ Example response `200`:
 **Edit the årsredovisning texts: förvaltningsberättelse, resultatdisposition, disclosure notes and K3 note texts.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Saves the narrative overrides for a räkenskapsår's årsredovisning, as the dashboard's text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object), the K3 kassaflödesanalys omission, the K3 disclosure answers (disclosure_answers by requirement id: {applies, text, choice, confirmed}; read the open ones from the validation issues and the k3_disclosures of the report), the kind of each equity verifikat the ledger cannot classify (equity_movement_overrides by journal_entry_id) and whether the K3 equity specification is its own statement (equity_statement_separate). disclosure_answers and equity_movement_overrides merge: only the keys sent change and null removes one. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.
+Saves the narrative overrides for a räkenskapsår's årsredovisning, as the dashboard's text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object), the K3 kassaflödesanalys omission, the K3 disclosure answers (disclosure_answers by requirement id: {applies, text, choice, confirmed}; read the open ones from the validation issues and the k3_disclosures of the report), the kind of each equity verifikat the ledger cannot classify (equity_movement_overrides by journal_entry_id) and whether the K3 equity specification is its own statement (equity_statement_separate). disclosure_answers and equity_movement_overrides merge: only the keys sent change and null removes one. For a K2 årsredovisning, fixed_asset_note_rows states the few rows of the anläggningstillgångar note that neither the anläggningsregister nor the ledger can tell apart, per balance sheet post and in whole kronor: omräkningsdifferenser (cost.omrakningsdifferenser, depreciation.omrakningsdifferenser) and where a nedskrivning booked on the post's write-down accounts outside the register came from or went (impairment.fusion, impairment.forsaljningar, impairment.omklassificeringar, impairment.omrakningsdifferenser). The rest of the note is derived: each asset in the register says how it was acquired (acquisition_type on the asset), which puts it on the Inköp, Rörelseförvärv, Fusion or Omklassificeringar row. The rows merge one by one: a row sent replaces that row, null removes a row, a post or all of them. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.
 
 **Use when:** Writing or correcting the texts of the årsredovisning before a version is frozen for signing.
 **Do not use for:** The compliance profile answers (PATCH .../arsredovisning/compliance), the figures (they come from the books), or freezing the document (POST .../arsredovisning/versions).
@@ -3163,6 +3260,8 @@ Saves the narrative overrides for a räkenskapsår's årsredovisning, as the das
 - Registered at Bolagsverket: 409 ARSREDOVISNING_REGISTERED.
 - Saving clears narrative_confirmed: confirm again with PATCH .../compliance {"narrative_confirmed": true}.
 - A disclosure_answers key must be a requirement id of the K3 disclosure matrix (for example not.handelser_efter_balansdagen); an unknown id is 400 VALIDATION_ERROR.
+- fixed_asset_note_rows: amounts are positive as the taxonomy names the row, so an omräkningsdifferens that lowers anskaffningsvärden is negative and one that lowers accumulated avskrivningar or nedskrivningar is positive. Every stated row must be booked: an impairment.* row is taken out of what the post's write-down accounts moved beyond the register, an omräkningsdifferens is what its anskaffnings- or avskrivningskonton moved beyond it. Each post with stated rows must tie to its books at the end of the year and at its start, or the document cannot be frozen. Anskaffningsvärden and avskrivningar that came by rörelseförvärv, fusion or omklassificering are not stated: set acquisition_type on the asset. Refused with 400 for a K3 year, whose note is the register's.
+- fixed_asset_note_rows omräkningsdifferenser carry forward: the amount stays in the post's opening balances every later year, because it is still on the post's accounts and the register does not hold it. When the asset is sold or scrapped, state the opposite amount that year to take it out.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3201,7 +3300,8 @@ Request body:
   kassaflodesanalys_omission_confirmed?: boolean,
   disclosure_answers?: Record<string, { applies?: boolean | null, text?: string | null, choice?: string | null, confirmed?: boolean } | null>,
   equity_movement_overrides?: Record<string, "rattelse_av_fel" | "andrad_redovisningsprincip" | "uppskrivning" | "verkligt_varde" | "ovriga_direkt_mot_eget_kapital" | "utdelning" | "aktieagartillskott" | "aterbetalt_tillskott" | "nyemission" | "andra_vardeoverforingar" | "omforing" | null>,
-  equity_statement_separate?: boolean
+  equity_statement_separate?: boolean,
+  fixed_asset_note_rows?: Record<string, Record<string, number | null> | null> | null
 }
 ```
 

@@ -16,27 +16,36 @@ import { inboxFocusHref } from '@/components/dashboard/StepItems'
 import { INKORG_HREF, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { bookingScreenHref } from '@/lib/bookkeeping/booking-screen'
 import {
+  bankRowMatchHref,
   inToBookFilter,
-  opensInBookingScreen,
+  suggestedJournalEntryId,
   toBookAmountLabel,
   toBookCounts,
   toBookFilterFromSlug,
   toBookIsMoneyIn,
   toBookListHref,
+  toBookRowDoor,
   toBookScreenSubject,
   TO_BOOK_FILTER_PARAM,
   TO_BOOK_FILTERS,
   type ToBookFilter,
   type ToBookRow,
+  type ToBookSuggestion,
 } from '@/lib/bookkeeping/to-book'
 import { useToBookRows } from './use-to-book-rows'
 import type { SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
+import type { MatchVoucherRow } from '@/components/transactions/MatchVoucherDialog'
 
 // The skattekonto events book in the dialog Bankrader and the Skattekonto
 // page use, loaded when one is opened.
 const SkattekontoBookDialog = dynamic(() => import('@/components/skattekonto/SkattekontoBookDialog'))
 const SkattekontoMatchDialog = dynamic(() =>
   import('@/components/skattekonto/SkattekontoMatchDialog').then((module) => module.SkattekontoMatchDialog),
+)
+// A bank row a verifikat already books is matched to it in the matcher
+// Bankrader uses, loaded when one is opened.
+const MatchVoucherDialog = dynamic(() =>
+  import('@/components/transactions/MatchVoucherDialog').then((module) => module.MatchVoucherDialog),
 )
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { cn, formatDate } from '@/lib/utils'
@@ -48,6 +57,9 @@ import { cn, formatDate } from '@/lib/utils'
  * invoice found for it, and a document with no bank row, open that document
  * in Inkommande, where the pair is confirmed or the document is booked. A
  * skattekonto event opens the skattekonto booking dialog here, as in Bankrader.
+ * A bank row the product already has a match for names it beside the row and
+ * opens where that match is confirmed (toBookRowDoor), not on the booking
+ * screen.
  */
 export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
   const t = useTranslations('to_book_list')
@@ -56,7 +68,14 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
   // and its next row keep it.
   const filter = toBookFilterFromSlug(useSearchParams().get(TO_BOOK_FILTER_PARAM))
   const setFilter = (next: ToBookFilter) => router.replace(toBookListHref(next), { scroll: false })
-  const { rows, skattekonto, loading, failed, retry, refreshSkattekonto } = useToBookRows()
+  const { rows, skattekonto, loading, failed, retry, refreshBankRows, refreshSkattekonto } = useToBookRows()
+  // The bank row the matcher is open for, held as it was when opened: the
+  // matcher reads its candidates again whenever the row it is given changes.
+  const [matching, setMatching] = useState<{
+    transaction: MatchVoucherRow
+    preferredJournalEntryId: string | null
+    note: string | null
+  } | null>(null)
   const [skvBook, setSkvBook] = useState<SkattekontoTransactionWithSuggestion | null>(null)
   const [skvMatch, setSkvMatch] = useState<SkattekontoTransactionWithSuggestion | null>(null)
   const openSkattekonto = (id: string | null) => setSkvBook(skattekonto.rows.find((r) => r.id === id) ?? null)
@@ -69,15 +88,63 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
     all: t('filter_all'),
     missing: t('filter_missing'),
     found: t('filter_found'),
+    suggested: t('filter_suggested'),
     no_bank: t('filter_no_bank'),
     skattekonto: t('filter_skattekonto'),
   }
   const accountName = (id: string | null) => cashAccounts.find((a) => a.id === id)?.name ?? null
 
-  const hrefOf = (row: ToBookRow): string =>
-    opensInBookingScreen(row)
-      ? bookingScreenHref(toBookScreenSubject(row), toBookListHref(filter))
-      : inboxFocusHref(inboxBase, row.inboxItemId as string, toBookListHref(filter))
+  const hrefOf = (row: ToBookRow): string => {
+    switch (toBookRowDoor(row)) {
+      case 'bank_rows':
+        return bankRowMatchHref(row.transactionId as string)
+      case 'screen':
+        return bookingScreenHref(toBookScreenSubject(row), toBookListHref(filter))
+      default:
+        return inboxFocusHref(inboxBase, row.inboxItemId as string, toBookListHref(filter))
+    }
+  }
+
+  const suggestionLabel = (suggestion: ToBookSuggestion): string => {
+    switch (suggestion.kind) {
+      case 'invoice':
+        return suggestion.number ? t('suggestion_invoice', { number: suggestion.number }) : t('suggestion_invoice_unnumbered')
+      case 'supplier_invoice':
+        return suggestion.number
+          ? t('suggestion_supplier_invoice', { number: suggestion.number })
+          : t('suggestion_supplier_invoice_unnumbered')
+      case 'rot_rut':
+        return t('suggestion_rot_rut')
+      case 'expense_payout':
+        return suggestion.name ? t('suggestion_expense_payout', { name: suggestion.name }) : t('suggestion_expense_payout_unnamed')
+      case 'salary':
+        return t('suggestion_salary', { period: suggestion.period })
+      case 'voucher':
+        return t('suggestion_voucher', { voucher: suggestion.voucher })
+      case 'ledger':
+        return t('suggestion_ledger')
+    }
+  }
+  const matchNote = (suggestion: ToBookSuggestion | null): string | null => {
+    if (suggestion?.kind === 'salary') return t('match_note_salary', { period: suggestion.period })
+    if (suggestion?.kind === 'voucher') return t('match_note_voucher')
+    return null
+  }
+  const openMatcher = (row: ToBookRow) => {
+    if (!row.transactionId || !row.date || row.amount == null) return
+    setMatching({
+      transaction: {
+        id: row.transactionId,
+        date: row.date,
+        amount: row.amount,
+        currency: row.currency,
+        description: row.name,
+        cash_account_id: row.cashAccountId,
+      },
+      preferredJournalEntryId: suggestedJournalEntryId(row),
+      note: matchNote(row.suggestion),
+    })
+  }
 
   return (
     <div className="space-y-4">
@@ -87,8 +154,10 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
         aria-label={t('filter_label')}
         value={filter}
         onChange={setFilter}
-        // Skattekonto is a filter only where there are skattekonto events to book.
-        options={TO_BOOK_FILTERS.filter((f) => f !== 'skattekonto' || counts.skattekonto > 0 || filter === 'skattekonto').map((f) => ({
+        // Skattekonto and Att matcha are filters only where there are such rows.
+        options={TO_BOOK_FILTERS.filter(
+          (f) => (f !== 'skattekonto' && f !== 'suggested') || counts[f] > 0 || filter === f,
+        ).map((f) => ({
           value: f,
           label: filterLabel[f],
           count: counts[f],
@@ -131,22 +200,34 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
                   <td className={cn(TD_CLASS, 'date-figures whitespace-nowrap text-muted-foreground')}>
                     {row.date ? formatDate(row.date) : ''}
                   </td>
-                  <td className={cn(TD_CLASS, 'max-w-0 truncate')}>
-                    {/* The whole row is the way in: the name carries it, stretched over the row. */}
-                    {row.kind === 'skattekonto' ? (
-                      <button
-                        type="button"
-                        onClick={() => openSkattekonto(row.skattekontoId)}
-                        className="max-w-full truncate text-left text-strong after:absolute after:inset-0"
-                        data-ph-mask=""
-                      >
-                        {row.name || t('unnamed')}
-                      </button>
-                    ) : (
-                      <Link href={hrefOf(row)} className="text-strong after:absolute after:inset-0" data-ph-mask="">
-                        {row.name || t('unnamed')}
-                      </Link>
-                    )}
+                  <td className={cn(TD_CLASS, 'max-w-0')}>
+                    <div className="flex min-w-0 items-center gap-2">
+                      {/* The whole row is the way in: the name carries it, stretched over the row. */}
+                      {row.kind === 'skattekonto' || toBookRowDoor(row) === 'match_voucher' ? (
+                        <button
+                          type="button"
+                          onClick={() => (row.kind === 'skattekonto' ? openSkattekonto(row.skattekontoId) : openMatcher(row))}
+                          className="min-w-0 truncate text-left text-strong after:absolute after:inset-0"
+                          data-ph-mask=""
+                        >
+                          {row.name || t('unnamed')}
+                        </button>
+                      ) : (
+                        <Link
+                          href={hrefOf(row)}
+                          className="min-w-0 truncate text-strong after:absolute after:inset-0"
+                          data-ph-mask=""
+                        >
+                          {row.name || t('unnamed')}
+                        </Link>
+                      )}
+                      {/* The chip marks the exception: a row the product already has a match for. */}
+                      {row.suggestion && (
+                        <Badge variant="outline" className="shrink-0" data-ph-mask="">
+                          {suggestionLabel(row.suggestion)}
+                        </Badge>
+                      )}
+                    </div>
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                     {row.kind === 'bank' ? (
@@ -211,6 +292,21 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
             setSkvBook(null)
           }}
           onLinked={() => void refreshSkattekonto()}
+        />
+      )}
+      {matching && (
+        <MatchVoucherDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setMatching(null)
+          }}
+          transaction={matching.transaction}
+          onLinked={() => {
+            setMatching(null)
+            void refreshBankRows()
+          }}
+          preferredJournalEntryId={matching.preferredJournalEntryId}
+          preferredNote={matching.note}
         />
       )}
       {skvMatch && (

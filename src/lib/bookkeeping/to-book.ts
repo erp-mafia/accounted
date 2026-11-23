@@ -9,6 +9,11 @@
  * purchase is one row. A bank row that already holds a document keeps it,
  * and a document matched to it elsewhere stays a row of its own: nothing is
  * hidden. Pure, so the page and the tests read the same rows.
+ *
+ * A bank row the product already has a match for (an invoice it pays, a
+ * salary run's payout, a verifikat that already books it) carries that
+ * suggestion, and opens where the match is confirmed instead of on the
+ * booking screen: booking it there would book the same event twice.
  */
 
 import { formatRowAmount } from '@/lib/utils'
@@ -25,6 +30,18 @@ export interface ToBookBankRow {
   cash_account_id: string | null
   /** The document pinned to the row, if any. */
   document_id: string | null
+  merchant_name?: string | null
+  is_business?: boolean | null
+  journal_entry_id?: string | null
+  is_ignored?: boolean | null
+  /** The invoice the row is already matched to, if any. */
+  invoice_id?: string | null
+  supplier_invoice_id?: string | null
+  /** What the matcher pointed the row at, as the open rows read answers it. */
+  potential_invoice_id?: string | null
+  potential_supplier_invoice_id?: string | null
+  potential_rot_rut_payout_request_id?: string | null
+  potential_journal_entry_id?: string | null
 }
 
 /** Where the next page of open bank rows starts, as the route answers it. */
@@ -101,6 +118,55 @@ export interface ToBookSkattekontoRow {
  */
 export type ToBookUnderlag = 'attached' | 'found' | 'missing' | 'document' | 'skatteverket'
 
+/**
+ * The match the product already has for a bank row, as Bankrader names it:
+ * an open customer or supplier invoice the row pays, Skatteverket's ROT/RUT
+ * payout, the repayment of a person's utlägg, a booked salary run's net pay,
+ * the verifikat the matcher suggests, or verifikat already in the ledger
+ * that add up to the row (imported bookkeeping).
+ */
+export type ToBookSuggestion =
+  | { kind: 'invoice'; number: string | null }
+  | { kind: 'supplier_invoice'; number: string | null }
+  | { kind: 'rot_rut' }
+  | { kind: 'expense_payout'; name: string | null }
+  | { kind: 'salary'; journalEntryId: string; period: string }
+  | { kind: 'voucher'; journalEntryId: string; voucher: string }
+  | { kind: 'ledger' }
+
+/** What was found for the open bank rows, each keyed by bank row id. */
+export interface ToBookSuggestionSources {
+  invoices?: ReadonlyMap<string, { number: string | null }>
+  supplierInvoices?: ReadonlyMap<string, { number: string | null }>
+  rotRut?: ReadonlySet<string>
+  expensePayouts?: ReadonlyMap<string, { name: string | null }>
+  salary?: ReadonlyMap<string, { journalEntryId: string; period: string }>
+  vouchers?: ReadonlyMap<string, { journalEntryId: string; voucher: string }>
+  /** Rows the ledger already explains (GET /api/transactions/migration-coverage). */
+  ledger?: ReadonlySet<string>
+}
+
+/**
+ * The one suggestion a bank row shows. The order is the one Bankrader's row
+ * uses for its button: an invoice before a ROT/RUT payout before an utlägg
+ * repayment before a salary run, then the verifikat suggestions.
+ */
+export function pickToBookSuggestion(transactionId: string, found: ToBookSuggestionSources): ToBookSuggestion | null {
+  const invoice = found.invoices?.get(transactionId)
+  if (invoice) return { kind: 'invoice', number: invoice.number }
+  const supplierInvoice = found.supplierInvoices?.get(transactionId)
+  if (supplierInvoice) return { kind: 'supplier_invoice', number: supplierInvoice.number }
+  if (found.rotRut?.has(transactionId)) return { kind: 'rot_rut' }
+  const payout = found.expensePayouts?.get(transactionId)
+  if (payout) return { kind: 'expense_payout', name: payout.name }
+  const salary = found.salary?.get(transactionId)
+  if (salary) return { kind: 'salary', journalEntryId: salary.journalEntryId, period: salary.period }
+  const voucher = found.vouchers?.get(transactionId)
+  if (voucher) return { kind: 'voucher', journalEntryId: voucher.journalEntryId, voucher: voucher.voucher }
+  if (found.ledger?.has(transactionId)) return { kind: 'ledger' }
+  return null
+}
+
 export interface ToBookRow {
   key: string
   kind: 'bank' | 'document' | 'skattekonto'
@@ -118,9 +184,11 @@ export interface ToBookRow {
   underlag: ToBookUnderlag
   /** What the document found for the bank row is, when one was found. */
   foundKind: InboxDocumentKind | null
+  /** The match the product already has for a bank row, if any. */
+  suggestion: ToBookSuggestion | null
 }
 
-export const TO_BOOK_FILTERS = ['all', 'missing', 'found', 'no_bank', 'skattekonto'] as const
+export const TO_BOOK_FILTERS = ['all', 'missing', 'found', 'suggested', 'no_bank', 'skattekonto'] as const
 export type ToBookFilter = (typeof TO_BOOK_FILTERS)[number]
 
 /** Newest first; rows without a date last, in the order they came. */
@@ -135,6 +203,7 @@ export function buildToBookRows(
   bankRows: readonly ToBookBankRow[],
   documents: readonly ToBookDocument[],
   skattekonto: readonly ToBookSkattekontoRow[] = [],
+  suggestions: ToBookSuggestionSources = {},
 ): ToBookRow[] {
   // A row without a document gets the first document that looks paid by it.
   const waiting = new Set(bankRows.filter((r) => !r.document_id).map((r) => r.id))
@@ -160,6 +229,7 @@ export function buildToBookRows(
       cashAccountId: r.cash_account_id,
       underlag: r.document_id ? 'attached' : found ? 'found' : 'missing',
       foundKind: found?.kind ?? null,
+      suggestion: pickToBookSuggestion(r.id, suggestions),
     }
   })
   const docs: ToBookRow[] = documents
@@ -177,6 +247,7 @@ export function buildToBookRows(
       cashAccountId: null,
       underlag: 'document',
       foundKind: null,
+      suggestion: null,
     }))
   const skv: ToBookRow[] = skattekonto.map((r) => ({
     key: `skv:${r.id}`,
@@ -191,6 +262,7 @@ export function buildToBookRows(
     cashAccountId: null,
     underlag: 'skatteverket',
     foundKind: null,
+    suggestion: null,
   }))
   return [...bank, ...docs, ...skv].sort(newestFirst)
 }
@@ -204,6 +276,8 @@ export function inToBookFilter(row: ToBookRow, filter: ToBookFilter): boolean {
       return row.underlag === 'missing'
     case 'found':
       return row.underlag === 'found'
+    case 'suggested':
+      return row.suggestion !== null
     case 'no_bank':
       return row.kind === 'document'
     case 'skattekonto':
@@ -254,8 +328,45 @@ export function toBookDoor(bookingScreen: boolean, before: string): string {
  * Inkommande, where those are decided.
  */
 export function opensInBookingScreen(row: ToBookRow): boolean {
-  if (row.kind !== 'bank' || row.transactionId === null) return false
+  if (row.kind !== 'bank' || row.transactionId === null || row.suggestion !== null) return false
   return row.underlag !== 'found' || (row.foundKind === 'receipt' && row.inboxItemId !== null)
+}
+
+/**
+ * Where a row opens. A bank row with a suggestion opens where that match is
+ * confirmed: an invoice, a ROT/RUT payout and an utlägg repayment in
+ * Bankrader's match dialogs, a verifikat (a salary run's, the matcher's, or
+ * the ledger's own) in the existing-verifikat matcher, here on the list.
+ */
+export type ToBookDoor = 'screen' | 'inbox' | 'bank_rows' | 'match_voucher' | 'skattekonto'
+
+export function toBookRowDoor(row: ToBookRow): ToBookDoor {
+  if (row.kind === 'skattekonto') return 'skattekonto'
+  if (row.kind === 'document') return 'inbox'
+  switch (row.suggestion?.kind) {
+    case 'invoice':
+    case 'supplier_invoice':
+    case 'rot_rut':
+    case 'expense_payout':
+      return 'bank_rows'
+    case 'salary':
+    case 'voucher':
+    case 'ledger':
+      return 'match_voucher'
+  }
+  return opensInBookingScreen(row) ? 'screen' : 'inbox'
+}
+
+/** Bankrader on a bank row, with the row's suggested match open (the page's ?highlight and ?open=match). */
+export function bankRowMatchHref(transactionId: string): string {
+  return `/transactions?${new URLSearchParams({ view: 'inbox', highlight: transactionId, open: 'match' })}`
+}
+
+/** The verifikat the existing-verifikat matcher opens with picked, for a row whose suggestion names one. */
+export function suggestedJournalEntryId(row: ToBookRow): string | null {
+  const suggestion = row.suggestion
+  if (suggestion?.kind === 'salary' || suggestion?.kind === 'voucher') return suggestion.journalEntryId
+  return null
 }
 
 /** What the booking screen books for a row that opens there: its bank row, with the receipt found for it. */
@@ -282,6 +393,7 @@ export const TO_BOOK_FILTER_PARAM = 'visa'
 const FILTER_SLUGS: Record<Exclude<ToBookFilter, 'all'>, string> = {
   missing: 'saknar-underlag',
   found: 'kvitto-hittat',
+  suggested: 'att-matcha',
   no_bank: 'utan-bankrad',
   skattekonto: 'skattekonto',
 }
