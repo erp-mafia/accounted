@@ -4,6 +4,13 @@ import { useMemo } from 'react'
 import useSWR from 'swr'
 import { itemHeadline, queueFor, type InkorgItem } from '@/lib/inkorg/items'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
+import { isOpenSkattekontoRow } from '@/lib/skatteverket/skattekonto-open-rows'
+import {
+  isSkattekontoLedgerAccount,
+  SKATTEKONTO_ACCOUNT_DEFAULT,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
+import type { SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
 import {
   buildToBookRows,
   readAllToBookBankRows,
@@ -63,14 +70,47 @@ async function readDocuments(): Promise<ToBookDocument[]> {
     })
 }
 
+/** The skattekonto events to book, whole, for the booking dialog the list opens them in. */
+export interface ToBookSkattekonto {
+  rows: SkattekontoTransactionWithSuggestion[]
+  /** The company's skattekonto account (1630, or 2012 for an enskild firma that runs it there). */
+  account: SkattekontoLedgerAccount
+}
+
+const SKATTEKONTO_KEY = 'to-book:skattekonto'
+const NO_SKATTEKONTO: ToBookSkattekonto = { rows: [], account: SKATTEKONTO_ACCOUNT_DEFAULT }
+
+/**
+ * The open skattekonto events: the read Bankrader's skattekonto rows make,
+ * narrowed to open work (isOpenSkattekontoRow, with the opening balance the
+ * read answers). A company without the Skatteverket connection has none.
+ */
+async function readSkattekonto(): Promise<ToBookSkattekonto> {
+  const res = await fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner')
+  if (res.status === 402 || res.status === 403 || res.status === 404) return NO_SKATTEKONTO
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const json = (await res.json()) as {
+    data?: { booked?: SkattekontoTransactionWithSuggestion[]; skattekonto_account?: unknown; opening_balance_date?: unknown }
+  }
+  const openingDate = typeof json.data?.opening_balance_date === 'string' ? json.data.opening_balance_date : null
+  return {
+    rows: (json.data?.booked ?? []).filter((r) => isOpenSkattekontoRow(r, openingDate)),
+    account: isSkattekontoLedgerAccount(json.data?.skattekonto_account) ? json.data.skattekonto_account : SKATTEKONTO_ACCOUNT_DEFAULT,
+  }
+}
+
 export interface ToBookRowsRead {
   rows: ToBookRow[]
+  /** The skattekonto events behind the skattekonto rows. */
+  skattekonto: ToBookSkattekonto
   loading: boolean
   failed: boolean
   /** Read both again (the list's Försök igen). */
   retry: () => Promise<unknown>
   /** Read the bank rows again, after one was booked. */
   refreshBankRows: () => Promise<unknown>
+  /** Read the skattekonto events again, after one was booked, linked or ignored. */
+  refreshSkattekonto: () => Promise<unknown>
 }
 
 /** Read only when nothing is cached: the booking screen steps through rows the list already read. */
@@ -86,12 +126,24 @@ export function useToBookRows({ enabled = true, cachedOnly = false }: { enabled?
   const options = cachedOnly ? CACHED_ONLY : undefined
   const bank = useSWR(enabled ? BANK_ROWS_KEY : null, readBankRows, options)
   const docs = useSWR(enabled ? DOCUMENTS_KEY : null, readDocuments, options)
-  const rows = useMemo(() => buildToBookRows(bank.data ?? [], docs.data ?? []), [bank.data, docs.data])
+  const skv = useSWR(enabled ? SKATTEKONTO_KEY : null, readSkattekonto, options)
+  const skattekonto = skv.data ?? NO_SKATTEKONTO
+  const rows = useMemo(
+    () =>
+      buildToBookRows(
+        bank.data ?? [],
+        docs.data ?? [],
+        skattekonto.rows.map((r) => ({ id: r.id, date: r.transaktionsdatum, text: r.transaktionstext, amount: r.belopp_skatteverket })),
+      ),
+    [bank.data, docs.data, skattekonto.rows],
+  )
   return {
     rows,
-    loading: enabled && ((!bank.data && !bank.error) || (!docs.data && !docs.error)),
-    failed: Boolean(bank.error || docs.error),
-    retry: () => Promise.all([bank.mutate(), docs.mutate()]),
+    skattekonto,
+    loading: enabled && ((!bank.data && !bank.error) || (!docs.data && !docs.error) || (!skv.data && !skv.error)),
+    failed: Boolean(bank.error || docs.error || skv.error),
+    retry: () => Promise.all([bank.mutate(), docs.mutate(), skv.mutate()]),
     refreshBankRows: () => bank.mutate(),
+    refreshSkattekonto: () => skv.mutate(),
   }
 }

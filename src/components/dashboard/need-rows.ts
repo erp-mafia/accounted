@@ -47,9 +47,9 @@ export interface CountRowInput {
   /** The company's open questions (lib/questions); 0 where the question list is not switched on. */
   openQuestions?: number
   /**
-   * The booking screen is switched on: the bank rows and the inbox documents
-   * waiting to be booked are one row, Att bokföra, which leads to the list
-   * that holds both.
+   * The booking screen is switched on: the bank rows, the inbox documents and
+   * the skattekonto events waiting to be booked are one row, Att bokföra,
+   * which leads to the list that holds them all.
    */
   bookingScreen?: boolean
 }
@@ -66,7 +66,7 @@ export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, person
   })
 
   if (bookingScreen) {
-    add(n('book_transaction') + (hasAi ? n('inbox_document') : 0), {
+    add(n('book_transaction') + n('book_skattekonto') + (hasAi ? n('inbox_document') : 0), {
       key: 'to-book', items: 'to_book', earliest: 'oldest', group: 'book', href: TO_BOOK_PATH, labelKey: 'row_to_book', category: 'book_transaction',
     })
   } else {
@@ -74,7 +74,7 @@ export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, person
       key: 'book-transactions', items: 'bank_rows', earliest: 'oldest', group: 'book', href: '/transactions?view=inbox', labelKey: 'row_book_transactions', category: 'book_transaction',
     })
   }
-  add(n('book_skattekonto'), {
+  add(bookingScreen ? 0 : n('book_skattekonto'), {
     key: 'book-skattekonto', items: 'skattekonto', earliest: 'oldest', group: 'book', href: '/transactions?source=skatteverket&view=inbox', labelKey: 'row_book_skattekonto', category: 'book_skattekonto',
   })
   // The single-invoice matches: among the transactions to book already.

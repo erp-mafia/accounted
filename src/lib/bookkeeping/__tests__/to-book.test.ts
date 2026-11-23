@@ -87,7 +87,7 @@ describe('filters and counts', () => {
   )
 
   it('counts every filter from the same rows', () => {
-    expect(toBookCounts(rows)).toEqual({ all: 4, missing: 1, found: 1, no_bank: 1 })
+    expect(toBookCounts(rows)).toEqual({ all: 4, missing: 1, found: 1, no_bank: 1, skattekonto: 0 })
   })
 
   it('places each row under the filters it belongs to', () => {
@@ -264,5 +264,38 @@ describe('toBookDoor', () => {
   it('leads every "book these" link to Att bokföra with the booking screen, else where it led', () => {
     expect(toBookDoor(true, '/transactions?view=inbox')).toBe('/att-bokfora')
     expect(toBookDoor(false, '/transactions?view=inbox')).toBe('/transactions?view=inbox')
+  })
+})
+
+describe('skattekonto events', () => {
+  const rows = buildToBookRows(
+    [bank({ id: 'a', date: '2026-11-20' })],
+    [],
+    [
+      { id: 'skv-1', date: '2026-11-12', text: 'Inbetalning bokförd 261112', amount: 25000 },
+      { id: 'skv-2', date: '2026-11-21', text: 'Debiterad preliminärskatt', amount: -4521 },
+    ],
+  )
+  const skv = rows.filter((r) => r.kind === 'skattekonto')
+
+  it('are rows of the one list, newest first among the rest, with Skatteverket as underlag', () => {
+    expect(rows.map((r) => r.key)).toEqual(['skv:skv-2', 'tx:a', 'skv:skv-1'])
+    expect(skv[0]).toMatchObject({ skattekontoId: 'skv-2', transactionId: null, underlag: 'skatteverket', currency: 'SEK' })
+  })
+
+  it('have a filter of their own and never count as missing underlag', () => {
+    expect(toBookCounts(rows)).toMatchObject({ all: 3, missing: 1, skattekonto: 2 })
+    expect(toBookFilterFromSlug('skattekonto')).toBe('skattekonto')
+    expect(toBookListHref('skattekonto')).toBe('/att-bokfora?visa=skattekonto')
+  })
+
+  it('open their own booking dialog, not the booking screen, and are not stepped through', () => {
+    expect(skv.some(opensInBookingScreen)).toBe(false)
+    expect(bookingWalk(rows, 'all')).toEqual(['a'])
+  })
+
+  it('write money into the skattekonto with a plus', () => {
+    expect(toBookAmountLabel(skv[1])).toBe('+25\u00a0000')
+    expect(toBookIsMoneyIn(skv[0])).toBe(false)
   })
 })

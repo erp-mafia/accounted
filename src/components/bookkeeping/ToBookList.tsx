@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -29,6 +30,14 @@ import {
   type ToBookRow,
 } from '@/lib/bookkeeping/to-book'
 import { useToBookRows } from './use-to-book-rows'
+import type { SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
+
+// The skattekonto events book in the dialog Bankrader and the Skattekonto
+// page use, loaded when one is opened.
+const SkattekontoBookDialog = dynamic(() => import('@/components/skattekonto/SkattekontoBookDialog'))
+const SkattekontoMatchDialog = dynamic(() =>
+  import('@/components/skattekonto/SkattekontoMatchDialog').then((module) => module.SkattekontoMatchDialog),
+)
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { cn, formatDate } from '@/lib/utils'
 
@@ -37,7 +46,8 @@ import { cn, formatDate } from '@/lib/utils'
  * list (lib/bookkeeping/to-book.ts). A bank row opens the booking screen,
  * with the receipt found for it held as its underlag; a bank row with an
  * invoice found for it, and a document with no bank row, open that document
- * in Inkommande, where the pair is confirmed or the document is booked.
+ * in Inkommande, where the pair is confirmed or the document is booked. A
+ * skattekonto event opens the skattekonto booking dialog here, as in Bankrader.
  */
 export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
   const t = useTranslations('to_book_list')
@@ -46,7 +56,10 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
   // and its next row keep it.
   const filter = toBookFilterFromSlug(useSearchParams().get(TO_BOOK_FILTER_PARAM))
   const setFilter = (next: ToBookFilter) => router.replace(toBookListHref(next), { scroll: false })
-  const { rows, loading, failed, retry } = useToBookRows()
+  const { rows, skattekonto, loading, failed, retry, refreshSkattekonto } = useToBookRows()
+  const [skvBook, setSkvBook] = useState<SkattekontoTransactionWithSuggestion | null>(null)
+  const [skvMatch, setSkvMatch] = useState<SkattekontoTransactionWithSuggestion | null>(null)
+  const openSkattekonto = (id: string | null) => setSkvBook(skattekonto.rows.find((r) => r.id === id) ?? null)
   const { cashAccounts } = useCashAccounts()
   const inboxBase = inkorgV2Enabled ? INKORG_HREF : LEGACY_INBOX_HREF
 
@@ -57,6 +70,7 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
     missing: t('filter_missing'),
     found: t('filter_found'),
     no_bank: t('filter_no_bank'),
+    skattekonto: t('filter_skattekonto'),
   }
   const accountName = (id: string | null) => cashAccounts.find((a) => a.id === id)?.name ?? null
 
@@ -73,7 +87,12 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
         aria-label={t('filter_label')}
         value={filter}
         onChange={setFilter}
-        options={TO_BOOK_FILTERS.map((f) => ({ value: f, label: filterLabel[f], count: counts[f] }))}
+        // Skattekonto is a filter only where there are skattekonto events to book.
+        options={TO_BOOK_FILTERS.filter((f) => f !== 'skattekonto' || counts.skattekonto > 0 || filter === 'skattekonto').map((f) => ({
+          value: f,
+          label: filterLabel[f],
+          count: counts[f],
+        }))}
       />
 
       {failed ? (
@@ -113,14 +132,27 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
                     {row.date ? formatDate(row.date) : ''}
                   </td>
                   <td className={cn(TD_CLASS, 'max-w-0 truncate')}>
-                    {/* The whole row is the link: the name carries it, stretched over the row. */}
-                    <Link href={hrefOf(row)} className="text-strong after:absolute after:inset-0" data-ph-mask="">
-                      {row.name || t('unnamed')}
-                    </Link>
+                    {/* The whole row is the way in: the name carries it, stretched over the row. */}
+                    {row.kind === 'skattekonto' ? (
+                      <button
+                        type="button"
+                        onClick={() => openSkattekonto(row.skattekontoId)}
+                        className="max-w-full truncate text-left text-strong after:absolute after:inset-0"
+                        data-ph-mask=""
+                      >
+                        {row.name || t('unnamed')}
+                      </button>
+                    ) : (
+                      <Link href={hrefOf(row)} className="text-strong after:absolute after:inset-0" data-ph-mask="">
+                        {row.name || t('unnamed')}
+                      </Link>
+                    )}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                     {row.kind === 'bank' ? (
                       <span className="text-foreground/80">{accountName(row.cashAccountId) ?? t('payment_bank')}</span>
+                    ) : row.kind === 'skattekonto' ? (
+                      <span className="text-foreground/80">{t('payment_skattekonto')}</span>
                     ) : (
                       <Badge variant="secondary">{t('payment_none')}</Badge>
                     )}
@@ -134,7 +166,11 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
                       <Badge variant="outline">{t('underlag_found')}</Badge>
                     ) : (
                       <span className="text-foreground/80">
-                        {row.underlag === 'attached' ? t('underlag_attached') : t('underlag_document')}
+                        {row.underlag === 'attached'
+                          ? t('underlag_attached')
+                          : row.underlag === 'skatteverket'
+                            ? t('underlag_skatteverket')
+                            : t('underlag_document')}
                       </span>
                     )}
                   </td>
@@ -156,6 +192,38 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {skvBook && (
+        <SkattekontoBookDialog
+          row={skvBook}
+          skattekontoAccount={skattekonto.account}
+          open
+          onOpenChange={(open) => {
+            if (!open) setSkvBook(null)
+          }}
+          onBooked={() => {
+            setSkvBook(null)
+            void refreshSkattekonto()
+          }}
+          onMatch={() => {
+            setSkvMatch(skvBook)
+            setSkvBook(null)
+          }}
+          onLinked={() => void refreshSkattekonto()}
+        />
+      )}
+      {skvMatch && (
+        <SkattekontoMatchDialog
+          row={skvMatch}
+          open
+          onClose={() => setSkvMatch(null)}
+          onMatched={() => {
+            setSkvMatch(null)
+            void refreshSkattekonto()
+          }}
+          skattekontoAccount={skattekonto.account}
+        />
       )}
     </div>
   )

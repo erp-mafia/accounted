@@ -28,9 +28,15 @@ describe('countRowSpecs: with the booking screen switched on', () => {
     expect(spec(on({ book_transaction: 5, inbox_document: 9 }, { hasAi: false }), 'to-book')).toMatchObject({ count: 5 })
   })
 
-  it('keeps the skattekonto rows and the suggested matches where they were', () => {
-    const hrefs = Object.fromEntries(countRowSpecs(on({ book_skattekonto: 2, suggested_match: 3 })).map((s) => [s.key, s.href]))
-    expect(hrefs).toEqual({ 'book-skattekonto': '/transactions?source=skatteverket&view=inbox', 'suggested-matches': '/transactions' })
+  it('counts the skattekonto events in the same row', () => {
+    const specs = countRowSpecs(on({ book_transaction: 498, book_skattekonto: 4, inbox_document: 43 }))
+    expect(specs.map((s) => s.key)).toEqual(['to-book'])
+    expect(specs[0]).toMatchObject({ count: 545, things: 545 })
+  })
+
+  it('keeps the suggested matches where they were', () => {
+    const hrefs = Object.fromEntries(countRowSpecs(on({ suggested_match: 3 })).map((s) => [s.key, s.href]))
+    expect(hrefs).toEqual({ 'suggested-matches': '/transactions' })
   })
 })
 
