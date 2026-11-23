@@ -97,7 +97,8 @@ export interface ContextGraphModel {
    * counterparties. wait: the checks that differ, the suggestions, the
    * deadlines and the questions. instructions: the knowledge areas the
    * briefing lists (`atoms`), plus one for the workflows and one for the
-   * permissions when it carries them.
+   * permissions when it carries them. The legend draws a chip for a family
+   * whose count is above zero and shows no number.
    */
   counts: Record<ChipFamily, number>
   /** How many things the caps left out of the picture (they stay in the lists below it). */

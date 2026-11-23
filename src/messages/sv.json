@@ -348,11 +348,6 @@
     "window_truncated": "Minnet har nått sin gräns: de äldsta fakta skickas inte med.",
     "window_connector": "Som en Claude- eller ChatGPT-koppling får det, med standardbehörigheterna.",
     "window_bar_label": "Kontextfönstret delat efter källa",
-    "families": {
-      "taught": "Det ni lärt den",
-      "read": "Det Accounted läser ur bokföringen",
-      "instructions": "Instruktioner och verktyg"
-    },
     "sections": {
       "group": "Gruppens minne",
       "memory": "Företagets minne",

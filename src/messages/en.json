@@ -348,11 +348,6 @@
     "window_truncated": "The memory has reached its limit: the oldest facts are not sent.",
     "window_connector": "As a Claude or ChatGPT connection receives it, with the default permissions.",
     "window_bar_label": "The context window split by source",
-    "families": {
-      "taught": "What you taught it",
-      "read": "What Accounted reads from the books",
-      "instructions": "Instructions and tools"
-    },
     "sections": {
       "group": "The group's memory",
       "memory": "The company's memory",

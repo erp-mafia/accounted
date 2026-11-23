@@ -16,8 +16,8 @@
  *
  * Caps keep the picture readable (GRAPH_CAPS). Each kind shows its first N
  * as the briefing orders them (counterparties: the most used in twelve
- * months first); the rest collapse into one "+N" dot per kind, the chips
- * keep the full counts, and every thing stays in the lists under the graph.
+ * months first); the rest collapse into one "+N" dot per kind, the model
+ * keeps the full counts, and every thing stays in the lists under the graph.
  *
  * The briefing carries open questions for a company with the question list
  * switched on (2026-11); it does not carry deadlines or permissions today.

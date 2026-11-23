@@ -22,12 +22,14 @@ import { describeNode, familyLabel, nodeLabel, nodeName, type NodePages, type No
  * It reads the briefing text the page already holds, the same answer the
  * sections below describe, so it loads nothing of its own. Full-bleed
  * between two hairlines on the page's own ground (light and dark follow the
- * theme), no card and no summary on top. The chips carry the counts and dim
- * everything outside their family; picking a dot keeps it, its lines and its
- * neighbours and says what it is in a small floating panel inside the stage
- * (under the stage on a phone), with its links and the page that holds it.
- * A chip is named as the agent picture's card names the same thing, and a
- * knowledge dot as the knowledge folders name the area (node-text.ts).
+ * theme), no card and no summary on top. The chips are the key: one per
+ * family that holds something, its dot and its word and no number, and a
+ * pressed chip dims everything outside its family; picking a dot keeps it,
+ * its lines and its neighbours and says what it is in a small floating panel
+ * inside the stage (under the stage on a phone), with its links and the page
+ * that holds it. A chip is named as the agent picture's card names the same
+ * thing, and a knowledge dot as the knowledge folders name the area
+ * (node-text.ts).
  *
  * `className` is for a host that is not the page (a dialog): it takes the
  * bleed away there.
@@ -126,7 +128,6 @@ export function ContextGraph({ text, className }: { text: string; className?: st
           >
             <FamilyDot family={f} />
             {familyLabel(f, t)}
-            <span className="font-medium tabular-nums text-muted-foreground">{model.counts[f].toLocaleString('sv-SE')}</span>
           </button>
         ))}
       </div>

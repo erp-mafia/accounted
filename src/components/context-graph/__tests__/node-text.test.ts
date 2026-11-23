@@ -1,9 +1,9 @@
 /**
  * The words of the context graph, with the real messages in both languages:
  * the legend names what people saved and the knowledge areas as the agent
- * picture's card names them, the number on a chip is the graph's own count
- * of the briefing, and a knowledge dot carries the name the knowledge
- * folders show for the same area.
+ * picture's card names them, it is a plain key (a dot and a word per family,
+ * no number), and a knowledge dot carries the name the knowledge folders
+ * show for the same area.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
@@ -113,33 +113,53 @@ describe('the legend of the context graph', () => {
       expect(familyLabel('instructions', t)).toBe(MESSAGES[language].wiki.picture.row_knowledge)
       // The two have no message of their own in the graph: a second word has nowhere to live.
       expect(Object.keys(MESSAGES[language].wiki.graph.families).sort()).toEqual(['read', 'wait'])
+      expect(MESSAGES[language].wiki).not.toHaveProperty('families')
     }
   })
 
-  it('counts on each chip what the briefing holds of that family', () => {
-    // Minne: the company's two facts and its group's one.
-    expect(model.counts.taught).toBe(BRIEFING.memory.length + BRIEFING.group_memory.facts.length)
-    // Kunskap: the five knowledge areas the briefing lists and one for the workflows.
-    expect(model.counts.instructions).toBe(BRIEFING.atoms.length + 1)
-    expect(model.counts.read).toBe(1)
-    expect(model.counts.wait).toBe(1)
-  })
+  /** Each chip of the legend as the real component draws it: what is inside the button, and its text. */
+  const chips = (language: Language, briefing: Record<string, unknown> = BRIEFING) => {
+    locale.current = language
+    const html = renderToStaticMarkup(createElement(ContextGraph, { text: JSON.stringify(briefing) }))
+    return [...html.matchAll(/<button([^>]*aria-pressed[^>]*)>(.*?)<\/button>/g)].map((match) => ({
+      attributes: match[1],
+      inner: match[2],
+      text: match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+    }))
+  }
 
-  it('keeps the full count on the chip when more knowledge areas are listed than are drawn', () => {
-    const many = Array.from({ length: GRAPH_CAPS.skills + 5 }, (_, i) => ({ atom_id: `horizontal/area-${i}`, title: `Area ${i}` }))
-    const capped = buildContextGraph({ atoms: many })
-    expect(capped.nodes.filter((node) => node.kind === 'skill')).toHaveLength(GRAPH_CAPS.skills)
-    expect(capped.counts.instructions).toBe(many.length)
-  })
-
-  it('draws the chips with those names and those numbers', () => {
-    const chips = (language: Language) => {
-      locale.current = language
-      const html = renderToStaticMarkup(createElement(ContextGraph, { text: JSON.stringify(BRIEFING) }))
-      return [...html.matchAll(/<button[^>]*aria-pressed[^>]*>(.*?)<\/button>/g)].map((match) => match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+  it('draws each chip as its dot and its word, with no number', () => {
+    expect(chips('sv').map((chip) => chip.text)).toEqual(['Minne', 'Ur bokföringen', 'Väntar', 'Kunskap'])
+    expect(chips('en').map((chip) => chip.text)).toEqual(['Memory', 'From the books', 'Waiting', 'Knowledge'])
+    for (const chip of chips('sv')) {
+      // One element, the dot, then the word: nothing after it.
+      expect(chip.inner, chip.text).toMatch(/^<span aria-hidden="true"[^>]*rounded-full[^>]*><\/span>[^<]+$/)
+      expect(chip.text).not.toMatch(/\d/)
     }
-    expect(chips('sv')).toEqual(['Minne 3', 'Ur bokföringen 1', 'Väntar 1', 'Kunskap 6'])
-    expect(chips('en')).toEqual(['Memory 3', 'From the books 1', 'Waiting 1', 'Knowledge 6'])
+  })
+
+  it('reads the same however much the briefing holds', () => {
+    const much = {
+      ...BRIEFING,
+      atoms: Array.from({ length: GRAPH_CAPS.skills + 5 }, (_, i) => ({ atom_id: `horizontal/area-${i}`, title: `Area ${i}` })),
+      memory: Array.from({ length: GRAPH_CAPS.facts + 30 }, (_, i) => ({ fact_id: `f${i}`, kind: 'fact', content: `Fakta nummer ${i}.` })),
+    }
+    expect(chips('sv', much).map((chip) => chip.text)).toEqual(['Minne', 'Ur bokföringen', 'Väntar', 'Kunskap'])
+    expect(chips('en', much).map((chip) => chip.text)).toEqual(['Memory', 'From the books', 'Waiting', 'Knowledge'])
+  })
+
+  it('has a chip for a family that holds something, and none for one that holds nothing', () => {
+    expect(chips('sv', { atoms: BRIEFING.atoms }).map((chip) => chip.text)).toEqual(['Kunskap'])
+    expect(chips('sv', { memory: BRIEFING.memory, suggestions: BRIEFING.suggestions }).map((chip) => chip.text)).toEqual(['Minne', 'Väntar'])
+    // Which chips there are is read off the model's counts; the legend writes no number.
+    expect(model.counts).toEqual({ taught: 3, read: 1, wait: 1, instructions: 6 })
+  })
+
+  it('keeps each chip a button that lights up its family: not pressed until someone presses it', () => {
+    for (const chip of chips('sv')) {
+      expect(chip.attributes, chip.text).toContain('type="button"')
+      expect(chip.attributes, chip.text).toContain('aria-pressed="false"')
+    }
   })
 })
 
