@@ -415,9 +415,9 @@ describe('suggestArgKey: the synonyms agents sent, against real schemas', () => 
     ['date_from', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
     ['from_date', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
     ['start_date', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
-    ['until', 'gnubok_get_income_statement', 'to_date', 'gnubok_receipt_hunt_worklist'],
+    ['until', 'gnubok_get_income_statement', 'to_date', 'gnubok_list_transactions_without_documents'],
     ['until', 'gnubok_list_reconciliation_items', 'date_to', 'gnubok_list_transactions_without_documents'],
-    ['date_to', 'gnubok_get_ar_ledger', 'as_of_date', 'gnubok_receipt_hunt_worklist'],
+    ['date_to', 'gnubok_get_ar_ledger', 'as_of_date', 'gnubok_list_transactions_without_documents'],
     ['offset', 'gnubok_list_salary_runs', 'cursor', 'gnubok_search_tools'],
   ])('%s -> %s names "%s"; %s gets no hint', (unknownKey, withTarget, expected, without) => {
     expect(hintOn(withTarget, unknownKey)).toBe(expected)
@@ -426,7 +426,7 @@ describe('suggestArgKey: the synonyms agents sent, against real schemas', () => 
 
   it('never points an upper bound at the lower bound of a since-only list', () => {
     for (const key of ['until', 'date_to', 'to_date', 'end_date']) {
-      expect(hintOn('gnubok_receipt_hunt_worklist', key), key).toBeNull()
+      expect(hintOn('gnubok_list_transactions_without_documents', key), key).toBeNull()
     }
   })
 })
