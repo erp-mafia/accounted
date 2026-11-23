@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -8,6 +9,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useViewerLock } from '@/components/ui/viewer-lock'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import useSWR from 'swr'
 import { BuildingLibraryIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, InboxIcon, LightBulbIcon } from '@/components/icons'
@@ -34,6 +36,12 @@ import { useProposalWhy } from '@/components/transactions/proposal-why'
 import { useToBookRows } from './use-to-book-rows'
 import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
 import type { Transaction } from '@/types'
+
+// The row may already have its verifikat (imported bookkeeping, a salary
+// run): the matcher Bankrader uses, loaded when it is opened.
+const MatchVoucherDialog = dynamic(() =>
+  import('@/components/transactions/MatchVoucherDialog').then((module) => module.MatchVoucherDialog),
+)
 
 /**
  * The booking screen (/bokfor): one full page for booking, in the order the
@@ -312,6 +320,7 @@ function TransactionBooking({
   const { toast } = useToast()
   const dropSurfaceRef = useRef<HTMLDivElement>(null)
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
+  const [matchOpen, setMatchOpen] = useState(false)
 
   // The row's own underlag and everything attached here, through the same
   // hook as the booking dialog: the first document attached is pinned to the
@@ -411,7 +420,27 @@ function TransactionBooking({
             {amountLabel}
           </span>
         </div>
+        {/* A row whose verifikat already exists is matched to it, not booked again. */}
+        <p className="text-xs text-muted-foreground">
+          {t('match_existing_lead')}{' '}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setMatchOpen(true)}>
+            {t('match_existing_action')}
+          </button>
+        </p>
       </section>
+      {matchOpen && (
+        <MatchVoucherDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setMatchOpen(false)
+          }}
+          transaction={transaction}
+          onLinked={(_transactionId, journalEntryId) => {
+            setMatchOpen(false)
+            void handleBooked(journalEntryId)
+          }}
+        />
+      )}
 
       {!hasDocument && (
         <section aria-labelledby="booking-screen-underlag-line" className="space-y-2">

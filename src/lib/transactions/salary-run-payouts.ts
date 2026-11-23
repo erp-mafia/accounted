@@ -17,7 +17,7 @@
  * itself goes through the ordinary reconciliation link path, which
  * revalidates everything at click time.
  */
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -49,7 +49,10 @@ export interface SalaryRunPayouts {
   without_run: Set<string>
 }
 
-type AskedRow = Pick<Transaction, 'id' | 'date' | 'amount' | 'currency' | 'journal_entry_id' | 'is_ignored' | 'cash_account_id'>
+type AskedRow = Pick<Transaction, 'id' | 'date' | 'amount' | 'journal_entry_id' | 'is_ignored' | 'cash_account_id'> & {
+  /** Any spelling the row carries: only the ledger currency is asked about. */
+  currency: string | null
+}
 
 function ore(amount: number | string | null | undefined): number {
   return Math.round(Number(amount) * 100)
@@ -75,7 +78,7 @@ function isOpenPayoutCandidate(tx: AskedRow): boolean {
  * only when one of them has no run nearby.
  */
 export async function findSalaryRunPayouts(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   transactions: readonly AskedRow[],
   withoutRunFor: ReadonlySet<string> = new Set(),
