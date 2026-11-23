@@ -30,7 +30,7 @@
 --
 -- 2. personal_details_removed_at on event_log and event_outbox: when the
 --    removal ran; NULL until then. Indexed, for the rows still to do, by
---    20261123190100 and 20261123190200 (built CONCURRENTLY).
+--    20261124000100 and 20261124000200 (built CONCURRENTLY).
 --
 -- 3. event_log stays append-only. event_log_no_update (audit_log_immutable)
 --    refused every UPDATE; event_log_append_only allows exactly one: setting

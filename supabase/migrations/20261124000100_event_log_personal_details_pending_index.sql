@@ -1,6 +1,6 @@
 -- event_log: the business events whose personal details are still in data.
 --
--- remove_event_personal_details (20261123190000) takes them oldest first,
+-- remove_event_personal_details (20261124000000) takes them oldest first,
 -- each night those that turned 30 days old. Event_log keeps every business
 -- event, so without this index the batch would read past every event already
 -- done, a number that only grows. The index holds the rows still to do:

@@ -4,7 +4,7 @@ import { getPool, runAsServiceRole } from '@/tests/pg/setup'
 
 /**
  * Events are kept; what can name a person leaves them after 30 days
- * (20261123190000_event_personal_details_after_30_days):
+ * (20261124000000_event_personal_details_after_30_days):
  * event_data_without_personal_details is what stays of an event,
  * remove_event_personal_details applies it to event_log business events and
  * event_outbox rows older than 30 days, an outbox row keeps its payload while
