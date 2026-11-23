@@ -19,6 +19,7 @@ import type { AgentConnectionState, AgentsOverview } from '@/lib/agent-skills/ag
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
 import { AI_CLIENTS, type AiClient } from '@/lib/onboarding/ai-clients'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
+import { catalogueKnowledge } from '@/lib/agent-skills/knowledge-list'
 import type { SkillUsage } from '@/lib/agent-skills/usage'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -52,7 +53,7 @@ const CATEGORIES_SHOWN = 8
 
 /** A category's picture, by the industry or company-form pack it stands for. */
 type Source = 'accounted' | 'community' | 'own'
-interface Item {
+export interface CatalogItem {
   key: string
   kind: ItemKind
   title: string
@@ -70,6 +71,27 @@ interface Item {
   status?: { presence: Presence; text: string }
   /** What a flow works with, as the small marks on its card. */
   connections?: readonly AgentConnection[]
+  /** A quiet word after the name ("För din bransch"). */
+  tag?: string
+}
+type Item = CatalogItem
+
+/**
+ * The catalogue's knowledge list as rows (lib/agent-skills/knowledge-list.ts
+ * says which items it holds): each with its display name, its one line and
+ * the page it opens. The Kunskap kind of the catalogue and the list in the
+ * agent picture are both drawn from this.
+ */
+export function knowledgeRows(
+  options: readonly KnowledgeOption[],
+  hrefBase: string,
+  label: { name: (id: string, title: string) => string; desc: (id: string, summary: string) => string },
+  usedByFlows: (id: string) => number = () => 0,
+): CatalogItem[] {
+  return catalogueKnowledge(options).map((o) => ({
+    key: o.id, kind: 'rules', title: label.name(o.id, o.title), desc: label.desc(o.id, o.summary), href: `${hrefBase}/${rulesSegment(o.id)}`,
+    source: 'accounted', meta: null, categories: o.tier === 'vertical' || o.tier === 'modifier' ? [o.id] : [], popularity: usedByFlows(o.id), usedByFlows: usedByFlows(o.id),
+  }))
 }
 
 /**
@@ -78,8 +100,11 @@ interface Item {
  * in one toolbar. Upptäck opens on a featured item, the most used and the
  * categories (industries and company forms) with counts; a category or a
  * search shows the full list. Egna is what the company made or uses.
+ *
+ * `knowledgeOnly`: the page shows the knowledge kind alone. The kinds and
+ * Egna | Upptäck are not offered, whatever the URL says.
  */
-export function Catalog({ hrefBase, catalog, options, overview, usage, own, companyIndustry, client, aiReady, canWrite, onCreate, gate, pending }: {
+export function Catalog({ hrefBase, catalog, options, overview, usage, own, companyIndustry, client, aiReady, canWrite, onCreate, gate, pending, knowledgeOnly = false }: {
   hrefBase: string
   catalog: SkillSummary[]
   options: KnowledgeOption[]
@@ -102,6 +127,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
    * on top, so a connect started from Egna or a search keeps the address.
    */
   pending?: ReactNode
+  knowledgeOnly?: boolean
 }) {
   const t = useTranslations('skills_registry')
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
@@ -111,8 +137,8 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
-  const kind = kindFromParams(params)
-  const view: 'discover' | 'own' = params.get('vy') === 'egna' ? 'own' : 'discover'
+  const kind = knowledgeOnly ? 'rules' : kindFromParams(params)
+  const view: 'discover' | 'own' = !knowledgeOnly && params.get('vy') === 'egna' ? 'own' : 'discover'
   const category = params.get('kategori')?.replace('.', '/') ?? null
   const [q, setQ] = useState('')
   const [sort, setSort] = useState<'popular' | 'name'>('popular')
@@ -150,10 +176,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
     status: agentStatus({ id: s.id, aiKnown: true, overview, waiting: undefined, lastAt: undefined, t: (key, values) => t(key, values), formatDate: (iso) => iso }),
   }))
   // Accounted's packs only: the company's own knowledge is listed under Egna from the catalog.
-  const packs: Item[] = options.filter((o) => o.tier !== 'community' && o.tier !== 'own').map((o) => ({
-    key: o.id, kind: 'rules', title: knowledgeName(o.id, o.title), desc: knowledgeDesc(o.id, o.summary), href: `${hrefBase}/${rulesSegment(o.id)}`,
-    source: 'accounted', meta: null, categories: o.tier === 'vertical' || o.tier === 'modifier' ? [o.id] : [], popularity: usedByFlows(o.id), usedByFlows: usedByFlows(o.id),
-  }))
+  const packs: Item[] = knowledgeRows(options, hrefBase, { name: knowledgeName, desc: knowledgeDesc }, usedByFlows)
   // Own items: a flow opens the flow page; own knowledge and analyses open the item page (egen.<id>).
   const ownItems: Item[] = own.map((s) => {
     const k = s.itemKind ?? 'workflow'
@@ -201,18 +224,22 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
     <div className={styles.catalog}>
       {/* V7 list toolbar: the kinds, then Egna | Upptäck, then search with the category and sort pickers at the right end. Skapa sits in the top bar (CatalogCreateMenu). */}
       <div className="flex flex-wrap items-center gap-2">
-        <SegmentedControl<ItemKind>
-          aria-label={t('kinds_label')}
-          value={kind}
-          onChange={(k) => go({ typ: k, kategori: null })}
-          options={KINDS.map((k) => ({ value: k, label: t(`kind_${k}`) }))}
-        />
-        <SegmentedControl<'own' | 'discover'>
-          aria-label={t('view_label')}
-          value={view}
-          onChange={(vy) => go({ vy, kategori: null })}
-          options={[{ value: 'own', label: t('view_own') }, { value: 'discover', label: t('view_discover') }]}
-        />
+        {!knowledgeOnly && (
+          <>
+            <SegmentedControl<ItemKind>
+              aria-label={t('kinds_label')}
+              value={kind}
+              onChange={(k) => go({ typ: k, kategori: null })}
+              options={KINDS.map((k) => ({ value: k, label: t(`kind_${k}`) }))}
+            />
+            <SegmentedControl<'own' | 'discover'>
+              aria-label={t('view_label')}
+              value={view}
+              onChange={(vy) => go({ vy, kategori: null })}
+              options={[{ value: 'own', label: t('view_own') }, { value: 'discover', label: t('view_discover') }]}
+            />
+          </>
+        )}
         <ToolbarSearch containerClassName={TOOLBAR_SEARCH_END_CLASS} aria-label={t('search_label')} placeholder={t(`search_${kind}`)} value={q} onChange={(e) => setQ(e.target.value)} />
         {view === 'discover' && categories.length > 0 && (
           <DropdownMenu>
@@ -341,7 +368,7 @@ function CreateButtons({ client, canWrite, onCreate, onWrite }: { client: AiClie
 }
 
 /** A search with no hits: one line where the first row would be, with the way back. */
-function NoHits({ onClear }: { onClear: () => void }) {
+export function NoHits({ onClear }: { onClear: () => void }) {
   const t = useTranslations('skills_registry')
   const tCommon = useTranslations('common')
   return (
@@ -357,29 +384,37 @@ function NoHits({ onClear }: { onClear: () => void }) {
  * row each over a hairline, the name and what it does on one line, what it
  * works with, where it comes from and where it stands. The name opens the
  * item's page.
+ *
+ * `compact`: the name and its one line alone, with no column heads, for a
+ * narrow place (a drawer).
  */
-function CatalogList({ kind, items }: { kind: ItemKind; items: Item[] }) {
+export function CatalogList({ kind, items, compact = false }: { kind: ItemKind; items: Item[]; compact?: boolean }) {
   const t = useTranslations('skills_registry')
   const { appName } = useBranding()
   return (
     <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
       <table className="w-full table-fixed border-collapse text-sm">
-        <thead>
-          <tr>
-            <th className={TH_CLASS}>{t(`col_name_${kind}`)}</th>
-            <th className={cn(TH_CLASS, 'hidden w-[22%] md:table-cell')}>{t(kind === 'workflow' ? 'col_connections' : 'col_usage')}</th>
-            <th className={cn(TH_CLASS, 'hidden w-[14%] sm:table-cell')}>{t('col_source')}</th>
-            <th className={cn(TH_CLASS, 'w-[30%] sm:w-[18%]')}>{t('col_status')}</th>
-          </tr>
-        </thead>
+        {!compact && (
+          <thead>
+            <tr>
+              <th className={TH_CLASS}>{t(`col_name_${kind}`)}</th>
+              <th className={cn(TH_CLASS, 'hidden w-[22%] md:table-cell')}>{t(kind === 'workflow' ? 'col_connections' : 'col_usage')}</th>
+              <th className={cn(TH_CLASS, 'hidden w-[14%] sm:table-cell')}>{t('col_source')}</th>
+              <th className={cn(TH_CLASS, 'w-[30%] sm:w-[18%]')}>{t('col_status')}</th>
+            </tr>
+          </thead>
+        )}
         <tbody className="stagger-enter">
           {items.map((item) => (
             <tr key={item.key} className="group relative hover:bg-secondary/35">
               <td className={cn(TD_CLASS, 'truncate py-0 align-middle')}>
                 {/* The link covers the row, so a click anywhere on it opens the item. */}
                 <Link href={item.href} className="font-medium text-strong after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/70" data-ph-mask={item.source === 'own' ? '' : undefined}>{item.title}</Link>
+                {item.tag && <span className="ml-2 text-xs text-muted-foreground">{item.tag}</span>}
                 {item.desc && <span className="text-muted-foreground" data-ph-mask={item.source === 'own' ? '' : undefined}> · {item.desc}</span>}
               </td>
+              {!compact && (
+                <>
               <td className={cn(TD_CLASS, 'hidden truncate py-0 align-middle text-muted-foreground md:table-cell')}>
                 {item.connections && item.connections.length > 0
                   ? <span className="flex items-center gap-2"><SourceMarks connections={item.connections} /><span className="truncate">{item.connections.map((c) => t(`conn_${c}`)).join(', ')}</span></span>
@@ -395,6 +430,8 @@ function CatalogList({ kind, items }: { kind: ItemKind; items: Item[] }) {
                   ? <span className={styles.status} data-presence={item.status.presence}>{item.status.text}</span>
                   : <span className="text-muted-foreground">{t('open_hint')}</span>}
               </td>
+                </>
+              )}
             </tr>
           ))}
         </tbody>
