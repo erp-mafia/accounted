@@ -21595,7 +21595,7 @@
     "headline_incomplete": "Could not read everything that is waiting.",
     "incomplete_body": "Something may be missing from the list. Try again in a moment.",
     "headline_not_started": "Your bookkeeping is not up and running yet.",
-    "headline_waiting": "{count, plural, one {Nothing is urgent. # thing is waiting.} other {Nothing is urgent. # things are waiting.}}",
+    "headline_waiting": "{count, plural, one {# thing is waiting.} other {# things are waiting.}}",
     "headline_urgent": "{urgent, plural, one {# thing is urgent.} other {# things are urgent.}} {rest, number} more waiting.",
     "headline_urgent_only": "{urgent, plural, one {# thing is urgent.} other {# things are urgent.}}",
     "next_deadline": "Next deadline",

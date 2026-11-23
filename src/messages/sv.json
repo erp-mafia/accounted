@@ -21595,7 +21595,7 @@
     "headline_incomplete": "Kunde inte läsa allt som väntar.",
     "incomplete_body": "Något kan saknas i listan. Försök igen om en stund.",
     "headline_not_started": "Bokföringen är inte igång än.",
-    "headline_waiting": "{count, plural, one {Inget brådskar. # sak väntar.} other {Inget brådskar. # saker väntar.}}",
+    "headline_waiting": "{count, plural, one {# sak väntar.} other {# saker väntar.}}",
     "headline_urgent": "{urgent, plural, one {# sak brådskar.} other {# saker brådskar.}} {rest, number} till väntar.",
     "headline_urgent_only": "{urgent, plural, one {# sak brådskar.} other {# saker brådskar.}}",
     "next_deadline": "Nästa frist",
