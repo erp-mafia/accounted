@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import { stripFrontMatter } from '@/lib/agent-skills/front-matter'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
+import { knowledgeTextNote } from '@/lib/agent-skills/knowledge-list'
 import { formatDateLong } from '@/lib/utils'
 import { CopyIcon } from './CopyIcon'
 import { readBody } from './data'
@@ -24,6 +25,10 @@ const Markdown = dynamic(() => import('@/components/agent/MarkdownMessage'))
  * matter (lib/agent-skills/front-matter.ts); the copy control copies the
  * whole text, front matter included.
  *
+ * Above the text of an item Accounted ships, one quiet line says that it is
+ * written for the AI, and for a general item that it is in English
+ * (knowledgeTextNote). An item the company wrote has no such line.
+ *
  * Nothing about flows: an item is read here, not handed out.
  */
 export function KnowledgeItemView({ option, companyId }: { option: KnowledgeOption; companyId: string }) {
@@ -34,6 +39,7 @@ export function KnowledgeItemView({ option, companyId }: { option: KnowledgeOpti
   const body = useSWR(['/api/skills', companyId, option.id], ([url, , slug]) => readBody(`${url}?slug=${encodeURIComponent(slug)}`))
   // As the item's page words it: the day it was reviewed when the registry carries one, otherwise who reviews it.
   const reviewed = option.reviewed_at ? t('reviewed_on', { date: formatDateLong(option.reviewed_at, locale) }) : t('reviewed_accounted')
+  const note = knowledgeTextNote(option.tier)
 
   return (
     <div className="space-y-5">
@@ -52,6 +58,7 @@ export function KnowledgeItemView({ option, companyId }: { option: KnowledgeOpti
           </h4>
           <CopyIcon text={body.data} label={t('copy_contents')} />
         </div>
+        {note && <div className="text-xs text-muted-foreground">{t(`ai_text_note_${note}`)}</div>}
         <div className={styles.mdBody}>
           {body.data ? <Markdown text={stripFrontMatter(body.data)} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
         </div>

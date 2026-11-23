@@ -16230,6 +16230,8 @@
     "folders_back": "Alla kunskapsområden",
     "own_add": "Lägg till egen kunskap, ett arbetsflöde eller en analys",
     "ai_text_title": "Texten din AI läser",
+    "ai_text_note_ai_english": "Skriven för din AI, på engelska.",
+    "ai_text_note_ai": "Skriven för din AI.",
     "reviewed_on": "Granskad {date}",
     "create_prompt_workflow": "Ladda skillen \"create-skill\" från Accounted (load_skill) och följ den. Jag vill skapa ett eget arbetsflöde.",
     "create_prompt_rules": "Ladda skillen \"create-skill\" från Accounted (load_skill) och följ den. Jag vill skriva ner egen kunskap som min AI ska följa.",

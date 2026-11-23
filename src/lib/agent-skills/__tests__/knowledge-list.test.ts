@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { KnowledgeOption } from '../knowledge-choices'
-import { catalogueKnowledge, chosenKnowledge, groupKnowledge, isActiveKnowledge, SEARCH_FROM_TILES } from '../knowledge-list'
+import { catalogueKnowledge, chosenKnowledge, groupKnowledge, isActiveKnowledge, knowledgeTextNote, SEARCH_FROM_TILES } from '../knowledge-list'
 
 const option = (id: string, tier: KnowledgeOption['tier']): KnowledgeOption => ({ id, tier, title: id, summary: '', version: 1, reviewed_at: null })
 
@@ -111,5 +111,27 @@ describe('groupKnowledge', () => {
 describe('the search field', () => {
   it('comes with more than thirty tiles', () => {
     expect(SEARCH_FROM_TILES).toBe(30)
+  })
+})
+
+describe('knowledgeTextNote', () => {
+  it('says of a general item that its text is written for the AI and is in English', () => {
+    expect(knowledgeTextNote('horizontal')).toBe('ai_english')
+  })
+
+  it('says of an industry or company-form item that its text is written for the AI, and names no language', () => {
+    expect(knowledgeTextNote('vertical')).toBe('ai')
+    expect(knowledgeTextNote('modifier')).toBe('ai')
+  })
+
+  it('says nothing of what the company or the community wrote', () => {
+    expect(knowledgeTextNote('own')).toBeNull()
+    expect(knowledgeTextNote('community')).toBeNull()
+  })
+
+  it('has a line for every item of the catalogue\'s knowledge list, and for no other', () => {
+    for (const item of CATALOGUE) {
+      expect(knowledgeTextNote(item.tier) !== null, item.id).toBe(catalogueKnowledge([item]).length === 1)
+    }
   })
 })

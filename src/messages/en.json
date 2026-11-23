@@ -16230,6 +16230,8 @@
     "folders_back": "All knowledge areas",
     "own_add": "Add knowledge, a workflow or an analysis of your own",
     "ai_text_title": "The text your AI reads",
+    "ai_text_note_ai_english": "Written for your AI, in English.",
+    "ai_text_note_ai": "Written for your AI.",
     "reviewed_on": "Reviewed {date}",
     "create_prompt_workflow": "Load the \"create-skill\" skill from Accounted (load_skill) and follow it. I want to create a workflow of my own.",
     "create_prompt_rules": "Load the \"create-skill\" skill from Accounted (load_skill) and follow it. I want to write down knowledge of my own for my AI to follow.",

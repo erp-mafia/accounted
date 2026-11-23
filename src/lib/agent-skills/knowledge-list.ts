@@ -74,3 +74,20 @@ export function groupKnowledge<T extends { id: string; tier: KnowledgeOption['ti
 
 /** More tiles than this get a search field; fewer are read at a glance. */
 export const SEARCH_FROM_TILES = 30
+
+/**
+ * What the line above a knowledge item's text says about the text, by the
+ * item's tier. An item the product ships is written for an AI to read, and
+ * the line says so. A general item is written in English, every one of them,
+ * so its line says that too (`ai_english`). An industry or company-form item
+ * is written in Swedish or in English, item by item, and the registry does
+ * not say which, so its line names no language (`ai`). What the company or
+ * the community wrote gets no line: null.
+ */
+export type KnowledgeTextNote = 'ai_english' | 'ai'
+
+export function knowledgeTextNote(tier: KnowledgeOption['tier']): KnowledgeTextNote | null {
+  if (tier === 'horizontal') return 'ai_english'
+  if (tier === 'vertical' || tier === 'modifier') return 'ai'
+  return null
+}
