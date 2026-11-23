@@ -65,8 +65,8 @@ export const VAT_ACCOUNTS = Object.keys(ACCOUNT_RUTA)
 
 /**
  * 26xx output VAT accounts feeding rutor 10/11/12, 30/31/32 and 60/61/62.
- * Derived from ACCOUNT_RUTA so the KPI vatLiability widget can never drift
- * from the momsdeklaration (ruta 49) calculation.
+ * Derived from ACCOUNT_RUTA so the KPI vatLiability widget reads the same
+ * accounts as the momsdeklaration.
  */
 export const VAT_OUTPUT_ACCOUNTS = Object.entries(ACCOUNT_RUTA)
   .filter(([account, mapping]) => account.startsWith('26') && mapping.side === 'credit')

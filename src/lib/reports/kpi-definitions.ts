@@ -50,7 +50,8 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'vatLiability',
-    // Same 26xx accounts as the momsdeklaration (ruta 49): see vat-declaration.ts
+    // The momsdeklaration's 26xx accounts, not 2650/1650: the moms no
+    // momsredovisning has moved yet (calculateVatLiability in kpi.ts)
     defaultAccounts: [...VAT_OUTPUT_ACCOUNTS, ...VAT_INPUT_ACCOUNTS],
     customizableAccounts: true,
     defaultVisible: true,

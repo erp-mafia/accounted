@@ -10369,7 +10369,7 @@
     "def_outstandingReceivables_formula": "Sum of unpaid customer invoices",
     "def_outstandingReceivables_accounts": "Accounts receivable (1510)",
     "def_vatLiability_label": "VAT",
-    "def_vatLiability_description": "VAT liability or receivable for the period",
+    "def_vatLiability_description": "VAT on the 26xx accounts not yet moved to 2650 or 1650 by a VAT settlement",
     "def_vatLiability_formula": "Output VAT (rutor 10-12, 30-32, 60-62) − Input VAT (ruta 48): same accounts as the VAT declaration",
     "def_vatLiability_accounts": "Output VAT incl. reverse charge and import (2610-2638), Input VAT (2640-2649)",
     "def_grossMargin_label": "Gross margin",
@@ -10559,7 +10559,7 @@
     "kpi_result": "Result",
     "kpi_margin": "Margin",
     "kpi_cash": "Cash",
-    "kpi_vat": "VAT payable",
+    "kpi_vat": "VAT on 26xx",
     "kpi_row_failed": "Could not load figures",
     "kpi_failed_notice": "{count, plural, one {One client company} other {# client companies}} could not be loaded and is excluded from the totals."
   },
