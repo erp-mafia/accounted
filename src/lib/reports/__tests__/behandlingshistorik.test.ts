@@ -1206,6 +1206,60 @@ describe('generateBehandlingshistorik', () => {
     })
   })
 
+  it('shows the same events in the same order whatever order the database returns its rows in', async () => {
+    // behandlingshistorik_sources aggregates each source without ORDER BY, so
+    // its arrays come in the order the plan reads them, and an index can
+    // change that order (20261123091600). The report orders every event by
+    // time, source and id, bursts included, so what it shows cannot change.
+    const at = (iso: string) => `2026-${iso}.000Z`
+    const entries = [
+      baseEntry,
+      { ...baseEntry, id: 'entry-2', voucher_number: 13 },
+      { ...baseEntry, id: 'entry-3', voucher_number: 14, source_type: 'storno', reverses_id: 'entry-1', committed_at: at('04-01T08:00:00') },
+      { ...baseEntry, id: 'entry-4', voucher_number: 15, committed_at: at('05-01T08:00:00') },
+    ]
+    const accounts = Array.from({ length: 12 }, (_, i) =>
+      auditRow({ id: `acc-${i}`, table_name: 'chart_of_accounts', action: 'INSERT', created_at: at(`02-01T08:00:0${Math.min(i, 9)}`), new_state: { account_number: String(4000 + i), account_name: `Konto ${i}` } }),
+    )
+    const documents = ['a.pdf', 'b.pdf', 'c.pdf'].map((file_name, i) =>
+      auditRow({ id: `doc-${i}`, table_name: 'document_attachments', action: 'DELETE', created_at: at('06-01T08:00:00'), old_state: { file_name } }),
+    )
+    const audit = [
+      ...accounts,
+      ...documents,
+      // At the same instant as two commits: the source decides, then the id.
+      auditRow({ id: 'settings', table_name: 'company_settings', action: 'UPDATE', created_at: baseEntry.committed_at, old_state: { moms_period: 'quarterly' }, new_state: { moms_period: 'monthly' } }),
+      auditRow({ id: 'reverse', record_id: 'entry-1', action: 'REVERSE', created_at: at('04-01T08:00:00'), old_state: { voucher_series: 'A', voucher_number: 12, status: 'posted' }, new_state: { voucher_series: 'A', voucher_number: 12, status: 'reversed', reversed_by_id: 'entry-3' } }),
+      // The trigger's twin of the metadata rättelse below: suppressed.
+      auditRow({ id: 'twin', record_id: 'entry-2', action: 'UPDATE', created_at: at('03-11T08:00:00'), old_state: { status: 'posted', description: 'Hyra' }, new_state: { status: 'posted', description: 'Hyra mars' } }),
+    ]
+    const rattelse = [
+      { id: 'r1', journal_entry_id: 'entry-2', rattelse_type: 'metadata', old_description: 'Hyra', new_description: 'Hyra mars', old_entry_date: null, new_entry_date: null, struck_lines: null, added_lines: null, actor: 'user-1', created_at: at('03-11T08:00:00') },
+      { id: 'r2', journal_entry_id: 'entry-4', rattelse_type: 'metadata', old_description: 'Hyra', new_description: 'Hyra maj', old_entry_date: null, new_entry_date: null, struck_lines: null, added_lines: null, actor: 'user-1', created_at: at('05-02T08:00:00') },
+    ]
+    const report = async (order: <T>(rows: T[]) => T[]) => {
+      rpcResults = { behandlingshistorik_sources: ledger({ entries: order(entries), audit: order(audit), rattelse: order(rattelse) }) }
+      mockResults = {
+        fiscal_periods: [{ data: period }],
+        company_settings: [{ data: { company_name: 'T', org_number: null } }],
+        company_migration_resets: [{ data: [] }, { data: [] }],
+        app_releases: [{ data: [] }],
+        sie_imports: [{ data: [] }],
+        bank_file_imports: [{ data: [] }],
+      }
+      return generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' }, { now: new Date('2026-08-21T12:00:00.000Z') })
+    }
+
+    const asRead = await report((rows) => rows)
+    expect(asRead!.events.map((e) => e.id)).toEqual([
+      'audit:acc-0:bulk', 'entry:entry-1', 'entry:entry-2', 'audit:settings', 'rattelse:r1', 'entry:entry-3', 'audit:reverse',
+      'entry:entry-4', 'rattelse:r2', 'audit:doc-0:bulk',
+    ])
+    expect(await report((rows) => [...rows].reverse())).toEqual(asRead)
+    expect(await report((rows) => [...rows.slice(2), ...rows.slice(0, 2)])).toEqual(asRead)
+    expect(await report((rows) => [...rows].sort((a, b) => JSON.stringify(b).localeCompare(JSON.stringify(a))))).toEqual(asRead)
+  })
+
   it('fails with the SQLSTATE when a read fails', async () => {
     for (const fn of ['behandlingshistorik_sources', 'behandlingshistorik_decisions']) {
       mockResults = {
