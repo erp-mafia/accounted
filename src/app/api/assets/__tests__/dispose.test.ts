@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
 const { supabase, reset } = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
@@ -83,6 +84,25 @@ describe('POST /api/assets/[id]/dispose', () => {
 
     expect(status).toBe(404)
     expect(body.error.code).toBe('ASSET_NOT_FOUND')
+  })
+
+  it.each([
+    ['a locked or closed year', 'Cannot dispose asset in a locked or closed fiscal period'],
+    ['the company lock date', 'Bookkeeping is locked through 2026-06-30'],
+  ])('answers a disposal commit_asset_disposal refuses behind %s as 400 PERIOD_LOCKED, not a 500', async (_lock, text) => {
+    // The year was locked after the draft was inserted: the function's own
+    // lock check refuses the commit (23514), and the lock holds on a retry.
+    mockDisposeAsset.mockRejectedValue(new BookkeepingDatabaseError('commit_asset_disposal', text, '23514'))
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await POST(
+        createMockRequest('/api/assets/asset-1/dispose', { method: 'POST', body: validBody }),
+        routeParams,
+      ),
+    )
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
   })
 
   it('returns the atomically posted disposal', async () => {

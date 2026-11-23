@@ -26,7 +26,7 @@ vi.mock('@/lib/bokslut/k3-transition/transition-service', async (importOriginal)
   commitK3TransitionPosting: vi.fn(),
 }))
 
-import { K3TransitionBlockedError, K3TransitionInvalidError } from '@/lib/bookkeeping/errors'
+import { BookkeepingDatabaseError, K3TransitionBlockedError, K3TransitionInvalidError } from '@/lib/bookkeeping/errors'
 import {
   commitK3TransitionPosting,
   deleteK3Transition,
@@ -99,6 +99,18 @@ describe('/api/bookkeeping/k3-transition', () => {
     )
     expect(invalid.status).toBe(400)
     expect(invalid.body.error.code).toBe('INVALID_K3_TRANSITION')
+  })
+
+  it('answers a transition voucher commit_k3_transition refuses behind a lock as 400 PERIOD_LOCKED, not a 500', async () => {
+    // Open when the service checked it, locked before the voucher's commit.
+    vi.mocked(commitK3TransitionPosting).mockRejectedValueOnce(
+      new BookkeepingDatabaseError('commit_k3_transition', 'Cannot book the K3 transition in a locked or closed fiscal period', '23514'),
+    )
+    const locked = await parseJsonResponse<{ error: { code: string } }>(
+      await COMMIT(request('POST', '/api/bookkeeping/k3-transition/commit', {}), NO_PARAMS),
+    )
+    expect(locked.status).toBe(400)
+    expect(locked.body.error.code).toBe('PERIOD_LOCKED')
   })
 
   it('reads, starts, updates, drops, previews and commits the transition', async () => {
