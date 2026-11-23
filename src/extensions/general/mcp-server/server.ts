@@ -1,5 +1,6 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CASH_OR_CARD_LEDGER_PATTERN, isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA, sieAppendSummary } from './sie-import-status'
 import { MIGRATION_PROVIDER_IDS } from '@/lib/providers/catalog'
 import { isAnyUnattended, markUnattended, unattendedMarks, unattendedScopes } from './unattended'
@@ -4926,34 +4927,40 @@ export function toolResultWireBytes(result: unknown): number {
 }
 
 /**
- * What one tools/call answer may weigh. The route answers with a buffered
- * body (NextResponse.json), and Vercel refuses a buffered function response
- * over 4.5 MB; the rest is room for the JSON-RPC envelope and the company
- * block the text carries for a key that reaches several companies.
+ * What one tools/call answer may weigh on the hosted service. The route
+ * answers with a buffered body (NextResponse.json), and Vercel refuses a
+ * buffered function response over 4.5 MB (4 500 000 bytes, the stricter
+ * reading); the 20 000 left over are room for the JSON-RPC envelope, _meta
+ * and the company block the text carries for a key that reaches several
+ * companies, together well under 2 000 bytes.
  */
-export const MCP_ANSWER_BUDGET_BYTES = 4_400_000
+export const MCP_ANSWER_BUDGET_BYTES = 4_480_000
 
 /**
- * Whether a result fits one answer. Each of its two copies is at least the
- * compact JSON, so a register far over the budget is not printed twice to
- * find that out.
+ * Whether a result fits one answer. Self-hosted Docker has no such limit, so
+ * there everything fits, as it always did. Each of the two copies is at
+ * least the compact JSON, so a register far over the budget is not printed
+ * twice to find that out.
  */
 function fitsOneAnswer(result: unknown): boolean {
+  if (isSelfHosted()) return true
   if (2 * Buffer.byteLength(JSON.stringify(result), 'utf8') > MCP_ANSWER_BUDGET_BYTES) return false
   return toolResultWireBytes(result) <= MCP_ANSWER_BUDGET_BYTES
 }
 
-const REGISTER_PAGE_DEFAULT = 100
-const REGISTER_PAGE_MAX = 200
+// A page of 100 customers is about 42 000 characters of text, under the
+// 25 000 tokens at which some MCP hosts cut a tool result.
+const REGISTER_PAGE_SIZE = 100
 
 /**
  * The answer of a register list (customers, articles), cut from the whole
- * register in its display order (crm#2151). With limit or offset: that page.
- * Without either: the whole register, as these tools have always answered,
- * when it fits one answer; a register too large for one answer, which could
- * not be answered at all before, gets its first page, with has_more,
- * next_offset and total_count saying there is more. Only the rows answered
- * pass through `present` (the customer list opens personnummer there).
+ * register in its display order (crm#2151). With limit or offset: that page,
+ * at most 100 rows. Without either: the whole register, as these tools have
+ * always answered, when it fits one answer; a register too large for one
+ * answer, which could not be answered at all before, gets its first page,
+ * with has_more, next_offset and total_count saying there is more. `present`
+ * shapes the rows answered (the customer list opens personnummer there): a
+ * paged call presents only its page, an unpaged one the whole register.
  */
 function registerAnswer<Row, Out>(
   key: string,
@@ -4966,7 +4973,7 @@ function registerAnswer<Row, Out>(
     const whole = { [key]: rows, ...pageTail(rows, rows.length, 0) }
     if (fitsOneAnswer(whole)) return whole
   }
-  const limit = Math.min(Math.max(1, Math.floor(Number(args.limit)) || REGISTER_PAGE_DEFAULT), REGISTER_PAGE_MAX)
+  const limit = Math.min(Math.max(1, Math.floor(Number(args.limit)) || REGISTER_PAGE_SIZE), REGISTER_PAGE_SIZE)
   const offset = Math.max(0, Math.floor(Number(args.offset)) || 0)
   const rows = present(sorted.slice(offset, offset + limit))
   return { [key]: rows, ...pageTail(rows, sorted.length, offset) }

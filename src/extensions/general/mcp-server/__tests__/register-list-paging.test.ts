@@ -250,11 +250,12 @@ describe('gnubok_list_customers: limit and offset', () => {
     expect(answer.has_more).toBe(false)
   })
 
-  it('caps a page at 200 rows', async () => {
+  it('caps a page at 100 rows, under the size at which some MCP hosts cut a result', async () => {
     mocks.tables.customers = Array.from({ length: 450 }, (_, i) => customerRow(i))
     const answer = await callTool(listCustomers, { limit: 10_000 })
-    expect(answer.count).toBe(200)
-    expect(answer.next_offset).toBe(200)
+    expect(answer.count).toBe(100)
+    expect(answer.next_offset).toBe(100)
+    expect(JSON.stringify(answer, null, 2).length).toBeLessThan(50_000)
   })
 
   it('opens only the personnummer of the customers it answers', async () => {
@@ -288,9 +289,24 @@ describe('gnubok_list_customers: a register too large for one answer', () => {
     expect(answer.total_count).toBe(8_000)
     expect(answer.has_more).toBe(true)
     expect(answer.next_offset).toBe(100)
+    // The same cut as the paged calls: page 1, then where next_offset points.
+    const first = await callTool(listCustomers, { limit: 100 })
     const next = await callTool(listCustomers, { offset: answer.next_offset })
-    const whole = ids((await callTool(listCustomers, { limit: 200 })).customers)
-    expect([...ids(answer.customers), ...ids(next.customers)]).toEqual(whole)
+    expect(ids(answer.customers)).toEqual(ids(first.customers))
+    expect(ids(next.customers)).not.toContain(ids(answer.customers)[99])
+    expect(next.next_offset).toBe(200)
+  })
+
+  it('answers the whole register on self-hosted Docker, which has no response size limit', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    try {
+      mocks.tables.customers = Array.from({ length: 8_000 }, (_, i) => customerRow(i))
+      const answer = await callTool(listCustomers, {})
+      expect(answer.count).toBe(8_000)
+      expect(answer.has_more).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('pages only past the size one answer can carry: the largest register that fits is answered whole', async () => {
