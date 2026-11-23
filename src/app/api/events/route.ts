@@ -11,7 +11,7 @@ import { validateQuery } from '@/lib/api/validate'
 import { EventsQuerySchema } from '@/lib/api/schemas'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { minimisePayload } from '@/lib/webhooks/handler'
@@ -23,6 +23,7 @@ import {
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
 import { createLogger } from '@/lib/logger'
 import { roleAllowsScope } from '@/lib/auth/invoicer-role'
+import { mapWithConcurrency } from '@/lib/concurrency'
 
 const log = createLogger('api/events')
 
@@ -38,12 +39,116 @@ const REQUIRED_SCOPE = 'events:read' as const
 /** Response header mirroring the v1 wrapper so integrators can see the key mode. */
 const MODE_HEADER = 'X-Gnubok-Mode'
 
+/** The reads of a several-type page run this many at a time. */
+const TYPE_READ_CONCURRENCY = 4
+
+/**
+ * More distinct types than this, more than there are event types, are read
+ * in one query with `in` rather than as that many reads.
+ */
+const MAX_TYPE_READS = 100
+
+const EVENT_COLUMNS = 'sequence, event_type, entity_id, data, created_at'
+
 interface EventLogRow {
   sequence: number
   event_type: string
   entity_id: string | null
   data: unknown
   created_at: string
+}
+
+interface EventPageQuery {
+  companyId: string
+  after: number | undefined
+  limit: number
+  /** Distinct event types to read; none reads every type. */
+  eventTypes: readonly string[]
+  /** Prefixes of the event families the caller may not read. */
+  closedPrefixes: readonly string[]
+}
+
+type EventPage = { rows: EventLogRow[]; error: PostgrestError | null }
+
+/**
+ * One page of a company's events after the cursor, in sequence order.
+ *
+ * Named types are read one type at a time, each with an equality on
+ * event_type: with idx_event_log_company_type_sequence that is one range in
+ * sequence order, and the read stops after the page. An `in` filter, which
+ * PostgREST sends as `event_type = ANY (...)` even for one type, cannot be
+ * served in that order, and the planner walked every event of the company
+ * instead: 17 to 34 s for the largest event log, past the 8 s statement
+ * timeout (crm#2142).
+ *
+ * 1. With several types, first the company's newest sequence: the horizon.
+ *    Each later read is its own snapshot. Bounded by the horizon they all
+ *    see the events committed before it was read, so an event written after
+ *    it waits for the next page instead of being passed by the cursor. An
+ *    event still being written when the horizon is read, below it, can be
+ *    passed when it commits between two of the reads; one read over all the
+ *    types passes such an event too when it commits after a later one, so
+ *    the feed was never free of that.
+ * 2. Per type, the sequences only, at most `limit`: an index-only read, which
+ *    the planner takes even where it would walk the table to fetch whole rows
+ *    (a type common in the table and absent in the company, on default cost
+ *    settings). Each type's first `limit` events after the cursor hold every
+ *    event of the merged page.
+ * 3. The page's rows, by sequence.
+ */
+async function readEventPage(supabase: SupabaseClient, q: EventPageQuery): Promise<EventPage> {
+  const read = (columns: string) => {
+    let query = supabase.from('event_log').select(columns).eq('company_id', q.companyId)
+    for (const prefix of q.closedPrefixes) {
+      query = query.not('event_type', 'like', `${prefix}%`)
+    }
+    return query
+  }
+
+  if (q.eventTypes.length === 0 || q.eventTypes.length > MAX_TYPE_READS) {
+    let query = read(EVENT_COLUMNS).order('sequence', { ascending: true }).limit(q.limit)
+    if (q.after !== undefined) query = query.gt('sequence', q.after)
+    if (q.eventTypes.length > 0) query = query.in('event_type', [...q.eventTypes])
+    const { data, error } = await query
+    return { rows: (data ?? []) as unknown as EventLogRow[], error }
+  }
+
+  let horizon: number | undefined
+  if (q.eventTypes.length > 1) {
+    const newest = await supabase
+      .from('event_log')
+      .select('sequence')
+      .eq('company_id', q.companyId)
+      .order('sequence', { ascending: false })
+      .limit(1)
+    if (newest.error) return { rows: [], error: newest.error }
+    horizon = (newest.data?.[0] as { sequence: number } | undefined)?.sequence
+    // Nothing new since the cursor: no type has an event to read.
+    if (horizon === undefined || (q.after !== undefined && horizon <= q.after)) return { rows: [], error: null }
+  }
+
+  // After a failed read the rest are not started: the page fails anyway.
+  let stopped = false
+  const reads = await mapWithConcurrency(q.eventTypes, TYPE_READ_CONCURRENCY, async (eventType) => {
+    if (stopped) return { sequences: [] as number[], error: null }
+    let query = read('sequence').eq('event_type', eventType).order('sequence', { ascending: true }).limit(q.limit)
+    if (q.after !== undefined) query = query.gt('sequence', q.after)
+    if (horizon !== undefined) query = query.lte('sequence', horizon)
+    const { data, error } = await query
+    if (error) stopped = true
+    return { sequences: ((data ?? []) as unknown as { sequence: number }[]).map((row) => row.sequence), error }
+  })
+  const failed = reads.find((r) => r.error)
+  if (failed?.error) return { rows: [], error: failed.error }
+
+  const page = reads
+    .flatMap((r) => r.sequences)
+    .sort((a, b) => a - b)
+    .slice(0, q.limit)
+  if (page.length === 0) return { rows: [], error: null }
+
+  const { data, error } = await read(EVENT_COLUMNS).in('sequence', page).order('sequence', { ascending: true })
+  return { rows: (data ?? []) as unknown as EventLogRow[], error }
 }
 
 /**
@@ -227,29 +332,13 @@ export async function GET(request: Request) {
     })
   }
 
-  // Build query
-  let query = supabase
-    .from('event_log')
-    .select('sequence, event_type, entity_id, data, created_at')
-    .eq('company_id', companyId)
-    .order('sequence', { ascending: true })
-    .limit(limit)
-
-  if (after !== undefined) {
-    query = query.gt('sequence', after)
-  }
-
-  if (types && types.length > 0) {
-    query = query.in('event_type', types)
-  }
-
-  for (const family of closedEventFamilies(holdsFamilyScope)) {
-    for (const prefix of family.prefixes) {
-      query = query.not('event_type', 'like', `${prefix}%`)
-    }
-  }
-
-  const { data, error } = await query
+  const { rows, error } = await readEventPage(supabase, {
+    companyId,
+    after,
+    limit,
+    eventTypes: [...new Set(types ?? [])],
+    closedPrefixes: closedEventFamilies(holdsFamilyScope).flatMap((family) => family.prefixes),
+  })
 
   if (error) {
     log.error('event_log query failed', error)
@@ -258,7 +347,6 @@ export async function GET(request: Request) {
     })
   }
 
-  const rows = (data ?? []) as EventLogRow[]
   const events = rows.map((row) => ({ ...row, data: minimiseEventData(row.data) }))
 
   const response = NextResponse.json({
