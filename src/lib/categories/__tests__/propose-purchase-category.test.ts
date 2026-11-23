@@ -445,6 +445,12 @@ describe('categoryOfLine', () => {
     ['Registreringsavgift varumärke', 'expense.fees.authorities'],
     ['Registration fee', 'expense.fees.authorities'],
     ['Registrar of Companies filing fee', 'expense.fees.authorities'],
+    ['Registrar Transfer Fee - example.com', 'expense.software.domains'],
+    ['Company registrar registration fee', 'expense.fees.authorities'],
+    ['Companies registrar filing fee', 'expense.fees.authorities'],
+    ['Filing fee paid to the Registrar', 'expense.fees.authorities'],
+    ['Registrar of Societies registration fee', 'expense.fees.authorities'],
+    ['Trademark registrar fee', 'expense.fees.patents_trademarks'],
   ])('"%s" is %s', (line, code) => {
     expect(categoryOfLine(line)).toBe(code)
   })
