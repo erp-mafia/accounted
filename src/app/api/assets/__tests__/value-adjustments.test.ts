@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
-import { AssetValueAdjustmentBlockedError } from '@/lib/bookkeeping/errors'
+import { AssetValueAdjustmentBlockedError, BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
 const { supabase, reset } = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
@@ -121,5 +121,16 @@ describe('POST /api/assets/[id]/value-adjustments', () => {
     expect(status).toBe(409)
     expect(json.error.code).toBe('ASSET_VALUE_ADJUSTMENT_BLOCKED')
     expect(json.error.message).toContain('årets avskrivning')
+  })
+
+  it('answers a write-down its posting function refuses behind a lock as 400 PERIOD_LOCKED, not a 500', async () => {
+    // The lock date moved past the balansdag between the draft and its
+    // commit: the function's own check refuses the commit (23514).
+    vi.mocked(postValueAdjustment).mockRejectedValue(
+      new BookkeepingDatabaseError('commit_asset_value_adjustment', 'Bookkeeping is locked through 2026-12-31', '23514'),
+    )
+    const { status, body: json } = await parseJsonResponse<{ error: { code: string } }>(await POST(request(body), params))
+    expect(status).toBe(400)
+    expect(json.error.code).toBe('PERIOD_LOCKED')
   })
 })

@@ -3,9 +3,10 @@ import { DOCUMENT_PERIOD_LOCK_REFUSAL } from './document-period-lock-refusal'
 /**
  * Refusals the database raises as plain text (RAISE EXCEPTION with no code of
  * ours): the period-lock triggers (migration 017: a verifikat, and a document
- * on one), the company lock date, and the locked period's tax adjustment and
- * tax depreciation election triggers. Every one of them is a lock. Triggers
- * are never edited, so their sentences are read here, once, for every door:
+ * on one), the company lock date, the locked period's tax adjustment and
+ * tax depreciation election triggers, and the posting functions' own lock
+ * checks. Every one of them is a lock. Triggers are never edited, so their
+ * sentences are read here, once, for every door:
  * routes and services ask isPeriodLockRefusal/isLockDateRefusal
  * (lib/errors/get-structured-error.ts) instead of matching them, and
  * BookkeepingDatabaseError names its refusal by the code read here. A file of
@@ -22,6 +23,20 @@ const DATABASE_REFUSALS: ReadonlyArray<{ pattern: RegExp; code: DatabaseRefusalC
   { pattern: /locked\/closed fiscal period/i, code: 'PERIOD_LOCKED' },
   { pattern: /Bokföringen är låst/, code: 'PERIOD_LOCKED', lockDate: true },
   { pattern: /Fiscal period is locked for tax (adjustments|depreciation elections)/i, code: 'PERIOD_LOCKED' },
+  // The posting functions check the lock themselves before they commit, in
+  // their own words, mostly under 23514: "Cannot <act> in a locked or closed
+  // fiscal period" and "Bookkeeping is locked through <date>". The engine
+  // carries the refusal of commit_asset_disposal,
+  // commit_asset_component_replacement, commit_asset_value_adjustment,
+  // commit_deferred_tax, commit_contract_revenue and commit_k3_transition to
+  // the doors, met for example when the year is locked or the lock date moves
+  // after the draft was inserted, and they answered it as a retryable 500.
+  // split_asset_at_k3_transition and commit_opening_balance_replacement use
+  // the same words; their callers answer or skip the refusal themselves.
+  // lib/errors/__tests__/period-lock-refusal.test.ts reads every such
+  // sentence from the migrations. Case-sensitive: the functions' own words.
+  { pattern: /in a locked or closed fiscal period/, code: 'PERIOD_LOCKED' },
+  { pattern: /Bookkeeping is locked through/, code: 'PERIOD_LOCKED', lockDate: true },
 ]
 
 /** The registry code a lock refusal answers with. */

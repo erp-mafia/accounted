@@ -11,7 +11,12 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { BookkeepingDatabaseError, bookkeepingErrorResponse } from '../errors'
-import { errorResponse } from '@/lib/errors/get-structured-error'
+import {
+  errorResponse,
+  getStructuredError,
+  isLockDateRefusal,
+  isPeriodLockRefusal,
+} from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const PERIOD_LOCK =
@@ -70,5 +75,66 @@ describe('a lock refusal from the database', () => {
 
     expect(response.status).toBe(500)
     expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
+  })
+})
+
+/**
+ * The engine's posting functions check the lock themselves before they
+ * commit, in their own words: "Cannot <act> in a locked or closed fiscal
+ * period" and "Bookkeeping is locked through <date>", under 23514 (P0001 for
+ * the opening balance replacement). A draft inserted while the year was open
+ * meets them when the year is locked before its commit, and a disposal with
+ * nothing to post meets them first. They answered 500
+ * BOOKKEEPING_DATABASE_ERROR, retryable, for a lock no retry passes.
+ */
+describe('a lock refusal raised by an engine posting function', () => {
+  // Each function's own text, as its latest migration raises it.
+  const PERIOD_LOCKS = [
+    ['commit_asset_disposal', 'Cannot dispose asset in a locked or closed fiscal period'],
+    ['commit_asset_component_replacement', 'Cannot derecognise a component in a locked or closed fiscal period'],
+    ['commit_asset_value_adjustment', 'Cannot adjust an asset in a locked or closed fiscal period'],
+    ['commit_deferred_tax', 'Cannot post deferred tax in a locked or closed fiscal period'],
+    ['commit_contract_revenue', 'Cannot post contract revenue in a locked or closed fiscal period'],
+    ['commit_k3_transition', 'Cannot book the K3 transition in a locked or closed fiscal period'],
+  ] as const
+  const ENGINE_LOCK_DATE = 'Bookkeeping is locked through 2025-12-31'
+
+  it.each(PERIOD_LOCKS)('is PERIOD_LOCKED for %s', (operation, text) => {
+    const refusal = new BookkeepingDatabaseError(operation, text, '23514')
+
+    expect(refusal.code).toBe('PERIOD_LOCKED')
+    expect(isPeriodLockRefusal(refusal)).toBe(true)
+    expect(isLockDateRefusal(refusal)).toBe(false)
+  })
+
+  it('is PERIOD_LOCKED for the company lock date, and reads as the lock date', () => {
+    for (const refusal of [
+      new BookkeepingDatabaseError('commit_deferred_tax', ENGINE_LOCK_DATE, '23514'),
+      new BookkeepingDatabaseError('replace_opening_balance', ENGINE_LOCK_DATE, 'P0001'),
+    ]) {
+      expect(refusal.code).toBe('PERIOD_LOCKED')
+      expect(isLockDateRefusal(refusal)).toBe(true)
+    }
+  })
+
+  it('answers 400 PERIOD_LOCKED, not retryable, at every door', async () => {
+    const refusal = new BookkeepingDatabaseError('commit_asset_disposal', PERIOD_LOCKS[0][1], '23514')
+
+    const dashboard = errorResponse(refusal, log as never)
+    expect(dashboard.status).toBe(400)
+    expect(((await dashboard.json()) as { error: { code: string } }).error.code).toBe('PERIOD_LOCKED')
+
+    const engineDoor = bookkeepingErrorResponse(refusal)!
+    expect(engineDoor.status).toBe(400)
+    expect(getErrorMessage(await engineDoor.json())).toBe('Bokföringen är låst för denna period.')
+
+    expect(getStructuredError(refusal)).toMatchObject({ code: 'PERIOD_LOCKED', retryable: false })
+  })
+
+  it('leaves the same functions\' other refusals as they were', () => {
+    expect(new BookkeepingDatabaseError('commit_asset_disposal', 'Disposal VAT cannot exceed gross proceeds', '23514').code)
+      .toBe('BOOKKEEPING_DATABASE_ERROR')
+    expect(new BookkeepingDatabaseError('commit_deferred_tax', 'Fiscal period not found: 0c1e', 'P0002').code)
+      .toBe('BOOKKEEPING_DATABASE_ERROR')
   })
 })
