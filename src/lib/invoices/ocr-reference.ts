@@ -1,4 +1,4 @@
-import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import { generateLengthDigitOcrReference, generateOcrReference } from '@/lib/bankgiro/luhn'
 
 // Loose on purpose: rows written before the invoice_show_* flags existed
 // reach the templates with them undefined, which is why each flag defaults
@@ -10,7 +10,11 @@ type GiroPrintSettings = {
   invoice_show_plusgiro?: boolean | null
 }
 
-type OcrSettings = GiroPrintSettings & {
+type OcrFormSettings = {
+  invoice_ocr_length_digit?: boolean | null
+}
+
+type OcrSettings = GiroPrintSettings & OcrFormSettings & {
   invoice_show_ocr?: boolean | null
 }
 
@@ -25,8 +29,8 @@ export function invoicePrintsPlusgiro(company: GiroPrintSettings): boolean {
 }
 
 /**
- * Whether the invoice carries an OCR reference (invoice number + Luhn check
- * digit) as its payment reference. Shared by the PDF payment box, the
+ * Whether the invoice carries an OCR reference (invoiceOcrReference) as its
+ * payment reference. Shared by the PDF payment box, the
  * invoice email and the bank-app QR so the three never show different
  * references for one faktura: the OCR row exists only for a Swedish-language
  * invoice that PRINTS a bankgiro or plusgiro to pay it to, and only while the
@@ -42,10 +46,36 @@ export function invoiceShowsOcrReference(company: OcrSettings, lang: 'sv' | 'en'
 }
 
 /**
+ * The OCR reference the company's invoices carry for an invoice number: its
+ * digits and a Luhn (10-modulen) check digit, with Bankgirot's length digit
+ * between the two when the company has switched it on
+ * (company_settings.invoice_ocr_length_digit). Invoice 0073 is paid as 00737,
+ * or as 007369 with the length digit.
+ *
+ * Which of the two a bankgiro accepts is set in the company's agreement with
+ * its bank: an OCR control of the check digit alone takes either, one that
+ * also checks the length takes only a reference whose length digit fits, and
+ * the payer's bank refuses the other at entry (Bankgirot, "Bankgiro
+ * Inbetalningar Användarmanual", OCR-referenskontroll). So the form is the
+ * company's to choose, and every place that states the OCR of an invoice
+ * reads it here: the payment reference below and the Peppol PaymentID.
+ *
+ * A number the length-digit form cannot carry (more than 23 digits) keeps
+ * the plain form.
+ */
+export function invoiceOcrReference(company: OcrFormSettings, invoiceNumber: string): string {
+  if (company.invoice_ocr_length_digit) {
+    return generateLengthDigitOcrReference(invoiceNumber) ?? generateOcrReference(invoiceNumber)
+  }
+  return generateOcrReference(invoiceNumber)
+}
+
+/**
  * How a payment reference is built. `ocr`: the digits of the invoice number
- * followed by a Luhn (10-modulen) check digit, no length digit: invoice 0073
- * is paid as 00737. `invoice_number`: the invoice number as it is, written as
- * the message of the payment.
+ * followed by a Luhn (10-modulen) check digit, with Bankgirot's length digit
+ * before the check digit when the company prints one (invoiceOcrReference).
+ * `invoice_number`: the invoice number as it is, written as the message of
+ * the payment.
  */
 export type InvoicePaymentReferenceType = 'ocr' | 'invoice_number'
 
@@ -80,7 +110,7 @@ export function invoicePaymentReference(
 ): InvoicePaymentReference {
   const number = invoiceNumber?.trim() || null
   if (invoiceShowsOcrReference(company, lang)) {
-    return { type: 'ocr', reference: number ? generateOcrReference(number) : null }
+    return { type: 'ocr', reference: number ? invoiceOcrReference(company, number) : null }
   }
   return { type: 'invoice_number', reference: number }
 }

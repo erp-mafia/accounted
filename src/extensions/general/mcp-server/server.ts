@@ -10763,7 +10763,7 @@ export const tools: McpTool[] = [
         paid_amount: { type: 'number' },
         remaining_amount: { type: ['number', 'null'], description: 'Open balance in the ledger, exact öre' },
         payment_reference: { type: ['string', 'null'], description: 'What the payer quotes, as the PDF prints it. null: no number yet, credit note, quote, proforma, delivery note or Autogiro' },
-        payment_reference_type: { type: ['string', 'null'], description: 'ocr: invoice number digits + Luhn check digit, no length digit. invoice_number: the number as the payment message' },
+        payment_reference_type: { type: ['string', 'null'], description: 'ocr: invoice number digits + Luhn check digit, with a length digit before it when the company setting invoice_ocr_length_digit is on. invoice_number: the number as the payment message' },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
         invoice_marking: { type: ['string', 'null'], description: 'Fakturamärkning (buyer marking), separate from your_reference' },

@@ -120,6 +120,16 @@ describe('buildInvoicePaymentRows: exactly one reference row', () => {
     expect(rows({ bankgiro: '5050-1055', invoice_show_bankgiro: false }).at(-1)?.key).toBe('message')
   })
 
+  it("prints the OCR with Bankgirot's length digit when the company switched it on", () => {
+    expect(rows({ bankgiro: '5050-1055', invoice_ocr_length_digit: true }).at(-1)).toEqual({
+      key: 'ocr',
+      label: 'OCR/Referens:',
+      value: '104265',
+      emphasis: true,
+    })
+    expect(rows({ bankgiro: '5050-1055', invoice_ocr_length_digit: false }).at(-1)?.value).toBe('10421')
+  })
+
   it('is Meddelande when the company switched the OCR row off', () => {
     expect(rows({ bankgiro: '5050-1055', invoice_show_ocr: false }).at(-1)?.key).toBe('message')
   })
