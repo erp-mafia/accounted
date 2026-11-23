@@ -325,8 +325,9 @@ export async function getCounterpartList(
         .eq('company_id', companyId)
         .eq('is_ignored', false)
       if (since) query = query.gte('date', since)
-      // Oldest first, so the rows a bank sync adds while the pages are read
-      // land after them instead of moving every page down by a row.
+      // Oldest first, so the rows a bank sync adds during the read sort after
+      // the pages already read. A row dated further back can still move a
+      // page boundary while the pages are read: they share no snapshot.
       return query.order('date', { ascending: true }).order('id', { ascending: true }).range(from, to)
     }),
   ])
