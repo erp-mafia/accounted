@@ -54,8 +54,11 @@ async function readDocuments(): Promise<ToBookDocument[]> {
   if (res.status === 402 || res.status === 403 || res.status === 404) return []
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const json = (await res.json()) as { data?: { items?: InkorgItem[] } }
+  // Only items with a file: one that arrived without one (a failed intake)
+  // has nothing to book, and is removed or read again in Inkommande. The same
+  // documents Hem's Att bokföra row counts (countInboxDocuments).
   return queueFor(json.data?.items ?? [], { kind: 'need' })
-    .filter((item) => !item.matched_transaction_id)
+    .filter((item) => !item.matched_transaction_id && item.document_id !== null)
     .map((item) => {
       const head = itemHeadline(item)
       return {
