@@ -20,7 +20,7 @@ import type { AnsweredQuestionOfFact } from '@/lib/questions/fact-questions'
 
 import type { FactKind as Kind, FactSource as Source } from '@/lib/agent-context/agent-competence'
 
-interface AgentMemoryRow {
+export interface AgentMemoryRow {
   id: string
   kind: Kind
   content: string
@@ -40,20 +40,10 @@ interface AgentMemoryRow {
   answered_question?: AnsweredQuestionOfFact | null
 }
 
-const KIND_LABEL: Record<Kind, string> = {
-  fact: 'Fakta',
-  preference: 'Preferens',
-  pattern: 'Mönster',
-  correction: 'Korrigering',
-}
+/** The kinds a memory can have, in the order the add form offers them. */
+const KINDS: readonly Kind[] = ['fact', 'preference', 'pattern', 'correction']
 
-const KIND_FILTER: { value: 'all' | Kind; label: string }[] = [
-  { value: 'all', label: 'Alla' },
-  { value: 'fact', label: 'Fakta' },
-  { value: 'preference', label: 'Preferenser' },
-  { value: 'pattern', label: 'Mönster' },
-  { value: 'correction', label: 'Korrigeringar' },
-]
+type KindFilter = 'all' | Kind
 
 /**
  * What the assistant remembers about the company, to read, add to, edit, pin
@@ -61,24 +51,25 @@ const KIND_FILTER: { value: 'all' | Kind; label: string }[] = [
  * kind filter, no help and no count line. Everything that changes a memory
  * stays: adding one, each row's pin, edit and hide, and showing the hidden
  * rows so one can be brought back.
+ *
+ * Every text is read from the message files (settings.memory_*, the kind
+ * names from agentKnowledge), so the panel follows the reader's language.
  */
 export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
+  const memory = useAgentMemory()
+  return <AgentMemoryView plain={plain} memory={memory} />
+}
+
+/**
+ * The panel's state and its requests: the memory list as read, what the
+ * person has open, and the calls that add, change, pin, hide and restore a
+ * memory. AgentMemoryView draws it.
+ */
+function useAgentMemory() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const errorLocale = useLocale() as ErrorLocale
   const t = useTranslations('settings')
-  const tKnowledge = useTranslations('agentKnowledge')
-  const tAttribution = useTranslations('attribution')
-  // The words of the line under a row (who saved it and when): agent-memory-row.ts builds the line.
-  const lineWords = useMemo(
-    () =>
-      memoryLineWordsFrom({
-        settings: (key, values) => t(key, values),
-        knowledge: (key, values) => tKnowledge(key, values),
-        attribution: (key, values) => tAttribution(key, values),
-      }),
-    [t, tKnowledge, tAttribution],
-  )
 
   // null = the memory list is not known: still loading, or the read failed
   // (loadError). A failed read must never render the "Inga minnen ännu"
@@ -90,7 +81,7 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
   const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [includeDismissed, setIncludeDismissed] = useState(false)
-  const [kindFilter, setKindFilter] = useState<'all' | Kind>('all')
+  const [kindFilter, setKindFilter] = useState<KindFilter>('all')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
@@ -152,13 +143,6 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
     }
   }, [includeDismissed, kindFilter, errorLocale, reloadKey])
 
-  const counts = useMemo(() => {
-    const active = rows?.filter((r) => r.is_active).length ?? 0
-    const pinned = rows?.filter((r) => r.is_active && r.is_pinned).length ?? 0
-    const dismissed = rows?.filter((r) => !r.is_active).length ?? 0
-    return { active, pinned, dismissed }
-  }, [rows])
-
   async function patch(id: string, body: Partial<Pick<AgentMemoryRow, 'content' | 'is_pinned' | 'is_active'>>) {
     setBusyId(id)
     try {
@@ -172,7 +156,7 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
         // getErrorMessage falls back to the status map.
         const json = await res.json().catch(() => null)
         toast({
-          title: 'Kunde inte uppdatera',
+          title: t('memory_update_failed'),
           description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
@@ -188,7 +172,7 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
       // One toast per failed click, never two: TOAST_LIMIT is 1
       // (components/ui/use-toast.tsx) and a second would evict the first.
       toast({
-        title: 'Kunde inte uppdatera',
+        title: t('memory_update_failed'),
         description: getErrorMessage(err, { locale: errorLocale }),
         variant: 'destructive',
       })
@@ -211,7 +195,7 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
         // getErrorMessage falls back to the status map.
         const json = await res.json().catch(() => null)
         toast({
-          title: 'Kunde inte spara minne',
+          title: t('memory_save_failed'),
           description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
@@ -222,14 +206,14 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
       setNewContent('')
       setNewKind('fact')
       setShowAdd(false)
-      toast({ title: 'Minne sparat' })
+      toast({ title: t('memory_saved') })
     } catch (err) {
       // A rejected fetch or a 200 whose body will not parse never reaches the
       // !res.ok arm above: the draft stays in the form and one toast says the
       // save did not land. One toast per outcome, never two: TOAST_LIMIT is 1
       // (components/ui/use-toast.tsx) and a second would evict the first.
       toast({
-        title: 'Kunde inte spara minne',
+        title: t('memory_save_failed'),
         description: getErrorMessage(err, { locale: errorLocale }),
         variant: 'destructive',
       })
@@ -253,6 +237,104 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
     setEditingId(null)
   }
 
+  return {
+    canWrite,
+    errorLocale,
+    rows,
+    loadError,
+    retry: () => setReloadKey((k) => k + 1),
+    includeDismissed,
+    setIncludeDismissed,
+    kindFilter,
+    setKindFilter,
+    busyId,
+    editingId,
+    setEditingId,
+    editDraft,
+    setEditDraft,
+    showAdd,
+    setShowAdd,
+    newContent,
+    setNewContent,
+    newKind,
+    setNewKind,
+    adding,
+    patch,
+    addMemory,
+    startEdit,
+    saveEdit,
+  }
+}
+
+/** What AgentMemoryView draws: the state useAgentMemory holds. */
+export type AgentMemoryState = ReturnType<typeof useAgentMemory>
+
+/** The panel drawn from its state, with no request of its own. Exported for its render test. */
+export function AgentMemoryView({ plain = false, memory }: { plain?: boolean; memory: AgentMemoryState }) {
+  const {
+    canWrite,
+    errorLocale,
+    rows,
+    loadError,
+    retry,
+    includeDismissed,
+    setIncludeDismissed,
+    kindFilter,
+    setKindFilter,
+    busyId,
+    editingId,
+    setEditingId,
+    editDraft,
+    setEditDraft,
+    showAdd,
+    setShowAdd,
+    newContent,
+    setNewContent,
+    newKind,
+    setNewKind,
+    adding,
+    patch,
+    addMemory,
+    startEdit,
+    saveEdit,
+  } = memory
+  const t = useTranslations('settings')
+  const tCommon = useTranslations('common')
+  const tKnowledge = useTranslations('agentKnowledge')
+  const tAttribution = useTranslations('attribution')
+  // The words of the line under a row (who saved it and when): agent-memory-row.ts builds the line.
+  const lineWords = useMemo(
+    () =>
+      memoryLineWordsFrom({
+        settings: (key, values) => t(key, values),
+        knowledge: (key, values) => tKnowledge(key, values),
+        attribution: (key, values) => tAttribution(key, values),
+      }),
+    [t, tKnowledge, tAttribution],
+  )
+  const kindLabel = (kind: Kind): string =>
+    kind === 'fact'
+      ? tKnowledge('kind_fact')
+      : kind === 'preference'
+        ? tKnowledge('kind_preference')
+        : kind === 'pattern'
+          ? tKnowledge('kind_pattern')
+          : tKnowledge('kind_correction')
+  const kindFilters: Array<{ value: KindFilter; label: string }> = [
+    { value: 'all', label: t('memory_filter_all') },
+    { value: 'fact', label: t('memory_filter_fact') },
+    { value: 'preference', label: t('memory_filter_preference') },
+    { value: 'pattern', label: t('memory_filter_pattern') },
+    { value: 'correction', label: t('memory_filter_correction') },
+  ]
+
+  const counts = useMemo(() => {
+    const active = rows?.filter((r) => r.is_active).length ?? 0
+    const pinned = rows?.filter((r) => r.is_active && r.is_pinned).length ?? 0
+    const dismissed = rows?.filter((r) => !r.is_active).length ?? 0
+    return { active, pinned, dismissed }
+  }, [rows])
+
   // The plain list reads newest first, whatever order the read came in.
   const shownRows = plain && rows ? [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at)) : rows
 
@@ -265,7 +347,7 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
         {!plain && (
           // The segments scroll sideways on a phone instead of pushing the page wide.
           <div className="max-w-full overflow-x-auto rounded-lg">
-            <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+            <SettingsSeg value={kindFilter} onChange={setKindFilter} options={kindFilters} aria-label={t('memory_filter_label')} />
           </div>
         )}
         <button
@@ -274,19 +356,15 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
           aria-pressed={includeDismissed}
           className={cn(QUIET_LINK_CLASS, plain ? 'text-xs' : 'ml-1 text-xs')}
         >
-          {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
+          {includeDismissed ? t('memory_hide_hidden') : t('memory_show_hidden')}
         </button>
         {!plain && (
-          <HelpPopover className="shrink-0">
-            Bokföringsassistenten använder dessa anteckningar för att ge dig rätt råd. Fäst det som alltid
-            ska vara med, redigera fel, eller dölj det som inte längre stämmer. Upp till 30 minnen ingår i
-            samtal per tur.
-          </HelpPopover>
+          <HelpPopover className="shrink-0">{t('memory_help')}</HelpPopover>
         )}
         {canWrite && (
           <Button className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
             <PlusIcon className="h-3.5 w-3.5" aria-hidden />
-            Lägg till minne
+            {t('memory_add')}
           </Button>
         )}
       </div>
@@ -296,28 +374,28 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
           <SettingsTextarea
             value={newContent}
             onChange={(e) => setNewContent(e.target.value)}
-            placeholder="T.ex. Vi använder Stripe för B2C-betalningar; utbetalningar landar på 1930 var måndag."
+            placeholder={t('memory_new_placeholder')}
             rows={3}
             maxLength={2000}
             autoFocus
-            aria-label="Nytt minne"
+            aria-label={t('memory_new_label')}
             className="w-full border-border"
           />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Typ</span>
-              <SettingsSelect value={newKind} onChange={(e) => setNewKind(e.target.value as Kind)} aria-label="Typ">
-                {(Object.keys(KIND_LABEL) as Kind[]).map((k) => (
-                  <option key={k} value={k}>{KIND_LABEL[k]}</option>
+              <span className="text-xs text-muted-foreground">{t('memory_kind_label')}</span>
+              <SettingsSelect value={newKind} onChange={(e) => setNewKind(e.target.value as Kind)} aria-label={t('memory_kind_label')}>
+                {KINDS.map((k) => (
+                  <option key={k} value={k}>{kindLabel(k)}</option>
                 ))}
               </SettingsSelect>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={() => { setShowAdd(false); setNewContent('') }}>
-                Avbryt
+                {tCommon('cancel')}
               </Button>
               <Button onClick={addMemory} disabled={newContent.trim().length < 2} loading={adding}>
-                Spara
+                {tCommon('save')}
               </Button>
             </div>
           </div>
@@ -326,8 +404,9 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
 
       {!plain && rows && rows.length > 0 && (
         <p className="text-xs tabular-nums text-muted-foreground">
-          {counts.active} aktiva · {counts.pinned} fästa
-          {includeDismissed && counts.dismissed > 0 ? ` · ${counts.dismissed} dolda` : ''}
+          {includeDismissed && counts.dismissed > 0
+            ? t('memory_counts_with_hidden', { active: counts.active, pinned: counts.pinned, hidden: counts.dismissed })
+            : t('memory_counts', { active: counts.active, pinned: counts.pinned })}
         </p>
       )}
 
@@ -336,9 +415,9 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
       <div role="status" aria-live="polite" className="min-w-0">
         {loadError && (
           <AttnLine
-            action={loadError.detail ? undefined : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }}
+            action={loadError.detail ? undefined : { label: tCommon('retry'), onClick: retry }}
           >
-            {loadError.detail ? `Minnena kunde inte läsas in just nu. ${loadError.detail}` : 'Minnena kunde inte läsas in just nu.'}
+            {loadError.detail ? `${t('memory_load_failed')} ${loadError.detail}` : t('memory_load_failed')}
           </AttnLine>
         )}
       </div>
@@ -357,8 +436,8 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
       {rows && rows.length === 0 && (
         <EmptyState
           icon={LightBulbIcon}
-          title="Inga minnen ännu"
-          description="När du lär assistenten saker (eller när den noterar saker själv med ditt godkännande) dyker de upp här."
+          title={t('memory_empty_title')}
+          description={t('memory_empty_description')}
         />
       )}
 
@@ -380,8 +459,8 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
                       'mt-0.5 shrink-0 rounded-sm p-1 transition-colors duration-150',
                       row.is_pinned ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
                     )}
-                    aria-label={row.is_pinned ? 'Lossa' : 'Fäst'}
-                    title={row.is_pinned ? 'Lossa' : 'Fäst: minnet skickas alltid med'}
+                    aria-label={row.is_pinned ? t('memory_unpin') : t('memory_pin')}
+                    title={row.is_pinned ? t('memory_unpin') : t('memory_pin_title')}
                   >
                     <BookmarkIcon className={cn('h-3.5 w-3.5', row.is_pinned && 'fill-current')} />
                   </button>
@@ -399,15 +478,15 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
                         rows={3}
                         maxLength={2000}
                         autoFocus
-                        aria-label="Redigera minne"
+                        aria-label={t('memory_edit_label')}
                         className="w-full border-border"
                       />
                       <div className="flex items-center gap-2">
                         <Button onClick={() => saveEdit(row)} disabled={editDraft.trim().length < 2} loading={isBusy}>
-                          Spara
+                          {tCommon('save')}
                         </Button>
                         <Button variant="outline" onClick={() => setEditingId(null)} disabled={isBusy}>
-                          Avbryt
+                          {tCommon('cancel')}
                         </Button>
                       </div>
                     </div>
@@ -424,15 +503,15 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
                     {row.is_active ? (
                       <>
                         <button type="button" onClick={() => startEdit(row)} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
-                          Redigera
+                          {tCommon('edit')}
                         </button>
                         <button type="button" onClick={() => patch(row.id, { is_active: false })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
-                          Dölj
+                          {t('memory_hide')}
                         </button>
                       </>
                     ) : (
                       <button type="button" onClick={() => patch(row.id, { is_active: true })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
-                        Återställ
+                        {t('memory_restore')}
                       </button>
                     )}
                   </div>
