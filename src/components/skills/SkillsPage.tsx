@@ -31,13 +31,17 @@ type PageState = 'loading' | 'locked' | 'waiting' | 'open'
  * knowledge, analyses), from Accounted, the community or the company itself,
  * as a catalogue (Catalog.tsx). This component owns the AI connection and the
  * connect gate. `hrefBase` lets the sandbox demo link to its own pages.
+ *
+ * `knowledgeOnly`: the page is the knowledge kind alone, under that name:
+ * no kinds to switch between, no Egna | Upptäck, no first-visit explanation
+ * of the three kinds and no Skapa. A company's own items keep their pages.
  */
-export function SkillsPage({ hrefBase = '/skills' }: { hrefBase?: string }) {
+export function SkillsPage({ hrefBase = '/skills', knowledgeOnly = false }: { hrefBase?: string; knowledgeOnly?: boolean }) {
   const { company } = useCompany()
-  return company ? <Registry key={company.id} companyId={company.id} hrefBase={hrefBase} /> : null
+  return company ? <Registry key={company.id} companyId={company.id} hrefBase={hrefBase} knowledgeOnly={knowledgeOnly} /> : null
 }
 
-function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string }) {
+function Registry({ companyId, hrefBase, knowledgeOnly }: { companyId: string; hrefBase: string; knowledgeOnly: boolean }) {
   const t = useTranslations('skills_registry')
   // The top bar carries the menu row's name (Agenter › Arbetssätt).
   const tNav = useTranslations('nav')
@@ -156,13 +160,13 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
   return (
     <div className={styles.page} data-state={state}>
       <PageHeader
-        title={tNav('v3_skills')}
-        help={<HelpPopover><p>{t('help')}</p></HelpPopover>}
-        action={<CatalogCreateMenu hrefBase={hrefBase} client={client} canWrite={canWrite} onCreate={createAgent} />}
+        title={knowledgeOnly ? t('kind_rules') : tNav('v3_skills')}
+        help={<HelpPopover><p>{knowledgeOnly ? t('help_knowledge') : t('help')}</p></HelpPopover>}
+        action={knowledgeOnly ? undefined : <CatalogCreateMenu hrefBase={hrefBase} client={client} canWrite={canWrite} onCreate={createAgent} />}
       />
 
       {/* The first visit's explanation sits above the catalogue, so it is read before the featured item. */}
-      <KindsIntro companyId={companyId} />
+      {!knowledgeOnly && <KindsIntro companyId={companyId} />}
 
       {/* The catalogue could not load: said before it, with "Försök igen". */}
       {catalog.error &&
@@ -186,6 +190,7 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
         onCreate={createAgent}
         gate={state === 'locked' ? <ConnectHero onConnect={connect} /> : waitingBanner}
         pending={waitingBanner}
+        knowledgeOnly={knowledgeOnly}
       />
       {!canWrite && <p className={styles.note}>{t('viewer_note')}</p>}
 

@@ -49,10 +49,10 @@ const FACT_KINDS = new Set(['fact', 'preference', 'pattern', 'correction'])
  * line with its source, who saved it and when, the remembered facts with
  * Glöm and Ångra (the memory API), and the raw text the agent reads.
  *
- * `picture`: the company has the agent picture switched on. The view then
- * opens with the picture (components/agent-picture) in place of the graph,
- * and the rest of the page stays below it. The picture's drawer shows the
- * same sections this view loads.
+ * `picture`: the company has the agent picture switched on. The view is
+ * then the picture alone (components/agent-picture): no window bar and no
+ * list of sections. The briefing is still loaded here, once, and handed to
+ * the picture, whose Kontext row draws the context graph from it.
  */
 export function ContextView({ picture = false }: { picture?: boolean }) {
   const t = useTranslations('wiki')
@@ -82,31 +82,22 @@ export function ContextView({ picture = false }: { picture?: boolean }) {
 
   // An installation without the agent connection has no picture either.
   if (load.state === 'unavailable') return <EmptyState title={load.sentence} />
-  const body =
-    load.state === 'loading' ? (
-      <ContextSkeleton />
-    ) : load.state === 'failed' ? (
-      <LoadError title={t('load_failed_title')} description={load.description} onRetry={() => void fetchContext()} />
-    ) : (
-      <ContextWindowView window={load.data.window} text={load.data.text} graph={!picture} />
-    )
-  if (!picture) return body
-  return (
-    <div className="space-y-8">
+  if (picture) {
+    return (
       <AgentPicture
-        contextTab={
-          load.state === 'ok' ? (
-            <ContextSectionList sections={load.data.window.sections} idPrefix="wiki-drawer-section" />
-          ) : load.state === 'failed' ? (
-            <div className="text-[13px] text-foreground/80">{t('picture.context_failed')}</div>
-          ) : (
-            <ContextSkeleton />
-          )
+        context={
+          load.state === 'ok'
+            ? { state: 'ok', text: load.data.text }
+            : load.state === 'failed'
+              ? { state: 'failed', description: load.description, onRetry: () => void fetchContext() }
+              : { state: 'loading' }
         }
       />
-      {body}
-    </div>
-  )
+    )
+  }
+  if (load.state === 'loading') return <ContextSkeleton />
+  if (load.state === 'failed') return <LoadError title={t('load_failed_title')} description={load.description} onRetry={() => void fetchContext()} />
+  return <ContextWindowView window={load.data.window} text={load.data.text} />
 }
 
 function ContextSkeleton() {
@@ -123,7 +114,7 @@ function ContextSkeleton() {
   )
 }
 
-export function ContextWindowView({ window: w, text, graph = true }: { window: ContextWindow; text: string; graph?: boolean }) {
+export function ContextWindowView({ window: w, text }: { window: ContextWindow; text: string }) {
   const t = useTranslations('wiki')
   const n = (x: number) => x.toLocaleString('sv-SE')
   const levels: ScopeLevel[] = [
@@ -146,7 +137,7 @@ export function ContextWindowView({ window: w, text, graph = true }: { window: C
         </h2>
       </div>
 
-      {graph && <ContextGraph text={text} />}
+      <ContextGraph text={text} />
 
       <section className="space-y-3" aria-labelledby="wiki-window-title">
         <ContextBar sections={w.sections} total={w.total_chars} />
@@ -177,36 +168,25 @@ export function ContextWindowView({ window: w, text, graph = true }: { window: C
         {w.memory_budget.truncated && <AttnLine>{t('window_truncated')}</AttnLine>}
       </section>
 
-      <ContextSectionList sections={w.sections} />
+      <div className="stagger-enter space-y-8">
+        {w.sections.map((s) => (
+          <ContextSectionView key={s.id} section={s} />
+        ))}
+      </div>
 
       <RawText text={text} subject="company" />
     </div>
   )
 }
 
-/**
- * The parts of the window, each with its lines. `idPrefix` keeps the heading
- * ids apart when the list is on screen twice (the page, and the agent
- * picture's drawer over it).
- */
-export function ContextSectionList({ sections, idPrefix = 'wiki-section' }: { sections: ContextSection[]; idPrefix?: string }) {
-  return (
-    <div className="stagger-enter space-y-8">
-      {sections.map((s) => (
-        <ContextSectionView key={s.id} section={s} idPrefix={idPrefix} />
-      ))}
-    </div>
-  )
-}
-
-function ContextSectionView({ section, idPrefix }: { section: ContextSection; idPrefix: string }) {
+function ContextSectionView({ section }: { section: ContextSection }) {
   const t = useTranslations('wiki')
   const visible = section.items
   return (
-    <section aria-labelledby={`${idPrefix}-${section.id}`}>
+    <section aria-labelledby={`wiki-section-${section.id}`}>
       <div className="-mx-2 flex items-center gap-2 border-b-hairline px-2 pb-2">
         <Swatch family={section.family} />
-        <h3 id={`${idPrefix}-${section.id}`} className="text-[13px] font-medium text-strong">
+        <h3 id={`wiki-section-${section.id}`} className="text-[13px] font-medium text-strong">
           {t(`sections.${section.id}`)}
         </h3>
         <span className="ml-auto text-xs tabular-nums text-muted-foreground">

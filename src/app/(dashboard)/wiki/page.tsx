@@ -17,9 +17,9 @@ import { getDashboardCompanyId } from '../request-context'
  * inside the Arkiv rollout. Outside it nothing reads the documents, so the
  * view is not offered.
  *
- * For a company in AGENT_PICTURE_COMPANY_IDS the context view opens with the
- * agent picture in place of the graph. The switch is read here, on the
- * server: the browser gets a boolean.
+ * For a company in AGENT_PICTURE_COMPANY_IDS the context view is the agent
+ * picture, and its help says what the picture is. The switch is read here,
+ * on the server: the browser gets a boolean.
  */
 export default async function WikiPage({ searchParams }: { searchParams: Promise<{ view?: string | string[] }> }) {
   const t = await getTranslations('wiki')
@@ -33,7 +33,7 @@ export default async function WikiPage({ searchParams }: { searchParams: Promise
   const view = parsed === 'facts' && !facts ? 'context' : parsed
   return (
     <>
-      <PageHeader title={t(`view_${view}`)} help={<HelpPopover>{t('help')}</HelpPopover>} />
+      <PageHeader title={t(`view_${view}`)} help={<HelpPopover>{picture && view === 'context' ? t('picture.help') : t('help')}</HelpPopover>} />
       <Suspense>
         <WikiViews facts={facts} picture={picture} />
       </Suspense>

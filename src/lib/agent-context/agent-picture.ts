@@ -11,8 +11,8 @@ import { createLogger } from '@/lib/logger'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { connectionKind, type ConnectionKind } from '@/lib/settings/mcp-connections'
 import { createServiceClient } from '@/lib/supabase/server'
-import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
-import { REGISTRY_SKILLS, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
+import { catalogueKnowledge } from '@/lib/agent-skills/knowledge-list'
 
 const log = createLogger('agent-picture')
 
@@ -34,8 +34,8 @@ const log = createLogger('agent-picture')
  *
  * Every read filters on the company. The exceptions are named where they
  * are made: the company's own row (by id), the signed-in person's WhatsApp
- * link and own connections (by user), and the skill registry, which is the
- * same for every company.
+ * link and own connections (by user), and the knowledge catalogue, whose
+ * registry is the same for every company.
  */
 
 /** A source or connection as the picture draws it. */
@@ -106,6 +106,8 @@ export interface PictureCheckLine {
   name_en: string | null
   /** What the result is about when the check has several: a bank account, a momsperiod. */
   subject: string | null
+  /** A bank account's result only: the last four characters of the account, so two accounts with one name read apart. */
+  subject_tail: string | null
   status: PictureCheckStatus
   /** attention only: the difference as the check gives it, in `unit`. */
   difference: number | null
@@ -131,10 +133,10 @@ export interface PictureChecks {
 }
 
 export interface PictureKnowledge {
-  /** Knowledge items the briefing lists for the company; null when they could not be counted. */
-  rule_areas: number | null
-  /** The curated workflows, by id (their names are UI strings). */
-  workflows: RegistrySkillId[]
+  /** How many items the catalogue's knowledge list holds for the company (lib/agent-skills/knowledge-list.ts); null when it could not be read. */
+  items: number | null
+  /** The company's own industry item in that list, which the list puts first; null without one. */
+  industry: string | null
 }
 
 export interface PictureCompany {
@@ -162,6 +164,8 @@ export interface PictureActivity {
   actors: Record<string, PictureActorActivity>
   /** True when the day held more calls than were read: the counts are then lower bounds. */
   capped: boolean
+  /** Active remembered facts right now, so a fact saved while the picture is open shows; null when the count could not be read. */
+  memory_facts: number | null
 }
 
 export interface PictureAgent {
@@ -170,6 +174,8 @@ export interface PictureAgent {
   kind: ConnectionKind
   /** A hand-made key's own name or a partner's name; null when the screen names the client by its kind. */
   name: string | null
+  /** The service account the connection belongs to, by its name; null for a person's connection. */
+  service_account: string | null
   last_used_at: string | null
   calls_today: number
   last_call_at: string | null
@@ -538,36 +544,21 @@ async function loadMemoryFacts(supabase: SupabaseClient, companyId: string): Pro
 }
 
 /**
- * How many knowledge items the briefing lists for the company: the atoms of
- * its profile and the ones it installed that are live in the registry, and
- * its own items a person has added. The registry is the same for every
- * company, so that one read has no company filter.
+ * The catalogue's knowledge list for the company, as a number, and the
+ * company's own industry item in it (the first live industry item of its
+ * profile, as the catalogue page picks it). The registry behind the list is
+ * the same for every company, so that read has no company filter.
  */
-async function loadRuleAreas(supabase: SupabaseClient, companyId: string): Promise<number> {
-  const [profile, skillRows] = await Promise.all([
-    supabase.from('agent_profiles').select('horizontal_atoms, vertical_atoms, modifier_atoms').eq('company_id', companyId).maybeSingle(),
-    loadCompanySkillRows(supabase, companyId),
+async function loadKnowledge(supabase: SupabaseClient, companyId: string): Promise<{ items: number; industry: string | null }> {
+  const [options, profile] = await Promise.all([
+    loadKnowledgeOptions(supabase, companyId),
+    supabase.from('agent_profiles').select('vertical_atoms').eq('company_id', companyId).maybeSingle(),
   ])
-  if (profile.error) failed('agent profile', profile.error)
-  const atoms = profile.data as { horizontal_atoms: string[] | null; vertical_atoms: string[] | null; modifier_atoms: string[] | null } | null
-  const ids = [
-    ...new Set([
-      ...(atoms?.horizontal_atoms ?? []),
-      ...(atoms?.vertical_atoms ?? []),
-      ...(atoms?.modifier_atoms ?? []),
-      ...skillRows.flatMap((row) => (row.atom_id ? [row.atom_id] : [])),
-    ]),
-  ]
-  const own = skillRows.filter((row) => ownSkill(row) !== null).length
-  if (ids.length === 0) return own
-  const { count, error } = await supabase
-    .from('agent_atom_registry')
-    .select('id', { count: 'exact', head: true })
-    .in('id', ids)
-    .eq('is_active', true)
-    .eq('mcp_exposed', true)
-  if (error) failed('skill registry', error)
-  return (count ?? 0) + own
+  const list = catalogueKnowledge(options)
+  // The industry only orders the list: a failed profile read leaves it unordered.
+  const chosen = profile.error ? [] : ((profile.data as { vertical_atoms: string[] | null } | null)?.vertical_atoms ?? [])
+  const industry = chosen.find((id) => list.some((option) => option.id === id && option.tier === 'vertical')) ?? null
+  return { items: list.length, industry }
 }
 
 // ---------------------------------------------------------------- checks
@@ -596,6 +587,7 @@ async function bankFeedLine(supabase: SupabaseClient, companyId: string, today: 
     name_sv: null,
     name_en: null,
     subject: null,
+    subject_tail: null,
     status: 'unknown',
     difference: null,
     unit: null,
@@ -616,6 +608,18 @@ async function bankFeedLine(supabase: SupabaseClient, companyId: string, today: 
     as_of: status.bank.last_sync_at,
     href: current ? null : BANK_FEED_HREF,
   }
+}
+
+/** The last four characters of each of the company's cash accounts, by account id. Empty when they cannot be read: the name still stands. */
+async function accountTails(supabase: SupabaseClient, companyId: string): Promise<Map<string, string>> {
+  const { data, error } = await supabase.from('cash_accounts').select('id, iban, kind, card_last4').eq('company_id', companyId)
+  const tails = new Map<string, string>()
+  if (error) return tails
+  for (const row of (data ?? []) as Array<{ id: string; iban: string | null; kind?: string | null; card_last4?: string[] | null }>) {
+    const tail = row.kind === 'card' ? (row.card_last4?.[0]?.slice(-4) ?? null) : (ibanLast4(row.iban) ?? null)
+    if (tail) tails.set(row.id, tail)
+  }
+  return tails
 }
 
 async function loadChecks(supabase: SupabaseClient, companyId: string, ports: AgentPicturePorts, now: Date): Promise<PictureChecks | null> {
@@ -647,6 +651,8 @@ async function loadChecks(supabase: SupabaseClient, companyId: string, ports: Ag
 
   const lines: PictureCheckLine[] = []
   const counts: Record<PictureCheckStatus, number> = { agrees: 0, attention: 0, unknown: 0 }
+  // Two bank accounts can share a name: each bank account's result also carries the account's last four characters.
+  const tails = queue?.list.items.some((row) => row.subject.kind === 'bank_account') ? await accountTails(supabase, companyId) : new Map<string, string>()
   if (queue) {
     counts.agrees += queue.list.counts.ok
     counts.attention += queue.list.counts.unexplained
@@ -662,6 +668,7 @@ async function loadChecks(supabase: SupabaseClient, companyId: string, ports: Ag
         name_sv: row.name_sv,
         name_en: queue.nameEn(row.check_id),
         subject,
+        subject_tail: row.subject.kind === 'bank_account' ? (tails.get(row.subject.cash_account_id) ?? null) : null,
         status: row.status === 'ok' ? 'agrees' : attention ? 'attention' : 'unknown',
         difference: attention ? row.difference : null,
         unit: row.unit,
@@ -696,11 +703,19 @@ const ACTIVITY_MAX_PAGES = 5
  * made today (the Stockholm calendar day) and when the last one was. Read
  * from the newest rows of the tool call log backwards, a page at a time,
  * until a page reaches before today. The log holds the tool's name and who
- * called, never the arguments or what was read.
+ * called, never the arguments or what was read. The answer also carries the
+ * number of remembered facts right now, so the picture's memory follows a
+ * fact saved while it is open.
  *
  * Throws when the log cannot be read.
  */
 export async function loadAgentActivity(supabase: SupabaseClient, companyId: string, now: Date = new Date()): Promise<PictureActivity> {
+  const [calls, memoryFacts] = await Promise.all([readToolCalls(supabase, companyId, now), loadMemoryFacts(supabase, companyId)])
+  return { ...calls, memory_facts: memoryFacts }
+}
+
+/** The tool call log's part of the activity. Throws when the log cannot be read. */
+async function readToolCalls(supabase: SupabaseClient, companyId: string, now: Date): Promise<Omit<PictureActivity, 'memory_facts'>> {
   const day = todayIsoStockholm(now)
   const dayStart = stockholmWallTimeToUtc(day, '00:00').getTime()
   const actors: Record<string, PictureActorActivity> = {}
@@ -792,17 +807,41 @@ async function loadConnectionKeys(supabase: SupabaseClient, companyId: string, u
   return [...here, ...elsewhere.filter((key) => !lists.has(key.id) || lists.get(key.id)!.includes(companyId))]
 }
 
-async function loadAgents(supabase: SupabaseClient, companyId: string, userId: string, now: Date): Promise<PictureAgents> {
+/**
+ * The names of the company's service accounts that hold a listed key, read
+ * with the service role as the API settings page reads them (every member
+ * who sees the key sees whose it is). Empty when they cannot be read.
+ */
+async function serviceAccountNames(companyId: string, ids: readonly string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (ids.length === 0) return names
+  const { data, error } = await createServiceClient().from('service_accounts').select('id, name').eq('company_id', companyId).in('id', ids)
+  if (error) {
+    log.warn('service account names unavailable', { companyId, reason: error.message })
+    return names
+  }
+  for (const row of (data ?? []) as Array<{ id: string; name: string }>) names.set(row.id, row.name)
+  return names
+}
+
+/** The connections with their tool calls; the picture adds the memory count it reads in its own part. */
+type AgentsRead = Omit<PictureAgents, 'activity'> & { activity: Omit<PictureActivity, 'memory_facts'> | null }
+
+async function loadAgents(supabase: SupabaseClient, companyId: string, userId: string, now: Date): Promise<AgentsRead> {
   const [keys, activity] = await Promise.all([
     loadConnectionKeys(supabase, companyId, userId),
-    loadAgentActivity(supabase, companyId, now).catch((err: unknown) => {
+    readToolCalls(supabase, companyId, now).catch((err: unknown) => {
       log.warn('tool call log unavailable', { companyId, reason: err instanceof Error ? err.message : String(err) })
       return null
     }),
   ])
 
   const partnerSlugs = keys.map((key) => partnerSlugOf(key.client)).filter((slug): slug is string => slug !== null)
-  const partnerNames = partnerSlugs.length > 0 ? await partnerClientNames(createServiceClient(), partnerSlugs) : new Map<string, string>()
+  const accountIds = [...new Set(keys.map((key) => key.service_account_id).filter((id): id is string => id !== null))]
+  const [partnerNames, accountNames] = await Promise.all([
+    partnerSlugs.length > 0 ? partnerClientNames(createServiceClient(), partnerSlugs) : new Map<string, string>(),
+    serviceAccountNames(companyId, accountIds),
+  ])
 
   const agents = keys.map((key): PictureAgent => {
     // Who a key is comes from its one definition (credentialActor): a key the sign-in minted is a client.
@@ -817,6 +856,8 @@ async function loadAgents(supabase: SupabaseClient, companyId: string, userId: s
       id: key.id,
       kind,
       name: kind === 'key' ? key.name : kind === 'partner' ? (partnerNames.get(partnerSlugOf(key.client) ?? '') ?? null) : null,
+      // Without the account's name the key's own stands in: the connection is still the account's.
+      service_account: key.service_account_id ? (accountNames.get(key.service_account_id) ?? key.name) : null,
       last_used_at: key.last_used_at,
       calls_today: seen?.calls_today ?? 0,
       last_call_at: seen?.last_call_at ?? null,
@@ -843,12 +884,12 @@ export async function loadAgentPicture(
 ): Promise<AgentPicture> {
   const part = <T>(name: string, read: () => Promise<T>, ms = PART_DEADLINE_MS) => within(name, companyId, ms, read)
 
-  const [sources, name, counts, memoryFacts, ruleAreas, checks, agents] = await Promise.all([
+  const [sources, name, counts, memoryFacts, knowledge, checks, agents] = await Promise.all([
     loadSources(supabase, companyId, userId, ports, now),
     part('company', async () => ({ name: await loadCompanyName(supabase, companyId) })),
     part('counts', () => loadCounts(supabase, companyId)),
     part('memory', async () => ({ facts: await loadMemoryFacts(supabase, companyId) })),
-    part('knowledge', async () => ({ count: await loadRuleAreas(supabase, companyId) })),
+    part('knowledge', () => loadKnowledge(supabase, companyId)),
     part('checks', async () => ({ checks: await loadChecks(supabase, companyId, ports, now) }), CHECKS_DEADLINE_MS),
     part('agents', () => loadAgents(supabase, companyId, userId, now)),
   ])
@@ -860,9 +901,9 @@ export async function loadAgentPicture(
       name: name?.name ?? null,
       counts: counts ?? NO_COUNTS,
       memory_facts: memoryFacts?.facts ?? null,
-      knowledge: { rule_areas: ruleAreas?.count ?? null, workflows: REGISTRY_SKILLS.map((skill) => skill.id) },
+      knowledge: { items: knowledge?.items ?? null, industry: knowledge?.industry ?? null },
       checks: checks?.checks ?? null,
     },
-    agents,
+    agents: agents && { ...agents, activity: agents.activity && { ...agents.activity, memory_facts: memoryFacts?.facts ?? null } },
   }
 }
