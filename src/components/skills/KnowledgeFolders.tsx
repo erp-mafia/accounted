@@ -53,7 +53,8 @@ const GROUP_LABEL: Record<Exclude<KnowledgeGroupId, 'all'>, string> = {
  * Under the groups, the company's own items of every kind (ownItemRows: its
  * flows, knowledge and analyses and its firm's, as the catalogue page lists
  * them under Egna), each a link to its own page, and one link to the page
- * that adds one. The own items are read by the catalogue page's loader too
+ * that adds one. An item the firm keeps for its companies says so, in one
+ * quiet word before its kind. The own items are read by the catalogue page's loader too
  * (GET /api/skills, the same key). A person who cannot write is shown the
  * items and no link to add one.
  *
@@ -171,11 +172,14 @@ export function KnowledgeFolders({ active, item = null, onItemClose }: { active:
             </div>
           ) : (
             <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {ownShown.map((row) => (
-                <li key={row.key} className="min-w-0">
-                  <OwnItemTile row={row} note={row.draft ? t('draft_tag') : t(`kind_one_${row.kind}`)} />
-                </li>
-              ))}
+              {ownShown.map((row) => {
+                const kindWord = row.draft ? t('draft_tag') : t(`kind_one_${row.kind}`)
+                return (
+                  <li key={row.key} className="min-w-0">
+                    <OwnItemTile row={row} note={row.scope === 'team' ? `${t('own_firm')} · ${kindWord}` : kindWord} />
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>
@@ -195,8 +199,9 @@ export function KnowledgeFolders({ active, item = null, onItemClose }: { active:
 /**
  * One of the company's own items: the picture of its kind (a folder for
  * knowledge, steps for a flow, bars for an analysis) in the colour its own
- * page gives it, its name, and one quiet word under it: its kind, or that
- * it waits to be added. A link, not a button: it opens the item's own page.
+ * page gives it, its name, and the quiet words under it (`note`): its kind,
+ * or that it waits to be added, after the word for the firm on an item the
+ * firm keeps. A link, not a button: it opens the item's own page.
  * The name is what a person typed, so it is masked in recordings and its one
  * line is left to the page.
  */

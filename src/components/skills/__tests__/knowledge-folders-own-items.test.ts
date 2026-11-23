@@ -81,12 +81,33 @@ describe('the own items in the Kunskap panel', () => {
     ])
   })
 
-  it("lists the firm's items with the company's own", () => {
-    const html = render({ data: [own(FIRM, 'Byråns månadsrutin', { itemKind: 'workflow' }, 'team'), own(RULES, 'Representation', { itemKind: 'rules' })] })
+  it("lists the firm's items with the company's own, and says of each firm item that it is the firm's", () => {
+    const html = render({ data: [own(FIRM, 'Månadsrutin', { itemKind: 'workflow' }, 'team'), own(RULES, 'Representation', { itemKind: 'rules' })] })
     expect(links(html).slice(0, 2)).toEqual([
-      [`/skills/own-${FIRM}`, 'Byråns månadsrutin · Arbetsflöde'],
+      // The firm's item: the word for the firm, then its kind.
+      [`/skills/own-${FIRM}`, 'Månadsrutin · Byråns · Arbetsflöde'],
+      // The company's own item: its kind alone, as before.
       [`/skills/egen.${RULES}`, 'Representation · Kunskap'],
     ])
+    expect(sv.skills_registry.own_firm).toBe('Byråns')
+  })
+
+  it("marks the firm's item of every kind, and a draft of the firm's, and no item of the company's", () => {
+    const firm: SkillSummary[] = [
+      own(FIRM, 'A flow', { itemKind: 'workflow' }, 'team'),
+      own(RULES, 'B knowledge', { itemKind: 'rules' }, 'team'),
+      own(ANALYSIS, 'C analysis', { itemKind: 'analysis' }, 'team'),
+      own(DRAFT, 'D draft', { itemKind: 'analysis', draft: true, active: false }, 'team'),
+    ]
+    // The markup writes an apostrophe as an entity: read it back as the reader sees it.
+    const notes = (catalog: SkillSummary[], locale: 'sv' | 'en'): string[] =>
+      links(render({ data: catalog }, locale)).slice(0, catalog.length).map(([, text]) => text.replaceAll('&#x27;', "'"))
+    // A draft comes first: it waits for a person.
+    expect(notes(firm, 'sv')).toEqual([`D draft · Byråns · ${sv.skills_registry.draft_tag}`, 'A flow · Byråns · Arbetsflöde', 'B knowledge · Byråns · Kunskap', 'C analysis · Byråns · Analys'])
+    expect(notes(firm, 'en')).toEqual([`D draft · The firm's · ${en.skills_registry.draft_tag}`, "A flow · The firm's · Workflow", "B knowledge · The firm's · Knowledge", "C analysis · The firm's · Analysis"])
+    const company: SkillSummary[] = firm.map((item): SkillSummary => ({ ...item, installations: [{ installation_id: item.installations[0].installation_id, scope: 'company' }] }))
+    expect(notes(company, 'sv').filter((text) => text.includes(sv.skills_registry.own_firm))).toEqual([])
+    expect(notes(company, 'en').filter((text) => text.includes(en.skills_registry.own_firm))).toEqual([])
   })
 
   it('says of a draft an AI saved that it waits to be added, as the catalogue does', () => {

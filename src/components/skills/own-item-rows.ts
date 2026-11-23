@@ -12,7 +12,7 @@ export interface OwnItemRow {
   href: string
   /** Saved by an AI and not yet added by a person. */
   draft: boolean
-  /** The company's own item, or one its firm keeps for its companies. */
+  /** The company's own item, or one its firm keeps for its companies: the panel marks the firm's with a word. */
   scope: 'company' | 'team'
 }
 
