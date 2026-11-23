@@ -77,9 +77,16 @@ const TYPED_VOUCHER = {
  * would answer), and a write on a bank row answering with the row.
  */
 function makeDb(state: { cashAccounts?: TableMockResult; glLines?: TableMockResult; openRows?: unknown[] }) {
+  const glLines = state.glLines ?? { data: [] }
   return createTableMockSupabase({
     cash_accounts: state.cashAccounts ?? { data: [CASH_1930] },
-    'rpc:get_unlinked_gl_lines': state.glLines ?? { data: [] },
+    // get_unlinked_gl_lines' answer, read in its two halves: the narrowing
+    // names the lines' verifikat, the predicate answers the lines. A failed
+    // read fails at the narrowing.
+    'rpc:bank_account_unlinked_entries': glLines.error
+      ? glLines
+      : { data: [...new Set(((glLines.data ?? []) as UnlinkedGLLine[]).map((line) => line.journal_entry_id))] },
+    'rpc:bank_account_unlinked_lines': glLines,
     open_bank_rows: { data: state.openRows ?? [] },
     account_reconciliation_settlements: { data: [] },
     transactions: (chain) => (chain.some((call) => call.method === 'update') ? { data: [{ id: 'updated' }] } : { data: null }),
@@ -128,7 +135,7 @@ describe('linkOpenBankRowsToVoucher', () => {
 
     await run(db)
 
-    const reads = db.findCalls('rpc:get_unlinked_gl_lines', 'rpc')
+    const reads = db.findCalls('rpc:bank_account_unlinked_entries', 'rpc')
     expect(reads.length).toBeGreaterThan(0)
     for (const [args] of reads) {
       expect(args).toMatchObject({
@@ -214,7 +221,7 @@ describe('linkOpenBankRowsToVoucher', () => {
 
     await run(db)
 
-    const asked = db.findCalls('rpc:get_unlinked_gl_lines', 'rpc').map(([args]) => (args as { p_account_number: string }).p_account_number)
+    const asked = db.findCalls('rpc:bank_account_unlinked_entries', 'rpc').map(([args]) => (args as { p_account_number: string }).p_account_number)
     expect(asked).toEqual(['1930', '2890'])
   })
 
