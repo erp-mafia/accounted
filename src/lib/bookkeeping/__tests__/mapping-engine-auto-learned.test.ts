@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
+import type { MappingRule } from '@/types'
 
 const { findTemplate } = vi.hoisted(() => ({ findTemplate: vi.fn() }))
 vi.mock('../counterparty-templates', async (importActual) => ({
@@ -25,7 +26,7 @@ import {
 const COMPANY = 'company-1'
 const OTHER = 'company-2'
 
-function rule(overrides: Record<string, unknown> = {}) {
+function rule(overrides: Partial<MappingRule> = {}): MappingRule {
   return {
     id: 'rule-learned',
     user_id: null,

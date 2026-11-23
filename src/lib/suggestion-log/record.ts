@@ -149,7 +149,7 @@ export async function snapshotSuggestions(
           : null,
       })
     }
-    snapshot.ruleVersion = withProgramVersion(BANK_LINE_SUGGESTIONS.rulesRevision())
+    snapshot.ruleVersion = withProgramVersion(BANK_LINE_SUGGESTIONS.rulesRevision(companyId))
   } catch (err) {
     log.warn('suggestion snapshot failed; decisions are recorded without suggestions', {
       companyId,

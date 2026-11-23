@@ -5596,6 +5596,7 @@
     "rec_why_catalog": "Known pattern in the bank text",
     "rec_why_counterparty": "{count, plural, =1 {Booked like this once before} other {Booked like this # times before}}",
     "rec_why_counterparty_refund": "{count, plural, =1 {Counterparty booked once before} other {Counterparty booked # times before}}, but the money moves the other way: likely a refund, booked in reverse",
+    "rec_why_precedent": "{count, plural, =1 {As last time: booked this way once before} other {As last time: booked this way # times before}}",
     "rec_why_manual": "Chosen by you",
     "rec_why_box_disputed": "the assistant's read gives another VAT box",
     "rec_why_clearing_receipt": "Swish receipt {receipt} in the till on {date}; the sale is booked in the daily takings, so the money goes against {account}, not to revenue again",

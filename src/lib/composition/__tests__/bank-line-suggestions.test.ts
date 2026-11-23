@@ -43,8 +43,18 @@ describe('BANK_LINE_SUGGESTIONS', () => {
   })
 
   it('rulesRevision and policyVersion: the constants the log recorded before', () => {
-    expect(BANK_LINE_SUGGESTIONS.rulesRevision()).toBe(BANK_PROPOSAL_RULES_REVISION)
+    expect(BANK_LINE_SUGGESTIONS.rulesRevision('company-1')).toBe(BANK_PROPOSAL_RULES_REVISION)
     expect(BANK_LINE_SUGGESTIONS.policyVersion()).toBe(DIRECT_BOOKING_POLICY_VERSION)
+  })
+
+  it('rulesRevision: a company whose rows are proposed for by the precedent rules records them, no other company does', () => {
+    vi.stubEnv('BOOKING_PRECEDENT_COMPANY_IDS', 'company-1')
+    try {
+      expect(BANK_LINE_SUGGESTIONS.rulesRevision('company-1')).toBe(`${BANK_PROPOSAL_RULES_REVISION}+precedent.1`)
+      expect(BANK_LINE_SUGGESTIONS.rulesRevision('company-2')).toBe(BANK_PROPOSAL_RULES_REVISION)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('propose: proposeForTransactions(supabase, companyId, transactions), its result and failure untouched', async () => {
