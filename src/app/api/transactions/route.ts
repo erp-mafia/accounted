@@ -12,6 +12,10 @@ import { isUuid } from '@/lib/invariants/uuid'
 const MAX_ROWS = 500
 const LIST_COLUMNS =
   'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, document_id'
+// An open row also answers what the matcher pointed it at, so a list of open
+// work can name the suggestion beside the row (components/transactions/
+// potential-matches.ts revalidates the pointers before they are shown).
+const OPEN_ROW_COLUMNS = `${LIST_COLUMNS}, is_business, invoice_id, supplier_invoice_id, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id, potential_journal_entry_id`
 
 // withRouteContext enforces auth (MFA on hosted) and resolves companyId; the
 // previous hand-rolled session lookup in this handler skipped the MFA gate.
@@ -78,7 +82,7 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
   const openRows = unmatched && !onlyIgnored
   let query = supabase
     .from(openRows ? 'open_bank_rows' : 'transactions')
-    .select(openRows ? LIST_COLUMNS : `${LIST_COLUMNS}, transaction_voucher_links(journal_entry_id, role)`)
+    .select(openRows ? OPEN_ROW_COLUMNS : `${LIST_COLUMNS}, transaction_voucher_links(journal_entry_id, role)`)
     .eq('company_id', companyId)
 
   // unmatched and reconciled are mutually exclusive: unmatched wins if both set
