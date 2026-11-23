@@ -25,6 +25,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { signerPersonalNumberFromBankIdLogin } from '@/lib/auth/bankid-signer'
 import { bankIdSignatoryProof } from '@/lib/company-lookup/signatory'
 import { isLegalPersonOrgNumber, normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Logger } from '@/lib/logger'
 import { BILLO_ALREADY_ENROLLED, type BilloProvider } from './billo'
 import { isDigitalMailboxApiError } from './http'
@@ -140,9 +141,9 @@ export interface KivraConnectResult {
  * cron) and Kivra's integration.created.
  *
  *   - A firmatecknare of the number proved it with their own BankID
- *     (bankIdSignatoryProof): the person who connected, or, when the
- *     activation began at Kivra and nobody in Accounted connected, a current
- *     member of the company.
+ *     (bankIdSignatoryProof): the person who connected, while still a member
+ *     of the company, or, when the activation began at Kivra and nobody in
+ *     Accounted connected, a current member of the company.
  *   - No other live company in Accounted holds the number: with two, Kivra's
  *     company cannot be told apart, so neither is made the reader.
  *
@@ -153,7 +154,9 @@ export async function kivraOwnershipRefusal(
   service: SupabaseClient,
   args: { companyId: string; orgNumber: string; connectedBy: string | null },
 ): Promise<KivraOwnershipRefusal | null> {
-  const people = args.connectedBy ? [args.connectedBy] : await memberUserIds(service, args.companyId)
+  // A connector read from a waiting row counts only while still a member of the company.
+  const members = await memberUserIds(service, args.companyId)
+  const people = args.connectedBy ? members.filter((id) => id === args.connectedBy) : members
   const proof = await bankIdSignatoryProof(service, people, args.orgNumber)
   if (proof === 'no_bankid') return 'DIGITAL_MAILBOX_SIGNATORY_BANKID_REQUIRED'
   if (proof === 'not_signatory') return 'DIGITAL_MAILBOX_NOT_SIGNATORY'
@@ -164,9 +167,10 @@ export async function kivraOwnershipRefusal(
 }
 
 async function memberUserIds(service: SupabaseClient, companyId: string): Promise<string[]> {
-  const { data, error } = await service.from('company_members').select('user_id').eq('company_id', companyId)
-  if (error) throw new Error(`company members read failed: ${error.message}`)
-  return ((data as Array<{ user_id: string }> | null) ?? []).map((row) => row.user_id)
+  const rows = await fetchAllRows<{ user_id: string }>(({ from, to }) =>
+    service.from('company_members').select('user_id').eq('company_id', companyId).order('user_id').range(from, to),
+  )
+  return rows.map((row) => row.user_id)
 }
 
 /**
@@ -373,13 +377,17 @@ export async function onKivraIntegrationDeleted(service: SupabaseClient, company
 async function companiesWithOrgNumber(service: SupabaseClient, orgNumber: string): Promise<string[]> {
   const key = orgNumberKey(orgNumber)
   if (!key) return []
-  const { data, error } = await service
-    .from('company_settings')
-    .select('company_id, org_number, is_sandbox, companies!inner(archived_at)')
-    .like('org_number', `%${key.slice(6)}%`)
-    .is('companies.archived_at', null)
-  if (error) throw new Error(`company lookup failed: ${error.message}`)
-  return ((data as Array<{ company_id: string; org_number: string | null; is_sandbox: boolean | null }> | null) ?? [])
+  // Every page: the exact match is decided below, so a capped read would miss a second holder.
+  const rows = await fetchAllRows<{ company_id: string; org_number: string | null; is_sandbox: boolean | null }>(({ from, to }) =>
+    service
+      .from('company_settings')
+      .select('company_id, org_number, is_sandbox, companies!inner(archived_at)')
+      .like('org_number', `%${key.slice(6)}%`)
+      .is('companies.archived_at', null)
+      .order('company_id')
+      .range(from, to),
+  )
+  return rows
     .filter((row) => row.is_sandbox !== true && orgNumberKey(row.org_number) === key)
     .map((row) => row.company_id)
 }

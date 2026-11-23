@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRowsMockSupabase } from '@/tests/helpers'
+import { createPagedMockSupabase, createRowsMockSupabase, manyRows } from '@/tests/helpers'
 
 const findCompanyKey = vi.hoisted(() => vi.fn())
 
@@ -13,7 +13,7 @@ vi.mock('../providers', () => ({
   isDigitalMailboxEnabled: () => true,
 }))
 
-import { activatePendingKivra, connectKivraReceive, onKivraIntegrationCreated } from '../connect'
+import { activatePendingKivra, connectKivraReceive, kivraOwnershipRefusal, onKivraIntegrationCreated } from '../connect'
 import type { DigitalMailboxConnection } from '../connections'
 import type { KivraProvider } from '../kivra'
 
@@ -80,7 +80,8 @@ function world(opts: {
       digital_mailbox_connections: opts.connections ?? [],
       bankid_identities: (opts.bankIds ?? []).map((b) => b.identity),
       bankid_enrichment: (opts.bankIds ?? []).map((b) => b.enrichment),
-      company_members: opts.members ?? [],
+      // The admin who connects is a member of the company, as the route requires.
+      company_members: opts.members ?? [{ company_id: COMPANY, user_id: ADMIN }],
     },
     writes,
   )
@@ -257,6 +258,23 @@ describe('activatePendingKivra: a waiting row activates only for a proven, singl
     expect(connectionWrites()).toEqual([])
   })
 
+  it('does not count a connector who is no longer a member of the company', async () => {
+    const row = pendingRow(COMPANY, ADMIN) as unknown as DigitalMailboxConnection
+    const { service, connectionWrites } = world({
+      settings: [settings(COMPANY, ORG)],
+      bankIds: [bankId(ADMIN, ['LE'])],
+      members: [{ company_id: COMPANY, user_id: 'user-bookkeeper' }],
+      connections: [row as unknown as Row],
+    })
+
+    await expect(activatePendingKivra(service, kivra, row, ORG, log)).resolves.toEqual({
+      ok: false,
+      code: 'DIGITAL_MAILBOX_SIGNATORY_BANKID_REQUIRED',
+    })
+    expect(findCompanyKey).not.toHaveBeenCalled()
+    expect(connectionWrites()).toEqual([])
+  })
+
   it('activates the row of a firmatecknare once Kivra lists the company', async () => {
     const row = pendingRow(COMPANY, ADMIN) as unknown as DigitalMailboxConnection
     const { service } = world({ settings: [settings(COMPANY, ORG)], bankIds: [bankId(ADMIN, ['EFT'])], connections: [row as unknown as Row] })
@@ -272,5 +290,39 @@ describe('activatePendingKivra: a waiting row activates only for a proven, singl
     const { service } = world({ settings: [settings(COMPANY, ORG)], bankIds: [bankId(ADMIN, ['LE'])], connections: [row as unknown as Row] })
 
     await expect(activatePendingKivra(service, kivra, row, ORG, log)).resolves.toEqual({ ok: true, data: null })
+  })
+})
+
+describe('kivraOwnershipRefusal: reads every page, as PostgREST returns at most 1,000 rows', () => {
+  it('finds a second holder of the number past the first page', async () => {
+    const proven = bankId(ADMIN, ['LE'])
+    // The read narrows on the last four digits, so numbers that only share those fill the first page.
+    const lookalikes = manyRows(999, (i) => settings(`lookalike-${i}`, `55${String(i).padStart(4, '0')}9208`))
+    const { supabase } = createPagedMockSupabase({
+      company_settings: [settings(COMPANY, ORG), ...lookalikes, settings(OTHER, '442005-9208')],
+      company_members: [{ company_id: COMPANY, user_id: ADMIN }],
+      bankid_identities: [proven.identity],
+      bankid_enrichment: [proven.enrichment],
+    })
+
+    await expect(
+      kivraOwnershipRefusal(supabase as unknown as SupabaseClient, { companyId: COMPANY, orgNumber: ORG, connectedBy: ADMIN }),
+    ).resolves.toBe('DIGITAL_MAILBOX_ORG_NUMBER_SHARED')
+  })
+
+  it('finds the member who proves the number past the first page', async () => {
+    const proven = bankId('user-signatory', ['VD'])
+    const { supabase, findCalls } = createPagedMockSupabase({
+      company_settings: [settings(COMPANY, ORG)],
+      company_members: [...manyRows(1000, (i) => ({ company_id: COMPANY, user_id: `user-${i}` })), { company_id: COMPANY, user_id: 'user-signatory' }],
+      bankid_identities: [proven.identity],
+      bankid_enrichment: [proven.enrichment],
+    })
+
+    await expect(
+      kivraOwnershipRefusal(supabase as unknown as SupabaseClient, { companyId: COMPANY, orgNumber: ORG, connectedBy: null }),
+    ).resolves.toBeNull()
+    // This mock applies no filters, so the proof is asked of the 1,001st member only if the read paged.
+    expect(findCalls('bankid_identities', 'in')).toEqual([['user_id', expect.arrayContaining(['user-signatory'])]])
   })
 })
