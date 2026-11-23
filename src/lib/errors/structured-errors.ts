@@ -11393,6 +11393,13 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Filen tar slut mitt i en rad, så den verkar avkortad. Ladda ner rapporten igen från Kustom.',
     message_en: 'The file ends in the middle of a row, so it looks cut short. Download the report again from Kustom.',
   },
+  KUSTOM_SETTLEMENT_TOO_MANY_ROWS: {
+    httpStatus: 400,
+    message_sv:
+      'Rapporten har fler än 10 000 köp och returer, mer än en uppladdning läser in. Ladda ner rapporten för en utbetalning i taget från Kustom.',
+    message_en:
+      'The report holds more than 10,000 sales and returns, more than one upload reads. Download the report for one payout at a time from Kustom.',
+  },
   KUSTOM_SETTLEMENT_IMPORT_FAILED: {
     httpStatus: 500,
     message_sv: 'Det gick inte att spara alla ordrar från rapporten. Försök igen: ordrar som redan sparats läses inte in två gånger.',

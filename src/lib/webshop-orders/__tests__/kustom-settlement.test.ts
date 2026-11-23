@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildOrderBooking } from '../booking-lines'
 import {
+  KUSTOM_SETTLEMENT_MAX_ROWS,
   kustomCaptureExternalId,
   kustomImport,
   kustomOrderNumbers,
@@ -379,6 +380,21 @@ describe('parseKustomSettlementReport', () => {
     // A quoted field that closes is read as usual.
     const quoted = [sale({ captureId: 'cap-q', amount: '125.00', vat: [['2500', '25.00']] }).replace(/;;$/, ';"SE";')]
     expect(refusal(report({ rows: quoted, summary: summaryOf('125.00', '0.00', '125.00') }))).toBe('ok')
+  })
+
+  it('reads a report at the row cap and refuses one above it, counting sales and returns only', () => {
+    const sales = (n: number) =>
+      Array.from({ length: n }, (_, i) => sale({ captureId: `cap-${i}`, amount: '1.00', vat: [['2500', '0.20']] }))
+    const fee = tx({ type: 'FEE', capture: '2026-11-18T09:00:00.000Z', order: 'o-cap-0', amount: '0.10' })
+    const atCap = [...sales(KUSTOM_SETTLEMENT_MAX_ROWS), fee]
+    const total = `${KUSTOM_SETTLEMENT_MAX_ROWS}.00`
+    expect(read(report({ rows: atCap, summary: summaryOf(total, '0.00', total) })).entries).toHaveLength(
+      KUSTOM_SETTLEMENT_MAX_ROWS,
+    )
+    const over = `${KUSTOM_SETTLEMENT_MAX_ROWS + 1}.00`
+    expect(
+      refusal(report({ rows: sales(KUSTOM_SETTLEMENT_MAX_ROWS + 1), summary: summaryOf(over, '0.00', over) })),
+    ).toBe('KUSTOM_SETTLEMENT_TOO_MANY_ROWS')
   })
 
   it('finds an in-store mark in a far column of a wide header', () => {

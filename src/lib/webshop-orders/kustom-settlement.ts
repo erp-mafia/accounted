@@ -61,6 +61,13 @@ const CONSUMER_VAT_PAIRS = 4
  */
 const VAT_ROUNDING_PER_RATE = 0.02
 
+/**
+ * Sales and returns one report may hold. Each row is looked up and written on
+ * upload, so the cap bounds the database work of one request; one payout's
+ * report holds far fewer.
+ */
+export const KUSTOM_SETTLEMENT_MAX_ROWS = 10_000
+
 const COUNTRY_SWEDEN = 'SE'
 
 /** Why a row cannot be booked from the Orders page without a person. */
@@ -94,6 +101,8 @@ export type KustomSettlementRefusal =
   | 'KUSTOM_SETTLEMENT_TOTALS_MISMATCH'
   /** The file stops inside a quoted field or mid-record: a download that was cut. */
   | 'KUSTOM_SETTLEMENT_CUT_SHORT'
+  /** More sales and returns than KUSTOM_SETTLEMENT_MAX_ROWS. */
+  | 'KUSTOM_SETTLEMENT_TOO_MANY_ROWS'
 
 /** The payout as the summary states it, for booking the bank row by hand. */
 export interface KustomPayout {
@@ -403,6 +412,7 @@ export function parseKustomSettlementReport(content: string): KustomSettlementOu
   for (const t of transactions) {
     const type = cell(t, 'type').toUpperCase()
     if (type !== 'SALE' && type !== 'RETURN') continue
+    if (entries.length === KUSTOM_SETTLEMENT_MAX_ROWS) return { ok: false, code: 'KUSTOM_SETTLEMENT_TOO_MANY_ROWS' }
     const kind = type === 'SALE' ? 'sale' : 'return'
 
     const amount = amountOf(cell(t, 'amount'))
