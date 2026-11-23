@@ -31,7 +31,10 @@ export const POST = withRouteContext<{ params: Promise<{ provider: string }> }>(
     if (connection?.receive_state === 'pending' && provider === 'kivra' && providers.kivra) {
       const identity = await loadCompanyIdentity(service, companyId)
       if (identity?.orgNumber) {
-        connection = (await activatePendingKivra(service, providers.kivra, connection, identity.orgNumber, log)) ?? connection
+        const activation = await activatePendingKivra(service, providers.kivra, connection, identity.orgNumber, log)
+        // Why the company may not read the inbox is the answer, not "not connected yet".
+        if (!activation.ok) return errorResponseFromCode(activation.code, log, { requestId })
+        connection = activation.data ?? connection
       }
     }
     if (connection?.receive_state !== 'active') {
