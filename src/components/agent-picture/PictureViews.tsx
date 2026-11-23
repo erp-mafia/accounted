@@ -15,23 +15,26 @@ import { RawText } from '@/components/wiki/wiki-parts'
 import { formatCurrency } from '@/lib/utils'
 import type { PictureCheckLine, PictureChecks, PictureCheckStatus } from '@/lib/agent-context/agent-picture'
 
-function ListSkeleton() {
+function FoldersSkeleton() {
   return (
-    <div aria-busy>
-      {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="flex h-11 items-center border-b-hairline">
-          <Skeleton className="h-3.5 w-2/3" />
-        </div>
+    <div aria-busy className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <Skeleton key={i} className="h-24 w-full rounded-lg" />
       ))}
     </div>
   )
 }
 
-// The catalogue's list brings the catalogue's own code with it: loaded when the Kunskap view is first opened.
-const KnowledgeList = dynamic(() => import('@/components/skills/KnowledgeList').then((m) => m.KnowledgeList), { loading: () => <ListSkeleton /> })
+// The folders bring the catalogue's folder mark and item view with them: loaded when the Kunskap view is first opened.
+const KnowledgeFolders = dynamic(() => import('@/components/skills/KnowledgeFolders').then((m) => m.KnowledgeFolders), { loading: () => <FoldersSkeleton /> })
 
 /** What a row of the company's card opens. */
-export type PictureView = 'context' | 'checks' | 'memory' | 'knowledge'
+export const PICTURE_VIEWS = ['context', 'checks', 'memory', 'knowledge'] as const
+export type PictureView = (typeof PICTURE_VIEWS)[number]
+
+export function isPictureView(value: unknown): value is PictureView {
+  return typeof value === 'string' && (PICTURE_VIEWS as readonly string[]).includes(value)
+}
 type SheetView = Exclude<PictureView, 'context'>
 
 /** The briefing, as the page that hosts the picture loads it (once): the context graph is drawn from its text. */
@@ -60,8 +63,8 @@ const REASONS = new Set([
  * view, titled with the row's name, with a close control and nothing to
  * switch between: Kontext the context graph in the app's wide dialog with
  * the raw text under it, Kontroller the check lines, Minne the memory as one
- * list, Kunskap the catalogue's knowledge list. The last three open in the
- * app's slide-over.
+ * list, Kunskap the knowledge items as folders, each opening in place. The
+ * last three open in the app's slide-over.
  */
 export function PictureViews({
   view,
@@ -69,7 +72,7 @@ export function PictureViews({
   companyName,
   context,
   checks,
-  industry,
+  activeKnowledge,
   when,
 }: {
   view: PictureView | null
@@ -77,8 +80,8 @@ export function PictureViews({
   companyName: string | null
   context: PictureContext
   checks: PictureChecks | null
-  /** The company's own industry item, which the knowledge list puts first. */
-  industry: string | null
+  /** The knowledge items the agent gets today, by id; null when that could not be read. */
+  activeKnowledge: readonly string[] | null
   /** An instant or a date in words: today (with its time), another day by its date. */
   when: (instant: string) => string
 }) {
@@ -120,7 +123,7 @@ export function PictureViews({
               <SlideOverBody className="space-y-5">
                 {shown === 'checks' && <ChecksView checks={checks} when={when} />}
                 {shown === 'memory' && <AgentMemoryPanel plain />}
-                {shown === 'knowledge' && <KnowledgeList industry={industry} />}
+                {shown === 'knowledge' && <KnowledgeFolders active={activeKnowledge} />}
               </SlideOverBody>
             </>
           )}

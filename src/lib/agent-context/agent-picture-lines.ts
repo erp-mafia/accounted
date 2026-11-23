@@ -144,3 +144,17 @@ export function isReadingNow(lastCallAt: string | null | undefined, now: string 
   // slightly ahead is still a call made just now.
   return Math.abs(at - last) / 1000 <= windowSeconds
 }
+
+/**
+ * Which of some measured targets holds a point: the first one, by id, or
+ * null when none does. For a press that has to be placed by where it landed
+ * (a press on a row of the company's card while a view is still closing over
+ * the page reaches the page as coordinates only).
+ */
+export function hitTest(targets: ReadonlyArray<{ id: string; rect: FlowRect }>, x: number, y: number): string | null {
+  for (const target of targets) {
+    const { left, top, width, height } = target.rect
+    if (x >= left && x <= left + width && y >= top && y <= top + height) return target.id
+  }
+  return null
+}
