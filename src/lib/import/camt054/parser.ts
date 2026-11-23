@@ -144,19 +144,27 @@ function accountAsGiven(account: string): string | null {
   return accountBankgiro(account) ?? text(extractTextContent(account, 'IBAN')) ?? text(extractNestedText(account, 'Othr', 'Id'))
 }
 
+/** What follows the account's own <Id>: its type, currency and name, then its owner and servicer, who carry ids of their own. */
+const AFTER_ACCOUNT_ID = /<(?:Tp|Ccy|Nm|Ownr|Svcr)(?=[\s>/])/i
+
 /**
- * The account a notification is for. Länsförsäkringar types the account BGNR
- * and prints the bankgiro as its name; a notification may also identify the
- * account by the bankgiro itself. Neither is a bank account number.
+ * The account a notification is for, read from the account's own <Id> (the
+ * owner's organisation number is an <Othr> id too, and is not the account).
+ * Länsförsäkringar types the account BGNR and prints the bankgiro as its
+ * name; a notification may also identify the account by the bankgiro itself.
+ * Neither is a bank account number.
  */
 function notificationAccount(account: string | undefined): { identity: BankFileAccountIdentity | null; giro: string | null } {
   if (!account) return { identity: null, giro: null }
-  const ownGiro = accountBankgiro(account)
-  const typedGiro =
-    extractNestedText(account, 'Tp', 'Prtry')?.toUpperCase() === 'BGNR' ? bankgiro(extractTextContent(account, 'Nm') ?? '') : null
+  const idEnd = account.search(AFTER_ACCOUNT_ID)
+  const ownId = idEnd === -1 ? account : account.slice(0, idEnd)
+  const ownGiro = accountBankgiro(ownId)
+  const name = extractNestedText(account, 'Tp', 'Prtry')?.toUpperCase() === 'BGNR' ? (extractTextContent(account, 'Nm') ?? '') : ''
+  // A bankgiro is 7 or 8 digits: a name that is anything else is a name.
+  const typedGiro = /^\d{3,4}-?\d{4}$/.test(name.trim()) ? bankgiro(name) : null
   const identity = ownGiro
     ? null
-    : accountIdentity({ iban: extractTextContent(account, 'IBAN'), account_number: extractNestedText(account, 'Othr', 'Id') })
+    : accountIdentity({ iban: extractTextContent(ownId, 'IBAN'), account_number: extractNestedText(ownId, 'Othr', 'Id') })
   return { identity, giro: ownGiro ?? typedGiro }
 }
 

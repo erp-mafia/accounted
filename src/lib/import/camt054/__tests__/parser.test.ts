@@ -306,6 +306,15 @@ describe('parseCamt054', () => {
     expect(result.deposits.map((d) => d.account)).toEqual([{ iban: OWN_IBAN, clearing: null, account_number: null }, null])
   })
 
+  it('reads the account from its own id, never from its owner', () => {
+    const entries = [entry({ amount: '10.00', date: '2026-12-01', payments: [payment({ amount: '10.00', receiverBankgiro: null })] })]
+    const owner = { name: 'Bolag 123 4567 AB', orgNumber: '5560160680' }
+    // An IBAN account: the owner's organisation number is not an account number.
+    expect(one(entries, { owner }).deposits[0]).toMatchObject({ account: { iban: OWN_IBAN, clearing: null, account_number: null }, bankgiro: null })
+    // An account typed BGNR with no name of its own: the owner's name is not a bankgiro.
+    expect(one(entries, { owner, iban: null, giroTyped: '' }).deposits[0]).toMatchObject({ account: null, bankgiro: null })
+  })
+
   it('reports a file with no entries', () => {
     const result = parseCamt054(document([notification({ entries: [] })]))
     expect(result.deposits).toEqual([])
