@@ -1648,6 +1648,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   company_sending_domains: 'outbound-mail infrastructure (sender domain verification state)',
   company_invitations: 'membership state, meaningless outside the platform',
   company_members: 'membership state, meaningless outside the platform',
+  rattelse_actor_names: 'the name behind a platform user id, kept for the reports\' labels after the account is deleted; user identities are platform state, like company_members',
   company_subscriptions: 'billing state',
   usage_statements: "billing state: Accounted's monthly usage statements and invoice ids, not räkenskapsinformation (the usage itself is in the exported payment orders, deliveries and signings)",
   usage_consents: 'billing state: the charge for use above what the plan includes, opened for the company, by whom and at what price; not räkenskapsinformation',

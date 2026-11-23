@@ -214,7 +214,7 @@ describe('names of who corrected entries, after the account is deleted (pg)', ()
     const notYet = await namedPerson(null, 'not-yet@example.se')
     await getPool().query(
       `INSERT INTO public.rattelse_actor_names (company_id, user_id, email, retention_expires_at)
-       VALUES ($1, $2, 'due@example.se', CURRENT_DATE), ($1, $3, 'not-yet@example.se', CURRENT_DATE + 1)`,
+       VALUES ($1, $2, 'due@example.se', public.stockholm_today()), ($1, $3, 'not-yet@example.se', public.stockholm_today() + 1)`,
       [companyId, due, notYet],
     )
 

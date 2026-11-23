@@ -240,8 +240,9 @@ $function$;
 
 REVOKE ALL ON FUNCTION public.erase_user_personal_data(uuid) FROM PUBLIC, anon, authenticated, service_role;
 
--- Daily: a kept name goes once its bevarandetid has ended. CURRENT_DATE is
--- UTC, so a row due on 1 January goes after the Swedish 31 December is over.
+-- Daily: a kept name goes once its bevarandetid has ended, counted on the
+-- Swedish calendar (public.stockholm_today()), so a row due on 1 January goes
+-- only after the Swedish 31 December is over.
 CREATE OR REPLACE FUNCTION public.delete_expired_rattelse_actor_names()
  RETURNS integer
  LANGUAGE plpgsql
@@ -252,7 +253,7 @@ DECLARE
   deleted_count integer;
 BEGIN
   DELETE FROM public.rattelse_actor_names
-   WHERE retention_expires_at <= CURRENT_DATE;
+   WHERE retention_expires_at <= public.stockholm_today();
 
   GET DIAGNOSTICS deleted_count = ROW_COUNT;
   RETURN deleted_count;
