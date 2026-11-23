@@ -1140,7 +1140,6 @@
     "backfill_done_title": "Older purchases fetched"
   },
   "settings": {
-    "memory_updated": "updated {date}",
     "memory_hidden": "hidden",
     "memory_creator_deleted": "a deleted user",
     "group_profile": "Profile",

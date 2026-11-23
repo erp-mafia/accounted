@@ -1140,7 +1140,6 @@
     "backfill_done_title": "Äldre köp hämtade"
   },
   "settings": {
-    "memory_updated": "uppdaterad {date}",
     "memory_hidden": "dold",
     "memory_creator_deleted": "en borttagen användare",
     "group_profile": "Profil",

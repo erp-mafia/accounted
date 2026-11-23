@@ -75,7 +75,6 @@ const lineRow = (overrides: Partial<MemoryLineRow> = {}): MemoryLineRow => ({
   client: null,
   created_by: ANNA,
   created_at: SAVED,
-  updated_at: SAVED,
   is_active: true,
   ...overrides,
 })
@@ -85,7 +84,7 @@ const lines = (row: MemoryLineRow) => [memoryRowLine(row, svWords, 'sv'), memory
 
 describe('memoryRowLine', () => {
   it('says the person and the date for a fact a person saved', () => {
-    expect(lines(lineRow({ created_at: '2026-11-23T12:00:00Z', updated_at: '2026-11-23T12:00:00Z' }))).toEqual([
+    expect(lines(lineRow({ created_at: '2026-11-23T12:00:00Z' }))).toEqual([
       'Anna Andersson · 23 nov. 2026',
       'Anna Andersson · Nov 23, 2026',
     ])
@@ -102,16 +101,25 @@ describe('memoryRowLine', () => {
     ])
   })
 
-  it('names a later change only when the row was changed on a later day', () => {
-    expect(lines(lineRow({ source: 'agent_learned', updated_at: '2026-10-20T12:00:00Z' }))).toEqual([
-      'AI-anslutning åt Anna Andersson · 7 aug. 2026 · uppdaterad 20 okt. 2026',
-      'AI connection for Anna Andersson · Aug 7, 2026 · updated Oct 20, 2026',
+  it('names no later change, whatever the row\'s own stamp says: it also moves when the row is pinned, hidden or read', () => {
+    /** A row as the panel hands it in, with the stamp the table keeps. */
+    const stamped = (updated_at: string, overrides: Partial<MemoryLineRow> = {}): MemoryLineRow & { updated_at: string } => ({ ...lineRow(overrides), updated_at })
+    // A later day, the same day, an earlier one and a stamp that cannot be read: the line is who and when it was saved.
+    for (const stamp of ['2026-10-20T12:00:00Z', '2026-08-07T12:30:00Z', '2026-08-01T12:00:00Z', '']) {
+      expect(lines(stamped(stamp)), stamp).toEqual(['Anna Andersson · 7 aug. 2026', 'Anna Andersson · Aug 7, 2026'])
+    }
+    expect(lines(stamped('2026-10-20T12:00:00Z', { source: 'agent_learned' }))).toEqual([
+      'AI-anslutning åt Anna Andersson · 7 aug. 2026',
+      'AI connection for Anna Andersson · Aug 7, 2026',
     ])
-    // Changed the same day: the date is already said.
-    expect(lines(lineRow({ updated_at: '2026-08-07T12:30:00Z' }))).toEqual(['Anna Andersson · 7 aug. 2026', 'Anna Andersson · Aug 7, 2026'])
-    // A stamp that is not later, or cannot be read, names nothing.
-    expect(memoryRowLine(lineRow({ updated_at: '2026-08-01T12:00:00Z' }), svWords, 'sv')).toBe('Anna Andersson · 7 aug. 2026')
-    expect(memoryRowLine(lineRow({ updated_at: '' }), svWords, 'sv')).toBe('Anna Andersson · 7 aug. 2026')
+    // The kind and the hidden mark stand as before; the later day is in neither.
+    expect(lines(stamped('2026-10-20T12:00:00Z', { kind: 'pattern', is_active: false }))).toEqual([
+      'Mönster · Anna Andersson · 7 aug. 2026 · dold',
+      'Pattern · Anna Andersson · Aug 7, 2026 · hidden',
+    ])
+    // The words for it are gone from both languages.
+    expect(sv.settings).not.toHaveProperty('memory_updated')
+    expect(en.settings).not.toHaveProperty('memory_updated')
   })
 
   it('names the kind only on a row that is not a plain fact', () => {
@@ -127,9 +135,9 @@ describe('memoryRowLine', () => {
     const all = [
       ...lines(lineRow()),
       ...lines(lineRow({ source: 'agent_learned', client: 'chatgpt' })),
-      ...lines(lineRow({ kind: 'pattern', updated_at: '2026-10-20T12:00:00Z' })),
+      ...lines(lineRow({ kind: 'pattern' })),
     ].join(' | ')
-    for (const word of ['Fakta', 'Fact', 'Du lärde mig', 'You taught me', 'Jag noterade', 'I noted', 'Sparad av', 'Saved by']) {
+    for (const word of ['Fakta', 'Fact', 'Du lärde mig', 'You taught me', 'Jag noterade', 'I noted', 'Sparad av', 'Saved by', 'uppdaterad', 'updated']) {
       expect(all).not.toContain(word)
     }
   })
