@@ -2687,7 +2687,7 @@ Response `200` (`application/pdf`).
 **Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note's verifikat and restore the invoice.**
 `scope:suppliers:write · risk:high · idempotent · dry-run`
 
-For an original supplier invoice with status credited: posts a storno cancelling the live credit note's verifikat (dated on that verifikat's date, never an edit or delete), marks the credit note reversed (the row is kept for the archive and the ankomstnummer series), and restores the original's status and remaining amount from its payments (paid, partially_paid, overdue, approved, or registered when it has no verifikat). The invoice can be credited again afterwards. An invoice that is not credited is an idempotent no-op (changed=false). Dry-runnable: the preview names the storno and the restored status.
+For an original supplier invoice with status credited: posts a storno cancelling the live credit note's verifikat (dated on that verifikat's date, never an edit or delete), marks the credit note reversed (the row is kept for the archive and the ankomstnummer series), and restores the original's status and remaining amount from its payments (paid, partially_paid, overdue, approved when it was attested, else registered, where it waits for attest again). The invoice can be credited again afterwards. An invoice that is not credited is an idempotent no-op (changed=false). Dry-runnable: the preview names the storno and the restored status.
 
 **Use when:** A supplier invoice was credited by mistake and the credit should be taken back.
 **Do not use for:** Crediting an invoice (POST /supplier-invoices/{id}/credit), deleting an unbooked invoice (DELETE /supplier-invoices/{id}) or reversing an arbitrary verifikat.

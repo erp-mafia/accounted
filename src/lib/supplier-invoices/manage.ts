@@ -40,7 +40,7 @@ import type { SupplierInvoice, SupplierInvoicePayment } from '@/types'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events'
 import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
-import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import {
@@ -55,6 +55,7 @@ import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/
 import {
   canMarkSupplierInvoiceBankEntered,
   payableSupplierInvoiceStatuses,
+  resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -224,9 +225,14 @@ type OriginalWithPayments = SupplierInvoice & { payments?: SupplierInvoicePaymen
 /**
  * The status and remaining amount the original returns to once its credit
  * is undone, from what is actually paid. Pure.
+ *
+ * With nothing paid it rests where resolveUnsettledStatus puts it: the
+ * attest mark (approved_at) decides 'approved', never the registration
+ * verifikat, which is posted before attest. Reading the verifikat sent a
+ * never attested invoice back as 'approved', past attest (crm#2121).
  */
 export function restoredAfterUncredit(
-  original: Pick<SupplierInvoice, 'total' | 'due_date' | 'registration_journal_entry_id'>,
+  original: Pick<SupplierInvoice, 'total' | 'due_date' | 'approved_at'>,
   payments: ReadonlyArray<Pick<SupplierInvoicePayment, 'amount'>>,
   now: Date = new Date(),
 ): { status: SupplierInvoice['status']; remaining_amount: number } {
@@ -239,16 +245,11 @@ export function restoredAfterUncredit(
     status = 'paid'
   } else if (paidSum > 0) {
     status = 'partially_paid'
-  } else if (original.due_date && isPastDue(original.due_date, todayIsoStockholm(now))) {
-    status = 'overdue'
-  } else if (original.registration_journal_entry_id) {
-    // A posted verifikat exists: safe to restore to 'approved'.
-    status = 'approved'
   } else {
-    // No registration verifikat (kontantmetoden, or an inconsistent row):
-    // 'approved' without a verifikat would break sambandskravet (BFL 4 kap
-    // 2 §), so fall back to 'registered'.
-    status = 'registered'
+    status = resolveUnsettledStatus(
+      { due_date: original.due_date, remaining_amount: remaining, approved_at: original.approved_at },
+      todayIsoStockholm(now),
+    )
   }
   return { status, remaining_amount: remaining }
 }

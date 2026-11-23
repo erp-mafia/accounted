@@ -69,7 +69,11 @@ export function isOverduePayable(
 }
 
 /**
- * The status an unsettled invoice should rest at right now.
+ * The status an unsettled invoice should rest at right now. The one
+ * definition (scripts/checks/one-definition/supplier-invoice-rest-status.mjs):
+ * every TypeScript door that puts an invoice back here asks it, an undone
+ * payment and an undone credit included, and the SQL undo paths and the
+ * overdue cron mirror it.
  *
  * The flip collapses 'registered' and 'approved' into 'overdue', so the way
  * back needs approved_at: without it an un-flip would silently strip an

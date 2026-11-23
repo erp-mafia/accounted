@@ -34,12 +34,11 @@ const NOTHING_LEFT_EPSILON = 0.005
  * approved_at is the mark the attest service sets, and nothing clears it:
  * there is no un-attest, a rejection is only possible before the mark, and
  * the overdue flip, a due date edit and a payment undo all leave it alone.
- * The stored status 'approved' without a mark is the other shape: a payment
- * undo (lib/bookkeeping/payment-sync.ts) and an undone credit
- * (restoredAfterUncredit) rest an invoice there whether or not it was ever
- * attested, and from there it can no longer be attested
- * (canApproveSupplierInvoice refuses 'approved'), so it is past the attest
- * step for every reader.
+ * The stored status 'approved' without a mark is the other shape: rows
+ * inserted as 'approved', and rows a payment undo or an undone credit rested
+ * there before both asked resolveUnsettledStatus (crm#2121). From there an
+ * invoice can no longer be attested (canApproveSupplierInvoice refuses
+ * 'approved'), so it is past the attest step for every reader.
  */
 export function isSupplierInvoiceAttested(invoice: { status: string; approved_at?: string | null }): boolean {
   return !!invoice.approved_at || invoice.status === 'approved'

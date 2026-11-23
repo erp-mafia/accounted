@@ -97,6 +97,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       remaining_amount: 0,
       due_date: '2099-12-31',
       registration_journal_entry_id: 'je-reg-1',
+      approved_at: '2026-01-15T10:00:00Z',
       payments: [],
     })
 
@@ -180,9 +181,8 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
 
   it('handles cash method (credit row without registration_journal_entry_id): skips reverseEntry and restores to registered', async () => {
     // Pure cash-method: neither the original nor the credit row have a
-    // registration JE. The original must not be restored to 'approved':
-    // that would assert a verifikation that never existed (sambandskravet,
-    // BFL 4 kap 2§). 'registered' is the correct state.
+    // registration JE, and kontantmetoden has no attest step, so the original
+    // was never attested: 'registered' is the correct state.
     const original = makeSupplierInvoice({
       id: 'inv-1',
       status: 'credited',
