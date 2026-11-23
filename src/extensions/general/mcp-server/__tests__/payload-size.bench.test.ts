@@ -991,6 +991,16 @@ describe('tools/list payload size guard', () => {
     // gnubok_list_articles (a shorter description, include_inactive bare).
     // Measured 63 058 (full catalog 67 487; main 63 011 and 67 441).
     // Ceiling unchanged.
+    // 2026-11-23: acquisition_type on gnubok_create_asset (how the asset came
+    // onto the books: a purchase, a business acquisition, a merger or a
+    // reclassification, which is the row of the K2 anläggningstillgångar note
+    // it prints on) and, bare, on the gnubok_list_assets row. Wire data on
+    // existing tools, paid for in part on the same two (shorter notes on the
+    // opening depreciation and shorter tool descriptions). The life of an
+    // asset taken over by merger or reclassification is what remains of it,
+    // said on useful_life_months and paid for with the category note the
+    // tool description repeats. Measured 63 085 (full catalog 67 515; main
+    // 63 058 and 67 487). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

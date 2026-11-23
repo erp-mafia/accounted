@@ -13,7 +13,22 @@
  *     the prior-year churn from the resultatdisposition entry.
  */
 
-import { mapTrialBalancesToK2, type TrialBalancePair, type TrialBalanceRowLike } from '../k2-mapper'
+import type { AnlaggningAsset } from '@/lib/bokslut/arsredovisning/anlaggningstillgangar-note'
+import {
+  buildK2FixedAssetTables,
+  fixedAssetNoteBody,
+  type FixedAssetNoteRows,
+  type FixedAssetNoteTable,
+  type WriteDownsOutsideRegister,
+} from '@/lib/bokslut/arsredovisning/k2-fixed-asset-note'
+import { k2AssetPostLabel } from '../document/statements'
+import {
+  K2_BR_MAPPINGS,
+  k2BrPostForAccount,
+  mapTrialBalancesToK2,
+  type TrialBalancePair,
+  type TrialBalanceRowLike,
+} from '../k2-mapper'
 import type { IxbrlArsredovisningInput, K3EquityPost } from '../types'
 import { k3CashFlowFromStatement, k3EquityFromSpecification } from '../k3-adapters'
 
@@ -133,8 +148,16 @@ export const PREVIOUS: TrialBalancePair = {
   preClosing: PREVIOUS_PRE_CLOSING,
 }
 
-export function makeInput(): IxbrlArsredovisningInput {
-  const mapping = mapTrialBalancesToK2(CURRENT, PREVIOUS)
+/** A year with more balance accounts on the books, before and after the closing entry alike. */
+function withRows(pair: TrialBalancePair, rows: TrialBalanceRowLike[] = []): TrialBalancePair {
+  return rows.length === 0 ? pair : { full: [...pair.full, ...rows], preClosing: [...pair.preClosing, ...rows] }
+}
+
+export function makeInput(
+  /** Balance accounts on top of the fixture's (they must balance among themselves). */
+  extra: { current?: TrialBalanceRowLike[]; previous?: TrialBalanceRowLike[] } = {},
+): IxbrlArsredovisningInput {
+  const mapping = mapTrialBalancesToK2(withRows(CURRENT, extra.current), withRows(PREVIOUS, extra.previous))
   return {
     company: { name: 'Testbolaget AB', orgNumber: '556999-9997', registeredOffice: 'Sundsvall' },
     period: { start: '2025-01-01', end: '2025-12-31' },
@@ -349,4 +372,138 @@ export const K3_EQUITY_PREVIOUS_YEAR: { posts: K3EquityPost[] } = {
       movements: { resultatdisposition: -25_000, arets_resultat: 40_000 },
     },
   ],
+}
+
+// ---- a complete anläggningstillgångar note ---------------------------------
+//
+// Bolagsverket's test criterion for the note (Testunderlag för
+// K2-årsredovisning 5.0, 2024-09-12): one post where every concept of its
+// note is tagged and holds a value other than zero. Maskiner och andra
+// tekniska anläggningar here. The register tells a machine held, one sold,
+// and four that came in during the year, one of each acquisition type; the
+// write-down accounts hold more than the register; the rest is stated.
+
+const MACHINE_HELD: AnlaggningAsset = {
+  category: 'machinery',
+  acquisition_date: '2020-01-01',
+  acquisition_cost: 2_000_000,
+  salvage_value: 0,
+  useful_life_months: 600,
+  disposed_at: null,
+  bas_asset_account: '1210',
+  figures: { ibAck: 200_000, aretsAvskrivning: 40_000, avgaendeAck: 0 },
+  writeDowns: { opening: 80_000, writtenDown: 30_000, reversed: 10_000, disposed: 0, closing: 100_000 },
+}
+const MACHINE_SOLD: AnlaggningAsset = {
+  ...MACHINE_HELD,
+  acquisition_cost: 400_000,
+  disposed_at: '2025-09-30',
+  figures: { ibAck: 60_000, aretsAvskrivning: 6_000, avgaendeAck: 66_000 },
+  writeDowns: { opening: 20_000, writtenDown: 0, reversed: 0, disposed: 20_000, closing: 0 },
+}
+const cameIn = (
+  acquisition_type: AnlaggningAsset['acquisition_type'],
+  acquisition_date: string,
+  acquisition_cost: number,
+  figures: AnlaggningAsset['figures'],
+): AnlaggningAsset => ({ ...MACHINE_HELD, acquisition_type, acquisition_date, acquisition_cost, figures, writeDowns: undefined })
+const MACHINES_ACQUIRED: AnlaggningAsset[] = [
+  cameIn('purchase', '2025-05-01', 900_000, { ibAck: 0, aretsAvskrivning: 12_000, avgaendeAck: 0 }),
+  cameIn('business_acquisition', '2025-03-01', 150_000, { ibAck: 0, aretsAvskrivning: 5_000, avgaendeAck: 0 }),
+  // Taken over with 45 000 already depreciated.
+  cameIn('merger', '2025-06-01', 250_000, { ibAck: 45_000, aretsAvskrivning: 8_000, avgaendeAck: 0 }),
+  // Moved in from another post with 5 000 already depreciated.
+  cameIn('reclassification', '2025-07-01', 70_000, { ibAck: 5_000, aretsAvskrivning: 3_000, avgaendeAck: 0 }),
+]
+
+export const COMPLETE_NOTE_POST = 'MaskinerAndraTekniskaAnlaggningar'
+
+/** Every row a user can state for the post, each with an amount of its own. */
+export const COMPLETE_NOTE_STATED_ROWS: FixedAssetNoteRows = {
+  [COMPLETE_NOTE_POST]: {
+    'cost.omrakningsdifferenser': -8_000,
+    'depreciation.omrakningsdifferenser': 2_000,
+    'impairment.fusion': 11_000,
+    'impairment.forsaljningar': 4_000,
+    'impairment.omklassificeringar': 6_000,
+    'impairment.omrakningsdifferenser': 1_500,
+  },
+}
+
+/**
+ * What the post's write-down accounts hold beyond the register: 20 000 from
+ * before Accounted, 11 000 taken over in the fusion, and 11 500 that left
+ * with a machine sold, an omklassificering and an omräkning (the stated
+ * nedskrivning rows).
+ */
+const COMPLETE_NOTE_WRITE_DOWNS_OUTSIDE: WriteDownsOutsideRegister = { opening: 20_000, written: 11_000, released: 11_500 }
+
+/**
+ * The post on the books at the start and at the end of the year, written
+ * out by hand and not read off the note, so the tie between the two is a
+ * check of the note's arithmetic:
+ *   anskaffningsvärden 2 400 000 + 900 000 + 150 000 + 250 000 - 400 000
+ *     + 70 000 - 8 000 = 3 362 000
+ *   avskrivningar 260 000 + 45 000 - 66 000 + 5 000 + 74 000 - 2 000 = 316 000
+ *   nedskrivningar 120 000 + 11 000 - 24 000 - 10 000 - 6 000 + 30 000
+ *     - 1 500 = 119 500
+ */
+export const COMPLETE_NOTE_BOOKS = {
+  opening: { cost: 2_400_000, depreciation: 260_000, impairment: 120_000 },
+  closing: { cost: 3_362_000, depreciation: 316_000, impairment: 119_500 },
+} as const
+
+/** The K2 note tables of register assets and stated rows, as build-data builds them. */
+export function fixedAssetTables(
+  assets: AnlaggningAsset[],
+  stated: FixedAssetNoteRows = {},
+  outsideWriteDowns?: ReadonlyMap<string, WriteDownsOutsideRegister>,
+): FixedAssetNoteTable[] {
+  return buildK2FixedAssetTables({
+    assets,
+    periodStart: '2025-01-01',
+    periodEnd: '2025-12-31',
+    stated,
+    postOfAccount: (account) => k2BrPostForAccount(account, 'aktiebolag'),
+    labelOfPost: (post) => k2AssetPostLabel(post) ?? post,
+    postOrder: K2_BR_MAPPINGS.map((mapping) => mapping.concept),
+    outsideWriteDowns,
+  })
+}
+
+export function completeFixedAssetTables(): FixedAssetNoteTable[] {
+  return fixedAssetTables(
+    [MACHINE_HELD, MACHINE_SOLD, ...MACHINES_ACQUIRED],
+    COMPLETE_NOTE_STATED_ROWS,
+    new Map([[COMPLETE_NOTE_POST, COMPLETE_NOTE_WRITE_DOWNS_OUTSIDE]]),
+  )
+}
+
+/**
+ * makeInput with the complete note and the machines on the books
+ * (COMPLETE_NOTE_BOOKS), financed by a long-term loan: the balance sheet
+ * balances in both years and the note's redovisat värde is its post.
+ */
+export function makeCompleteFixedAssetNoteInput(): IxbrlArsredovisningInput {
+  const tables = completeFixedAssetTables()
+  const books = (at: 'opening' | 'closing'): TrialBalanceRowLike[] => {
+    const { cost, depreciation, impairment } = COMPLETE_NOTE_BOOKS[at]
+    return [
+      row('1210', 'Maskiner och andra tekniska anläggningar', cost, 0),
+      row('1218', 'Ackumulerade nedskrivningar på maskiner och andra tekniska anläggningar', 0, impairment),
+      row('1219', 'Ackumulerade avskrivningar på maskiner och andra tekniska anläggningar', 0, depreciation),
+      row('2350', 'Andra långfristiga skulder till kreditinstitut', 0, cost - depreciation - impairment),
+    ]
+  }
+  const input = makeInput({ current: books('closing'), previous: books('opening') })
+  input.noter = [
+    ...input.noter,
+    {
+      number: input.noter.length + 1,
+      title: 'Anläggningstillgångar',
+      body: fixedAssetNoteBody(tables),
+      fixedAssets: tables,
+    },
+  ]
+  return input
 }

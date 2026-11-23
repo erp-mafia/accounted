@@ -63,6 +63,12 @@ export interface IxbrlNote {
   number: number
   title: string
   body: string
+  /**
+   * The K2 note on anläggningstillgångar as tables per balance sheet post:
+   * the document tags the figures from these instead of printing the body.
+   * Absent on every other note and on versions locked before it existed.
+   */
+  fixedAssets?: import('@/lib/bokslut/arsredovisning/k2-fixed-asset-note').FixedAssetNoteTable[]
 }
 
 export interface IxbrlSigner {

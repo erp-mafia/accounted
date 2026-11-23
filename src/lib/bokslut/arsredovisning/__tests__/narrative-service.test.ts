@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { errorResponse, type ErrorEnvelope } from '@/lib/errors/get-structured-error'
-import { getNarrative, upsertNarrative } from '../narrative-service'
+import { getNarrative, listFixedAssetNoteRows, upsertNarrative } from '../narrative-service'
 
 const noopLogger = { error: () => {}, warn: () => {} }
 
@@ -173,5 +173,96 @@ describe('getNarrative', () => {
     ).catch((e: unknown) => e)
     expect(err).toMatchObject({ code: '42501' })
     expect((await envelopeFor(err)).status).toBe(403)
+  })
+})
+
+// fixed_asset_note_rows is the newest column: the code is live before its
+// migration has run, so the service must keep working without it.
+describe('a database without the newest column', () => {
+  const missingColumn = Object.assign(new Error('column arsredovisning_narratives.fixed_asset_note_rows does not exist'), {
+    name: 'PostgrestError',
+    code: '42703',
+    details: null,
+    hint: null,
+  })
+
+  /** The columns each read or write asked for, in order: the first names the newest column, the retry does not. */
+  const selectedColumns = (calls: { method: string; args: unknown[] }[]) =>
+    calls.filter((call) => call.method === 'select').map((call) => String(call.args[0]))
+
+  it('reads the narrative with the columns before it', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ error: missingColumn })
+    enqueue({ data: narrativeRow })
+    const result = await getNarrative(supabase as unknown as SupabaseClient, 'company-1', 'period-1')
+    expect(result).toEqual(narrativeRow)
+    const [first, retry] = selectedColumns(calls)
+    expect(first).toContain('fixed_asset_note_rows')
+    expect(retry).not.toContain('fixed_asset_note_rows')
+    // The retry asks for everything else the first read asked for.
+    expect(retry).toBe(first.replace(', fixed_asset_note_rows', ''))
+  })
+
+  it('saves the other fields with the columns before it', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ error: missingColumn })
+    enqueue({ data: narrativeRow })
+    const result = await upsertNarrative(supabase as unknown as SupabaseClient, 'company-1', 'user-1', 'period-1', {
+      description: 'Bolaget bedriver konsultverksamhet.',
+    })
+    expect(result).toEqual(narrativeRow)
+    const [first, retry] = selectedColumns(calls)
+    expect(first).toContain('fixed_asset_note_rows')
+    expect(retry).not.toContain('fixed_asset_note_rows')
+    // Both attempts write the same row: the fallback changes what is read back, not what is saved.
+    const writes = calls.filter((call) => call.method === 'upsert').map((call) => call.args[0])
+    expect(writes).toHaveLength(2)
+    expect(writes[1]).toEqual(writes[0])
+  })
+
+  it('fails a save of the stated rows themselves instead of losing them', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ error: Object.assign(new Error("Could not find the 'fixed_asset_note_rows' column"), { name: 'PostgrestError', code: 'PGRST204' }) })
+    enqueue({ data: narrativeRow })
+    const err = await upsertNarrative(supabase as unknown as SupabaseClient, 'company-1', 'user-1', 'period-1', {
+      fixed_asset_note_rows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 100_000 } },
+    }).catch((e: unknown) => e)
+    expect(err).toMatchObject({ code: 'PGRST204' })
+    // One attempt only: no retry without the column.
+    expect(calls.filter((call) => call.method === 'upsert')).toHaveLength(1)
+  })
+
+  it('has no stated rows of earlier years to read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ error: missingColumn })
+    const rows = await listFixedAssetNoteRows(supabase as unknown as SupabaseClient, 'company-1')
+    expect(rows.size).toBe(0)
+  })
+})
+
+describe('listFixedAssetNoteRows', () => {
+  it('returns the stated rows of every year by fiscal period, normalised', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { fiscal_period_id: 'period-1', fixed_asset_note_rows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 200_000, 'cost.inkop': 5 } } },
+        { fiscal_period_id: 'period-2', fixed_asset_note_rows: {} },
+        { fiscal_period_id: 'period-3', fixed_asset_note_rows: null },
+      ],
+    })
+    const rows = await listFixedAssetNoteRows(supabase as unknown as SupabaseClient, 'company-1')
+    expect([...rows.entries()]).toEqual([
+      ['period-1', { ByggnaderMark: { 'cost.omrakningsdifferenser': 200_000 } }],
+      ['period-2', {}],
+      ['period-3', {}],
+    ])
+  })
+
+  it('throws on a read failure: the note would open with the wrong balance', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ error: Object.assign(new Error('connection reset'), { name: 'PostgrestError', code: '08006' }) })
+    await expect(listFixedAssetNoteRows(supabase as unknown as SupabaseClient, 'company-1')).rejects.toThrow(
+      /Failed to load the stated rows of the anläggningstillgångar note: connection reset/,
+    )
   })
 })

@@ -2513,8 +2513,23 @@
     "count_footer": "{count, plural, one {1 asset} other {# assets}}",
     "life_help": "K2 standard periods for financial reporting: computers 3 years, equipment 5 years, buildings 25 years. A different useful life can apply for tax depreciation (IL ch. 18-20).",
     "register_help": "The acquisition must already be booked (debit the 1xxx account against e.g. 1930/2440): the register does not book the purchase itself. This register only drives the planned depreciation at year-end.",
+    "acquisition": {
+      "label": "Acquired through",
+      "help": "How the asset came into the company. The choice decides its row in the annual report's note on fixed assets: Inköp, Rörelseförvärv, Fusion or Omklassificeringar. For a merger or a reclassification, enter the day the asset came in as the acquisition date, the depreciation that came with it under \"Already depreciated\", and the depreciation period that remains from that day. Nothing is booked from the choice.",
+      "purchase": "Purchase",
+      "business_acquisition": "Business acquisition",
+      "merger": "Merger",
+      "reclassification": "Reclassification"
+    },
+    "remaining_life": {
+      "label": "Remaining depreciation period (months)",
+      "help": "The time left of the asset's depreciation period from the day it came in, not the whole period from when it was first acquired. What is not already depreciated is depreciated on a straight-line basis over it.",
+      "error": "Enter the remaining depreciation period in whole months (at least 1)."
+    },
     "opening": {
       "title": "Already depreciated (moving from another system)",
+      "title_taken_over": "Already depreciated (came with the asset)",
+      "hint_taken_over": "Enter the accumulated depreciation that came with the asset, as of the day it came in. No voucher is created: the takeover is booked separately. The annual report's note shows the amount on the Fusion or Omklassificeringar row of the depreciation. The remaining value is depreciated on a straight-line basis over the remaining depreciation period.",
       "disclosure": "Moving from a previous register?",
       "amount_label": "Accumulated depreciation (SEK)",
       "date_label": "As of",
@@ -22064,6 +22079,9 @@
       "bank_missing": "Choose a bank and we tailor the checklist.",
       "unnamed": "the person"
     }
+  },
+  "tax_depreciation_plan": {
+    "taken_over_additions": "{amount} of the year's acquisitions are assets taken over by merger or reclassification. The plan counts them at their acquisition cost, like the year's other acquisitions: check that this is the right tax basis for them."
   },
   "year_end_accruals": {
     "empty_title": "No periods to accrue",

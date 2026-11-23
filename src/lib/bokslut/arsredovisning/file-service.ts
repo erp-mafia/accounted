@@ -292,7 +292,14 @@ export async function validateArsredovisningIxbrl(
     const issues: PreflightIssue[] = [...result.issues]
     let generatedBytes = 0
     try {
-      const { xhtml } = generateIxbrlDocument(input)
+      const { xhtml, warnings } = generateIxbrlDocument(input)
+      // What the generator itself noticed while writing the document (a
+      // figure it had to leave untagged). The input's own warnings are
+      // already issues from the preflight above.
+      const fromInput = new Set(input.warnings)
+      for (const warning of warnings) {
+        if (!fromInput.has(warning)) issues.push({ code: 'ACC-WARN', severity: 'warn', message: warning })
+      }
       generatedBytes = Buffer.byteLength(xhtml, 'utf8')
       if (generatedBytes >= MAX_IXBRL_BYTES) {
         issues.push({ code: '5006', severity: 'error', message: 'Dokumentet överstiger Bolagsverkets maxstorlek 5 MB.' })

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Asset, AssetCategory } from '@/types'
 import { roundOre } from '@/lib/money'
 import { pickPreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
+import { arrivesDepreciated, assetAcquisitionType } from './acquisition-type'
 import { listAssets } from './asset-service'
 import {
   TAX_DEPRECIATION_CATEGORIES,
@@ -61,6 +62,14 @@ export interface TaxDepreciationView {
   excludedCategories: AssetCategory[]
   cohortHistoryComplete: boolean
   incompleteCohortCount: number
+  /**
+   * The part of the year's additions that are assets taken over in a fusion
+   * or an omklassificering (Asset.acquisition_type), at their registered
+   * acquisition cost. The plan counts them like any asset acquired in the
+   * year; whether that is their tax basis is the user's to check, so the
+   * amount is shown beside the plan.
+   */
+  takenOverAdditions: number
   result: TaxDepreciationResult | null
   snapshot: TaxDepreciationSnapshot | null
   isStale: boolean
@@ -195,6 +204,7 @@ export async function loadTaxDepreciationView(
     excludedCategories: population.excludedCategories,
     cohortHistoryComplete: population.cohortHistoryComplete,
     incompleteCohortCount: population.incompleteCohortCount,
+    takenOverAdditions: population.takenOverAdditions,
     result,
     snapshot,
     isStale: snapshot !== null && (result === null || !taxDepreciationSnapshotMatches(snapshot, result)),
@@ -443,6 +453,7 @@ async function calculateWithElection(
     excludedCategories: population.excludedCategories,
     cohortHistoryComplete: population.cohortHistoryComplete,
     incompleteCohortCount: population.incompleteCohortCount,
+    takenOverAdditions: population.takenOverAdditions,
   }
 }
 
@@ -486,6 +497,7 @@ export function buildTaxDepreciationPopulation(
   excludedCategories: AssetCategory[]
   cohortHistoryComplete: boolean
   incompleteCohortCount: number
+  takenOverAdditions: number
 } {
   const eligibleCategories = new Set<AssetCategory>(TAX_DEPRECIATION_CATEGORIES)
   const acquiredByEnd = assets.filter((asset) => asset.acquisition_date <= current.period_end)
@@ -497,6 +509,17 @@ export function buildTaxDepreciationPopulation(
   const additions = roundOre(
     eligibleHeld
       .filter((asset) => asset.acquisition_date >= current.period_start)
+      .reduce((sum, asset) => sum + Number(asset.acquisition_cost), 0),
+  )
+  // Counted in `additions` above like every asset acquired in the year; the
+  // amount is reported so the plan can say so (TaxDepreciationView).
+  const takenOverAdditions = roundOre(
+    eligibleHeld
+      .filter(
+        (asset) =>
+          asset.acquisition_date >= current.period_start
+          && arrivesDepreciated(assetAcquisitionType(asset)),
+      )
       .reduce((sum, asset) => sum + Number(asset.acquisition_cost), 0),
   )
   const disposals = roundOre(
@@ -564,6 +587,7 @@ export function buildTaxDepreciationPopulation(
     excludedCategories: [...new Set(excluded.map((asset) => asset.category))],
     cohortHistoryComplete: incompleteCohortCount === 0,
     incompleteCohortCount,
+    takenOverAdditions,
   }
 }
 

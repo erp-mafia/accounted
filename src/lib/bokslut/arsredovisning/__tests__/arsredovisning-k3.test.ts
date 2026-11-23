@@ -71,6 +71,12 @@ function makeSupabase(opts: {
   period?: { name: string; period_start: string; period_end: string }
   medelantalOverride?: number | null
   noteOverrides?: Record<string, string>
+  /** K2: the rows of the anläggningstillgångar note the user stated (k2-fixed-asset-note.ts). */
+  fixedAssetNoteRows?: Record<string, Record<string, number>>
+  /** K2: the stated rows of every year with a narrative, as listFixedAssetNoteRows reads them. */
+  fixedAssetNoteRowsByPeriod?: Record<string, Record<string, Record<string, number>>>
+  /** The read of the year's narrative fails with this message. */
+  narrativeError?: string
   omitCashFlow?: boolean
   registeredOffice?: string | null
   city?: string | null
@@ -177,13 +183,25 @@ function makeSupabase(opts: {
       return {
         select: () => ({
           eq: () => ({
+            // Awaited as it stands by the read of every year's stated rows.
+            then: (resolve: (value: unknown) => void) =>
+              resolve({
+                data: Object.entries(opts.fixedAssetNoteRowsByPeriod ?? {}).map(([fiscal_period_id, fixed_asset_note_rows]) => ({
+                  fiscal_period_id,
+                  fixed_asset_note_rows,
+                })),
+                error: null,
+              }),
             eq: () => ({
               maybeSingle: () =>
-                Promise.resolve({
+                opts.narrativeError
+                  ? Promise.resolve({ data: null, error: { message: opts.narrativeError, code: '08006' } })
+                  : Promise.resolve({
                   data:
-                    opts.agmDate || opts.medelantalOverride != null || opts.noteOverrides || opts.omitCashFlow
+                    opts.agmDate || opts.medelantalOverride != null || opts.noteOverrides || opts.omitCashFlow || opts.fixedAssetNoteRows
                       ? {
                           note_overrides: opts.noteOverrides ?? {},
+                          fixed_asset_note_rows: opts.fixedAssetNoteRows ?? {},
                           omit_kassaflodesanalys: opts.omitCashFlow ?? false,
                           kassaflodesanalys_omission_confirmed: false,
                           agm_date: opts.agmDate ?? null,
@@ -222,11 +240,16 @@ function makeSupabase(opts: {
   })
   // get_entries_with_account_lines: the equity verifikat of the year. The
   // tests that read the specification plant their own (opts.equityEntries).
-  const rpc = vi.fn(async (name: string, args: { p_start?: string; p_end?: string } = {}) =>
+  // Like the RPC: a verifikat is returned, with all its lines, when one of
+  // them is on an account asked for.
+  const rpc = vi.fn(async (name: string, args: { p_start?: string; p_end?: string; p_accounts?: string[] } = {}) =>
     name === 'get_entries_with_account_lines'
       ? {
-          data: ((opts.equityEntries ?? []) as Array<{ entry_date: string }>).filter(
-            (entry) => (!args.p_start || entry.entry_date >= args.p_start) && (!args.p_end || entry.entry_date <= args.p_end),
+          data: ((opts.equityEntries ?? []) as Array<{ entry_date: string; lines?: Array<{ account_number: string }> }>).filter(
+            (entry) =>
+              (!args.p_start || entry.entry_date >= args.p_start)
+              && (!args.p_end || entry.entry_date <= args.p_end)
+              && (!args.p_accounts || !entry.lines || entry.lines.some((line) => args.p_accounts?.includes(line.account_number))),
           ),
           error: null,
         }
@@ -863,27 +886,38 @@ describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5
       adjustment('r1', 'reversal', '2025-12-31', 20_000),
     ],
   }
-  const tbRow = (account: string, debit: number, credit: number) => ({
-    account_number: account,
-    account_name: account,
-    account_class: 1,
-    opening_debit: 0,
-    opening_credit: 0,
-    period_debit: 0,
-    period_credit: 0,
-    closing_debit: debit,
-    closing_credit: credit,
-  })
-  function plantMark(writtenDownOnBooks: number) {
-    mockFetchAllRows.mockResolvedValue(PERIODS)
-    mockedListAssets.mockResolvedValue([mark] as never)
-    mockedTrialBalance.mockResolvedValue({
-      rows: [tbRow('1130', 900_000, 0), tbRow('1118', 0, writtenDownOnBooks)],
-      totalDebit: 0,
-      totalCredit: 0,
-      isBalanced: true,
-    } as never)
+  /**
+   * A ledger row as the trial balance reports it: the year opens with
+   * `opening` (net debit), `debit` and `credit` move it, the closing follows.
+   */
+  const ledgerRow = (account: string, opening: number, debit = 0, credit = 0) => {
+    const closing = opening + debit - credit
+    return {
+      account_number: account,
+      account_name: account,
+      account_class: 1,
+      opening_debit: Math.max(opening, 0),
+      opening_credit: Math.max(-opening, 0),
+      period_debit: debit,
+      period_credit: credit,
+      closing_debit: Math.max(closing, 0),
+      closing_credit: Math.max(-closing, 0),
+    }
   }
+  const plantLedger = (rows: unknown[], assets: unknown[] = [mark], periods: unknown[] = PERIODS) => {
+    mockFetchAllRows.mockResolvedValue(periods)
+    mockedListAssets.mockResolvedValue(assets as never)
+    mockedTrialBalance.mockResolvedValue({ rows, totalDebit: 0, totalCredit: 0, isBalanced: true } as never)
+  }
+  /**
+   * The land on 1130 and its write-downs on 1118, which opened with the
+   * 100 000 of 2024 and was credited the 50 000 of 2025; the debit is what
+   * leaves `writtenDownOnBooks` (the 20 000 reversal when the books agree).
+   */
+  function plantMark(writtenDownOnBooks: number) {
+    plantLedger([ledgerRow('1130', 900_000), ledgerRow('1118', -100_000, 150_000 - writtenDownOnBooks, 50_000)])
+  }
+  const landWithoutWriteDowns = { ...mark, value_adjustments: [] }
 
   for (const framework of ['k2', 'k3'] as const) {
     it(`${framework.toUpperCase()}: shows the year's write-down and reversal and ties to the books`, async () => {
@@ -892,14 +926,17 @@ describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5
       // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
       const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
       const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
-      expect(note?.body).toContain('Mark')
-      expect(note?.body).toMatch(/Ingående ackumulerade nedskrivningar: -100\s000 kr/)
+      // K2 prints the note per balance sheet post with the taxonomy's row
+      // names (k2-fixed-asset-note.ts); K3 per register category.
+      const k2 = framework === 'k2'
+      expect(note?.body).toContain(k2 ? 'Byggnader och mark' : 'Mark')
+      expect(note?.body).toMatch(k2 ? /Ingående nedskrivningar: -100\s000 kr/ : /Ingående ackumulerade nedskrivningar: -100\s000 kr/)
       expect(note?.body).toMatch(/Årets nedskrivningar: -50\s000 kr/)
-      expect(note?.body).toMatch(/Årets återförda nedskrivningar: 20\s000 kr/)
-      expect(note?.body).toMatch(/Utgående ackumulerade nedskrivningar: -130\s000 kr/)
-      expect(note?.body).toMatch(/Utgående redovisat värde: 770\s000 kr/)
+      expect(note?.body).toMatch(k2 ? /Återförda nedskrivningar: 20\s000 kr/ : /Årets återförda nedskrivningar: 20\s000 kr/)
+      expect(note?.body).toMatch(k2 ? /Utgående nedskrivningar: -130\s000 kr/ : /Utgående ackumulerade nedskrivningar: -130\s000 kr/)
+      expect(note?.body).toMatch(k2 ? /Redovisat värde: 770\s000 kr/ : /Utgående redovisat värde: 770\s000 kr/)
       expect(data.errors).toBeUndefined()
-      expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+      expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
     })
 
     it(`${framework.toUpperCase()}: blocks a note that does not tie while the register holds write-downs`, async () => {
@@ -909,9 +946,254 @@ describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5
       // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
       const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
       expect(data.errors).toEqual([expect.stringMatching(/^Anläggningsnotens .*innan årsredovisningen kan låsas/)])
-      expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+      expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
     })
   }
+
+  // K2: the rows neither the register nor the ledger can tell apart, as the
+  // user states them for the year. They print in the note and must leave it
+  // tied to the books.
+  it('K2: prints the rows the user stated and carries the tables for the iXBRL tags', async () => {
+    // An omräkningsdifferens of 200 000 was booked on 1130 in the year.
+    plantLedger([ledgerRow('1130', 900_000, 200_000), ledgerRow('1118', -100_000, 20_000, 50_000)])
+    const supabase = makeSupabase({
+      accountingFramework: 'k2',
+      fixedAssetNoteRows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 200_000 } },
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+    expect(note?.body).toMatch(/Ingående anskaffningsvärden: 900\s000 kr/)
+    expect(note?.body).toMatch(/Omräkningsdifferenser: 200\s000 kr/)
+    expect(note?.body).toMatch(/Utgående anskaffningsvärden: 1\s100\s000 kr/)
+    expect(note?.body).toMatch(/Redovisat värde: 970\s000 kr/)
+    expect(note?.fixedAssets?.map((table) => [table.post, table.carrying])).toEqual([['ByggnaderMark', 970_000]])
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
+  })
+
+  it('K2: blocks stated rows that leave the note untied to the books', async () => {
+    // The same omräkningsdifferens stated, but never booked: 1130 still holds 900 000.
+    plantMark(130_000)
+    const supabase = makeSupabase({
+      accountingFramework: 'k2',
+      fixedAssetNoteRows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 200_000 } },
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.errors).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: redovisat värde \(970\s000 kr\) .*\(770\s000 kr\)\. Noten har rader som angetts för året eller tidigare år.*innan årsredovisningen kan låsas/),
+    ])
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
+  })
+
+  // K2 over two years: what an earlier year stated is still on the post's
+  // accounts, so the next year opens with it.
+  const TWO_YEARS = [
+    { id: 'fp0', name: '2024', period_start: '2024-01-01', period_end: '2024-12-31' },
+    { id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+  ]
+  const STATED_IN_2024 = { fp0: { ByggnaderMark: { 'cost.omrakningsdifferenser': 200_000 } } }
+
+  it('K2: opens the year with what an earlier year stated, without anyone restating it', async () => {
+    // 1130 opened 2025 with the 200 000 that 2024 booked and stated.
+    plantLedger([ledgerRow('1130', 1_100_000), ledgerRow('1118', -100_000, 20_000, 50_000)], [mark], TWO_YEARS)
+    const supabase = makeSupabase({ accountingFramework: 'k2', fixedAssetNoteRowsByPeriod: STATED_IN_2024 })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+    expect(note?.body).toMatch(/Ingående anskaffningsvärden: 1\s100\s000 kr/)
+    expect(note?.body).not.toMatch(/Omräkningsdifferenser/)
+    expect(note?.body).toMatch(/Utgående anskaffningsvärden: 1\s100\s000 kr/)
+    expect(note?.fixedAssets?.map((table) => [table.post, table.carrying])).toEqual([['ByggnaderMark', 970_000]])
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
+  })
+
+  it('K2: reads only the years before this one for the opening balances', async () => {
+    // The year's own rows are among the rows read; they must not open the year too.
+    plantLedger([ledgerRow('1130', 900_000, 200_000), ledgerRow('1118', -100_000, 20_000, 50_000)], [mark], TWO_YEARS)
+    const rows = { ByggnaderMark: { 'cost.omrakningsdifferenser': 200_000 } }
+    const supabase = makeSupabase({ accountingFramework: 'k2', fixedAssetNoteRows: rows, fixedAssetNoteRowsByPeriod: { fp1: rows } })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+    expect(note?.body).toMatch(/Ingående anskaffningsvärden: 900\s000 kr/)
+    expect(note?.body).toMatch(/Omräkningsdifferenser: 200\s000 kr/)
+    expect(note?.fixedAssets?.[0].carrying).toBe(970_000)
+    expect(data.errors).toBeUndefined()
+  })
+
+  it('K2: blocks a later year whose books do not hold what an earlier year stated', async () => {
+    // 2024 stated 200 000 that 1130 never held: 2025 cannot open with it.
+    plantMark(130_000)
+    mockFetchAllRows.mockResolvedValue(TWO_YEARS)
+    const supabase = makeSupabase({ accountingFramework: 'k2', fixedAssetNoteRowsByPeriod: STATED_IN_2024 })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.errors).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: redovisat värde \(970\s000 kr\) .*\(770\s000 kr\)\. Noten har rader som angetts för året eller tidigare år/),
+    ])
+  })
+
+  // K2: the opening balance of a post is tied to the books too.
+  it('K2: reports an opening balance the books did not hold, when the note closes right', async () => {
+    // The land was bought and booked in 2025 but is registered as acquired
+    // in 2020: the note opens with 900 000 and shows no inköp.
+    plantLedger([ledgerRow('1130', 0, 900_000)], [landWithoutWriteDowns])
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings.filter((w) => w.startsWith('Anläggningsnoten'))).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: ingående redovisat värde \(900\s000 kr\) stämmer inte med postens bokförda värde vid årets ingång \(0 kr\)\..*anskaffningsdatum/),
+    ])
+  })
+
+  it('K2: blocks an opening balance the books did not hold on a post with stated rows', async () => {
+    plantLedger([ledgerRow('1130', 0, 910_000)], [landWithoutWriteDowns])
+    const supabase = makeSupabase({
+      accountingFramework: 'k2',
+      fixedAssetNoteRows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 10_000 } },
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.errors).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: ingående redovisat värde \(900\s000 kr\) .*\(0 kr\)\. Noten har rader som angetts för året eller tidigare år.*innan årsredovisningen kan låsas/),
+    ])
+  })
+
+  it('K2: blocks an omräkningsdifferens in each block that cancel in the post\'s value and are not booked', async () => {
+    // Land of 900 000. 20 000 more anskaffningsvärde and 20 000 more
+    // avskrivningar leave the post's value where it was.
+    const stated = { ByggnaderMark: { 'cost.omrakningsdifferenser': 20_000, 'depreciation.omrakningsdifferenser': -20_000 } }
+    const buildWith = async (ledger: unknown[]) => {
+      plantLedger(ledger, [landWithoutWriteDowns])
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      return buildArsredovisningData(makeSupabase({ accountingFramework: 'k2', fixedAssetNoteRows: stated }), 'co1', 'fp1')
+    }
+    // Nothing moved on the post's accounts: its value ties, the rows are in no account.
+    const unbooked = await buildWith([ledgerRow('1130', 900_000)])
+    expect(unbooked.errors).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: omräkningsdifferensen i anskaffningsvärdena är angiven till 20\s000 kr, men postens anskaffningskonton har under året ändrats med 0 kr/),
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: omräkningsdifferensen i avskrivningarna är angiven till -20\s000 kr/),
+    ])
+    // Booked on the anskaffningskonto and on an account of accumulated avskrivningar, the same rows stand.
+    const booked = await buildWith([
+      ledgerRow('1130', 900_000, 20_000),
+      { ...ledgerRow('1119', 0, 0, 20_000), account_name: 'Ackumulerade avskrivningar på byggnader' },
+    ])
+    expect(booked.errors).toBeUndefined()
+    expect(booked.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
+    const body = booked.noter.find((n) => n.title === 'Anläggningstillgångar')?.body ?? ''
+    expect(body).toMatch(/Utgående anskaffningsvärden: 920\s000 kr/)
+    expect(body).toMatch(/Utgående avskrivningar: -20\s000 kr/)
+    expect(body).toMatch(/Redovisat värde: 900\s000 kr/)
+  })
+
+  it('K2: ties each post with stated rows to its own post, not only the note to the books', async () => {
+    // An omräkningsdifferens stated on two posts with opposite signs and
+    // never booked: the note's total still ties, each post is 70 000 off.
+    plantMark(130_000)
+    const supabase = makeSupabase({
+      accountingFramework: 'k2',
+      fixedAssetNoteRows: {
+        ByggnaderMark: { 'cost.omrakningsdifferenser': 70_000 },
+        MaskinerAndraTekniskaAnlaggningar: { 'cost.omrakningsdifferenser': -70_000 },
+      },
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.errors).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: redovisat värde \(840\s000 kr\) .*\(770\s000 kr\)/),
+      expect.stringMatching(/^Anläggningsnoten för Maskiner och andra tekniska anläggningar: redovisat värde \(-70\s000 kr\) .*\(0 kr\)/),
+    ])
+  })
+
+  it('K2: names a post the register alone fills only when the note as a whole ties', async () => {
+    // 100 000 of the land is booked on a machine account: the note ties in
+    // total, and each post is 100 000 off.
+    plantLedger([ledgerRow('1130', 800_000), ledgerRow('1210', 100_000)], [landWithoutWriteDowns])
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings.filter((w) => w.startsWith('Anläggningsnoten'))).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: redovisat värde \(900\s000 kr\) .*\(800\s000 kr\)\. Kontrollera att tillgångarna/),
+    ])
+  })
+
+  it('K2: reports the note as a whole, not each post, when it does not tie', async () => {
+    plantLedger([ledgerRow('1130', 800_000)], [landWithoutWriteDowns])
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    expect(data.warnings.filter((w) => w.startsWith('Anläggningsnoten'))).toEqual([expect.stringMatching(/^Anläggningsnotens utgående redovisade värde/)])
+  })
+
+  it('K2: prints the balance sheet post as the redovisat värde of a note that ties to it', async () => {
+    // The books hold 60 öre more than the register: within the krona the
+    // tie allows, and the balance sheet rounds the post to 900 001.
+    plantLedger([ledgerRow('1130', 900_000.6)], [landWithoutWriteDowns])
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+    expect(note?.fixedAssets?.[0].carrying).toBe(900_001)
+    expect(note?.body).toMatch(/Redovisat värde: 900\s001 kr/)
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
+  })
+
+  it('K2: reports an opening balance the books did not hold beside a note that is off as a whole', async () => {
+    // The land is registered too early (the opening is 900 000 too high) and
+    // the machine's account holds 10 000 less than the register: two causes.
+    const machine = {
+      ...landWithoutWriteDowns,
+      id: 'machine-1',
+      name: 'Svarv',
+      category: 'machinery',
+      acquisition_cost: 400_000,
+      useful_life_months: 120,
+      bas_asset_account: '1210',
+      bas_accumulated_account: '1219',
+      bas_expense_account: '7831',
+    }
+    plantLedger([ledgerRow('1130', 0, 900_000), ledgerRow('1210', 390_000)], [landWithoutWriteDowns, machine])
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings.filter((w) => w.startsWith('Anläggningsnoten'))).toEqual([
+      expect.stringMatching(/^Anläggningsnotens utgående redovisade värde/),
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: ingående redovisat värde \(900\s000 kr\)/),
+    ])
+  })
+
+  it('K2: prints the balance sheet figure when the note ties to the accounts, whatever the rounding of the post', async () => {
+    // 900 000,61 in the register and 900 001,60 on the account are within
+    // the krona; the balance sheet prints 900 002.
+    plantLedger([ledgerRow('1130', 900_001.6)], [{ ...landWithoutWriteDowns, acquisition_cost: 900_000.61 }])
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(makeSupabase({ accountingFramework: 'k2' }), 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+    expect(note?.fixedAssets?.[0].carrying).toBe(900_002)
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
+  })
+
+  it('fails the build when the year\'s narrative cannot be read: its stated rows would be missing from a note that still ties', async () => {
+    plantMark(130_000)
+    const supabase = makeSupabase({ accountingFramework: 'k2', narrativeError: 'connection reset' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    await expect(buildArsredovisningData(supabase, 'co1', 'fp1')).rejects.toMatchObject({ message: 'connection reset' })
+  })
+
+  it('K2: ignores stated rows under K3, whose note is the register per category', async () => {
+    plantMark(130_000)
+    const supabase = makeSupabase({
+      accountingFramework: 'k3',
+      fixedAssetNoteRows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 200_000 } },
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+    expect(note?.body).not.toContain('Omräkningsdifferenser')
+    expect(note?.fixedAssets).toBeUndefined()
+  })
 })
 
 // The merge of Phases 1 and 2: each nedskrivning has one source. Posted
@@ -954,6 +1236,8 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
     components: [],
     value_adjustments: valueAdjustments,
   })
+  // Through the register before 2025 only: 130 000.
+  const REGISTER_BEFORE_2025 = [adjustment('w0', 'impairment', '2024-12-31', 130_000)]
   // Through the register: 100 000 in 2024; in 2025 50 000 more and 20 000 reversed.
   const REGISTER = [
     adjustment('w1', 'impairment', '2024-12-31', 100_000),
@@ -994,7 +1278,7 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
   }
   const tiesOut = (data: { errors?: string[]; warnings: string[] }) => {
     expect(data.errors).toBeUndefined()
-    expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
   }
 
   for (const framework of ['k3', 'k2'] as const) {
@@ -1002,34 +1286,292 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
       plant(REGISTER, { opening: 100_000, written: 50_000, released: 20_000 })
       const { data, rollforward, ledger } = await build(framework)
       expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
-      expect(rollforward).toMatch(/Utgående redovisat värde: 770\s000 kr/)
+      expect(rollforward).toMatch(framework === 'k2' ? /Redovisat värde: 770\s000 kr/ : /Utgående redovisat värde: 770\s000 kr/)
       expect(ledger).toBeUndefined()
       tiesOut(data)
     })
 
-    it(`${framework.toUpperCase()}: a write-down booked by hand is shown from the ledger`, async () => {
+    // K3 keeps a write-down booked by hand in the ledger note. K2 shows
+    // every nedskrivning of a post in the post's table (k2-fixed-asset-note.ts).
+    it(`${framework.toUpperCase()}: a write-down booked by hand is shown once, from the ledger`, async () => {
       plant([], { opening: 0, written: 40_000, released: 0 })
       const { data, rollforward, ledger } = await build(framework)
-      expect(rollforward).not.toContain('nedskrivningar')
-      expect(ledger).toContain(IMPAIRMENT_ACCOUNT)
-      expect(ledger).toMatch(/Årets nedskrivningar: -40\s000 kr/)
-      expect(ledger).not.toContain('utanför anläggningsregistret')
+      if (framework === 'k2') {
+        expect(rollforward).toMatch(/Årets nedskrivningar: -40\s000 kr/)
+        expect(rollforward).toMatch(/Redovisat värde: 860\s000 kr/)
+        expect(ledger).toBeUndefined()
+      } else {
+        expect(rollforward).not.toContain('nedskrivningar')
+        expect(ledger).toContain(IMPAIRMENT_ACCOUNT)
+        expect(ledger).toMatch(/Årets nedskrivningar: -40\s000 kr/)
+        expect(ledger).not.toContain('utanför anläggningsregistret')
+      }
       tiesOut(data)
     })
 
-    it(`${framework.toUpperCase()}: with both, the ledger note shows only what the register did not book`, async () => {
+    it(`${framework.toUpperCase()}: with both, what the register did not book is shown once beside it`, async () => {
       // 30 000 more booked by hand on 1118 in 2025, beside the register's.
       plant(REGISTER, { opening: 100_000, written: 80_000, released: 20_000 })
       const { data, rollforward, ledger } = await build(framework)
-      expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
-      expect(rollforward).toMatch(/Utgående ackumulerade nedskrivningar: -130\s000 kr/)
-      expect(ledger).toContain('utanför anläggningsregistret')
-      expect(ledger).toMatch(/Ingående nedskrivningar: 0 kr/)
-      expect(ledger).toMatch(/Årets nedskrivningar: -30\s000 kr/)
-      expect(ledger).toMatch(/Utgående nedskrivningar: -30\s000 kr/)
+      if (framework === 'k2') {
+        expect(rollforward).toMatch(/Årets nedskrivningar: -80\s000 kr/)
+        expect(rollforward).toMatch(/Utgående nedskrivningar: -160\s000 kr/)
+        expect(ledger).toBeUndefined()
+      } else {
+        expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+        expect(rollforward).toMatch(/Utgående ackumulerade nedskrivningar: -130\s000 kr/)
+        expect(ledger).toContain('utanför anläggningsregistret')
+        expect(ledger).toMatch(/Ingående nedskrivningar: 0 kr/)
+        expect(ledger).toMatch(/Årets nedskrivningar: -30\s000 kr/)
+        expect(ledger).toMatch(/Utgående nedskrivningar: -30\s000 kr/)
+      }
       tiesOut(data)
     })
   }
+
+  // K2: a nedskrivning on a stated row (taken over in a fusion) is on 1118
+  // without having gone through the register. The roll-forward discloses it,
+  // so the ledger note and the tie-out must not count it again.
+  async function buildStated(rows: Record<string, number>) {
+    const supabase = makeSupabase({ accountingFramework: 'k2', fixedAssetNoteRows: { ByggnaderMark: rows } })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    return {
+      data,
+      rollforward: data.noter.find((n) => n.title === 'Anläggningstillgångar')?.body ?? '',
+      ledger: data.noter.find((n) => n.title === 'Nedskrivningar av anläggningstillgångar')?.body,
+    }
+  }
+
+  it('K2: a nedskrivning taken over in a fusion is shown once, on its stated row', async () => {
+    // The register's 50 000 and 11 000 from the fusion were booked on 1118 in 2025.
+    plant(REGISTER, { opening: 100_000, written: 61_000, released: 20_000 })
+    const { data, rollforward, ledger } = await buildStated({ 'impairment.fusion': 11_000 })
+    expect(rollforward).toMatch(/Fusion: -11\s000 kr/)
+    expect(rollforward).toMatch(/Utgående nedskrivningar: -141\s000 kr/)
+    expect(rollforward).toMatch(/Redovisat värde: 759\s000 kr/)
+    expect(ledger).toBeUndefined()
+    tiesOut(data)
+  })
+
+  it('K2: beside a stated row, what was booked by hand is in the same table', async () => {
+    // 11 000 from the fusion and 30 000 more by hand, beside the register's 50 000.
+    plant(REGISTER, { opening: 100_000, written: 91_000, released: 20_000 })
+    const { data, rollforward, ledger } = await buildStated({ 'impairment.fusion': 11_000 })
+    expect(rollforward).toMatch(/Fusion: -11\s000 kr/)
+    expect(rollforward).toMatch(/Årets nedskrivningar: -80\s000 kr/)
+    expect(rollforward).toMatch(/Utgående nedskrivningar: -171\s000 kr/)
+    expect(ledger).toBeUndefined()
+    tiesOut(data)
+  })
+
+  it('K2: the year after, the note opens with what the stated row closed with', async () => {
+    // Last year's fusion nedskrivning is on 1118 beyond the register's 130 000.
+    plant(REGISTER_BEFORE_2025, { opening: 141_000, written: 0, released: 0 })
+    const { data, rollforward, ledger } = await build('k2')
+    expect(rollforward).toMatch(/Ingående nedskrivningar: -141\s000 kr/)
+    expect(rollforward).toMatch(/Utgående nedskrivningar: -141\s000 kr/)
+    expect(ledger).toBeUndefined()
+    tiesOut(data)
+  })
+
+  it('K2: a nedskrivning from before, moved out of the post and stated, leaves the post at what its accounts hold', async () => {
+    // 11 000 booked by hand before the year; debited in the year by the omklassificering.
+    plant([], { opening: 11_000, written: 0, released: 11_000 })
+    const { data, rollforward, ledger } = await buildStated({ 'impairment.omklassificeringar': 11_000 })
+    expect(rollforward).toMatch(/Ingående nedskrivningar: -11\s000 kr/)
+    expect(rollforward).toMatch(/Omklassificeringar: 11\s000 kr/)
+    expect(rollforward).toMatch(/Utgående nedskrivningar: 0 kr/)
+    expect(rollforward).toMatch(/Redovisat värde: 900\s000 kr/)
+    expect(ledger).toBeUndefined()
+    tiesOut(data)
+  })
+
+  it('K2: a stated decrease of nedskrivningar that the accounts never held blocks', async () => {
+    plant([], { opening: 0, written: 0, released: 0 })
+    const { data } = await buildStated({ 'impairment.omklassificeringar': 11_000 })
+    expect(data.errors).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: de angivna raderna minskar nedskrivningarna med 11\s000 kr, men postens nedskrivningskonton har debiterats 0 kr/),
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: redovisat värde \(911\s000 kr\) .*\(900\s000 kr\)/),
+    ])
+  })
+
+  it('K2: a stated nedskrivning that is not on the books blocks', async () => {
+    plant(REGISTER, { opening: 100_000, written: 50_000, released: 20_000 })
+    const { data } = await buildStated({ 'impairment.fusion': 11_000 })
+    expect(data.errors).toEqual([
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: de angivna raderna ökar nedskrivningarna med 11\s000 kr, men postens nedskrivningskonton har krediterats 0 kr/),
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: .*innan årsredovisningen kan låsas/),
+    ])
+  })
+
+  it('K2: stated rows that cancel in the closing balance block when the accounts support neither', async () => {
+    // 50 000 from before; the year credited 10 000 and debited nothing. A
+    // fusion of 20 000 and a försäljning of 10 000 close at the same 60 000.
+    plant([], { opening: 50_000, written: 10_000, released: 0 })
+    const { data, rollforward } = await buildStated({ 'impairment.fusion': 20_000, 'impairment.forsaljningar': 10_000 })
+    expect(rollforward).toMatch(/Utgående nedskrivningar: -60\s000 kr/)
+    expect(data.errors).toEqual([
+      expect.stringMatching(/ökar nedskrivningarna med 20\s000 kr, men postens nedskrivningskonton har krediterats 10\s000 kr/),
+      expect.stringMatching(/minskar nedskrivningarna med 10\s000 kr, men postens nedskrivningskonton har debiterats 0 kr/),
+    ])
+  })
+
+  it('K2: says when the write-down accounts released an amount beyond the register that prints as an återföring', async () => {
+    // 30 000 booked by hand before the year, 12 000 of it debited in 2025.
+    plant([], { opening: 30_000, written: 0, released: 12_000 })
+    const { data, rollforward } = await build('k2')
+    expect(rollforward).toMatch(/Återförda nedskrivningar: 12\s000 kr/)
+    tiesOut(data)
+    expect(data.warnings.filter((w) => w.startsWith('Nedskrivningar utanför anläggningsregistret'))).toEqual([
+      expect.stringMatching(/Byggnader och mark: postens nedskrivningskonton har debiterats 12\s000 kr under året utöver registret/),
+    ])
+    // Stated as having left with a sold asset, nothing is left to say.
+    plant([], { opening: 30_000, written: 0, released: 12_000 })
+    const stated = await buildStated({ 'impairment.forsaljningar': 12_000 })
+    expect(stated.rollforward).toMatch(/Försäljningar\/utrangeringar: 12\s000 kr/)
+    expect(stated.rollforward).not.toMatch(/Återförda nedskrivningar/)
+    expect(stated.data.warnings.find((w) => w.startsWith('Nedskrivningar utanför anläggningsregistret'))).toBeUndefined()
+    tiesOut(stated.data)
+  })
+
+  it('K2: a write-down posted through the register and reversed by storno is no nedskrivning and no återföring', async () => {
+    // The register's adjustment is gone with its verifikat; the ledger holds
+    // the credit and the debit of the storno.
+    plant([{ ...adjustment('w9', 'impairment', '2025-06-30', 40_000), journal_entry: { status: 'reversed' } }], {
+      opening: 0,
+      written: 40_000,
+      released: 40_000,
+    })
+    const entry = (id: string, lines: Array<[string, number, number]>, extra: Record<string, unknown>) => ({
+      id,
+      voucher_series: 'A',
+      voucher_number: 1,
+      entry_date: '2025-06-30',
+      description: null,
+      status: 'posted',
+      source_type: 'system',
+      source_id: null,
+      reverses_id: null,
+      correction_of_id: null,
+      lines: lines.map(([account_number, debit_amount, credit_amount], index) => ({ id: `${id}-${index}`, account_number, debit_amount, credit_amount })),
+      ...extra,
+    })
+    const supabase = makeSupabase({
+      accountingFramework: 'k2',
+      equityEntries: [
+        entry('je-w9', [['7720', 40_000, 0], ['1118', 0, 40_000]], { status: 'reversed' }),
+        entry('je-w9-storno', [['1118', 40_000, 0], ['7720', 0, 40_000]], { source_type: 'storno', reverses_id: 'je-w9' }),
+      ],
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'get_entries_with_account_lines',
+      expect.objectContaining({ p_accounts: expect.arrayContaining(['1118']) }),
+    )
+    const body = data.noter.find((n) => n.title === 'Anläggningstillgångar')?.body ?? ''
+    expect(body).not.toMatch(/nedskrivningar/i)
+    expect(body).toMatch(/Redovisat värde: 900\s000 kr/)
+    expect(data.noter.find((n) => n.title === 'Nedskrivningar av anläggningstillgångar')).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Nedskrivningar utanför anläggningsregistret'))).toBeUndefined()
+    tiesOut(data)
+  })
+
+  describe('K2: a register write-down that the ledger holds on another account of the post', () => {
+    // 130 000 written down through the register on 1118 in 2024 and moved by
+    // hand to 1158 before 2025.
+    const account = (account_number: string, account_name: string, opening: number) => ({
+      account_number, account_name, account_class: 1,
+      opening_debit: Math.max(opening, 0), opening_credit: Math.max(-opening, 0),
+      period_debit: 0, period_credit: 0,
+      closing_debit: Math.max(opening, 0), closing_credit: Math.max(-opening, 0),
+    })
+    const plantMoved = (rows: unknown[]) => {
+      mockFetchAllRows.mockResolvedValue(PERIODS)
+      mockedListAssets.mockResolvedValue([mark(REGISTER_BEFORE_2025)] as never)
+      mockedTrialBalance.mockResolvedValue({ rows, totalDebit: 0, totalCredit: 0, isBalanced: true } as never)
+    }
+    const MOVED = [account('1130', 'Mark', 900_000), account('1158', 'Ackumulerade nedskrivningar på markanläggningar', -130_000)]
+
+    it.each([
+      ['with the emptied account still in the trial balance', [...MOVED, account('1118', IMPAIRMENT_ACCOUNT, 0)]],
+      ['with the emptied account gone from the trial balance', MOVED],
+    ])('is shown once, in the table, and ties (%s)', async (_name, rows) => {
+      plantMoved(rows)
+      const { data, rollforward, ledger } = await build('k2')
+      expect(rollforward).toMatch(/Ingående nedskrivningar: -130\s000 kr/)
+      expect(rollforward).toMatch(/Utgående nedskrivningar: -130\s000 kr/)
+      expect(rollforward).toMatch(/Redovisat värde: 770\s000 kr/)
+      expect(ledger).toBeUndefined()
+      tiesOut(data)
+    })
+  })
+
+  it('K2: a movement between two write-down accounts of the post, and a verifikat with its storno, are no nedskrivning and no återföring', async () => {
+    // 30 000 written down by hand before 2025. In 2025 10 000 of it was
+    // moved from 1118 to 1158, and a write-down of 5 000 was booked on 1118
+    // and reversed again by storno.
+    const account = (account_number: string, account_name: string, opening: number, debit: number, credit: number) => {
+      const closing = opening + debit - credit
+      return {
+        account_number, account_name, account_class: 1,
+        opening_debit: Math.max(opening, 0), opening_credit: Math.max(-opening, 0),
+        period_debit: debit, period_credit: credit,
+        closing_debit: Math.max(closing, 0), closing_credit: Math.max(-closing, 0),
+      }
+    }
+    mockFetchAllRows.mockResolvedValue(PERIODS)
+    mockedListAssets.mockResolvedValue([mark([])] as never)
+    mockedTrialBalance.mockResolvedValue({
+      rows: [
+        account('1130', 'Mark', 900_000, 0, 0),
+        account('1118', IMPAIRMENT_ACCOUNT, -30_000, 15_000, 5_000),
+        account('1158', 'Ackumulerade nedskrivningar på markanläggningar', 0, 0, 10_000),
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    } as never)
+    const voucher = (id: string, entry_date: string, lines: Array<[string, number, number]>, extra: Record<string, unknown> = {}) => ({
+      id,
+      voucher_series: 'A',
+      voucher_number: 1,
+      entry_date,
+      description: null,
+      status: 'posted',
+      source_type: 'manual',
+      source_id: null,
+      reverses_id: null,
+      correction_of_id: null,
+      lines: lines.map(([account_number, debit_amount, credit_amount], index) => ({ id: `${id}-${index}`, account_number, debit_amount, credit_amount })),
+      ...extra,
+    })
+    const supabase = makeSupabase({
+      accountingFramework: 'k2',
+      equityEntries: [
+        voucher('v-move', '2025-03-01', [['1118', 10_000, 0], ['1158', 0, 10_000]]),
+        voucher('v-write-down', '2025-05-01', [['7720', 5_000, 0], ['1118', 0, 5_000]], { status: 'reversed' }),
+        voucher('v-storno', '2025-05-02', [['1118', 5_000, 0], ['7720', 0, 5_000]], { source_type: 'storno', reverses_id: 'v-write-down' }),
+      ],
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'get_entries_with_account_lines',
+      expect.objectContaining({ p_accounts: expect.arrayContaining(['1118', '1158']) }),
+    )
+    const body = data.noter.find((n) => n.title === 'Anläggningstillgångar')?.body ?? ''
+    expect(body).toMatch(/Ingående nedskrivningar: -30\s000 kr/)
+    expect(body).not.toMatch(/Årets nedskrivningar/)
+    expect(body).not.toMatch(/Återförda nedskrivningar/)
+    expect(body).toMatch(/Utgående nedskrivningar: -30\s000 kr/)
+    expect(body).toMatch(/Redovisat värde: 870\s000 kr/)
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
+    // The ledger note has nothing left to say about the post.
+    expect(data.noter.find((n) => n.title === 'Nedskrivningar av anläggningstillgångar')).toBeUndefined()
+  })
 })
 
 describe('buildArsredovisningData: note overrides', () => {
