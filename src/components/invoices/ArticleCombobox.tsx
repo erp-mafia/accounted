@@ -119,7 +119,7 @@ export default function ArticleCombobox({
 
   const close = useCallback(() => setIsOpen(false), [])
   const insideRefs = useMemo(() => [containerRef], [])
-  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+  const { highlightedIndex, setHighlightedIndex, resetHighlight, handleKeyDown } = useComboboxNavigation({
     count: options.length,
     isOpen,
     // A text input inside a form submits on Enter; the Select this replaces
@@ -137,10 +137,11 @@ export default function ArticleCombobox({
 
   // While typing, highlight the first actual match (index 1: index 0 is the
   // pinned "Egen rad"), so type-and-Enter picks the searched article instead
-  // of silently detaching the line to free text.
+  // of silently detaching the line to free text. Through resetHighlight: this
+  // runs after every keystroke in the search.
   useEffect(() => {
-    setHighlightedIndex(hasTyped && filtered.length > 0 ? 1 : 0)
-  }, [options.length, search, hasTyped, filtered.length, setHighlightedIndex])
+    resetHighlight(hasTyped && filtered.length > 0 ? 1 : 0)
+  }, [options.length, search, hasTyped, filtered.length, resetHighlight])
 
   // Opening on a committed selection starts the highlight ON that selection,
   // like the Select this replaces, so Enter re-confirms instead of switching.

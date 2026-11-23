@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState, type KeyboardEvent, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 
 /**
  * Where an arrow key moves a combobox highlight among `count` options:
@@ -73,6 +73,24 @@ export function useComboboxNavigation({
   closeOnTab = false,
 }: ComboboxNavigationOptions) {
   const [highlightedIndex, setHighlightedIndex] = useState(initialIndex)
+  // The highlight as last committed, read by resetHighlight.
+  const committedHighlightRef = useRef(highlightedIndex)
+  useLayoutEffect(() => {
+    committedHighlightRef.current = highlightedIndex
+  }, [highlightedIndex])
+
+  /**
+   * Puts the highlight on `index` unless it is there already: for the effect
+   * that resets the highlight when the options change. That effect runs after
+   * every keystroke in the field, and right after a render React does not
+   * drop an update that changes nothing: it leaves one more render pending
+   * behind the keystroke. React counts each commit that leaves one pending as
+   * nested: keystrokes handled before that render ran added up, and past 50
+   * the next keystroke threw "Maximum update depth exceeded" (React #185).
+   */
+  const resetHighlight = useCallback((index: number) => {
+    if (committedHighlightRef.current !== index) setHighlightedIndex(index)
+  }, [])
 
   useEffect(() => {
     if (!isOpen || !listRef.current) return
@@ -127,5 +145,5 @@ export function useComboboxNavigation({
     [isOpen, openKeys, open, onNavigate, count, wrap, activate, highlightedIndex, close, closeOnTab],
   )
 
-  return { highlightedIndex, setHighlightedIndex, handleKeyDown }
+  return { highlightedIndex, setHighlightedIndex, resetHighlight, handleKeyDown }
 }

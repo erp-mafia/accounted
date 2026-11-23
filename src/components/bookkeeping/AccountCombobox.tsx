@@ -186,12 +186,13 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     listRef,
     insideRefs,
   })
-  const { highlightedIndex, setHighlightedIndex } = navigation
+  const { highlightedIndex, setHighlightedIndex, resetHighlight } = navigation
 
-  // Reset highlight when filtered results change
+  // Reset highlight when filtered results change. Through resetHighlight:
+  // this runs after every keystroke in the search.
   useEffect(() => {
-    setHighlightedIndex(0)
-  }, [filteredAccounts, setHighlightedIndex])
+    resetHighlight(0)
+  }, [filteredAccounts, resetHighlight])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isOpen && e.key === 'Enter' && /^\d{4}$/.test(search)) {
