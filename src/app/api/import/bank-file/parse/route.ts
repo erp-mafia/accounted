@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { parseBankFile, generateFileHash, detectFileFormat } from '@/lib/import/bank-file/parser'
 import { detectSkattekontoFile } from '@/lib/import/skattekonto-file/parser'
 import { detectBgMax } from '@/lib/import/bgmax/parser'
+import { detectCamt054 } from '@/lib/import/camt054/parser'
 import { decodeBankFile } from '@/lib/import/bank-file/workbook'
 import { UnreadableWorkbookError } from '@/lib/import/shared/workbook-reader'
 import { unrecognizedColumnsMessages } from '@/lib/import/bank-file/columns'
@@ -60,13 +61,14 @@ export const POST = withRouteContext(
       const { content, workbook } = await decodeBankFile(arrayBuffer, file.name)
       stage = 'detect'
 
-      // Bankgirot's deposit specification (BG Max) is not a statement: its
-      // deposits are bank rows that already exist, so it never creates rows.
-      // The wizard sends it to the deposit-specification route, which
-      // attaches each deposit's payments to its row (crm#1170). No format
+      // A deposit specification (Bankgirot's BG Max, or the bank's camt.054
+      // notification of incoming payments) is not a statement: its deposits
+      // are bank rows that already exist, so it never creates rows. The
+      // wizard sends it to the deposit-specification route, which attaches
+      // each deposit's payments to its row (crm#1170, crm#1883). No format
       // override reaches past this: parsed as a statement it would only
       // create rows that double the deposits.
-      if (detectBgMax(content)) {
+      if (detectBgMax(content) || detectCamt054(content)) {
         return errorResponseFromCode('BANK_FILE_DEPOSIT_SPEC_DETECTED', opLog, { requestId })
       }
 

@@ -26,8 +26,14 @@ import type { BankFileAccountIdentity, BankFileFormat, BankFileParseResult, Pars
 import { prepareContent } from '../../shared/encoding'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { parseSwedishAmount } from '@/lib/money'
-import { bankBookingDay } from '@/lib/dates/iso'
 import { accountIdentity, sharedAccountIdentity } from '../account-identity'
+import {
+  extractElements,
+  extractEntryDate,
+  extractNestedText,
+  extractTextContent,
+  stripNamespacePrefixes,
+} from '../../shared/iso20022-xml'
 
 /** Markers of a camt.053 statement: its namespace, root element or long name. */
 const CAMT053_MARKERS = ['camt.053', 'bktocstmrstmt', 'banktocustomerstatement']
@@ -244,86 +250,4 @@ function statementAccount(xml: string): BankFileAccountIdentity | null {
     })
   })
   return identities.length > 0 ? sharedAccountIdentity(identities) : null
-}
-
-/**
- * Drop namespace prefixes from element names (<ns2:Ntry> becomes <Ntry>,
- * </ns2:Ntry> becomes </Ntry>). Attributes such as xmlns:ns2 are left alone;
- * nothing reads them.
- */
-function stripNamespacePrefixes(xml: string): string {
-  return xml.replace(/<(\/?)[A-Za-z_][\w.-]*:(?=[A-Za-z_])/g, '<$1')
-}
-
-/**
- * The calendar date of <BookgDt> or <ValDt>: an ISODate in <Dt>, or the
- * ISODateTime in <DtTm>, as the Swedish day (bankBookingDay). A local time is
- * read as written; a time with an offset is the day it fell on in Stockholm.
- */
-function extractEntryDate(entry: string, parentTag: string): string | null {
-  return bankBookingDay(extractNestedText(entry, parentTag, 'Dt') || extractNestedText(entry, parentTag, 'DtTm'))
-}
-
-const NAMED_XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
-
-/** The five predefined XML entities plus numeric character references. */
-function decodeXmlEntities(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (match, entity: string) => {
-    const lower = entity.toLowerCase()
-    const codePoint = lower.startsWith('#x')
-      ? parseInt(lower.slice(2), 16)
-      : lower.startsWith('#')
-        ? parseInt(lower.slice(1), 10)
-        : null
-    if (codePoint === null) return NAMED_XML_ENTITIES[lower] ?? match
-    return codePoint > 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match
-  })
-}
-
-/**
- * Extract all occurrences of a named XML element (simple parser, no dependencies)
- */
-function extractElements(xml: string, tagName: string): string[] {
-  const elements: string[] = []
-  // Match exact tag name (followed by > or whitespace, not a longer tag name)
-  const regex = new RegExp(`<${tagName}(?=[\\s>/])`, 'gi')
-  let match
-
-  while ((match = regex.exec(xml)) !== null) {
-    const startIdx = match.index
-    // Find matching closing tag
-    const closeTag = `</${tagName}>`
-    const closeIdx = xml.indexOf(closeTag, startIdx + match[0].length)
-
-    if (closeIdx === -1) continue
-
-    elements.push(xml.substring(startIdx, closeIdx + closeTag.length))
-
-    // Advance regex past this element to avoid re-matching inside it
-    regex.lastIndex = closeIdx + closeTag.length
-  }
-
-  return elements
-}
-
-/**
- * Extract text content of the first occurrence of a tag. The name matches
- * exactly: <Dt> never reads <DtTm>, <Cdtr> never reads <CdtrAcct>.
- */
-function extractTextContent(xml: string, tagName: string): string | null {
-  const regex = new RegExp(`<${tagName}(?:\\s[^>]*)?>([^<]+)<`, 'i')
-  const match = xml.match(regex)
-  const text = match?.[1]?.trim()
-  return text ? decodeXmlEntities(text) : null
-}
-
-/**
- * Extract text content of a nested tag within a parent tag
- */
-function extractNestedText(xml: string, parentTag: string, childTag: string): string | null {
-  const parentRegex = new RegExp(`<${parentTag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${parentTag}>`, 'i')
-  const parentMatch = xml.match(parentRegex)
-  if (!parentMatch) return null
-
-  return extractTextContent(parentMatch[1], childTag)
 }

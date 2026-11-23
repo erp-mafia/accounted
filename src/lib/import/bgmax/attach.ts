@@ -31,6 +31,16 @@
  * The closest row wins. When two rows are equally close and nothing tells
  * them apart, the deposit is ambiguous and left for the person: a wrong
  * split would suggest the wrong customer's invoices.
+ *
+ * The bank's own notification (camt.054, lib/import/camt054/parser.ts)
+ * brings the same thing by the same road: each booked credit entry is a
+ * deposit with its payments. An entry is a booking on the account the
+ * notification names, which gives one more piece of evidence and one more
+ * refusal:
+ *   - a row on that account, booked on the entry's booking or value date, is
+ *     the entry even when its text says nothing of bankgiro (the notification
+ *     may name no bankgiro at all);
+ *   - a row on another account is never it.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -40,6 +50,8 @@ import { amountToOre } from '@/lib/transactions/external-id'
 import { giroKey, readGiroCounterparty, type GiroRegister, type GiroRow } from '@/lib/transactions/giro-counterparty'
 import { loadGiroRegister } from '@/lib/transactions/giro-register'
 import { applyTransactionSplit } from '@/lib/transactions/parts-apply'
+import { isFileAccount, type FileAccountCandidate } from '@/lib/cash-accounts/file-account'
+import type { BankFileAccountIdentity } from '@/lib/import/bank-file/types'
 import type { BankTransactionPartInput, Transaction } from '@/types'
 import type { BgMaxDeposit, BgMaxPayment } from './parser'
 
@@ -53,6 +65,7 @@ export type DepositRow = GiroRow &
     | 'id'
     | 'date'
     | 'currency'
+    | 'cash_account_id'
     | 'journal_entry_id'
     | 'invoice_id'
     | 'supplier_invoice_id'
@@ -61,6 +74,19 @@ export type DepositRow = GiroRow &
     | 'potential_journal_entry_id'
     | 'potential_match_method'
   >
+
+/**
+ * A deposit as the attachment reads it. A BG Max deposit is one. So is a
+ * booked credit entry of the bank's notification (camt.054), which may name
+ * no bankgiro and says which account it was booked on.
+ */
+export type AttachableDeposit = Omit<BgMaxDeposit, 'bankgiro' | 'bank_account'> & {
+  bankgiro: string | null
+  /** The value date, when the source gives one beside the booking date. */
+  value_date?: string | null
+  /** The bank account the source says the deposit was booked on. */
+  account?: BankFileAccountIdentity | null
+}
 
 export type DepositMatch =
   | { status: 'matched'; row: DepositRow }
@@ -92,14 +118,38 @@ function bankText(row: GiroRow): string {
   return (row.original_description || row.description || '').trim()
 }
 
-/** 'giro': read as a deposit through the file's bankgiro; 'worded': says bankgiro, names no other giro. */
-function depositEvidence(row: DepositRow, deposit: BgMaxDeposit, register: GiroRegister): 'giro' | 'worded' | null {
+/**
+ * 'giro': read as a deposit through the file's bankgiro; 'worded': says
+ * bankgiro, names no other giro; 'account': a row on the account the source
+ * names, booked on the deposit's booking or value date.
+ */
+type Evidence = 'giro' | 'worded' | 'account'
+
+const EVIDENCE_RANK: Record<Evidence, number> = { giro: 0, worded: 1, account: 2 }
+
+/**
+ * `accountIds`: the cash accounts that are the account the source names;
+ * null when it names none, or none of the company's accounts is it.
+ */
+function depositEvidence(
+  row: DepositRow,
+  deposit: AttachableDeposit,
+  register: GiroRegister,
+  accountIds: ReadonlySet<string> | null,
+): Evidence | null {
+  const onAccount = accountIds !== null && row.cash_account_id != null && accountIds.has(row.cash_account_id)
+  // The source says where the deposit was booked: a row on another account is not it.
+  if (accountIds !== null && row.cash_account_id != null && !onAccount) return null
+
   const reading = readGiroCounterparty(row, register)
   if (reading) {
     if (reading.kind !== 'own_deposit') return null
-    return giroKey(reading.giro) === giroKey(deposit.bankgiro) ? 'giro' : null
+    if (deposit.bankgiro) return giroKey(reading.giro) === giroKey(deposit.bankgiro) ? 'giro' : null
+    // The source names no bankgiro: the row is a deposit through one of the company's own.
+    return 'worded'
   }
-  return BANKGIRO_WORDING.test(bankText(row)) ? 'worded' : null
+  if (BANKGIRO_WORDING.test(bankText(row))) return 'worded'
+  return onAccount && (row.date === deposit.date || row.date === deposit.value_date) ? 'account' : null
 }
 
 /** Whole days from a to b (YYYY-MM-DD). */
@@ -126,7 +176,12 @@ interface Candidate {
   rank: Rank
 }
 
-function candidatesFor(deposit: BgMaxDeposit, rows: readonly DepositRow[], register: GiroRegister): Candidate[] {
+function candidatesFor(
+  deposit: AttachableDeposit,
+  rows: readonly DepositRow[],
+  register: GiroRegister,
+  accountIds: ReadonlySet<string> | null,
+): Candidate[] {
   const ore = amountToOre(deposit.amount)
   const out: Candidate[] = []
   for (const row of rows) {
@@ -134,30 +189,35 @@ function candidatesFor(deposit: BgMaxDeposit, rows: readonly DepositRow[], regis
     if (row.currency && row.currency.toUpperCase() !== deposit.currency) continue
     const distance = Math.abs(dayDiff(deposit.date, row.date))
     if (!Number.isFinite(distance) || distance > DATE_WINDOW_DAYS) continue
-    const evidence = depositEvidence(row, deposit, register)
+    const evidence = depositEvidence(row, deposit, register, accountIds)
     if (!evidence) continue
-    out.push({ row, rank: [serialOnRow(row, deposit.serial) ? 0 : 1, distance, evidence === 'giro' ? 0 : 1] })
+    out.push({ row, rank: [serialOnRow(row, deposit.serial) ? 0 : 1, distance, EVIDENCE_RANK[evidence]] })
   }
   return out.sort((a, b) => compareRank(a.rank, b.rank) || a.row.date.localeCompare(b.row.date) || a.row.id.localeCompare(b.row.id))
 }
 
 /**
  * The bank row of each deposit, in the deposits' order. Deposits that look
- * the same (date, amount, bankgiro and serial) are interchangeable: when
- * exactly as many equally close rows exist, they are paired in order. The
- * deposit whose closest row is closest claims first, so a deposit whose own
- * row has not synced never takes a neighbour's row the neighbour fits better.
+ * the same (date, amount, bankgiro, serial and account) are interchangeable:
+ * when exactly as many equally close rows exist, they are paired in order.
+ * The deposit whose closest row is closest claims first, so a deposit whose
+ * own row has not synced never takes a neighbour's row the neighbour fits
+ * better. `accounts` holds, per deposit, the cash accounts that are the
+ * account its source names (depositAccounts); absent for a source that names
+ * none.
  */
 export function matchDepositsToRows(
-  deposits: readonly BgMaxDeposit[],
+  deposits: readonly AttachableDeposit[],
   rows: readonly DepositRow[],
   register: GiroRegister,
+  accounts?: ReadonlyArray<ReadonlySet<string> | null>,
 ): DepositMatch[] {
   const results: DepositMatch[] = deposits.map(() => ({ status: 'no_row' }))
-  const candidates = deposits.map((deposit) => candidatesFor(deposit, rows, register))
+  const candidates = deposits.map((deposit, index) => candidatesFor(deposit, rows, register, accounts?.[index] ?? null))
   const groups = new Map<string, number[]>()
   deposits.forEach((d, index) => {
-    const key = `${d.date}|${amountToOre(d.amount)}|${d.currency}|${giroKey(d.bankgiro)}|${d.serial ?? ''}`
+    const account = [...(accounts?.[index] ?? [])].sort().join(',')
+    const key = `${d.date}|${amountToOre(d.amount)}|${d.currency}|${giroKey(d.bankgiro)}|${d.serial ?? ''}|${account}`
     groups.set(key, [...(groups.get(key) ?? []), index])
   })
   const pending = [...groups.values()]
@@ -199,7 +259,8 @@ export function matchDepositsToRows(
 export interface DepositOutcome {
   date: string
   amount: number
-  bankgiro: string
+  /** The receiving bankgiro; null when the source names none for the deposit. */
+  bankgiro: string | null
   payments: number
   status: DepositMatch['status']
   /** The bank row the deposit attached to (status 'matched'). */
@@ -227,9 +288,11 @@ export interface AttachSummary {
 export interface AttachInput {
   companyId: string
   userId: string
-  deposits: readonly BgMaxDeposit[]
+  deposits: readonly AttachableDeposit[]
   /** False: read and match only (the preview). True: write each matched row's split. */
   apply: boolean
+  /** Where the deposits come from, for the match log; a BG Max file when left out. */
+  source?: 'bgmax' | 'camt054'
 }
 
 function shiftDays(date: string, days: number): string {
@@ -239,7 +302,7 @@ function shiftDays(date: string, days: number): string {
 }
 
 /** The company's incoming rows that could be one of the deposits: amounts in the file, dates in its window. */
-async function loadDepositRows(supabase: SupabaseClient, companyId: string, deposits: readonly BgMaxDeposit[]): Promise<DepositRow[]> {
+async function loadDepositRows(supabase: SupabaseClient, companyId: string, deposits: readonly AttachableDeposit[]): Promise<DepositRow[]> {
   if (deposits.length === 0) return []
   const dates = deposits.map((d) => d.date).sort()
   const from = shiftDays(dates[0]!, -DATE_WINDOW_DAYS)
@@ -255,7 +318,7 @@ async function loadDepositRows(supabase: SupabaseClient, companyId: string, depo
           .from('transactions')
           // One literal, so the schema guard (tests/schema/no-phantom-columns) can read it.
           .select(
-            'id, date, amount, currency, description, original_description, merchant_name, counterparty_account, reference, journal_entry_id, invoice_id, supplier_invoice_id, is_ignored, potential_invoice_id, potential_journal_entry_id, potential_match_method',
+            'id, date, amount, currency, cash_account_id, description, original_description, merchant_name, counterparty_account, reference, journal_entry_id, invoice_id, supplier_invoice_id, is_ignored, potential_invoice_id, potential_journal_entry_id, potential_match_method',
           )
           .eq('company_id', companyId)
           .gt('amount', 0)
@@ -271,18 +334,48 @@ async function loadDepositRows(supabase: SupabaseClient, companyId: string, depo
 }
 
 /**
+ * Per deposit, the cash accounts that are the account its source names (one
+ * rule for "this file is that account": isFileAccount), or null when the
+ * source names none or none of the company's accounts is it. Read only when
+ * a deposit names an account, so a BG Max file costs no extra query.
+ */
+async function depositAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  deposits: readonly AttachableDeposit[],
+): Promise<Array<ReadonlySet<string> | null>> {
+  if (!deposits.some((d) => d.account)) return deposits.map(() => null)
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account, iban, bban, clearing_number, account_number, currency, enabled, is_primary, bank_connection_id')
+    .eq('company_id', companyId)
+  if (error) throw error
+  const cashAccounts = (data ?? []) as Array<FileAccountCandidate & { id: string }>
+  return deposits.map((deposit) => {
+    const identity = deposit.account
+    if (!identity) return null
+    const ids = cashAccounts
+      .filter((row) => !row.currency || row.currency.toUpperCase() === deposit.currency)
+      .filter((row) => isFileAccount(identity, row))
+      .map((row) => row.id)
+    return ids.length > 0 ? new Set(ids) : null
+  })
+}
+
+/**
  * Match each deposit to its bank row and, when `apply`, write the row's
  * split with the invoice suggestions. A refused write fails the call: the
  * person sees it and can upload again, and every split written before it is
  * already whole (a split replaces the row's previous one).
  */
 export async function attachBgMaxDeposits(supabase: SupabaseClient, input: AttachInput): Promise<AttachSummary> {
-  const { companyId, userId, deposits, apply } = input
-  const [rows, register] = await Promise.all([
+  const { companyId, userId, deposits, apply, source = 'bgmax' } = input
+  const [rows, register, accounts] = await Promise.all([
     loadDepositRows(supabase, companyId, deposits),
     loadGiroRegister(supabase, companyId),
+    depositAccounts(supabase, companyId, deposits),
   ])
-  const matches = matchDepositsToRows(deposits, rows, register)
+  const matches = matchDepositsToRows(deposits, rows, register, accounts)
 
   const pool = apply && matches.some((m) => m.status === 'matched') ? await loadInvoiceMatchPool(supabase, companyId) : null
   // An invoice is offered to one payment of the file, never two.
@@ -344,7 +437,7 @@ export async function attachBgMaxDeposits(supabase: SupabaseClient, input: Attac
       if (error) throw error
       await logMatchEvent(supabase, userId, row.id, 'auto_suggested', {
         invoiceId: only.suggested_invoice_id,
-        matchMethod: `bgmax_${only.suggestion_reason ?? 'reference'}`,
+        matchMethod: `${source}_${only.suggestion_reason ?? 'reference'}`,
       })
       readyRows++
     }
