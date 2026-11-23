@@ -41,6 +41,7 @@ import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { isSkatteverketPayment } from './skatteverket-payment'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { TRANSACTION_FALLBACK_DESCRIPTION } from '@/types'
 import type {
   CategorizationTemplate,
   CategorizationTemplateSource,
@@ -186,8 +187,15 @@ export function normalizeCounterpartyName(raw: string): string {
  * suppliers (PostHog PH 118). The phrases are the catalog matcher's list
  * (stripBankNoise in ./booking-templates), not a second one; the persisted
  * key (normalizeCounterpartyName) is untouched.
+ *
+ * Nor does the title a row is stored with when the bank sent no text at all
+ * (TRANSACTION_FALLBACK_DESCRIPTION, "Okänd transaktion"): every such row
+ * carries it, whoever was paid, so one booking of it was proposed for all
+ * of them. A template already learned under it (its key is the same text)
+ * is skipped by the matcher like any other key that names no one.
  */
 export function namesCounterparty(raw: string): boolean {
+  if (raw.trim().toLowerCase() === TRANSACTION_FALLBACK_DESCRIPTION.toLowerCase()) return false
   return /\p{L}/u.test(stripBankMethodPhrases(raw.toLowerCase()))
 }
 
