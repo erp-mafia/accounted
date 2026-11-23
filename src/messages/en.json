@@ -21778,6 +21778,8 @@
     "title": "Questions",
     "help": "These are questions only you can answer, and each answer is saved as a fact about the company.",
     "empty": "No questions right now.",
+    "none_waiting": "No questions are waiting for an answer.",
+    "answered_label": "Answered",
     "evidence_label": "Records behind the question",
     "evidence_missing": "This record no longer exists",
     "dont_know": "Don't know",

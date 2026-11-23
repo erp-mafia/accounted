@@ -21778,6 +21778,8 @@
     "title": "Frågor",
     "help": "Det här är frågor som bara du kan svara på, och varje svar sparas som fakta om företaget.",
     "empty": "Inga frågor just nu.",
+    "none_waiting": "Inga frågor väntar på svar.",
+    "answered_label": "Besvarade",
     "evidence_label": "Underlag till frågan",
     "evidence_missing": "Underlaget finns inte kvar",
     "dont_know": "Vet inte",

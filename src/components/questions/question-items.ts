@@ -42,6 +42,32 @@ export function listItems(questions: readonly AppQuestion[]): QuestionItem[] {
   return questions.map((question) => ({ question, ended: endedOf(question), busy: false, error: null }))
 }
 
+/** The page's two lists, each in the order the questions were listed. */
+export interface QuestionSections {
+  /**
+   * The questions that were open when the page was read. One that is
+   * answered or closed on the page stays here: its block keeps its place and
+   * says what was saved, with Ångra.
+   */
+  waiting: QuestionItem[]
+  /** The questions that had ended before the page was read: answered earlier, or closed as settled. */
+  answered: QuestionItem[]
+}
+
+/** Whether a question had ended before the page was read. */
+function endedEarlier(item: QuestionItem): boolean {
+  return item.ended?.kind === 'answered_earlier' || item.ended?.kind === 'settled'
+}
+
+/**
+ * The questions split into the ones that wait and the ones answered before.
+ * The page says that none waits when `waiting` is empty, and lists
+ * `answered` under its own label.
+ */
+export function questionSections(items: readonly QuestionItem[]): QuestionSections {
+  return { waiting: items.filter((item) => !endedEarlier(item)), answered: items.filter(endedEarlier) }
+}
+
 /**
  * How a linked operation stands, as its line says it: prepared (it waits for
  * approval), booked (it was approved and carried out) or rejected (it was

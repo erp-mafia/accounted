@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppOperation, AppQuestion } from '@/lib/questions/app-answer'
-import { answeredState, closedState, listItems, operationLines, ownWordsBody } from '../question-items'
+import { answeredState, closedState, listItems, operationLines, ownWordsBody, questionSections } from '../question-items'
 
 const question: AppQuestion = {
   question_id: 'e0000000-0000-4000-8000-000000000001',
@@ -92,6 +92,48 @@ describe('a question answered before the page was read, in the page state', () =
   it('comes in ended without an answer when the question records none', () => {
     const bare: AppQuestion = { ...answered, answered: { answer: null, answered_at: null } }
     expect(listItems([bare])[0].ended).toEqual({ kind: 'answered_earlier', answer: null })
+  })
+})
+
+describe('the questions that wait and the ones answered before, as the page splits them', () => {
+  const id = (n: number) => `e0000000-0000-4000-8000-00000000001${n}`
+  const open: AppQuestion = { ...question, question_id: id(1) }
+  const second: AppQuestion = { ...question, question_id: id(2) }
+  const answered: AppQuestion = { ...question, question_id: id(3), answered: { answer: 'Årsbetalning', answered_at: '2026-11-22T09:00:00.000Z' }, operations: [] }
+  const settled: AppQuestion = { ...question, question_id: id(4), settled: { close_note: null, close_evidence: [], closed_at: null }, operations: [] }
+  const ids = (items: ReturnType<typeof listItems>) => items.map((item) => item.question.question_id)
+
+  it('puts the open questions among the waiting and the answered and settled ones among the answered, each in the order listed', () => {
+    const sections = questionSections(listItems([open, second, answered, settled]))
+    expect(ids(sections.waiting)).toEqual([id(1), id(2)])
+    expect(ids(sections.answered)).toEqual([id(3), id(4)])
+  })
+
+  it('has nothing waiting when every question had ended before the page was read', () => {
+    const sections = questionSections(listItems([answered, settled]))
+    expect(sections.waiting).toEqual([])
+    expect(ids(sections.answered)).toEqual([id(3), id(4)])
+  })
+
+  it('has nothing answered when every question is open', () => {
+    const sections = questionSections(listItems([open, second]))
+    expect(ids(sections.waiting)).toEqual([id(1), id(2)])
+    expect(sections.answered).toEqual([])
+  })
+
+  it('keeps a question that is answered or closed on the page among the waiting, where its block says what was saved', () => {
+    const [first, other] = listItems([open, second])
+    const sections = questionSections([
+      { ...first, ended: answeredState({ fact: 'Vad har ändrats? Svar: Årsbetalning' }) },
+      { ...other, ended: closedState('dont_know') },
+      ...listItems([answered]),
+    ])
+    expect(ids(sections.waiting)).toEqual([id(1), id(2)])
+    expect(ids(sections.answered)).toEqual([id(3)])
+  })
+
+  it('is two empty lists for no questions', () => {
+    expect(questionSections([])).toEqual({ waiting: [], answered: [] })
   })
 })
 

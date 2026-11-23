@@ -25,6 +25,7 @@ import {
   listItems,
   operationLines,
   ownWordsBody,
+  questionSections,
   type AppCloseChoice,
   type OperationLine,
   type QuestionItem,
@@ -32,6 +33,9 @@ import {
 
 /** The longest answer in the person's own words (APP_ANSWER_MAX in lib/questions/app-answer.ts). */
 const OWN_WORDS_MAX = 1000
+
+/** The id of the label over the answered questions, which names their section. */
+const ANSWERED_LABEL_ID = 'questions-answered-label'
 
 type T = ReturnType<typeof useTranslations>
 
@@ -282,12 +286,14 @@ function QuestionBlock({
 /**
  * The question list: each open question as a block with the records it rests
  * on, why it is asked and its answers. One press answers; the block then
- * shows what was saved, with Ångra. A question that was answered before the
- * page was read comes after them as a quiet row: its text, the answer as the
- * person gave it, and one line per staged operation linked to it. A question
- * that was closed as settled follows as its text, the line saying so, the
- * note of its close, the records the close named and the same operation
- * lines. `initial` is null when the server could not read the list.
+ * shows what was saved, with Ångra. When no question waits, one line at the
+ * top says so. The questions that had ended before the page was read follow
+ * under one small label: a question that was answered as a quiet row with
+ * its text, the answer as the person gave it, and one line per staged
+ * operation linked to it; a question that was closed as settled as its text,
+ * the line saying so, the note of its close, the records the close named and
+ * the same operation lines. `initial` is null when the server could not read
+ * the list.
  */
 export function QuestionList({ initial }: { initial: AppQuestion[] | null }) {
   const t = useTranslations('questions')
@@ -357,6 +363,23 @@ export function QuestionList({ initial }: { initial: AppQuestion[] | null }) {
     [send, t],
   )
 
+  const sections = items ? questionSections(items) : null
+  const blocks = (list: QuestionItem[]) => (
+    <ul className={cn(LIST_BLEED_CLASS, 'stagger-enter border-t-hairline')}>
+      {list.map((item) => (
+        <QuestionBlock
+          key={item.question.question_id}
+          item={item}
+          canWrite={canWrite}
+          t={t}
+          onAnswer={onAnswer}
+          onClose={onClose}
+          onUndo={onUndo}
+        />
+      ))}
+    </ul>
+  )
+
   return (
     <div className="space-y-8">
       <PageHeader
@@ -367,24 +390,22 @@ export function QuestionList({ initial }: { initial: AppQuestion[] | null }) {
           </HelpPopover>
         }
       />
-      {items === null ? (
+      {items === null || sections === null ? (
         <LoadError onRetry={() => void reload()} className={loading ? 'opacity-60' : undefined} />
       ) : items.length === 0 ? (
         <EmptyState title={t('empty')} />
       ) : (
-        <ul className={cn(LIST_BLEED_CLASS, 'stagger-enter border-t-hairline')}>
-          {items.map((item) => (
-            <QuestionBlock
-              key={item.question.question_id}
-              item={item}
-              canWrite={canWrite}
-              t={t}
-              onAnswer={onAnswer}
-              onClose={onClose}
-              onUndo={onUndo}
-            />
-          ))}
-        </ul>
+        <>
+          {sections.waiting.length === 0 ? <p className="text-[13px] text-foreground">{t('none_waiting')}</p> : blocks(sections.waiting)}
+          {sections.answered.length > 0 && (
+            <section aria-labelledby={ANSWERED_LABEL_ID}>
+              <div id={ANSWERED_LABEL_ID} className="pb-2 text-xs font-medium text-muted-foreground">
+                {t('answered_label')}
+              </div>
+              {blocks(sections.answered)}
+            </section>
+          )}
+        </>
       )}
     </div>
   )
