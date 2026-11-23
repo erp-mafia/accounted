@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateVacationLiability } from '@/lib/reports/vacation-liability'
+import { generateVacationLiability, type VacationLiabilityRow } from '@/lib/reports/vacation-liability'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { splitVacationLiabilityChange } from '@/lib/salary/account-mapping'
 import type { AccrualProposal, AccrualsProposal } from './types'
@@ -135,6 +135,24 @@ export async function assessVacationLiability(
 
   const totalAmount = Math.abs(deltaInt) + Math.abs(avgifterDelta)
 
+  // Per employee, the figures the target is the sum of: liability = valued
+  // days x day value + earning_pay (procentregeln, running intjänandeår) +
+  // variable_pay (sammalöneregeln, rörliga lönedelar). Read from the report;
+  // nothing is recomputed here.
+  const employees = report.rows.map((row) => ({
+    employee_id: row.employeeId,
+    employee_name: row.employeeName,
+    employment_start: row.employmentStart,
+    vacation_rule: row.vacationRule,
+    entitled_days: row.vacationDaysEntitled,
+    valued_days: row.liabilityDays,
+    day_value: row.dayValue,
+    day_value_estimated: row.dayValueEstimated,
+    earning_pay: row.earningPay,
+    variable_pay: row.variablePay,
+    liability: row.computedLiability,
+  }))
+
   const proposal: AccrualProposal = {
     kind: 'vacation_liability_change',
     label: isIncrease
@@ -148,7 +166,7 @@ export async function assessVacationLiability(
     // filter `reverses_on IS NOT NULL` and an empty string would silently
     // match that.
     reverses_on: null,
-    warnings: [],
+    warnings: vacationLiabilityWarnings(report.rows, report.vacationYearStart, options.closingDate),
     computation: {
       current_2920: currentLiability,
       closing_target: targetLiability,
@@ -156,9 +174,43 @@ export async function assessVacationLiability(
       avgifter_rate: AVGIFTER_RATE_ON_ACCRUED,
       avgifter_delta: avgifterDelta,
       employee_rows: report.rows.length,
+      vacation_year_start: report.vacationYearStart,
+      employees,
     },
   }
   return { proposal, notice: null }
+}
+
+/**
+ * What a reviewer should check before approving the semesterlöneskuld
+ * adjustment: a day value estimated from today's pay (procentregeln without
+ * the intjänandeår's payslips in Accounted), and an employment that started
+ * inside the intjänandeår containing the closing date. Never blockers.
+ */
+function vacationLiabilityWarnings(
+  rows: ReadonlyArray<Pick<VacationLiabilityRow, 'employeeName' | 'employmentStart' | 'dayValueEstimated'>>,
+  vacationYearStart: string,
+  closingDate: string,
+): string[] {
+  const warnings: string[] = []
+  const estimated = rows.filter((row) => row.dayValueEstimated)
+  if (estimated.length > 0) {
+    warnings.push(
+      `Dagvärdet är uppskattat från dagens lön för ${estimated.map((row) => row.employeeName).join(', ')}: ` +
+        'lönebesked för intjänandeåret saknas i Accounted. Kontrollera semesterlöneskulden innan du godkänner.',
+    )
+  }
+  const startedInside = rows.filter(
+    (row) => !!row.employmentStart && row.employmentStart > vacationYearStart && row.employmentStart <= closingDate,
+  )
+  if (startedInside.length > 0) {
+    warnings.push(
+      `Anställningen började under intjänandeåret för ${startedInside
+        .map((row) => `${row.employeeName} (${row.employmentStart})`)
+        .join(', ')}: kontrollera antalet semesterdagar och semesterlöneskulden innan du godkänner.`,
+    )
+  }
+  return warnings
 }
 
 /**

@@ -156,6 +156,138 @@ describe('assessVacationLiability', () => {
   })
 })
 
+// A reviewer must be able to trace the target per employee and see when a
+// figure rests on an estimate or a part-year employment.
+describe('assessVacationLiability: the workings behind the target', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function employee(over: Record<string, unknown>) {
+    return {
+      employeeId: 'e-1',
+      employeeName: 'Anna Andersson',
+      employmentStart: '2020-01-01',
+      vacationRule: 'procentregeln',
+      vacationDaysEntitled: 25,
+      liabilityDays: 25,
+      dayValue: 2400,
+      dayValueEstimated: false,
+      earningPay: 0,
+      variablePay: 0,
+      computedLiability: 60000,
+      liabilityChangeAccount: '7290',
+      ...over,
+    }
+  }
+
+  function report(rows: Array<Record<string, unknown>>) {
+    const computedLiability = rows.reduce((sum, row) => sum + (row.computedLiability as number), 0)
+    return { rows, totals: { computedLiability }, vacationYearStart: '2026-01-01' }
+  }
+
+  async function assess(rows: Array<Record<string, unknown>>) {
+    vi.mocked(generateVacationLiability).mockResolvedValue(report(rows) as never)
+    vi.mocked(generateTrialBalance).mockResolvedValue(trialBalanceWith2920(40000) as never)
+    const result = await assessVacationLiability({} as never, 'c1', 'p1', OPTIONS)
+    return result.proposal!
+  }
+
+  function amounts(proposal: Awaited<ReturnType<typeof assess>>) {
+    return {
+      amount: proposal.amount,
+      lines: proposal.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount]),
+    }
+  }
+
+  const UNCHANGED = {
+    amount: 26284,
+    lines: [
+      ['7290', 20000, 0],
+      ['2920', 0, 20000],
+      ['7519', 6284, 0],
+      ['2940', 0, 6284],
+    ],
+  }
+
+  it('returns each employee: entitled and valued days, day value, estimate flag, employment start and liability', async () => {
+    const proposal = await assess([
+      employee({ liabilityDays: 20, earningPay: 8000, computedLiability: 56000 }),
+      employee({
+        employeeId: 'e-2',
+        employeeName: 'Bo Berg',
+        employmentStart: '2018-03-01',
+        vacationRule: 'sammaloneregeln',
+        liabilityDays: 4,
+        dayValue: 900,
+        variablePay: 400,
+        computedLiability: 4000,
+      }),
+    ])
+
+    expect(proposal.computation).toMatchObject({
+      current_2920: 40000,
+      closing_target: 60000,
+      delta: 20000,
+      vacation_year_start: '2026-01-01',
+      employees: [
+        {
+          employee_id: 'e-1',
+          employee_name: 'Anna Andersson',
+          employment_start: '2020-01-01',
+          vacation_rule: 'procentregeln',
+          entitled_days: 25,
+          valued_days: 20,
+          day_value: 2400,
+          day_value_estimated: false,
+          earning_pay: 8000,
+          variable_pay: 0,
+          liability: 56000,
+        },
+        {
+          employee_id: 'e-2',
+          employee_name: 'Bo Berg',
+          employment_start: '2018-03-01',
+          vacation_rule: 'sammaloneregeln',
+          entitled_days: 25,
+          valued_days: 4,
+          day_value: 900,
+          day_value_estimated: false,
+          earning_pay: 0,
+          variable_pay: 400,
+          liability: 4000,
+        },
+      ],
+    })
+    expect(proposal.warnings).toEqual([])
+    expect(amounts(proposal)).toEqual(UNCHANGED)
+  })
+
+  it('warns when a day value is estimated from today\'s pay, and books the same amounts', async () => {
+    const proposal = await assess([employee({ dayValueEstimated: true })])
+
+    expect(proposal.warnings).toHaveLength(1)
+    expect(proposal.warnings[0]).toContain('Dagvärdet är uppskattat från dagens lön för Anna Andersson')
+    expect(proposal.warnings[0]).toContain('Kontrollera semesterlöneskulden innan du godkänner')
+    expect(amounts(proposal)).toEqual(UNCHANGED)
+  })
+
+  it('warns when an employment started inside the intjänandeår, and books the same amounts', async () => {
+    const proposal = await assess([employee({ employmentStart: '2026-09-01' })])
+
+    expect(proposal.warnings).toHaveLength(1)
+    expect(proposal.warnings[0]).toContain('Anställningen började under intjänandeåret för Anna Andersson (2026-09-01)')
+    expect(proposal.warnings[0]).toContain('innan du godkänner')
+    expect(amounts(proposal)).toEqual(UNCHANGED)
+  })
+
+  it('does not warn for an employment that started on the intjänandeår\'s first day', async () => {
+    const proposal = await assess([employee({ employmentStart: '2026-01-01' })])
+
+    expect(proposal.warnings).toEqual([])
+  })
+})
+
 describe('proposeVacationLiabilityChange', () => {
   beforeEach(() => {
     vi.clearAllMocks()
