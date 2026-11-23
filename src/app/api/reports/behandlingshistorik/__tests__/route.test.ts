@@ -153,9 +153,10 @@ describe('GET /api/reports/behandlingshistorik', () => {
     const [, companyId, params, options] = mockGenerate.mock.calls[0]
     expect(companyId).toBe('company-1')
     expect(params).toEqual({ periodId: 'period-1', fromDate: undefined, toDate: undefined, categories: ['verifikation'] })
-    // The injected resolver goes through resolveUserLabelsFromProfiles with the service client.
+    // The injected resolver goes through resolveUserLabelsFromProfiles with the service client,
+    // scoped to the company the report is for.
     await options!.resolveUserLabels!(['user-1'])
-    expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ from: serviceFrom }), ['user-1'])
+    expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ from: serviceFrom }), ['user-1'], 'company-1')
   })
 
   it('passes a validated sub-range through to the generator', async () => {

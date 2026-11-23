@@ -127,6 +127,26 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
     expect(body.data[1].actor_label).toBe('anna@example.se')
     // One lookup, scoped to exactly the distinct actor ids in the log rows.
     expect(service.findCalls('profiles', 'in')).toEqual([['id', ['user-1']]])
+    // Every actor had a label, so the names kept for deleted accounts are not read.
+    expect(service.findCalls('rattelse_actor_names', 'in')).toEqual([])
+  })
+
+  it('names who struck a line after their account was deleted, from the names this company keeps', async () => {
+    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
+    enqueue({ data: [linesRow('log-5', 'user-3', '2026-07-23T12:00:00Z')], error: null })
+    // The deleted account's profile has no name or e-mail left.
+    service.enqueue({ data: [{ id: 'user-3', email: null, full_name: null }], error: null })
+    service.enqueue({ data: [{ user_id: 'user-3', email: 'bo@example.se', full_name: 'Bo Berg' }], error: null })
+
+    const response = await GET(makeGet(), params())
+    const { body } = await parseJsonResponse<{ data: LogRow[] }>(response)
+
+    expect(response.status).toBe(200)
+    expect(body.data[0].actor).toBe('user-3')
+    expect(body.data[0].actor_label).toBe('bo@example.se')
+    // Scoped to this company and to exactly the ids the profiles left unnamed.
+    expect(service.findCalls('rattelse_actor_names', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(service.findCalls('rattelse_actor_names', 'in')).toEqual([['user_id', ['user-3']]])
   })
 
   it('leaves actor_label null and skips the profiles lookup when no row has an actor', async () => {

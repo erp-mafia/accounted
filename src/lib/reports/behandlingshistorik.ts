@@ -3688,21 +3688,43 @@ async function fetchCollectionDecisions(
   )
 }
 
+/** The label a person goes by in these reports: the e-mail, else the full name. */
+function personLabel(row: { email: string | null; full_name: string | null }): string | null {
+  return row.email || row.full_name || null
+}
+
 /**
- * Resolve user ids to e-mail labels through `profiles`. `profiles` RLS is
- * self-only, so the caller passes a service-role client; the lookup is scoped
- * to exactly the ids that appear in the report.
+ * Resolve user ids to e-mail labels through `profiles`. A deleted account has
+ * no label there, so its id is looked up in `rattelse_actor_names` next: the
+ * name erasure kept, for this company only, of a person who corrected its
+ * entries, until the bevarandetid ends (BFL 5 kap. 5 §, 7 kap. 2 §).
+ * `profiles` RLS is self-only and the kept names have no policy at all, so
+ * the caller passes a service-role client; both lookups are scoped to exactly
+ * the ids that appear in the report.
  */
 export async function resolveUserLabelsFromProfiles(
   serviceClient: Pick<SupabaseClient, 'from'>,
   userIds: string[],
+  companyId: string,
 ): Promise<Map<string, string>> {
   const labels = new Map<string, string>()
   for (const ids of chunk(userIds, ID_CHUNK)) {
     const { data } = await serviceClient.from('profiles').select('id, email, full_name').in('id', ids)
     for (const row of (data as { id: string; email: string | null; full_name: string | null }[] | null) ?? []) {
-      const label = row.email || row.full_name
+      const label = personLabel(row)
       if (label) labels.set(row.id, label)
+    }
+  }
+  const unlabelled = userIds.filter((id) => !labels.has(id))
+  for (const ids of chunk(unlabelled, ID_CHUNK)) {
+    const { data } = await serviceClient
+      .from('rattelse_actor_names')
+      .select('user_id, email, full_name')
+      .eq('company_id', companyId)
+      .in('user_id', ids)
+    for (const row of (data as { user_id: string; email: string | null; full_name: string | null }[] | null) ?? []) {
+      const label = personLabel(row)
+      if (label) labels.set(row.user_id, label)
     }
   }
   return labels

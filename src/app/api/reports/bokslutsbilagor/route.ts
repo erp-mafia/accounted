@@ -35,7 +35,7 @@ export const GET = withRouteContext('report.bokslutsbilagor', async (request, ct
     const serviceClient = createServiceClient()
     const report = await generateBokslutsbilagor(supabase, companyId, periodId, {
       userId: user.id,
-      resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(serviceClient, ids),
+      resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(serviceClient, ids, companyId),
       appVersion: currentAppVersion(),
     })
     if (!report) return errorResponseFromCode('FISCAL_PERIOD_NOT_FOUND', log, { requestId })
