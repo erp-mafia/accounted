@@ -122,7 +122,8 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     expect(body.error.code).toBe('SI_UNCREDIT_CREDIT_NOTE')
     expect(body.error.details).toMatchObject({ credit_note_id: 'credit-1', credited_invoice_id: 'inv-1' })
     // The dashboard toast reads the envelope through getErrorMessage.
-    const sentence = 'En kreditering ångras på originalfakturan, inte på kreditfakturan. Gå till originalfakturan och välj "Ångra kreditering".'
+    const sentence =
+      'En kreditering ångras på originalfakturan, inte på kreditfakturan. Är kreditfakturan kopplad till en originalfaktura, gå till den och välj "Ångra kreditering" där. Annars går krediteringen inte att ångra här.'
     expect(body.error.message).toBe(sentence)
     expect(getErrorMessage(body, { context: 'supplier_invoice', statusCode: status })).toBe(sentence)
     expect(findCalls('supplier_invoices', 'update')).toEqual([])

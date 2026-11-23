@@ -37,7 +37,7 @@ The first stable release of the public REST API. Six phases of development cover
 
 ### Supplier invoices: undoing a credit refuses the credit note's own id (2026-11)
 
-- **Fix: \`POST /supplier-invoices/{id}/uncredit\` with a credit note's id answers \`400 SI_UNCREDIT_CREDIT_NOTE\`** (crm#2171, 2026-11-23), on a dry run too, whatever the credit note's status; \`details.credited_invoice_id\` names the original to send instead. **Before**, a credit note's id was taken for the original's: the dry run answered 200 with a preview that restored the credit note as an invoice to pay, and the commit answered \`400 SI_UNCREDIT_FAILED\` without saying why (the database refuses a credit note in a payable status, so nothing was written). An already undone credit note's id answered a no-op. The API version date is unchanged.
+- **Fix: \`POST /supplier-invoices/{id}/uncredit\` with a credit note's id answers \`400 SI_UNCREDIT_CREDIT_NOTE\`** (crm#2171, 2026-11-23), on a dry run too, whatever the credit note's status; \`details.credited_invoice_id\` names the original to send instead, and is null for a credit note linked to no original, whose credit cannot be undone here. **Before**, a credit note's id was taken for the original's: the dry run answered 200 with a preview that restored the credit note as an invoice to pay, and the commit answered \`400 SI_UNCREDIT_FAILED\` without saying why (the database refuses a credit note in a payable status, so nothing was written). An already undone credit note's id answered a no-op. The API version date is unchanged.
 
 ### Supplier invoices: an undone credit or payment goes back to attest (2026-11)
 

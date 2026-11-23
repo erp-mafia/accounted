@@ -2687,13 +2687,13 @@ Response `200` (`application/pdf`).
 **Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note's verifikat and restore the invoice.**
 `scope:suppliers:write · risk:high · idempotent · dry-run`
 
-For an original supplier invoice with status credited: posts a storno cancelling the live credit note's verifikat (dated on that verifikat's date, never an edit or delete), marks the credit note reversed (the row is kept for the archive and the ankomstnummer series), and restores the original's status and remaining amount from its payments (paid, partially_paid, overdue, approved when it was attested, else registered, where it waits for attest again). The invoice can be credited again afterwards. An invoice that is not credited is an idempotent no-op (changed=false). Dry-runnable: the preview names the storno and the restored status.
+For an original supplier invoice with status credited: posts a storno cancelling the live credit note's verifikat (dated on that verifikat's date, never an edit or delete), marks the credit note reversed (the row is kept for the archive and the ankomstnummer series), and restores the original's status and remaining amount from its payments (paid, partially_paid, overdue, approved when it was attested, else registered, where it waits for attest again). The invoice can be credited again afterwards. An original that is not credited is an idempotent no-op (changed=false); a credit note's own id is refused. Dry-runnable: the preview names the storno and the restored status.
 
 **Use when:** A supplier invoice was credited by mistake and the credit should be taken back.
 **Do not use for:** Crediting an invoice (POST /supplier-invoices/{id}/credit), deleting an unbooked invoice (DELETE /supplier-invoices/{id}) or reversing an arbitrary verifikat.
 
 **Pitfalls:**
-- Pass the ORIGINAL invoice id, not the credit note's: a credit note's id answers 400 SI_UNCREDIT_CREDIT_NOTE, on a dry run too, and details.credited_invoice_id names its original.
+- Pass the ORIGINAL invoice id, not the credit note's: a credit note's id answers 400 SI_UNCREDIT_CREDIT_NOTE, on a dry run too. details.credited_invoice_id names its original; when it is null the credit note is linked to none and its credit cannot be undone here, so ask the person instead of picking an original.
 - The credit note's verifikat must lie in an open, unlocked period: otherwise the dry run answers 400 PERIOD_LOCKED and the commit 400 SI_UNCREDIT_FAILED.
 - A credit verifikat already reversed by hand is fine: the row cleanup still runs and reversal_entry_id is null.
 

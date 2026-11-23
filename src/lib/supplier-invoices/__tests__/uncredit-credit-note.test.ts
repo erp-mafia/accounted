@@ -5,7 +5,8 @@
  * gate: the dry run, and with it the MCP staging, promised to restore the
  * credit note as an invoice to pay, and the commit tried to write that, which
  * supplier_invoices_credit_note_not_payable refuses. A credit note's id is
- * refused before anything is read or written, the same at every door.
+ * refused on its own row, before any other read and any write, the same at
+ * every door.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, makeSupplierInvoice } from '@/tests/helpers'
@@ -71,6 +72,16 @@ describe("uncreditSupplierInvoice: a credit note's own id", () => {
     expect(entry?.message_sv).toContain('Ångra kreditering')
     expect(entry?.remediation?.description).toContain('credited_invoice_id')
     expect(entry?.retryable).toBeFalsy()
+  })
+
+  it('never sends anyone to an original that the credit note is not linked to', () => {
+    // Uncredit finds a credit note only through credited_invoice_id, and
+    // most imported credit notes have none: undoing the credit on an
+    // original picked by hand would restore it and leave the credit note.
+    const entry = getErrorEntry('SI_UNCREDIT_CREDIT_NOTE')
+    expect(entry?.message_sv).toContain('Annars går krediteringen inte att ångra här')
+    expect(entry?.message_en).toContain('When that is null')
+    expect(entry?.remediation?.description).toContain('ask the person')
   })
 
   it('a dry run refuses it, so neither a preview nor a staged proposal promises a restore', async () => {
