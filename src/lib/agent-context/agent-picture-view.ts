@@ -9,6 +9,8 @@
  *
  * Pure and browser-safe: no DOM, no IO.
  */
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { ISO_DATE_RE } from '@/lib/invariants'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
 import type { PictureAgent, PictureChecks, PictureCounts, PictureSourceGroup } from './agent-picture'
 
@@ -45,20 +47,25 @@ export function latestDelivery(groups: readonly PictureSourceGroup[]): string | 
 }
 
 export interface InstantWords {
-  /** The instant falls on the same calendar day as `now`, in the reader's own time zone. */
+  /** The instant falls on the same Swedish calendar day as `now`. */
   today: boolean
   /** False for a bare date (YYYY-MM-DD), which names a day and no time of it. */
   hasTime: boolean
+  /** The instant itself; for a bare date, noon of that day, which is that day wherever it is read. */
   date: Date
 }
 
-/** How an instant is said: today (with its time when it has one), otherwise by its date. Null for something that is no date. */
+/**
+ * How an instant is said: today (with its time when it has one), otherwise
+ * by its date. The day is the Swedish calendar day, as everywhere else in
+ * the books. Null for something that is no date.
+ */
 export function instantWords(instant: string, now: Date): InstantWords | null {
-  const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(instant)
-  const date = bare ? new Date(Number(bare[1]), Number(bare[2]) - 1, Number(bare[3])) : new Date(instant)
+  const bare = ISO_DATE_RE.test(instant)
+  const date = new Date(bare ? `${instant}T12:00:00Z` : instant)
   if (Number.isNaN(date.getTime())) return null
-  const today = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()
-  return { today, hasTime: !bare, date }
+  const day = bare ? instant : todayIsoStockholm(date)
+  return { today: day === todayIsoStockholm(now), hasTime: !bare, date }
 }
 
 // ---------------------------------------------------------------- counts

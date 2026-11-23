@@ -66,23 +66,27 @@ describe('latestDelivery', () => {
 })
 
 describe('instantWords', () => {
-  // Built from local parts, so the test reads the same in every time zone.
-  const now = new Date(2026, 2, 2, 9, 0)
+  // 09:00 in Stockholm on 2 March (CET).
+  const now = new Date('2026-03-02T08:00:00.000Z')
 
-  it('says today with its time for an instant on the same day', () => {
-    const words = instantWords(new Date(2026, 2, 2, 6, 12).toISOString(), now)!
-    expect(words.today).toBe(true)
-    expect(words.hasTime).toBe(true)
-    expect(words.date.getHours()).toBe(6)
+  it('says today with its time for an instant on the same Swedish day', () => {
+    const words = instantWords('2026-03-02T05:12:00.000Z', now)!
+    expect(words).toMatchObject({ today: true, hasTime: true })
+    expect(words.date.toISOString()).toBe('2026-03-02T05:12:00.000Z')
+    // 23:30 UTC the day before is 00:30 in Stockholm: today.
+    expect(instantWords('2026-03-01T23:30:00.000Z', now)).toMatchObject({ today: true, hasTime: true })
   })
 
   it('says today without a time for a bare date', () => {
-    expect(instantWords('2026-03-02', now)).toMatchObject({ today: true, hasTime: false })
+    const words = instantWords('2026-03-02', now)!
+    expect(words).toMatchObject({ today: true, hasTime: false })
+    // Noon of the day, so the date reads the same wherever it is formatted.
+    expect(words.date.toISOString()).toBe('2026-03-02T12:00:00.000Z')
   })
 
   it('says another day by its date', () => {
     expect(instantWords('2026-03-01', now)).toMatchObject({ today: false, hasTime: false })
-    expect(instantWords(new Date(2026, 2, 1, 23, 59).toISOString(), now)).toMatchObject({ today: false, hasTime: true })
+    expect(instantWords('2026-03-01T22:30:00.000Z', now)).toMatchObject({ today: false, hasTime: true })
   })
 
   it('answers nothing for what is no date', () => {
