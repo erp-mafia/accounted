@@ -3,8 +3,9 @@
  * including `notices`: the reason a proposal was withheld must reach the
  * agent, not just the wizard.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { buildAccrualsProposal } from '@/lib/bokslut/accruals/accrual-detector'
 import { tools } from '../server'
 
 vi.mock('@/lib/bokslut/accruals/accrual-detector', () => ({
@@ -36,5 +37,31 @@ describe('gnubok_propose_accruals', () => {
     await expect(
       tool.execute({}, 'c1', 'u1', {} as never, {} as never),
     ).rejects.toThrow(/fiscal_period_id/)
+  })
+})
+
+// Per-employee figures are payroll data: the tool itself needs only
+// reports:read, so it asks the detector for them only when the key also
+// holds payroll:read.
+describe('gnubok_propose_accruals: employee detail follows payroll:read', () => {
+  beforeEach(() => {
+    vi.mocked(buildAccrualsProposal).mockClear()
+  })
+
+  async function detailFor(args: Record<string, unknown>) {
+    await tool.execute({ fiscal_period_id: 'p1', ...args }, 'c1', 'u1', {} as never, { type: 'api_key' })
+    return vi.mocked(buildAccrualsProposal).mock.calls[0][3]
+  }
+
+  it('leaves employee detail out for a key with reports:read only', async () => {
+    expect(await detailFor({ __keyScopes: ['reports:read'] })).toEqual({ employeeDetail: false })
+  })
+
+  it('includes employee detail for a key that also reads payroll', async () => {
+    expect(await detailFor({ __keyScopes: ['reports:read', 'payroll:read'] })).toEqual({ employeeDetail: true })
+  })
+
+  it('leaves employee detail out when the scopes are unknown', async () => {
+    expect(await detailFor({})).toEqual({ employeeDetail: false })
   })
 })

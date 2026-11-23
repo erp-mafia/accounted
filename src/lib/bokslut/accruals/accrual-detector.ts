@@ -8,6 +8,12 @@ import type { AccrualProposal, AccrualsProposal, VacationProposalEmployee } from
  *  K2 BFNAR 2016:10 ch.16). Same rate as the regular AGI calculation. */
 export const AVGIFTER_RATE_ON_ACCRUED = 0.3142
 
+export interface VacationLiabilityOptions {
+  closingDate: string
+  /** Name each employee (computation.employees, names in warnings): payroll data, for a caller that may read payroll. Off unless true. */
+  employeeDetail?: boolean
+}
+
 /**
  * Compute the next-day ISO date for auto-reversal. The accrual is reversed
  * on the first day of the period following the closing date.
@@ -45,12 +51,16 @@ function nextDayIso(closingDate: string): string {
  *
  * `proposal` is null when there is no entry to propose; `notice` carries
  * the reason when the detector declined for rule 3.
+ *
+ * Per-employee figures (names, employment start, day value, pay) are payroll
+ * data: `computation.employees` and the names in `warnings` appear only with
+ * `employeeDetail: true`. Without it the warnings give counts.
  */
 export async function assessVacationLiability(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options: { closingDate: string },
+  options: VacationLiabilityOptions,
 ): Promise<{ proposal: AccrualProposal | null; notice: string | null }> {
   const closingYear = parseInt(options.closingDate.slice(0, 4), 10)
   if (Number.isNaN(closingYear)) {
@@ -134,6 +144,7 @@ export async function assessVacationLiability(
   ]
 
   const totalAmount = Math.abs(deltaInt) + Math.abs(avgifterDelta)
+  const employeeDetail = options.employeeDetail === true
 
   // Per employee, the figures the target is the sum of: liability = valued
   // days x day value + earning_pay (procentregeln, running intjänandeår) +
@@ -166,7 +177,7 @@ export async function assessVacationLiability(
     // filter `reverses_on IS NOT NULL` and an empty string would silently
     // match that.
     reverses_on: null,
-    warnings: vacationLiabilityWarnings(report.rows, report.vacationYearStart, options.closingDate),
+    warnings: vacationLiabilityWarnings(report.rows, report.vacationYearStart, options.closingDate, employeeDetail),
     computation: {
       current_2920: currentLiability,
       closing_target: targetLiability,
@@ -175,10 +186,15 @@ export async function assessVacationLiability(
       avgifter_delta: avgifterDelta,
       employee_rows: report.rows.length,
       vacation_year_start: report.vacationYearStart,
-      employees,
+      ...(employeeDetail ? { employees } : {}),
     },
   }
   return { proposal, notice: null }
+}
+
+/** "1 anställd", "2 anställda". */
+function employeeCount(count: number): string {
+  return `${count} ${count === 1 ? 'anställd' : 'anställda'}`
 }
 
 /**
@@ -186,17 +202,20 @@ export async function assessVacationLiability(
  * adjustment: a day value estimated from today's pay (procentregeln without
  * the intjänandeår's payslips in Accounted), and an employment that started
  * inside the intjänandeår containing the closing date. Never blockers.
+ * Names the employees when `named`, otherwise counts them.
  */
 function vacationLiabilityWarnings(
   rows: ReadonlyArray<Pick<VacationLiabilityRow, 'employeeName' | 'employmentStart' | 'dayValueEstimated'>>,
   vacationYearStart: string,
   closingDate: string,
+  named: boolean,
 ): string[] {
   const warnings: string[] = []
   const estimated = rows.filter((row) => row.dayValueEstimated)
   if (estimated.length > 0) {
+    const who = named ? estimated.map((row) => row.employeeName).join(', ') : employeeCount(estimated.length)
     warnings.push(
-      `Dagvärdet är uppskattat från dagens lön för ${estimated.map((row) => row.employeeName).join(', ')}: ` +
+      `Dagvärdet är uppskattat från dagens lön för ${who}: ` +
         'lönebesked för intjänandeåret saknas i Accounted. Kontrollera semesterlöneskulden innan du godkänner.',
     )
   }
@@ -204,10 +223,12 @@ function vacationLiabilityWarnings(
     (row) => !!row.employmentStart && row.employmentStart > vacationYearStart && row.employmentStart <= closingDate,
   )
   if (startedInside.length > 0) {
+    const who = named
+      ? startedInside.map((row) => `${row.employeeName} (${row.employmentStart})`).join(', ')
+      : employeeCount(startedInside.length)
     warnings.push(
-      `Anställningen började under intjänandeåret för ${startedInside
-        .map((row) => `${row.employeeName} (${row.employmentStart})`)
-        .join(', ')}: kontrollera antalet semesterdagar och semesterlöneskulden innan du godkänner.`,
+      `Anställningen började under intjänandeåret för ${who}: ` +
+        'kontrollera antalet semesterdagar och semesterlöneskulden innan du godkänner.',
     )
   }
   return warnings
@@ -502,11 +523,13 @@ export function proposeAccruedUtility(input: AccruedUtilityInput): AccrualPropos
  * future versions can add salary-accrued-but-unpaid, supplier-invoice-period
  * detection, etc. Manual prepaid/accrued cards are added via the UI form
  * (the API endpoint accepts them but they're not in the auto-proposal).
+ * `employeeDetail` as in assessVacationLiability: off unless set.
  */
 export async function buildAccrualsProposal(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
+  options: { employeeDetail?: boolean } = {},
 ): Promise<AccrualsProposal> {
   const { data: period, error } = await supabase
     .from('fiscal_periods')
@@ -521,6 +544,7 @@ export async function buildAccrualsProposal(
 
   const vacation = await assessVacationLiability(supabase, companyId, fiscalPeriodId, {
     closingDate: period.period_end,
+    employeeDetail: options.employeeDetail === true,
   })
   if (vacation.proposal) proposals.push(vacation.proposal)
   if (vacation.notice) notices.push(vacation.notice)

@@ -32,7 +32,9 @@ export const GET = withRouteContext(
       // Run the two independent scans in parallel so the wizard's first
       // paint isn't gated on the slower auto-detect query.
       const [proposal, autoDetected] = await Promise.all([
-        buildAccrualsProposal(supabase, companyId, id),
+        // A signed-in member (this route takes no API key): the wizard's
+        // card lists each employee's days x day value.
+        buildAccrualsProposal(supabase, companyId, id, { employeeDetail: true }),
         (async () => {
           // Entity type picks the regelverk the materiality wording cites:
           // K1 (BFNAR 2006:1) for enskild firma, K2 (BFNAR 2016:10) for AB.
