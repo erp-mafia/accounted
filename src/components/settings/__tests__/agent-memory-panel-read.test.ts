@@ -6,7 +6,7 @@
  * The panel reads in an effect, and a server render runs none: useEffect is
  * collected here and run by hand after the render, with fetch recorded.
  */
-import { createElement } from 'react'
+import { createElement, type ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderInLocale } from '@/tests/i18n-render'
 
@@ -30,7 +30,9 @@ const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ da
 /** The addresses the panel read when it was first shown. */
 async function firstReads(plain: boolean): Promise<string[]> {
   effects.run = []
-  renderInLocale(createElement(AgentMemoryPanel, { plain }), 'sv')
+  // The panel's props have a default, so its type is narrowed to a component that always takes them.
+  const Panel: (props: { plain?: boolean }) => ReactElement = AgentMemoryPanel
+  renderInLocale(createElement(Panel, { plain }), 'sv')
   await Promise.all(effects.run.map((effect) => effect()))
   return fetchMock.mock.calls.map(([url]) => url)
 }
