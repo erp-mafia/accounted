@@ -156,7 +156,7 @@ describe('POST /items/:id/retry-extraction', () => {
     expect(body.error).toMatch(/Ingen bilaga/i)
   })
 
-  it('returns 500 and reads nothing when the document key is not inside the company', async () => {
+  it('returns 404 and reads nothing when the document key is not inside the company', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: { id: 'item-1', document_id: 'doc-1', correlation_id: null, created_supplier_invoice_id: null },
@@ -170,7 +170,7 @@ describe('POST /items/:id/retry-extraction', () => {
 
     const res = await retryRoute.handler(makeReq(), buildCtx(supabase))
     const { status } = await parseJsonResponse(res)
-    expect(status).toBe(500)
+    expect(status).toBe(404)
     expect(serviceDownloadMock).not.toHaveBeenCalled()
     expect(extractInvoiceFields).not.toHaveBeenCalled()
   })

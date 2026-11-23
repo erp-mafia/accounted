@@ -158,6 +158,13 @@ describe('dashboard underlag routes', () => {
     expect(res.headers.get('Content-Disposition')).toMatch(/^inline/)
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
 
+    // A row whose key is not in the company's folder of the documents bucket is not found, and nothing is read.
+    downloadMock.mockClear()
+    getRowMock.mockResolvedValue({ ...attachment, storage_bucket: 'documents', storage_path: 'documents/company-2/reconciliation/x' })
+    const elsewhere = await fileGET(createMockRequest('http://localhost/x'), p({ accountKey: 'manual:2350', attachmentId: ATTACHMENT_ID }))
+    expect(elsewhere.status).toBe(404)
+    expect(downloadMock).not.toHaveBeenCalled()
+
     getRowMock.mockResolvedValue(null)
     const missing = await fileGET(createMockRequest('http://localhost/x'), p({ accountKey: 'manual:2350', attachmentId: ATTACHMENT_ID }))
     expect(missing.status).toBe(404)

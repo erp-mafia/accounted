@@ -13,7 +13,7 @@ export default {
   match: [
     // A row's stored key handed to Storage directly.
     /\.(download|createSignedUrl|createSignedUrls)\(\s*[\w.!?]*\bstorage_path\b/,
-    /\.remove\(\s*\[(?![^\]]*documentStoragePathCandidates\()[^\]]*\bstorage_path\b/,
+    /\.remove\(\s*\[[^\]]*\bstorage_path\b/,
   ],
   sanctioned: ['lib/core/documents/storage-key.ts'],
   allowed: {},

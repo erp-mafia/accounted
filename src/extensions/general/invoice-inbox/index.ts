@@ -13,7 +13,7 @@ import {
   completePendingDocumentUpload,
 } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
-import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
+import { downloadDocumentObject, isDocumentKeyOfCompany } from '@/lib/core/documents/storage-key'
 import { validateBody } from '@/lib/api/validate'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { dbError } from '@/lib/errors/db-error'
@@ -1105,7 +1105,8 @@ export const invoiceInboxExtension: Extension = {
           .eq('company_id', ctx.companyId)
           .maybeSingle()
 
-        if (!doc) {
+        // A row whose key is not inside the company has no file here (storage-key.ts).
+        if (!doc || !isDocumentKeyOfCompany(doc.storage_path, ctx.companyId)) {
           return NextResponse.json({ error: 'Bilagan kunde inte hittas.' }, { status: 404 })
         }
 
