@@ -296,6 +296,16 @@ describe('reverseChargeAccountConflict', () => {
     expect(reverseChargeAccountConflict('4531', null)).toBeNull()
   })
 
+  it('compares the boxes, so domestic goods (ruta 23) refuse domestic_services (ruta 24)', () => {
+    expect(reverseChargeAccountConflict('4415', null, 'domestic_services'))
+      .toEqual({ reason: 'other_kind', box: 'ruta23', kind: 'domestic_services' })
+    expect(reverseChargeAccountConflict('4010', treatment('reverse_charge_domestic'), 'domestic_services'))
+      .toEqual({ reason: 'other_kind', box: 'ruta23', kind: 'domestic_services' })
+    expect(reverseChargeAccountConflict('4415', null)).toBeNull()
+    expect(reverseChargeAccountConflict('4425', null, 'domestic_services')).toBeNull()
+    expect(reverseChargeAccountConflict('6540', treatment('reverse_charge_domestic'), 'domestic_services')).toBeNull()
+  })
+
   it('lets an ordinary cost account and one outside class 4-6 take the purchase with its pair', () => {
     for (const account of ['6540', '5420', '7610', '1630', '2893']) {
       expect(reverseChargeAccountConflict(account, undefined, 'eu_services'), account).toBeNull()

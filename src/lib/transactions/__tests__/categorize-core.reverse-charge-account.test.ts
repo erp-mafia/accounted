@@ -197,6 +197,25 @@ describe('categorize: reverse charge on a cost account that reports a box itself
     expect(await viaApi('4531', 'non_eu_services')).toMatchObject({ ok: true })
   })
 
+  it('tells a caller only no box on an account that reports ruta 23 or 24, which no door can name', async () => {
+    type Refusal = { message?: { sv: string; en?: string } }
+    for (const [account, box] of [['4415', 'ruta23'], ['4425', 'ruta24']] as const) {
+      const refused = await viaApi(account, 'eu_services')
+      expect(refused, account).toMatchObject({
+        ok: false,
+        code: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT',
+        details: { reason: 'other_kind', account_number: account, account_box: box, requested_box: 'ruta21' },
+      })
+      const message = (refused as Refusal).message
+      expect(message?.sv, account).toMatch(/Stämmer kontot, ange ingen ruta, så gäller kontots egen/)
+      expect(message?.sv, account).not.toMatch(/ange ruta 2[34]/)
+      expect(message?.en, account).toMatch(/If the account is right, name no box, and the account's own applies/)
+    }
+    // A box a caller can name (4531, ruta 22) is still offered.
+    const named = (await viaApi('4531', 'eu_services')) as Refusal
+    expect(named.message?.sv).toMatch(/Stämmer kontot, ange ruta 22 eller ingen ruta/)
+  })
+
   it('refuses a catalog template whose cost account the company set to the import basis', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow })

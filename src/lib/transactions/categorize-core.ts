@@ -116,6 +116,7 @@ import type {
 } from '@/types'
 import {
   isReverseChargeBasisAccount,
+  REVERSE_CHARGE_TREATMENT_KINDS,
   reverseChargeKindRuta,
   type ReverseChargeKind,
 } from '@/lib/bookkeeping/vat-entries'
@@ -567,9 +568,20 @@ function reverseChargeAccountRefusal(
       const named = stated?.parameter
         ? { sv: `${stated.parameter} anger ruta ${asked}`, en: `${stated.parameter} names box ${asked}` }
         : { sv: `den valda rutan är ${asked}`, en: `the box chosen is ${asked}` }
+      // A caller can state only rutor 20-22 (REVERSE_CHARGE_TREATMENT_KINDS,
+      // the doors' vocabulary). On an account that reports ruta 23 or 24
+      // only no box, or the row on its own, gives the account's own.
+      const ownCanBeNamed = Object.values(REVERSE_CHARGE_TREATMENT_KINDS)
+        .some((kind) => reverseChargeKindRuta(kind) === conflict.box)
       const right = stated?.parameter
-        ? { sv: `ange ruta ${own} eller ingen ruta, så gäller kontots egen`, en: `name box ${own} or no box, and the account's own applies` }
-        : { sv: `välj ruta ${own}, eller bokför raden för sig i granskningen, som visar kontots ruta`, en: `choose box ${own}, or book the row on its own in the review, which shows the account's box` }
+        ? {
+          sv: `ange ${ownCanBeNamed ? `ruta ${own} eller ` : ''}ingen ruta, så gäller kontots egen`,
+          en: `name ${ownCanBeNamed ? `box ${own} or ` : ''}no box, and the account's own applies`,
+        }
+        : {
+          sv: `${ownCanBeNamed ? `välj ruta ${own}, eller ` : ''}bokför raden för sig i granskningen, som visar kontots ruta`,
+          en: `${ownCanBeNamed ? `choose box ${own}, or ` : ''}book the row on its own in the review, which shows the account's box`,
+        }
       return refuse(CONFLICT_CODE, {
         ...details,
         account_box: conflict.box,

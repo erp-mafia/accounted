@@ -215,10 +215,14 @@ export function vatCodeRuleForAccount(
  *
  * And one with its own ruta 20-24 can carry only that box:
  *
- *  - other_kind: the account reports its own ruta 20-24 (`box`) for another
- *    purchase (`kind`) than the one stated, so the purchase would land in a
- *    box other than the one asked. Only a `statedKind` is compared: without
- *    one the account's own box is the purchase's.
+ *  - other_kind: the account reports its own ruta 20-24 (`box`, for `kind`)
+ *    and the stated kind names another (reverseChargeKindRuta), so the
+ *    purchase would land in a box other than the one asked. The boxes are
+ *    compared, not the kinds: an account for domestic goods (4415-4417, or a
+ *    class 4 account with reverse_charge_domestic) reports ruta 23 under the
+ *    kind domestic_services, which names ruta 24, and no kind names ruta 23.
+ *    Only a `statedKind` is compared: without one the account's own box is
+ *    the purchase's.
  *
  * Any other account takes the purchase: an ordinary cost account, or one
  * outside class 4-6, with the basis pair; one with its own box without it.
@@ -237,7 +241,9 @@ export function reverseChargeAccountConflict(
 ): ReverseChargeAccountConflict | null {
   const rule = vatCodeRuleForAccount(account, row)
   if (rule.mode === 'fixed') {
-    return statedKind && statedKind !== rule.code.kind ? { reason: 'other_kind', box: rule.box, kind: rule.code.kind } : null
+    return statedKind && reverseChargeKindRuta(statedKind) !== rule.box
+      ? { reason: 'other_kind', box: rule.box, kind: rule.code.kind }
+      : null
   }
   if (rule.mode === 'free' || !COST_ACCOUNT.test(account)) return null
   if (account === RC_BASIS_OFFSET_ACCOUNT) return { reason: 'basis_offset' }

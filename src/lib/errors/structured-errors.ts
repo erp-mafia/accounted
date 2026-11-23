@@ -1194,7 +1194,7 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     thrown_message_sv: true,
     remediation: {
       description:
-        'details.reason "other_box": details.account_number reports details.account_box itself (ruta37 trepartshandel, ruta50 import); such a purchase is not reverse charge, so book it without reverse charge (trepartshandel without VAT, an import with its import VAT). "basis_offset": 4598 is the basis offset, book the purchase on its cost account. "no_rate": the account\'s reverse-charge momskod has no rate of 25, 12 or 6 %; correct the rate in the chart of accounts or book on an ordinary cost account. "other_kind": the account reports details.account_box itself, not details.requested_box; resend with that box or none, or book the purchase on an ordinary cost account.',
+        'details.reason "other_box": details.account_number reports details.account_box itself (ruta37 trepartshandel, ruta50 import); such a purchase is not reverse charge, so book it without reverse charge (trepartshandel without VAT, an import with its import VAT). "basis_offset": 4598 is the basis offset, book the purchase on its cost account. "no_rate": the account\'s reverse-charge momskod has no rate of 25, 12 or 6 %; correct the rate in the chart of accounts or book on an ordinary cost account. "other_kind": the account reports details.account_box itself, not details.requested_box; resend with no box (or with that box when it is ruta20, ruta21 or ruta22, the boxes a caller can name), or book the purchase on an ordinary cost account.',
       resource: 'Accounted://chart-of-accounts',
     },
   },
