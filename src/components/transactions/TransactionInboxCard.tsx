@@ -137,6 +137,8 @@ interface TransactionInboxCardProps {
   proposal?: RowProposal | null
   /** Book the row with its proposal (opens the review with the template set). */
   onBookProposal?: (transaction: TransactionWithInvoice) => void
+  /** With the booking screen switched on: Bokför on a row without a proposal opens the row there instead of the picker. */
+  onOpenBookingScreen?: (transaction: TransactionWithInvoice) => void
   /**
    * The period ("2026-10") of a booked salary run that already pays this row
    * out (lib/transactions/salary-run-payouts.ts, crm#1685): the primary
@@ -184,6 +186,7 @@ export default function TransactionInboxCard({
   accountLogo = null,
   proposal = null,
   onBookProposal,
+  onOpenBookingScreen,
   salaryRunPeriod = null,
   giroCounterparty = null,
 }: TransactionInboxCardProps) {
@@ -289,12 +292,13 @@ export default function TransactionInboxCard({
 
   // Primary action: invoice/supplier-invoice match keeps the 1-click
   // shortcut, then a salary run's payout; otherwise the user opens the
-  // template picker. Rendered as the row-level quiet pill AND as the
-  // drawer's leading pill.
+  // template picker, or the booking screen where it is switched on.
+  // Rendered as the row-level quiet pill AND as the drawer's leading pill.
   const runPrimary = (anchor?: HTMLElement) => {
     if (matchLabel) onOpenMatchDialog(transaction)
     else if (salaryRunLabel && onOpenMatchVoucher) onOpenMatchVoucher(transaction)
     else if (proposal && onBookProposal) onBookProposal(transaction)
+    else if (onOpenBookingScreen) onOpenBookingScreen(transaction)
     else onOpenCategoryDialog(transaction, anchor)
   }
   const primaryLabel = matchLabel ?? salaryRunLabel ?? 'Bokför'
