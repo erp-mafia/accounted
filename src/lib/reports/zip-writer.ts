@@ -158,7 +158,7 @@ export async function* writeZip(
     }
     // An entry this large needs ZIP64 sizes in its headers, which this writer
     // does not write: refused rather than wrapped silently. Held deflated, a
-    // behandlingshistorik could get there (about three times today's largest).
+    // long enough behandlingshistorik could get there.
     if (size >= UINT32_MARKER) throw new Error(`ZIP entry too large: ${entry.name}`)
     const name = utf8.encode(entry.name)
     // Any character outside ASCII encodes to more bytes than UTF-16 units.

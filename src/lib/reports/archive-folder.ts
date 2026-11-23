@@ -35,7 +35,7 @@ export function jsonArrayElement(value: unknown): Uint8Array {
 /**
  * Bytes held deflated until the ZIP writer reads them, and inflated each time
  * it does. The archive stores them as they are: what changes is only what the
- * function holds meanwhile. A behandlingshistorik of 574 000 rows is 1.2 GB as
+ * function holds meanwhile. A long behandlingshistorik can pass a gigabyte of
  * text, held whole before an archive's first byte; deflated it is a fraction.
  */
 export class DeflatedBytes implements ZipPartSource {
