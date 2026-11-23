@@ -4526,6 +4526,27 @@ export const UpdateAccountSchema = z.object({
   sru_code: z.string().nullable().optional(),
 })
 
+/**
+ * Which EU country each OSS account is for (unionsordningen): the request of
+ * every door (accounts.oss-countries). Which account may take what is decided
+ * in lib/vat/oss-account-countries.ts.
+ */
+export const SetOssAccountCountriesSchema = z.object({
+  accounts: z
+    .array(
+      z.object({
+        account_number: z.string().min(1).max(10),
+        country: z
+          .string()
+          .nullable()
+          .describe('ISO 3166-1 alpha-2 of another EU country, e.g. "DE". "EU" on a VAT account shared by every country. null clears the account.'),
+        vat_rate: z.number().nullable().optional().describe('Percent, e.g. 19 or 25.5. Sales accounts only.'),
+      }),
+    )
+    .min(1)
+    .max(200),
+})
+
 // Looser account-number shape than the 4-digit primitive on purpose: imported
 // charts can carry non-standard numbers (sub-accounts like '19301'), and those
 // are exactly the rows the prune flow exists to remove.

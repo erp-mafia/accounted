@@ -33,14 +33,18 @@ const routeCtx = createMockRouteParams({})
 
 const UNDERLAG = {
   period: { year: 2026, quarter: 3, start: '2026-07-01', end: '2026-09-30', label: 'Q3 2026', deadline: '2026-10-31' },
-  rows: [{ country: 'DE', vat_rate: 19, net_eur: 88.25, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1 }],
+  rows: [{ country: 'DE', vat_rate: 19, net_eur: 88.25, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1, voucher_count: 1, rate_mismatch: true }],
   corrections: [
-    { country: 'DE', period: { year: 2026, quarter: 2, label: 'Q2 2026' }, vat_eur: -3.49, vat_sek: -38, refund_count: 1 },
+    { country: 'DE', period: { year: 2026, quarter: 2, label: 'Q2 2026' }, vat_eur: -3.49, vat_sek: -38, refund_count: 1, voucher_count: 0 },
   ],
   totals: { net_eur: 88.25, vat_eur: 16.77, corrections_vat_eur: -3.49, net_sek: 1000, vat_sek: 190, corrections_vat_sek: -38 },
   rates: [{ currency: 'SEK', for_date: '2026-09-30', rate: 11.331, rate_date: '2026-09-30', unavailable: false }],
   ledger_vat_sek: 152,
   unaccounted: [],
+  refund_vouchers: [
+    { journal_entry_id: 'e2', voucher_series: 'A', voucher_number: 2, entry_date: '2026-08-15', description: 'Kreditfaktura', net_sek: -400, vat_sek: -76 },
+  ],
+  accounts: [],
   warnings: [],
   nil_return: false,
 }

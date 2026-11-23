@@ -601,6 +601,103 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/accounts/oss-countries`
+
+**Say which EU country each OSS account is for (unionsordningen).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Sets the country, and for a sales account the VAT rate, that an OSS account is for, so the OSS underlag places the verifikat booked on it per country and rate without a webshop order behind them. A sales account is a class 3 account with VAT code oss: it takes one other EU country and that country's rate in percent. A VAT account is a 26xx account other than 2650: it takes the country whose OSS output VAT it holds, or EU when one account is shared by every country, and no rate. country null clears the account. Every account is checked before any is written: one that cannot take what it is given refuses the call. No verifikat changes. Idempotent. Dry-runnable.
+
+**Use when:** A company books OSS sales on one account per country and rate (invoices, vouchers booked by hand, a ledger imported from another system) and the OSS underlag lists those verifikat as unaccounted. The underlag's accounts list names the accounts and what their names suggest.
+**Do not use for:** Webshop orders booked through a Shopify country rule: the order row carries the country. The Swedish momsdeklaration: set default_vat_treatment or vat_box with PATCH /accounts/{number}.
+
+**Pitfalls:**
+- account_number and country are STRINGS. The country is two capital letters ("DE") and never SE.
+- vat_rate is a percentage (19, 25.5), not a fraction, and belongs to sales accounts only.
+- A class 3 account needs VAT code oss first (PATCH /accounts/{number} default_vat_treatment=oss).
+- A VAT account that names no country is not read as OSS VAT: the sales booked with it then show no VAT.
+- The name of an account is only a suggestion: check the country and the rate before setting them.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ accounts: { account_number: string, country: string | null, vat_rate?: number | null }[] }
+```
+
+Example request:
+```json
+{
+  "accounts": [
+    {
+      "account_number": "3106",
+      "country": "DE",
+      "vat_rate": 19
+    },
+    {
+      "account_number": "2670",
+      "country": "EU"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    accounts: { account_number: string, account_name: string, kind: "sales" | "vat", oss_country: string | null, oss_vat_rate: number | null }[],
+    updated: number,
+    unchanged: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accounts": [
+      {
+        "account_number": "3106",
+        "account_name": "Försäljning OSS Tyskland 19 %",
+        "kind": "sales",
+        "oss_country": "DE",
+        "oss_vat_rate": 19
+      },
+      {
+        "account_number": "2670",
+        "account_name": "Utgående moms OSS",
+        "kind": "vat",
+        "oss_country": "EU",
+        "oss_vat_rate": null
+      }
+    ],
+    "updated": 2,
+    "unchanged": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/accrual-schedules`
 
 **Create a periodisering by hand for an amount on 17xx/29xx that no invoice line in Accounted carries, with monthly catch-up.**

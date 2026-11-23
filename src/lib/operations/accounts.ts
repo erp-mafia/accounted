@@ -21,8 +21,11 @@ import {
   deleteAccount,
   updateAccount,
 } from '@/lib/bookkeeping/chart-of-accounts-service'
+import { SetOssAccountCountriesSchema } from '@/lib/api/schemas'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
 import { ACCOUNT_VAT_BOXES } from '@/lib/vat/account-vat-box'
+import { ossAccountCountriesTitle, setOssAccountCountries } from '@/lib/vat/oss-account-countries'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { defineOperation } from './types'
 
 const Account = z.object({
@@ -351,4 +354,80 @@ export const accountsDeactivate = defineOperation({
   },
   run: (ctx, { account_numbers, include_used }, { dryRun }) =>
     deactivateAccounts(ctx, account_numbers, include_used ?? false, { dryRun }),
+})
+
+/** The accounts of the OSS example: the chart's own OSS sales and OSS output VAT accounts. */
+const OSS_SALES_EXAMPLE = resolveAccountRole(PINNED_JURISDICTION, 'oss_sales')
+const OSS_VAT_EXAMPLE = resolveAccountRole(PINNED_JURISDICTION, 'oss_output_vat')
+
+export const accountsOssCountries = defineOperation({
+  id: 'accounts.oss-countries',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'low',
+  reversible: true,
+  docs: {
+    summary: 'Say which EU country each OSS account is for (unionsordningen).',
+    description:
+      'Sets the country, and for a sales account the VAT rate, that an OSS account is for, so the OSS underlag places the verifikat booked on it per country and rate without a webshop order behind them. A sales account is a class 3 account with VAT code oss: it takes one other EU country and that country\'s rate in percent. A VAT account is a 26xx account other than 2650: it takes the country whose OSS output VAT it holds, or EU when one account is shared by every country, and no rate. country null clears the account. Every account is checked before any is written: one that cannot take what it is given refuses the call. No verifikat changes. Idempotent. Dry-runnable.',
+    useWhen:
+      'A company books OSS sales on one account per country and rate (invoices, vouchers booked by hand, a ledger imported from another system) and the OSS underlag lists those verifikat as unaccounted. The underlag\'s accounts list names the accounts and what their names suggest.',
+    doNotUseFor:
+      'Webshop orders booked through a Shopify country rule: the order row carries the country. The Swedish momsdeklaration: set default_vat_treatment or vat_box with PATCH /accounts/{number}.',
+    pitfalls: [
+      'account_number and country are STRINGS. The country is two capital letters ("DE") and never SE.',
+      'vat_rate is a percentage (19, 25.5), not a fraction, and belongs to sales accounts only.',
+      'A class 3 account needs VAT code oss first (PATCH /accounts/{number} default_vat_treatment=oss).',
+      'A VAT account that names no country is not read as OSS VAT: the sales booked with it then show no VAT.',
+      'The name of an account is only a suggestion: check the country and the rate before setting them.',
+    ],
+    example: {
+      request: {
+        accounts: [
+          { account_number: OSS_SALES_EXAMPLE, country: 'DE', vat_rate: 19 },
+          { account_number: OSS_VAT_EXAMPLE, country: 'EU' },
+        ],
+      },
+      response: {
+        data: {
+          accounts: [
+            { account_number: OSS_SALES_EXAMPLE, account_name: 'Försäljning OSS Tyskland 19 %', kind: 'sales', oss_country: 'DE', oss_vat_rate: 19 },
+            { account_number: OSS_VAT_EXAMPLE, account_name: 'Utgående moms OSS', kind: 'vat', oss_country: 'EU', oss_vat_rate: null },
+          ],
+          updated: 2,
+          unchanged: 0,
+        },
+        meta: META,
+      },
+    },
+  },
+  input: SetOssAccountCountriesSchema,
+  output: z.object({
+    accounts: z.array(
+      z.object({
+        account_number: z.string(),
+        account_name: z.string(),
+        kind: z.enum(['sales', 'vat']),
+        oss_country: z.string().nullable(),
+        oss_vat_rate: z.number().nullable(),
+      }),
+    ),
+    updated: z.number().int(),
+    unchanged: z.number().int(),
+  }),
+  errorCodes: ['ACCOUNT_NOT_FOUND'],
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/accounts/oss-countries' },
+  mcp: {
+    name: 'gnubok_set_oss_account_countries',
+    title: 'Set OSS Account Countries',
+    description:
+      'Stage which EU country (and, for a sales account, VAT rate in percent) each OSS account is for, so the OSS underlag places vouchers without an order per country. Read gnubok_get_oss_underlag first: its accounts list names the accounts.',
+    keywords: ['oss', 'one stop shop', 'unionsordningen', 'konto per land', 'landskod', 'momssats per land', 'kontoplan'],
+    stage: {
+      pendingType: 'set_oss_account_countries',
+      title: (input) =>
+        ossAccountCountriesTitle((input.accounts as Array<{ account_number: string }>).map((account) => account.account_number)),
+    },
+  },
+  run: (ctx, { accounts }, { dryRun }) => setOssAccountCountries(ctx, accounts, { dryRun }),
 })

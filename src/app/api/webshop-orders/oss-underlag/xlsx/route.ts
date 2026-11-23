@@ -19,8 +19,9 @@ import { getOssUnderlag } from '@/lib/webshop-orders/oss-underlag'
  * GET /api/webshop-orders/oss-underlag/xlsx?year=2026&quarter=3
  *
  * The OSS underlag as a workbook: the declaration's figures per country and
- * rate, the corrections, the OSS verifikat it does not cover, and the ECB
- * rates used. Headers are Swedish, as Skatteverket's form is.
+ * rate, the corrections, the OSS verifikat it does not cover, the refunds it
+ * took off the quarter, and the ECB rates used. Headers are Swedish, as
+ * Skatteverket's form is.
  */
 export const GET = withRouteContext('webshop_orders.oss_underlag.xlsx', async (request, { supabase, companyId, user, log, requestId }) => {
   const query = validateQuery(request, OssUnderlagQuerySchema)
@@ -47,9 +48,21 @@ export const GET = withRouteContext('webshop_orders.oss_underlag.xlsx', async (r
         decimalColumn('Försäljning exkl. moms (SEK)'),
         decimalColumn('Moms (SEK)'),
         integerColumn('Ordrar'),
+        integerColumn('Verifikat'),
+        textColumn('Kontroll'),
       ],
       rows: underlag.rows,
-      mapRow: (row) => [row.country, row.vat_rate, row.net_eur, row.vat_eur, row.net_sek, row.vat_sek, row.order_count],
+      mapRow: (row) => [
+        row.country,
+        row.vat_rate,
+        row.net_eur,
+        row.vat_eur,
+        row.net_sek,
+        row.vat_sek,
+        row.order_count,
+        row.voucher_count,
+        row.rate_mismatch ? 'Momsen stämmer inte med momssatsen' : null,
+      ],
     },
     {
       name: 'Rättelser',
@@ -59,9 +72,10 @@ export const GET = withRouteContext('webshop_orders.oss_underlag.xlsx', async (r
         decimalColumn('Moms (EUR)'),
         decimalColumn('Moms (SEK)'),
         integerColumn('Återbetalningar'),
+        integerColumn('Verifikat'),
       ],
       rows: underlag.corrections,
-      mapRow: (row) => [row.country, row.period.label, row.vat_eur, row.vat_sek, row.refund_count],
+      mapRow: (row) => [row.country, row.period.label, row.vat_eur, row.vat_sek, row.refund_count, row.voucher_count],
     },
     {
       name: 'Ej i underlaget',
@@ -73,6 +87,24 @@ export const GET = withRouteContext('webshop_orders.oss_underlag.xlsx', async (r
         decimalColumn('Moms (SEK)'),
       ],
       rows: underlag.unaccounted,
+      mapRow: (row) => [
+        formatVoucher(row),
+        parseCellDate(row.entry_date),
+        row.description,
+        row.net_sek,
+        row.vat_sek,
+      ],
+    },
+    {
+      name: 'Avräknade återbetalningar',
+      columns: [
+        textColumn('Verifikat'),
+        dateColumn('Datum'),
+        textColumn('Beskrivning'),
+        decimalColumn('Försäljning (SEK)'),
+        decimalColumn('Moms (SEK)'),
+      ],
+      rows: underlag.refund_vouchers,
       mapRow: (row) => [
         formatVoucher(row),
         parseCellDate(row.entry_date),

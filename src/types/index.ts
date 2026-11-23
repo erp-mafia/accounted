@@ -2369,6 +2369,11 @@ export interface BASAccount {
   default_vat_treatment: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
   // Momsruta override for 26xx VAT accounts; null = BAS mapping by number.
   vat_box: import('@/lib/vat/account-vat-box').AccountVatBox | null
+  // OSS (unionsordningen): the other EU country the account is for, and that
+  // country's VAT rate in percent on a sales account (lib/vat/oss-accounts.ts).
+  // Optional: only the reads that need them select them.
+  oss_country?: string | null
+  oss_vat_rate?: number | null
   description: string | null
   sru_code: string | null
   k2_excluded: boolean

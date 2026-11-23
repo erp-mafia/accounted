@@ -239,6 +239,9 @@ const RISK_TIERS = {
   delete_account: 'medium',
   activate_accounts: 'low',
   deactivate_accounts: 'low',
+  // Two fields on kontoplan rows that decide where the OSS underlag places a
+  // verifikat: no verifikat changes, and the same call takes it back.
+  set_oss_account_countries: 'low',
   update_company_tax_profile: 'high',
   update_bookkeeping_lock: 'high',
   // Revoking a service account (lib/service-accounts) revokes every key it
