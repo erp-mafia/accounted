@@ -937,7 +937,11 @@ describe('loadAgentPicture: what the connections did today', () => {
   })
 
   it('says the work is unknown when it cannot be read, and keeps the cards and their calls', async () => {
-    for (const broken of [{ company_questions: { error: { message: 'boom' } } }, { pending_operations: { error: { message: 'boom' } } }]) {
+    const brokenReads: Array<Parameters<typeof tables>[0]> = [
+      { company_questions: { error: { message: 'boom' } } },
+      { pending_operations: { error: { message: 'boom' } } },
+    ]
+    for (const broken of brokenReads) {
       const picture = await loadAgentPicture(fakeSupabase(tables(broken)).client, COMPANY, USER, ports(), NOW)
       expect(picture.agents!.activity).toMatchObject({ work: null, actors: { 'key-claude': { calls_today: 2 } } })
       expect(picture.agents!.list.map((card) => card.id)).toEqual(['claude', 'key:key-manual'])
