@@ -17,6 +17,7 @@ import {
   plausibleDate,
   readCustomerNames,
   readMergeRequest,
+  run,
   scan,
   stripAuthorTrailers,
 } from '../../check-mr-privacy.mjs'
@@ -201,6 +202,42 @@ describe('customer names', () => {
     expect(readCustomerNames(env({ MR_PRIVACY_CUSTOMER_NAMES_B64: gzipped })).names).toHaveLength(2)
     expect(readCustomerNames(env({ MR_PRIVACY_CUSTOMER_NAMES: '["Acme Havsbad AB"]' })).names).toHaveLength(1)
     expect(readCustomerNames(env())).toEqual({ source: null, names: [], skipped: 0 })
+  })
+})
+
+describe('ticket references', () => {
+  // HEAD..HEAD holds no commit, so only the title and the description are read.
+  async function check(title: string, description: string) {
+    const out: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((line: string) => void out.push(line))
+    vi.spyOn(console, 'error').mockImplementation((line: string) => void out.push(line))
+    const code = await run({ title, description, base: 'HEAD' }, env())
+    return { code, printed: out.join('\n') }
+  }
+
+  it('refuses one in the title, says how to fix it and never prints it', async () => {
+    const { code, printed } = await check('fix(reports): totals add up (crm#2151)', '## What\n\nTotals add up.')
+    expect(code).toBe(1)
+    expect(printed).toContain('title, line 1: ticket_ref: crm#N')
+    expect(printed).toContain('put <!-- crm#N --> on its own line in the description')
+    expect(printed).not.toContain('2151')
+  })
+
+  it('refuses one in the visible description, also below a hidden one', async () => {
+    const { code, printed } = await check('fix(reports): totals add up', '## What\n\n<!-- crm#2151 -->\nTotals add up, see CRM#2151.')
+    expect(code).toBe(1)
+    expect(printed).toContain('description, line 4: ticket_ref: crm#N')
+    expect(printed).not.toContain('description, line 3')
+  })
+
+  it('passes one in a hidden comment', async () => {
+    const { code, printed } = await check('fix(reports): totals add up', '## What\n\nTotals add up.\n\n<!-- crm#2151 -->\n<!--\ncrm#2152\n-->\n')
+    expect(code).toBe(0)
+    expect(printed).toContain('MR privacy check passed')
+  })
+
+  it('refuses a comment in the title, which GitHub shows as text', async () => {
+    expect((await check('fix(reports): totals add up <!-- crm#2151 -->', '')).code).toBe(1)
   })
 })
 

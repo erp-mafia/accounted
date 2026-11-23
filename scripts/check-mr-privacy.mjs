@@ -15,6 +15,13 @@
  *   customer_name  a name from the customer name list: whole words, the first
  *                  letter of each word as written in the list, a multi-word
  *                  name as one phrase, every word at least 4 characters.
+ *   ticket_ref     a desk ticket reference, crm#N, in the title, or in the
+ *                  description outside an HTML comment. Not customer data, but
+ *                  internal, and the repo is public: a pull request names its
+ *                  ticket on a line of its own in the description, as
+ *                  <!-- crm#N -->, which GitHub does not show and the desk
+ *                  tooling reads from the raw body. Commit messages are not
+ *                  checked for it: the squash subject is the title.
  *
  * The name list is kept outside the repo, one name per line (or a JSON array):
  *   MR_PRIVACY_CUSTOMER_NAMES      the list itself, or the path GitLab gives a
@@ -272,6 +279,23 @@ function findNames(text, names) {
 }
 
 // ---------------------------------------------------------------------------
+// ticket references
+
+const TICKET_REF_RE = /crm#\d+/gi
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g
+
+/** The text with each HTML comment blanked out; line breaks stay, so line numbers hold. */
+function hideHtmlComments(text) {
+  return String(text ?? '').replace(HTML_COMMENT_RE, (comment) => comment.replace(/[^\n]/g, ' '))
+}
+
+/** Every ticket reference in the text a reader sees, each as { rule, line, masked }. */
+function findTicketRefs(shown) {
+  const source = String(shown ?? '')
+  return [...source.matchAll(TICKET_REF_RE)].map((m) => ({ rule: 'ticket_ref', line: lineOf(source, m.index), masked: 'crm#N' }))
+}
+
+// ---------------------------------------------------------------------------
 // scanning
 
 /** Author and sign-off trailers name contributors, not customers. */
@@ -357,7 +381,9 @@ export function collectCommitMessages(options = {}, env = process.env) {
 function report(entries, names) {
   const failures = []
   for (const entry of entries) {
-    for (const issue of findPrivacyIssues(entry.text, names)) failures.push({ label: entry.label, ...issue })
+    const found = findPrivacyIssues(entry.text, names)
+    if (entry.shown !== undefined) found.push(...findTicketRefs(entry.shown))
+    for (const issue of found) failures.push({ label: entry.label, ...issue })
   }
   for (const f of failures) console.error(`${f.label}, line ${f.line}: ${f.rule}: ${f.masked}`)
   return failures
@@ -377,12 +403,18 @@ export async function run(options = {}, env = process.env) {
   const mr = await readMergeRequest(options, env)
   for (const note of mr.notes) console.log(note)
   const entries = [
-    { label: 'title', text: mr.title },
-    { label: 'description', text: mr.description },
+    // `shown` is what a reader of the pull request sees, where no ticket reference may show.
+    { label: 'title', text: mr.title, shown: mr.title },
+    { label: 'description', text: mr.description, shown: hideHtmlComments(mr.description) },
     ...collectCommitMessages(options, env),
   ]
   const failures = report(entries, list.names)
   if (failures.length > 0) {
+    if (failures.some((f) => f.rule === 'ticket_ref')) {
+      console.error(
+        'A ticket reference shows in the pull request: drop it from the title and the visible description, and put <!-- crm#N --> on its own line in the description instead, which GitHub does not show.',
+      )
+    }
     console.error(
       `MR privacy check failed with ${failures.length} finding(s). Remove them from the MR title or description, or reword the commits, then push again.`,
     )
