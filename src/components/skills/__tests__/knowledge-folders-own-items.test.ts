@@ -5,7 +5,8 @@
  */
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { renderInLocale, visibleText } from '@/tests/i18n-render'
+import { renderInLocale } from '@/tests/i18n-render'
+import { markupText, markupTexts } from '@/tests/markup-text'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
@@ -52,7 +53,7 @@ function render(catalog: { data?: SkillSummary[]; error?: Error } | null, locale
 }
 
 /** Every link of the panel: where it leads and what it says. */
-const links = (html: string) => [...html.matchAll(/<a [^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/g)].map((m) => [m[1], visibleText(m[2]).join(' · ')])
+const links = (html: string) => [...html.matchAll(/<a [^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/g)].map((m) => [m[1], markupText(m[2], ' · ')])
 /** The labelled groups of the panel, in order. */
 const groups = (html: string) => [...html.matchAll(/<section aria-label="([^"]*)"/g)].map((m) => m[1])
 
@@ -96,7 +97,7 @@ describe('the own items in the Kunskap panel', () => {
   it('keeps the own knowledge item out of the folders: it is listed once, under Egna', () => {
     const html = render({ data: [own(RULES, 'Representation', { itemKind: 'rules' })] })
     // The folders are buttons that open in place; the own item is a link.
-    const buttons = [...html.matchAll(/<button[^>]*title="[^"]*"[^>]*>(.*?)<\/button>/g)].map((m) => visibleText(m[1]).join(' '))
+    const buttons = [...html.matchAll(/<button[^>]*title="[^"]*"[^>]*>(.*?)<\/button>/g)].map((m) => markupText(m[1]))
     expect(buttons).toEqual(['Moms', 'Holdingbolag'])
     expect(html.match(/Representation/g)).toHaveLength(1)
   })
@@ -139,7 +140,7 @@ describe('the link to add an own item', () => {
   it('stays when the own items could not be read, under a line that says so with a retry', () => {
     const html = render({ error: new Error('Skills request failed') })
     expect(groups(html)).toContain(sv.skills_registry.view_own)
-    const text = visibleText(html)
+    const text = markupTexts(html)
     expect(text).toContain(sv.skills_registry.load_failed)
     expect(text).toContain(sv.skills_registry.retry)
     expect(links(html)).toEqual([ADD])

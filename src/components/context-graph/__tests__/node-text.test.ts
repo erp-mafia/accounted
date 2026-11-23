@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { GraphNode } from '@/lib/context-graph/types'
+import { markupText } from '@/tests/markup-text'
 
 const locale = vi.hoisted(() => ({ current: 'sv' as 'sv' | 'en' }))
 
@@ -135,7 +136,7 @@ describe('the legend of the context graph', () => {
     return [...html.matchAll(/<button([^>]*aria-pressed[^>]*)>(.*?)<\/button>/g)].map((match) => ({
       attributes: match[1],
       inner: match[2],
-      text: match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+      text: markupText(match[2]),
     }))
   }
 

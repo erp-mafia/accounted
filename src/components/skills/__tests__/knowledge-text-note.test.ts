@@ -8,7 +8,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { renderInLocale, visibleText } from '@/tests/i18n-render'
+import { renderInLocale } from '@/tests/i18n-render'
+import { markupTexts } from '@/tests/markup-text'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { stripFrontMatter } from '@/lib/agent-skills/front-matter'
@@ -29,7 +30,7 @@ const OWN = option('own/22222222-2222-4222-8222-222222222222', 'own', 'Represent
 const render = (item: KnowledgeOption, locale: 'sv' | 'en' = 'sv') => renderInLocale(createElement(KnowledgeItemView, { option: item, companyId: 'company-a' }), locale)
 const NOTES = [sv.skills_registry.ai_text_note_ai_english, sv.skills_registry.ai_text_note_ai, en.skills_registry.ai_text_note_ai_english, en.skills_registry.ai_text_note_ai]
 /** The lines of the view that are one of the notes. */
-const notes = (html: string) => visibleText(html).filter((line) => NOTES.includes(line))
+const notes = (html: string) => markupTexts(html).filter((line) => NOTES.includes(line))
 
 describe('the line above a knowledge item\'s text', () => {
   it('says of a general item that it is written for the AI and is in English, in Swedish and in English', () => {
@@ -59,7 +60,7 @@ describe('the line above a knowledge item\'s text', () => {
     expect(notes(render(OWN))).toEqual([])
     expect(notes(render(OWN, 'en'))).toEqual([])
     // The rest of the view is: the name and the heading of the text.
-    expect(visibleText(render(OWN))).toEqual(expect.arrayContaining(['Representation', sv.skills_registry.ai_text_title]))
+    expect(markupTexts(render(OWN))).toEqual(expect.arrayContaining(['Representation', sv.skills_registry.ai_text_title]))
   })
 
   it('is chosen by the tier alone', () => {

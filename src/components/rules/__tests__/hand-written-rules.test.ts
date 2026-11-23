@@ -7,7 +7,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { renderInLocale, visibleText } from '@/tests/i18n-render'
+import { renderInLocale } from '@/tests/i18n-render'
+import { markupText } from '@/tests/markup-text'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import type { ExplicitRule } from '@/lib/agent-context/ledger-context'
@@ -32,14 +33,13 @@ const RULES = [
 ]
 
 const render = (rules: ExplicitRule[], locale: 'sv' | 'en' = 'sv') => renderInLocale(createElement(HandWrittenRules, { rules }), locale)
-/** The rows of the section: the text of each, part by part (React's own comment marks between text parts taken out). */
+/** The rows of the section: the text of each as one line. */
 const ROW_START = '<div class="flex flex-wrap items-baseline'
 const rows = (html: string) =>
   html
-    .replaceAll('<!-- -->', '')
     .split(ROW_START)
     .slice(1)
-    .map((row) => visibleText(row.slice(row.indexOf('>') + 1)))
+    .map((row) => markupText(row.slice(row.indexOf('>') + 1)))
 
 describe('the company\'s own rules on Bokföringsregler', () => {
   it('has no section for a company with none', () => {
@@ -58,11 +58,7 @@ describe('the company\'s own rules on Bokföringsregler', () => {
 
   it('shows each rule as the profile does: its name, what it matches, the account with its name, the VAT and that it is a rule', () => {
     const html = render(RULES)
-    expect(rows(html)).toEqual([
-      ['Hyra', 'FASTIGHETS AB', '5010', '· Momsfri', '· Regel'],
-      ['Bankavgift', 'MÅNADSAVGIFT', '6570', '· Regel'],
-      ['Utan konto', 'OKÄND', '-', '· Regel'],
-    ])
+    expect(rows(html)).toEqual(['Hyra FASTIGHETS AB 5010 · Momsfri · Regel', 'Bankavgift MÅNADSAVGIFT 6570 · Regel', 'Utan konto OKÄND - · Regel'])
     // The account is asked for with its name.
     expect([...html.matchAll(/data-account="(\d+)" data-name="(\w+)"/g)].map((m) => [m[1], m[2]])).toEqual([
       ['5010', 'shown'],
@@ -74,7 +70,7 @@ describe('the company\'s own rules on Bokföringsregler', () => {
     const html = render(RULES, 'en')
     expect(html).toMatch(new RegExp(`<h2[^>]*>${en.agentKnowledge.rules_title}</h2>`))
     expect(html).toContain(en.agentKnowledge.rules_description)
-    expect(rows(html)[0]).toEqual(['Hyra', 'FASTIGHETS AB', '5010', '· Momsfri', '· Rule'])
+    expect(rows(html)[0]).toBe('Hyra FASTIGHETS AB 5010 · Momsfri · Rule')
   })
 
   it('is the one row the bookkeeping profile lists its rules with, under the same heading', () => {
