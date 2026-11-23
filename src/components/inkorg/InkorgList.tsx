@@ -159,6 +159,8 @@ function InkorgRow({
       )
     ) : status.kind === 'unreadable' ? (
       <Badge variant="destructive">{t('row_unreadable')}</Badge>
+    ) : status.kind === 'no_file' ? (
+      <Badge variant="warning">{t('row_no_file')}</Badge>
     ) : status.kind === 'linked' ? (
       <Badge variant="secondary">{t('status_linked')}</Badge>
     ) : status.kind === 'booked_with' ? (

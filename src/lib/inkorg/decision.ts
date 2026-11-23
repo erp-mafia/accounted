@@ -21,6 +21,8 @@
  *   - not_underlag: DELETE /items/:id (the document stays in the archive);
  *   - retry_reading: POST /items/:id/retry-extraction, for a reading that
  *     failed and, where the company can read documents, for one never read;
+ *     never for an item with no document: there is nothing to read, and it
+ *     asks for the file instead (no_file);
  *   - credit: InboxCreditNotePanel (POST /api/supplier-invoices/:id/credit);
  *   - open_entry, open_supplier_invoice, open_matched_entry: links;
  *   - the company's own sales invoice (isOwnIssuedInvoice) is no purchase:
@@ -98,6 +100,7 @@ export type DecisionQuestion =
   | 'already_paid'
   | 'reading'
   | 'unreadable'
+  | 'no_file'
   | 'not_read'
   | 'invoice_paid'
   | 'who_paid'
@@ -112,6 +115,7 @@ export type DecisionQuestion =
 export type DecisionEvidence =
   | { kind: 'reading' }
   | { kind: 'unreadable' }
+  | { kind: 'no_file' }
   | {
       kind: 'not_read'
       /** The AI provider could not take the last reading: whether the sweep reads it again (./items.ts ReadingRetry). */
@@ -300,11 +304,19 @@ export function focusDecision(
     }
   }
 
+  // No document: the mail intake kept a row for a mail that brought no file
+  // it could take (none attached, or one refused or lost on the way). Nothing
+  // failed to read, so nothing is read again: the person brings the file in
+  // another way, or drops the row.
+  if (stage === 'error' && !item.document_id) {
+    return { question: 'no_file', evidence: { kind: 'no_file' }, actions: ['not_underlag'], quietActions: [], editorEscape: false }
+  }
+
   if (stage === 'error') {
     return {
       question: 'unreadable',
       evidence: { kind: 'unreadable' },
-      actions: item.document_id ? ['retry_reading', 'not_underlag'] : ['not_underlag'],
+      actions: ['retry_reading', 'not_underlag'],
       quietActions: [],
       editorEscape: false,
     }
@@ -508,6 +520,7 @@ export function canUndo(action: DecisionAction): boolean {
  *   - to_pay: an invoice with a due date that nothing says is paid, and
  *     whether that date has passed (overdue);
  *   - unreadable, reading, linked: its stage;
+ *   - no_file: an error row with no document, nothing to read (focusDecision);
  *   - booked_with: the other half of the purchase is booked already, on
  *     this verifikat;
  *   - waiting: everything else waiting for a decision;
@@ -522,6 +535,7 @@ export type RowStatus =
   | { kind: 'paid_by_receipt' }
   | { kind: 'to_pay'; dueDate: string; overdue: boolean }
   | { kind: 'unreadable' }
+  | { kind: 'no_file' }
   | { kind: 'reading' }
   | { kind: 'linked' }
   | { kind: 'waiting' }
@@ -538,7 +552,7 @@ export function rowStatus(
   if (stage === 'processing') return { kind: 'reading' }
   // The other half of the purchase is booked: "Redan bokförd" with its verifikat.
   if (item.pairing?.role === 'booked_companion') return { kind: 'booked_with', voucher: item.pairing.voucher ?? null }
-  if (stage === 'error') return { kind: 'unreadable' }
+  if (stage === 'error') return item.document_id ? { kind: 'unreadable' } : { kind: 'no_file' }
   if (stage === 'linked') return { kind: 'linked' }
   const headline = itemHeadline(item)
   const kind = headline.kind
