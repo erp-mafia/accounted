@@ -379,7 +379,9 @@ describe('the two phases of the register', () => {
     expect(preview.preview.warning_codes).toContain('SHARE_REGISTER_SETUP_COMPLETES')
 
     reset()
-    const completionNote = { ...founding, id: 'e2', event_number: 2, event_date: '2026-10-29', kind: 'anteckning', share_class_id: null, to_party_id: null, range_start: null, range_end: null, note: 'Aktieboken är upplagd.' }
+    const completionNote = { ...founding, id: 'e2', event_number: 2, event_date: '2026-10-29', kind: 'anteckning', share_class_id: null, to_party_id: null, range_start: null, range_end: null, note: 'Aktieboken är upplagd.', created_at: '2026-10-29T09:00:00Z' }
+    // A note somebody made right after the completion: not the one that is answered.
+    const laterNote = { ...completionNote, id: 'e3', event_number: 3, note: 'Kontrollerad', created_at: '2026-10-29T09:00:02Z' }
     enqueueEntry()
     enqueue({ data: { role: 'owner' } }) // completeShareRegisterSetup: company_members
     enqueue({ data: { is_avstamningsbolag: false, setup_completed_at: null } }) // share_register_settings
@@ -387,7 +389,7 @@ describe('the two phases of the register', () => {
     enqueue({ data: [founding] }) // share_register_events
     enqueue({ data: { aktiekapital: 25000, antal_aktier: 100 } }) // company_settings
     enqueue({ data: { setup_completed_at: '2026-10-29T09:00:00Z' } }) // upsert
-    enqueue({ data: [founding, completionNote] }) // share_register_events, the note the database wrote in it
+    enqueue({ data: [founding, completionNote, laterNote] }) // share_register_events, the note the database wrote in it
     const outcome = await registerShareEvent(ctx, { kind: 'anteckning', completes_setup: true }, { dryRun: false })
     expect(outcome).toMatchObject({
       ok: true,

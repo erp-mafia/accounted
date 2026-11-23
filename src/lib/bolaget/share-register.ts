@@ -587,9 +587,11 @@ export async function registerShareEvent(
       const completed = await completeShareRegisterSetup(ctx, { expected_last_event_number: lastEventNumber }, { dryRun: false })
       if (!completed.ok) return completed
       if (completed.dryRun || !completed.data.completed_now) return { ok: false, code: 'SHARE_REGISTER_SETUP_COMPLETE', messageSv: 'Aktieboken är redan upplagd och i bruk.' }
-      const written = (await loadShareEvents(ctx.supabase, ctx.companyId))
-        .filter((e) => e.kind === 'anteckning' && e.event_number > lastEventNumber)
-        .sort((a, b) => b.event_number - a.event_number)[0]
+      // The note is written in the completing write itself and carries its moment: a note made right after does not.
+      const completedAt = Date.parse(completed.data.setup_completed_at)
+      const written = (await loadShareEvents(ctx.supabase, ctx.companyId)).find(
+        (e) => e.kind === 'anteckning' && e.event_number > lastEventNumber && Date.parse(e.created_at) === completedAt,
+      )
       if (!written) throw new Error('share_register_events: the note of the completed setup was not written')
       return {
         ok: true,
