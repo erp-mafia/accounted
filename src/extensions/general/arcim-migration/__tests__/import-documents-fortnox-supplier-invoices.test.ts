@@ -215,10 +215,13 @@ function rangeMockSupabase(byTable: Record<string, Row[]>): SupabaseClient {
     const node = {
       select: () => node,
       eq: () => node,
+      gt: () => node,
       not: () => node,
       in: () => node,
       order: () => node,
       range: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
+      // The existing-attachments read pages by keyset and ends in .limit().
+      limit: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
     }
     return node
   }

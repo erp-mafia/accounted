@@ -146,6 +146,7 @@ import {
   recordImportedInvoiceDelivery,
 } from '@/lib/invoices/invoice-deliveries'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import {
   checkExecutionBudget,
   currentExecutionBudget,
@@ -833,6 +834,50 @@ function fortnoxSource(
   }
 }
 
+/** One page of the existing-attachments read: what one PostgREST response carries. */
+const EXISTING_ATTACHMENTS_PAGE = 1000
+
+interface ExistingAttachmentRow {
+  id: string
+  sha256_hash: string
+  journal_entry_id: string | null
+  upload_source: string | null
+}
+
+/**
+ * Every document_attachments row of the company, in id order, for the dedup
+ * sets each slice builds. Keyset pages: each page is the next thousand ids
+ * after the last one read, a range of idx_document_attachments_company_id_id.
+ * The offset pages this replaces made every page fetch and sort all of the
+ * company's rows again (27 pages of 26 000 rows in 7 300 heap blocks for the
+ * largest archive), and a page that met a cold cache passed the 8 s
+ * statement timeout at the start of every slice. The order is the same total
+ * id order, so the rows are the same rows.
+ */
+async function fetchExistingAttachments(supabase: SupabaseClient, companyId: string): Promise<ExistingAttachmentRow[]> {
+  const rows: ExistingAttachmentRow[] = []
+  let after: string | null = null
+  while (true) {
+    let query = supabase
+      .from('document_attachments')
+      .select('id, sha256_hash, journal_entry_id, upload_source')
+      .eq('company_id', companyId)
+    if (after !== null) query = query.gt('id', after)
+    const { data, error } = await query.order('id', { ascending: true }).limit(EXISTING_ATTACHMENTS_PAGE)
+    // dbError keeps the SQLSTATE, as fetchAllRows does: a statement timeout
+    // stays a 57014 for the continuation's retry.
+    if (error) throw dbError(error, null)
+    const page = (data ?? []) as ExistingAttachmentRow[]
+    rows.push(...page)
+    if (page.length < EXISTING_ATTACHMENTS_PAGE) return rows
+    const last = page[page.length - 1].id
+    // A full page that does not move past the last id would ask for the same
+    // page for ever.
+    if (!last || last === after) throw new Error('existing attachments: a full page gave no id to continue after')
+    after = last
+  }
+}
+
 export async function importProviderDocuments(
   opts: ImportDocumentsOptions,
 ): Promise<ImportDocumentsResult> {
@@ -980,22 +1025,7 @@ export async function importProviderDocuments(
     withUnauthorizedRefresh(() => source().list()),
     fetchFiscalPeriods(supabase, companyId),
     fetchSourceRefVouchers(supabase, companyId),
-    // A stable `.order('id')` is required: fetchAllRows pages with `.range()`,
-    // and PostgREST paging without a deterministic order can skip or repeat
-    // rows once a table exceeds one page, which would defeat the hash dedup.
-    fetchAllRows<{
-      id: string
-      sha256_hash: string
-      journal_entry_id: string | null
-      upload_source: string | null
-    }>(({ from, to }) =>
-      supabase
-        .from('document_attachments')
-        .select('id, sha256_hash, journal_entry_id, upload_source')
-        .eq('company_id', companyId)
-        .order('id', { ascending: true })
-        .range(from, to),
-    ),
+    fetchExistingAttachments(supabase, companyId),
   ])
 
   // Stable order across calls: a provider may page its listing differently
