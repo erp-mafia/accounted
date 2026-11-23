@@ -31,9 +31,11 @@ on:
 permissions:
   contents: read
 
+# A push to main never cancels a running scan: a scan on main that starts and does
+# not finish writes a cache marker that switches CodeQL's overlay mode off for good.
 concurrency:
   group: codeql-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
