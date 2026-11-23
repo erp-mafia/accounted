@@ -371,35 +371,51 @@ describe('localizeEntry: the palette in the language of the reader', () => {
  * is the picture and the rules, and the addresses the picture took over
  * lead to it: /skills and the wiki's Minne and Arbetssätt views to the
  * picture, the bookkeeping profile to Bokföringsregler. The palette offers
- * where they lead, once, and none of the addresses that only lead on.
+ * where they lead, once, and none of the addresses that only lead on. Chatt
+ * is offered as everywhere else: by the chat's own switch.
  */
 describe('the palette where the agent picture is on', () => {
-  const withPicture = () => pagesFor({ agentPictureEnabled: true })
-  /** Addresses that lead elsewhere for such a company, and Chatt, which its menu does not list. */
-  const LEFT = ['/skills', '/wiki?view=map', '/wiki?view=memory', '/wiki?view=skills', '/agent-knowledge', '/settings/assistant', '/chat']
+  const withPicture = (overrides: Parameters<typeof gateContext>[0] = {}) => pagesFor({ agentPictureEnabled: true, ...overrides })
+  /** Addresses that lead elsewhere for such a company. */
+  const LEFT = ['/skills', '/wiki?view=map', '/wiki?view=memory', '/wiki?view=skills', '/agent-knowledge', '/settings/assistant']
 
-  it('offers Kontext, Bokföringsregler and Koppla en agent under Agenter, and nothing else there', () => {
+  it('offers Kontext, Bokföringsregler, Chatt and Koppla en agent under Agenter, and nothing else there', () => {
     const agents = withPicture().filter((p) => p.group === nav.v3_agents)
     expect(agents.map((p) => [p.label, p.href])).toEqual([
       [nav.v3_context, '/wiki'],
       [nav.v2_rules, '/rules'],
+      [nav.v3_chat, '/chat'],
       [nav.v3_connect_agent, '/settings/api'],
     ])
   })
 
   it('offers each place once in the whole list', () => {
     const hrefs = withPicture().map((p) => p.href)
-    for (const href of ['/wiki', '/rules', '/settings/api']) expect(hrefs.filter((h) => h === href), href).toHaveLength(1)
+    for (const href of ['/wiki', '/rules', '/chat', '/settings/api']) expect(hrefs.filter((h) => h === href), href).toHaveLength(1)
   })
 
-  it('offers no address that only leads on, under any name, and no Chatt', () => {
+  it('offers no address that only leads on, under any name', () => {
     const pages = withPicture()
     for (const href of LEFT) expect(pages.some((p) => p.href === href), href).toBe(false)
-    expect(pages.filter((p) => /^\/(skills|chat|agent-knowledge)(\/|\?|$)/.test(p.href) || p.href.startsWith('/wiki?'))).toEqual([])
+    expect(pages.filter((p) => /^\/(skills|agent-knowledge)(\/|\?|$)/.test(p.href) || p.href.startsWith('/wiki?'))).toEqual([])
     // The names those rows had find no page, instead of one that would only lead on.
-    for (const word of ['arbetssätt', 'kompetens', 'instruktioner', 'minne', 'bokföringsprofil', 'chatt', 'assistent']) {
+    for (const word of ['arbetssätt', 'kompetens', 'instruktioner', 'minne', 'bokföringsprofil']) {
       expect(pages.filter((p) => matches(p, word)).map((p) => p.href), word).toEqual([])
     }
+  })
+
+  it('offers the chat by its row and its old name while the chat is on, and not once it is switched off', () => {
+    const on = withPicture()
+    expect(on.filter((p) => matches(p, 'chatt')).map((p) => p.href)).toContain('/chat')
+    expect(on.find((p) => matches(p, 'assistent'))?.href).toBe('/chat')
+    // As for a company without the picture: the same chat pages, by the same switch.
+    const chatPages = (pages: ReturnType<typeof pagesFor>) => pages.filter((p) => p.href === '/chat' || p.href.startsWith('/chat/')).map((p) => p.href)
+    expect(chatPages(on)).toEqual(chatPages(pagesFor()))
+
+    const off = withPicture({ assistantChatEnabled: false })
+    expect(chatPages(off)).toEqual([])
+    for (const word of ['chatt', 'assistent']) expect(off.filter((p) => matches(p, word)).map((p) => p.href), word).toEqual([])
+    expect(off.filter((p) => p.group === nav.v3_agents).map((p) => p.href)).toEqual(['/wiki', '/rules', '/settings/api'])
   })
 
   it('finds the picture and the rules by the words people type', () => {

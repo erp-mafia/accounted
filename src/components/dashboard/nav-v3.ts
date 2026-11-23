@@ -418,9 +418,9 @@ export const NAV_V3_AREAS: NavV3Area[] = [
       {
         // Where the agent picture is on (AGENT_PICTURE_COMPANY_IDS) the area
         // is these two rows, with no group label: the picture (Kontext) and
-        // Bokföringsregler. Every other row of the area hides there, Chatt
-        // among them; what they open is reached from the picture or by its
-        // address.
+        // Bokföringsregler. The rows the picture replaces hide there; what
+        // they open is reached from the picture or by its address. Chatt,
+        // below, follows the chat's own switch and stays.
         items: [
           { href: '/wiki', module: 'agent', labelKey: 'v3_context', icon: RectangleGroupIcon, newBadge: true, match: ['/agent-knowledge'], requiresAgentPicture: true },
           { href: '/rules', module: 'transactions', labelKey: 'v2_rules', icon: AdjustmentsHorizontalIcon, requiresAgentPicture: true },
@@ -450,9 +450,9 @@ export const NAV_V3_AREAS: NavV3Area[] = [
         // The built-in chat will be removed: a
         // customer's own assistant connects over MCP instead (Koppla en agent
         // above). Until then the row stays, behind the switch that takes the
-        // chat away (ASSISTANT_CHAT_ENABLED, on unless switched off). Where
-        // the agent picture is on the row is not listed; /chat still answers.
-        items: [{ href: '/chat', module: 'agent', labelKey: 'v3_chat', icon: ChatBubbleLeftIcon, requiresAssistantChat: true, hiddenWithAgentPicture: true }],
+        // chat away (ASSISTANT_CHAT_ENABLED, on unless switched off), with
+        // the agent picture on or off.
+        items: [{ href: '/chat', module: 'agent', labelKey: 'v3_chat', icon: ChatBubbleLeftIcon, requiresAssistantChat: true }],
       },
     ],
   },

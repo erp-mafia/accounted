@@ -8,7 +8,9 @@
  * (components/dashboard/nav-v3.ts), the addresses whose content the picture
  * holds lead to it (lib/agent-context/wiki-views.ts: /skills and a knowledge
  * item, the wiki's Minne and Arbetssätt views), and the bookkeeping profile
- * leads to /rules, which says how the company books.
+ * leads to /rules, which says how the company books. The Chatt row is not
+ * the picture's to hide: it stays in the menu for as long as the built-in
+ * chat does (lib/env/assistant-chat-switch.ts).
  *
  * It rolls out per company, like COMPANY_QUESTIONS_COMPANY_IDS: `*` opens it
  * for every company, a comma-separated list of company ids for those only.

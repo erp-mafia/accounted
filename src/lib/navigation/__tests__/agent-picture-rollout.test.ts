@@ -70,8 +70,27 @@ describe('the Agenter area', () => {
     })
   })
 
-  it('is Koppla en agent, Kontext and Bokföringsregler where the picture is on, with no group label and no Chatt', () => {
+  it('is Koppla en agent, Kontext and Bokföringsregler with no group label where the picture is on, then Chatt while the chat is on', () => {
     vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
+    expect(agentsMenu(COMPANY)).toEqual({
+      create: '/settings/api',
+      groups: [
+        [null, ['/wiki', '/rules']],
+        [null, ['/chat']],
+      ],
+      rows: ['/wiki', '/rules', '/chat'],
+    })
+  })
+
+  it('keeps Chatt by the chat switch alone where the picture is on', () => {
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
+    // Unset and on: the row is there.
+    for (const chat of [undefined, 'true']) {
+      if (chat !== undefined) vi.stubEnv('ASSISTANT_CHAT_ENABLED', chat)
+      expect(agentsMenu(COMPANY).rows, String(chat)).toEqual(['/wiki', '/rules', '/chat'])
+    }
+    // Switched off with no company keeping the chat: the row goes, and the group with it.
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
     expect(agentsMenu(COMPANY)).toEqual({
       create: '/settings/api',
       groups: [[null, ['/wiki', '/rules']]],
@@ -79,12 +98,13 @@ describe('the Agenter area', () => {
     })
   })
 
-  it('has no Chatt where the picture is on, whatever the chat switch says', () => {
+  it('keeps the row for every company while some company keeps the chat, with the picture on or off', () => {
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+    vi.stubEnv('ASSISTANT_CHAT_COMPANY_IDS', 'another-company')
     vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
-    for (const chat of [undefined, 'true', 'false']) {
-      if (chat !== undefined) vi.stubEnv('ASSISTANT_CHAT_ENABLED', chat)
-      expect(agentsMenu(COMPANY).rows, String(chat)).toEqual(['/wiki', '/rules'])
-    }
+    expect(agentsMenu(COMPANY).rows).toEqual(['/wiki', '/rules', '/chat'])
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', 'another-company')
+    expect(agentsMenu(COMPANY).rows).toContain('/chat')
   })
 
   it('keeps Chatt by the chat switch alone for a company outside the switch', () => {
