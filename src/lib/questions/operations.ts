@@ -22,6 +22,7 @@ import { badArgument, codedRefusal } from '@/lib/errors/refusal'
 import { isUuid } from '@/lib/invariants/uuid'
 import { operationNumberOf } from '@/lib/pending-operations/operation-number'
 import { readWithOperationNumber } from '@/lib/pending-operations/operation-number-read'
+import { pendingOperationTaskState } from '@/lib/pending-operations/task-state'
 import { emitQuestionEvent } from './events'
 import { evidenceLines } from './evidence-lines'
 import { assertCompanyQuestionsOn, readQuestionRow } from './rows'
@@ -58,6 +59,15 @@ function operationNotFound(operationId: string): Error {
   return codedRefusal('NOT_FOUND', `No pending operation ${operationId} in this company.`)
 }
 
+/**
+ * Whether a question takes the operations its answer led to: it is
+ * answered, or closed as settled. Only such a question is linked to an
+ * operation, and only such a question has a follow-up (questionFollowUp).
+ */
+export function takesOperations(question: { status: string; close_reason: string | null }): boolean {
+  return question.status === 'answered' || (question.status === 'closed' && question.close_reason === 'settled')
+}
+
 /** Whether the write failed on the unique pair: the same link was written between the read and the insert. */
 function isUniqueViolation(error: { code?: string } | null): boolean {
   return error?.code === '23505'
@@ -78,8 +88,7 @@ export async function linkQuestionOperation(
   const operationId = idOf('operation_id', input.operationId)
 
   const question = await readQuestionRow(supabase, companyId, questionId)
-  const linkable = question.status === 'answered' || (question.status === 'closed' && question.close_reason === 'settled')
-  if (!linkable) {
+  if (!takesOperations(question)) {
     const stands = question.status === 'closed' ? `closed as ${question.close_reason ?? 'unknown'}` : question.status
     throw codedRefusal(
       'COMPANY_QUESTION_NOT_ANSWERED',
@@ -163,6 +172,26 @@ export interface QuestionOperation {
   document_name: string | null
   /** The verifikat it links to, by the label its preview states, when it states one. */
   voucher_label: string | null
+}
+
+/**
+ * Where the follow-up of an answer stands, read off the operations linked to
+ * its question and nothing else:
+ *   no_operation       none is linked: nothing was prepared from the answer
+ *   awaiting_approval  one waits for approval, or is being carried out
+ *   done               none waits, and one was carried out
+ *   not_carried_out    every one was rejected, failed or expired
+ */
+export const QUESTION_FOLLOW_UPS = ['no_operation', 'awaiting_approval', 'done', 'not_carried_out'] as const
+export type QuestionFollowUp = (typeof QUESTION_FOLLOW_UPS)[number]
+
+/** The follow-up of an answer, from the statuses of its linked operations, grouped as the task states group them. */
+export function questionFollowUp(operations: readonly Pick<QuestionOperation, 'status'>[]): QuestionFollowUp {
+  const states = operations.map((operation) => pendingOperationTaskState({ status: operation.status }))
+  if (states.length === 0) return 'no_operation'
+  if (states.includes('working')) return 'awaiting_approval'
+  if (states.includes('completed')) return 'done'
+  return 'not_carried_out'
 }
 
 /** A pending_operations row as the reads of an operation's line select it. */
