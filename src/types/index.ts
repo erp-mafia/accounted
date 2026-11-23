@@ -4801,9 +4801,9 @@ export interface IngestResult {
   first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
 }
 
-// ── Webshop orders (Orders page; synced by the woocommerce/shopify/zettle extensions) ──
+// ── Webshop orders (Orders page; synced by the woocommerce/shopify/zettle extensions, read from a Kustom settlement file) ──
 
-export type WebshopPlatform = 'woocommerce' | 'shopify' | 'zettle'
+export type WebshopPlatform = 'woocommerce' | 'shopify' | 'zettle' | 'kustom'
 export type WebshopOrderRowType = 'order' | 'refund'
 
 /** One VAT rate bucket of an order, in the order's currency. */

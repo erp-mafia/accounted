@@ -740,6 +740,8 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     'POST /api/pos-sales/days/:id/book': BOOK,
     '/api/webshop-orders': BOOK,
     'POST /api/webshop-orders/:id/create-invoice': INVOICING,
+    // Reads a Kustom settlement file onto the Orders page; books nothing.
+    'POST /api/webshop-orders/kustom-settlement': BOOK_HOUSE,
     'PUT /api/webshop-orders/settings': BOOK_RECORD,
 
     // ── Bolaget: the company's statutory registers ─────────────────────

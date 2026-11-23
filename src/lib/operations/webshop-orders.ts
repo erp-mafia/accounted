@@ -51,7 +51,7 @@ const SuggestedLine = z.object({
 
 const OrderSummary = z.object({
   webshop_order_id: z.string().uuid(),
-  platform: z.enum(['woocommerce', 'shopify', 'zettle']),
+  platform: z.enum(['woocommerce', 'shopify', 'zettle', 'kustom']),
   store_scope: z.string(),
   store_label: z.string().nullable(),
   row_type: z.enum(['order', 'refund']),
@@ -175,7 +175,7 @@ export const webshopOrdersList = defineOperation({
   },
   input: z.object({
     booked: z.enum(['booked', 'unbooked']).optional().describe('booked: booked here or marked as booked outside; unbooked: the rest.'),
-    platform: z.enum(['woocommerce', 'shopify', 'zettle']).optional(),
+    platform: z.enum(['woocommerce', 'shopify', 'zettle', 'kustom']).optional(),
     row_type: z.enum(['order', 'refund']).optional(),
     from: isoDateSchema.optional().describe('First order date, inclusive.'),
     to: isoDateSchema.optional().describe('Last order date, inclusive.'),
@@ -200,7 +200,7 @@ export const webshopOrdersList = defineOperation({
     keywords: [
       'webshop', 'webbutik', 'webbshop', 'nätbutik', 'e-handel', 'e-commerce', 'ecommerce', 'online store',
       'order', 'ordrar', 'butiksorder', 'ordernummer', 'order number', 'synkade ordrar',
-      'shopify', 'woocommerce', 'zettle', 'oss', 'leveransland',
+      'shopify', 'woocommerce', 'zettle', 'kustom', 'oss', 'leveransland',
     ],
   },
   run: async (ctx, input) => {
@@ -503,7 +503,7 @@ export const webshopOrdersBookDay = defineOperation({
     },
   },
   input: z.object({
-    platform: z.enum(['woocommerce', 'shopify', 'zettle']),
+    platform: z.enum(['woocommerce', 'shopify', 'zettle', 'kustom']),
     store_scope: z.string().min(1).describe('The store, store_scope from GET /webshop-orders, e.g. exempel.myshopify.com.'),
     date: isoDateSchema.describe('The day: the orders\' paid date, else their order date.'),
     payment_method: z.string().min(1).describe('The orders\' payment_method from GET /webshop-orders, e.g. shopify_payments or paypal.'),

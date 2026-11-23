@@ -734,6 +734,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/webshop-orders/:id/mark-booked': gap('P3'),
   'POST /api/webshop-orders/:id/underlag': gap('P3', 'retry the orderunderlag PDF on a booked order'),
   'POST /api/webshop-orders/bulk-book': gap('P3'),
+  'POST /api/webshop-orders/kustom-settlement': gap('P3', 'read a Kustom settlement report (CSV) onto the Orders page'),
   'PUT /api/webshop-orders/settings': gap('P3', 'payment-method mapping and accounts per country'),
   // POS sales (kassasystem via Accounted Connect): lib/operations/pos-sales.ts
   'POST /api/pos-sales/connections': covered([`POST ${V}/pos-sales/connections`, 'gnubok_connect_pos_venue']),
@@ -1170,4 +1171,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * (PUT .../ef-declaration/inputs), new and dashboard-only in this step; the
  * MCP preview takes the same figures per call.
  */
-export const GAP_CEILING = 162
+export const GAP_CEILING = 163

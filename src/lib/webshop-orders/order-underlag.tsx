@@ -61,6 +61,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   woocommerce: 'WooCommerce',
   shopify: 'Shopify',
   zettle: 'Zettle',
+  kustom: 'Kustom',
 }
 
 function vatRateLabel(rate: number | null): string {

@@ -50,6 +50,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   woocommerce: 'WooCommerce',
   shopify: 'Shopify',
   zettle: 'Zettle',
+  kustom: 'Kustom',
 }
 
 type DayOrder = Pick<

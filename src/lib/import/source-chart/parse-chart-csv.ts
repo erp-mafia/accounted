@@ -90,7 +90,7 @@ function detectFormat(text: string): {
  * harder to diagnose than one that handles neither. CR, LF and CRLF all end a
  * record outside quotes and are all kept verbatim inside them.
  */
-function splitCsvRecords(
+export function splitCsvRecords(
   text: string,
   delimiter: string,
 ): { records: string[][]; unterminated: boolean } {
