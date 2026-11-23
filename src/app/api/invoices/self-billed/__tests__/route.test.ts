@@ -8,7 +8,7 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, findCall, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -115,7 +115,7 @@ describe('POST /api/invoices/self-billed', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   })
 
-  it('returns 409 when the same customer invoice number is already registered', async () => {
+  it('trims the customer invoice number before checking for a duplicate', async () => {
     mockDomesticVat()
     enqueue({ data: makeCustomer({ id: VALID_UUID }) })
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' } })
@@ -123,10 +123,14 @@ describe('POST /api/invoices/self-billed', () => {
       error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_invoices_self_billed_number"' },
     })
 
-    const request = createMockRequest('/api/invoices/self-billed', { method: 'POST', body: validBody })
+    const request = createMockRequest('/api/invoices/self-billed', {
+      method: 'POST',
+      body: { ...validBody, external_invoice_number: '\tKUND-55012 ' },
+    })
     const { status } = await parseJsonResponse(await POST(request, { params: Promise.resolve({}) }))
 
     expect(status).toBe(409)
+    expect(findCall('invoices', 'insert')?.[0]).toMatchObject({ external_invoice_number: 'KUND-55012' })
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })
 
@@ -150,6 +154,18 @@ describe('POST /api/invoices/self-billed', () => {
 
     expect(status).toBe(400)
     expect(body.type).toBe('validation_error')
+  })
+
+  it('returns 400 when external_invoice_number is only whitespace', async () => {
+    const request = createMockRequest('/api/invoices/self-billed', {
+      method: 'POST',
+      body: { ...validBody, external_invoice_number: ' \t ' },
+    })
+
+    const response = await POST(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+    expect(findCall('invoices', 'insert')).toBeUndefined()
   })
 
   it('returns 404 when the customer (issuer) is not found', async () => {

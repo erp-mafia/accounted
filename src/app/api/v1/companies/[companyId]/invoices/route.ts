@@ -28,7 +28,7 @@ import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/regis
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { CreateInvoiceSchema } from '@/lib/api/schemas'
+import { CreateInvoiceSchema, SelfBilledExternalInvoiceNumberSchema } from '@/lib/api/schemas'
 import { scopeSatisfied } from '@/lib/auth/scope-catalog'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
@@ -629,12 +629,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           },
         })
       }
-      if (!input.external_invoice_number || !input.received_date) {
+      const externalInvoiceNumber = SelfBilledExternalInvoiceNumberSchema.safeParse(input.external_invoice_number)
+      if (!externalInvoiceNumber.success || !input.received_date) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
           requestId: ctx.requestId,
           details: {
             issues: [
-              ...(!input.external_invoice_number
+              ...(!externalInvoiceNumber.success
                 ? [{ field: 'external_invoice_number', message: 'external_invoice_number is required when is_self_billed is true.' }]
                 : []),
               ...(!input.received_date
@@ -647,7 +648,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
       const selfBilledInput: SelfBilledSaleInput = {
         customer_id: input.customer_id,
-        external_invoice_number: input.external_invoice_number,
+        external_invoice_number: externalInvoiceNumber.data,
         self_billing_agreement_ref: input.self_billing_agreement_ref ?? null,
         invoice_date: input.invoice_date,
         received_date: input.received_date,

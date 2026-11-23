@@ -140,6 +140,15 @@ describe('POST /api/v1/.../invoices with is_self_billed', () => {
     expect(mockCreate).not.toHaveBeenCalled()
   })
 
+  it('400 when the external invoice number is only whitespace', async () => {
+    const res = await createInvoice(
+      makePost({ ...VALID_BODY, external_invoice_number: ' \t ' }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
   it('dry-run validates + previews without creating', async () => {
     mockResolve.mockResolvedValue({ ok: true, draft: DRAFT })
     const res = await createInvoice(makePost(VALID_BODY, { dryRun: true }), companyParams(COMPANY_ID))
@@ -152,11 +161,15 @@ describe('POST /api/v1/.../invoices with is_self_billed', () => {
     expect(json.data.preview.total).toBe(12500)
   })
 
-  it('201 registers the self-billed invoice on the happy path', async () => {
-    mockCreate.mockResolvedValue({ ok: true, invoice: CREATED_INVOICE })
-    const res = await createInvoice(makePost(VALID_BODY), companyParams(COMPANY_ID))
+  it('201 registers the self-billed invoice with a trimmed external number', async () => {
+    mockCreate.mockResolvedValue({ ok: true, invoice: CREATED_INVOICE, journalEntryId: null })
+    const res = await createInvoice(
+      makePost({ ...VALID_BODY, external_invoice_number: '\tKUND-55012 ' }),
+      companyParams(COMPANY_ID),
+    )
     expect(res.status).toBe(201)
     expect(mockCreate).toHaveBeenCalledTimes(1)
+    expect(mockCreate.mock.calls[0][3]).toMatchObject({ external_invoice_number: 'KUND-55012' })
     const json = await res.json()
     expect(json.data.is_self_billed).toBe(true)
     expect(json.data.external_invoice_number).toBe('KUND-55012')

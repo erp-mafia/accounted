@@ -3,8 +3,6 @@ import { CreateSelfBillingInvoiceSchema, SelfBillingInvoiceItemSchema } from '@/
 import type { SelfBilledSaleFailure } from '@/lib/invoices/self-billed-sale'
 
 export const CreateSelfBilledInvoiceParamsSchema = CreateSelfBillingInvoiceSchema.strict().extend({
-  external_invoice_number: CreateSelfBillingInvoiceSchema.shape.external_invoice_number.trim().min(1)
-    .describe('Invoice number on the document issued by the customer.'),
   invoice_date: z.iso.date(),
   received_date: z.iso.date().describe('Date the company received the document, YYYY-MM-DD.'),
   due_date: z.iso.date(),

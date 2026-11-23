@@ -2277,7 +2277,7 @@ async function commitCreateSelfBilledInvoice(
     data: {
       invoice_id: result.invoice.id,
       external_invoice_number: result.invoice.external_invoice_number,
-      journal_entry_id: result.invoice.journal_entry_id ?? null,
+      journal_entry_id: result.journalEntryId,
       status: result.invoice.status,
       total: result.invoice.total,
       currency: result.invoice.currency,

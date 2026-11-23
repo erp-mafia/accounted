@@ -237,10 +237,9 @@ export async function resolveSelfBilledSaleDraft(
 
 /**
  * Register a received self-billing invoice: insert the row, its items, and
- * (under faktureringsmetoden) book the registration entry. Rolls back on any
- * failure. Returns the created invoice or a structured failure. Re-throws an
- * unexpected booking error (e.g. a period-lock trigger) after rolling back so
- * the caller can map it to its structured envelope.
+ * (under faktureringsmetoden) book the registration entry. Returns the created
+ * invoice and any posted journal entry ID, or a structured failure. Re-throws
+ * unexpected booking errors after rolling back the unbooked invoice.
  */
 export async function createSelfBilledSaleInvoice(
   supabase: SupabaseClient,
@@ -248,7 +247,7 @@ export async function createSelfBilledSaleInvoice(
   userId: string,
   input: SelfBilledSaleInput,
   review?: SelfBilledSaleReview,
-): Promise<{ ok: true; invoice: Invoice } | { ok: false; failure: SelfBilledSaleFailure }> {
+): Promise<{ ok: true; invoice: Invoice; journalEntryId: string | null } | { ok: false; failure: SelfBilledSaleFailure }> {
   const resolved = await resolveSelfBilledSaleDraft(supabase, companyId, input)
   if (!resolved.ok) return resolved
   const { draft } = resolved
@@ -345,6 +344,7 @@ export async function createSelfBilledSaleInvoice(
 
   // Faktureringsmetoden: book the registration entry now (Debit 1510, Credit
   // 30xx + 26xx). Kontantmetoden: leave unbooked until payment.
+  let journalEntryId: string | null = null
   if (accountingMethod === 'accrual') {
     if (!completeInvoice) {
       await supabase.from('invoices').delete().eq('id', invoice.id)
@@ -369,28 +369,30 @@ export async function createSelfBilledSaleInvoice(
           posting: () => ({ linkBasis: linkBasisColumns('user_created') }),
         },
       )
-      if (!journalEntry) {
-        // No open fiscal period: roll back so we never leave an unbooked sale.
-        await supabase.from('invoices').delete().eq('id', invoice.id)
-        return { ok: false, failure: { code: 'no_fiscal_period' } }
-      }
-      const { error: linkError } = await supabase
-        .from('invoices')
-        .update({ journal_entry_id: journalEntry.id })
-        .eq('id', invoice.id)
-        .eq('company_id', companyId)
-      if (linkError) {
-        // The verifikat is committed (immutable): don't roll it back over a
-        // failed convenience link. Log loudly.
-        log.error('self-billed invoice booked but journal_entry_id link failed', linkError, {
-          invoiceId: invoice.id,
-          journalEntryId: journalEntry.id,
-        })
-      }
+      journalEntryId = journalEntry?.id ?? null
     } catch (err) {
       await supabase.from('invoices').delete().eq('id', invoice.id)
       log.error('failed to book self-billed invoice; rolled back', err as Error, { invoiceId: invoice.id })
       throw err
+    }
+    if (!journalEntryId) {
+      await supabase.from('invoices').delete().eq('id', invoice.id)
+      return { ok: false, failure: { code: 'no_fiscal_period' } }
+    }
+
+    try {
+      const { error: linkError } = await supabase
+        .from('invoices')
+        .update({ journal_entry_id: journalEntryId })
+        .eq('id', invoice.id)
+        .eq('company_id', companyId)
+      if (linkError) throw linkError
+    } catch (err) {
+      // The voucher is committed and the invoice stays registered.
+      log.error('self-billed invoice booked but journal_entry_id link failed', err as Error, {
+        invoiceId: invoice.id,
+        journalEntryId,
+      })
     }
   }
 
@@ -407,5 +409,5 @@ export async function createSelfBilledSaleInvoice(
     payload: { invoice: responseInvoice, companyId, userId },
   })
 
-  return { ok: true, invoice: responseInvoice }
+  return { ok: true, invoice: responseInvoice, journalEntryId }
 }

@@ -153,6 +153,36 @@ describe('MCP received self-billed invoice', () => {
     }
   })
 
+  it('records the posted voucher in the approval receipt when linking the invoice fails', async () => {
+    const operation = await stageForApproval('accrual')
+    const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+    const invoice = makeInvoice({ id: 'invoice-1', journal_entry_id: null })
+    const journalEntry = makeJournalEntry({ id: '550e8400-e29b-41d4-a716-446655440000' })
+    vi.mocked(createInvoiceJournalEntry).mockResolvedValue(journalEntry)
+    enqueueMany([
+      { data: { id: operation.id, updated_at: '2026-10-03T10:00:00Z' } },
+      { data: customer },
+      { data: { accounting_method: 'accrual', entity_type: 'aktiebolag' } },
+      { data: invoice },
+      {},
+      { data: invoice },
+      { error: { message: 'Invoice link update failed' } },
+      { data: invoice },
+      {},
+      { data: [{ id: journalEntry.id }] },
+      { data: [] },
+      {},
+    ])
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', operation)
+
+    expect(result).toMatchObject({ status: 'committed', data: { journal_entry_id: journalEntry.id } })
+    expect(findCalls('invoices', 'delete')).toEqual([])
+    expect(findCall('suggestion_log', 'insert')?.[0]).toMatchObject([
+      { final: { journal_entry_id: journalEntry.id } },
+    ])
+  })
+
   it('refuses approval when the customer-invoices package is disabled', async () => {
     expect(startPackageForTool(createInvoice.name)).toBe('customer-invoices')
     const operation = await stageForApproval('cash')
