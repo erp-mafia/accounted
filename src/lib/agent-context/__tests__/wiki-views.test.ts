@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { legacyKnowledgeHref, parseWikiView, wikiViewHref } from '../wiki-views'
+import {
+  PICTURE_ROWS,
+  WIKI_VIEWS,
+  isPictureRow,
+  knowledgeItemId,
+  knowledgeItemParam,
+  legacyKnowledgeHref,
+  parseWikiView,
+  pictureRowHref,
+  pictureRowOf,
+  wikiPlace,
+  wikiViewHref,
+  withoutPictureRow,
+} from '../wiki-views'
 
 describe('wiki views', () => {
   it('lands on the context view and puts every other view in the URL', () => {
@@ -17,5 +30,123 @@ describe('wiki views', () => {
     expect(legacyKnowledgeHref('memory')).toBe('/wiki?view=memory')
     expect(legacyKnowledgeHref('skills')).toBe('/wiki?view=skills')
     expect(legacyKnowledgeHref('nonsense')).toBe('/wiki')
+  })
+})
+
+describe('the rows of the picture in an address', () => {
+  it('names each row by its own name, and Kunskap by the wiki view that lists the knowledge too', () => {
+    expect(PICTURE_ROWS).toEqual(['context', 'checks', 'memory', 'knowledge'])
+    for (const row of PICTURE_ROWS) {
+      expect(isPictureRow(row)).toBe(true)
+      expect(pictureRowOf(row)).toBe(row)
+    }
+    expect(pictureRowOf('skills')).toBe('knowledge')
+    for (const other of [null, undefined, '', 'map', 'facts', 'nonsense', 'toString', '__proto__']) {
+      expect(pictureRowOf(other), String(other)).toBeNull()
+    }
+    expect(isPictureRow('skills')).toBe(false)
+  })
+
+  it('writes the address of a row, and of one knowledge item under Kunskap', () => {
+    expect(pictureRowHref('context')).toBe('/wiki?view=context')
+    expect(pictureRowHref('checks')).toBe('/wiki?view=checks')
+    expect(pictureRowHref('memory')).toBe('/wiki?view=memory')
+    expect(pictureRowHref('knowledge')).toBe('/wiki?view=knowledge')
+    expect(pictureRowHref('knowledge', 'horizontal.swedish-vat')).toBe('/wiki?view=knowledge&item=horizontal.swedish-vat')
+    // Only Kunskap has items.
+    expect(pictureRowHref('memory', 'horizontal.swedish-vat')).toBe('/wiki?view=memory')
+    expect(pictureRowHref('knowledge', null)).toBe('/wiki?view=knowledge')
+  })
+
+  it('spells a knowledge item with a dot for the slash, and reads it back', () => {
+    expect(knowledgeItemParam('horizontal/swedish-vat')).toBe('horizontal.swedish-vat')
+    expect(knowledgeItemId('horizontal.swedish-vat')).toBe('horizontal/swedish-vat')
+    // Only the first dot is the slash: an id's own dots stay.
+    expect(knowledgeItemId(knowledgeItemParam('vertical/e-handel.se'))).toBe('vertical/e-handel.se')
+  })
+
+  it('reads back the address it writes', () => {
+    for (const row of PICTURE_ROWS) {
+      const query = new URLSearchParams(pictureRowHref(row, 'modifier.holding-ab').split('?')[1])
+      expect(wikiPlace({ view: query.get('view'), item: query.get('item') }, { picture: true, facts: false })).toEqual({
+        show: 'picture',
+        row,
+        item: row === 'knowledge' ? 'modifier.holding-ab' : null,
+      })
+    }
+  })
+})
+
+describe('what /wiki shows for an address', () => {
+  const withPicture = { picture: true, facts: false }
+  const without = { picture: false, facts: false }
+
+  it('is the picture with nothing open on the bare address, where the picture is on', () => {
+    expect(wikiPlace({}, withPicture)).toEqual({ show: 'picture', row: null, item: null })
+    expect(wikiPlace({ view: null, item: null }, withPicture)).toEqual({ show: 'picture', row: null, item: null })
+    expect(wikiPlace({ view: 'nonsense' }, withPicture)).toEqual({ show: 'picture', row: null, item: null })
+  })
+
+  it('opens the row the address names: Kontext, Kontroller, Minne and Kunskap', () => {
+    expect(wikiPlace({ view: 'context' }, withPicture)).toEqual({ show: 'picture', row: 'context', item: null })
+    expect(wikiPlace({ view: 'checks' }, withPicture)).toEqual({ show: 'picture', row: 'checks', item: null })
+    expect(wikiPlace({ view: 'memory' }, withPicture)).toEqual({ show: 'picture', row: 'memory', item: null })
+    expect(wikiPlace({ view: 'knowledge' }, withPicture)).toEqual({ show: 'picture', row: 'knowledge', item: null })
+    expect(wikiPlace({ view: 'skills' }, withPicture)).toEqual({ show: 'picture', row: 'knowledge', item: null })
+  })
+
+  it('opens one folder of Kunskap when the address names an item, under either spelling of the row', () => {
+    expect(wikiPlace({ view: 'knowledge', item: 'horizontal.swedish-vat' }, withPicture)).toEqual({ show: 'picture', row: 'knowledge', item: 'horizontal.swedish-vat' })
+    expect(wikiPlace({ view: 'skills', item: 'horizontal.swedish-vat' }, withPicture)).toEqual({ show: 'picture', row: 'knowledge', item: 'horizontal.swedish-vat' })
+    // An item means nothing on another row, or with no row.
+    expect(wikiPlace({ view: 'memory', item: 'horizontal.swedish-vat' }, withPicture)).toEqual({ show: 'picture', row: 'memory', item: null })
+    expect(wikiPlace({ item: 'horizontal.swedish-vat' }, withPicture)).toEqual({ show: 'picture', row: null, item: null })
+    expect(wikiPlace({ view: 'knowledge', item: '' }, withPicture)).toEqual({ show: 'picture', row: 'knowledge', item: null })
+  })
+
+  it('keeps Fakta a view of its own where the company has it, and the picture where it has not', () => {
+    expect(wikiPlace({ view: 'facts' }, { picture: true, facts: true })).toEqual({ show: 'view', view: 'facts' })
+    expect(wikiPlace({ view: 'facts' }, { picture: true, facts: false })).toEqual({ show: 'picture', row: null, item: null })
+  })
+
+  it('shows a company without the picture the view it always showed, whatever else the address says', () => {
+    // Every view the wiki knows: itself.
+    for (const view of WIKI_VIEWS) {
+      const expected = view === 'facts' ? 'context' : view
+      expect(wikiPlace({ view }, without), view).toEqual({ show: 'view', view: expected })
+      expect(wikiPlace({ view, item: 'horizontal.swedish-vat' }, without), view).toEqual({ show: 'view', view: expected })
+    }
+    expect(wikiPlace({ view: 'facts' }, { picture: false, facts: true })).toEqual({ show: 'view', view: 'facts' })
+    // The picture's own row names are not wiki views: the landing, as before.
+    for (const view of ['knowledge', 'checks', 'nonsense', '', null, undefined]) {
+      expect(wikiPlace({ view }, without), String(view)).toEqual({ show: 'view', view: 'context' })
+    }
+    // For any address the answer is what parseWikiView alone gave before.
+    for (const view of [...WIKI_VIEWS, ...PICTURE_ROWS, 'nonsense', null]) {
+      for (const facts of [false, true]) {
+        const parsed = parseWikiView(view)
+        expect(wikiPlace({ view }, { picture: false, facts })).toEqual({ show: 'view', view: parsed === 'facts' && !facts ? 'context' : parsed })
+      }
+    }
+  })
+})
+
+describe('closing a row takes it out of the address', () => {
+  it('drops the row and its item, and keeps the rest', () => {
+    expect(withoutPictureRow('/wiki?view=memory')).toBe('/wiki')
+    expect(withoutPictureRow('/wiki?view=knowledge&item=horizontal.swedish-vat')).toBe('/wiki')
+    expect(withoutPictureRow('/wiki?ctx=byra&view=checks#top')).toBe('/wiki?ctx=byra#top')
+    expect(withoutPictureRow('/wiki')).toBe('/wiki')
+    expect(withoutPictureRow('/wiki#top')).toBe('/wiki#top')
+  })
+
+  it('drops the item alone when a folder is closed and its row stays open', () => {
+    expect(withoutPictureRow('/wiki?view=knowledge&item=horizontal.swedish-vat', { keepRow: true })).toBe('/wiki?view=knowledge')
+    expect(withoutPictureRow('/wiki?view=knowledge', { keepRow: true })).toBe('/wiki?view=knowledge')
+    expect(withoutPictureRow('/wiki', { keepRow: true })).toBe('/wiki')
+  })
+
+  it('leaves an address that names no row as it is, so nothing is written for a row opened from the card', () => {
+    for (const address of ['/wiki', '/wiki#x', '/wiki?ctx=byra']) expect(withoutPictureRow(address)).toBe(address)
   })
 })

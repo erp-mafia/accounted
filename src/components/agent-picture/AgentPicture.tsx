@@ -33,6 +33,7 @@ import type {
   PictureSource,
 } from '@/lib/agent-context/agent-picture'
 import type { ConnectionKind } from '@/lib/settings/mcp-connections'
+import { withoutPictureRow } from '@/lib/agent-context/wiki-views'
 import { PictureViews, isPictureView, type PictureContext, type PictureView } from './PictureViews'
 import { AgentMark, LogoTile, SourceMark } from './picture-marks'
 
@@ -92,6 +93,18 @@ const reducedMotionNow = () => window.matchMedia(REDUCED_MOTION).matches
 const reducedMotionOnServer = () => false
 
 /**
+ * Takes the row the address names, and its item, out of the address (with
+ * `keepRow`, the item alone), so a reload does not open it again. Through
+ * the History API, which Next keeps in step with useSearchParams: the page
+ * is not loaded again.
+ */
+function forgetInAddress(options?: { keepRow?: boolean }): void {
+  const here = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  const next = withoutPictureRow(here, options)
+  if (next !== here) window.history.replaceState(null, '', next)
+}
+
+/**
  * One picture of what a connected agent gets: what is connected on the left,
  * the company in the middle, the agents on the right, and a line from every
  * card to the company's card (GET /api/wiki/picture). Every card leads to
@@ -103,13 +116,26 @@ const reducedMotionOnServer = () => false
  *
  * `context` is the briefing as the page that hosts the picture loads it: the
  * Kontext row draws the context graph from it.
+ *
+ * `row` is the row the address names (lib/agent-context/wiki-views.ts): the
+ * picture opens with that row's view open, and opens it when the address
+ * comes to name it while the picture is shown. `item` is the knowledge item
+ * the address names, whose folder the Kunskap view opens on. Closing the
+ * view takes both out of the address; a row opened from the card is not
+ * written to it.
  */
-export function AgentPicture({ context }: { context: PictureContext }) {
+export function AgentPicture({ context, row = null, item = null }: { context: PictureContext; row?: PictureView | null; item?: string | null }) {
   const t = useTranslations('wiki')
   const locale = useLocale() as ErrorLocale
   const [load, setLoad] = useState<LoadState>({ state: 'loading' })
   const [activity, setActivity] = useState<PictureActivity | null>(null)
-  const [view, setView] = useState<PictureView | null>(null)
+  const [view, setView] = useState<PictureView | null>(row)
+  // The row the address named at the last render: a change to another row opens that one.
+  const [namedRow, setNamedRow] = useState(row)
+  if (row !== namedRow) {
+    setNamedRow(row)
+    if (row) setView(row)
+  }
 
   // A view that is closing still covers the page for the length of its
   // animation and takes every press, so a press on another row would be
@@ -121,6 +147,7 @@ export function AgentPicture({ context }: { context: PictureContext }) {
     if (performance.now() - reopenedAt.current < REOPEN_GRACE_MS) return
     closingUntil.current = performance.now() + CLOSING_MS
     setView(null)
+    forgetInAddress()
   }, [])
   useEffect(() => {
     const onPress = (event: PointerEvent) => {
@@ -202,7 +229,7 @@ export function AgentPicture({ context }: { context: PictureContext }) {
   if (load.state === 'failed') {
     return <LoadError title={t('picture.load_failed_title')} description={load.description} onRetry={retry} />
   }
-  return <PictureFigure picture={load.data} activity={activity} view={view} onOpen={setView} onClose={closeView} context={context} />
+  return <PictureFigure picture={load.data} activity={activity} view={view} item={item} onOpen={setView} onClose={closeView} context={context} />
 }
 
 /** The canvas: between two hairlines, on the dotted ground, as wide as the page. */
@@ -265,6 +292,7 @@ function PictureFigure({
   picture,
   activity,
   view,
+  item,
   onOpen,
   onClose,
   context,
@@ -272,6 +300,8 @@ function PictureFigure({
   picture: AgentPictureData
   activity: PictureActivity | null
   view: PictureView | null
+  /** The knowledge item the address names. */
+  item: string | null
   onOpen: (view: PictureView) => void
   onClose: () => void
   context: PictureContext
@@ -550,6 +580,8 @@ function PictureFigure({
         context={context}
         checks={picture.company.checks}
         activeKnowledge={picture.company.knowledge.active}
+        knowledgeItem={item}
+        onKnowledgeItemClose={() => forgetInAddress({ keepRow: true })}
         when={when}
       />
     </>

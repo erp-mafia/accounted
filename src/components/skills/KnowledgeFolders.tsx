@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { groupKnowledge, SEARCH_FROM_TILES, type KnowledgeGroupId } from '@/lib/agent-skills/knowledge-list'
+import { knowledgeItemId } from '@/lib/agent-context/wiki-views'
 import { cn } from '@/lib/utils'
 import { readOptions } from './data'
 import { Folder } from './Folder'
@@ -38,8 +39,13 @@ const GROUP_LABEL: Record<Exclude<KnowledgeGroupId, 'all'>, string> = {
  * A tile is a button: it opens the item in place (KnowledgeItemView), with a
  * way back to the folders. The items are read by the catalogue page's own
  * loader, under its own key, so the two share one read.
+ *
+ * `item` is the item the address names (as knowledgeItemParam spells it):
+ * the list opens on that item's folder, and opens it when the address comes
+ * to name it. An item that is not in the list opens nothing. `onItemClose`
+ * is called when an opened folder is left for the folders.
  */
-export function KnowledgeFolders({ active }: { active: readonly string[] | null }) {
+export function KnowledgeFolders({ active, item = null, onItemClose }: { active: readonly string[] | null; item?: string | null; onItemClose?: () => void }) {
   const t = useTranslations('skills_registry')
   const tCommon = useTranslations('common')
   const { company } = useCompany()
@@ -47,7 +53,13 @@ export function KnowledgeFolders({ active }: { active: readonly string[] | null 
   const knowledgeDesc = useKnowledgeDesc()
   const options = useSWR(company ? ['/api/agents/knowledge', company.id] : null, ([url]) => readOptions(url))
   const [q, setQ] = useState('')
-  const [openId, setOpenId] = useState<string | null>(null)
+  const [openId, setOpenId] = useState<string | null>(item ? knowledgeItemId(item) : null)
+  // The item the address named at the last render: a change to another item opens that one.
+  const [namedItem, setNamedItem] = useState(item)
+  if (item !== namedItem) {
+    setNamedItem(item)
+    if (item) setOpenId(knowledgeItemId(item))
+  }
 
   if (options.error && !options.data) return <LoadError title={t('load_failed')} onRetry={() => void options.mutate()} />
   if (!options.data || !company) {
@@ -64,7 +76,14 @@ export function KnowledgeFolders({ active }: { active: readonly string[] | null 
   if (opened) {
     return (
       <div className="space-y-4">
-        <Button variant="ghost" className="-ml-2" onClick={() => setOpenId(null)}>
+        <Button
+          variant="ghost"
+          className="-ml-2"
+          onClick={() => {
+            setOpenId(null)
+            onItemClose?.()
+          }}
+        >
           <ArrowLeftIcon className="h-4 w-4" aria-hidden />
           {t('folders_back')}
         </Button>
