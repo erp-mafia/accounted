@@ -17832,6 +17832,7 @@
     "personal_number_label": "Personal identity number of the signer",
     "method_qr": "Sign with BankID",
     "method_same_device": "BankID on this device",
+    "method_qr_other_device": "BankID on another device",
     "qr_label": "QR code for BankID",
     "signing_qr_hint": "Open the BankID app and scan the QR code.",
     "steps_intro": "The bank signs in several steps, each with its own QR code. Keep the BankID app ready between steps.",
