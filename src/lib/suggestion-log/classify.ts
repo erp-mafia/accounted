@@ -69,6 +69,8 @@ export interface SuggestionEvidence {
   rule_import_unconfirmed?: true
   has_underlag?: boolean
   read_reverse_charge_kind?: string
+  /** Set only when true: a read on a row where an auto-learned mapping row no longer read would have proposed. */
+  replaces_learned_rule?: true
 }
 
 /** The stored read as the log keeps it: the reasoning only as a hash. */
@@ -157,6 +159,7 @@ function evidenceOf(p: BookingProposal): SuggestionEvidence | undefined {
     ...(p.rule_import_unconfirmed ? { rule_import_unconfirmed: true as const } : {}),
     ...(p.has_underlag !== undefined ? { has_underlag: p.has_underlag } : {}),
     ...(p.read_reverse_charge_kind ? { read_reverse_charge_kind: p.read_reverse_charge_kind } : {}),
+    ...(p.replaces_learned_rule ? { replaces_learned_rule: true as const } : {}),
   }
   return Object.keys(evidence).length > 0 ? evidence : undefined
 }

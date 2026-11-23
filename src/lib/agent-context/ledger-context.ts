@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { mappingPatternNamesCounterparty } from '@/lib/bookkeeping/counterparty-templates'
+import { AUTO_LEARNED_MAPPING_SOURCE, readsAutoLearnedMappingRules } from '@/lib/bookkeeping/mapping-engine'
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
 // MCP resource. Everything here is computed by code from ledger data; the LLM
@@ -161,6 +162,23 @@ function share(agree: number, seen: number): number {
   return seen > 0 ? roundOre(agree / seen) : 0
 }
 
+/**
+ * The company's explicit rules: authoritative, listed separately from
+ * observed patterns (instruction vs observation). Its auto-learned rows are
+ * left out where they are not read (readsAutoLearnedMappingRules): a row no
+ * reader takes is no instruction to the agent.
+ */
+function explicitRulesRead(supabase: SupabaseClient, companyId: string) {
+  const rules = supabase
+    .from('mapping_rules')
+    .select('rule_name, merchant_pattern, description_pattern, debit_account, vat_treatment')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+  return (readsAutoLearnedMappingRules(companyId) ? rules : rules.neq('source', AUTO_LEARNED_MAPPING_SOURCE))
+    .order('priority', { ascending: true })
+    .limit(25)
+}
+
 export async function buildLedgerContext(
   supabase: SupabaseClient,
   companyId: string,
@@ -183,15 +201,7 @@ export async function buildLedgerContext(
         .eq('company_id', companyId)
         .maybeSingle(),
 
-      // Explicit user-authored rules: authoritative, listed separately from
-      // observed patterns (instruction vs observation).
-      supabase
-        .from('mapping_rules')
-        .select('rule_name, merchant_pattern, description_pattern, debit_account, vat_treatment')
-        .eq('company_id', companyId)
-        .eq('is_active', true)
-        .order('priority', { ascending: true })
-        .limit(25),
+      explicitRulesRead(supabase, companyId),
 
       // Learned counterparty templates carry vat_treatment, which the RPC's
       // journal-side aggregation cannot see; merged into patterns below.

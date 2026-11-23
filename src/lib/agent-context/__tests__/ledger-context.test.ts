@@ -351,6 +351,33 @@ describe('buildLedgerContext', () => {
     expect(ctx.explicit_rules.map((r) => r.match)).toEqual(['KORTKÖP ICA MAXI'])
   })
 
+  it('reads every active mapping row of the company while its auto-learned rows are read', async () => {
+    enqueueAll(mock)
+    await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+
+    expect(mock.findCalls('mapping_rules', 'eq')).toEqual([['company_id', COMPANY_ID], ['is_active', true]])
+    expect(mock.findCalls('mapping_rules', 'neq')).toEqual([])
+    expect(mock.findCalls('mapping_rules', 'limit')).toEqual([[25]])
+  })
+
+  it('leaves the auto-learned rows out of the read for a company that does not read them', async () => {
+    vi.stubEnv('BOOKING_PRECEDENT_COMPANY_IDS', COMPANY_ID)
+    try {
+      enqueueAll(mock, {
+        rules: [
+          { rule_name: 'Described: SL', merchant_pattern: 'SL', description_pattern: null, debit_account: '5810', vat_treatment: null },
+        ],
+      })
+      const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+
+      expect(mock.findCalls('mapping_rules', 'neq')).toEqual([['source', 'auto']])
+      expect(mock.findCalls('mapping_rules', 'limit')).toEqual([[25]])
+      expect(ctx.explicit_rules.map((r) => r.rule_name)).toEqual(['Described: SL'])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('derives vat profile and conventions from settings, stats, and series', async () => {
     enqueueAll(mock, {
       stats: { ...emptyStats(), vat_treatments_used: ['standard_25'], median_booking_lag_days: 2.6 },

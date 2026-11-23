@@ -34,7 +34,7 @@ describe('DIRECT_BOOKING_POLICY_VERSION', () => {
     expect({
       revision: DIRECT_BOOKING_POLICY_REVISION,
       sha256: createHash('sha256').update(source).digest('hex'),
-    }).toEqual({ revision: 4, sha256: 'f6ca83f8320966e258c83720e93b274823a6589fc4b7e177863ca68417b666de' })
+    }).toEqual({ revision: 4, sha256: 'd2940ec2b583348cc537b5950ba2324355d03a0a190ca59b22ca276160fff8ab' })
   })
 
   it('a booking review rule match asks first, whatever the switch, the rule or the evidence (accounted#130 step 2)', () => {
@@ -144,6 +144,12 @@ describe('booksWithoutReview', () => {
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.9, has_underlag: false })).toBe(false)
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.7, has_underlag: true })).toBe(false)
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.85, has_underlag: true })).toBe(true)
+  })
+  it('never books a read that stands where an auto-learned mapping row no longer read would have proposed', () => {
+    const sure = { source: 'assistant' as const, confidence: 0.95, has_underlag: true }
+    expect(booksWithoutReview(sure)).toBe(true)
+    expect(booksWithoutReview({ ...sure, replaces_learned_rule: true })).toBe(false)
+    expect(reviewReason({ ...sure, replaces_learned_rule: true }, DIRECT_BOOKING_ON)).toBe('evidence')
   })
   it('never books a catalog keyword match without a review', () => {
     expect(booksWithoutReview({ source: 'catalog', confidence: 0.95 })).toBe(false)

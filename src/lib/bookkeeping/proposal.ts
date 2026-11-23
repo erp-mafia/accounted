@@ -151,6 +151,14 @@ export interface BookingProposal {
   read_reverse_charge_kind?: ReverseChargeKind
   /** Source 'clearing': the record behind it. Never booked without a review. */
   clearing?: ClearingEvidence
+  /**
+   * Set on the assistant's proposal for a row that one of the company's
+   * auto-learned mapping rows would have proposed for, where those rows are
+   * not read (lib/bookkeeping/mapping-engine.ts readsAutoLearnedMappingRules):
+   * the read stands where the rule stood, and never books without a review.
+   * Set by proposeForTransactions.
+   */
+  replaces_learned_rule?: boolean
 }
 
 /** The leg that is not the bank: what the chip, the assistant and Claude call "the account". */

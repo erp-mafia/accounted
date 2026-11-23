@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getSuggestedTemplates, buildCounterpartySuggestion, rowProposal } from './category-suggestions'
+import { getSuggestedTemplates, buildCounterpartySuggestion, matchedRuleProposals, rowProposal } from './category-suggestions'
 import {
   bindTemplateToSettlementAccount,
   contradictsLearnedDirection,
@@ -21,6 +21,7 @@ import { readDirectBookingSettings } from './direct-booking-settings'
 import { proposeClearings } from './clearing-proposals'
 import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
 import { markBlockedProposals } from '@/lib/booking-review/proposals'
+import { isAutoLearnedMappingRule, mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
 /**
@@ -43,6 +44,12 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * card and Swish on 1686) leads above everything, since any other booking
  * of it counts the revenue twice (leadWithClearing); it never books from
  * the row.
+ *
+ * For a company whose auto-learned mapping rows are not read
+ * (lib/bookkeeping/mapping-engine.ts readsAutoLearnedMappingRules), such a
+ * row proposes nothing. Where one would have proposed, the assistant's
+ * proposal carries replaces_learned_rule and never books without a review:
+ * the row is not booked by one click on a read where a rule stood before.
  *
  * Last, a booking review rule (lib/booking-review, accounted#130 step 2)
  * marks every proposal it matches review_blocked: it keeps its place, and
@@ -119,15 +126,24 @@ export async function proposeForTransactions(
     ),
     loadActiveBookingReviewRules(supabase, companyId),
   ])
-  const mappingRules = [
+  const storedRules = [
     ...((companyRules.data ?? []) as MappingRule[]),
     ...((globalRules.data ?? []) as MappingRule[]),
   ]
+  // Without the company's auto-learned rows where they are not read
+  // (lib/bookkeeping/mapping-engine.ts readsAutoLearnedMappingRules).
+  const mappingRules = mappingRulesRead(companyId, storedRules)
+  const unreadRules = mappingRules.length === storedRules.length ? [] : storedRules.filter(isAutoLearnedMappingRule)
 
   const entityType = (settingsRead.data?.entity_type as EntityType) || undefined
 
+  // The rows an auto-learned rule that is no longer read would have proposed
+  // for: the assistant's read may take the row there, but only into a review
+  // (replaces_learned_rule below).
+  const unreadRuleRows = new Set<string>()
   for (const tx of transactions) {
     proposals[tx.id] = await getSuggestedTemplates(tx, entityType, mappingRules)
+    if (unreadRules.length > 0 && matchedRuleProposals(tx, entityType, unreadRules).length > 0) unreadRuleRows.add(tx.id)
   }
 
   // Inject counterparty template matches as top suggestions. A learned
@@ -229,7 +245,12 @@ export async function proposeForTransactions(
       if (!read || !ASSISTANT_READS.isFresh(read, tx)) continue
       assistant_reads[tx.id] = read
       const s = ASSISTANT_READS.proposal(read, tx, entityType)
-      if (s) proposals[tx.id] = mergeAssistantSuggestion(proposals[tx.id] ?? [], s)
+      if (s) {
+        proposals[tx.id] = mergeAssistantSuggestion(
+          proposals[tx.id] ?? [],
+          unreadRuleRows.has(tx.id) ? { ...s, replaces_learned_rule: true } : s,
+        )
+      }
       const cpMatch = counterpartyMatches.get(tx.id)
       if (cpMatch) proposals[tx.id] = contestCounterpart(proposals[tx.id] ?? [], cpMatch, read)
       proposals[tx.id] = disputeReverseChargeBox(proposals[tx.id] ?? [], read)

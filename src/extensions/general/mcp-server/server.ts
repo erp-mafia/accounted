@@ -687,6 +687,7 @@ import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
+import { mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
 import {
   findSalaryRunPayouts,
   salaryPayoutLinkProposal,
@@ -854,7 +855,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 import { CURRENCIES, INVOICE_QR_MODES, SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
 import { InvoiceDeliveryAddressSchema, type InvoiceDeliveryAddress } from '@/lib/invoices/delivery-address'
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, Customer, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, MappingRule, Invoice, InvoiceQrMode, Currency, Customer, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 import type { InvoiceExtractionResult, SupplierInvoiceReverseChargeKind } from '@/types'
 import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
@@ -13854,6 +13855,9 @@ export const tools: McpTool[] = [
         .eq('is_active', true)
         .order('priority', { ascending: false })
 
+      // Without the company's auto-learned rows where they are not read.
+      const readMappingRules = mappingRulesRead(companyId, (mappingRules ?? []) as MappingRule[])
+
       // Build category history from past categorizations
       // Counterparty-keyed history: the engine only surfaces history tied to
       // the SAME merchant: global frequency padding produced the identical
@@ -13891,7 +13895,7 @@ export const tools: McpTool[] = [
         // tagged expense_other and read back as 6991), so it is never
         // printed beside the match (crm#1920).
         suggestions[tx.id] = getSuggestedCategories(
-          tx as Transaction, mappingRules ?? [],
+          tx as Transaction, readMappingRules,
           cpMatch
             ? {}
             : merchantHistoryFor(
