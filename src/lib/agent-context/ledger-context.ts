@@ -164,17 +164,19 @@ function share(agree: number, seen: number): number {
 
 /**
  * The company's explicit rules: authoritative, listed separately from
- * observed patterns (instruction vs observation). Its auto-learned rows are
- * left out where they are not read (readsAutoLearnedMappingRules): a row no
- * reader takes is no instruction to the agent.
+ * observed patterns (instruction vs observation). `autoLearned` says whether
+ * the rows a booking wrote are part of the read (a company's row with the
+ * source AUTO_LEARNED_MAPPING_SOURCE, mapping-engine isAutoLearnedMappingRule);
+ * without them it is the rows a person described. The one place a read of
+ * the explicit rules leaves the learned rows out.
  */
-function explicitRulesRead(supabase: SupabaseClient, companyId: string) {
+function explicitRulesRead(supabase: SupabaseClient, companyId: string, autoLearned: boolean) {
   const rules = supabase
     .from('mapping_rules')
     .select('rule_name, merchant_pattern, description_pattern, debit_account, vat_treatment')
     .eq('company_id', companyId)
     .eq('is_active', true)
-  return (readsAutoLearnedMappingRules(companyId) ? rules : rules.neq('source', AUTO_LEARNED_MAPPING_SOURCE))
+  return (autoLearned ? rules : rules.neq('source', AUTO_LEARNED_MAPPING_SOURCE))
     .order('priority', { ascending: true })
     .limit(25)
 }
@@ -210,14 +212,16 @@ export function explicitRulesFrom(rows: ReadonlyArray<ExplicitRuleRow> | null | 
 }
 
 /**
- * The company's explicit rules alone: the same rows by the same read and the
- * same rule as buildLedgerContext lists under explicit_rules, without the
- * ledger statistics around them. Throws when the read fails: an empty list
- * would claim the company has no rules.
+ * The rules the company set itself: its explicit rules without the rows a
+ * booking learned, for every company, whether or not its learned rows are
+ * read elsewhere (readsAutoLearnedMappingRules). The same read and the same
+ * rule as buildLedgerContext lists under explicit_rules, less those rows and
+ * without the ledger statistics around them. Throws when the read fails: an
+ * empty list would claim the company has no rules.
  */
-export async function readExplicitRules(supabase: SupabaseClient, companyId: string): Promise<ExplicitRule[]> {
-  const { data, error } = await explicitRulesRead(supabase, companyId)
-  if (error) throw new Error(`explicit rules read failed: ${error.message}`)
+export async function readWrittenRules(supabase: SupabaseClient, companyId: string): Promise<ExplicitRule[]> {
+  const { data, error } = await explicitRulesRead(supabase, companyId, false)
+  if (error) throw new Error(`written rules read failed: ${error.message}`)
   return explicitRulesFrom(data)
 }
 
@@ -248,7 +252,9 @@ export async function buildLedgerContext(
         .eq('company_id', companyId)
         .maybeSingle(),
 
-      explicitRulesRead(supabase, companyId),
+      // The learned rows are left out where they are not read: a row no
+      // reader takes is no instruction to the agent.
+      explicitRulesRead(supabase, companyId, readsAutoLearnedMappingRules(companyId)),
 
       // Learned counterparty templates carry vat_treatment, which the RPC's
       // journal-side aggregation cannot see; merged into patterns below.

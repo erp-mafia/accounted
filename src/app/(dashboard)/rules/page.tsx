@@ -5,7 +5,7 @@ import RulesList from '@/components/rules/RulesList'
 import BookingBlocks from '@/components/rules/BookingBlocks'
 import HandWrittenRules from '@/components/rules/HandWrittenRules'
 import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
-import { readExplicitRules, type ExplicitRule } from '@/lib/agent-context/ledger-context'
+import { readWrittenRules, type ExplicitRule } from '@/lib/agent-context/ledger-context'
 import { profileLine, readProfileFacts } from '@/lib/agent-context/profile-line'
 import { createLogger } from '@/lib/logger'
 import { getDashboardAuthContext, getDashboardCompanyId, redirectInvoicerOffPage } from '../request-context'
@@ -25,11 +25,12 @@ const log = createLogger('rules/page')
  * sentence above the list says how the company books: its accounting method,
  * its VAT period and its voucher series (lib/agent-context/profile-line.ts),
  * each left out when the company has no value for it. Under the list, the
- * rules the company set itself (the explicit rules of the bookkeeping
- * profile, lib/agent-context/ledger-context.ts readExplicitRules), under the
- * profile's own heading and in its own row; a company with none has no such
- * section. /wiki?view=map leads here for such a company. Every other company
- * gets the page without either, and nothing is read for them.
+ * rules the company set itself (lib/agent-context/ledger-context.ts
+ * readWrittenRules: the explicit rules of the bookkeeping profile without
+ * the rows a booking learned, for every company), under the profile's own
+ * heading and in its own row; a company with none has no such section.
+ * /wiki?view=map leads here for such a company. Every other company gets the
+ * page without either, and nothing is read for them.
  */
 export default async function RulesPage() {
   const t = await getTranslations('rules')
@@ -63,9 +64,9 @@ export default async function RulesPage() {
 
 /**
  * What the page adds for a company with the agent picture on: the sentence
- * (null when the company has none of its parts) and the company's explicit
- * rules. Every other company gets neither, and nothing is read. The reads go
- * through the caller's own client, filtered by the company. Explicit rules
+ * (null when the company has none of its parts) and the rules the company
+ * set itself. Every other company gets neither, and nothing is read. The
+ * reads go through the caller's own client, filtered by the company. Rules
  * that cannot be read are logged and left out: the page is then as for a
  * company with none.
  */
@@ -76,8 +77,8 @@ async function pictureParts(t: (key: string, values?: Record<string, string | nu
   const [{ supabase }, locale] = await Promise.all([getDashboardAuthContext(), getLocale(), redirectInvoicerOffPage()])
   const [facts, rules] = await Promise.all([
     readProfileFacts(supabase, companyId),
-    readExplicitRules(supabase, companyId).catch((error: unknown) => {
-      log.warn('explicit rules read failed', { companyId, error: error instanceof Error ? error.message : String(error) })
+    readWrittenRules(supabase, companyId).catch((error: unknown) => {
+      log.warn('written rules read failed', { companyId, error: error instanceof Error ? error.message : String(error) })
       return [] as ExplicitRule[]
     }),
   ])

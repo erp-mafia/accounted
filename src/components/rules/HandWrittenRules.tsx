@@ -6,11 +6,12 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import type { ExplicitRule } from '@/lib/agent-context/ledger-context'
 
 /**
- * The company's explicit rules on Bokföringsregler, for a company with the
- * agent picture on: under the list of counterparty rules, with the heading
- * and the help the bookkeeping profile gives them (the agentKnowledge
- * messages) and the profile's own row (ExplicitRuleRows). The page reads the
- * rules and hands them in; with none there is no section.
+ * The rules the company set itself on Bokföringsregler, for a company with
+ * the agent picture on: under the list of counterparty rules, with the
+ * heading and the help the bookkeeping profile gives its explicit rules (the
+ * agentKnowledge messages) and the profile's own row (ExplicitRuleRows). The
+ * page reads the rules, never a row a booking learned, and hands them in;
+ * with none there is no section.
  */
 export default function HandWrittenRules({ rules }: { rules: readonly ExplicitRule[] }) {
   const t = useTranslations('agentKnowledge')
