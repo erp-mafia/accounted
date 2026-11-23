@@ -424,7 +424,10 @@ export async function registerShareEvent(
       return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Ange aktiebrevets nummer och om det utfärdas eller makuleras.' }
     }
     if ((kind === 'pant' || kind === 'nyttjanderatt') && !input.note_status) return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Ange om anteckningen öppnas eller avslutas.' }
-    if ((kind === 'anteckning' || kind === 'rattelse') && !input.note?.trim()) {
+    // A note that only completes the setup brings no text of its own: the
+    // register's note of the completion is the entry, and no other is made.
+    const completionOnly = kind === 'anteckning' && Boolean(input.completes_setup) && !input.note?.trim()
+    if ((kind === 'anteckning' || kind === 'rattelse') && !input.note?.trim() && !completionOnly) {
       return { ok: false, code: 'VALIDATION_ERROR', messageSv: kind === 'rattelse' ? 'Ange varför anteckningen rättas.' : 'Skriv anteckningen.' }
     }
 
@@ -491,8 +494,8 @@ export async function registerShareEvent(
     if (kind === 'ingaende') {
       warnings.push(warning(
         'SHARE_REGISTER_KEEP_EARLIER_REGISTER',
-        'Ett ingående innehav förs in från den aktiebok bolaget har fört tidigare. Den tidigare aktieboken ska bevaras i minst tio år efter att alla aktier har förts in här (5 kap. 3 § ABL).',
-        'An opening holding is carried over from the share register the company kept before. That earlier register must be kept for at least ten years after every share has been entered here (ABL 5:3).',
+        'Ett ingående innehav förs in från den aktiebok bolaget har fört tidigare, med de aktienummer som står där. Den tidigare aktieboken ska bevaras i minst tio år efter att alla aktier har förts in här (5 kap. 3 § ABL).',
+        'An opening holding is carried over from the share register the company kept before, with the share numbers that register gives. That earlier register must be kept for at least ten years after every share has been entered here (ABL 5:3).',
       ))
     }
     if (kind === 'nyemission' && !input.registered_on) {
@@ -575,6 +578,36 @@ export async function registerShareEvent(
           // The code of each warning, in the same order: a caller that says one of them its own way leaves that sentence out by code.
           warning_codes: warnings.map((w) => w.code),
         },
+      }
+    }
+
+    if (completionOnly) {
+      // Nothing of its own to enter: completing the setup has the database
+      // write the register's note, and that note is what the caller gets back.
+      const completed = await completeShareRegisterSetup(ctx, { expected_last_event_number: lastEventNumber }, { dryRun: false })
+      if (!completed.ok) return completed
+      if (completed.dryRun || !completed.data.completed_now) return { ok: false, code: 'SHARE_REGISTER_SETUP_COMPLETE', messageSv: 'Aktieboken är redan upplagd och i bruk.' }
+      const written = (await loadShareEvents(ctx.supabase, ctx.companyId))
+        .filter((e) => e.kind === 'anteckning' && e.event_number > lastEventNumber)
+        .sort((a, b) => b.event_number - a.event_number)[0]
+      if (!written) throw new Error('share_register_events: the note of the completed setup was not written')
+      return {
+        ok: true,
+        data: {
+          share_register_event_id: written.id,
+          event_number: written.event_number,
+          kind,
+          event_date: written.event_date,
+          occurred_on: null,
+          range_start: null,
+          range_end: null,
+          share_class_id: null,
+          from_party_id: null,
+          to_party_id: null,
+          setup_completed_at: completed.data.setup_completed_at,
+        },
+        created: true,
+        ...(warnings.length > 0 ? { warnings } : {}),
       }
     }
 

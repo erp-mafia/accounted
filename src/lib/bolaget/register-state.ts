@@ -187,7 +187,7 @@ export function replayShareRegister(events: readonly ReplayEvent[], asOf: string
         if (overlaps(r.range_start, r.range_end, start, end)) {
           throw new ShareRegisterError(
             'SHARE_REGISTER_RANGE_TAKEN',
-            `${rangeText(Math.max(r.range_start, start), Math.min(r.range_end, end))} finns redan i aktieboken. Nya aktier får nästa lediga nummer.`,
+            `${rangeText(Math.max(r.range_start, start), Math.min(r.range_end, end))} finns redan i aktieboken. Nya aktier får nästa lediga nummer. Har en införd anteckning fel nummer rättas den först.`,
             num,
           )
         }
