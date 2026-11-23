@@ -27,12 +27,16 @@ import { isOutboxNotDeployed } from '@/lib/events/outbox-dispatcher'
  * 3. Everything past 180 days, only when step 1 succeeded: a telemetry day is
  *    never purged before it is counted.
  * 4. The event outbox (event_outbox, event_deliveries): finished events after
- *    7 days, events with a dead delivery after 30 (prune_event_outbox).
+ *    7 days, events with a dead delivery after 30 (prune_event_outbox, whose
+ *    defaults hold that rule; the run passes only the batch size). Batches
+ *    until one comes back short: one call a night deleted 10 000 events while
+ *    up to 34 000 a day arrived, so the retention fell further behind every
+ *    day (crm#2141).
  *
  * Time: a rollup call may run 30 s (pre_request_statement_timeout), every
- * other call 8 s, so seven slow rollups, ten slow batches and the two last
- * calls add up to about 306 s against the route's limit (300 s, declared by
- * the route). No call is started after
+ * other call 8 s, so seven slow rollups, ten slow delivery batches, the purge
+ * and twenty slow outbox batches add up to far more than the route's limit
+ * (300 s, declared by the route). No call is started after
  * TIME_BUDGET_MS (250 s + one 30 s call = 280 s); what was not started is
  * named in `deferred`, logged as an error and done by the next night's run,
  * which starts from the same cutoffs.
@@ -43,6 +47,10 @@ const TELEMETRY_RETENTION_DAYS = 180
 const ROLLUP_MAX_CALLS = 7
 const DELIVERY_BATCH = 20_000
 const DELIVERY_MAX_BATCHES = 10
+/** prune_event_outbox's own default: the batch one call a night has deleted inside its 8 s since the outbox shipped. */
+const OUTBOX_BATCH = 10_000
+/** At most 200 000 events a night, six times the busiest day so far (33 567 events on 2026-11-20). */
+const OUTBOX_MAX_BATCHES = 20
 
 /** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
 export const maxDuration = 300
@@ -138,17 +146,35 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
   // shadow mode was on must still age out after it is switched off (raw
   // payloads). With the mode never on it deletes nothing. Best effort: it
   // never fails the run, and a database the outbox migration has not reached
-  // yet answers PGRST202, which is a skip.
+  // yet answers PGRST202, which is a skip. Batches until one comes back
+  // short; a run that stops on a full batch leaves events past the retention
+  // and says so.
   let prunedOutbox = 0
-  const { data: pruned, error: pruneError } = outOfTime('outbox_prune')
-    ? { data: 0, error: null }
-    : await supabase.rpc('prune_event_outbox')
-  if (pruneError) {
-    if (isOutboxNotDeployed(pruneError)) ctx.log.info('event outbox not deployed; prune skipped')
-    else ctx.log.error('event outbox prune failed', pruneError)
-  } else {
-    prunedOutbox = typeof pruned === 'number' ? pruned : 0
-    ctx.log.info('event outbox prune summary', { prunedOutbox })
+  let outboxBatches = 0
+  let outboxLastFull = false
+  for (let batch = 0; batch < OUTBOX_MAX_BATCHES; batch++) {
+    if (outOfTime('outbox_prune')) break
+    const { data: pruned, error: pruneError } = await supabase.rpc('prune_event_outbox', { p_limit: OUTBOX_BATCH })
+    if (pruneError) {
+      if (isOutboxNotDeployed(pruneError)) ctx.log.info('event outbox not deployed; prune skipped')
+      else ctx.log.error('event outbox prune failed', pruneError)
+      break
+    }
+    const n = typeof pruned === 'number' ? pruned : 0
+    prunedOutbox += n
+    outboxBatches++
+    outboxLastFull = n >= OUTBOX_BATCH
+    if (!outboxLastFull) break
+  }
+  ctx.log.info('event outbox prune summary', { prunedOutbox, batches: outboxBatches })
+  // Every batch of the night came back full: there may be more past the
+  // retention than one night deletes. A run cut short by the clock is named
+  // in `deferred` instead.
+  if (outboxBatches === OUTBOX_MAX_BATCHES && outboxLastFull) {
+    ctx.log.error('event outbox prune stopped at its batch cap; events past the retention may wait for the next run', {
+      prunedOutbox,
+      batches: outboxBatches,
+    })
   }
 
   if (deferred.length > 0) {

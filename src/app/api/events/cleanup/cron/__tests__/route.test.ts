@@ -28,12 +28,13 @@ let deleteResults: Array<{ error: unknown; count: number | null }> = []
 const timeline: string[] = []
 let rollupResults: RpcResult[] = []
 let deliveryResults: RpcResult[] = []
-let pruneResult: RpcResult = { data: 0, error: null }
+// One result per outbox prune call, then { data: 0 } (a short batch).
+let pruneResults: RpcResult[] = []
 function defaultRpc(name: string, _args?: unknown): Promise<RpcResult> {
   timeline.push(name)
   if (name === 'rollup_agent_telemetry') return Promise.resolve(rollupResults.shift() ?? { data: 0, error: null })
   if (name === 'prune_delivery_events') return Promise.resolve(deliveryResults.shift() ?? { data: 0, error: null })
-  return Promise.resolve(pruneResult)
+  return Promise.resolve(pruneResults.shift() ?? { data: 0, error: null })
 }
 const rpc = vi.fn(defaultRpc)
 
@@ -80,7 +81,7 @@ beforeEach(() => {
   timeline.length = 0
   rollupResults = []
   deliveryResults = []
-  pruneResult = { data: 0, error: null }
+  pruneResults = []
   rpc.mockImplementation(defaultRpc)
 })
 
@@ -196,10 +197,110 @@ describe('GET /api/events/cleanup/cron', () => {
   })
 
   it('prunes the event outbox after the event_log steps', async () => {
-    pruneResult = { data: 7, error: null }
+    pruneResults = [{ data: 7, error: null }]
     const response = await GET(createCronRequest('/api/events/cleanup/cron'))
-    expect(rpc).toHaveBeenCalledWith('prune_event_outbox', undefined)
+    expect(callsTo('prune_event_outbox')).toEqual([['prune_event_outbox', { p_limit: 10_000 }]])
     expect(await response.json()).toMatchObject({ success: true, prunedOutbox: 7 })
+  })
+
+  // crm#2141: one call a night deleted 10 000 events while up to 34 000 a day
+  // arrived, so the 7-day retention fell further behind every day.
+  it('prunes the event outbox in batches until one comes back short', async () => {
+    pruneResults = [{ data: 10_000, error: null }, { data: 10_000, error: null }, { data: 3, error: null }]
+
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ success: true, prunedOutbox: 20_003 })
+    // Only the batch size is passed: the retention (7 days, 30 with a dead
+    // delivery) stays the function's own default.
+    expect(callsTo('prune_event_outbox').map(([, args]) => args)).toEqual([
+      { p_limit: 10_000 },
+      { p_limit: 10_000 },
+      { p_limit: 10_000 },
+    ])
+  })
+
+  it('stops the outbox prune at twenty batches a night and logs that events past the retention remain', async () => {
+    pruneResults = Array.from({ length: 25 }, () => ({ data: 10_000, error: null }))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ success: true, prunedOutbox: 200_000 })
+      expect(callsTo('prune_event_outbox')).toHaveLength(20)
+      expect(errorSpy.mock.calls.flat().join('\n')).toContain('event outbox prune stopped at its batch cap')
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('says nothing of the cap when the twentieth batch comes back short', async () => {
+    pruneResults = [...Array.from({ length: 19 }, () => ({ data: 10_000, error: null })), { data: 42, error: null }]
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+      expect(await response.json()).toMatchObject({ success: true, prunedOutbox: 190_042 })
+      expect(callsTo('prune_event_outbox')).toHaveLength(20)
+      expect(errorSpy.mock.calls.flat().join('\n')).not.toContain('batch cap')
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('stops the outbox prune on an answer without a count', async () => {
+    pruneResults = [{ data: 10_000, error: null }, { data: null, error: null }, { data: 10_000, error: null }]
+
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+    expect(await response.json()).toMatchObject({ success: true, prunedOutbox: 10_000 })
+    expect(callsTo('prune_event_outbox')).toHaveLength(2)
+  })
+
+  it('stops the outbox prune at the first failing batch and keeps what it pruned', async () => {
+    pruneResults = [{ data: 10_000, error: null }, { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }]
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ success: true, prunedOutbox: 10_000 })
+      expect(callsTo('prune_event_outbox')).toHaveLength(2)
+      const logged = errorSpy.mock.calls.flat().join('\n')
+      expect(logged).toContain('event outbox prune failed')
+      expect(logged).not.toContain('batch cap')
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('starts no outbox batch after 250 s and names the outbox prune as left for the next run', async () => {
+    // Every outbox batch is full and takes 60 s: the sixth would start at 300 s.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      rpc.mockImplementation((name: string, args?: unknown) => {
+        if (name === 'prune_event_outbox') {
+          vi.setSystemTime(new Date(Date.now() + 60_000))
+          timeline.push(name)
+          return Promise.resolve({ data: 10_000, error: null })
+        }
+        return defaultRpc(name, args)
+      })
+
+      const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        success: true,
+        prunedOutbox: 50_000,
+        deferred: ['outbox_prune'],
+      })
+      expect(callsTo('prune_event_outbox')).toHaveLength(5)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it.each([
@@ -208,7 +309,7 @@ describe('GET /api/events/cleanup/cron', () => {
   ])('still answers the event_log cleanup when the outbox prune is %s', async (_label, error) => {
     deliveryResults = [{ data: 4, error: null }]
     deleteResults = [{ error: null, count: 1 }]
-    pruneResult = { data: null, error }
+    pruneResults = [{ data: null, error }]
     const response = await GET(createCronRequest('/api/events/cleanup/cron'))
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({
