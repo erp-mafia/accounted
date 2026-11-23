@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { dbError } from '@/lib/errors/db-error'
+import { createLogger } from '@/lib/logger'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
+import { ledgerLineAmountIn, type LedgerLineAmount } from '@/lib/bookkeeping/ledger-line-amount'
 import {
   assertTransactionScope,
   fetchUnlinkedGLLines,
@@ -34,6 +38,47 @@ import {
  * unlinked-GL-lines RPC for the ledger side; the bank matcher's proposals are
  * the rows carrying potential_journal_entry_id.
  */
+
+const log = createLogger('reconciliation.items')
+
+/**
+ * What each listed verifikat books on a foreign account, in the account's
+ * currency. The candidate lines carry kronor only, so the lines' own currency
+ * columns are read for the verifikat listed. null for a verifikat with a
+ * line that states no amount in the currency (ledgerLineAmountIn), and for
+ * every verifikat when the read fails: the caller then lists it in kronor
+ * and says so, as before.
+ */
+async function ledgerAmountsInCurrency(
+  supabase: SupabaseClient,
+  entryIds: string[],
+  ledgerAccount: string,
+  currency: string,
+): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>()
+  let lines: Array<LedgerLineAmount & { id: string; journal_entry_id: string }>
+  try {
+    lines = await fetchLinesByEntryIds(
+      supabase,
+      entryIds,
+      'id, journal_entry_id, debit_amount, credit_amount, currency, amount_in_currency',
+      (q) => q.eq('account_number', ledgerAccount),
+    )
+  } catch (err) {
+    log.warn('ledger rows listed in kronor: the lines\' currency could not be read', {
+      ledgerAccount,
+      currency,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return out
+  }
+  for (const line of lines) {
+    const amount = ledgerLineAmountIn(line, currency)
+    const prev = out.has(line.journal_entry_id) ? out.get(line.journal_entry_id) : 0
+    out.set(line.journal_entry_id, prev === null || amount === null ? null : roundOre((prev ?? 0) + amount))
+  }
+  return out
+}
 
 export const DEFAULT_ITEMS_LIMIT = 50
 export const MAX_ITEMS_LIMIT = 200
@@ -651,9 +696,27 @@ export async function listAccountItems(
       const lines = read.ledger_lines
       // One item per entry: several 1930 lines of one voucher net, as a link
       // settles the voucher. A voucher 1:N slices settle in part shows only
-      // what they leave open (agent feedback seq 854089). Amounts in SEK, as
-      // the ledger side has always been listed here.
+      // what they leave open (agent feedback seq 854089). The candidate
+      // lines are in kronor. On a foreign account the bank side is in the
+      // account's currency, so a verifikat is listed in that currency when
+      // its lines state it, and otherwise in kronor, labelled as kronor: a
+      // row's amount is always in the row's own currency.
       const openByEntry = openAmountByEntry(lines, 'SEK')
+      const inCurrency =
+        isKronorCurrency(currency) || lines.length === 0
+          ? null
+          : await ledgerAmountsInCurrency(
+              supabase,
+              [...new Set(lines.map((l) => l.journal_entry_id))],
+              account.ledger_account,
+              currency,
+            )
+      // A verifikat that 1:N slices settle in part shows what they leave
+      // open, and that remainder is known in kronor only (openAmountByEntry):
+      // it stays in kronor, never the full amount in the currency.
+      const openInKronorOnly = new Set(lines.filter((l) => l.remaining_amount != null).map((l) => l.journal_entry_id))
+      const amountInCurrency = (entryId: string) =>
+        inCurrency && !openInKronorOnly.has(entryId) ? (inCurrency.get(entryId) ?? null) : null
       const periodStarts = new Set(read.fiscal_year_starts)
       const byEntry = new Map<string, ReconciliationItem>()
       for (const l of lines) {
@@ -665,8 +728,8 @@ export async function listAccountItems(
           bucket: 'unmatched_ledger',
           date: l.entry_date,
           description: l.entry_description || l.line_description || '',
-          amount: openByEntry.get(l.journal_entry_id) ?? 0,
-          currency,
+          amount: amountInCurrency(l.journal_entry_id) ?? openByEntry.get(l.journal_entry_id) ?? 0,
+          currency: inCurrency && amountInCurrency(l.journal_entry_id) === null ? 'SEK' : currency,
           voucher_number: l.voucher_number,
           voucher_series: l.voucher_series,
           entry_status: 'posted',

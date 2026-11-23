@@ -103,6 +103,8 @@ export function PairRow({
   const covered = external && isSkv && item.covered_by_ledger === true
 
   // ---- the ledger side -----------------------------------------------------
+  // A verifikat row carries its own currency: on a foreign account one whose
+  // lines state no amount in the account's currency is listed in kronor.
   let ledgerDate: string | null = null
   let ledgerText: React.ReactNode = null
   let ledgerAmount: number | null = null
@@ -283,7 +285,7 @@ export function PairRow({
       <td className={cn(TD_CLASS, DATE, 'pl-6 date-figures')}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
       <td className={cn(TD_CLASS, 'max-w-0')}>{ledgerText}</td>
       <td className={cn(TD_CLASS, NUM)} data-ph-mask>
-        {ledgerAmount != null ? money(ledgerAmount) : ''}
+        {ledgerAmount == null ? '' : external ? money(ledgerAmount) : formatCurrency(ledgerAmount, item.currency)}
       </td>
       <td className={cn(TD_CLASS, '!pr-0 text-right')}>
         <span className="inline-flex items-center justify-end gap-2">

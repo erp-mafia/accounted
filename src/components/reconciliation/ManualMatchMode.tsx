@@ -481,7 +481,10 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                         )}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
-                        {formatRowAmount(item.amount, currency)}
+                        {/* A verifikat listed in kronor on a foreign account says so. */}
+                        {item.currency === currency
+                          ? formatRowAmount(item.amount, currency)
+                          : formatCurrency(item.amount, item.currency)}
                       </td>
                     </tr>
                   )
