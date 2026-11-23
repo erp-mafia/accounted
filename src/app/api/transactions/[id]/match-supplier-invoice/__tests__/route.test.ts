@@ -337,9 +337,10 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: FX residual', () =
       paymentRows: [{ id: 'payment-1', amount: payment.amount, transaction_id: TX_UUID }],
       transactionIds: [TX_UUID],
     })
+    // The happy path's invoice was never attested: unpaid again, it waits for attest (crm#2165).
     expect(reversal.findCalls('supplier_invoices', 'update').at(-1)![0]).toMatchObject({
       paid_amount: earlierPaid, remaining_amount: remaining,
-      status: earlierPaid > 0 ? 'partially_paid' : 'approved',
+      status: earlierPaid > 0 ? 'partially_paid' : 'registered',
     })
   })
 

@@ -1367,7 +1367,7 @@
       {
         "supplier_invoice_number": "F-1009",
         "arrival_number": 11,
-        "status": "approved",
+        "status": "registered",
         "is_credit_note": false,
         "credits": null,
         "invoice_date": "2026-06-08",

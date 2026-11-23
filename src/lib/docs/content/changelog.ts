@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Supplier invoices: an undone credit or payment goes back to attest (2026-11)
+
+- **Fix: an unpaid supplier invoice nobody attested rests at \`registered\` when its credit or its payment is undone** (crm#2165, 2026-11-23): \`POST /supplier-invoices/{id}/uncredit\` (\`restored_status\` on a dry run) and the storno of a payment verifikat (\`POST /journal-entries/{id}/reverse\`). It is \`approved\` only when it carries an attest (\`approved_at\`), and \`overdue\` past its due date, as before. **Before**, both answered \`approved\` for an invoice that was never attested, so it skipped attest: \`POST /supplier-invoices/{id}/approve\` refused it and it was offered for payment. The API version date is unchanged.
+
 ### Assets and the K3 transition: a locked period is a refusal, not a server error (2026-11)
 
 - **Fix: a posting that the bookkeeping engine's own lock check refuses, because its fiscal year is locked or closed or its date is on or before the company lock date, answers \`400 PERIOD_LOCKED\`** (2026-11-23) on \`POST /assets/{id}/dispose\`, \`POST /assets/{id}/value-adjustments\`, \`POST /assets/{id}/components/{componentId}/replace\` and \`POST /k3-transition/commit\`; \`message\` and \`recovery_hint\` are the code's own. **Before**, such a refusal, met for example when the year was locked or the lock date moved after the endpoint's own checks, answered \`500 BOOKKEEPING_DATABASE_ERROR\`, which is retryable, so a retry met the same lock. Once the lock is removed, send the request again with a new \`Idempotency-Key\`: a 4xx answer can be kept under its key for 24 hours. The API version date is unchanged.

@@ -428,7 +428,8 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
     const { supabase, calls, updatePayload, wasDeleted, tablesUpdated } = createRecordingSupabase([
       { data: [{ id: 'sip-1', amount: 1000, transaction_id: 'tx-7' }] }, // supplier_invoice_payments rows
       { data: [] }, // transactions on the entry
-      { data: { paid_amount: 1000, total: 1000, due_date: '2099-12-31' } }, // supplier_invoices select
+      // An attested invoice: it goes back to 'approved'.
+      { data: { paid_amount: 1000, total: 1000, due_date: '2099-12-31', approved_at: '2026-09-01T10:00:00Z' } }, // supplier_invoices select
       { data: null }, // supplier_invoices update
       { data: null }, // supplier_invoice_payments delete
       { data: null }, // transactions update by id
@@ -479,12 +480,34 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
       entry({ source_type: 'supplier_invoice_cash_payment', source_id: 'supplier-invoice-1' }),
     )
 
+    // Kontantmetoden has no attest step, so the invoice was never attested.
     expect(updatePayload('supplier_invoices')).toMatchObject({
-      status: 'approved',
+      status: 'registered',
       paid_amount: 0,
       remaining_amount: 1000,
       paid_at: null,
       payment_journal_entry_id: null,
+    })
+  })
+
+  // crm#2165: approved_at is the attest mark (resolveUnsettledStatus). An
+  // undone payment puts an invoice nobody attested back in front of attest; it
+  // never comes back 'approved'.
+  it('a supplier payment storno returns a never attested invoice to registered', async () => {
+    const { supabase, updatePayload } = createRecordingSupabase([
+      { data: [{ id: 'sip-1', amount: 1000, transaction_id: null }] }, // supplier_invoice_payments rows
+      { data: [] }, // transactions on the entry
+      { data: { paid_amount: 1000, total: 1000, due_date: '2099-12-31', approved_at: null } }, // supplier_invoices select
+      { data: null }, // supplier_invoices update
+      { data: null }, // supplier_invoice_payments delete
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(supabase, 'co-1', entry())
+
+    expect(updatePayload('supplier_invoices')).toMatchObject({
+      status: 'registered',
+      paid_amount: 0,
+      remaining_amount: 1000,
     })
   })
 
@@ -509,7 +532,7 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
     const projection = calls
       .find((c) => c.table === 'supplier_invoices')
       ?.ops.find((o) => o.method === 'select')?.args[0] as string
-    expect(projection).toBe('paid_amount, total, due_date')
+    expect(projection).toBe('paid_amount, total, due_date, approved_at')
     expect(projection).not.toContain('total_amount')
   })
 

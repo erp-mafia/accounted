@@ -97,6 +97,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       remaining_amount: 0,
       due_date: '2099-12-31',
       registration_journal_entry_id: 'je-reg-1',
+      approved_at: '2026-01-15T10:00:00Z',
       payments: [],
     })
 
@@ -180,9 +181,8 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
 
   it('handles cash method (credit row without registration_journal_entry_id): skips reverseEntry and restores to registered', async () => {
     // Pure cash-method: neither the original nor the credit row have a
-    // registration JE. The original must not be restored to 'approved':
-    // that would assert a verifikation that never existed (sambandskravet,
-    // BFL 4 kap 2§). 'registered' is the correct state.
+    // registration JE, and kontantmetoden has no attest step, so the original
+    // was never attested: 'registered' is the correct state.
     const original = makeSupplierInvoice({
       id: 'inv-1',
       status: 'credited',
@@ -288,8 +288,9 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     enqueue({ data: original, error: null })
     // Find credit row filters out status='reversed': nothing comes back
     enqueue({ data: null, error: null })
+    // Never attested: it goes back to wait for attest (crm#2165).
     enqueue({
-      data: { ...original, status: 'approved', remaining_amount: 5000 },
+      data: { ...original, status: 'registered', remaining_amount: 5000 },
       error: null,
     })
 
@@ -301,7 +302,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.status).toBe('approved')
+    expect(body.data.status).toBe('registered')
     expect(body.reversal_entry_id).toBeNull()
     expect(mockReverseEntry).not.toHaveBeenCalled()
   })
@@ -325,7 +326,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     mockReverseEntry.mockResolvedValue({ id: 'je-reversal' })
     enqueue({ data: null, error: null })
     enqueue({
-      data: { ...original, status: 'approved', remaining_amount: 5000 },
+      data: { ...original, status: 'registered', remaining_amount: 5000 },
       error: null,
     })
 

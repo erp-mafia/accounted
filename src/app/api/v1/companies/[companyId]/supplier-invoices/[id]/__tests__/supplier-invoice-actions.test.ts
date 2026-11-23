@@ -326,7 +326,8 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/uncredit', () 
       credit_note_id: CREDIT_ID,
       posts_storno: true,
       credit_voucher: 'A42',
-      restored_status: 'approved',
+      // Booked but never attested: it goes back to wait for attest (crm#2165).
+      restored_status: 'registered',
       remaining_amount: 6250,
     })
     expect(reverseEntryMock).not.toHaveBeenCalled()
@@ -354,7 +355,8 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/uncredit', () 
     const client = makeClient({
       company_members: OWNER,
       supplier_invoices: [
-        { data: invoice({ status: 'credited', registration_journal_entry_id: JE_ID, remaining_amount: 0 }) },
+        // Attested before the credit: it goes back to 'approved'.
+        { data: invoice({ status: 'credited', registration_journal_entry_id: JE_ID, remaining_amount: 0, approved_at: '2026-09-04T08:00:00Z' }) },
         { data: { id: CREDIT_ID, registration_journal_entry_id: 'credit-je' } },
         { data: null, error: null },
         { data: invoice({ status: 'approved', registration_journal_entry_id: JE_ID }) },
