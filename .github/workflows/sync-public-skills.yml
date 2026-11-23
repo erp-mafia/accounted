@@ -2,7 +2,7 @@ name: Sync public accounting skills
 on:
   push:
     branches: [main]
-    paths: ['.claude/skills/swedish-*/**', 'scripts/sync-public-skills.ts', 'scripts/lib/atom-discovery.ts', '.github/workflows/sync-public-skills.yml']
+    paths: ['.claude/skills/swedish-*/**', 'skills/accounted-start-company/**', 'scripts/sync-public-skills.ts', 'scripts/lib/atom-discovery.ts', '.github/workflows/sync-public-skills.yml']
   workflow_dispatch:
 permissions:
   contents: read
