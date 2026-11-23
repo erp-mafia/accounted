@@ -44,6 +44,19 @@ export function connectionKind(row: Pick<ConnectionRow, 'source' | 'client'>): C
   }
 }
 
+/**
+ * The shown names that more than one row of the list carries. Rows under
+ * such a name cannot be told apart by it, so each of them also says who
+ * connected it and since when; a row whose name is its own says nothing
+ * more.
+ */
+export function sharedNames(names: readonly string[]): Set<string> {
+  const seen = new Set<string>()
+  const shared = new Set<string>()
+  for (const name of names) (seen.has(name) ? shared : seen).add(name)
+  return shared
+}
+
 /** A connection unused this long is worth one quiet question: still needed? */
 export const STALE_AFTER_DAYS = 90
 
