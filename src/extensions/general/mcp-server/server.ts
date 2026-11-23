@@ -5437,10 +5437,42 @@ function readInnerArguments(inner: McpTool, raw: unknown): Record<string, unknow
 }
 
 /**
+ * The tools that read the caller's key scopes, which the dispatcher hands
+ * them privately as __keyScopes, beside the cross-company tools, which check
+ * the INNER tool's scope per call. A cross-company tool hands the scopes on
+ * to an inner call of one of these (runInnerTool), so a gate on a scope
+ * holds the same through it as on a direct call.
+ */
+const KEY_SCOPE_TOOLS: ReadonlySet<string> = new Set([
+  // Search filters to what the API key can actually invoke; the briefing
+  // flags each recommended tool as callable or not.
+  'gnubok_search_tools',
+  'gnubok_get_agent_briefing',
+  'gnubok_list_skills',
+  // Re-checks agent:read for an own/ slug as it is loaded.
+  'gnubok_load_skill',
+  // Its already-explained refusal names the link tool this key can call.
+  'gnubok_match_batch_allocate',
+  // Says whether this key can approve, so the widget can hide its buttons.
+  'gnubok_list_pending_operations',
+  // Names employees and their pay only for a key with payroll:read.
+  'gnubok_propose_accruals',
+  // Shows the operations an answer led to only to a key with pending_operations:read.
+  'gnubok_list_questions',
+])
+
+/** Whether the dispatcher hands the tool the caller's key scopes (__keyScopes). */
+function receivesKeyScopes(toolName: string): boolean {
+  return KEY_SCOPE_TOOLS.has(toolName) || isScopedTool(toolName)
+}
+
+/**
  * One inner call of a cross-company tool: the same capability gate and
  * telemetry a direct call gets, attributed to the company it ran for and
  * marked companySelection=scope. Membership was checked by the scope
- * resolver (and, for writes, again per company by the staging tool).
+ * resolver (and, for writes, again per company by the staging tool). An
+ * inner tool that reads the caller's key scopes gets them as on a direct
+ * call; a caller without them (the in-app chat) hands on none.
  */
 async function runInnerTool(params: {
   supabase: SupabaseClient
@@ -5450,8 +5482,10 @@ async function runInnerTool(params: {
   userId: string
   actor: ActorContext
   requestId: string | number | null
+  /** The caller's key scopes, as the dispatcher handed them to the cross-company tool. */
+  keyScopes: ApiKeyScope[] | undefined
 }): Promise<unknown> {
-  const { supabase, inner, innerArgs, companyId, userId, actor, requestId } = params
+  const { supabase, inner, innerArgs, companyId, userId, actor, requestId, keyScopes } = params
   const startedAt = Date.now()
   const requiredScope = TOOL_SCOPE_MAP[inner.name] ?? null
   try {
@@ -5472,6 +5506,7 @@ async function runInnerTool(params: {
     }
     // The agent's reason, split off as the dispatcher splits a direct call's.
     const { args, reason } = splitAgentReason(inner, { ...innerArgs })
+    if (keyScopes && receivesKeyScopes(inner.name)) args.__keyScopes = keyScopes
     const result = await withSIEExternalReport(supabase, companyId, inner.name, () =>
       runWithAgentReason(reason, () => inner.execute(args, companyId, userId, supabase, actor))
     )
@@ -6597,6 +6632,7 @@ export const tools: McpTool[] = [
             userId,
             actor: runnerActor,
             requestId: null,
+            keyScopes,
           })
         }
       )
@@ -6711,6 +6747,7 @@ export const tools: McpTool[] = [
             userId,
             actor: runnerActor,
             requestId: null,
+            keyScopes,
           }),
         { concurrency: typeof args.concurrency === 'number' ? args.concurrency : undefined }
       )
@@ -6877,6 +6914,7 @@ export const tools: McpTool[] = [
             userId,
             actor: runnerActor,
             requestId: null,
+            keyScopes,
           })
           shadow?.settled(dryRun)
           return staged
@@ -32632,27 +32670,9 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
 
       const callStartedAt = Date.now()
       try {
-        // gnubok_search_tools and gnubok_get_agent_briefing need the caller's
-        // scopes: search filters to what the API key can actually invoke, the
-        // briefing flags each recommended tool as callable or not. Inject
-        // privately via __keyScopes.
-        if (
-          toolName === 'gnubok_search_tools' ||
-          toolName === 'gnubok_get_agent_briefing' ||
-          toolName === 'gnubok_list_skills' ||
-          // Re-checks agent:read for an own/ slug as it is loaded.
-          toolName === 'gnubok_load_skill' ||
-          // Its already-explained refusal names the link tool this key can call.
-          toolName === 'gnubok_match_batch_allocate' ||
-          // Says whether this key can approve, so the widget can hide its buttons.
-          toolName === 'gnubok_list_pending_operations' ||
-          // Names employees and their pay only for a key with payroll:read.
-          toolName === 'gnubok_propose_accruals' ||
-          // Shows the operations an answer led to only to a key with pending_operations:read.
-          toolName === 'gnubok_list_questions' ||
-          // The cross-company tools check the INNER tool's scope per call.
-          isScopedTool(toolName)
-        ) {
+        // The tools that read the caller's scopes get them privately via
+        // __keyScopes (receivesKeyScopes).
+        if (receivesKeyScopes(toolName)) {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
         }
         if (toolName === 'gnubok_search_tools') {
