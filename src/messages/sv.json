@@ -11124,6 +11124,10 @@
     "total": "Summa",
     "more_rows": "+ {count, plural, one {# rad till} other {# rader till}}"
   },
+  "voucher_peek": {
+    "title": "Verifikat",
+    "open_full": "Öppna verifikatet"
+  },
   "customer_picker": {
     "search_placeholder": "Sök kund",
     "no_match": "Ingen kund matchar",

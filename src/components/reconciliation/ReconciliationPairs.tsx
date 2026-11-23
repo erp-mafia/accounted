@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { VoucherPeekLink } from '@/components/bookkeeping/VoucherPeekLink'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { ReconciliationAccount, ReconciliationItem } from '@/lib/reconciliation/schemas'
@@ -119,9 +120,9 @@ export function PairRow({
         <span className="truncate" data-ph-mask title={item.description}>
           {item.description}
         </span>
-        <Link href={`/bookkeeping/${item.item_id}`} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
+        <VoucherPeekLink entryId={item.item_id} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
           {voucherOf(item) ?? item.item_id.slice(0, 8)}
-        </Link>
+        </VoucherPeekLink>
         {item.entry_status === 'draft' && <Chip>{t('chip_draft')}</Chip>}
         {item.entry_status === 'reversed' && <Chip>{t('chip_reversed')}</Chip>}
         {item.awaiting_external && <Chip>{t('chip_awaiting', { source: sourceLabel })}</Chip>}
@@ -157,9 +158,9 @@ export function PairRow({
                 +
               </span>
             )}
-            <Link href={`/bookkeeping/${v.journal_entry_id}`} className={QUIET_LINK_CLASS} data-ph-mask>
+            <VoucherPeekLink entryId={v.journal_entry_id} className={QUIET_LINK_CLASS} data-ph-mask>
               {voucherOf(v) ?? v.journal_entry_id.slice(0, 8)}
-            </Link>
+            </VoucherPeekLink>
           </span>
         ))}
         <span className="text-xs text-muted-foreground">
@@ -178,9 +179,9 @@ export function PairRow({
             {p.description}
           </span>
         )}
-        <Link href={`/bookkeeping/${p.journal_entry_id}`} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
+        <VoucherPeekLink entryId={p.journal_entry_id} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
           {voucherOf(p) ?? p.journal_entry_id.slice(0, 8)}
-        </Link>
+        </VoucherPeekLink>
         <span className="shrink-0 text-xs text-muted-foreground">
           {t('confidence', { percent: Math.round(p.confidence * 100) })}
         </span>
@@ -192,9 +193,9 @@ export function PairRow({
     ledgerDate = linked?.entry_date ?? null
     ledgerText = (
       <span className="flex min-w-0 items-center gap-2">
-        <Link href={`/bookkeeping/${item.linked_journal_entry_id}`} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
+        <VoucherPeekLink entryId={item.linked_journal_entry_id} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
           {(linked ? voucherOf(linked) : null) ?? item.linked_journal_entry_id.slice(0, 8)}
-        </Link>
+        </VoucherPeekLink>
         {linked?.description ? <span className="truncate text-muted-foreground">{linked.description}</span> : null}
         {item.link_problem === 'entry_draft' && <Chip>{t('chip_draft')}</Chip>}
         {item.link_problem === 'entry_reversed' && <Chip>{t('chip_reversed')}</Chip>}
@@ -246,9 +247,9 @@ export function PairRow({
     )
   } else if (can('review') && !external) {
     primary = (
-      <Link href={`/bookkeeping/${item.item_id}`} className={QUIET_LINK_CLASS}>
+      <VoucherPeekLink entryId={item.item_id} className={QUIET_LINK_CLASS}>
         {t('row_review')}
-      </Link>
+      </VoucherPeekLink>
     )
   }
   const menu: Array<{ key: string; label: string; onSelect: () => void }> = []

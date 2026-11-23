@@ -11124,6 +11124,10 @@
     "total": "Total",
     "more_rows": "+ {count, plural, one {# more row} other {# more rows}}"
   },
+  "voucher_peek": {
+    "title": "Voucher",
+    "open_full": "Open the voucher"
+  },
   "customer_picker": {
     "search_placeholder": "Search customer",
     "no_match": "No customer matches",
