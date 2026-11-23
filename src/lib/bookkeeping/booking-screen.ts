@@ -22,6 +22,8 @@ export type BookingScreenSubject =
       account: string | null
       /** The inbox item found for the row (Att bokföra's Kvitto hittat), held as its underlag until Bokför. */
       foundItemId?: string | null
+      /** A proposal the person picked waits for the screen (booking-screen-pick.ts): it opens with it used. */
+      picked?: boolean
     }
   | { kind: 'voucher' }
 
@@ -86,6 +88,7 @@ export function bookingScreenHref(subject: BookingScreenSubject, back?: string |
     params.set('transaktion', subject.transactionId)
     if (subject.account) params.set('konto', subject.account)
     if (subject.foundItemId) params.set('underlag', subject.foundItemId)
+    if (subject.picked) params.set('vald', '1')
   }
   const returnTo = safeReturnPath(back)
   if (returnTo) params.set('tillbaka', returnTo)
@@ -103,6 +106,7 @@ export function parseBookingScreenSubject(query: {
   transaktion?: QueryValue
   konto?: QueryValue
   underlag?: QueryValue
+  vald?: QueryValue
 }): BookingScreenSubject {
   const transactionId = first(query.transaktion)
   if (!transactionId || !isUuid(transactionId)) return { kind: 'voucher' }
@@ -113,6 +117,7 @@ export function parseBookingScreenSubject(query: {
     transactionId: transactionId.toLowerCase(),
     account: account && ACCOUNT_NUMBER_RE.test(account) ? account : null,
     ...(found && isUuid(found) ? { foundItemId: found.toLowerCase() } : {}),
+    ...(first(query.vald) === '1' ? { picked: true } : {}),
   }
 }
 
