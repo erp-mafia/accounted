@@ -122,7 +122,7 @@ export function buildIncomeStatementFromRows(
       '51': 'Fastighetskostnader',
       '52': 'Hyra av tillgångar',
       '53': 'Energikostnader',
-      '54': 'Förbrukningsinventarier',
+      '54': 'Förbrukningsinventarier och förbrukningsmaterial',
       '55': 'Reparation och underhåll',
       '56': 'Transportkostnader',
       '57': 'Frakter och transporter',
