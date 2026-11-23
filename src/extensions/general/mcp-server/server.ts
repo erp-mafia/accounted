@@ -25471,7 +25471,7 @@ export const tools: McpTool[] = [
 
       // The listing every door shares: throws on a failed read (it used to
       // answer 0 gaps), and checks series A when the year has no sequence row.
-      const listing = await listVoucherGaps(supabase, companyId, period.id, { series: voucherSeries })
+      const listing = await listVoucherGaps(supabase, companyId, period.id, { series: voucherSeries, withCancelled: true })
       const allGaps = listing.gaps.map((g) => ({
         series: g.series,
         gap_start: g.gap_start,
@@ -25488,11 +25488,31 @@ export const tools: McpTool[] = [
           : null,
       }))
 
+      // A number held by a cancelled verifikat is used, so it is no gap, but
+      // no journal list shows the verifikat: listed apart so a reader can
+      // account for every number in the series.
+      const cancelledVouchers = (listing.cancelled ?? []).map((c) => ({
+        kind: 'makulerad' as const,
+        series: c.series,
+        voucher_number: c.voucher_number,
+        entry_date: c.entry_date,
+        description: c.description,
+        journal_entry_id: c.id,
+        explanation: c.explanation?.explanation ?? null,
+      }))
+
       return {
         fiscal_period: { id: period.id, name: period.name },
         gaps: allGaps,
         total_gaps: allGaps.length,
         unexplained_gaps: allGaps.filter((g) => !g.explanation).length,
+        cancelled_vouchers: cancelledVouchers,
+        ...(cancelledVouchers.length > 0
+          ? {
+              cancelled_note:
+                'makulerad: a verifikat posted and then cancelled. Its number is used, so it is not a gap; the verifikat and its lines are kept but left out of journal lists and reports.',
+            }
+          : {}),
       }
     },
   },

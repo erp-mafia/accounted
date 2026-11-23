@@ -9108,6 +9108,9 @@
     "gap_saved": "Explanation saved",
     "gap_forbidden": "Only owners and admins can explain gaps.",
     "gap_save_failed": "Couldn't save the explanation.",
+    "gap_cancelled_toggle": "Cancelled vouchers ({count})",
+    "gap_cancelled_hide": "Hide cancelled vouchers",
+    "gap_cancelled_title": "Voucher {voucher} is cancelled",
     "no_results_line": "No entries match your filters."
   },
   "attachment_preview_sheet": {

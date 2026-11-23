@@ -1924,6 +1924,55 @@ describe('gnubok_list_voucher_gaps: a failed check is an error, never 0 gaps', (
     })
   })
 
+  // A98 posted, then cancelled: detect_voucher_gaps counts the number as used,
+  // and every journal list hides the verifikat, so it was accounted for nowhere.
+  it('lists a cancelled numbered verifikat as makulerad, apart from the gaps', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD, error: null })
+    enqueue({ data: [{ voucher_series: 'A' }], error: null })
+    enqueue({ data: [], error: null }) // detect_voucher_gaps('A'): no gap
+    enqueue({
+      data: [{ id: 'je-98', voucher_series: 'A', voucher_number: 98, entry_date: '2026-05-12', description: 'Betalning leverantörsfaktura 1043' }],
+      error: null,
+    }) // journal_entries: cancelled, numbered
+    enqueue({ data: [], error: null }) // explanations
+
+    const result = (await listGaps.execute({ fiscal_period_id: PERIOD_ID }, 'company-1', 'user-1', supabase as never)) as {
+      total_gaps: number
+      cancelled_vouchers: unknown[]
+      cancelled_note?: string
+    }
+
+    expect(result.total_gaps).toBe(0)
+    expect(result.cancelled_vouchers).toEqual([
+      {
+        kind: 'makulerad',
+        series: 'A',
+        voucher_number: 98,
+        entry_date: '2026-05-12',
+        description: 'Betalning leverantörsfaktura 1043',
+        journal_entry_id: 'je-98',
+        explanation: null,
+      },
+    ])
+    expect(result.cancelled_note).toMatch(/not a gap/)
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['status', 'cancelled'])
+    expect(findCalls('journal_entries', 'gt')).toContainEqual(['voucher_number', 0])
+  })
+
+  it('answers an empty cancelled_vouchers and no note when no verifikat is cancelled', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD, error: null })
+    enqueue({ data: [{ voucher_series: 'A' }], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null }) // journal_entries: none cancelled
+
+    const result = (await listGaps.execute({ fiscal_period_id: PERIOD_ID }, 'company-1', 'user-1', supabase as never)) as Record<string, unknown>
+
+    expect(result.cancelled_vouchers).toEqual([])
+    expect(result).not.toHaveProperty('cancelled_note')
+  })
+
   it('throws when gap detection fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD, error: null })
