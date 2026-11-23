@@ -56,9 +56,10 @@ describe('getDossier', () => {
     }
     dossierReads()
     await getDossier(supabase as never, 'company-1', PARTY, 0, '12m')
+    // No ranked key: the RPC reads only the party's own vouchers (20261123005000).
     expect(supabase.rpc).toHaveBeenCalledWith(
       'get_observed_parties',
-      expect.objectContaining({ p_from_date: periodStart('12m'), p_keys: ['loopia'] }),
+      expect.objectContaining({ p_from_date: periodStart('12m'), p_limit: 0, p_keys: ['loopia'] }),
     )
 
     vi.clearAllMocks()

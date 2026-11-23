@@ -488,12 +488,13 @@ export async function getDossier(
       .limit(50),
     supabase.from('customers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
     supabase.from('suppliers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
-    // This party's keys by name, whatever their rank; the one ranked key the
-    // RPC always returns is filtered out below.
-    getObservedParties(supabase, companyId, { fromDate: periodStart(period), limit: 1, keys: p.alias_keys }),
+    // This party's keys by name, whatever their rank, and no ranked key: the
+    // RPC then reads only these keys' vouchers, not every voucher in the window.
+    getObservedParties(supabase, companyId, { fromDate: periodStart(period), limit: 0, keys: p.alias_keys }),
   ])
   for (const r of [facts, identities, decisions]) if (r.error) throw new Error(`dossier read failed: ${r.error.message}`)
 
+  // A database before 20261123005000 still adds its top key: only this party's count.
   const parts = observed.filter((o) => p.alias_keys.includes(o.key))
   const stats = mergeStats(parts)
 

@@ -68,6 +68,7 @@ export const TEMPLATE = {
   m26ListAnswerTooLong: 'm26_list_answer_too_long',
   m27ListLater: 'm27_list_later',
   m28ListQuestionBack: 'm28_list_question_back',
+  m29FileTooLarge: 'm29_file_too_large',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
@@ -293,6 +294,12 @@ const SV = {
   // goes out as it came, already cleaned and cut (readReply). The question
   // stays open and in flight.
   m28ListQuestionBack: ({ reply }: { reply: string }) => reply,
+
+  // A file over our own intake cap (graph-api.ts MAX_MEDIA_BYTES). M18's
+  // "försök igen" can never come true for it, and the app's Underlag upload
+  // has the same cap, so the way forward is a smaller file.
+  m29FileTooLarge: ({ maxMb }: { maxMb: number }) =>
+    `Filen är för stor. Jag tar emot filer på högst ${maxMb} MB. Skicka en mindre fil, till exempel ett foto av dokumentet eller en PDF med färre sidor.`,
 }
 
 const EN: typeof SV = {
@@ -451,6 +458,9 @@ const EN: typeof SV = {
   m27ListLater: () => 'Okay, the question stays open. Answer here when you know.',
 
   m28ListQuestionBack: ({ reply }: { reply: string }) => reply,
+
+  m29FileTooLarge: ({ maxMb }: { maxMb: number }) =>
+    `The file is too large. I accept files of at most ${maxMb} MB. Send a smaller file, for example a photo of the document or a PDF with fewer pages.`,
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }
