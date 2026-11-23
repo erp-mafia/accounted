@@ -968,6 +968,9 @@ export function getErrorMessage(
         if (details?.reason === 'identical_to_original') {
           return 'Rättelsen är identisk med originalverifikationen: inget har ändrats.'
         }
+        if (details?.reason === 'currency_incomplete') {
+          return 'Rättelsen ändrar bara valuta, men en rads valuta är ofullständig. En rad vars original är i utländsk valuta bokförs i kronor om valutan saknas, och en rad i utländsk valuta behöver belopp i valuta och kurs. Ange valuta, belopp i valuta och kurs på raden, eller SEK om den ska bokföras i kronor.'
+        }
         if (details?.reason === 'negates_original') {
           return 'Rättelsen är originalet med debet och kredit omkastade. Stornon nollställer redan originalet, så rättelsen skulle vända beloppen en gång till. Vill du bara ta bort verifikationen: använd Återför (storno). En rättelse innehåller de rader som borde ha bokförts, och omkastade sidor är bara rätt om originalet hade debet och kredit omkastade.'
         }

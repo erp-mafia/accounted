@@ -16,12 +16,9 @@ import {
 import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import { storedLineValues } from '@/lib/bookkeeping/line-balance'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
-import {
-  dimensionsBagKey,
-  normalizeLineDimensions,
-  type DimensionAliasInput,
-} from '@/lib/bookkeeping/dimension-resolver'
+import { dimensionsBagKey, normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { assertLinesWithinUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
@@ -69,34 +66,123 @@ function netsToZeroPerAccount(lines: CreateJournalEntryLineInput[]): boolean {
   return Array.from(nets.values()).every((n) => Math.abs(n) < 0.005)
 }
 
+type StoredLine = ReturnType<typeof storedLineValues>[number]
+
+/** A line's account, amounts and dimensions bag, as stored. */
+const amountsKey = (l: StoredLine) =>
+  JSON.stringify([l.account_number, l.debit_amount, l.credit_amount, dimensionsBagKey(l.dimensions)])
+
+/** Whether a stored line is in kronor, whatever the case of its code. */
+const inKronor = (l: StoredLine) => isKronorCurrency(l.currency.trim())
+
+/**
+ * amountsKey plus the line's currency facts, as stored: a kronor line is
+ * just SEK (a rate or an amount in currency on it means nothing), a foreign
+ * one its code, amount in currency and rate.
+ */
+const fullKey = (l: StoredLine) =>
+  JSON.stringify([
+    amountsKey(l),
+    inKronor(l) ? 'SEK' : [l.currency.trim().toUpperCase(), l.amount_in_currency, l.exchange_rate],
+  ])
+
+/**
+ * Whether a proposed line names its currency. The dialog never does, and an
+ * amount in currency or a rate without a code is not a currency: the MCP
+ * doors turn a null into 0, so counting those would read every agent line as
+ * stated.
+ */
+const namesCurrency = (l: CreateJournalEntryLineInput) => !!l.currency?.trim()
+
+/** Both sides as journal_entry_lines stores them (storedLineValues). */
+function storedSides(proposed: CreateJournalEntryLineInput[], original: JournalEntryLine[]) {
+  const noAccountIds = new Map<string, string>()
+  return {
+    storedProposed: storedLineValues(proposed, noAccountIds),
+    storedOriginal: storedLineValues(original.map(postedLineAsInput), noAccountIds),
+  }
+}
+
 /**
  * True when proposed lines are the same multiset as the original lines
- * (account_number + debit + credit + dimensions bag). A rättelse must actually
- * change something, and a changed tag is a change: in a locked period storno
- * plus correction is the only way to fix a wrong project or cost center (the
- * retag path is open-period only). The bag is compared normalized, so key
- * order, '01' vs '1', the cost_center/project aliases and '' vs a missing key
- * are not differences.
+ * (account_number + debit + credit + dimensions bag, and the currency, amount
+ * in currency and rate). A rättelse must actually change something, and a
+ * changed tag is a change: in a locked period storno plus correction is the
+ * only way to fix a wrong project or cost center (the retag path is
+ * open-period only). So is a line's currency: a 1510 line without the
+ * invoice's currency cannot be linked to a foreign-currency invoice, and this
+ * is how it gets one (crm#2161).
+ *
+ * Both sides are compared as journal_entry_lines stores them
+ * (storedLineValues), so key order, '01' vs '1', the cost_center/project
+ * aliases, '' vs a missing key, an omitted SEK and numeric strings are not
+ * differences, nor is 'eur' against 'EUR' or a rate on a kronor line. A
+ * proposed line that names no currency (the correction dialog sends none)
+ * matches the original line whatever its currency: restating the amounts is
+ * not a request to drop the currency, and must not pass as a change that
+ * does.
  */
 function isIdenticalToOriginal(
   proposed: CreateJournalEntryLineInput[],
   original: JournalEntryLine[]
 ): boolean {
   if (proposed.length !== original.length) return false
-  const key = (line: DimensionAliasInput & { account_number: string }, d: number, c: number) =>
-    JSON.stringify([
-      line.account_number,
-      roundOre(d),
-      roundOre(c),
-      dimensionsBagKey(normalizeLineDimensions(line)),
-    ])
-  const proposedKeys = proposed
-    .map((l) => key(l, l.debit_amount || 0, l.credit_amount || 0))
-    .sort()
-  const originalKeys = original
-    .map((l) => key(l, Number(l.debit_amount) || 0, Number(l.credit_amount) || 0))
-    .sort()
-  return proposedKeys.every((k, i) => k === originalKeys[i])
+  const { storedProposed, storedOriginal: remaining } = storedSides(proposed, original)
+  // Lines that name a currency need their exact match; the rest take any
+  // original with the same amounts, so they are matched last.
+  const order = proposed
+    .map((line, index) => ({ index, explicit: namesCurrency(line) }))
+    .sort((a, b) => Number(b.explicit) - Number(a.explicit))
+  for (const { index, explicit } of order) {
+    const line = storedProposed[index]
+    const key = explicit ? fullKey : amountsKey
+    const match = remaining.findIndex((o) => key(o) === key(line))
+    if (match < 0) return false
+    remaining.splice(match, 1)
+  }
+  return true
+}
+
+/**
+ * True when a rättelse that changes only currency facts (every line keeps its
+ * account, amounts and dimensions) leaves a line's currency incomplete. Every
+ * such correction was refused as identical before crm#2161, so this one is
+ * strict:
+ *
+ * - A line that names no currency is stored in kronor (storedLineValues). If
+ *   an original line with the same account, amounts and dimensions is in a
+ *   foreign currency, that currency would go without anyone asking for it.
+ *   With several such lines it cannot be told which original a bare line
+ *   restates, so any foreign one refuses it.
+ * - A line in a foreign currency needs its amount in currency and its rate:
+ *   without them it cannot be linked to a foreign-currency invoice, which is
+ *   what a currency-only correction is for. A line restated exactly as its
+ *   original stored it is not judged (a revaluation leg carries amount 0).
+ *
+ * Refused before anything is written; the caller states the line's currency,
+ * amount in currency and rate, or currency 'SEK' to post it in kronor. A
+ * correction that changes amounts is not judged here.
+ */
+function incompleteCurrencyChange(
+  proposed: CreateJournalEntryLineInput[],
+  original: JournalEntryLine[]
+): boolean {
+  if (proposed.length !== original.length) return false
+  const { storedProposed, storedOriginal } = storedSides(proposed, original)
+  const proposedAmounts = storedProposed.map(amountsKey).sort()
+  const originalAmounts = storedOriginal.map(amountsKey).sort()
+  if (!proposedAmounts.every((k, i) => k === originalAmounts[i])) return false
+  const foreignAmounts = new Set(storedOriginal.filter((l) => !inKronor(l)).map(amountsKey))
+  const unrestated = [...storedOriginal]
+  return storedProposed.some((line, index) => {
+    if (!namesCurrency(proposed[index])) return foreignAmounts.has(amountsKey(line))
+    if (inKronor(line)) return false
+    if (line.amount_in_currency && Number(line.exchange_rate) > 0) return false
+    const restated = unrestated.findIndex((o) => fullKey(o) === fullKey(line))
+    if (restated < 0) return true
+    unrestated.splice(restated, 1)
+    return false
+  })
 }
 
 /**
@@ -363,6 +449,9 @@ export async function correctEntry(
   // the change (moving a verifikation to the right year keeps the same lines).
   if (!dateOrPeriodChanged && isIdenticalToOriginal(correctedLines, originalLines)) {
     throw new MeaninglessCorrectionError('identical_to_original')
+  }
+  if (!dateOrPeriodChanged && incompleteCurrencyChange(correctedLines, originalLines)) {
+    throw new MeaninglessCorrectionError('currency_incomplete')
   }
 
   // Importmoms keeps its ruta 50 base in the corrected verifikat (#94), as at

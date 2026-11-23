@@ -14,6 +14,7 @@ import {
 import { after } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { dbError } from '@/lib/errors/db-error'
+import { isUuid } from '@/lib/invariants/uuid'
 import { eventBus } from '@/lib/events'
 import type { CoreEvent, DocumentExtractionOwner } from '@/lib/events/types'
 import { createLogger } from '@/lib/logger'
@@ -91,6 +92,29 @@ export function buildDocumentStoragePath(
   return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/${timestamp}_${sanitizeFileName(fileName)}`
 }
 
+/**
+ * Coded so REST callers can answer 404 with the registry copy: the browser PUT
+ * never landed, the reservation outlived its TTL, or the upload id names no
+ * upload at all.
+ */
+function documentUploadNotFound(): Error {
+  return Object.assign(
+    new Error('Document upload was not found or has expired. Create a new upload URL and try again.'),
+    { code: 'DOCUMENT_UPLOAD_NOT_FOUND' },
+  )
+}
+
+/**
+ * The upload id of a signed upload, as part of its storage key. Only the form
+ * the server issues (crypto.randomUUID() when the upload is created) is
+ * accepted: any other value names no upload, and is answered as one, whatever
+ * the caller checked before.
+ */
+function issuedUploadId(uploadId: string): string {
+  if (!isUuid(uploadId)) throw documentUploadNotFound()
+  return uploadId
+}
+
 /** Build the temporary key targeted by a signed, model-free upload. */
 export function buildPendingDocumentStoragePath(
   companyId: string,
@@ -98,7 +122,7 @@ export function buildPendingDocumentStoragePath(
   uploadId: string,
   fileName: string
 ): string {
-  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending/${uploadId}_${sanitizeFileName(fileName)}`
+  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending/${issuedUploadId(uploadId)}_${sanitizeFileName(fileName)}`
 }
 
 /** Build the permanent WORM key for a completed signed upload. */
@@ -108,7 +132,7 @@ export function buildReservedDocumentStoragePath(
   uploadId: string,
   fileName: string
 ): string {
-  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/${uploadId}_${sanitizeFileName(fileName)}`
+  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/${issuedUploadId(uploadId)}_${sanitizeFileName(fileName)}`
 }
 
 /** True when the key already sits under the company-scoped prefix. */
@@ -565,10 +589,10 @@ export async function createPendingDocumentUpload(
   fileName: string,
   now: number = Date.now()
 ): Promise<PendingDocumentUploadReservation> {
+  const storagePath = buildPendingDocumentStoragePath(companyId, userId, uploadId, fileName)
   await ensureDocumentsBucket()
   await cleanupExpiredPendingDocumentUploads(companyId, userId, now)
 
-  const storagePath = buildPendingDocumentStoragePath(companyId, userId, uploadId, fileName)
   const { data, error } = await supabase.storage
     .from(DOCUMENTS_BUCKET)
     .createSignedUploadUrl(storagePath, { upsert: false })
@@ -636,8 +660,8 @@ async function findReservedDocument(
  * pending first, then the permanent key a concurrent completion may have
  * written). The key holds the sanitized name, so a name with spaces or åäö
  * comes back as stored. Null when no reservation is found: the PUT never
- * landed, the reservation expired, or the key's name would not rebuild the
- * same key.
+ * landed, the reservation expired, the key's name would not rebuild the
+ * same key, or the upload id is not in the form the server issues.
  *
  * Agent feedback crm#1474: complete with only upload_id crashed on the
  * missing file name although the upload already knew it.
@@ -648,6 +672,7 @@ export async function findPendingDocumentUploadName(
   userId: string,
   uploadId: string
 ): Promise<{ fileName: string; mimeType: string | null } | null> {
+  if (!isUuid(uploadId)) return null
   const reserved = await findReservedDocument(supabase, companyId, userId, uploadId)
   if (reserved) return { fileName: reserved.file_name, mimeType: reserved.mime_type ?? null }
 
@@ -750,14 +775,7 @@ export async function completePendingDocumentUpload(
     downloadError = permanentDownload.error
     sourcePath = permanentPath
   }
-  if (downloadError || !blob) {
-    // Coded so REST callers can answer 404 with the registry copy: the
-    // browser PUT never landed, or the reservation outlived its TTL.
-    throw Object.assign(
-      new Error('Document upload was not found or has expired. Create a new upload URL and try again.'),
-      { code: 'DOCUMENT_UPLOAD_NOT_FOUND' },
-    )
-  }
+  if (downloadError || !blob) throw documentUploadNotFound()
 
   const buffer = await blob.arrayBuffer()
   let sha256Hash: string

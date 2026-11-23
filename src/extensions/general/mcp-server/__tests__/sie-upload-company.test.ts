@@ -254,15 +254,16 @@ describe('gnubok_sie_preflight reports where the file would land', () => {
 
   it('does not find an upload_id from another company, and says the upload belongs to its company', async () => {
     mocks.download.mockResolvedValue({ data: null, error: { message: 'not found' } })
+    const uploadId = '44444444-4444-4444-8444-444444444444'
 
     await expect(
-      preflightTool.execute({ filename: 'export.se', upload_id: 'upload-1' }, SIBLING, 'user-1', routedSupabase(WORLD) as never),
+      preflightTool.execute({ filename: 'export.se', upload_id: uploadId }, SIBLING, 'user-1', routedSupabase(WORLD) as never),
     ).rejects.toMatchObject({
       code: 'NOT_FOUND',
       message: expect.stringContaining('company_id that upload was created for'),
     })
     // The pending key is the company's own prefix.
-    expect(String(mocks.download.mock.calls[0][0])).toContain(`/${SIBLING}/user-1/pending/upload-1_`)
+    expect(String(mocks.download.mock.calls[0][0])).toContain(`/${SIBLING}/user-1/pending/${uploadId}_`)
   })
 })
 
