@@ -180,7 +180,7 @@ describe('GET /api/v1/companies/:companyId/settings', () => {
     expect(select?.args[0]).not.toBe('*')
   })
 
-  it("returns Nordea's agreement id, and reads without it while its column is not there yet (crm#1530)", async () => {
+  it("returns Nordea's agreement id (crm#1530)", async () => {
     const withColumn = makeClient({
       company_members: OWNER,
       company_settings: { data: { ...STORED, nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' } },
@@ -189,22 +189,6 @@ describe('GET /api/v1/companies/:companyId/settings', () => {
     const res = await getSettings(request(BASE), params)
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' })
-
-    // Vercel serves the code before CI applies the migration: 42703 once, then the read without the column.
-    const beforeMigration = makeClient({
-      company_members: OWNER,
-      company_settings: [
-        { data: null, error: { code: '42703', message: 'column company_settings.nordea_agreement_id does not exist' } },
-        { data: STORED },
-      ],
-    })
-    mockServiceClient.mockReturnValue(beforeMigration)
-    const gap = await getSettings(request(BASE), params)
-    expect(gap.status).toBe(200)
-    expect((await gap.json()).data).toMatchObject({ bankgiro: '991-2346', nordea_agreement_id: null })
-    const selects = beforeMigration.calls.filter((c) => c.table === 'company_settings' && c.method === 'select')
-    expect(String(selects[0].args[0])).toContain('nordea_agreement_id')
-    expect(String(selects[1].args[0])).not.toContain('nordea_agreement_id')
   })
 
   it('carries the document inbox address, and null when the company has none or it cannot be read', async () => {
@@ -233,7 +217,7 @@ describe('GET /api/v1/companies/:companyId/settings', () => {
     }
   })
 
-  it('returns the English fine print, and reads without it while its columns are not there yet (crm#1735)', async () => {
+  it('returns the English fine print (crm#1735)', async () => {
     const english = { invoice_late_fee_text_en: 'Interest is charged on late payments.', invoice_credit_terms_text_en: null }
     mockServiceClient.mockReturnValue(
       makeClient({ company_members: OWNER, company_settings: { data: { ...STORED, invoice_late_fee_text: 'Dröjsmålsränta.', ...english } } }),
@@ -241,12 +225,23 @@ describe('GET /api/v1/companies/:companyId/settings', () => {
     const res = await getSettings(request(BASE), params)
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ invoice_late_fee_text: 'Dröjsmålsränta.', ...english })
+  })
 
+  it('reads without the OCR length digit switch while its column is not there yet, and still returns every stored setting', async () => {
+    const stored = { ...STORED, nordea_agreement_id: 'NB123456', invoice_late_fee_text_en: 'Interest is charged on late payments.' }
+    mockServiceClient.mockReturnValue(
+      makeClient({ company_members: OWNER, company_settings: { data: { ...stored, invoice_ocr_length_digit: true } } }),
+    )
+    const res = await getSettings(request(BASE), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ invoice_ocr_length_digit: true })
+
+    // Vercel serves the code before CI applies the migration: 42703 once, then the read without the column.
     const beforeMigration = makeClient({
       company_members: OWNER,
       company_settings: [
-        { data: null, error: { code: '42703', message: 'column company_settings.invoice_late_fee_text_en does not exist' } },
-        { data: STORED },
+        { data: null, error: { code: '42703', message: 'column company_settings.invoice_ocr_length_digit does not exist' } },
+        { data: stored },
       ],
     })
     mockServiceClient.mockReturnValue(beforeMigration)
@@ -254,13 +249,17 @@ describe('GET /api/v1/companies/:companyId/settings', () => {
     expect(gap.status).toBe(200)
     expect((await gap.json()).data).toMatchObject({
       bankgiro: '991-2346',
-      invoice_late_fee_text_en: null,
-      invoice_credit_terms_text_en: null,
+      nordea_agreement_id: 'NB123456',
+      invoice_late_fee_text_en: 'Interest is charged on late payments.',
+      invoice_ocr_length_digit: null,
     })
     const selects = beforeMigration.calls.filter((c) => c.table === 'company_settings' && c.method === 'select')
-    expect(String(selects[0].args[0])).toContain('invoice_late_fee_text_en')
-    expect(String(selects[0].args[0])).toContain('invoice_credit_terms_text_en')
-    expect(String(selects[1].args[0])).not.toContain('_text_en')
+    expect(String(selects[0].args[0])).toContain('invoice_ocr_length_digit')
+    // The second read drops only the column that is not there yet.
+    expect(String(selects[1].args[0])).not.toContain('invoice_ocr_length_digit')
+    for (const column of ['nordea_agreement_id', 'invoice_late_fee_text_en', 'invoice_credit_terms_text_en']) {
+      expect(String(selects[1].args[0])).toContain(column)
+    }
   })
 
   it('a viewer may read', async () => {
