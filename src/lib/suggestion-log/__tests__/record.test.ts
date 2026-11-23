@@ -10,6 +10,7 @@ import { passed, warned } from '../checks'
 const mockPropose = vi.fn()
 vi.mock('@/lib/transactions/propose', () => ({
   BANK_PROPOSAL_RULES_REVISION: 'bank-proposals.1',
+  bankProposalRulesRevision: () => 'bank-proposals.1',
   proposeForTransactions: (...args: unknown[]) => mockPropose(...args),
 }))
 vi.mock('@/lib/company/entity-type', () => ({

@@ -70,6 +70,7 @@ const CANDIDATE_SOURCES = [
   'catalog',
   'counterparty_template',
   'recent',
+  'precedent',
   'extraction',
   'pending_operation',
 ] as const
