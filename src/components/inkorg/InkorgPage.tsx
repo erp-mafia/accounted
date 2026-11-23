@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,9 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { removalCanBePutBack } from '@/lib/documents/inbox-item-state'
 import { cn } from '@/lib/utils'
-import { INKORG_FOCUS_FIRST, INKORG_FOCUS_QUERY, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
+import { INKORG_FOCUS_FIRST, INKORG_FOCUS_QUERY, INKORG_HREF, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
+import { TO_BOOK_PATH, TO_BOOK_RETURN_PARAM, toBookReturnPath } from '@/lib/bookkeeping/to-book'
+import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
 import { ALL_STARTABLE, offersRemoval, type InkorgStartable } from '@/lib/inkorg/decision'
 import { focusAfterChange, focusKeyAction, neighbour } from '@/lib/inkorg/focus'
 import { companionOf, doorsInUse, mailProviderOf, needCount, parseViewKey, queueFor, recentlyRoutedAway, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
@@ -129,6 +131,7 @@ export function InkorgPage({
 
 function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartable; ownerAccount: string | null }) {
   const t = useTranslations('inkorg')
+  const tToBook = useTranslations('to_book_list')
   const locale = useLocale()
   const searchParams = useSearchParams()
   const { toast } = useToast()
@@ -252,17 +255,24 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   // of the queue, in the focus view: opened once, when the list has loaded.
   // One that is not waiting any more leaves the list as it is.
   const wantedFocus = useRef<string | null>(searchParams.get(INKORG_FOCUS_QUERY))
+  // Opened from Att bokföra (a document row): the way back leads there, with
+  // its filter, and the list stays lit in the menu.
+  const router = useRouter()
+  const [returnTo] = useState(() => (wantedFocus.current ? toBookReturnPath(searchParams.get(TO_BOOK_RETURN_PARAM)) : null))
+  useClaimNavRow(INKORG_HREF, returnTo ? TO_BOOK_PATH : null)
   useEffect(() => {
     const wanted = wantedFocus.current
     if (!wanted || itemsState !== 'ready' || view.kind !== 'need') return
     wantedFocus.current = null
     const id = wanted === INKORG_FOCUS_FIRST ? (queueIds[0] ?? null) : queueIds.includes(wanted) ? wanted : null
     if (id) setFocusId(id)
+    else if (returnTo) router.replace(returnTo)
     // The address keeps no stale focus: a reload shows the list, as before.
     const url = new URL(window.location.href)
     url.searchParams.delete(INKORG_FOCUS_QUERY)
+    url.searchParams.delete(TO_BOOK_RETURN_PARAM)
     window.history.replaceState(window.history.state, '', url)
-  }, [itemsState, queueIds, view.kind])
+  }, [itemsState, queueIds, view.kind, returnTo, router])
 
   const previousQueue = useRef<string[]>(queueIds)
   useEffect(() => {
@@ -274,6 +284,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     if (next === null) {
       setLastOpenedId(null)
       setFocusId(null)
+      // Nothing left to decide: back to the list it was opened from.
+      if (returnTo) router.push(returnTo)
       return
     }
     setMotionState({ direction: 1, completed: true })
@@ -302,9 +314,13 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   )
 
   const back = useCallback(() => {
+    if (returnTo) {
+      router.push(returnTo)
+      return
+    }
     setLastOpenedId(focusId)
     setFocusId(null)
-  }, [focusId])
+  }, [focusId, returnTo, router])
 
   const chooseView = useCallback((next: InkorgView) => {
     setView(next)
@@ -725,7 +741,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
               ids={queueIds}
               focusId={focusId}
               motionState={motionState}
-              viewLabel={viewLabel}
+              // Opened from Att bokföra, the way back is named after it.
+              viewLabel={returnTo ? tToBook('title') : viewLabel}
               onStep={step}
               onBack={back}
               renderStage={(id) => {

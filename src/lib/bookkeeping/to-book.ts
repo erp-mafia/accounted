@@ -13,7 +13,7 @@
 
 import { formatRowAmount } from '@/lib/utils'
 import type { InboxDocumentKind } from '@/lib/documents/inbox-kind'
-import type { BookingScreenSubject } from './booking-screen'
+import { safeReturnPath, type BookingScreenSubject } from './booking-screen'
 
 /** An open bank row, as GET /api/transactions?unmatched=true answers it. */
 export interface ToBookBankRow {
@@ -295,6 +295,18 @@ export function toBookFilterFromSlug(slug: string | null | undefined): ToBookFil
 /** The list's address under a filter. */
 export function toBookListHref(filter: ToBookFilter): string {
   return filter === 'all' ? TO_BOOK_PATH : `${TO_BOOK_PATH}?${TO_BOOK_FILTER_PARAM}=${FILTER_SLUGS[filter]}`
+}
+
+/** The address parameter that names the list to return to (as on the booking screen). */
+export const TO_BOOK_RETURN_PARAM = 'tillbaka'
+
+/**
+ * A return address to the list, with its filter, or null for anything else:
+ * Inkommande's focus view, opened from a document row, returns there.
+ */
+export function toBookReturnPath(raw: string | null | undefined): string | null {
+  const path = safeReturnPath(raw)
+  return path && toBookFilterOfBack(path) !== null ? path : null
 }
 
 /**

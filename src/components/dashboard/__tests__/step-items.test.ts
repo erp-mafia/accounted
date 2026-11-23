@@ -62,6 +62,8 @@ describe('inbox documents in a step', () => {
   it('opens the document in the focus view of Inkommande, and the old inbox as a page', () => {
     expect(inboxFocusHref('/inkorg', 'i1')).toBe('/inkorg?fokus=i1')
     expect(inboxFocusHref('/e/general/invoice-inbox', 'i1')).toBe('/e/general/invoice-inbox')
+    // Opened from Att bokföra: the list to return to rides along.
+    expect(inboxFocusHref('/inkorg', 'i1', '/att-bokfora?visa=utan-bankrad')).toBe('/inkorg?fokus=i1&tillbaka=%2Fatt-bokfora%3Fvisa%3Dutan-bankrad')
     expect(inboxStepItem(base, '/inkorg').href).toBe('/inkorg?fokus=i1')
   })
 })

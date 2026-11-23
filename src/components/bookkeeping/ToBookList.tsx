@@ -77,7 +77,7 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
   const hrefOf = (row: ToBookRow): string =>
     opensInBookingScreen(row)
       ? bookingScreenHref(toBookScreenSubject(row), toBookListHref(filter))
-      : inboxFocusHref(inboxBase, row.inboxItemId as string)
+      : inboxFocusHref(inboxBase, row.inboxItemId as string, toBookListHref(filter))
 
   return (
     <div className="space-y-4">
