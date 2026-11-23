@@ -141,6 +141,7 @@ import { SignalIcon as SignalSource } from '@heroicons-animated/react/signal'
 import { SparklesIcon as SparklesSource } from '@heroicons-animated/react/sparkles'
 import { Square2StackIcon as Square2StackSource } from '@heroicons-animated/react/square-2-stack'
 import { Squares2X2Icon as Squares2X2Source } from '@heroicons-animated/react/squares-2x2'
+import { StarIcon as StarSource } from '@heroicons-animated/react/star'
 import { StopIcon as StopSource } from '@heroicons-animated/react/stop'
 import { SunIcon as SunSource } from '@heroicons-animated/react/sun'
 import { SwatchIcon as SwatchSource } from '@heroicons-animated/react/swatch'
@@ -325,6 +326,7 @@ export const SignalIcon = icon(SignalSource, 'SignalIcon')
 export const SparklesIcon = icon(SparklesSource, 'SparklesIcon')
 export const Square2StackIcon = icon(Square2StackSource, 'Square2StackIcon')
 export const Squares2X2Icon = icon(Squares2X2Source, 'Squares2X2Icon')
+export const StarIcon = icon(StarSource, 'StarIcon')
 export const StopIcon = icon(StopSource, 'StopIcon')
 export const SunIcon = icon(SunSource, 'SunIcon')
 export const SwatchIcon = icon(SwatchSource, 'SwatchIcon')

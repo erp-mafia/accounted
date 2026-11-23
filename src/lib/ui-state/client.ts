@@ -17,6 +17,19 @@ export function persistUiState(patch: Partial<UserUiState>): void {
 }
 
 /**
+ * Stores a ui_state patch and hands back the response, for a preference whose
+ * refused save is shown and put back instead of swallowed (the favourite menu
+ * rows, components/dashboard/use-nav-favorites.ts).
+ */
+export function saveUiState(patch: Partial<UserUiState>): Promise<Response> {
+  return fetch('/api/user/ui-state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+}
+
+/**
  * Remember the last-used mode of a split button (ui_state.create_mode),
  * keyed per surface (e.g. 'bookkeeping' -> 'mall').
  */
