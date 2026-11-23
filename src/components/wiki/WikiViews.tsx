@@ -16,9 +16,11 @@ import { ContextView } from './ContextView'
  * /agent-knowledge redirects here.
  *
  * `facts`: whether the company is inside the Arkiv rollout, where Fakta has
- * something to show.
+ * something to show. `picture`: whether the company has the agent picture
+ * switched on (lib/env/agent-picture-switch.ts), which then opens the
+ * context view in place of the graph.
  */
-export function WikiViews({ facts }: { facts: boolean }) {
+export function WikiViews({ facts, picture = false }: { facts: boolean; picture?: boolean }) {
   const searchParams = useSearchParams()
   const parsed = parseWikiView(searchParams.get('view'))
   const view = parsed === 'facts' && !facts ? 'context' : parsed
@@ -26,7 +28,7 @@ export function WikiViews({ facts }: { facts: boolean }) {
   return (
     <div className="space-y-6">
       {/* Only the active view mounts, so each one fetches the first time it is opened. */}
-      {view === 'context' && <ContextView />}
+      {view === 'context' && <ContextView picture={picture} />}
       {view === 'map' && <AgentKnowledgePanel heading={false} />}
       {view === 'facts' && <AgentFactsPanel />}
       {view === 'memory' && <AgentMemoryPanel />}
