@@ -44,9 +44,10 @@ export type BookingScreenOrigin = (typeof BOOKING_SCREEN_RETURN_PATHS)[number]
 
 /** The page a path lands on, of those the screen returns to. */
 function returnPathOf(path: string): BookingScreenOrigin | null {
-  const at = path.indexOf('?')
-  if ((at === -1 ? path : path.slice(0, at)) === '/') return '/'
-  return BOOKING_SCREEN_RETURN_PATHS.find((p) => p !== '/' && (path === p || path.startsWith(`${p}?`) || path.startsWith(`${p}/`))) ?? null
+  // The page is the path before its query or anchor: Hem's group links (/#decide) are Hem.
+  const base = path.split(/[?#]/)[0]
+  if (base === '/') return '/'
+  return BOOKING_SCREEN_RETURN_PATHS.find((p) => p !== '/' && (base === p || base.startsWith(`${p}/`))) ?? null
 }
 
 /**

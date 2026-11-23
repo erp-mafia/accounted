@@ -30,6 +30,9 @@ describe('the way back to Hem', () => {
     expect(bookingScreenOrigin('/', true)).toBe('/')
     expect(bookingScreenOrigin('/?vy=behover', true)).toBe('/')
     expect(bookingScreenOrigin('/?vy=annat', true)).toBe('/')
+    // A link into one of Hem's groups is Hem too.
+    expect(safeReturnPath('/#decide')).toBe('/#decide')
+    expect(bookingScreenOrigin('/#decide', true)).toBe('/')
   })
 
   it('keeps the Börja step it was opened from, under Hem', () => {

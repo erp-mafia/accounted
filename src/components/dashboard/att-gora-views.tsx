@@ -231,6 +231,10 @@ export function HemCalm({
   // A row in Först is not listed again below it.
   const firstKeys = new Set(first.map((row) => row.key))
   const listed = rows.filter((row) => !firstKeys.has(row.key))
+  // A group every row of which sits in Först keeps its anchor (#decide) there, on its first row.
+  const listedGroups = new Set(listed.map((row) => row.group))
+  const anchorOf = (row: NeedRow, index: number) =>
+    !listedGroups.has(row.group) && first.findIndex((other) => other.group === row.group) === index ? row.group : undefined
   const primary = leadOf(rows, lead, t)
   // Kom igång leads the page until something is
   // urgent; then the three blocks (Först, Behöver dig, Rutin) come first and
@@ -283,8 +287,14 @@ export function HemCalm({
         <section aria-label={t('first_title')}>
           <h2 className={SECTION_TITLE_CLASS}>{t('first_title')}</h2>
           <ul className="-mx-2 mt-2 border-t-hairline">
-            {first.map((row) =>
-              row.embed ? <li key={row.key} className="px-1">{row.embed}</li> : <ListRow key={row.key} row={row} todayIso={todayIso} t={t} />,
+            {first.map((row, index) =>
+              row.embed ? (
+                <li key={row.key} id={anchorOf(row, index)} className="px-1">
+                  {row.embed}
+                </li>
+              ) : (
+                <ListRow key={row.key} row={row} todayIso={todayIso} t={t} id={anchorOf(row, index)} />
+              ),
             )}
           </ul>
         </section>
@@ -361,12 +371,12 @@ function AskField({ label }: { label: string }) {
 
 /* ---------------------------------------------------------- Behöver dig */
 
-function ListRow({ row, todayIso, t }: { row: NeedRow; todayIso: string; t: T }) {
+function ListRow({ row, todayIso, t, id }: { row: NeedRow; todayIso: string; t: T; id?: string }) {
   const { canWrite, lockedTitle } = useViewerLock()
   // The label is the link, stretched over the row, so the row's own button
   // can sit beside it instead of inside an anchor.
   return (
-    <li className="group relative flex min-h-11 w-full items-center gap-3 border-b-hairline px-2 py-2 transition-colors duration-150 hover:bg-secondary/35">
+    <li id={id} className="group relative flex min-h-11 w-full items-center gap-3 border-b-hairline px-2 py-2 transition-colors duration-150 hover:bg-secondary/35">
       <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
         <row.icon className="h-[15px] w-[15px]" />
       </span>
