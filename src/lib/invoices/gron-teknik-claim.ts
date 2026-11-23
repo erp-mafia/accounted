@@ -1,5 +1,6 @@
 import type { Invoice, InvoiceItem } from '@/types'
 import { truncateToWholeKronor } from '@/lib/money'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import {
   isDeductionLine,
   isPastRequestDeadline,
@@ -22,14 +23,13 @@ import {
  * Skattereduktion för grön teknik: what the payout claim for one invoice is.
  *
  * The payout is requested in Skatteverkets e-tjänst "Grön teknik: företag",
- * by hand or with a Begaran file (Begaran.xsd V1, TypAvBegaran GRON_TEKNIK).
- * This module evaluates a paid invoice against the rules that claim needs and
- * returns exactly the figures an ärende asks for, so the dialog can list them
- * today and the file generator can emit them later from the same evaluation.
- * It emits no XML.
+ * with a Begaran file (Begaran.xsd V1, TypAvBegaran GRON_TEKNIK). This module
+ * evaluates a paid invoice against the rules that claim needs and returns
+ * exactly the figures an ärende asks for, so the dialog lists the same
+ * figures that gron-teknik-file.ts emits. It emits no XML.
  *
  * What an ärende carries (Begaran.xsd V1 and Skatteverket's example file
- * gron_teknik_exempel.xml, checked 2026-09-30): the buyer, the property,
+ * Gronteknik_V1.0.xml, checked 2026-11-23): the buyer, the property,
  * ONE installation type ("Endast en typ av installation kan anges per
  * ärende") with AntalTimmar and Kostnad (arbete och material for the
  * installation), OvrigKostnad, Betalningsdatum, BetaltBelopp and
@@ -59,11 +59,12 @@ import {
  *     42 500 betalt).
  *   - ovrig_kostnad: the invoice's unflagged priced lines incl. moms (travel,
  *     machinery, projektering), whole kronor, never negative.
- * A foreign-currency invoice converts with its booking rate, the same
- * conversion as the 1513 debit, and is blocked without one. Skatteverket's
- * private-person pages mention the rate of the payment day for the buyer's
- * own figures; the file generator has to confirm which rate the begäran
- * expects before emitting foreign invoices.
+ * A foreign-currency invoice is not requested from here. The begäran is in
+ * kronor, and which rate converts it is not confirmed: the booking rate (the
+ * 1513 debit, which the HUS file uses) or the rate of the payment day, which
+ * Skatteverket's private-person pages mention for the buyer's own figures.
+ * Until a source settles it, such an invoice is requested by hand in the
+ * e-tjänst.
  *
  * Pure and deterministic: the caller passes the invoice (with items) and
  * `today`; blocker messages are Swedish (statutory surface) and name the
@@ -198,13 +199,14 @@ export function evaluateGronTeknikClaim(
   const property = readClaimProperty(lines, GRON_TEKNIK_PROPERTY_MISSING)
   if (!property.ok) return block(property.code, property.message)
 
-  const toSek = deductionSekConverter({ currency: invoice.currency, exchangeRate: invoice.exchange_rate })
-  if (!toSek) {
+  if (!isKronorCurrency(invoice.currency)) {
     return block(
-      'MISSING_EXCHANGE_RATE',
-      `Fakturan är utställd i ${invoice.currency} men saknar växelkurs. Begäran om utbetalning anges alltid i hela kronor: komplettera fakturans växelkurs först.`,
+      'FOREIGN_CURRENCY',
+      `Fakturan är utställd i ${invoice.currency}. Filen för grön teknik tar bara fakturor i kronor: begär den här fakturan för hand i Skatteverkets e-tjänst för grön teknik.`,
     )
   }
+  // Every amount below is kronor: a foreign invoice stopped above.
+  const toSek = deductionSekConverter({ currency: invoice.currency, exchangeRate: invoice.exchange_rate })!
 
   const installations: GronTeknikInstallation[] = []
   for (const def of GRON_TEKNIK_WORK_TYPES) {

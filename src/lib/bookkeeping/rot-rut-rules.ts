@@ -79,6 +79,13 @@ export const COMBINED_MAX = 75000
 export const GRON_TEKNIK_MAX = 50000
 
 /**
+ * Skatteverket, "Grön teknik: företag": where the grön teknik Begaran file is
+ * uploaded and signed. Linked from the payout dialog and the MCP file tool.
+ */
+export const GRON_TEKNIK_SERVICE_URL =
+  'https://www.skatteverket.se/foretag/skatterochavdrag/gronteknik.4.676f4884175c97df4192a42.html'
+
+/**
  * Every kind an invoice line can carry: the runtime twin of DeductionType
  * (Zod enums, pickers). Listed in the order the UI offers them.
  */

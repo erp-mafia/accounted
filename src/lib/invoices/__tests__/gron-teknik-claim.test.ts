@@ -248,8 +248,9 @@ describe('evaluateGronTeknikClaim', () => {
       expect(blockerOf(gronInvoice({ deduction_reclaimed_total: 7500 }))).toMatchObject({ code: 'DEDUCTION_RECLAIMED' })
     })
 
-    it('needs a booking rate on a foreign invoice', () => {
-      expect(blockerOf(gronInvoice({ currency: 'EUR', exchange_rate: null }))).toMatchObject({ code: 'MISSING_EXCHANGE_RATE' })
+    it('leaves a foreign invoice to the e-tjänst, with or without a booking rate', () => {
+      expect(blockerOf(gronInvoice({ currency: 'EUR', exchange_rate: null }))).toMatchObject({ code: 'FOREIGN_CURRENCY' })
+      expect(blockerOf(gronInvoice({ currency: 'EUR', exchange_rate: 11.5 }))).toMatchObject({ code: 'FOREIGN_CURRENCY' })
     })
 
     it('has nothing to request when the deduction rounds to 0 kr', () => {

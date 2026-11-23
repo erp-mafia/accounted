@@ -221,7 +221,7 @@ import {
   getArticleVatRateAdoptionSet,
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
-import { DEDUCTION_INVOICE_ONLY_ERROR, DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { DEDUCTION_INVOICE_ONLY_ERROR, DEDUCTION_TYPES, isDeductionType, validateDeductionLines, GRON_TEKNIK_SERVICE_URL, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { MAX_INVOICE_ATTACHMENTS, linkInvoiceAttachments } from '@/lib/invoices/invoice-attachments'
@@ -602,7 +602,12 @@ import {
   type MatchableInvoice,
 } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
-import { listRotRutCandidates, createRotRutPayoutRequest, archiveRotRutPayoutFile } from '@/lib/invoices/rot-rut-service'
+import {
+  listRotRutCandidates,
+  listGronTeknikCandidates,
+  createRotRutPayoutRequest,
+  archiveRotRutPayoutFile,
+} from '@/lib/invoices/rot-rut-service'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { getPayoutRecognition } from '@/lib/invoices/rot-rut-payout-recognition'
 import { twoStepPayoutShape } from '@/lib/invoices/rot-rut-link-voucher'
@@ -23764,12 +23769,12 @@ export const tools: McpTool[] = [
     keywords: ['rotavdrag', 'rutavdrag', 'husarbete', 'utbetalningsfil'],
     title: 'Generate Rot/Rut Payout File',
     description:
-      'Begäran om utbetalning for rot/rut (Skatteverket husavdrag) from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns app_url for the user.',
+      'Begäran om utbetalning for rot/rut (husavdrag) or grön teknik from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns app_url for the user.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        deduction_type: { type: 'string', enum: ['rot', 'rut'] },
+        deduction_type: { type: 'string', enum: ['rot', 'rut', 'gron_teknik'] },
         list_only: {
           type: 'boolean',
           description: 'Only list eligible + blocked invoices, generate nothing (default false)',
@@ -23803,7 +23808,7 @@ export const tools: McpTool[] = [
         file_document_id: { type: ['string', 'null'] },
         download_url: { type: ['string', 'null'] },
         requested_total: { type: 'number' },
-        other_type_counts: { type: 'object', description: 'Grön teknik invoices, counted not listed' },
+        other_type_counts: { type: 'object', description: 'Invoices of the other file kind, counted not listed' },
         arenden: { type: 'array', items: { type: 'object' } },
         warnings: { type: 'array', items: { type: 'string' } },
         upload_url: { type: 'string' },
@@ -23815,17 +23820,16 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     }),
     async execute(args, companyId, userId, supabase) {
-      const type = args.deduction_type as 'rot' | 'rut'
-      if (type !== 'rot' && type !== 'rut') {
-        throw new Error(
-          args.deduction_type === 'gron_teknik'
-            ? 'deduction_type must be rot or rut: grön teknik has no begäran file yet. The payout is requested in Skatteverket\'s e-tjänst for grön teknik; the invoice page shows what to enter.'
-            : 'deduction_type must be rot or rut',
-        )
+      const type = args.deduction_type as 'rot' | 'rut' | 'gron_teknik'
+      if (type !== 'rot' && type !== 'rut' && type !== 'gron_teknik') {
+        throw new Error('deduction_type must be rot, rut or gron_teknik')
       }
-      const uploadUrl = 'https://www7.skatteverket.se/portal/rotrut/begar-utbetalning/fil'
+      const uploadUrl = type === 'gron_teknik' ? GRON_TEKNIK_SERVICE_URL : 'https://www7.skatteverket.se/portal/rotrut/begar-utbetalning/fil'
 
-      const candidates = await listRotRutCandidates(supabase, companyId, type)
+      const candidates =
+        type === 'gron_teknik'
+          ? await listGronTeknikCandidates(supabase, companyId)
+          : await listRotRutCandidates(supabase, companyId, type)
       if (!candidates.ok) throw new Error('Failed to list rot/rut candidates')
 
       if (args.list_only === true) {

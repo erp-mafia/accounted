@@ -11,6 +11,9 @@ import {
   type RotRutBlockerCode,
 } from './rot-rut-file'
 import { evaluateGronTeknikClaim, type GronTeknikInstallation } from './gron-teknik-claim'
+import { buildGronTeknikFile, type BuildGronTeknikFileResult } from './gron-teknik-file'
+import { companyRedovisare } from '@/lib/company/org-number'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
 import { DEDUCTION_TYPE_LABELS, deductionKindsOf, type HusDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -20,7 +23,8 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
  * (gnubok_generate_rot_rut_file): one implementation of "which invoices can
  * go into a begäran" and "record the begäran", so the two surfaces can never
  * drift apart. Grön teknik invoices are listed from the same fetch
- * (listGronTeknikCandidates) but never enter a HUS file.
+ * (listGronTeknikCandidates) and go in their own Begaran file, never a HUS
+ * file; the begäran row is the same for every kind.
  */
 
 export interface RotRutCandidateSummary {
@@ -34,9 +38,9 @@ export interface RotRutCandidateSummary {
 }
 
 /**
- * A paid grön teknik invoice with the figures its ärenden need (one per
- * installation type), for the request made in Skatteverkets e-tjänst. The
- * buyer's full personnummer is not here: it is read on the invoice page.
+ * A paid grön teknik invoice with the figures its ärenden carry in the
+ * Begaran file (one per installation type). The buyer's full personnummer
+ * is not here: only the file carries it.
  */
 export interface GronTeknikCandidateSummary {
   invoice_id: string
@@ -329,16 +333,11 @@ export async function listRotRutCandidates(
  * Grön teknik invoices evaluated with evaluateGronTeknikClaim: eligible ones
  * carry the figures each ärende needs, blocked ones the first reason.
  * ROT/RUT invoices are counted in `other_type_counts` (they are listed under
- * ROT and RUT). There is no grön teknik file yet: the request is made in
- * Skatteverkets e-tjänst for grön teknik, so no begäran row exists for these
- * invoices and nothing here writes one. `eligible` therefore means "paid and
- * complete", not "not yet requested": a request made in the e-tjänst is
- * invisible here, and callers must say so (the tile and the invoice list do).
- * The decided/in-flight begäran rules still apply, so the list is ready for
- * the Begaran GRON_TEKNIK file.
+ * ROT and RUT). An invoice in a begäran (the grön teknik file records one,
+ * like the HUS file) is blocked as ALREADY_REQUESTED, or left out once
+ * decided, exactly as on the ROT/RUT lists.
  *
- * Newest payment first: the invoice to enter next in the e-tjänst is the one
- * most recently paid, and the ones already entered sink down the list.
+ * Newest payment first, as this list has always been ordered.
  */
 export async function listGronTeknikCandidates(
   supabase: SupabaseClient,
@@ -408,12 +407,22 @@ export async function listGronTeknikCandidates(
   return { ok: true, eligible, blocked, other_type_counts: otherTypeCounts }
 }
 
+/**
+ * NamnPaBegaran when the user gives none: the kind and the day, inside the
+ * 16 characters both schemas allow. "Grön teknik 2026-11-23" would be cut to
+ * "Grön teknik 2026", so grön teknik is "GT" (its e-tjänst holds nothing else).
+ */
+function defaultRequestName(type: DeductionType, today: string): string {
+  return `${type === 'gron_teknik' ? 'GT' : DEDUCTION_TYPE_LABELS[type].short} ${today}`
+}
+
 export type CreateRotRutRequestResult =
-  | { ok: true; request: Record<string, unknown>; file: BuildRotRutFileResult }
+  | { ok: true; request: Record<string, unknown>; file: BuildRotRutFileResult | BuildGronTeknikFileResult }
   | {
       ok: false
       code:
         | 'ROT_RUT_REQUEST_NOT_FOUND'
+        | 'ROT_RUT_COMPANY_ORG_NUMBER_INVALID'
         | 'ROT_RUT_NO_ELIGIBLE_INVOICES'
         | 'ROT_RUT_INVOICES_BLOCKED'
         | 'ROT_RUT_INVOICE_CONFLICT'
@@ -438,14 +447,17 @@ export async function createRotRutPayoutRequest(
   companyId: string,
   userId: string,
   params: {
-    type: HusDeductionType
+    type: DeductionType
     invoiceIds: string[]
     name?: string
     today?: string
   },
 ): Promise<CreateRotRutRequestResult> {
   const today = params.today ?? todayIsoStockholm()
-  const name = (params.name ?? `${DEDUCTION_TYPE_LABELS[params.type].short} ${today}`).slice(0, 16)
+  // NamnPaBegaran is an xs:token: Skatteverket collapses its whitespace, and
+  // the beslut import finds the begäran by that name again. Stored as sent.
+  const given = params.name?.replace(/\s+/g, ' ').trim()
+  const name = (given || defaultRequestName(params.type, today)).slice(0, 16).trimEnd()
 
   const { data: invoices, error: invoicesError } = await supabase
     .from('invoices')
@@ -463,12 +475,23 @@ export async function createRotRutPayoutRequest(
     return { ok: false, code: 'ROT_RUT_REQUEST_NOT_FOUND', missingInvoiceIds: missing }
   }
 
-  const file = buildRotRutFile({
-    type: params.type,
-    name,
-    invoices: (invoices ?? []) as unknown as Invoice[],
-    today,
-  })
+  const fileInput = { name, invoices: (invoices ?? []) as unknown as Invoice[], today }
+  let file: BuildRotRutFileResult | BuildGronTeknikFileResult
+  if (params.type === 'gron_teknik') {
+    // The grön teknik file names the company as Utforare, and the e-tjänst
+    // refuses a file whose org number is not the company's own.
+    let utforare: string | null
+    try {
+      utforare = await companyRedovisare(supabase, companyId)
+    } catch (error) {
+      if (error instanceof FilingIdentityError) return { ok: false, code: 'ROT_RUT_COMPANY_ORG_NUMBER_INVALID' }
+      return { ok: false, code: 'ROT_RUT_FILE_CREATE_FAILED' }
+    }
+    if (!utforare) return { ok: false, code: 'ROT_RUT_COMPANY_ORG_NUMBER_INVALID' }
+    file = buildGronTeknikFile({ ...fileInput, utforare })
+  } else {
+    file = buildRotRutFile({ ...fileInput, type: params.type })
+  }
 
   if (!file.xml) {
     return { ok: false, code: 'ROT_RUT_NO_ELIGIBLE_INVOICES', blockers: file.blockers }
@@ -495,10 +518,16 @@ export async function createRotRutPayoutRequest(
     return { ok: false, code: 'ROT_RUT_FILE_CREATE_FAILED' }
   }
 
-  const itemRows = file.arenden.map((a) => ({
+  // One item per invoice: a grön teknik invoice with two installation types
+  // is two ärenden in the file but one invoice in the begäran.
+  const requestedByInvoice = new Map<string, number>()
+  for (const a of file.arenden) {
+    requestedByInvoice.set(a.invoice_id, (requestedByInvoice.get(a.invoice_id) ?? 0) + a.begart_belopp)
+  }
+  const itemRows = Array.from(requestedByInvoice, ([invoiceId, requested]) => ({
     request_id: payoutRequest.id,
-    invoice_id: a.invoice_id,
-    requested_amount: a.begart_belopp,
+    invoice_id: invoiceId,
+    requested_amount: requested,
   }))
   const { error: itemsError } = await supabase
     .from('rot_rut_payout_request_items')

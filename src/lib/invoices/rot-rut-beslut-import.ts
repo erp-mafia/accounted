@@ -19,6 +19,10 @@ import { beslutFileIsForCompany, type RotRutBeslutFile } from './rot-rut-beslut-
  *     SKV's file unchanged). Ambiguity is an error, not a guess.
  *   - ärende -> item: by fakturanummer against the invoice number, else by
  *     the buyer's personnummer. Exactly one candidate or the beslut errors.
+ *     A grön teknik invoice with two installation types is two ärenden in
+ *     the file and one item in the begäran, so ärenden that name the same
+ *     invoice number add up on that one item; a match by personnummer takes
+ *     an item no other ärende has taken.
  *
  * A beslut applies all-or-nothing: if any ärende fails to match, nothing in
  * that beslut is written. Different beslut in the same file are independent.
@@ -187,14 +191,13 @@ async function applyBeslut(
 
   // 3. Match every ärende to exactly one item (all-or-nothing per beslut).
   const consumed = new Set<string>()
-  const matches: Array<{ itemId: string; godkantBelopp: number }> = []
+  const decidedByItem = new Map<string, number>()
   for (const arende of beslut.arenden) {
-    const available = items.filter((i) => !consumed.has(i.id))
     let candidates = arende.fakturanummer
-      ? available.filter((i) => i.invoiceNumber === arende.fakturanummer)
+      ? items.filter((i) => i.invoiceNumber === arende.fakturanummer)
       : []
     if (candidates.length !== 1) {
-      candidates = available.filter((i) => i.personnummer === arende.personnummer)
+      candidates = items.filter((i) => !consumed.has(i.id) && i.personnummer === arende.personnummer)
     }
     if (candidates.length !== 1) {
       return {
@@ -208,8 +211,9 @@ async function applyBeslut(
       }
     }
     consumed.add(candidates[0].id)
-    matches.push({ itemId: candidates[0].id, godkantBelopp: arende.godkantBelopp })
+    decidedByItem.set(candidates[0].id, (decidedByItem.get(candidates[0].id) ?? 0) + arende.godkantBelopp)
   }
+  const matches = Array.from(decidedByItem, ([itemId, godkantBelopp]) => ({ itemId, godkantBelopp }))
 
   // 4. Apply atomically: per-item decided amounts plus the request header go
   //    through one RPC (apply_rot_rut_beslut) so a mid-sequence failure can

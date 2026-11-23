@@ -2090,6 +2090,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Begäran om utbetalning hittades inte.',
     message_en: 'Payout request not found.',
   },
+  ROT_RUT_COMPANY_ORG_NUMBER_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Företagets organisationsnummer saknas eller är ogiltigt. Filen för grön teknik anger företaget som utförare: komplettera organisationsnumret i företagsinställningarna.',
+    message_en:
+      "The company's organisation number is missing or invalid. The green technology file names the company as the installer: complete the organisation number in the company settings.",
+  },
   ROT_RUT_NO_ELIGIBLE_INVOICES: {
     httpStatus: 400,
     message_sv: 'Ingen av de valda fakturorna kan ingå i filen. Se blockeringarna per faktura.',

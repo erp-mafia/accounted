@@ -215,7 +215,6 @@ type ListInvoice = InvoiceListRow
 
 const ROT_RUT_STATE_LABEL_KEYS: Record<NonNullable<RotRutListState>, string> = {
   claimable: 'rot_rut_status_claimable',
-  etjanst: 'rot_rut_status_etjanst',
   generated: 'rot_rut_status_generated',
   submitted: 'rot_rut_status_submitted',
   paid: 'rot_rut_status_paid',

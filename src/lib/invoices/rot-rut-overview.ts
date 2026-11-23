@@ -1,35 +1,23 @@
-import type { HusDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import type { DeductionType } from '@/types'
 
 /**
  * The "Redo att begäras" tile on /invoices/rot-rut.
  *
- * ROT and RUT invoices are ready: paid and complete, and each one leaves the
- * list the moment its begäran file is generated (the begäran row holds it).
- * Grön teknik is never counted as ready. Its payout is requested in
- * Skatteverkets e-tjänst for grön teknik, which writes nothing back here, so
- * an invoice requested and paid through the e-tjänst would read "ready"
- * forever and invite a second, incorrect claim. The tile shows grön teknik
- * apart instead: paid invoices whose request window (31 January after the
- * payment year) is still open, without claiming that they are unrequested.
- * When the Begaran GRON_TEKNIK file records begäran rows, grön teknik can
- * join the ready count like ROT and RUT.
+ * An invoice is ready when it is paid and complete for its kind's begäran
+ * file, and it leaves the list the moment that file is generated (the
+ * begäran row holds it). ROT and RUT go in a HUS file, grön teknik in its own
+ * Begaran file (gron-teknik-file.ts); all three are counted the same way.
  */
 export interface ReadyTile {
-  /** ROT + RUT invoices ready for a begäran file. */
+  /** Invoices ready for a begäran file, every kind. */
   ready: number
-  /** The ROT/RUT kinds with at least one ready invoice, in order. */
-  parts: Array<{ kind: HusDeductionType; count: number }>
-  /** Paid grön teknik invoices still inside their request window. */
-  gronTeknikOpen: number
+  /** The kinds with at least one ready invoice, in order. */
+  parts: Array<{ kind: DeductionType; count: number }>
 }
 
-export function readyTileOf(counts: {
-  rot: number
-  rut: number
-  gronTeknikOpen: number
-}): ReadyTile {
-  const parts = (['rot', 'rut'] as const)
+export function readyTileOf(counts: Record<DeductionType, number>): ReadyTile {
+  const parts = (['rot', 'rut', 'gron_teknik'] as const)
     .map((kind) => ({ kind, count: counts[kind] }))
     .filter((part) => part.count > 0)
-  return { ready: counts.rot + counts.rut, parts, gronTeknikOpen: counts.gronTeknikOpen }
+  return { ready: parts.reduce((sum, part) => sum + part.count, 0), parts }
 }

@@ -15,14 +15,14 @@ import { listGronTeknikCandidates, listRotRutCandidates } from '@/lib/invoices/r
  *               pointing at the other list) and invoices held by an
  *               in-flight begäran (ALREADY_REQUESTED): nothing drops out
  *               silently (#1884).
- *   - other_type_counts: invoices whose deduction is requested in another
- *               e-tjänst (grön teknik on the ROT/RUT lists, ROT/RUT on the
- *               grön teknik list), counted rather than listed; each one is
- *               listed on its own kind's list.
+ *   - other_type_counts: invoices whose deduction goes in another kind of
+ *               file and e-tjänst (grön teknik on the ROT/RUT lists, ROT/RUT
+ *               on the grön teknik list), counted rather than listed; each
+ *               one is listed on its own kind's list.
  *
- * type=gron_teknik lists invoices for the request made in Skatteverkets
- * e-tjänst Grön teknik: företag (no file is generated for them yet). A
- * missing or unknown type reads as rot, as it always has.
+ * type=gron_teknik lists invoices for the grön teknik Begaran file, uploaded
+ * in Skatteverkets e-tjänst Grön teknik: företag. A missing or unknown type
+ * reads as rot, as it always has.
  */
 export const GET = withRouteContext('rot_rut.eligible', async (request, ctx) => {
   const { supabase, companyId, log, requestId } = ctx
