@@ -590,6 +590,7 @@ export type MeaninglessCorrectionReason =
   | 'identical_to_original'
   | 'no_date_change'
   | 'negates_original'
+  | 'currency_incomplete'
 
 export class MeaninglessCorrectionError extends Error {
   readonly code = MEANINGLESS_CORRECTION
@@ -601,7 +602,9 @@ export class MeaninglessCorrectionError extends Error {
           ? 'New date equals the current date: nothing to move.'
           : reason === 'negates_original'
             ? 'Correction lines are the original with debit and credit swapped: the storno already reverses the original, so this would reverse it a second time. To only cancel the entry, reverse it (storno). Pass sides_swapped=true only when the original itself was booked with debit and credit swapped.'
-            : 'Correction lines are identical to the original entry: nothing to correct.'
+            : reason === 'currency_incomplete'
+              ? "Correction changes only currency, and a line's currency is incomplete: a line whose original is in a foreign currency would post in kronor without it, and a foreign-currency line needs its amount in currency and rate. State currency, amount_in_currency and exchange_rate on every such line, or currency 'SEK' to post it in kronor."
+              : 'Correction lines are identical to the original entry: nothing to correct.'
     )
     this.name = 'MeaninglessCorrectionError'
   }

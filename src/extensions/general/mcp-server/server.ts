@@ -733,6 +733,7 @@ import {
   paymentFeeShortfall,
 } from '@/lib/bookkeeping/payment-fee'
 import { isLedgerCurrency, resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { storedLineValues } from '@/lib/bookkeeping/line-balance'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError, capabilityBlockedRefusal } from '@/lib/entitlements/has-capability'
 import { CAPABILITY, MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -4242,6 +4243,11 @@ async function resolveSieToolContent(
     const fileName = typeof args.filename === 'string' ? args.filename : ''
     if (!fileName) {
       throw codedError('VALIDATION_ERROR', 'filename is required together with upload_id')
+    }
+    // The same check as gnubok_complete_document_upload: an upload_id is the
+    // UUID gnubok_create_sie_upload returned, nothing else.
+    if (!isUuid(args.upload_id)) {
+      throw badArgument('upload_id', 'upload_id must be the upload_id gnubok_create_sie_upload returned.')
     }
     const service = createServiceClientNoCookies()
     const pendingPath = buildPendingDocumentStoragePath(companyId, userId, args.upload_id, fileName)
@@ -8697,52 +8703,60 @@ export const tools: McpTool[] = [
         | undefined
       if (dimensionRows.length > 0) {
         try {
-          const { data: valueRows, error: valueErr } = await supabase
-            .from('dimension_values')
-            .select('dimension_id, code, name')
-            .eq('company_id', companyId)
-            .eq('is_active', true)
-            .order('code', { ascending: true })
-          if (!valueErr) {
-            const byDimension = new Map<string, Array<{ code: string; name: string }>>()
-            for (const v of (valueRows ?? []) as Array<{ dimension_id: string; code: string; name: string }>) {
-              const bucket = byDimension.get(v.dimension_id) ?? []
-              bucket.push({ code: v.code, name: v.name })
-              byDimension.set(v.dimension_id, bucket)
-            }
-            // Account dimension rules (PR10): tell the agent up front which
-            // accounts refuse postings without a value (required) and which
-            // auto-apply one (default/fixed) - so gnubok_create_voucher calls
-            // self-correct instead of bouncing off MANDATORY_DIMENSION_MISSING.
-            const requiredByDimension = new Map<string, string[]>()
-            const defaultByDimension = new Map<string, string[]>()
-            const { data: ruleRows, error: ruleErr } = await supabase
-              .from('account_dimension_rules')
-              .select('account_number, rule_type, dimension_id')
+          // Every active value, paged past PostgREST's 1,000-row cap: the
+          // count and the top values per dimension come from this set, and a
+          // read cut at 1,000 rows across all dimensions showed a dimension
+          // whose codes sort late as empty (crm#2152). A code is unique only
+          // inside its dimension, so id completes the order. A failed read
+          // throws into the catch below.
+          const valueRows = await fetchAllRows<{ dimension_id: string; code: string; name: string }>(({ from, to }) =>
+            supabase
+              .from('dimension_values')
+              .select('dimension_id, code, name')
               .eq('company_id', companyId)
               .eq('is_active', true)
-            if (!ruleErr) {
-              for (const r of (ruleRows ?? []) as Array<{ account_number: string; rule_type: string; dimension_id: string }>) {
-                const target = r.rule_type === 'required' ? requiredByDimension : defaultByDimension
-                const bucket = target.get(r.dimension_id) ?? []
-                bucket.push(r.account_number)
-                target.set(r.dimension_id, bucket)
+              .order('code', { ascending: true })
+              .order('id', { ascending: true })
+              .range(from, to),
+          )
+          const byDimension = new Map<string, Array<{ code: string; name: string }>>()
+          for (const v of valueRows) {
+            const bucket = byDimension.get(v.dimension_id) ?? []
+            bucket.push({ code: v.code, name: v.name })
+            byDimension.set(v.dimension_id, bucket)
+          }
+          // Account dimension rules (PR10): tell the agent up front which
+          // accounts refuse postings without a value (required) and which
+          // auto-apply one (default/fixed) - so gnubok_create_voucher calls
+          // self-correct instead of bouncing off MANDATORY_DIMENSION_MISSING.
+          const requiredByDimension = new Map<string, string[]>()
+          const defaultByDimension = new Map<string, string[]>()
+          const { data: ruleRows, error: ruleErr } = await supabase
+            .from('account_dimension_rules')
+            .select('account_number, rule_type, dimension_id')
+            .eq('company_id', companyId)
+            .eq('is_active', true)
+          if (!ruleErr) {
+            for (const r of (ruleRows ?? []) as Array<{ account_number: string; rule_type: string; dimension_id: string }>) {
+              const target = r.rule_type === 'required' ? requiredByDimension : defaultByDimension
+              const bucket = target.get(r.dimension_id) ?? []
+              bucket.push(r.account_number)
+              target.set(r.dimension_id, bucket)
+            }
+          }
+          dimensionsBlock = {
+            enabled: settingsRow?.dimensions_enabled === true,
+            dimensions: dimensionRows.map((d) => {
+              const values = byDimension.get(d.id) ?? []
+              return {
+                sie_dim_no: d.sie_dim_no,
+                name: d.name,
+                active_value_count: values.length,
+                required_on_accounts: (requiredByDimension.get(d.id) ?? []).sort(),
+                default_on_accounts: (defaultByDimension.get(d.id) ?? []).sort(),
+                top_values: values.slice(0, 10),
               }
-            }
-            dimensionsBlock = {
-              enabled: settingsRow?.dimensions_enabled === true,
-              dimensions: dimensionRows.map((d) => {
-                const values = byDimension.get(d.id) ?? []
-                return {
-                  sie_dim_no: d.sie_dim_no,
-                  name: d.name,
-                  active_value_count: values.length,
-                  required_on_accounts: (requiredByDimension.get(d.id) ?? []).sort(),
-                  default_on_accounts: (defaultByDimension.get(d.id) ?? []).sort(),
-                  top_values: values.slice(0, 10),
-                }
-              }),
-            }
+            }),
           }
         } catch {
           // Best-effort: a values-read failure just omits the block.
@@ -27389,7 +27403,8 @@ export const tools: McpTool[] = [
         )
       }
 
-      const previewLines = bookedLines.map((l) => ({
+      const storedBookedLines = storedLineValues(bookedLines, new Map())
+      const previewLines = bookedLines.map((l, i) => ({
         account_number: l.account_number,
         // Fallback to the BAS catalog name for a seedable account that is not
         // in the chart yet, so the approver still reads a named line.
@@ -27400,6 +27415,13 @@ export const tools: McpTool[] = [
         debit_amount: l.debit_amount,
         credit_amount: l.credit_amount,
         line_description: l.line_description ?? null,
+        // As the line will store them (storedLineValues), so the approver and
+        // the agent see a line that posts in kronor before it is approved: a
+        // 1510 line without the invoice's currency cannot be linked to a
+        // foreign-currency invoice afterwards (crm#2161).
+        currency: storedBookedLines[i].currency,
+        amount_in_currency: storedBookedLines[i].amount_in_currency,
+        exchange_rate: storedBookedLines[i].exchange_rate,
         dimensions: l.dimensions ?? null,
       }))
 
