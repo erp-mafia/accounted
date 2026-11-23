@@ -18,9 +18,37 @@ export function stripNamespacePrefixes(xml: string): string {
   return xml.replace(/<(\/?)[A-Za-z_][\w.-]*:(?=[A-Za-z_])/g, '<$1')
 }
 
-/** Drop XML comments, so a commented-out element is never read as one. */
-export function stripXmlComments(xml: string): string {
-  return xml.replace(/<!--[\s\S]*?-->/g, '')
+const escapeXmlText = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/**
+ * The document with nothing but elements and escaped text left: a CDATA
+ * section becomes the escaped text it stands for, and a comment is dropped,
+ * so a commented-out element is never read as one. One scan from the left,
+ * so a comment opener inside CDATA is text and a CDATA opener inside a
+ * comment is part of the comment. A section that never closes is left as it
+ * is written.
+ */
+export function plainXml(xml: string): string {
+  const COMMENT = '<!--'
+  const CDATA = '<![CDATA['
+  let out = ''
+  let at = 0
+  // Each opener is looked for again only once the scan has passed it, so the whole document is read once.
+  let comment = xml.indexOf(COMMENT)
+  let cdata = xml.indexOf(CDATA)
+  for (;;) {
+    if (comment !== -1 && comment < at) comment = xml.indexOf(COMMENT, at)
+    if (cdata !== -1 && cdata < at) cdata = xml.indexOf(CDATA, at)
+    const next = comment === -1 ? cdata : cdata === -1 ? comment : Math.min(comment, cdata)
+    if (next === -1) break
+    const isCdata = next === cdata
+    const end = xml.indexOf(isCdata ? ']]>' : '-->', next + (isCdata ? CDATA.length : COMMENT.length))
+    if (end === -1) break
+    out += xml.slice(at, next)
+    if (isCdata) out += escapeXmlText(xml.slice(next + CDATA.length, end))
+    at = end + 3
+  }
+  return out + xml.slice(at)
 }
 
 const NAMED_XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
@@ -113,7 +141,7 @@ export function extractAmount(xml: string, tagName = 'Amt'): XmlAmount | null {
   const match = xml.match(new RegExp(`<${tagName}(\\s[^>]*)?>([^<]+)</${tagName}>`, 'i'))
   const value = match?.[2]?.trim()
   if (!value) return null
-  const currency = match?.[1]?.match(/Ccy=["']([^"']+)["']/i)?.[1] ?? null
+  const currency = match?.[1]?.match(/\sCcy\s*=\s*["']([^"']+)["']/i)?.[1] ?? null
   return { value, currency: currency ? currency.toUpperCase() : null }
 }
 

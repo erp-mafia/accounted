@@ -61,11 +61,18 @@ function december(): Camt054Deposit {
 }
 
 /** One entry of `amount` with a single payment and no receiving bankgiro. */
-function bare(amount: string, date: string, valueDate?: string): Camt054Deposit {
+function bare(amount: string, date: string, valueDate?: string, payer: { name: string; ocr: string } = { name: 'Kund AB', ocr: '10017' }): Camt054Deposit {
   return parseCamt054(
-    document([notification({ entries: [entry({ amount, date, valueDate, payments: [payment({ amount, receiverBankgiro: null, payerName: 'Kund AB', structured: [{ ocr: '10017' }] })] })] })]),
+    document([
+      notification({
+        entries: [entry({ amount, date, valueDate, payments: [payment({ amount, receiverBankgiro: null, payerName: payer.name, structured: [{ ocr: payer.ocr }] })] })],
+      }),
+    ]),
   ).deposits[0]!
 }
+
+const ALFA = { name: 'Alfa Bygg AB', ocr: '10017' }
+const BETA = { name: 'Beta Måleri AB', ocr: '20025' }
 
 const ids = (matches: ReturnType<typeof matchDepositsToRows>) => matches.map((m) => (m.status === 'matched' ? m.row.id : m.status))
 
@@ -106,16 +113,39 @@ describe('matchDepositsToRows with an entry of the bank\'s notification', () => 
     expect(ids(matchDepositsToRows([december()], [elsewhere], REGISTER))).toEqual(['tx-elsewhere'])
   })
 
-  it('still reads a row with no account by its bankgiro wording, a day late', () => {
-    const unbound = row({ id: 'tx-unbound', date: '2026-12-02', amount: 1500, description: 'BANKGIRO INBET', cash_account_id: null })
+  it('reads a row with no account by its bankgiro wording, on the entry\'s day', () => {
+    const unbound = row({ id: 'tx-unbound', date: '2026-12-01', amount: 1500, description: 'BANKGIRO INBET', cash_account_id: null })
     expect(ids(matchDepositsToRows([december()], [unbound], REGISTER, ON_OWN_ACCOUNT))).toEqual(['tx-unbound'])
   })
 
   it('reads a row through one of the company\'s bankgiros when the notification names none, and never another giro\'s row', () => {
-    const own = row({ id: 'tx-own', date: '2026-12-02', amount: 500, description: `BG ${OWN_BG} 00012` })
+    const own = row({ id: 'tx-own', date: '2026-12-01', amount: 500, description: `BG ${OWN_BG} 00012` })
     const other = row({ id: 'tx-other', date: '2026-12-01', amount: 1500, description: `BG ${OTHER_BG} 00012` })
     expect(ids(matchDepositsToRows([bare('500.00', '2026-12-01')], [own], REGISTER, ON_OWN_ACCOUNT))).toEqual(['tx-own'])
     expect(ids(matchDepositsToRows([december()], [other], REGISTER, ON_OWN_ACCOUNT))).toEqual(['no_row'])
+  })
+
+  it('takes no row on another day than the entry\'s booking or value date, whatever the row says', () => {
+    // The entry's own row has not synced; a bankgiro deposit of the same amount sits two days later.
+    const nearby = row({ id: 'tx-nearby', date: '2026-12-03', amount: 500, description: `BG ${OWN_BG} 00014` })
+    const worded = row({ id: 'tx-worded', date: '2026-12-02', amount: 1500, description: 'BANKGIRO INBET' })
+    expect(ids(matchDepositsToRows([bare('500.00', '2026-12-01')], [nearby], REGISTER, ON_OWN_ACCOUNT))).toEqual(['no_row'])
+    expect(ids(matchDepositsToRows([december()], [worded], REGISTER, ON_OWN_ACCOUNT))).toEqual(['no_row'])
+    // A value date far from the booking date is still the entry's day.
+    const farValue = row({ id: 'tx-far', date: '2026-12-08', amount: 500, description: 'Insättning' })
+    expect(ids(matchDepositsToRows([bare('500.00', '2026-12-01', '2026-12-08')], [farValue], REGISTER, ON_OWN_ACCOUNT))).toEqual(['tx-far'])
+  })
+
+  it('gives each of two entries with different value dates its own row, in either order', () => {
+    const first = bare('500.00', '2026-12-01', '2026-12-01')
+    const second = bare('500.00', '2026-12-01', '2026-12-02')
+    const rows = [
+      row({ id: 'tx-first', date: '2026-12-01', amount: 500, description: 'Insättning' }),
+      row({ id: 'tx-second', date: '2026-12-02', amount: 500, description: 'Insättning' }),
+    ]
+    const both = [new Set([OWN_ACCOUNT]), new Set([OWN_ACCOUNT])]
+    expect(ids(matchDepositsToRows([first, second], rows, REGISTER, both))).toEqual(['tx-first', 'tx-second'])
+    expect(ids(matchDepositsToRows([second, first], rows, REGISTER, both))).toEqual(['tx-second', 'tx-first'])
   })
 
   it('prefers the row that says bankgiro over one that only sits on the account', () => {
@@ -130,11 +160,52 @@ describe('matchDepositsToRows with an entry of the bank\'s notification', () => 
     expect(matchDepositsToRows([bare('500.00', '2026-12-01')], [a, b], REGISTER, ON_OWN_ACCOUNT)).toEqual([{ status: 'ambiguous', candidates: 2 }])
   })
 
-  it('pairs entries that look the same with as many rows that look the same', () => {
+  it('takes the row that carries the entry\'s reference when two rows fit equally well', () => {
+    const blank = row({ id: 'tx-blank', date: '2026-12-01', amount: 500, description: 'Insättning' })
+    const referenced = row({ id: 'tx-ref', date: '2026-12-01', amount: 500, description: 'Insättning', reference: '10017' })
+    const inText = row({ id: 'tx-text', date: '2026-12-01', amount: 500, description: 'Insättning ref 10017' })
+    expect(ids(matchDepositsToRows([bare('500.00', '2026-12-01')], [blank, referenced], REGISTER, ON_OWN_ACCOUNT))).toEqual(['tx-ref'])
+    expect(ids(matchDepositsToRows([bare('500.00', '2026-12-01')], [blank, inText], REGISTER, ON_OWN_ACCOUNT))).toEqual(['tx-text'])
+  })
+
+  const TWO = [new Set([OWN_ACCOUNT]), new Set([OWN_ACCOUNT])]
+
+  it('pairs entries of the same day and amount with the rows that name their payers or carry their references', () => {
+    const entries = [bare('500.00', '2026-12-01', undefined, ALFA), bare('500.00', '2026-12-01', undefined, BETA)]
+    const named = [
+      row({ id: 'tx-beta', date: '2026-12-01', amount: 500, description: 'Insättning Beta Måleri AB' }),
+      row({ id: 'tx-alfa', date: '2026-12-01', amount: 500, description: 'Insättning', merchant_name: 'ALFA BYGG AB' }),
+    ]
+    expect(ids(matchDepositsToRows(entries, named, REGISTER, TWO))).toEqual(['tx-alfa', 'tx-beta'])
+    expect(ids(matchDepositsToRows([...entries].reverse(), named, REGISTER, TWO))).toEqual(['tx-beta', 'tx-alfa'])
+
+    const referenced = [
+      row({ id: 'tx-20025', date: '2026-12-01', amount: 500, description: 'Insättning', reference: '20025' }),
+      row({ id: 'tx-10017', date: '2026-12-01', amount: 500, description: 'Insättning', reference: '10017' }),
+    ]
+    expect(ids(matchDepositsToRows(entries, referenced, REGISTER, TWO))).toEqual(['tx-10017', 'tx-20025'])
+  })
+
+  it('leaves such entries ambiguous when the rows differ and say nothing that tells which is which', () => {
+    const entries = [bare('500.00', '2026-12-01', undefined, ALFA), bare('500.00', '2026-12-01', undefined, BETA)]
+    const rows = [
+      row({ id: 'tx-x', date: '2026-12-01', amount: 500, description: 'Insättning 1' }),
+      row({ id: 'tx-y', date: '2026-12-01', amount: 500, description: 'Insättning 2' }),
+    ]
+    expect(matchDepositsToRows(entries, rows, REGISTER, TWO)).toEqual([
+      { status: 'ambiguous', candidates: 2 },
+      { status: 'ambiguous', candidates: 2 },
+    ])
+    // One of them names its payer: that entry is settled, and the other takes the row that is left.
+    const oneNamed = [rows[0]!, row({ id: 'tx-beta', date: '2026-12-01', amount: 500, description: 'Insättning Beta Måleri AB' })]
+    expect(ids(matchDepositsToRows(entries, oneNamed, REGISTER, TWO))).toEqual(['tx-x', 'tx-beta'])
+  })
+
+  it('pairs entries that look the same with as many rows that say the same thing, in order', () => {
     const a = row({ id: 'tx-a', date: '2026-12-01', amount: 500, description: 'Insättning' })
     const b = row({ id: 'tx-b', date: '2026-12-01', amount: 500, description: 'Insättning' })
-    const twins = [bare('500.00', '2026-12-01'), bare('500.00', '2026-12-01')]
-    expect(ids(matchDepositsToRows(twins, [b, a], REGISTER, [new Set([OWN_ACCOUNT]), new Set([OWN_ACCOUNT])]))).toEqual(['tx-a', 'tx-b'])
+    const twins = [bare('500.00', '2026-12-01', undefined, ALFA), bare('500.00', '2026-12-01', undefined, BETA)]
+    expect(ids(matchDepositsToRows(twins, [b, a], REGISTER, TWO))).toEqual(['tx-a', 'tx-b'])
   })
 })
 
@@ -192,6 +263,19 @@ describe('attachBgMaxDeposits with the bank\'s notification', () => {
     ])
     expect(summary).toMatchObject({ ready_rows: 1 })
     expect(summary.outcomes[0]).toMatchObject({ bankgiro: null, status: 'matched' })
+  })
+
+  it('reads the bank rows of the value date too', async () => {
+    const mock = setup([])
+    await attachBgMaxDeposits(mock.supabase as unknown as SupabaseClient, {
+      companyId: 'company-1',
+      userId: 'user-1',
+      deposits: [bare('500.00', '2026-12-01', '2026-12-10')],
+      apply: false,
+      source: 'camt054',
+    })
+    expect(mock.findCalls('transactions', 'gte')).toEqual([['date', '2026-11-28']])
+    expect(mock.findCalls('transactions', 'lte')).toEqual([['date', '2026-12-13']])
   })
 
   it('previews without writing, and reports an entry whose row has not synced', async () => {

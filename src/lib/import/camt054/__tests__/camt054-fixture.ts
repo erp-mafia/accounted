@@ -15,8 +15,8 @@ export interface StructuredFields {
   ocr?: string
   /** <RfrdDocInf><Nb>. */
   number?: string
-  /** The <RfrdDocInf> type code; left out, the number carries none. */
-  code?: 'CINV' | 'CREN'
+  /** The <RfrdDocInf> type code (CINV, CREN, PUOR, ...); left out, the number carries none. */
+  code?: string
   /** <RfrdDocAmt><RmtdAmt>. */
   remitted?: string
   /** <RfrdDocAmt><CdtNoteAmt>. */
@@ -95,7 +95,8 @@ export interface EntryFields {
   /** 'BOOK' by default; `wrapped` writes it as <Sts><Cd> (camt.054.001.08). */
   status?: string
   wrapped?: boolean
-  reversal?: boolean
+  /** <RvslInd>: true writes "true"; a string is written as it is ("1"). */
+  reversal?: boolean | string
   /** <Btch><MsgId> and <NbOfTxs>. */
   batch?: { id?: string; count?: number }
   payments: string[]
@@ -113,7 +114,7 @@ export function entry(fields: EntryFields): string {
       el('NtryRef', '1'),
       `<Amt Ccy="${fields.currency ?? 'SEK'}">${fields.amount}</Amt>`,
       el('CdtDbtInd', fields.indicator ?? 'CRDT'),
-      fields.reversal ? el('RvslInd', 'true') : '',
+      fields.reversal ? el('RvslInd', fields.reversal === true ? 'true' : fields.reversal) : '',
       el('Sts', fields.wrapped ? el('Cd', status) : status),
       dated('BookgDt', fields.date),
       dated('ValDt', fields.valueDate),

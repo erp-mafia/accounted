@@ -45,8 +45,8 @@ import {
   extractEntryDate,
   extractNestedText,
   extractTextContent,
+  plainXml,
   stripNamespacePrefixes,
-  stripXmlComments,
 } from '../shared/iso20022-xml'
 
 /**
@@ -64,6 +64,8 @@ export interface Camt054Deposit extends Omit<BgMaxDeposit, 'bankgiro'> {
   bankgiro: string | null
   /** <ValDt>, when the entry gives one. */
   value_date: string | null
+  /** Always true: `date` is the day the bank booked the entry, not a payment date it may book later. */
+  booked: true
   /** The account the notification is for (<Ntfctn><Acct>), as the bank-file import reads a statement's own account. */
   account: BankFileAccountIdentity | null
 }
@@ -87,23 +89,37 @@ export interface Camt054ParseResult {
   issues: Camt054Issue[]
 }
 
-/** Markers of a camt.054 notification: its namespace or root element. */
-const CAMT054_MARKERS = ['camt.054', 'bktocstmrdbtcdtntfctn']
+/** The message's own element, prefixed or not. A statement that only mentions camt.054 in a text has none. */
+const CAMT054_ELEMENT = /<(?:[A-Za-z_][\w.-]*:)?BkToCstmrDbtCdtNtfctn(?=[\s>/])/i
 
-/** True when the content is a camt.054 notification: XML that names the message, whatever the file is called. */
+/** True when the content is a camt.054 notification: XML that carries the message's element, whatever the file is called. */
 export function detectCamt054(content: string): boolean {
-  const lower = prepareContent(content).trimStart().toLowerCase()
-  return lower.startsWith('<') && CAMT054_MARKERS.some((marker) => lower.includes(marker))
+  const prepared = prepareContent(content).trimStart()
+  return prepared.startsWith('<') && CAMT054_ELEMENT.test(prepared)
 }
 
-/** An xs:decimal amount as whole öre; null when it is not a plain amount with at most two decimals that matter. */
+/**
+ * An xs:decimal amount as whole öre ("100", "100.5", "+100.00", ".50");
+ * null when it is not one, is negative, or has more than two decimals that
+ * matter.
+ */
 function decimalToOre(value: string): number | null {
-  const match = /^(\d+)(?:\.(\d+))?$/.exec(value.trim())
+  const match = /^\+?(\d*)(?:\.(\d*))?$/.exec(value.trim())
   if (!match) return null
+  const whole = match[1] ?? ''
   const fraction = match[2] ?? ''
+  if (whole.length + fraction.length === 0) return null
   if (/[1-9]/.test(fraction.slice(2))) return null
-  return Number(match[1]) * 100 + Number(fraction.slice(0, 2).padEnd(2, '0'))
+  return Number(whole || '0') * 100 + Number(fraction.slice(0, 2).padEnd(2, '0'))
 }
+
+/** xs:boolean: "true" or "1". */
+const isTrue = (value: string | null): boolean => value !== null && /^(true|1)$/i.test(value.trim())
+
+/** The <RfrdDocInf> type codes that name an invoice the payment settles; with no code at all the number is read as one too. */
+const INVOICE_DOCUMENTS = new Set(['CINV', 'MSIN', 'HIRI', 'SBIN', 'DEBN', 'DNFA'])
+/** The type codes that name a credit note the payment deducts. */
+const CREDIT_DOCUMENTS = new Set(['CREN', 'CNFA'])
 
 function text(value: string | null | undefined): string | null {
   const trimmed = (value ?? '').replace(/\s+/g, ' ').trim()
@@ -181,11 +197,21 @@ function parsePayment(tx: string): PaymentDraft {
   const creditReferences: string[] = []
   let credits = 0
   for (const part of structured) {
-    const documents = extractElements(part, 'RfrdDocInf')
-    const codes = documents.map((doc) => (extractNestedText(doc, 'CdOrPrtry', 'Cd') ?? extractNestedText(doc, 'CdOrPrtry', 'Prtry'))?.toUpperCase())
-    const isCredit = codes.includes('CREN') || (extractAmount(part, 'CdtNoteAmt') !== null && extractAmount(part, 'RmtdAmt') === null)
+    // A document of another kind (a purchase order, a contract, a statement
+    // of account) is not an invoice: its number is left out, so it never
+    // suggests the invoice that happens to share it.
+    const documents = extractElements(part, 'RfrdDocInf').map((doc) => ({
+      code: (extractNestedText(doc, 'CdOrPrtry', 'Cd') ?? extractNestedText(doc, 'CdOrPrtry', 'Prtry'))?.toUpperCase() ?? null,
+      number: text(extractTextContent(doc, 'Nb')),
+    }))
+    const isCredit =
+      documents.some((doc) => doc.code !== null && CREDIT_DOCUMENTS.has(doc.code)) ||
+      (extractAmount(part, 'CdtNoteAmt') !== null && extractAmount(part, 'RmtdAmt') === null)
     if (isCredit) credits++
-    const numbers = documents.map((doc) => text(extractTextContent(doc, 'Nb'))).filter((n): n is string => n !== null)
+    const numbers = documents
+      .filter((doc) => doc.code === null || INVOICE_DOCUMENTS.has(doc.code) || CREDIT_DOCUMENTS.has(doc.code))
+      .map((doc) => doc.number)
+      .filter((n): n is string => n !== null)
     const creditorReferences = extractElements(part, 'CdtrRefInf')
       .map((ref) => text(extractTextContent(ref, 'Ref')))
       .filter((r): r is string => r !== null)
@@ -244,7 +270,7 @@ function signedOre(drafts: readonly PaymentDraft[], entryOre: number): number[] 
  * out, because its split would not explain the bank row.
  */
 export function parseCamt054(content: string): Camt054ParseResult {
-  const xml = stripNamespacePrefixes(stripXmlComments(prepareContent(content)))
+  const xml = stripNamespacePrefixes(plainXml(prepareContent(content)))
   const issues: Camt054Issue[] = []
   const deposits: Camt054Deposit[] = []
   let rejected = 0
@@ -273,7 +299,7 @@ export function parseCamt054(content: string): Camt054ParseResult {
         issues.push({ entry: entryNo, severity: 'info', message: `Post ${entryNo} är inte bokförd (${status}) och hoppas över.` })
         continue
       }
-      if (extractTextContent(head, 'RvslInd')?.toLowerCase() === 'true' || extractTextContent(head, 'CdtDbtInd')?.toUpperCase() !== 'CRDT') {
+      if (isTrue(extractTextContent(head, 'RvslInd')) || extractTextContent(head, 'CdtDbtInd')?.toUpperCase() !== 'CRDT') {
         skipped++
         continue
       }
@@ -324,6 +350,7 @@ export function parseCamt054(content: string): Camt054ParseResult {
         account: account.identity,
         date,
         value_date: valueDate,
+        booked: true,
         serial: /^\d{1,5}$/.test(batchId) ? batchId : null,
         amount: roundOre(entryOre / 100),
         currency,

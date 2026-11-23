@@ -7,15 +7,23 @@ import { OWN_BBAN, OWN_IBAN, decemberFile, document, entry, notification, paymen
 const one = (entries: string[], fields: Partial<Parameters<typeof notification>[0]> = {}, version?: string) =>
   parseCamt054(document([notification({ ...fields, entries })], version))
 
+/** The same document as a serializer with a declared namespace prefix writes it. */
+const prefixed = (xml: string) => xml.replace('xmlns=', 'xmlns:ns2=').replace(/<(\/?)(?=[A-Z])/g, '<$1ns2:')
+
 describe('detectCamt054', () => {
   it('recognises a notification by its content, whatever it is called', () => {
     expect(detectCamt054(decemberFile())).toBe(true)
-    expect(detectCamt054(`﻿  ${decemberFile()}`)).toBe(true)
-    expect(detectCamt054(decemberFile().replace(/<(\/?)(?=[A-Z])/g, '<$1ns2:'))).toBe(true)
+    expect(detectCamt054(`\uFEFF  ${decemberFile()}`)).toBe(true)
+    expect(detectCamt054(prefixed(decemberFile()))).toBe(true)
   })
 
-  it('leaves a statement, a BG Max file and a CSV alone', () => {
+  it('leaves a statement, a BG Max file and a CSV alone, even one that mentions camt.054', () => {
     expect(detectCamt054('<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt/></Document>')).toBe(false)
+    expect(
+      detectCamt054(
+        '<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt><Stmt><Ntry><AddtlNtryInf>Se camt.054, BkToCstmrDbtCdtNtfctn</AddtlNtryInf></Ntry></Stmt></BkToCstmrStmt></Document>',
+      ),
+    ).toBe(false)
     expect(detectCamt054(septemberFile())).toBe(false)
     expect(detectCamt054('Datum;Text;Belopp\n2026-12-01;camt.054 avisering;1500,00')).toBe(false)
   })
@@ -32,6 +40,7 @@ describe('parseCamt054', () => {
       account: { iban: OWN_IBAN },
       date: '2026-12-01',
       value_date: '2026-12-01',
+      booked: true,
       serial: null,
       amount: 1500,
       currency: 'SEK',
@@ -77,11 +86,27 @@ describe('parseCamt054', () => {
   })
 
   it('reads prefixed element names and ignores commented-out elements', () => {
-    const prefixed = decemberFile().replace(/<(\/?)(?=[A-Z])/g, '<$1ns2:')
-    expect(parseCamt054(prefixed).deposits[0]!.payments).toHaveLength(3)
+    expect(parseCamt054(prefixed(decemberFile())).deposits[0]!.payments).toHaveLength(3)
     const commented = decemberFile().replace('<NtryDtls>', '<NtryDtls><!-- <TxDtls><AmtDtls><TxAmt><Amt Ccy="SEK">1.00</Amt></TxAmt></AmtDtls></TxDtls> -->')
     expect(parseCamt054(commented)).toMatchObject({ rejected_deposits: 0 })
     expect(parseCamt054(commented).deposits[0]!.payments).toHaveLength(3)
+  })
+
+  it('reads a message in CDATA whole, a comment opener inside it included', () => {
+    // A real comment follows the payment: the opener inside the CDATA must not swallow what lies between.
+    const withCdata = payment({ amount: '50.00', payerName: 'Kund AB', unstructured: ['<![CDATA[Faktura <1004> & <!-- mer]]>'], structured: [{ ocr: '10017' }] })
+    const result = one([entry({ amount: '50.00', date: '2026-12-01', payments: [`${withCdata}<!-- slut -->`] })])
+    expect(result.deposits[0]!.payments[0]).toMatchObject({ message: 'Faktura <1004> & <!-- mer', reference: '10017', payer_name: 'Kund AB' })
+  })
+
+  it('reads every form of an xs:decimal amount, and no negative one', () => {
+    const result = one([
+      entry({ amount: '+100.00', date: '2026-12-01', payments: [payment({ amount: '99.5' }), payment({ amount: '.50' })] }),
+      entry({ amount: '7.', date: '2026-12-02', payments: [payment({ amount: '7' })] }),
+      entry({ amount: '-5.00', date: '2026-12-03', payments: [payment({ amount: '-5.00' })] }),
+    ])
+    expect(result.deposits.map((d) => [d.amount, d.payments.map((p) => p.amount)])).toEqual([[100, [99.5, 0.5]], [7, [7]]])
+    expect(result.rejected_deposits).toBe(1)
   })
 
   it('reads the newer layout: status in <Cd>, a date-time, the payer in <Pty>, the amount under <TxDtls>', () => {
@@ -191,6 +216,29 @@ describe('parseCamt054', () => {
       entry({ amount: '100.005', date: '2026-12-01', payments: [payment({ amount: '100.005' })] }),
     ])
     expect(result).toMatchObject({ deposits: [], rejected_deposits: 2 })
+
+    // The currency attribute written with spaces around its equals sign is the same attribute.
+    const spaced = document([
+      notification({ entries: [entry({ amount: '100.00', date: '2026-12-01', payments: [payment({ amount: '100.00', currency: 'USD' })] })] }),
+    ]).replaceAll('Ccy="USD"', 'Ccy = "USD"')
+    expect(parseCamt054(spaced)).toMatchObject({ deposits: [], rejected_deposits: 1 })
+  })
+
+  it('reads only invoices and credit notes as references, never another kind of document', () => {
+    const result = one([
+      entry({
+        amount: '800.00',
+        date: '2026-12-01',
+        payments: [
+          payment({ amount: '300.00', structured: [{ number: '1002', code: 'PUOR' }] }),
+          payment({ amount: '500.00', structured: [{ number: '4471', code: 'PUOR' }, { number: '1003', code: 'CINV' }, { number: '1004' }] }),
+        ],
+      }),
+    ])
+    expect(result.deposits[0]!.payments).toMatchObject([
+      { reference: null, reference_code: '0', extra_references: [] },
+      { reference: '1003', extra_references: ['1004'] },
+    ])
   })
 
   it('skips what is no deposit: a debit, a pending entry, a reversal, an entry without payment details', () => {
@@ -198,12 +246,13 @@ describe('parseCamt054', () => {
       entry({ amount: '10.00', date: '2026-12-01', indicator: 'DBIT', payments: [payment({ amount: '10.00' })] }),
       entry({ amount: '20.00', date: '2026-12-01', status: 'PDNG', payments: [payment({ amount: '20.00' })] }),
       entry({ amount: '30.00', date: '2026-12-01', reversal: true, payments: [payment({ amount: '30.00' })] }),
+      entry({ amount: '35.00', date: '2026-12-01', reversal: '1', payments: [payment({ amount: '35.00' })] }),
       entry({ amount: '40.00', date: '2026-12-01', payments: [] }),
-      entry({ amount: '50.00', date: '2026-12-01', payments: [payment({ amount: '50.00' })] }),
+      entry({ amount: '50.00', date: '2026-12-01', reversal: 'false', payments: [payment({ amount: '50.00' })] }),
     ])
-    expect(result).toMatchObject({ skipped_entries: 4, rejected_deposits: 0 })
+    expect(result).toMatchObject({ skipped_entries: 5, rejected_deposits: 0 })
     expect(result.deposits).toMatchObject([{ amount: 50 }])
-    expect(result.issues.map((i) => [i.entry, i.severity])).toEqual([[2, 'info'], [4, 'info']])
+    expect(result.issues.map((i) => [i.entry, i.severity])).toEqual([[2, 'info'], [5, 'info']])
   })
 
   it('warns when the batch states another number of payments', () => {
