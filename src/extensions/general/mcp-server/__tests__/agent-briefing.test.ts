@@ -478,6 +478,12 @@ describe('gnubok_get_agent_briefing tool', () => {
     expect(result.memory_sync.last_synced_at).toBe('2026-10-02T09:00:00Z')
     expect(result.memory_sync.note).toContain('origin: session_sync')
     expect(result.where_to_find.join(' ')).toContain('gnubok_remember_fact')
+    // The memory line says where a note about one purchase belongs, in the tool description's own sentence.
+    const purchaseNotePlace =
+      "A note about one purchase or verifikat (who took part, what a receipt was for) goes on that verifikat with gnubok_set_voucher_note or in the booking's description, not here."
+    expect(result.where_to_find[0]).toMatch(/^memory: /)
+    expect(result.where_to_find[0]).toContain(purchaseNotePlace)
+    expect(tools.find((t) => t.name === 'gnubok_remember_fact')!.description).toContain(purchaseNotePlace)
     expect(result.memory_truncated).toBeUndefined()
   })
 
