@@ -326,7 +326,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/uncredit', () 
       credit_note_id: CREDIT_ID,
       posts_storno: true,
       credit_voucher: 'A42',
-      // Booked but never attested: it goes back to wait for attest (crm#2121).
+      // Booked but never attested: it goes back to wait for attest (crm#2165).
       restored_status: 'registered',
       remaining_amount: 6250,
     })

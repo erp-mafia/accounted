@@ -288,8 +288,9 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     enqueue({ data: original, error: null })
     // Find credit row filters out status='reversed': nothing comes back
     enqueue({ data: null, error: null })
+    // Never attested: it goes back to wait for attest (crm#2165).
     enqueue({
-      data: { ...original, status: 'approved', remaining_amount: 5000 },
+      data: { ...original, status: 'registered', remaining_amount: 5000 },
       error: null,
     })
 
@@ -301,7 +302,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.status).toBe('approved')
+    expect(body.data.status).toBe('registered')
     expect(body.reversal_entry_id).toBeNull()
     expect(mockReverseEntry).not.toHaveBeenCalled()
   })
@@ -325,7 +326,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     mockReverseEntry.mockResolvedValue({ id: 'je-reversal' })
     enqueue({ data: null, error: null })
     enqueue({
-      data: { ...original, status: 'approved', remaining_amount: 5000 },
+      data: { ...original, status: 'registered', remaining_amount: 5000 },
       error: null,
     })
 

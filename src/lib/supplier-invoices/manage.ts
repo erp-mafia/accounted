@@ -229,7 +229,7 @@ type OriginalWithPayments = SupplierInvoice & { payments?: SupplierInvoicePaymen
  * With nothing paid it rests where resolveUnsettledStatus puts it: the
  * attest mark (approved_at) decides 'approved', never the registration
  * verifikat, which is posted before attest. Reading the verifikat sent a
- * never attested invoice back as 'approved', past attest (crm#2121).
+ * never attested invoice back as 'approved', past attest (crm#2165).
  */
 export function restoredAfterUncredit(
   original: Pick<SupplierInvoice, 'total' | 'due_date' | 'approved_at'>,

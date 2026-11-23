@@ -5,7 +5,7 @@ import { invoiceCustomerOutstanding } from '@/lib/bookkeeping/customer-share'
 import type { JournalEntry } from '@/types'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
-import { resolveUnsettledStatus } from '@/lib/supplier-invoices/lifecycle'
+import { resolveUnsettledStatus } from '@/lib/bookkeeping/supplier-invoice-rest-status'
 
 const log = createLogger('payment-sync')
 
@@ -201,7 +201,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       const newPaidAmount = roundOre(supplierInvoice.paid_amount - paymentAmount)
       const newRemaining = roundOre(supplierInvoice.total - Math.max(0, newPaidAmount))
       // Nothing paid: the attest mark decides 'approved', so an invoice paid
-      // before anyone attested it waits for attest again (crm#2121).
+      // before anyone attested it waits for attest again (crm#2165).
       const newStatus = newPaidAmount > 0
         ? 'partially_paid'
         : resolveUnsettledStatus(

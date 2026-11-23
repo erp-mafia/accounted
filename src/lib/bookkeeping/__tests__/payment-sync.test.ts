@@ -490,9 +490,9 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
     })
   })
 
-  // crm#2121: approved_at is the attest mark (lifecycle.ts
-  // resolveUnsettledStatus). An undone payment puts an invoice nobody attested
-  // back in front of attest; it never comes back 'approved'.
+  // crm#2165: approved_at is the attest mark (resolveUnsettledStatus). An
+  // undone payment puts an invoice nobody attested back in front of attest; it
+  // never comes back 'approved'.
   it('a supplier payment storno returns a never attested invoice to registered', async () => {
     const { supabase, updatePayload } = createRecordingSupabase([
       { data: [{ id: 'sip-1', amount: 1000, transaction_id: null }] }, // supplier_invoice_payments rows

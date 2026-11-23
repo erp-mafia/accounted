@@ -1,7 +1,7 @@
 /**
  * "Ångra kreditering" returns the original to the status its own facts give
- * (crm#2121). Whether it was attested is one of those facts, and approved_at
- * is the only mark of it (lifecycle.ts resolveUnsettledStatus): an invoice
+ * (crm#2165). Whether it was attested is one of those facts, and approved_at
+ * is the only mark of it (resolveUnsettledStatus): an invoice
  * that was never attested goes back to 'registered' and waits for attest,
  * whether or not its registration verifikat is posted. Reading the verifikat
  * as the attest let a credited and uncredited invoice skip attest.

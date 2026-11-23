@@ -36,7 +36,7 @@ const NOTHING_LEFT_EPSILON = 0.005
  * the overdue flip, a due date edit and a payment undo all leave it alone.
  * The stored status 'approved' without a mark is the other shape: rows
  * inserted as 'approved', and rows a payment undo or an undone credit rested
- * there before both asked resolveUnsettledStatus (crm#2121). From there an
+ * there before both asked resolveUnsettledStatus (crm#2165). From there an
  * invoice can no longer be attested (canApproveSupplierInvoice refuses
  * 'approved'), so it is past the attest step for every reader.
  */
