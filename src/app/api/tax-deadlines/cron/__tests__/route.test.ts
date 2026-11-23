@@ -88,12 +88,13 @@ describe('GET /api/tax-deadlines/cron', () => {
     expect(mocks.backfill).toHaveBeenCalledWith(expect.anything(), { deadline: startedAt + 240_000 })
   })
 
-  it('moves helårsmoms rows the books date earlier after the repair, in at most 60 s of the run', async () => {
+  it('moves helårsmoms rows the books date earlier after the repair, in what is left of the run budget', async () => {
     const startedAt = Date.now()
     const order: string[] = []
     mocks.backfill.mockImplementation(async () => {
       order.push('repair')
-      // The repair takes 30 s: the pass's minute starts when it does.
+      // The repair takes 30 s: the pass has the 210 s left, not a minute
+      // from when it starts (a minute read a third of the queue a night).
       vi.advanceTimersByTime(30_000)
       return { companiesScanned: 10, companiesRepaired: 2, totalCreated: 24, companiesNotReached: 0 }
     })
@@ -105,7 +106,7 @@ describe('GET /api/tax-deadlines/cron', () => {
     const response = await GET(createCronRequest('/api/tax-deadlines/cron'))
 
     expect(order).toEqual(['repair', 'eu-trade'])
-    expect(mocks.euTrade).toHaveBeenCalledWith(expect.anything(), { deadline: startedAt + 90_000 })
+    expect(mocks.euTrade).toHaveBeenCalledWith(expect.anything(), { deadline: startedAt + 240_000 })
     await expect(response.json()).resolves.toMatchObject({
       euTradeCompaniesChecked: 5,
       euTradeCompaniesMoved: 1,
