@@ -519,6 +519,53 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(insertCalls.some((args) => args[0] === 'pending_operations')).toBe(true)
   })
 
+  it('previews each line with the currency, amount in currency and rate it will store (crm#2161)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'fp-1', is_closed: false, period_start: '2026-01-01', period_end: '2026-12-31', name: '2026' },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '2999', account_name: 'Övriga upplupna kostnader', is_active: true },
+        { account_number: '1510', account_name: 'Kundfordringar', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-staged' }, error: null })
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-05-12',
+        description: 'Kundbetalning i euro',
+        fiscal_period_id: 'fp-1',
+        lines: [
+          { account_number: '2999', debit_amount: 1129, credit_amount: 0 },
+          {
+            account_number: '1510',
+            debit_amount: 0,
+            credit_amount: 1129,
+            currency: 'EUR',
+            amount_in_currency: 100,
+            exchange_rate: 11.29,
+          },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { lines: Array<Record<string, unknown>> } }
+
+    expect(result.staged).toBe(true)
+    const byAccount = Object.fromEntries(result.preview.lines.map((l) => [l.account_number, l]))
+    // A line without a currency is previewed as the kronor line it posts as,
+    // so an agent sees a 1510 line that will not match a foreign invoice.
+    expect(byAccount['2999']).toMatchObject({ currency: 'SEK', amount_in_currency: null, exchange_rate: null })
+    expect(byAccount['1510']).toMatchObject({ currency: 'EUR', amount_in_currency: 100, exchange_rate: 11.29 })
+  })
+
   it('refuses to stage until the person confirmed the booking-time warnings, handing them to the agent', async () => {
     const warnings = [{ code: 'INPUT_VAT_ABOVE_RATE', message_sv: 'x', message_en: 'x', details: {} }]
     mockVoucherGuard.mockResolvedValue({ ok: false, code: 'VOUCHER_NEEDS_CONFIRMATION', details: { warnings } })
