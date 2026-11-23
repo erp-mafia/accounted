@@ -630,7 +630,7 @@ interface PeriodRange {
  * quarter, or for helårsmoms the räkenskapsår (the fiscal period covering
  * it, the calendar year when none does, as resolvePeriodDates falls back).
  */
-async function vatPeriodHolding(
+export async function vatPeriodHolding(
   supabase: SupabaseClient,
   companyId: string,
   type: VatPeriodType,

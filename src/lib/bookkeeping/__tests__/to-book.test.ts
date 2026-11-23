@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   toBookAmountLabel,
   toBookIsMoneyIn,
@@ -6,11 +6,14 @@ import {
   buildToBookRows,
   inToBookFilter,
   opensInBookingScreen,
+  readAllToBookBankRows,
   toBookCounts,
   toBookFilterFromSlug,
   toBookFilterOfBack,
   toBookListHref,
   TO_BOOK_FILTERS,
+  type ToBookBankCursor,
+  type ToBookBankPage,
   type ToBookBankRow,
   type ToBookDocument,
 } from '../to-book'
@@ -141,5 +144,90 @@ describe('the amount a row shows', () => {
 
   it('keeps the currency of a foreign amount', () => {
     expect(toBookAmountLabel({ kind: 'bank', amount: 12.5, currency: 'EUR' })).toMatch(/^\+12,50\s€$/)
+  })
+})
+
+describe('readAllToBookBankRows', () => {
+  const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
+
+  /**
+   * GET /api/transactions?unmatched=true as the route answers it: newest
+   * first, then id; at most 500 rows; has_more and next when more follow,
+   * and after_date/after_id continuing after the row they name.
+   */
+  const route = (open: ToBookBankRow[]) => {
+    const ordered = [...open].sort((a, b) => (a.date === b.date ? (a.id < b.id ? -1 : 1) : a.date < b.date ? 1 : -1))
+    return vi.fn(async (after: ToBookBankCursor | null): Promise<ToBookBankPage> => {
+      const rest = after
+        ? ordered.filter((r) => r.date < after.after_date || (r.date === after.after_date && r.id > after.after_id))
+        : ordered
+      const data = rest.slice(0, 500)
+      const hasMore = rest.length > 500
+      const last = data[data.length - 1]
+      return { data, has_more: hasMore, next: hasMore ? { after_date: last.date, after_id: last.id } : null }
+    })
+  }
+
+  /** 509 open rows, the oldest 60 on one day, as the company that uses the list today holds them (crm#2163). */
+  const realCase = (): ToBookBankRow[] =>
+    Array.from({ length: 509 }, (_, i) =>
+      bank({ id: uuid(i), date: i < 60 ? '2026-10-29' : `2026-11-${String(1 + (i % 23)).padStart(2, '0')}` }),
+    )
+
+  it('reads every open row past the 500 one answer holds, so the list and its counts hold all 509 (crm#2163)', async () => {
+    const open = realCase()
+    const readPage = route(open)
+
+    const rows = await readAllToBookBankRows(readPage)
+
+    expect(rows).toHaveLength(509)
+    expect(new Set(rows.map((r) => r.id)).size).toBe(509)
+    expect(toBookCounts(buildToBookRows(rows, []))).toMatchObject({ all: 509, missing: 509 })
+    // The second page starts after the first page's last row, inside the oldest day.
+    expect(readPage).toHaveBeenCalledTimes(2)
+    expect(readPage.mock.calls[0][0]).toBeNull()
+    expect(readPage.mock.calls[1][0]).toEqual({ after_date: '2026-10-29', after_id: rows[499].id })
+  })
+
+  it('keeps the route order across pages when every row has the same date', async () => {
+    const open = Array.from({ length: 1203 }, (_, i) => bank({ id: uuid(1202 - i), date: '2026-11-02' }))
+    const readPage = route(open)
+
+    const rows = await readAllToBookBankRows(readPage)
+
+    expect(readPage).toHaveBeenCalledTimes(3)
+    expect(rows.map((r) => r.id)).toEqual(Array.from({ length: 1203 }, (_, i) => uuid(i)))
+  })
+
+  it('asks once when one answer holds every row', async () => {
+    const readPage = route([bank({ id: uuid(1) }), bank({ id: uuid(2) })])
+
+    expect(await readAllToBookBankRows(readPage)).toHaveLength(2)
+    expect(readPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails, never loops or repeats rows, on an answer with more but no next, or a next that does not move', async () => {
+    const noNext = vi.fn(async (): Promise<ToBookBankPage> => ({ data: [bank()], has_more: true, next: null }))
+    await expect(readAllToBookBankRows(noNext)).rejects.toThrow('no next page')
+    expect(noNext).toHaveBeenCalledTimes(1)
+
+    // A route that ignores the cursor answers the first page again.
+    const stuck = vi.fn(async (): Promise<ToBookBankPage> => ({
+      data: [bank()],
+      has_more: true,
+      next: { after_date: '2026-11-18', after_id: 'tx-1' },
+    }))
+    await expect(readAllToBookBankRows(stuck)).rejects.toThrow('no next page')
+    expect(stuck).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails the whole read when a later page fails, so a partial list is never shown as the whole', async () => {
+    const pages = route(realCase())
+    const readPage = vi.fn(async (after: ToBookBankCursor | null) => {
+      if (after) throw new Error('HTTP 500')
+      return pages(after)
+    })
+
+    await expect(readAllToBookBankRows(readPage)).rejects.toThrow('HTTP 500')
   })
 })

@@ -184,7 +184,7 @@ describe('previewVoucherVatDeclaration', () => {
     const { supabase, calls } = createTableMockSupabase({
       company_settings: { data: answers.settings?.data ?? null, error: answers.settings?.error ?? null },
       chart_of_accounts: { data: answers.chart ?? [] },
-      // One year by id, or the company's years for the filing records.
+      // The year that holds the date, or the company's years for the filing records.
       fiscal_periods: (chain) => ({
         data: chain.some((call) => call.method === 'maybeSingle' || call.method === 'single')
           ? (answers.fiscalPeriod ?? null)
@@ -206,7 +206,6 @@ describe('previewVoucherVatDeclaration', () => {
 
   const input = {
     entryDate: '2026-10-25',
-    fiscalPeriodId: 'fp-1',
     lines: toLines(HISTORICAL_CORRECTION),
     isOpeningBalance: false,
   }
@@ -259,6 +258,52 @@ describe('previewVoucherVatDeclaration', () => {
     })
     const result = await previewVoucherVatDeclaration(client, 'company-1', input)
     expect(result.vat_period).toMatchObject({ type: 'yearly', year: 2027, period: 1, start: '2026-07-01', end: '2027-06-30' })
+  })
+
+  describe('helårsmoms on a broken räkenskapsår, read from the date alone (crm#2168)', () => {
+    const years = [
+      { period_start: '2024-07-01', period_end: '2025-06-30' },
+      { period_start: '2025-07-01', period_end: '2026-06-30' },
+    ]
+    /** fiscal_periods answered by the range filters the query puts on it. */
+    function brokenYearClient() {
+      const { supabase } = createTableMockSupabase({
+        company_settings: { data: { vat_registered: true, moms_period: 'yearly' } },
+        chart_of_accounts: { data: [] },
+        fiscal_periods: (chain) => {
+          let rows = years
+          for (const { method, args } of chain) {
+            const [column, value] = args as ['period_start' | 'period_end', string]
+            if (method === 'gte') rows = rows.filter((row) => row[column] >= value)
+            if (method === 'lte') rows = rows.filter((row) => row[column] <= value)
+          }
+          const single = chain.some((call) => call.method === 'maybeSingle' || call.method === 'single')
+          return { data: single ? (rows[0] ?? null) : rows }
+        },
+        deadlines: { data: [] },
+        'rpc:skattekonto_shape_accounts': { data: ['1630'] },
+      })
+      return supabase as unknown as SupabaseClient
+    }
+
+    it('names the räkenskapsår that holds the date, not the one ending in its calendar year', async () => {
+      const result = await previewVoucherVatDeclaration(brokenYearClient(), 'company-1', {
+        entryDate: '2025-09-15',
+        lines: toLines([['1930', 1250, 0], ['3001', 0, 1000], ['2611', 0, 250]]),
+        isOpeningBalance: false,
+      })
+      expect(result.vat_period).toMatchObject({ year: 2026, start: '2025-07-01', end: '2026-06-30', label: 'Helår 2026' })
+      expect(result.summary).toContain('för Helår 2026')
+    })
+
+    it('reads an opening balance on the first day of that year as the year\'s first day', async () => {
+      const result = await previewVoucherVatDeclaration(brokenYearClient(), 'company-1', {
+        entryDate: '2025-07-01',
+        lines: toLines([['1930', 1000, 0], ['2081', 0, 1000]]),
+        isOpeningBalance: true,
+      })
+      expect(result).toMatchObject({ counted: false, excluded_as: 'opening_balance' })
+    })
   })
 
   it('answers not_vat_registered without reading further', async () => {

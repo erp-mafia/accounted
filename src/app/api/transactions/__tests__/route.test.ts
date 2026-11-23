@@ -74,6 +74,7 @@ describe('GET /api/transactions', () => {
       data: typeof txs
       has_more: boolean
       limit: number
+      next: unknown
     }>(response)
 
     expect(status).toBe(200)
@@ -81,6 +82,7 @@ describe('GET /api/transactions', () => {
     expect(body.data[0].id).toBe('tx-1')
     expect(body.has_more).toBe(false)
     expect(body.limit).toBe(500)
+    expect(body.next).toBeNull()
   })
 
   it('signals has_more=true and truncates to the cap when more rows exist', async () => {
@@ -96,12 +98,15 @@ describe('GET /api/transactions', () => {
       data: typeof txs
       has_more: boolean
       limit: number
+      next: unknown
     }>(response)
 
     expect(status).toBe(200)
     expect(body.data).toHaveLength(500)
     expect(body.has_more).toBe(true)
     expect(body.limit).toBe(500)
+    // The next page starts after the last row answered, not after the extra one read.
+    expect(body.next).toEqual({ after_date: txs[499].date, after_id: 'tx-499' })
   })
 
   it('filters by unmatched=true', async () => {
@@ -204,6 +209,87 @@ describe('GET /api/transactions', () => {
     expect(findCall('open_bank_rows', 'or')).toEqual([
       'description.ilike.%Acme company_id.neq.x%,merchant_name.ilike.%Acme company_id.neq.x%',
     ])
+  })
+
+  it('orders newest first, then by id, so every page continues where the one before ended', async () => {
+    enqueue({ data: [], error: null })
+
+    await GET(createMockRequest('/api/transactions?unmatched=true'), createMockRouteParams({}))
+
+    expect(findCalls('open_bank_rows', 'order')).toEqual([
+      ['date', { ascending: false }],
+      ['id', { ascending: true }],
+    ])
+    expect(findCall('open_bank_rows', 'or')).toBeUndefined()
+  })
+
+  it('reads the page after the row after_date and after_id name (crm#2163)', async () => {
+    const id = '00000000-0000-4000-8000-0000000001f3'
+    enqueue({ data: [makeTransaction({ id: 'tx-501', date: '2026-10-29' })], error: null })
+
+    const response = await GET(
+      createMockRequest(`/api/transactions?unmatched=true&after_date=2026-10-29&after_id=${id}`),
+      createMockRouteParams({}),
+    )
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string }>; has_more: boolean; next: unknown }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.map((t) => t.id)).toEqual(['tx-501'])
+    expect(body.has_more).toBe(false)
+    expect(body.next).toBeNull()
+    expect(findCall('open_bank_rows', 'or')).toEqual([`date.lt.2026-10-29,and(date.eq.2026-10-29,id.gt.${id})`])
+  })
+
+  it('takes back its own next: the cursor of the last row it answered', async () => {
+    const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
+    enqueue({ data: Array.from({ length: 501 }, (_, i) => makeTransaction({ id: uuid(i), date: '2026-10-29' })), error: null })
+    const first = await parseJsonResponse<{ next: { after_date: string; after_id: string } }>(
+      await GET(createMockRequest('/api/transactions?unmatched=true'), createMockRouteParams({})),
+    )
+    expect(first.body.next).toEqual({ after_date: '2026-10-29', after_id: uuid(499) })
+
+    reset()
+    enqueue({ data: [], error: null })
+    const params = new URLSearchParams({ unmatched: 'true', ...first.body.next })
+    const second = await GET(createMockRequest(`/api/transactions?${params}`), createMockRouteParams({}))
+
+    expect(second.status).toBe(200)
+    expect(findCall('open_bank_rows', 'or')).toEqual([`date.lt.2026-10-29,and(date.eq.2026-10-29,id.gt.${uuid(499)})`])
+  })
+
+  it('keeps the account scope and the search when it pages: each is its own filter', async () => {
+    const accountId = '00000000-0000-4000-8000-00000000ca01'
+    const id = '00000000-0000-4000-8000-0000000001f3'
+    enqueue({ data: { id: accountId, currency: 'SEK', is_primary: true }, error: null })
+    enqueue({ data: [], error: null })
+
+    const response = await GET(
+      createMockRequest(`/api/transactions?unmatched=true&account_number=1930&q=Acme&after_date=2026-10-29&after_id=${id}`),
+      createMockRouteParams({}),
+    )
+
+    expect(response.status).toBe(200)
+    expect(findCalls('open_bank_rows', 'or')).toEqual([
+      [`cash_account_id.eq.${accountId},cash_account_id.is.null`],
+      ['description.ilike.%Acme%,merchant_name.ilike.%Acme%'],
+      [`date.lt.2026-10-29,and(date.eq.2026-10-29,id.gt.${id})`],
+    ])
+  })
+
+  it('refuses a half cursor, an impossible date or an id that is not a uuid, before reading anything', async () => {
+    const id = '00000000-0000-4000-8000-0000000001f3'
+    const cursors = [
+      'after_date=2026-10-29',
+      `after_id=${id}`,
+      `after_date=2026-02-31&after_id=${id}`,
+      `after_date=2026-10-29&after_id=${encodeURIComponent('x),company_id.neq.(y')}`,
+    ]
+    for (const cursor of cursors) {
+      reset()
+      const response = await GET(createMockRequest(`/api/transactions?unmatched=true&${cursor}`), createMockRouteParams({}))
+      expect(response.status, cursor).toBe(400)
+      expect(findCall('open_bank_rows', 'select'), cursor).toBeUndefined()
+    }
   })
 
   it('filters by reconciled=true', async () => {

@@ -839,7 +839,9 @@ export type TableMockResult = { data?: unknown; error?: unknown; count?: number 
  * A table answer computed from the chain that asked: every builder call made
  * on that one chain (`.select()`, `.eq()`, `.in()`, ...), in order. For a
  * table the code reads in two shapes (one row by id, a list by `.in()`), so a
- * test answers by WHAT was asked instead of by the order of the reads.
+ * test answers by WHAT was asked instead of by the order of the reads. An
+ * RPC's chain starts with the call itself, `{ method: 'rpc', args: [args] }`,
+ * so calls of one function side by side are each answered by their own args.
  *
  * It may answer with a Promise, for a test that lets something else happen
  * while the statement is on its way (another request interleaved with it). A
@@ -962,10 +964,11 @@ export function createTableMockSupabase(
 
   const supabase = {
     from: vi.fn((table: string) => buildChain(table)),
-    // Recorded as method 'rpc' on key 'rpc:<name>', so findCall can read the args.
+    // Recorded as method 'rpc' on key 'rpc:<name>', so findCall can read the
+    // args, and first on its own chain, so a resolver can.
     rpc: vi.fn((name: string, args?: unknown) => {
       calls.push({ table: `rpc:${name}`, method: 'rpc', args: [args] })
-      return buildChain(`rpc:${name}`)
+      return buildChain(`rpc:${name}`, [{ method: 'rpc', args: [args] }])
     }),
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null }),
@@ -1068,6 +1071,61 @@ export function routeRpcCalls(rpc: { mock: { calls: unknown[][] } }): unknown[][
 /** PostgREST's max-rows: what one request returns without a smaller window. */
 export const POSTGREST_MAX_ROWS = 1000
 
+export interface PagedMockOptions {
+  /**
+   * Sort each read by its `.order()` columns the way Postgres pages it: rows
+   * that tie on every ordered column (every row, when nothing is ordered)
+   * come back in another order on each page, as the sort under each LIMIT
+   * and OFFSET returns them. A read paged without a total order then reads
+   * some rows twice and others never, as in production. Off, rows come back
+   * in seed order whatever the read orders by.
+   */
+  sortLikePostgres?: boolean
+}
+
+/** Where a tied row lands on the page that starts at `offset`. */
+function tieRank(index: number, offset: number): number {
+  let h = Math.imul(index + 1, 0x9e3779b1) ^ Math.imul(offset + 1, 0x85ebca77)
+  h ^= h >>> 15
+  h = Math.imul(h, 0x2c1b3c6d)
+  h ^= h >>> 12
+  return h >>> 0
+}
+
+interface MockOrder {
+  column: string
+  ascending: boolean
+  /** Postgres's default: nulls first when descending, last when ascending. */
+  nullsFirst: boolean
+}
+
+/** Two values in one order column, as Postgres compares them. */
+function compareLikePostgres(x: unknown, y: unknown, { ascending, nullsFirst }: MockOrder): number {
+  const xNull = x === null || x === undefined
+  const yNull = y === null || y === undefined
+  if (xNull || yNull) return xNull === yNull ? 0 : xNull === nullsFirst ? -1 : 1
+  let c: number
+  if (typeof x === 'number' && typeof y === 'number') c = x - y
+  else {
+    const [a, b] = [String(x), String(y)]
+    c = a < b ? -1 : a > b ? 1 : 0
+  }
+  return ascending ? c : -c
+}
+
+function sortedLikePostgres(rows: unknown[], orders: MockOrder[], offset: number): unknown[] {
+  return rows
+    .map((row, index) => ({ row: row as Record<string, unknown>, tie: tieRank(index, offset) }))
+    .sort((a, b) => {
+      for (const order of orders) {
+        const c = compareLikePostgres(a.row[order.column], b.row[order.column], order)
+        if (c !== 0) return c
+      }
+      return a.tie - b.tie
+    })
+    .map((r) => r.row)
+}
+
 /**
  * A Supabase mock that pages like PostgREST, for "more than 1,000 rows"
  * tests: a read returns at most POSTGREST_MAX_ROWS rows, `.range(from, to)`
@@ -1078,9 +1136,10 @@ export const POSTGREST_MAX_ROWS = 1000
  * but not applied, so a test seeds only the rows the filters would return.
  * `.single()` / `.maybeSingle()` answer the first row, a `head: true` select
  * answers the count, and writes resolve with no data. A table with nothing
- * seeded reads as empty.
+ * seeded reads as empty. `{ sortLikePostgres: true }` also orders each read
+ * (PagedMockOptions).
  */
-export function createPagedMockSupabase(tables: Record<string, unknown[]> = {}) {
+export function createPagedMockSupabase(tables: Record<string, unknown[]> = {}, options: PagedMockOptions = {}) {
   const calls: { table: string; method: string; args: unknown[] }[] = []
 
   const buildChain = (key: string): unknown => {
@@ -1090,9 +1149,11 @@ export function createPagedMockSupabase(tables: Record<string, unknown[]> = {}) 
     let single: 'single' | 'maybeSingle' | null = null
     let head = false
     let write = false
+    const orders: MockOrder[] = []
 
     const resolve = () => {
-      const rows = tables[key] ?? []
+      const seeded = tables[key] ?? []
+      const rows = options.sortLikePostgres ? sortedLikePostgres(seeded, orders, from) : seeded
       if (write) return { data: null, error: null, count: null }
       if (head) return { data: null, error: null, count: rows.length }
       if (single) {
@@ -1121,6 +1182,14 @@ export function createPagedMockSupabase(tables: Record<string, unknown[]> = {}) 
               to = Number(args[1])
             } else if (method === 'limit') {
               limit = Number(args[0])
+            } else if (method === 'order') {
+              const how = args[1] as
+                | { ascending?: boolean; nullsFirst?: boolean; foreignTable?: string; referencedTable?: string }
+                | undefined
+              const ascending = how?.ascending !== false
+              if (!how?.foreignTable && !how?.referencedTable) {
+                orders.push({ column: String(args[0]), ascending, nullsFirst: how?.nullsFirst ?? !ascending })
+              }
             } else if (method === 'single' || method === 'maybeSingle') {
               single = method
             } else if (method === 'select') {

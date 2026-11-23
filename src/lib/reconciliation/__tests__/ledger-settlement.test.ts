@@ -395,9 +395,18 @@ function fakeSupabase(db: Db, options: { failTable?: string } = {}) {
           error: null,
         })
       }
+      // A candidate list (get_unlinked_gl_lines, get_account_gl_lines_for_matching)
+      // is read in its two halves: the narrowing names the verifikat, the
+      // predicate answers the lines of the ones it is handed.
+      if (name === 'bank_account_unlinked_entries' || name === 'bank_account_candidate_entries') {
+        reads.push(`rpc:${name}`)
+        return Promise.resolve({ data: [...new Set(ledgerOnlyLines(db, args).map((l) => l.journal_entry_id))], error: null })
+      }
       return new Query(
         `rpc:${name}`,
-        name === 'get_unlinked_gl_lines' || name === 'get_account_gl_lines_for_matching' ? ledgerOnlyLines(db, args) : [],
+        name === 'bank_account_unlinked_lines' || name === 'bank_account_candidate_lines'
+          ? ledgerOnlyLines(db, args).filter((l) => (args.p_entry_ids as unknown[]).includes(l.journal_entry_id))
+          : [],
       )
     },
   }

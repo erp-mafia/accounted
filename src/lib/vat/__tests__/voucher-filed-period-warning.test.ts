@@ -91,7 +91,6 @@ describe('filedPeriodVoucherWarning: a new verifikat', () => {
     })
     expect(impact.previewVoucherVatDeclaration).toHaveBeenCalledWith(supabase, 'c-1', {
       entryDate: '2026-09-27',
-      fiscalPeriodId: null,
       lines: purchase(125),
       isOpeningBalance: false,
     })
