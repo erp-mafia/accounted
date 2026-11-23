@@ -548,11 +548,12 @@ describe('the question list event handlers', () => {
     vi.clearAllMocks()
   })
 
-  it('subscribes to a question filed, answered and closed, and to nothing else', () => {
+  it('subscribes to a question filed, answered and closed and to an operation linked to one, and to nothing else', () => {
     expect((whatsappInboxExtension.eventHandlers ?? []).map((entry) => entry.eventType)).toEqual([
       'company_question.filed',
       'company_question.answered',
       'company_question.closed',
+      'company_question.prepared',
     ])
   })
 

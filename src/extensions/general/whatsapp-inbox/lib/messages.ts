@@ -70,6 +70,7 @@ export const TEMPLATE = {
   m28ListQuestionBack: 'm28_list_question_back',
   m29FileTooLarge: 'm29_file_too_large',
   m30ListSettled: 'm30_list_settled',
+  m31ListPrepared: 'm31_list_prepared',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
@@ -308,6 +309,13 @@ const SV = {
   // note.
   m30ListSettled: ({ note }: { note?: string | null }) =>
     note ? `Den här frågan är löst, du behöver inte svara.\n${note}` : 'Den här frågan är löst, du behöver inte svara.',
+
+  // A staged operation was linked to a list question the person answered in
+  // the chat: one sentence, then the app's address of the review list on a
+  // line of its own. listPreparedBody (lib/list-question.ts) builds the
+  // address.
+  m31ListPrepared: ({ url }: { url: string }) =>
+    `Jag har förberett bokföringen efter ditt svar. Den väntar på ditt godkännande i appen:\n${url}`,
 }
 
 const EN: typeof SV = {
@@ -472,6 +480,9 @@ const EN: typeof SV = {
 
   m30ListSettled: ({ note }: { note?: string | null }) =>
     note ? `This question is settled, you do not need to answer.\n${note}` : 'This question is settled, you do not need to answer.',
+
+  m31ListPrepared: ({ url }: { url: string }) =>
+    `I have prepared the bookkeeping from your answer. It is waiting for your approval in the app:\n${url}`,
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }

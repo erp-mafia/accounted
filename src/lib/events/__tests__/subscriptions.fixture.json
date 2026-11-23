@@ -54,7 +54,8 @@
   ],
   "company_question.prepared": [
     "event-log",
-    "webhooks"
+    "webhooks",
+    "ext:whatsapp-inbox"
   ],
   "company_question.reopened": [
     "event-log",

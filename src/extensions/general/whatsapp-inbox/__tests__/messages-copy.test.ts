@@ -203,3 +203,25 @@ describe('m30ListSettled, a question in flight that was closed as settled', () =
   }
 })
 
+describe('m31ListPrepared, a staged operation linked to a question answered in the chat', () => {
+  const sentence = {
+    sv: 'Jag har förberett bokföringen efter ditt svar. Den väntar på ditt godkännande i appen:',
+    en: 'I have prepared the bookkeeping from your answer. It is waiting for your approval in the app:',
+  } as const
+  const url = 'https://app.example.test/pending'
+
+  it('has its own message id, shared with no other message', () => {
+    expect(TEMPLATE.m31ListPrepared).toBe('m31_list_prepared')
+    const ids = Object.values(TEMPLATE)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  for (const locale of ['sv', 'en'] as const) {
+    it(`${locale}: says the bookkeeping is prepared and waits for approval, then the address on a line of its own, without a dash`, () => {
+      const body = botCopy(locale).m31ListPrepared({ url })
+      expect(body).toBe(`${sentence[locale]}\n${url}`)
+      expect(body.split('\n')).toHaveLength(2)
+      expect(body).not.toMatch(/[–—]/)
+    })
+  }
+})

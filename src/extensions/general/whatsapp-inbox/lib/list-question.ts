@@ -69,12 +69,17 @@
  * get one message saying so, with the note of the close, and the next open
  * list question follows as after an answer in the chat (settleListQuestion).
  *
+ * A staged operation linked to a question that was answered in the chat is
+ * told to the person who answered, once per question, with the app's address
+ * of the review list (tellListPrepared).
+ *
  * The plaintext phone is never stored: it is decrypted from the link for the
  * send only. Asked, answered and expired go to processing_history.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
+import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { companyQuestionsRollout, isCompanyQuestionsEnabled } from '@/lib/env/company-questions-switch'
 import { isUuid } from '@/lib/invariants/uuid'
 import { createLogger } from '@/lib/logger'
@@ -1241,6 +1246,136 @@ export async function settleListQuestion(
   } catch (err: unknown) {
     log.warn('a settled question was not cleared from its conversations', {
       questionId: settled.questionId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+// ── A staged operation linked to an answered question ───────
+
+/** The page of the app where staged operations wait for approval. */
+const REVIEW_LIST_PATH = '/pending'
+
+/**
+ * The body of the message that says the bookkeeping is prepared: the fixed
+ * sentence, then the address of the app's review list on a line of its own.
+ * `baseUrl` is the app's address for the company (getBaseUrlForCompany).
+ */
+export function listPreparedBody(baseUrl: string, locale: BotLocale = 'sv'): string {
+  return botCopy(locale).m31ListPrepared({ url: `${baseUrl.replace(/\/+$/, '')}${REVIEW_LIST_PATH}` })
+}
+
+/**
+ * Whether the message that says the bookkeeping is prepared already went out
+ * for the question: an outbound row with its template, stamped with the
+ * question as its correlation id. A send that was refused did not go out.
+ * Null when the read failed.
+ */
+async function preparedAlreadyTold(supabase: SupabaseClient, questionId: string): Promise<boolean | null> {
+  const { data, error } = await supabase
+    .from('whatsapp_messages')
+    .select('id')
+    .eq('direction', 'outbound')
+    .eq('correlation_id', questionId)
+    .eq('raw_payload->>template', TEMPLATE.m31ListPrepared)
+    .or('wamid.not.is.null,delivery_status.neq.failed')
+    .limit(1)
+  if (error) {
+    log.warn('outbound messages could not be read', { questionId, error: error.message })
+    return null
+  }
+  return Array.isArray(data) && data.length > 0
+}
+
+/**
+ * A staged operation was linked to a question (company_question.prepared).
+ * The person who answered the question is told once, in one message with
+ * the address of the app's review list (m31), when all of this holds:
+ *   - the question list is switched on for the question's company;
+ *   - the question is answered, and the answer came through the chat (a
+ *     question closed as settled is never told here);
+ *   - the operation is the first one linked to the question, and no such
+ *     message went out for the question before;
+ *   - the person's phone link is active and not paused, the service window
+ *     of their conversation is open, and they still keep the books of the
+ *     company.
+ * The message is not a question: it takes no slot in the conversation and
+ * counts against no limit on questions. It is recorded as an outbound
+ * message with the question as its correlation id, which is what a second
+ * delivery of the same event finds. A read that fails sends nothing. Never
+ * throws.
+ */
+export async function tellListPrepared(
+  supabase: SupabaseClient,
+  prepared: { companyId: string; questionId: string; operationId: string },
+): Promise<void> {
+  const { companyId, questionId, operationId } = prepared
+  try {
+    if (!isUuid(questionId) || !isCompanyQuestionsEnabled(companyId)) return
+
+    const { data: questionRow, error: questionError } = await supabase
+      .from('company_questions')
+      .select('status, answered_by, answered_via')
+      .eq('id', questionId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (questionError) throw new Error(`the question could not be read: ${questionError.message}`)
+    const question = questionRow as { status: string; answered_by: string | null; answered_via: string | null } | null
+    if (!question || question.status !== 'answered' || question.answered_via !== WHATSAPP_DOOR || !question.answered_by) return
+
+    const { data: firstLinked, error: linkedError } = await supabase
+      .from('company_question_operations')
+      .select('operation_id')
+      .eq('company_id', companyId)
+      .eq('question_id', questionId)
+      .order('created_at', { ascending: true })
+      .order('operation_id', { ascending: true })
+      .limit(1)
+    if (linkedError) throw new Error(`the linked operations could not be read: ${linkedError.message}`)
+    const first = ((firstLinked ?? []) as Array<{ operation_id: string }>)[0]
+    if (!first || first.operation_id !== operationId) return
+
+    const { data: linkRow, error: linkError } = await supabase
+      .from('whatsapp_phone_links')
+      .select('*')
+      .eq('user_id', question.answered_by)
+      .is('revoked_at', null)
+      .is('muted_at', null)
+      .limit(1)
+      .maybeSingle()
+    if (linkError) throw new Error(`the phone link could not be read: ${linkError.message}`)
+    const link = (linkRow as WhatsAppPhoneLink | null) ?? null
+    if (!link || link.revoked_at != null || link.muted_at != null) return
+
+    const { data: conversationRow, error: conversationError } = await supabase
+      .from('whatsapp_conversations')
+      .select('*')
+      .eq('phone_link_id', link.id)
+      .limit(1)
+      .maybeSingle()
+    if (conversationError) throw new Error(`the conversation could not be read: ${conversationError.message}`)
+    const conversation = (conversationRow as WhatsAppConversation | null) ?? null
+    if (!conversation || !serviceWindowOpen(conversation, new Date())) return
+
+    if ((await keepsTheBooks(supabase, link.user_id, companyId)) !== true) return
+    const to = linkRecipient(link)
+    if (!to) return
+    if ((await preparedAlreadyTold(supabase, questionId)) !== false) return
+
+    await sendText(supabase, {
+      to,
+      body: listPreparedBody(await getBaseUrlForCompany(companyId)),
+      template: TEMPLATE.m31ListPrepared,
+      senderPhoneHash: link.phone_hash,
+      phoneLinkId: link.id,
+      conversationId: conversation.id,
+      correlationId: questionId,
+    })
+  } catch (err: unknown) {
+    log.warn('a prepared operation was not told in the chat', {
+      companyId,
+      questionId,
+      operationId,
       error: err instanceof Error ? err.message : String(err),
     })
   }
