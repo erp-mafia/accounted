@@ -4,6 +4,12 @@
  * its two routes under /api/wiki/picture. Unset = nobody: the Kontext view
  * keeps its graph for every company.
  *
+ * Where it is on, the Agenter menu is the picture and Bokföringsregler
+ * (components/dashboard/nav-v3.ts), the addresses whose content the picture
+ * holds lead to it (lib/agent-context/wiki-views.ts: /skills and a knowledge
+ * item, the wiki's Minne and Arbetssätt views), and the bookkeeping profile
+ * leads to /rules, which says how the company books.
+ *
  * It rolls out per company, like COMPANY_QUESTIONS_COMPANY_IDS: `*` opens it
  * for every company, a comma-separated list of company ids for those only.
  *
