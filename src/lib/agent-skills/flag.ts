@@ -1,3 +1,5 @@
+import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
+
 /**
  * The Agenter page (/skills) is hidden in production while it is being
  * finished (2026-09-24). The agents themselves keep working over
@@ -15,4 +17,31 @@ export function isAgentsPageEnabled(companyId: string | null | undefined): boole
   if (raw === '*') return true
   if (!companyId) return false
   return raw.split(',').map((s) => s.trim()).includes(companyId)
+}
+
+/**
+ * Whether a segment of /skills/[id] is one of an own item's pages: the page
+ * that adds an item (ny), an own flow (own-<id>), or own knowledge and an
+ * own analysis (egen.<id>). The segments are the ones the links to an own
+ * item are built with (components/skills/data.ts: createItemHref,
+ * ownItemHref).
+ */
+export function isOwnItemSegment(segment: string): boolean {
+  return segment === 'ny' || segment.startsWith('own-') || segment.startsWith('egen.')
+}
+
+/**
+ * Whether the page at /skills/[id] answers for a company: the one rule for
+ * a door that follows the Agenter page's switch.
+ *
+ * Where the Agenter page is on, every item's page answers. Where it is off
+ * and the company has the agent picture (AGENT_PICTURE_COMPANY_IDS,
+ * lib/env/agent-picture-switch.ts), an own item's pages answer
+ * (isOwnItemSegment): the picture's Kunskap panel lists the company's own
+ * items and links to each one and to the page that adds one. With neither
+ * switch on, no page answers.
+ */
+export function isAgentItemPageEnabled(companyId: string | null | undefined, segment: string): boolean {
+  if (isAgentsPageEnabled(companyId)) return true
+  return isOwnItemSegment(segment) && isAgentPictureEnabled(companyId)
 }
