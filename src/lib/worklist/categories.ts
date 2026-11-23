@@ -205,19 +205,28 @@ export async function countOpenBankRows(supabase: SupabaseClient, companyId: str
  * instead of as rows of their own: one per open bank row without underlag
  * that an open inbox item looks paid by (bank_match_transaction_id), as
  * lib/bookkeeping/to-book.ts buildToBookRows pairs them. Subtracted from
- * the documents so a receipt and its bank row count once.
+ * the documents so a receipt and its bank row count once. Every matched
+ * item is read, page by page: a pair missed would count its receipt twice.
  */
 export async function countFoundPairs(supabase: SupabaseClient, companyId: string): Promise<number> {
-  const { data, error } = await whereInboxItemOpen(
-    supabase
-      .from('invoice_inbox_items')
-      .select('bank_match_transaction_id')
-      .eq('company_id', companyId)
-      .not('document_id', 'is', null)
-      .not('bank_match_transaction_id', 'is', null),
-  ).limit(INBOX_SCAN_CAP)
-  if (error) return logAndZero('inbox_document', companyId, error)
-  const ids = [...new Set(((data ?? []) as { bank_match_transaction_id: string | null }[]).map((r) => r.bank_match_transaction_id).filter((id): id is string => !!id))]
+  let matched: { bank_match_transaction_id: string | null }[]
+  try {
+    matched = await fetchAllRows<{ bank_match_transaction_id: string | null }>(({ from, to }) =>
+      whereInboxItemOpen(
+        supabase
+          .from('invoice_inbox_items')
+          .select('bank_match_transaction_id')
+          .eq('company_id', companyId)
+          .not('document_id', 'is', null)
+          .not('bank_match_transaction_id', 'is', null),
+      )
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (error) {
+    return logAndZero('inbox_document', companyId, error)
+  }
+  const ids = [...new Set(matched.map((r) => r.bank_match_transaction_id).filter((id): id is string => !!id))]
   let pairs = 0
   for (let i = 0; i < ids.length; i += IN_CLAUSE_CHUNK) {
     const { count, error: rowError } = await supabase

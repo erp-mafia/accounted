@@ -70,8 +70,13 @@ afterEach(() => {
 })
 
 describe('getWorklistCounts: Att bokföra\'s figures', () => {
-  afterEach(() => {
+  const before = process.env.BOOKING_SCREEN_COMPANY_IDS
+  beforeEach(() => {
     delete process.env.BOOKING_SCREEN_COMPANY_IDS
+  })
+  afterEach(() => {
+    if (before === undefined) delete process.env.BOOKING_SCREEN_COMPANY_IDS
+    else process.env.BOOKING_SCREEN_COMPANY_IDS = before
   })
 
   it('answers the open bank rows and the found receipts where the booking screen is switched on', async () => {
