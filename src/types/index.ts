@@ -670,6 +670,10 @@ export interface CompanySettings {
   // Invoice PDF settings
   ore_rounding: boolean
   invoice_show_ocr: boolean
+  // The OCR reference carries Bankgirot's length digit before the check
+  // digit (lib/invoices/ocr-reference.ts). Optional in TS: a row read before
+  // the column's migration has it absent, which prints the plain form.
+  invoice_ocr_length_digit?: boolean
   invoice_show_bankgiro: boolean
   invoice_show_plusgiro: boolean
   invoice_show_swish: boolean
@@ -2369,6 +2373,11 @@ export interface BASAccount {
   default_vat_treatment: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
   // Momsruta override for 26xx VAT accounts; null = BAS mapping by number.
   vat_box: import('@/lib/vat/account-vat-box').AccountVatBox | null
+  // OSS (unionsordningen): the other EU country the account is for, and that
+  // country's VAT rate in percent on a sales account (lib/vat/oss-accounts.ts).
+  // Optional: only the reads that need them select them.
+  oss_country?: string | null
+  oss_vat_rate?: number | null
   description: string | null
   sru_code: string | null
   k2_excluded: boolean

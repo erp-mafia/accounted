@@ -3569,6 +3569,28 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Billo behöver en företrädare som har loggat in med BankID. Logga in med BankID och försök igen.',
     message_en: 'Billo needs a representative who has signed in with BankID. Sign in with BankID and try again.',
   },
+  // Kivra receive: lib/digital-mailboxes/connect.ts, kivraOwnershipRefusal.
+  DIGITAL_MAILBOX_SIGNATORY_BANKID_REQUIRED: {
+    httpStatus: 403,
+    message_sv:
+      'Kivra-brevlådan får bara kopplas av en firmatecknare för företaget, och det ser vi när du loggar in med BankID. Koppla BankID under Inställningar om du inte har gjort det, logga sedan in med BankID och försök igen.',
+    message_en:
+      'Only a signatory of the company may connect the Kivra mailbox, and we see that when you sign in with BankID. Link BankID under Settings if you have not, then sign in with BankID and try again.',
+  },
+  DIGITAL_MAILBOX_NOT_SIGNATORY: {
+    httpStatus: 403,
+    message_sv:
+      'Enligt Bolagsverket, som vi läste när du senast loggade in med BankID, är du inte firmatecknare för företaget. Be en styrelseledamot, vd eller annan firmatecknare att koppla Kivra-brevlådan. Har du nyss blivit firmatecknare: logga in med BankID igen.',
+    message_en:
+      'The companies register, read at your last BankID sign-in, does not list you as a signatory of the company. Ask a board member, the managing director or another signatory to connect the Kivra mailbox. Just became one: sign in with BankID again.',
+  },
+  DIGITAL_MAILBOX_ORG_NUMBER_SHARED: {
+    httpStatus: 409,
+    message_sv:
+      'Ett annat företag i Accounted har samma organisationsnummer, så Kivra-brevlådan kan inte kopplas. Arkivera det företag ni inte använder, eller kontakta oss så hjälper vi till.',
+    message_en:
+      'Another company in Accounted has the same organisation number, so the Kivra mailbox cannot be connected. Archive the company you do not use, or contact us and we will help.',
+  },
   DIGITAL_MAILBOX_ALREADY_CONNECTED: {
     httpStatus: 409,
     message_sv: 'Brevlådan är redan kopplad till Accounted.',

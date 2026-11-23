@@ -9,7 +9,7 @@ exports[`every dashboard route belongs to an area > places each route as the cov
   "/arkiv/avtal": "company > /bolaget/avtal",
   "/arkiv/avtal/x-id": "company > /bolaget/avtal",
   "/arkiv/dokument/x-id": "documents > /arkiv",
-  "/arkiv/granska": "todo > /?vy=behover",
+  "/arkiv/granska": "todo > /",
   "/arkiv/historik": "documents > /arkiv/historik",
   "/arkiv/signeringar": "documents > /arkiv/signeringar",
   "/articles": "sales > /articles",

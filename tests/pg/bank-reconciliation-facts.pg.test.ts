@@ -14,7 +14,11 @@
  *   - every read answers the same once the company's ledger summaries are
  *     built (ledger_account_entries, ledger_account_days, 20261023093900) as
  *     through the journal itself, after every write the fixtures make;
- *   - no read tells a signed-in user anything about another company.
+ *   - no read tells a signed-in user anything about another company;
+ *   - 20261123171347_foreign_account_opening_balance.sql: a foreign account
+ *     reconciles over an IB booked in kronor, and account_ib_in_currency and
+ *     account_currency_balance answer what the IB and the account are in the
+ *     account's currency, or null.
  *
  * The engine runs on a real supabase-js client over the pool
  * (postgrest-over-pg.ts), signed in as the company's owner, so RLS, the
@@ -237,6 +241,12 @@ async function facts(b: Books, dateFrom: string | null, dateTo: string | null, c
   })
   if (error) throw new Error(error.message)
   return data as Facts
+}
+
+/** A numeric RPC answer: the figure, or null when the function answered NULL. A failed call throws, so null is never a failure. */
+function numericAnswer(answer: { data: unknown; error: { message: string } | null }): number | null {
+  if (answer.error) throw new Error(answer.error.message)
+  return answer.data === null ? null : Number(answer.data)
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +627,199 @@ describe('getReconciliationStatus over get_bank_reconciliation_facts', () => {
     })
   })
 
+  // 20261123171347: year-end, SIE import and set_opening_balances post the IB
+  // in kronor, so its line on a foreign account carries no amount in the
+  // account's currency. The comparison is over the movement after the IB and
+  // never used that line; the IB's own amount is what stood the day before.
+
+  /** A EUR account booked in EUR through 2025 (300 in, 100 out), each row linked. */
+  async function eurBooks2025(): Promise<Books> {
+    const b = await books({ cashLedger: '1932', currency: 'EUR' })
+    const deposit = await verifikat(b, '2025-06-10', [
+      { account: '1932', debit: 3300, currency: 'EUR', amountInCurrency: 300 },
+      { account: '3001', credit: 3300 },
+    ])
+    const payment = await verifikat(b, '2025-09-12', [
+      { account: '1932', credit: 1100, currency: 'EUR', amountInCurrency: 100 },
+      { account: '3001', debit: 1100 },
+    ])
+    await bankRow(b, '2025-06-10', 300, { entry: deposit, currency: 'EUR' })
+    await bankRow(b, '2025-09-12', -100, { entry: payment, currency: 'EUR' })
+    return b
+  }
+
+  /** The IB as year-end posts it: the account's kronor, no amount in EUR. */
+  function kronorOpeningBalance(b: Books, date: string, kronor: number) {
+    return verifikat(b, date, [{ account: '1932', debit: kronor }, { account: '3001', credit: kronor }], {
+      sourceType: 'opening_balance',
+    })
+  }
+
+  /** `eur` in on the account, booked in EUR and linked to its bank row. */
+  async function eurDeposit(b: Books, date: string, eur: number) {
+    const entry = await verifikat(b, date, [
+      { account: '1932', debit: eur * 11.5, currency: 'EUR', amountInCurrency: eur },
+      { account: '3001', credit: eur * 11.5 },
+    ])
+    await bankRow(b, date, eur, { entry, currency: 'EUR' })
+  }
+
+  /** account_currency_balance on the EUR account: the figure, or null for unknown. A failed read throws. */
+  async function currencyBalance(b: Books, through: string): Promise<number | null> {
+    return numericAnswer(
+      await b.client.rpc('account_currency_balance', {
+        p_company_id: b.companyId,
+        p_account_number: '1932',
+        p_currency: 'EUR',
+        p_through: through,
+      }),
+    )
+  }
+
+  it('reconciles a EUR account over a year start whose IB is booked in kronor', async () => {
+    const b = await eurBooks2025()
+    await kronorOpeningBalance(b, '2026-01-01', 2200)
+    await eurDeposit(b, '2026-03-05', 100)
+
+    expect(await status(b, '2026-01-01', '2026-12-31', '1932', 'EUR')).toMatchObject({
+      currency: 'EUR',
+      // What stood on the account on 2025-12-31, by the lines that say EUR.
+      gl_1930_opening_balance: 200,
+      gl_1930_balance: 300,
+      gl_1930_period_movement: 100,
+      bank_transaction_total: 100,
+      difference: 0,
+      unconvertible_gl_line_count: 0,
+      not_reconcilable_reason: null,
+      is_reconciled: true,
+    })
+    expect(await currencyBalance(b, '2026-06-30')).toBe(300)
+  })
+
+  it('reads through every kronor IB back to the lines that say the currency', async () => {
+    const b = await eurBooks2025()
+    await kronorOpeningBalance(b, '2026-01-01', 2200)
+    await eurDeposit(b, '2026-03-05', 100)
+    await kronorOpeningBalance(b, '2027-01-01', 3350)
+    await eurDeposit(b, '2027-02-01', 40)
+
+    expect(await status(b, '2027-01-01', '2027-12-31', '1932', 'EUR')).toMatchObject({
+      gl_1930_opening_balance: 300,
+      gl_1930_balance: 340,
+      gl_1930_period_movement: 40,
+      difference: 0,
+      not_reconcilable_reason: null,
+      is_reconciled: true,
+    })
+  })
+
+  it('takes an IB that states its amount in the currency as booked', async () => {
+    const b = await eurBooks2025()
+    await verifikat(
+      b,
+      '2026-01-01',
+      [
+        { account: '1932', debit: 2900, currency: 'EUR', amountInCurrency: 250 },
+        { account: '3001', credit: 2900 },
+      ],
+      { sourceType: 'opening_balance' },
+    )
+    await eurDeposit(b, '2026-03-05', 100)
+
+    expect(await status(b, '2026-01-01', '2026-12-31', '1932', 'EUR')).toMatchObject({
+      gl_1930_opening_balance: 250,
+      gl_1930_balance: 350,
+      gl_1930_period_movement: 100,
+      is_reconciled: true,
+    })
+    expect(await currencyBalance(b, '2026-06-30')).toBe(350)
+  })
+
+  it('compares the movement and reports no balance when the lines before the IB carry no currency', async () => {
+    const b = await books({ cashLedger: '1932', currency: 'EUR' })
+    // History that came in kronor only, as an SIE file gives it.
+    await verifikat(b, '2025-06-10', [{ account: '1932', debit: 3300 }, { account: '3001', credit: 3300 }])
+    await kronorOpeningBalance(b, '2026-01-01', 3300)
+    await eurDeposit(b, '2026-03-05', 100)
+
+    expect(await status(b, '2026-01-01', '2026-12-31', '1932', 'EUR')).toMatchObject({
+      gl_1930_opening_balance: null,
+      gl_1930_balance: null,
+      gl_1930_period_movement: 100,
+      bank_transaction_total: 100,
+      difference: 0,
+      unconvertible_gl_line_count: 0,
+      not_reconcilable_reason: null,
+      is_reconciled: true,
+    })
+    expect(await currencyBalance(b, '2026-06-30')).toBeNull()
+    // The year that holds the kronor-only line itself still cannot be compared.
+    expect(await status(b, '2025-01-01', '2025-12-31', '1932', 'EUR')).toMatchObject({
+      unconvertible_gl_line_count: 1,
+      not_reconcilable_reason: 'gl_lines_missing_currency_amount',
+      is_reconciled: false,
+    })
+  })
+
+  it('reports no balance for an IB that brings in what the ledger never held', async () => {
+    // An import's first year, or set_opening_balances: the IB is the first
+    // thing on the account, so nothing says what it is in EUR. Not 0.
+    const first = await books({ cashLedger: '1932', currency: 'EUR' })
+    await kronorOpeningBalance(first, '2026-01-01', 3300)
+    await eurDeposit(first, '2026-03-05', 100)
+    expect(await status(first, '2026-01-01', '2026-12-31', '1932', 'EUR')).toMatchObject({
+      gl_1930_opening_balance: null,
+      gl_1930_balance: null,
+      gl_1930_period_movement: 100,
+      difference: 0,
+      not_reconcilable_reason: null,
+      is_reconciled: true,
+    })
+    expect(await currencyBalance(first, '2026-06-30')).toBeNull()
+
+    // Nor an IB that states other kronor than the lines before it hold
+    // (2 200 kr, 200 EUR): it does not restate them.
+    const other = await eurBooks2025()
+    await kronorOpeningBalance(other, '2026-01-01', 5000)
+    expect(await status(other, '2026-01-01', '2026-12-31', '1932', 'EUR')).toMatchObject({
+      gl_1930_opening_balance: null,
+      gl_1930_balance: null,
+      not_reconcilable_reason: null,
+    })
+    expect(await currencyBalance(other, '2026-06-30')).toBeNull()
+    expect(await currencyBalance(other, '2025-12-31')).toBe(200)
+  })
+
+  it('still counts a kronor-only line after the IB as one the comparison lacks', async () => {
+    const b = await eurBooks2025()
+    await kronorOpeningBalance(b, '2026-01-01', 2200)
+    await verifikat(b, '2026-03-06', [{ account: '1932', debit: 1150 }, { account: '3001', credit: 1150 }])
+
+    expect(await status(b, '2026-01-01', '2026-12-31', '1932', 'EUR')).toMatchObject({
+      gl_1930_opening_balance: 200,
+      unconvertible_gl_line_count: 1,
+      not_reconcilable_reason: 'gl_lines_missing_currency_amount',
+      is_reconciled: false,
+    })
+    expect(await currencyBalance(b, '2026-06-30')).toBeNull()
+  })
+
+  it('answers a SEK account its balance in kronor, floored at the IB', async () => {
+    const b = await books()
+    await onBank(b, '2025-05-01', 700)
+    await onBank(b, '2026-01-01', 700, { sourceType: 'opening_balance' })
+    await onBank(b, '2026-02-01', -200)
+    const kronor = numericAnswer(
+      await b.client.rpc('account_currency_balance', {
+        p_company_id: b.companyId,
+        p_account_number: '1930',
+        p_currency: 'SEK',
+        p_through: '2026-12-31',
+      }),
+    )
+    expect(kronor).toBe(500)
+  })
+
   it('starts the comparison at the bank history and compares the saldo there (crm#1221)', async () => {
     const b = await books()
     await onBank(b, '2026-01-01', 10000, { sourceType: 'opening_balance' })
@@ -690,6 +893,25 @@ describe('getReconciliationStatus over get_bank_reconciliation_facts', () => {
       p_own_transaction_ids: [],
     })
     expect(legs.data).toEqual([])
+    const balance = (client: SupabaseClient) =>
+      client.rpc('account_currency_balance', {
+        p_company_id: b.companyId,
+        p_account_number: '1930',
+        p_currency: 'SEK',
+        p_through: '2026-12-31',
+      })
+    expect(numericAnswer(await balance(b.client)), 'account_currency_balance as the owner').toBe(60)
+    expect(numericAnswer(await balance(outsider.client)), 'account_currency_balance as an outsider').toBe(0)
+    await onBank(b, '2027-01-01', 60, { sourceType: 'opening_balance' })
+    const ib = (client: SupabaseClient) =>
+      client.rpc('account_ib_in_currency', {
+        p_company_id: b.companyId,
+        p_account_number: '1930',
+        p_currency: 'SEK',
+        p_floor: '2027-01-01',
+      })
+    expect(numericAnswer(await ib(b.client)), 'account_ib_in_currency as the owner').toBe(60)
+    expect(numericAnswer(await ib(outsider.client)), 'account_ib_in_currency as an outsider').toBe(0)
   })
 })
 

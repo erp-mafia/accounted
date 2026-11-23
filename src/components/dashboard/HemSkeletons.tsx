@@ -20,7 +20,7 @@ export function ChecklistSkeleton() {
  * stands in for: Hem (date, headline, the Först rows, the group rows), the
  * Behöver dig list (44px rows under a column head) or a Börja step.
  */
-export function PanesSkeleton({ view = 'hem' }: { view?: 'hem' | 'behover' | 'borja' | 'gjort' }) {
+export function PanesSkeleton({ view = 'hem' }: { view?: 'hem' | 'borja' | 'gjort' }) {
   if (view === 'borja') {
     return (
       <div className="animate-late space-y-5" aria-busy="true">

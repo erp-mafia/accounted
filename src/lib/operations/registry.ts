@@ -24,6 +24,7 @@ import {
   accountsCreate,
   accountsDeactivate,
   accountsDelete,
+  accountsOssCountries,
   accountsUpdate,
 } from './accounts'
 import {
@@ -303,6 +304,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   accountsDelete,
   accountsActivate,
   accountsDeactivate,
+  accountsOssCountries,
   // company-settings
   settingsGet,
   settingsUpdate,

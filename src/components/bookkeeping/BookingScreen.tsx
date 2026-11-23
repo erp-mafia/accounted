@@ -88,7 +88,6 @@ export function BookingScreen({ transaction, account, found, foundFailed = false
     '/att-bokfora': t('back_to_book'),
     '/transactions': t('back_transactions'),
     '/bookkeeping': t('back_vouchers'),
-    '/?vy=behover': t('back_needs_you'),
     '/': t('back_home'),
   }[origin]
 

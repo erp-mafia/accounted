@@ -4142,6 +4142,10 @@ export const UpdateSettingsSchema = z.object({
   // Invoice PDF settings
   ore_rounding: z.boolean().optional(),
   invoice_show_ocr: z.boolean().optional(),
+  invoice_ocr_length_digit: z
+    .boolean()
+    .optional()
+    .describe("true: the OCR reference on invoices carries Bankgirot's length digit before the check digit (invoice 1042 is paid as 104265, not 10421). For a bankgiro whose OCR control at the bank checks the reference's length; such a bankgiro refuses a reference without it. Default false."),
   invoice_show_bankgiro: z.boolean().optional(),
   invoice_show_plusgiro: z.boolean().optional(),
   invoice_show_swish: z.boolean().optional(),
@@ -4524,6 +4528,27 @@ export const UpdateAccountSchema = z.object({
   default_vat_treatment: defaultVatTreatment,
   vat_box: vatBox,
   sru_code: z.string().nullable().optional(),
+})
+
+/**
+ * Which EU country each OSS account is for (unionsordningen): the request of
+ * every door (accounts.oss-countries). Which account may take what is decided
+ * in lib/vat/oss-account-countries.ts.
+ */
+export const SetOssAccountCountriesSchema = z.object({
+  accounts: z
+    .array(
+      z.object({
+        account_number: z.string().min(1).max(10),
+        country: z
+          .string()
+          .nullable()
+          .describe('ISO 3166-1 alpha-2 of another EU country, e.g. "DE". "EU" on a VAT account shared by every country. null clears the account.'),
+        vat_rate: z.number().nullable().optional().describe('Percent, e.g. 19 or 25.5. Sales accounts only.'),
+      }),
+    )
+    .min(1)
+    .max(200),
 })
 
 // Looser account-number shape than the 4-digit primitive on purpose: imported

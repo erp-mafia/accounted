@@ -85,7 +85,7 @@ describe('resolveNavPlace', () => {
     expect(place('/mileage')).toEqual({ area: 'purchases', href: '/mileage' })
     expect(place('/reports/ink2-declaration')).toEqual({ area: 'ledger', href: '/bookkeeping/year-end' })
     expect(place('/dimensions/tagging')).toEqual({ area: 'ledger', href: '/bookkeeping' })
-    expect(place('/arkiv/granska')).toEqual({ area: 'todo', href: '/?vy=behover' })
+    expect(place('/arkiv/granska')).toEqual({ area: 'todo', href: '/' })
     expect(place('/bolaget/moten')).toEqual({ area: 'company', href: '/bolaget/moten' })
     expect(place('/bolaget')).toEqual({ area: 'company', href: '/bolaget' })
     expect(place('/bolaget/kapital')).toEqual({ area: 'company', href: '/bolaget/kapital' })
@@ -220,7 +220,7 @@ describe('the tree', () => {
     expect(NAV_V3_AREAS.map((a) => nav[a.labelKey])).toEqual([
       'Att göra', 'Pengar', 'Försäljning', 'Inköp', 'Dokument', 'Bokföring', 'Skatt', 'Rapporter', 'Löner', 'Företaget', 'Agenter', 'Inställningar', 'Byrå',
     ])
-    expect(labels('todo')).toEqual(['Hem', 'Att bokföra', 'Behöver dig', 'Rutin', 'Frågor', 'Gjort'])
+    expect(labels('todo')).toEqual(['Hem', 'Att bokföra', 'Rutin', 'Frågor', 'Gjort'])
     expect(labels('money')).toEqual(['Bankrader', 'Konton och saldo'])
     expect(labels('tax')).toEqual(['Moms', 'Skattekonto', 'Frister'])
     expect(labels('reports')).toEqual(['Resultat', 'Balans', 'Huvudbok', 'Nyckeltal', 'Budget', 'Fler rapporter'])

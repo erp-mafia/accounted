@@ -1387,6 +1387,12 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_create_dimension_rule: { empty: ['account_dimension_rules'] },
   // An account a budget uses is not deleted as unused (accounted#134).
   gnubok_delete_account: { empty: ['budget_lines'] },
+  // The chart holds the account the call names: a VAT account, which takes a
+  // country and no rate.
+  gnubok_set_oss_account_countries: {
+    args: { accounts: [{ account_number: '2671', country: 'DE' }] },
+    rows: { chart_of_accounts: { account_number: '2671', account_name: 'Utgående moms OSS Tyskland', default_vat_treatment: null, oss_country: null, oss_vat_rate: null } },
+  },
   // Budgets (accounted#134): the amounts' dry run is the STABLE
   // upsert_budget_lines_preview, which answers a jsonb object.
   gnubok_create_budget: { args: { name: 'Budget 2027' }, rows: { budgets: { name: 'Prognos 1' } } },

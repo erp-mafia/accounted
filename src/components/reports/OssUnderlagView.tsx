@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { LoadError } from '@/components/ui/empty-state'
@@ -18,22 +19,59 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { OssAccountsSection } from '@/components/reports/OssAccountsSection'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import type { OssUnderlag } from '@/lib/webshop-orders/oss-underlag'
+import type { OssUnaccountedVoucher, OssUnderlag } from '@/lib/webshop-orders/oss-underlag'
 import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
- * Underlag for the quarterly OSS declaration: the quarter's webshop sales to
+ * Underlag for the quarterly OSS declaration: the quarter's sales to
  * consumers in other EU countries per country and VAT rate, in euro, to type
  * into Skatteverket's e-tjänst. Every OSS-account verifikat the underlag does
  * not cover is listed under it, so a gap is never silent.
  */
 
 const QUARTERS = [1, 2, 3, 4]
+
+/**
+ * Warnings about what the underlag holds, each shown beside the rows it is
+ * about. Every other warning names something missing from the underlag.
+ */
+const IN_PLACE_WARNINGS = new Set(['vat_rate_mismatch', 'refund_vouchers_netted'])
+
+function VoucherTable({ vouchers }: { vouchers: OssUnaccountedVoucher[] }) {
+  const t = useTranslations('oss_underlag')
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{t('col_voucher')}</TableHead>
+          <TableHead>{t('col_date')}</TableHead>
+          <TableHead>{t('col_description')}</TableHead>
+          <TableHead className="text-right">{t('col_vat_sek')}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody className="stagger-enter">
+        {vouchers.map((voucher) => (
+          <TableRow key={voucher.journal_entry_id}>
+            <TableCell className="tabular-nums">
+              <Link href={`/bookkeeping/${voucher.journal_entry_id}`} className="underline-offset-4 hover:underline">
+                {formatVoucher(voucher)}
+              </Link>
+            </TableCell>
+            <TableCell className="date-figures">{formatDate(voucher.entry_date)}</TableCell>
+            <TableCell className="max-w-64 truncate">{voucher.description}</TableCell>
+            <TableCell className="text-right tabular-nums">{formatRowAmount(voucher.vat_sek)}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
 
 /** The last finished quarter: the one a declaration is due for. */
 function lastClosedQuarter(now: Date): { year: number; quarter: number } {
@@ -101,8 +139,10 @@ export function OssUnderlagView() {
   // No amounts, yet not a nil return (the underlag decides that, never this
   // view): something on the OSS accounts or among the orders is left outside.
   const emptyNotNil = !!report && !report.nil_return && report.rows.length === 0 && report.corrections.length === 0
+  const missing = report ? report.warnings.filter((w) => !IN_PLACE_WARNINGS.has(w.code)) : []
+  const inPlace = (code: string) => report?.warnings.find((w) => w.code === code)
   const incomplete =
-    !!report && (emptyNotNil || report.unaccounted.length > 0 || report.warnings.some((w) => w.code !== 'rate_unavailable'))
+    !!report && (emptyNotNil || report.unaccounted.length > 0 || missing.some((w) => w.code !== 'rate_unavailable'))
 
   return (
     <div className="space-y-4">
@@ -172,7 +212,7 @@ export function OssUnderlagView() {
               <CardHeader>
                 <CardTitle className="text-base">{t('heading_rows')}</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -186,7 +226,12 @@ export function OssUnderlagView() {
                   <TableBody className="stagger-enter">
                     {report.rows.map((row) => (
                       <TableRow key={`${row.country}-${row.vat_rate}`}>
-                        <TableCell>{countryName(row.country)}</TableCell>
+                        <TableCell>
+                          <span className="inline-flex items-center gap-2">
+                            {countryName(row.country)}
+                            {row.rate_mismatch && <Badge variant="warning">{t('rate_mismatch_chip')}</Badge>}
+                          </span>
+                        </TableCell>
                         <TableCell className="text-right tabular-nums whitespace-nowrap">{percent.format(row.vat_rate)}&nbsp;%</TableCell>
                         <TableCell className="text-right tabular-nums">{eur(row.net_eur)}</TableCell>
                         <TableCell className="text-right tabular-nums">{eur(row.vat_eur)}</TableCell>
@@ -203,6 +248,7 @@ export function OssUnderlagView() {
                     </TableRow>
                   </TableFooter>
                 </Table>
+                {inPlace('vat_rate_mismatch') && <p className="text-[13px]">{message(inPlace('vat_rate_mismatch')!)}</p>}
               </CardContent>
             </Card>
           )}
@@ -237,13 +283,13 @@ export function OssUnderlagView() {
             </Card>
           )}
 
-          {report.warnings.length > 0 && (
+          {missing.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">{t('heading_warnings')}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-[13px]">
-                {report.warnings.map((w) => (
+                {missing.map((w) => (
                   <div key={w.code}>
                     <p>{message(w)}</p>
                     {w.order_numbers.length > 0 && (
@@ -257,36 +303,31 @@ export function OssUnderlagView() {
             </Card>
           )}
 
+          {report.accounts.length > 0 && (
+            <OssAccountsSection key={requestKey} accounts={report.accounts} onSaved={() => setAttempt((n) => n + 1)} />
+          )}
+
           {report.unaccounted.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">{t('heading_unaccounted')}</CardTitle>
               </CardHeader>
               <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t('col_voucher')}</TableHead>
-                      <TableHead>{t('col_date')}</TableHead>
-                      <TableHead>{t('col_description')}</TableHead>
-                      <TableHead className="text-right">{t('col_vat_sek')}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody className="stagger-enter">
-                    {report.unaccounted.map((voucher) => (
-                      <TableRow key={voucher.journal_entry_id}>
-                        <TableCell className="tabular-nums">
-                          <Link href={`/bookkeeping/${voucher.journal_entry_id}`} className="underline-offset-4 hover:underline">
-                            {formatVoucher(voucher)}
-                          </Link>
-                        </TableCell>
-                        <TableCell className="date-figures">{formatDate(voucher.entry_date)}</TableCell>
-                        <TableCell className="max-w-64 truncate">{voucher.description}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatRowAmount(voucher.vat_sek)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <VoucherTable vouchers={report.unaccounted} />
+              </CardContent>
+            </Card>
+          )}
+
+          {report.refund_vouchers.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t('heading_refund_vouchers')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {inPlace('refund_vouchers_netted') && (
+                  <p className="text-[13px]">{message(inPlace('refund_vouchers_netted')!)}</p>
+                )}
+                <VoucherTable vouchers={report.refund_vouchers} />
               </CardContent>
             </Card>
           )}

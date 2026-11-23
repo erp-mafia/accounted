@@ -152,13 +152,17 @@ describe('parseHemView: ?vy= on "/"', () => {
     expect(parseHemView('BEHOVER')).toBe('hem')
   })
 
-  it.each(['hem', 'behover', 'borja', 'gjort'] as const)('reads %s', (view) => {
+  it.each(['hem', 'borja', 'gjort'] as const)('reads %s', (view) => {
     expect(parseHemView(view)).toBe(view)
   })
 
   it('takes the first of a repeated parameter', () => {
-    expect(parseHemView(['gjort', 'behover'])).toBe('gjort')
+    expect(parseHemView(['gjort', 'borja'])).toBe('gjort')
     expect(parseHemView([])).toBe('hem')
+  })
+
+  it('opens Hem for the list view it took over', () => {
+    expect(parseHemView('behover')).toBe('hem')
   })
 })
 

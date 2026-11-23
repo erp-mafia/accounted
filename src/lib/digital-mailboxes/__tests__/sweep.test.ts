@@ -162,7 +162,7 @@ describe('sweepDigitalMailboxes: Kivra daily safety net (crm#1524)', () => {
     const pending = row({ receive_state: 'pending', account_ref: null })
     listReceivingConnections.mockResolvedValue([pending])
     loadCompanyIdentity.mockResolvedValue({ orgNumber: '5560000000' })
-    activatePendingKivra.mockResolvedValue(row({}))
+    activatePendingKivra.mockResolvedValue({ ok: true, data: row({}) })
 
     const summary = await run(serviceStub({ actor: 'webhook' }).client)
 

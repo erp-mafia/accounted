@@ -199,6 +199,89 @@ describe('listAccountItems', () => {
     ])
   })
 
+  it('lists a verifikat on a foreign account in the account\'s currency, and in kronor only when its lines state no amount in it', async () => {
+    // The bank rows of a EUR account are in EUR. The candidate lines carry
+    // kronor only: a 0.13 EUR bank fee is booked as 1.50 kr, and listing that
+    // figure as EUR put the two sides an exchange rate apart.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...ACCOUNT, ledger_account: '1932', currency: 'EUR' } })
+    const line = (id: string, entry: string, debit: number, credit: number) => ({
+      line_id: id, journal_entry_id: entry, debit_amount: debit, credit_amount: credit, line_description: null,
+      entry_date: '2026-08-18', voucher_number: 231, voucher_series: 'A', entry_description: entry, source_type: 'manual',
+    })
+    enqueue(
+      read({
+        ledger_lines: [
+          line('l1', 'e-fee', 0, 1.5),
+          line('l2', 'e-kronor', 1150, 0),
+          line('l3', 'e-two', 2300, 0),
+          line('l4', 'e-two', 0, 575),
+          // Settled in part by 1:N slices: 400 kr of it is still open.
+          { ...line('l5', 'e-part', 2300, 0), remaining_amount: 400 },
+        ],
+      }),
+    )
+    // The listed verifikat's lines on 1932, with what they state in a currency.
+    enqueue({
+      data: [
+        { id: 'a', journal_entry_id: 'e-fee', debit_amount: 0, credit_amount: 1.5, currency: 'EUR', amount_in_currency: 0.13 },
+        { id: 'b', journal_entry_id: 'e-kronor', debit_amount: 1150, credit_amount: 0, currency: 'SEK', amount_in_currency: null },
+        { id: 'c', journal_entry_id: 'e-two', debit_amount: 2300, credit_amount: 0, currency: 'EUR', amount_in_currency: 200 },
+        { id: 'd', journal_entry_id: 'e-two', debit_amount: 0, credit_amount: 575, currency: 'EUR', amount_in_currency: 50 },
+        { id: 'e', journal_entry_id: 'e-part', debit_amount: 2300, credit_amount: 0, currency: 'EUR', amount_in_currency: 200 },
+      ],
+    })
+    enqueue({ data: [] }) // live settlements on the account: none
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { limit: 50, bucket: 'unmatched_ledger' })
+    const byId = Object.fromEntries((result?.items ?? []).map((i) => [i.item_id, i]))
+
+    expect(byId['e-fee']).toMatchObject({ side: 'ledger', amount: -0.13, currency: 'EUR' })
+    expect(byId['e-two']).toMatchObject({ amount: 150, currency: 'EUR' })
+    // No amount in EUR on its line: the kronor figure, said to be kronor.
+    expect(byId['e-kronor']).toMatchObject({ amount: 1150, currency: 'SEK' })
+    // What is left open is known in kronor only: not its full 200 EUR.
+    expect(byId['e-part']).toMatchObject({ amount: 400, currency: 'SEK' })
+    const lineRead = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === 'journal_entry_lines')
+    expect(lineRead).toHaveLength(1)
+  })
+
+  it('lists a foreign account\'s verifikat in kronor, said to be kronor, when their currency cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...ACCOUNT, ledger_account: '1932', currency: 'EUR' } })
+    enqueue(
+      read({
+        ledger_lines: [
+          { line_id: 'l1', journal_entry_id: 'e-fee', debit_amount: 0, credit_amount: 1.5, line_description: null, entry_date: '2026-08-18', voucher_number: 231, voucher_series: 'A', entry_description: 'Avgift', source_type: 'manual' },
+        ],
+      }),
+    )
+    enqueue({ data: null, error: { message: 'statement timeout' } })
+    enqueue({ data: [] }) // live settlements on the account: none
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { limit: 50, bucket: 'unmatched_ledger' })
+
+    expect(result?.items[0]).toMatchObject({ item_id: 'e-fee', amount: -1.5, currency: 'SEK' })
+  })
+
+  it('reads no line currency for a SEK account: its verifikat are in kronor already', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: ACCOUNT })
+    enqueue(
+      read({
+        ledger_lines: [
+          { line_id: 'l1', journal_entry_id: 'e-3', debit_amount: 0, credit_amount: 600, line_description: null, entry_date: '2026-08-18', voucher_number: 231, voucher_series: 'A', entry_description: 'Elgiganten', source_type: 'manual' },
+        ],
+      }),
+    )
+    enqueue({ data: [] }) // live settlements on the account: none
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { limit: 50, bucket: 'unmatched_ledger' })
+
+    expect(result?.items[0]).toMatchObject({ item_id: 'e-3', amount: -600, currency: 'SEK' })
+    expect((supabase.from as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === 'journal_entry_lines')).toHaveLength(0)
+  })
+
   it('reads no matched row when the page ends before the matched bucket starts', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: ACCOUNT })

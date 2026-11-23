@@ -4,6 +4,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { WikiViews } from '@/components/wiki/WikiViews'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
+import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
 import { parseWikiView } from '@/lib/agent-context/wiki-views'
 import { getDashboardCompanyId } from '../request-context'
 
@@ -15,11 +16,16 @@ import { getDashboardCompanyId } from '../request-context'
  * Fakta (what Arkiv has read out of the company's documents) exists only
  * inside the Arkiv rollout. Outside it nothing reads the documents, so the
  * view is not offered.
+ *
+ * For a company in AGENT_PICTURE_COMPANY_IDS the context view opens with the
+ * agent picture in place of the graph. The switch is read here, on the
+ * server: the browser gets a boolean.
  */
 export default async function WikiPage({ searchParams }: { searchParams: Promise<{ view?: string | string[] }> }) {
   const t = await getTranslations('wiki')
   const companyId = await getDashboardCompanyId()
   const facts = !!companyId && isArkivBrainEnabled(companyId)
+  const picture = isAgentPictureEnabled(companyId)
   // The top bar names the view, as the menu does: Kontext and Minne are rows
   // of Agenter, Karta a row of Företaget (nav-v3.ts), all views of this page.
   const raw = (await searchParams).view
@@ -29,7 +35,7 @@ export default async function WikiPage({ searchParams }: { searchParams: Promise
     <>
       <PageHeader title={t(`view_${view}`)} help={<HelpPopover>{t('help')}</HelpPopover>} />
       <Suspense>
-        <WikiViews facts={facts} />
+        <WikiViews facts={facts} picture={picture} />
       </Suspense>
     </>
   )

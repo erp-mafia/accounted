@@ -7,7 +7,9 @@
  * onboarding, a Kivra-hosted page), so connecting here records the intent
  * (pending) and hands back the link; the activation arrives as the
  * integration.created webhook, or the sync finds the company by its
- * organisationsnummer.
+ * organisationsnummer. Kivra knows the company only by that number, which
+ * in Accounted is typed, so every door that makes a company the reader
+ * first asks kivraOwnershipRefusal.
  *
  * Billo: Accounted creates the company's Billo business mailbox itself,
  * with the company's details and the admin as its representative. Billo
@@ -21,7 +23,9 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { signerPersonalNumberFromBankIdLogin } from '@/lib/auth/bankid-signer'
-import { isLegalPersonOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
+import { bankIdSignatoryProof } from '@/lib/company-lookup/signatory'
+import { isLegalPersonOrgNumber, normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Logger } from '@/lib/logger'
 import { BILLO_ALREADY_ENROLLED, type BilloProvider } from './billo'
 import { isDigitalMailboxApiError } from './http'
@@ -58,6 +62,13 @@ export type ConnectRefusal =
   | 'DIGITAL_MAILBOX_ALREADY_ENROLLED_ELSEWHERE'
   | 'DIGITAL_MAILBOX_SENDER_ELSEWHERE'
   | 'DIGITAL_MAILBOX_SENDER_REQUEST_REJECTED'
+  | KivraOwnershipRefusal
+
+/** Why a company may not read the Kivra Företag inbox of its org number (kivraOwnershipRefusal). */
+export type KivraOwnershipRefusal =
+  | 'DIGITAL_MAILBOX_SIGNATORY_BANKID_REQUIRED'
+  | 'DIGITAL_MAILBOX_NOT_SIGNATORY'
+  | 'DIGITAL_MAILBOX_ORG_NUMBER_SHARED'
 
 export type ConnectOutcome<T> = { ok: true; data: T } | { ok: false; code: ConnectRefusal; reason?: string }
 
@@ -124,9 +135,49 @@ export interface KivraConnectResult {
 }
 
 /**
+ * Whether a company may become the reader of the Kivra Företag inbox of
+ * `orgNumber`; null when it may. Asked by every door that makes a company
+ * the reader: the admin's connect, the activation of a waiting row (sync,
+ * cron) and Kivra's integration.created.
+ *
+ *   - A firmatecknare of the number proved it with their own BankID
+ *     (bankIdSignatoryProof): the person who connected, while still a member
+ *     of the company, or, when the activation began at Kivra and nobody in
+ *     Accounted connected, a current member of the company.
+ *   - No other live company in Accounted holds the number: with two, Kivra's
+ *     company cannot be told apart, so neither is made the reader.
+ *
+ * The proof is asked first, so only a proven firmatecknare learns that
+ * another company in Accounted holds the number.
+ */
+export async function kivraOwnershipRefusal(
+  service: SupabaseClient,
+  args: { companyId: string; orgNumber: string; connectedBy: string | null },
+): Promise<KivraOwnershipRefusal | null> {
+  // A connector read from a waiting row counts only while still a member of the company.
+  const members = await memberUserIds(service, args.companyId)
+  const people = args.connectedBy ? members.filter((id) => id === args.connectedBy) : members
+  const proof = await bankIdSignatoryProof(service, people, args.orgNumber)
+  if (proof === 'no_bankid') return 'DIGITAL_MAILBOX_SIGNATORY_BANKID_REQUIRED'
+  if (proof === 'not_signatory') return 'DIGITAL_MAILBOX_NOT_SIGNATORY'
+  const holders = await companiesWithOrgNumber(service, args.orgNumber)
+  // The company itself not among them (archived, or its number changed) is refused as well.
+  if (holders.length !== 1 || holders[0] !== args.companyId) return 'DIGITAL_MAILBOX_ORG_NUMBER_SHARED'
+  return null
+}
+
+async function memberUserIds(service: SupabaseClient, companyId: string): Promise<string[]> {
+  const rows = await fetchAllRows<{ user_id: string }>(({ from, to }) =>
+    service.from('company_members').select('user_id').eq('company_id', companyId).order('user_id').range(from, to),
+  )
+  return rows.map((row) => row.user_id)
+}
+
+/**
  * Start (or resume) reading the company's Kivra Företag inbox. Looks the
  * company up at once: a company that already activated Accounted at Kivra
- * is active without a round trip through the onboarding page.
+ * is active without a round trip through the onboarding page. The admin who
+ * connects must be a firmatecknare of the company (kivraOwnershipRefusal).
  */
 export async function connectKivraReceive(
   service: SupabaseClient,
@@ -143,6 +194,13 @@ export async function connectKivraReceive(
     return { ok: true, data: { connection: existing, onboardingUrl: null } }
   }
 
+  const orgNumber = identity!.orgNumber!
+  const ownership = await kivraOwnershipRefusal(service, { companyId: args.companyId, orgNumber, connectedBy: args.userId })
+  if (ownership) {
+    args.log.info('kivra connect refused', { companyId: args.companyId, code: ownership })
+    return { ok: false, code: ownership }
+  }
+
   let connection = await upsertConnection(service, args.companyId, 'kivra', {
     receive_state: 'pending',
     account_ref: null,
@@ -154,7 +212,7 @@ export async function connectKivraReceive(
     last_error_at: null,
   })
 
-  const activated = await activatePendingKivra(service, kivra, connection, identity!.orgNumber!, args.log)
+  const activated = await lookUpKivraCompany(service, kivra, connection, orgNumber, args.log)
   if (activated) connection = activated
   return {
     ok: true,
@@ -164,10 +222,35 @@ export async function connectKivraReceive(
 
 /**
  * A pending Kivra row becomes active once Kivra lists the company for
- * Accounted. Answers the updated row, or null while Kivra does not list it
- * yet (or the lookup failed, which is recorded on the row).
+ * Accounted, and only while the company may read that inbox
+ * (kivraOwnershipRefusal, asked before Kivra is): a row that waits from
+ * before the check, or whose company has since lost the right, stays
+ * waiting, unchanged, and the refusal is answered. Otherwise answers the
+ * updated row, or null while Kivra does not list it yet (or the lookup
+ * failed, which is recorded on the row).
  */
 export async function activatePendingKivra(
+  service: SupabaseClient,
+  kivra: KivraProvider,
+  connection: DigitalMailboxConnection,
+  orgNumber: string,
+  log: Logger,
+): Promise<ConnectOutcome<DigitalMailboxConnection | null>> {
+  if (!kivra.receiver) return { ok: true, data: null }
+  const refusal = await kivraOwnershipRefusal(service, {
+    companyId: connection.company_id,
+    orgNumber,
+    connectedBy: connection.receive_connected_by,
+  })
+  if (refusal) {
+    log.info('kivra activation held back', { companyId: connection.company_id, code: refusal })
+    return { ok: false, code: refusal }
+  }
+  return { ok: true, data: await lookUpKivraCompany(service, kivra, connection, orgNumber, log) }
+}
+
+/** Ask Kivra for the company and activate the row when it is listed. The caller has asked kivraOwnershipRefusal. */
+async function lookUpKivraCompany(
   service: SupabaseClient,
   kivra: KivraProvider,
   connection: DigitalMailboxConnection,
@@ -211,10 +294,12 @@ async function activateKivraConnection(
 }
 
 /**
- * Kivra's integration.created: the company activated Accounted. The company
- * that started connecting wins; otherwise the one live company with that
- * organisationsnummer (activation started from Kivra's own partner list).
- * Answers the company id it bound, or null when it could not tell which.
+ * Kivra's integration.created: the company activated Accounted. Bound to the
+ * one live company with that organisationsnummer, and only when it may read
+ * the inbox (kivraOwnershipRefusal): its waiting row when someone connected
+ * from Accounted, else a new row (activation started from Kivra's own
+ * partner list). A company that already reads it is answered unchanged.
+ * Answers the company id it bound, or null when it bound none.
  */
 export async function onKivraIntegrationCreated(
   service: SupabaseClient,
@@ -227,30 +312,44 @@ export async function onKivraIntegrationCreated(
     return null
   }
 
-  const { data: pending } = await service
+  const candidates = await companiesWithOrgNumber(service, orgNumber)
+  if (candidates.length === 0) {
+    log.warn('kivra integration.created matches no company')
+    return null
+  }
+  const { data, error } = await service
     .from('digital_mailbox_connections')
     .select('id, company_id, receive_state, receive_since, receive_connected_at, receive_connected_by')
     .eq('provider', 'kivra')
+    .in('company_id', candidates)
     .in('receive_state', ['pending', 'active'])
-  const rows = (pending as DigitalMailboxConnection[] | null) ?? []
-
-  const candidates = await companiesWithOrgNumber(service, orgNumber)
-  const started = rows.filter((r) => candidates.includes(r.company_id))
+  if (error) throw new Error(`digital mailbox connections read failed: ${error.message}`)
+  const started = (data as DigitalMailboxConnection[] | null) ?? []
   const already = started.find((r) => r.receive_state === 'active')
   if (already) return already.company_id
 
-  let target: DigitalMailboxConnection | null = started.find((r) => r.receive_state === 'pending') ?? null
-  if (!target) {
-    if (candidates.length !== 1) {
-      log.warn('kivra integration.created matches no single company', { candidates: candidates.length })
-      return null
-    }
-    target = await upsertConnection(service, candidates[0]!, 'kivra', {
+  if (candidates.length !== 1) {
+    log.warn('kivra integration.created matches no single company', { candidates: candidates.length })
+    return null
+  }
+  const companyId = candidates[0]!
+  const pending = started.find((r) => r.company_id === companyId && r.receive_state === 'pending') ?? null
+  const refusal = await kivraOwnershipRefusal(service, {
+    companyId,
+    orgNumber,
+    connectedBy: pending?.receive_connected_by ?? null,
+  })
+  if (refusal) {
+    log.warn('kivra integration.created not bound', { companyId, code: refusal })
+    return null
+  }
+  const target =
+    pending ??
+    (await upsertConnection(service, companyId, 'kivra', {
       receive_state: 'pending',
       receive_since: receiveSinceFrom(),
       receive_connected_at: new Date().toISOString(),
-    })
-  }
+    }))
   const activated = await activateKivraConnection(service, target, event.companyKey, log)
   return activated?.company_id ?? null
 }
@@ -268,17 +367,28 @@ export async function onKivraIntegrationDeleted(service: SupabaseClient, company
   return (data as unknown[] | null)?.length ?? 0
 }
 
-/** Live (not archived, not sandbox) companies whose organisationsnummer is `orgNumber`. */
+/**
+ * Live (not archived, not sandbox) companies whose organisationsnummer
+ * (company_settings) is `orgNumber`, in any form it is stored in: 10 or 12
+ * digits, with or without a hyphen or spaces. Every such form keeps the
+ * number's last four digits together, so those narrow the read and the
+ * shared key (orgNumberKey) decides.
+ */
 async function companiesWithOrgNumber(service: SupabaseClient, orgNumber: string): Promise<string[]> {
-  const dashed = `${orgNumber.slice(0, 6)}-${orgNumber.slice(6)}`
-  const { data, error } = await service
-    .from('company_settings')
-    .select('company_id, is_sandbox, companies!inner(archived_at)')
-    .in('org_number', [orgNumber, dashed])
-    .is('companies.archived_at', null)
-  if (error) throw new Error(`company lookup failed: ${error.message}`)
-  return ((data as Array<{ company_id: string; is_sandbox: boolean | null }> | null) ?? [])
-    .filter((row) => row.is_sandbox !== true)
+  const key = orgNumberKey(orgNumber)
+  if (!key) return []
+  // Every page: the exact match is decided below, so a capped read would miss a second holder.
+  const rows = await fetchAllRows<{ company_id: string; org_number: string | null; is_sandbox: boolean | null }>(({ from, to }) =>
+    service
+      .from('company_settings')
+      .select('company_id, org_number, is_sandbox, companies!inner(archived_at)')
+      .like('org_number', `%${key.slice(6)}%`)
+      .is('companies.archived_at', null)
+      .order('company_id')
+      .range(from, to),
+  )
+  return rows
+    .filter((row) => row.is_sandbox !== true && orgNumberKey(row.org_number) === key)
     .map((row) => row.company_id)
 }
 

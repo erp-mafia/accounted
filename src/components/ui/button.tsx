@@ -83,9 +83,13 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     // so they stay masked; a call site whose label carries user data adds
     // data-ph-mask, which wins over unmask on the same element.
     const phUnmask = props.role === "combobox" ? {} : { "data-ph-unmask": "" }
+    // A primary action is one of the clicks analytics records (client.ts
+    // ANALYTICS_CLICK_SCOPE): the menu, the top bar and these.
+    const phCapture = (variant ?? "default") === "default" ? { "data-ph-capture": "" } : {}
     return (
       <Comp
         {...phUnmask}
+        {...phCapture}
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         disabled={disabled || loading}
