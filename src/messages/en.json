@@ -299,7 +299,6 @@
         "suggestion": "Suggestion",
         "deadline": "Deadline",
         "question": "The agent's question",
-        "skill": "Skill",
         "workflows": "Workflows",
         "permissions": "What it may do",
         "more": "More"
@@ -1164,7 +1163,6 @@
     "backfill_done_title": "Older purchases fetched"
   },
   "settings": {
-    "memory_updated": "updated {date}",
     "memory_hidden": "hidden",
     "memory_creator_deleted": "a deleted user",
     "group_profile": "Profile",
@@ -16254,7 +16252,10 @@
     "folders_count": "{count, plural, =0 {Your agent gets no knowledge areas today.} =1 {Your agent gets # knowledge area today.} other {Your agent gets # knowledge areas today.}}",
     "folders_unknown": "Which knowledge areas apply to the company could not be read right now.",
     "folders_back": "All knowledge areas",
+    "own_add": "Add knowledge, a workflow or an analysis of your own",
     "ai_text_title": "The text your AI reads",
+    "ai_text_note_ai_english": "Written for your AI, in English.",
+    "ai_text_note_ai": "Written for your AI.",
     "reviewed_on": "Reviewed {date}",
     "create_prompt_workflow": "Load the \"create-skill\" skill from Accounted (load_skill) and follow it. I want to create a workflow of my own.",
     "create_prompt_rules": "Load the \"create-skill\" skill from Accounted (load_skill) and follow it. I want to write down knowledge of my own for my AI to follow.",

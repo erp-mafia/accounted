@@ -10,9 +10,10 @@
  *
  * The line under a row says who saved it and when: the person, or the
  * connection and the person it acted for ("Claude åt Jonas Ek"), then the
- * date. It names the kind only on a row that is not a plain fact, where the
- * row came from only when no person or connection saved it, and a later date
- * only when the row was changed on a later day.
+ * date. It names the kind only on a row that is not a plain fact, and where
+ * the row came from only when no person or connection saved it. It names no
+ * later date: the row's updated_at also moves when the row is pinned, hidden
+ * or read by an assistant, so it does not say that the text was changed.
  */
 import { attributionWordsFrom, formatActorAttribution, mcpClientDisplayName, type AttributionWords } from '@/lib/attribution/format-actor'
 import type { Creator } from '@/lib/attribution/person-names'
@@ -51,7 +52,6 @@ export interface MemoryLineRow {
   /** Who saved it; null or absent when the row records no one. */
   created_by?: Creator | null
   created_at: string
-  updated_at: string
   is_active: boolean
 }
 
@@ -63,8 +63,6 @@ export interface MemoryLineWords {
   origin: (source: 'composer' | 'derived') => string
   /** A person whose account is deleted, as said inside a sentence ("en borttagen användare"). */
   creatorDeleted: string
-  /** "uppdaterad {date}". */
-  updated: (date: string) => string
   /** A row that is hidden. */
   hidden: string
   attribution: AttributionWords
@@ -78,7 +76,6 @@ export function memoryLineWordsFrom(t: { settings: Translate; knowledge: Transla
     kind: (kind) => t.knowledge(kind === 'preference' ? 'kind_preference' : kind === 'pattern' ? 'kind_pattern' : 'kind_correction'),
     origin: (source) => t.knowledge(source === 'composer' ? 'source_composer' : 'source_derived'),
     creatorDeleted: t.settings('memory_creator_deleted'),
-    updated: (date) => t.settings('memory_updated', { date }),
     hidden: t.settings('memory_hidden'),
     attribution: attributionWordsFrom(t.attribution),
   }
@@ -108,16 +105,10 @@ export function memoryRowWho(row: Pick<MemoryLineRow, 'source' | 'client' | 'cre
   return deleted ? upperFirst(person) : person
 }
 
-function timeOf(value: string): number | null {
-  const time = new Date(value).getTime()
-  return Number.isNaN(time) ? null : time
-}
-
 /**
  * The line under a row, its parts joined by " · ": the kind (not on a plain
  * fact), where it came from (only when nobody saved it), who saved it, the
- * date it was saved, the date it was changed (only on a later day) and that
- * it is hidden.
+ * date it was saved and that it is hidden.
  */
 export function memoryRowLine(row: MemoryLineRow, words: MemoryLineWords, locale: string): string {
   const parts: string[] = []
@@ -125,14 +116,7 @@ export function memoryRowLine(row: MemoryLineRow, words: MemoryLineWords, locale
   const who = memoryRowWho(row, words)
   if (who) parts.push(who)
   else if (row.source === 'composer' || row.source === 'derived') parts.push(words.origin(row.source))
-  const saved = formatDateLong(row.created_at, locale)
-  parts.push(saved)
-  const savedAt = timeOf(row.created_at)
-  const changedAt = timeOf(row.updated_at)
-  if (savedAt !== null && changedAt !== null && changedAt > savedAt) {
-    const changed = formatDateLong(row.updated_at, locale)
-    if (changed !== saved) parts.push(words.updated(changed))
-  }
+  parts.push(formatDateLong(row.created_at, locale))
   if (!row.is_active) parts.push(words.hidden)
   return parts.join(' · ')
 }

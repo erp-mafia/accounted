@@ -3,7 +3,7 @@ import { clientDisplayName } from '@/lib/agent-context/context-window'
 import { vatLabel } from '@/lib/agent-context/vat-labels'
 import { formatCurrency } from '@/lib/utils'
 import { shortLabel } from '@/lib/context-graph/build'
-import type { ChipFamily, GraphNode } from '@/lib/context-graph/types'
+import type { ChipFamily, GraphNode, GraphNodeKind } from '@/lib/context-graph/types'
 
 /**
  * What a dot says in words: its name under the dot, and the lines of its
@@ -42,18 +42,66 @@ export function familyLabel(family: ChipFamily, t: (key: string) => string): str
  */
 export type KnowledgeName = (id: string, title: string) => string
 
+/**
+ * A knowledge area's one line by its id and its description in the briefing:
+ * the lookup the knowledge folders describe their tiles with
+ * (useKnowledgeDesc in components/skills/knowledge-labels.ts).
+ */
+export type KnowledgeDesc = (id: string, description: string) => string
+
+/**
+ * What a dot's words are looked up through. Each is optional: without one,
+ * the briefing's own words stand.
+ */
+export interface NodeLookups {
+  knowledgeName?: KnowledgeName
+  knowledgeDesc?: KnowledgeDesc
+  /**
+   * An account's name in the company's chart of accounts, by its number;
+   * undefined for an account the chart does not hold. The briefing sends
+   * account numbers only, so the host reads the chart once and hands the
+   * names in.
+   */
+  accountName?: (number: string) => string | undefined
+}
+
 /** A knowledge dot's title: the folder's name for the area when the lookup is given, else the briefing's own. */
 function knowledgeTitle(node: GraphNode, knowledgeName: KnowledgeName | undefined): string | null {
   if (node.kind !== 'skill' || !node.text) return null
   return knowledgeName && node.atomId ? knowledgeName(node.atomId, node.text) : node.text
 }
 
+/** A knowledge dot's one line: the folder's line for the area when the lookup is given, else the briefing's own description. */
+function knowledgeLine(node: GraphNode, knowledgeDesc: KnowledgeDesc | undefined): string | null {
+  if (node.kind !== 'skill') return null
+  const own = node.detail ?? ''
+  return (knowledgeDesc && node.atomId ? knowledgeDesc(node.atomId, own) : own) || null
+}
+
+/** An account dot's number with its name after it, when the chart has one: "1930 Företagskonto". */
+function accountText(node: GraphNode, accountName: NodeLookups['accountName']): string | null {
+  if (node.kind !== 'account' || !node.account) return null
+  const name = accountName?.(node.account)?.trim()
+  return name ? `${node.account} ${name}` : node.account
+}
+
+/**
+ * The kind of thing a dot is, in a word. A knowledge area is named by the
+ * agent picture's own row name, as its chip in the legend is
+ * (FAMILY_LABEL_KEY): it has no word of its own in the graph.
+ */
+function kindLabel(kind: GraphNodeKind, t: T): string {
+  return kind === 'skill' ? t(FAMILY_LABEL_KEY.instructions) : t(`graph.kinds.${kind}`)
+}
+
 /** The name under a dot. */
-export function nodeLabel(node: GraphNode, t: T, knowledgeName?: KnowledgeName): string {
+export function nodeLabel(node: GraphNode, t: T, lookups: NodeLookups = {}): string {
   if (node.kind === 'more') return t('graph.more', { count: node.count ?? 0 })
-  const knowledge = knowledgeTitle(node, knowledgeName)
+  const knowledge = knowledgeTitle(node, lookups.knowledgeName)
   if (knowledge) return shortLabel(knowledge)
-  return node.label ?? t(`graph.kinds.${node.kind}`)
+  const account = accountText(node, lookups.accountName)
+  if (account) return shortLabel(account)
+  return node.label ?? kindLabel(node.kind, t)
 }
 
 export interface NodeText {
@@ -83,9 +131,9 @@ export function describeNode(
   formatDateLong: (date: string) => string,
   linkedCounterparties: number,
   pages?: NodePages,
-  knowledgeName?: KnowledgeName,
+  lookups: NodeLookups = {},
 ): NodeText {
-  const kind = t(`graph.kinds.${node.kind === 'more' && node.moreOf ? node.moreOf : node.kind}`)
+  const kind = kindLabel(node.kind === 'more' && node.moreOf ? node.moreOf : node.kind, t)
   const date = (d: string | null | undefined) => (d ? formatDateLong(d) : null)
   const lines = (...parts: (string | null | undefined | false)[]) => parts.filter((p): p is string => !!p)
   const view = (v: 'memory' | 'map' | 'skills') => ({ href: `?view=${v}`, label: t('graph.open', { page: t(`view_${v}`) }) })
@@ -124,7 +172,12 @@ export function describeNode(
       }
     }
     case 'account':
-      return { kind, title: t('graph.account_text', { account: node.account ?? '' }), meta: lines(linkedCounterparties > 0 && t('graph.account_meta', { count: linkedCounterparties })), link: view('map') }
+      return {
+        kind,
+        title: t('graph.account_text', { account: accountText(node, lookups.accountName) ?? '' }),
+        meta: lines(linkedCounterparties > 0 && t('graph.account_meta', { count: linkedCounterparties })),
+        link: view('map'),
+      }
     case 'bank':
       return { kind, title: t('graph.bank_text', { date: date(node.date) ?? '' }), meta: [t('sources.connections')], link: { href: '/settings/banking', label: t('graph.open', { page: t('sources.connections') }) } }
     case 'skatteverket':
@@ -178,7 +231,7 @@ export function describeNode(
     case 'question':
       return { kind, title: node.text ?? '', meta: lines(node.detail, node.date ? t('graph.asked', { date: date(node.date) ?? '' }) : null), link: null }
     case 'skill':
-      return { kind, title: knowledgeTitle(node, knowledgeName) ?? '', meta: lines(node.detail), link: view('skills') }
+      return { kind, title: knowledgeTitle(node, lookups.knowledgeName) ?? '', meta: lines(knowledgeLine(node, lookups.knowledgeDesc)), link: view('skills') }
     case 'workflows':
       return { kind, title: t('workflows_count', { count: node.count ?? 0 }), meta: [t('sources.accounted')], link: view('skills') }
     case 'permissions':

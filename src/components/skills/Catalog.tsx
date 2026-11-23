@@ -42,7 +42,7 @@ import { itemHue, seedOf, type ItemKind } from './hues'
 import { cn } from '@/lib/utils'
 import { StrataField } from './StrataField'
 import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, type CommunityMeta, type SkillSummary } from './data'
+import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, ownItemHref, type CommunityMeta, type SkillSummary } from './data'
 import { knowledgeRows } from './knowledge-rows'
 import styles from './skills.module.css'
 
@@ -160,7 +160,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   const ownItems: Item[] = own.map((s) => {
     const k = s.itemKind ?? 'workflow'
     // A draft your AI saved waits for you: say so on the card, not only on its page.
-    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: k === 'workflow' ? `${hrefBase}/${agentSegment(s.slug)}` : `${hrefBase}/egen.${s.slug.slice(4)}`, source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
+    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: ownItemHref(hrefBase, s.slug, k), source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
       ...(s.draft ? { status: { presence: 'busy' as const, text: t('draft_tag') } } : {}) }
   })
   // Accounted's own analyses: examples of what an analysis is, next to the community's.

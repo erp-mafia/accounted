@@ -28,10 +28,27 @@ export const PACK_LEGAL_FORMS: Readonly<Record<string, readonly EntityType[]>> =
   'modifier/single-shareholder-ab-fmb': ['aktiebolag'],
 }
 
+/**
+ * The tax planning packs, one per legal form: each says in its own text
+ * which form it is written for and sends the other form to the other pack
+ * (.claude/skills/swedish-ef-skatteplanering: enskild firma, "for AB planning
+ * use swedish-tax-planning"; .claude/skills/swedish-tax-planning: "AB only,
+ * for enskild firma use swedish-ef-skatteplanering"). A company of a form
+ * that has a pack here is offered that one and not the other. A form neither
+ * text names has no entry and is offered both: nothing is decided for it.
+ */
+export const TAX_PLANNING_PACK_BY_FORM: Readonly<Partial<Record<EntityType, string>>> = {
+  enskild_firma: 'horizontal/swedish-ef-skatteplanering',
+  aktiebolag: 'horizontal/swedish-tax-planning',
+}
+
 /** Whether a pack applies to a company of this legal form. */
 export function packFitsForm(atomId: string, entityType: EntityType): boolean {
   const forms = PACK_LEGAL_FORMS[atomId]
-  return !forms || forms.includes(entityType)
+  if (forms && !forms.includes(entityType)) return false
+  // A tax planning pack is left out only for a form that has the other one as its own.
+  const own = TAX_PLANNING_PACK_BY_FORM[entityType]
+  return !own || own === atomId || !Object.values(TAX_PLANNING_PACK_BY_FORM).includes(atomId)
 }
 
 /**
