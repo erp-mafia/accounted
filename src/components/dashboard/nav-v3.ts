@@ -416,23 +416,34 @@ export const NAV_V3_AREAS: NavV3Area[] = [
     owns: ['/settings/api'],
     groups: [
       {
+        // Where the agent picture is on (AGENT_PICTURE_COMPANY_IDS) the area
+        // is these two rows, with no group label: the picture (Kontext) and
+        // Bokföringsregler. Every row of the two groups below hides there;
+        // what they open is reached from the picture, and each page keeps
+        // its address.
+        items: [
+          { href: '/wiki', module: 'agent', labelKey: 'v3_context', icon: RectangleGroupIcon, newBadge: true, match: ['/agent-knowledge'], requiresAgentPicture: true },
+          { href: '/rules', module: 'transactions', labelKey: 'v2_rules', icon: AdjustmentsHorizontalIcon, requiresAgentPicture: true },
+        ],
+      },
+      {
         labelKey: 'v3_group_steer',
         items: [
-          { href: '/rules', module: 'transactions', labelKey: 'v2_rules', icon: AdjustmentsHorizontalIcon },
-          { href: '/skills', module: 'agent', labelKey: 'v3_skills', icon: SparklesIcon, newBadge: true, requiresAgents: true },
+          { href: '/rules', module: 'transactions', labelKey: 'v2_rules', icon: AdjustmentsHorizontalIcon, hiddenWithAgentPicture: true },
+          { href: '/skills', module: 'agent', labelKey: 'v3_skills', icon: SparklesIcon, newBadge: true, requiresAgents: true, hiddenWithAgentPicture: true },
         ],
       },
       {
         labelKey: 'v3_group_knowledge',
         items: [
           // /agent-knowledge redirects into the wiki, view by view.
-          { href: '/wiki', module: 'agent', labelKey: 'v3_context', icon: RectangleGroupIcon, newBadge: true, match: ['/agent-knowledge'] },
+          { href: '/wiki', module: 'agent', labelKey: 'v3_context', icon: RectangleGroupIcon, newBadge: true, match: ['/agent-knowledge'], hiddenWithAgentPicture: true },
           // Every view of the wiki is a row here, so the page carries no view switcher.
-          { href: '/wiki?view=map', module: 'agent', labelKey: 'v3_rules_profile', icon: BookOpenIcon },
-          { href: '/wiki?view=facts', module: 'agent', labelKey: 'v3_facts', icon: ListBulletIcon, requiresArkivBrain: true },
-          { href: '/wiki?view=memory', module: 'agent', labelKey: 'v3_memory', icon: BookmarkIcon },
+          { href: '/wiki?view=map', module: 'agent', labelKey: 'v3_rules_profile', icon: BookOpenIcon, hiddenWithAgentPicture: true },
+          { href: '/wiki?view=facts', module: 'agent', labelKey: 'v3_facts', icon: ListBulletIcon, requiresArkivBrain: true, hiddenWithAgentPicture: true },
+          { href: '/wiki?view=memory', module: 'agent', labelKey: 'v3_memory', icon: BookmarkIcon, hiddenWithAgentPicture: true },
           // Where the Agenter page is open, Arbetssätt above is that page.
-          { href: '/wiki?view=skills', module: 'agent', labelKey: 'v3_skills', icon: SparklesIcon, hiddenWithAgents: true },
+          { href: '/wiki?view=skills', module: 'agent', labelKey: 'v3_skills', icon: SparklesIcon, hiddenWithAgents: true, hiddenWithAgentPicture: true },
         ],
       },
       {

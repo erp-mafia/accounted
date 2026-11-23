@@ -39,6 +39,7 @@ function rolloutsOff(overrides: Partial<NavGateContext> = {}): NavGateContext {
     autogiroEnabled: false,
     bolagetEnabled: false,
     companyQuestionsEnabled: false,
+    agentPictureEnabled: false,
     mcpExtensionEnabled: true,
     capabilities: ['ai'],
     hiddenNavHrefs: new Set(),

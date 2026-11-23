@@ -50,6 +50,10 @@ export interface NavGateFlags {
   requiresAgents?: boolean
   /** What the Agenter page replaces (the Arbetssätt view of the wiki): hidden where that page is open. */
   hiddenWithAgents?: boolean
+  /** Shown only where the agent picture is switched on for the company (AGENT_PICTURE_COMPANY_IDS, lib/env/agent-picture-switch.ts). */
+  requiresAgentPicture?: boolean
+  /** Hidden where the agent picture is switched on: the picture holds what the row opens, or shows it from its own rows. */
+  hiddenWithAgentPicture?: boolean
   /** The built-in chat (/chat): hidden where it is switched off (ASSISTANT_CHAT_ENABLED, lib/env/assistant-chat-switch.ts). */
   requiresAssistantChat?: boolean
   /** Fakta in the wiki: only where Arkiv reads the company's documents (lib/arkiv/flag.ts isArkivBrainEnabled). */
