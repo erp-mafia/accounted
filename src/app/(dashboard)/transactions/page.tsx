@@ -4803,7 +4803,8 @@ export default function TransactionsPage() {
           value={mode}
           onChange={handleModeChange}
           options={[
-            { value: 'inbox', label: t('mode_inbox'), count: inboxScope.inScope },
+            // With Att bokföra in the menu the name means that list: this tab is the register's unbooked rows.
+            { value: 'inbox', label: t(bookingScreen ? 'mode_inbox_unbooked' : 'mode_inbox'), count: inboxScope.inScope },
             { value: 'history', label: t('mode_all') },
             // Review tab exists only while suggestions do (or while the user is
             // standing in it after emptying the list): a permanent third tab

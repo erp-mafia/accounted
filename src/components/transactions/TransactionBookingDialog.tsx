@@ -341,7 +341,7 @@ export default function TransactionBookingDialog({
                         currency: transaction.currency,
                         foreignAmount: Math.abs(transaction.amount),
                         exchangeRate: transaction.exchange_rate,
-                        businessLineDescription: proposalLineDescription ?? undefined,
+                        lineDescription: proposalLineDescription ?? undefined,
                         settlementLineDescription: bankAccountName ?? t('bank_line_description'),
                       })
                     : preselectedTemplate

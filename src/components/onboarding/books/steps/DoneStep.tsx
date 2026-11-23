@@ -4,13 +4,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import useSWR from 'swr'
-import { useCapability, useCompany } from '@/contexts/CompanyContext'
+import { useBookingScreenEnabled, useCapability, useCompany } from '@/contexts/CompanyContext'
+import { toBookDoor } from '@/lib/bookkeeping/to-book'
 import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFormat } from '@/lib/hooks/use-format'
 import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
-import { AI_TASK_LABEL_KEY, aiTaskHref, foundTasksStartOpen, listAiTasks } from '@/lib/worklist/ai-task'
+import { AI_TASK_LABEL_KEY, aiTaskHref, foundTasksStartOpen, listAiTasks, type AiTaskCategory } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
 import { InkText } from '@/components/onboarding/journey/ink'
@@ -57,6 +58,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const { formatDateLong } = useFormat()
   const { findings, state } = ctx
   const hasAi = useCapability(CAPABILITY.ai)
+  const bookingScreen = useBookingScreenEnabled()
   const [preferredClient, setPreferredClient] = useState<AiClient>()
   const [polled, setPolled] = useState<AiConnection | null>(null)
   // null until the toggle is clicked: the list then follows what it holds (foundTasksStartOpen).
@@ -65,6 +67,11 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     ['worklist-counts', company?.id ?? null] as const,
     fetchWorklistCounts,
   )
+  // A bank row task opens where every "book these" link leads (Att bokföra with the booking screen).
+  const taskHref = (category: AiTaskCategory) => {
+    const href = aiTaskHref(category, worklist?.inboxHref)
+    return category === 'book_transaction' ? toBookDoor(bookingScreen, href) : href
+  }
   const refetch = useCallback(() => {
     void mutate()
   }, [mutate])
@@ -164,7 +171,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
                     <span className="n">{task.count}</span>
                   </span>
                   <span className="a">
-                    <Button variant="outline" disabled={leaving} onClick={() => onLeave('done', aiTaskHref(task.category, worklist?.inboxHref))}>
+                    <Button variant="outline" disabled={leaving} onClick={() => onLeave('done', taskHref(task.category))}>
                       {t('task_open')}
                     </Button>
                     <AiTaskAction

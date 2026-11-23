@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
-import { actionEntries, matches } from '../CommandPalette'
+import { actionEntries, localizeEntry, matches } from '../CommandPalette'
 
 /**
  * PH 216, PH 202: new users could not find how to add another company. ⌘K
@@ -43,5 +43,21 @@ describe('CommandPalette, adding a company', () => {
     expect(actionEntries(null).map((e) => e.id)).toEqual(
       actionEntries({ label: 'x', keywords: '' }).filter((e) => e.id !== 'add-company').map((e) => e.id),
     )
+  })
+})
+
+describe('the booking action with the booking screen switched on', () => {
+  it('opens Att bokföra, still found by the words for booking a transaction', () => {
+    const entry = actionEntries(null, { bookingScreen: true }).find((e) => e.id === 'to-book')
+    expect(entry).toMatchObject({ href: '/att-bokfora' })
+    const shown = localizeEntry(entry!, (key) => (sv.command_palette as Record<string, string>)[key])
+    expect(shown.label).toBe('Att bokföra')
+    expect(matches(shown, 'bokför')).toBe(true)
+    expect(matches(shown, 'boka transaktion')).toBe(true)
+    expect(actionEntries(null, { bookingScreen: true }).some((e) => e.id === 'book-transaction')).toBe(false)
+  })
+
+  it('keeps Bankrader without it', () => {
+    expect(actionEntries(null).find((e) => e.id === 'book-transaction')).toMatchObject({ href: '/transactions' })
   })
 })

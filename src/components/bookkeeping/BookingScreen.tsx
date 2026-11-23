@@ -15,7 +15,7 @@ import JournalEntryForm from '@/components/bookkeeping/JournalEntryForm'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
+import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import { useHeldUnderlag } from '@/components/transactions/use-held-underlag'
 import { bankRowInitialLines } from '@/components/transactions/bank-row-lines'
 import { HeldUnderlagRows } from '@/components/transactions/HeldUnderlagRows'
@@ -23,7 +23,7 @@ import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BOOKING_SCREEN_PATH, bookingScreenHref, bookingScreenOrigin } from '@/lib/bookkeeping/booking-screen'
-import { bookingWalk, toBookAmountLabel, toBookFilterOfBack, type ToBookRow } from '@/lib/bookkeeping/to-book'
+import { bookingWalk, toBookAmountLabel, toBookFilterOfBack, toBookScreenSubject, type ToBookRow } from '@/lib/bookkeeping/to-book'
 import { focusKeyAction, focusPosition, neighbour } from '@/lib/inkorg/focus'
 import { isEditableTarget, isOverlayBlocking } from '@/lib/hooks/detail-pager-guards'
 import { categorizeBodyFor, type BookingProposal } from '@/lib/bookkeeping/proposal'
@@ -54,11 +54,13 @@ export interface BookingScreenProps {
   transaction: Transaction | null
   /** A counter account the person already picked before opening the screen. */
   account: string | null
+  /** The inbox document found for the bank row (Kvitto hittat), held as its underlag until Bokför. */
+  found: AvailableInboxDoc | null
   /** The page to return to (the list with its filters), checked by safeReturnPath. */
   back: string | null
 }
 
-export function BookingScreen({ transaction, account, back }: BookingScreenProps) {
+export function BookingScreen({ transaction, account, found, back }: BookingScreenProps) {
   const t = useTranslations('booking_screen')
   const router = useRouter()
   const { canWrite, lockedTitle } = useViewerLock()
@@ -73,6 +75,8 @@ export function BookingScreen({ transaction, account, back }: BookingScreenProps
     '/att-bokfora': t('back_to_book'),
     '/transactions': t('back_transactions'),
     '/bookkeeping': t('back_vouchers'),
+    '/?vy=behover': t('back_needs_you'),
+    '/': t('back_home'),
   }[origin]
 
   const amountLabel = transaction
@@ -162,6 +166,7 @@ export function BookingScreen({ transaction, account, back }: BookingScreenProps
         <TransactionBooking
           transaction={transaction}
           account={account}
+          found={found}
           amountLabel={amountLabel ?? ''}
           nextUp={walk.afterRow}
           onTouched={() => setTouched(true)}
@@ -190,7 +195,12 @@ function useBookingWalk(transactionId: string | null, back: string | null, backH
   const previousId = position && transactionId ? neighbour(walk, transactionId, -1) : null
   const nextId = position && transactionId ? neighbour(walk, transactionId, 1) : null
   const afterId = nextId ?? previousId
-  const hrefOf = (id: string | null) => (id ? bookingScreenHref({ kind: 'transaction', transactionId: id, account: null }, back) : null)
+  // A row opens as the list opens it: with the receipt found for it.
+  const hrefOf = (id: string | null) => {
+    if (!id) return null
+    const row = rows.find((r) => r.transactionId === id)
+    return bookingScreenHref(row ? toBookScreenSubject(row) : { kind: 'transaction', transactionId: id, account: null }, back)
+  }
   return {
     position,
     previousHref: hrefOf(previousId),
@@ -277,6 +287,7 @@ function BookingColumns({
 function TransactionBooking({
   transaction,
   account,
+  found,
   amountLabel,
   nextUp,
   onTouched,
@@ -284,6 +295,7 @@ function TransactionBooking({
 }: {
   transaction: Transaction
   account: string | null
+  found: AvailableInboxDoc | null
   amountLabel: string
   /** The row Bokför opens next, named under the form. */
   nextUp: ToBookRow | null
@@ -298,12 +310,17 @@ function TransactionBooking({
 
   // The row's own underlag and everything attached here, through the same
   // hook as the booking dialog: the first document attached is pinned to the
-  // row at once, so leaving the page keeps it.
+  // row at once, so leaving the page keeps it. The receipt found for the row
+  // starts attached but only held: opening or stepping past the row writes
+  // nothing, and Bokför links it to the verifikat, which takes it out of the
+  // inbox.
   const attachments = useHeldUnderlag({
     transactionId: transaction.id,
     rowDocumentId: transaction.document_id ?? null,
     open: true,
+    found,
   })
+  const foundHeld = found !== null && attachments.attached.inboxDocs.some((d) => d.inbox_item_id === found.inbox_item_id)
   const { underlag, claimUpload } = attachments
   const uploadedFiles = attachments.attached.files
   const viewer = attachments.shown
@@ -411,6 +428,7 @@ function TransactionBooking({
         underlag={
           hasDocument ? (
             <>
+              {foundHeld && <p className="text-xs text-muted-foreground">{t('underlag_found_held')}</p>}
               <DocumentViewerPane
                 documentId={shownDocumentId}
                 mime={viewer.mime}
@@ -463,7 +481,7 @@ function TransactionBooking({
                         currency: transaction.currency,
                         foreignAmount: Math.abs(transaction.amount),
                         exchangeRate: transaction.exchange_rate,
-                        businessLineDescription: used.proposal.name_sv,
+                        lineDescription: used.proposal.name_sv,
                         settlementLineDescription: bankAccountName ?? t('bank_line_description'),
                       })
                     : bankRowInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, account)

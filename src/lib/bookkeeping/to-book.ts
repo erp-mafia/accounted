@@ -12,6 +12,8 @@
  */
 
 import { formatRowAmount } from '@/lib/utils'
+import type { InboxDocumentKind } from '@/lib/documents/inbox-kind'
+import type { BookingScreenSubject } from './booking-screen'
 
 /** An open bank row, as GET /api/transactions?unmatched=true answers it. */
 export interface ToBookBankRow {
@@ -73,6 +75,8 @@ export interface ToBookDocument {
   currency: string | null
   /** The open bank row it looks paid by, if any (Inkommande's bank_match). */
   bankMatchTransactionId: string | null
+  /** What the document is (resolveInboxKind), null while unknown. */
+  kind: InboxDocumentKind | null
 }
 
 /**
@@ -94,6 +98,8 @@ export interface ToBookRow {
   currency: string | null
   cashAccountId: string | null
   underlag: ToBookUnderlag
+  /** What the document found for the bank row is, when one was found. */
+  foundKind: InboxDocumentKind | null
 }
 
 export const TO_BOOK_FILTERS = ['all', 'missing', 'found', 'no_bank'] as const
@@ -130,6 +136,7 @@ export function buildToBookRows(bankRows: readonly ToBookBankRow[], documents: r
       currency: r.currency,
       cashAccountId: r.cash_account_id,
       underlag: r.document_id ? 'attached' : found ? 'found' : 'missing',
+      foundKind: found?.kind ?? null,
     }
   })
   const docs: ToBookRow[] = documents
@@ -145,6 +152,7 @@ export function buildToBookRows(bankRows: readonly ToBookBankRow[], documents: r
       currency: d.currency,
       cashAccountId: null,
       underlag: 'document',
+      foundKind: null,
     }))
   return [...bank, ...docs].sort(newestFirst)
 }
@@ -190,12 +198,34 @@ export function toBookIsMoneyIn(row: Pick<ToBookRow, 'kind' | 'amount'>): boolea
 export const TO_BOOK_PATH = '/att-bokfora'
 
 /**
- * Whether a row opens on the booking screen: a bank row without a document
- * found for it. A found pair and a document open in Inkommande, where the
- * pair is confirmed or the document is booked.
+ * Where a "book these" link leads (Hem's and Behöver dig's row, Börja, ⌘K,
+ * onboarding): Att bokföra where the booking screen is switched on, else the
+ * page the link led to before it.
+ */
+export function toBookDoor(bookingScreen: boolean, before: string): string {
+  return bookingScreen ? TO_BOOK_PATH : before
+}
+
+/**
+ * Whether a row opens on the booking screen: a bank row, with the receipt
+ * found for it if one was (the screen holds it as the row's underlag). A
+ * bank row with another kind of document found for it (an invoice, which may
+ * belong in leverantörsreskontran) and a document without a bank row open in
+ * Inkommande, where those are decided.
  */
 export function opensInBookingScreen(row: ToBookRow): boolean {
-  return row.kind === 'bank' && row.underlag !== 'found' && row.transactionId !== null
+  if (row.kind !== 'bank' || row.transactionId === null) return false
+  return row.underlag !== 'found' || (row.foundKind === 'receipt' && row.inboxItemId !== null)
+}
+
+/** What the booking screen books for a row that opens there: its bank row, with the receipt found for it. */
+export function toBookScreenSubject(row: ToBookRow): BookingScreenSubject {
+  return {
+    kind: 'transaction',
+    transactionId: row.transactionId as string,
+    account: null,
+    ...(row.underlag === 'found' && row.inboxItemId ? { foundItemId: row.inboxItemId } : {}),
+  }
 }
 
 /**

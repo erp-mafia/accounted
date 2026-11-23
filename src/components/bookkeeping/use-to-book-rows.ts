@@ -3,6 +3,7 @@
 import { useMemo } from 'react'
 import useSWR from 'swr'
 import { itemHeadline, queueFor, type InkorgItem } from '@/lib/inkorg/items'
+import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import {
   buildToBookRows,
   readAllToBookBankRows,
@@ -57,6 +58,7 @@ async function readDocuments(): Promise<ToBookDocument[]> {
         amount: head.amount,
         currency: head.amount == null ? null : head.currency,
         bankMatchTransactionId: item.bank_match?.transaction_id ?? null,
+        kind: resolveInboxKind({ kind_hint: item.kind_hint ?? null, extracted_data: item.extracted_data }),
       }
     })
 }

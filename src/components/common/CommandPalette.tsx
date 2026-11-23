@@ -29,7 +29,8 @@ import {
 } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { Kbd } from '@/components/ui/count-tile'
-import { useAssistantChatEnabled, useCompany } from '@/contexts/CompanyContext'
+import { useAssistantChatEnabled, useBookingScreenEnabled, useCompany } from '@/contexts/CompanyContext'
+import { toBookDoor } from '@/lib/bookkeeping/to-book'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
 import { passesNavGates, type NavGateContext, type ShellNavGate } from '@/lib/navigation/nav-gates'
@@ -71,6 +72,7 @@ const ACTION_ENTRIES: Entry[] = [
 const ENTRY_LABEL_KEYS: Record<string, { label: string; hint?: string }> = {
   'new-invoice': { label: 'action_new_invoice', hint: 'action_new_invoice_hint' },
   'book-transaction': { label: 'action_book_transaction', hint: 'action_book_transaction_hint' },
+  'to-book': { label: 'action_to_book', hint: 'action_to_book_hint' },
   'new-customer': { label: 'action_new_customer' },
   'new-supplier-invoice': { label: 'action_new_supplier_invoice' },
   reports: { label: 'action_reports', hint: 'action_reports_hint' },
@@ -100,11 +102,23 @@ export function localizeEntry<E extends Entry>(entry: E, translate: (key: string
  * The actions, with "Lägg till företag" (the user menu's door, under the
  * label the menu shows, found by the words people typed for it in PH 216 and
  * PH 202: company_switcher.add_company_keywords) unless it is null: a sandbox
- * has no such door.
+ * has no such door. With the booking screen switched on, "Boka transaktion"
+ * is Att bokföra, where the menu row of that name leads (toBookDoor).
  */
-export function actionEntries(addCompany: { label: string; keywords: string; href?: string } | null): Entry[] {
-  if (!addCompany) return ACTION_ENTRIES
-  return [...ACTION_ENTRIES, { id: 'add-company', icon: PlusIcon, ...addCompany, href: addCompany.href ?? ADD_COMPANY_HREF }]
+export function actionEntries(
+  addCompany: { label: string; keywords: string; href?: string } | null,
+  { bookingScreen = false }: { bookingScreen?: boolean } = {},
+): Entry[] {
+  const entries = bookingScreen
+    ? ACTION_ENTRIES.map((e) =>
+        e.id === 'book-transaction'
+          ? // Named in the reader's language (action_to_book); "Boka transaktion" stays searchable.
+            { ...e, id: 'to-book', href: toBookDoor(true, e.href) }
+          : e,
+      )
+    : ACTION_ENTRIES
+  if (!addCompany) return entries
+  return [...entries, { id: 'add-company', icon: PlusIcon, ...addCompany, href: addCompany.href ?? ADD_COMPANY_HREF }]
 }
 
 /** The words people type for a page, and the destinations without a menu row (see palette-pages.ts). */
@@ -172,6 +186,7 @@ export default function CommandPalette({
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const { company, capabilities, isSandbox, addCompanyHref, byraTeam, role } = useCompany()
+  const bookingScreen = useBookingScreenEnabled()
   const { identity } = useAgentSheet()
   const assistantChatEnabled = useAssistantChatEnabled()
   const tSwitcher = useTranslations('company_switcher')
@@ -224,12 +239,12 @@ export default function CommandPalette({
   const filteredActions = useMemo(() => {
     const addCompany = addCompanyLabel ? { label: addCompanyLabel, keywords: addCompanyKeywords, href: addCompanyHref } : null
     // "Lägg till företag" leaves the company, so it is not a page of the role.
-    const visible = actionEntries(addCompany)
+    const visible = actionEntries(addCompany, { bookingScreen })
       .map((entry) => localizeEntry(entry, (key) => t(key as never)))
       .filter(allowedByCapability)
       .filter((entry) => entry.id === 'add-company' || paletteOpensForRole(role, entry.href))
     return q ? visible.filter(e => matches(e, q)) : visible
-  }, [q, allowedByCapability, addCompanyLabel, addCompanyKeywords, addCompanyHref, role, t])
+  }, [q, allowedByCapability, addCompanyLabel, addCompanyKeywords, addCompanyHref, role, t, bookingScreen])
   // The pages are the shell's own tree (nav-v3.ts), gated as the sidebar
   // gates it for this company and grouped by area (palette-pages.ts).
   const hasCompany = !!company

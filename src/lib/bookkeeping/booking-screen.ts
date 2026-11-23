@@ -1,8 +1,9 @@
 /**
  * The booking screen's address (/bokfor) and what it books: a bank row
  * (`?transaktion=<id>`, optionally with the counter account the person
- * already picked, `&konto=5460`) or a new verifikation with no bank row
- * (no query). Pure, so the doors that link here and the page that reads
+ * already picked, `&konto=5460`, or the inbox item found for the row,
+ * `&underlag=<id>`, held as its underlag) or a new verifikation with no bank
+ * row (no query). Pure, so the doors that link here and the page that reads
  * the address agree on one shape.
  */
 import { isUuid } from '@/lib/invariants/uuid'
@@ -11,8 +12,17 @@ import { safeReturnTo } from '@/lib/auth/safe-return-to'
 
 export const BOOKING_SCREEN_PATH = '/bokfor'
 
+/** Hem's Behöver dig view, the menu row of that name. */
+const HEM_NEEDS_YOU_PATH = '/?vy=behover'
+
 export type BookingScreenSubject =
-  | { kind: 'transaction'; transactionId: string; account: string | null }
+  | {
+      kind: 'transaction'
+      transactionId: string
+      account: string | null
+      /** The inbox item found for the row (Att bokföra's Kvitto hittat), held as its underlag until Bokför. */
+      foundItemId?: string | null
+    }
   | { kind: 'voucher' }
 
 type QueryValue = string | string[] | undefined
@@ -26,14 +36,22 @@ function first(value: QueryValue): string | null {
 /**
  * The pages the screen returns to, with the list's own query (filters,
  * search, page) kept. Each is a menu row: the screen keeps the one it was
- * opened from lit (bookingScreenOrigin).
+ * opened from lit (bookingScreenOrigin). Hem and its Behöver dig view are
+ * one page (`/`, `/?vy=behover`), told apart by the view.
  */
-export const BOOKING_SCREEN_RETURN_PATHS = ['/bookkeeping', '/transactions', '/att-bokfora'] as const
+export const BOOKING_SCREEN_RETURN_PATHS = ['/bookkeeping', '/transactions', '/att-bokfora', HEM_NEEDS_YOU_PATH, '/'] as const
 export type BookingScreenOrigin = (typeof BOOKING_SCREEN_RETURN_PATHS)[number]
 
 /** The page a path lands on, of those the screen returns to. */
 function returnPathOf(path: string): BookingScreenOrigin | null {
-  return BOOKING_SCREEN_RETURN_PATHS.find((p) => path === p || path.startsWith(`${p}?`) || path.startsWith(`${p}/`)) ?? null
+  const at = path.indexOf('?')
+  if ((at === -1 ? path : path.slice(0, at)) === '/') {
+    return new URLSearchParams(at === -1 ? '' : path.slice(at + 1)).get('vy') === 'behover' ? HEM_NEEDS_YOU_PATH : '/'
+  }
+  return (
+    BOOKING_SCREEN_RETURN_PATHS.find((p) => !p.startsWith('/?') && p !== '/' && (path === p || path.startsWith(`${p}?`) || path.startsWith(`${p}/`))) ??
+    null
+  )
 }
 
 /**
@@ -67,6 +85,7 @@ export function bookingScreenHref(subject: BookingScreenSubject, back?: string |
   if (subject.kind === 'transaction') {
     params.set('transaktion', subject.transactionId)
     if (subject.account) params.set('konto', subject.account)
+    if (subject.foundItemId) params.set('underlag', subject.foundItemId)
   }
   const returnTo = safeReturnPath(back)
   if (returnTo) params.set('tillbaka', returnTo)
@@ -75,15 +94,26 @@ export function bookingScreenHref(subject: BookingScreenSubject, back?: string |
 }
 
 /**
- * What the address asks to book. A transaction id that is not a uuid, or an
- * account that is not four digits, is dropped rather than trusted: a broken
- * link opens an empty verifikation instead of a lookup on garbage.
+ * What the address asks to book. A transaction id or inbox item id that is
+ * not a uuid, or an account that is not four digits, is dropped rather than
+ * trusted: a broken link opens an empty verifikation (or the row without
+ * underlag) instead of a lookup on garbage.
  */
-export function parseBookingScreenSubject(query: { transaktion?: QueryValue; konto?: QueryValue }): BookingScreenSubject {
+export function parseBookingScreenSubject(query: {
+  transaktion?: QueryValue
+  konto?: QueryValue
+  underlag?: QueryValue
+}): BookingScreenSubject {
   const transactionId = first(query.transaktion)
   if (!transactionId || !isUuid(transactionId)) return { kind: 'voucher' }
   const account = first(query.konto)
-  return { kind: 'transaction', transactionId: transactionId.toLowerCase(), account: account && ACCOUNT_NUMBER_RE.test(account) ? account : null }
+  const found = first(query.underlag)
+  return {
+    kind: 'transaction',
+    transactionId: transactionId.toLowerCase(),
+    account: account && ACCOUNT_NUMBER_RE.test(account) ? account : null,
+    ...(found && isUuid(found) ? { foundItemId: found.toLowerCase() } : {}),
+  }
 }
 
 /** The page to return to after booking, when the address names a safe one. */

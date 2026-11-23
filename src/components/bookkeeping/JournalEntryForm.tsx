@@ -936,8 +936,9 @@ export default function JournalEntryForm({
     setLines((prev) => foldGeneratedVatLines(prev, vatRowOf, { stored: !!editEntryId }))
   }, [vatRowOf, editEntryId])
 
-  // Account number → name, so derived template lines get meaningful labels:
-  // the company's chart, then BAS for a standard account not activated yet.
+  // Account number → name, so derived template lines get meaningful labels
+  // and the Konto field names the account beside its number: the company's
+  // chart, then BAS for a standard account not activated yet.
   const accountNameMap = useMemo(
     () => templateAccountNames(accounts, catalog),
     [accounts, catalog],
@@ -1851,6 +1852,8 @@ export default function JournalEntryForm({
         accounts={accounts}
         catalog={catalog}
         notActivatedLabel={t('account_not_activated')}
+        accountName={(num) => accountNameMap[num]}
+        accountNameInline
         onAccountChange={(index, num) => updateLine(index, 'account_number', num)}
         onAccountCommit={focusDebit}
         accountInputRef={(index, el) => { accountRefs.current[index] = el }}

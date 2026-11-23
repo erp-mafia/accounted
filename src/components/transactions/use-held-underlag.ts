@@ -56,16 +56,24 @@ export interface HeldUnderlagState {
  * upload and inkorg pick held until the booking links them to the
  * verifikat. The orderings live in underlag-controller.ts and the pure
  * steps in review-underlag.ts.
+ *
+ * `found` is an inbox document someone else found for the row (the booking
+ * screen's Kvitto hittat): it starts attached, like an inkorg pick, but is
+ * only held, never pinned to the row, so opening the row writes nothing. The
+ * booking links it with the rest.
  */
 export function useHeldUnderlag(options: {
   transactionId: string | null
   rowDocumentId: string | null
   open: boolean
   onChange?: (transactionId: string, documentId: string | null) => void
+  found?: AvailableInboxDoc | null
 }): HeldUnderlagState {
   const underlag = useTransactionUnderlag(options)
   const { claim, withdraw, settled, isLetGo } = underlag
-  const [attached, setAttached] = useState<ReviewUnderlag>(NOTHING_ATTACHED)
+  const [attached, setAttached] = useState<ReviewUnderlag>(() =>
+    options.found ? withInboxDoc(NOTHING_ATTACHED, options.found) : NOTHING_ATTACHED,
+  )
   // The latest list, for a link that first waits for a pin or a take-off:
   // an upload that finishes during the wait is linked too.
   const latest = useRef(attached)

@@ -8,7 +8,6 @@
  * This module only converts them, so it stays safe for the browser.
  */
 
-import { isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
 import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
@@ -83,11 +82,10 @@ export function proposalLinesToFormLines(
     foreignAmount?: number | null
     exchangeRate?: number | null
     /**
-     * Radtext for the business lines: what the money was for, in the words
-     * the review used. The moms and reverse-charge basis legs are named by
-     * their accounts and get none.
+     * Radtext for every line but the bank leg, the moms and reverse-charge
+     * basis legs too: what the money was for, in the words the review used.
      */
-    businessLineDescription?: string
+    lineDescription?: string
     /**
      * Radtext for the money leg when it lands on the bank: the bank text a
      * bank row opens with (bankRowInitialLines), so using a proposal does
@@ -103,10 +101,6 @@ export function proposalLinesToFormLines(
     const amountStr = amount.toFixed(2)
     const isSettlement = line.settlement === true
     const swapAccount = isSettlement && isCashLedger(line.account) && !!opts.settlementAccount
-    // The line that says what the money was for: not the money leg, not a
-    // moms or reverse-charge basis leg.
-    const isBusinessLine =
-      !isSettlement && !isGeneratedVatAccount(line.account) && !isReverseChargeBasisLeg(line.account)
     const account = swapAccount && opts.settlementAccount ? opts.settlementAccount : line.account
     // The bank text only on a money leg that lands on the bank: a learned
     // non-cash leg (1510, 2440, 2890) is not the bank account.
@@ -115,11 +109,7 @@ export function proposalLinesToFormLines(
       account_number: account,
       debit_amount: line.side === 'debet' ? amountStr : '',
       credit_amount: line.side === 'kredit' ? amountStr : '',
-      line_description: isBusinessLine
-        ? (opts.businessLineDescription ?? '')
-        : isBankLeg
-          ? (opts.settlementLineDescription ?? '')
-          : '',
+      line_description: isBankLeg ? (opts.settlementLineDescription ?? '') : (opts.lineDescription ?? ''),
       // Currency metadata belongs on the money leg only, mirroring
       // buildTransactionEntryLines' settlement handling.
       ...(isSettlement ? currencyMeta : {}),

@@ -9,6 +9,7 @@ import {
 } from '../booking-screen'
 
 const TX = '3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f'
+const ITEM = '8d0f6a52-3b1e-4c7a-9f2d-1a2b3c4d5e6f'
 
 describe('bookingScreenHref', () => {
   it('opens an empty verifikation without a query', () => {
@@ -18,6 +19,21 @@ describe('bookingScreenHref', () => {
   it('names the bank row, and the account when one was picked', () => {
     expect(bookingScreenHref({ kind: 'transaction', transactionId: TX, account: null })).toBe(`/bokfor?transaktion=${TX}`)
     expect(bookingScreenHref({ kind: 'transaction', transactionId: TX, account: '5460' })).toBe(`/bokfor?transaktion=${TX}&konto=5460`)
+  })
+})
+
+describe('the way back to Hem', () => {
+  it('returns to Hem and to its Behöver dig view, named after each', () => {
+    expect(safeReturnPath('/')).toBe('/')
+    expect(safeReturnPath('/?vy=behover')).toBe('/?vy=behover')
+    expect(bookingScreenOrigin('/', true)).toBe('/')
+    expect(bookingScreenOrigin('/?vy=behover', true)).toBe('/?vy=behover')
+    expect(bookingScreenOrigin('/?vy=annat', true)).toBe('/')
+  })
+
+  it('still refuses a page it does not return to', () => {
+    expect(safeReturnPath('/settings')).toBeNull()
+    expect(safeReturnPath('//evil.example')).toBeNull()
   })
 })
 
@@ -49,6 +65,15 @@ describe('parseBookingScreenSubject', () => {
     expect(parseBookingScreenSubject({ transaktion: TX, konto: '1930' })).toMatchObject({ account: '1930' })
     expect(parseBookingScreenSubject({ transaktion: TX, konto: '193' })).toMatchObject({ account: null })
     expect(parseBookingScreenSubject({ transaktion: TX, konto: 'abcd' })).toMatchObject({ account: null })
+  })
+
+  it('reads the inbox item found for the row, and drops one that is not a uuid', () => {
+    const subject = { kind: 'transaction' as const, transactionId: TX, account: null, foundItemId: ITEM }
+    const query = Object.fromEntries(new URL(`https://x${bookingScreenHref(subject)}`).searchParams)
+    expect(query.underlag).toBe(ITEM)
+    expect(parseBookingScreenSubject(query)).toEqual(subject)
+    expect(parseBookingScreenSubject({ transaktion: TX, underlag: 'x' })).not.toHaveProperty('foundItemId')
+    expect(parseBookingScreenSubject({ underlag: ITEM })).toEqual({ kind: 'voucher' })
   })
 })
 
