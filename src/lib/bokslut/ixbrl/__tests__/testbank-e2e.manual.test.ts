@@ -4,6 +4,15 @@
  * public IP (ordered via api@bolagsverket.se, confirmed 2026-06-18).
  *
  * Run: BOLAGSVERKET_TESTBANK_E2E=1 npx vitest run lib/bokslut/ixbrl/__tests__/testbank-e2e.manual.test.ts
+ *
+ * kontrollera in the static test environment does not validate the file: it
+ * answers 200 with the same fixed utfall for any input, our generated K2
+ * document, an empty string or text that is not XML (checked 2026-11-23).
+ * That utfall is one warning, kod 1020 "Företagsnamnet saknas i
+ * åsredovisningen", although the document tags ForetagetsNamn and the name
+ * equals the test company's registered name from grunduppgifter. So 1020 here
+ * is a property of the test environment, and a pass here proves the token and
+ * transport flow, not the document; Arelle against the taxonomy does that.
  */
 import { describe, expect, it } from 'vitest'
 import { generateK2IxbrlDocument } from '../document/k2-document'
@@ -60,7 +69,9 @@ describe.skipIf(!enabled)('Bolagsverket testbänk E2E', () => {
     console.log(JSON.stringify(kontrollRes.json, null, 2))
     expect(kontrollRes.status).toBe(200)
     // kontrollera answers 200 even for invalid documents; the validation
-    // outcome lives in utfall, so acceptance means zero error entries.
+    // outcome lives in utfall, so acceptance means zero error entries. The
+    // static environment's utfall is fixed (see the header), so its 1020
+    // warning is expected and says nothing about the document.
     expect(kontrollRes.json.utfall).toEqual(
       expect.not.arrayContaining([expect.objectContaining({ typ: 'error' })]),
     )
