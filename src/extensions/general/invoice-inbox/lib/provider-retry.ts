@@ -34,6 +34,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -260,9 +261,10 @@ async function retryOne(supabase: SupabaseClient, row: Candidate): Promise<Retry
     return 'gated'
   }
 
-  const { data: blob, error: downloadError } = doc.storage_path
-    ? await supabase.storage.from('documents').download(doc.storage_path)
-    : { data: null, error: { message: 'no storage path' } }
+  // Only a key inside the item's company is read (storage-key.ts).
+  const { blob, error: downloadError } = doc.storage_path
+    ? await downloadDocumentObject(supabase, doc.storage_path, row.company_id)
+    : { blob: null, error: { message: 'no storage path' } }
   if (downloadError || !blob) {
     // Storage is ours, not the document's: the claimed stamp stands, and the
     // capped attempts still bound how often this is tried.

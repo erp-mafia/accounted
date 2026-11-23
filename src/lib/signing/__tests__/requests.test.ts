@@ -237,6 +237,14 @@ describe('createSigningRequest refuses', () => {
     expect(insertedRequests()).toEqual([])
   })
 
+  it('a document row whose stored key is not inside the company is not found, and its file is never read', async () => {
+    const elsewhere = 'documents/22222222-2222-4222-8222-222222222222/user-9/hyresavtal.pdf'
+    files.set(elsewhere, pdf)
+    db.setTable('document_attachments', { data: documentRow({ storage_path: elsewhere }) })
+    expect(await createSigningRequest(ctx, input())).toEqual({ ok: false, code: 'SIGNING_DOCUMENT_NOT_FOUND' })
+    expect(insertedRequests()).toEqual([])
+  })
+
   it('no signer or more than 5 on a document, and a signer without a name', async () => {
     expect(await createSigningRequest(ctx, input({ signers: [] }))).toMatchObject({ ok: false, code: 'SIGNING_SIGNERS_INVALID', details: { reason: 'count' } })
     const six = Array.from({ length: 6 }, (_, i) => ({ name: `Person ${i}` }))

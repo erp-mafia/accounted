@@ -13,6 +13,7 @@ import {
   completePendingDocumentUpload,
 } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { validateBody } from '@/lib/api/validate'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { dbError } from '@/lib/errors/db-error'
@@ -1112,10 +1113,9 @@ export const invoiceInboxExtension: Extension = {
         // only covers the uploader's own folder, and inbox documents are
         // attributed to the company creator, so ctx.supabase (user-bound)
         // cannot read them for other members. The company-scoped row fetch
-        // above is the authorization.
-        const { data: blob, error: dlError } = await createServiceClient().storage
-          .from('documents')
-          .download(doc.storage_path)
+        // above is the authorization, and only a key inside the company is
+        // read (storage-key.ts).
+        const { blob, error: dlError } = await downloadDocumentObject(createServiceClient(), doc.storage_path, ctx.companyId)
 
         if (dlError || !blob) {
           console.error('[invoice-inbox/retry-extraction] download failed:', dlError)

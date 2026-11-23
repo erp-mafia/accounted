@@ -19,6 +19,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { INTAKE_SOURCE_IDS, isIntakeSourceId, type IntakeSourceId } from '@/lib/intake/sources'
+import { isCompanyFolderDocumentKey, isDocumentKeyOfCompany } from '@/lib/core/documents/storage-key'
 
 const log = createLogger('intake/arrivals')
 
@@ -627,7 +628,8 @@ const originalKey = (companyId: string, path: string) => `${companyId}\n${path}`
  * documents (older documents sit under other folders). The arrival row alone
  * is not enough: any member of the company can insert one, and the signing
  * client is the service role, so a row must never name another company's
- * file. Keys are company + path.
+ * file. A document row's key counts when it lies inside the company
+ * (storage-key.ts). Keys are company + path.
  */
 async function signableDocumentOriginals(
   client: SupabaseClient,
@@ -637,8 +639,8 @@ async function signableDocumentOriginals(
   const toCheck = new Map<string, Set<string>>()
   for (const arrival of arrivals) {
     const path = arrival.original_path
-    if (!path || arrivalOriginalBucket(arrival) !== DOCUMENTS_BUCKET) continue
-    if (path.startsWith(`${DOCUMENTS_PATH_ROOT}/${arrival.company_id}/`)) {
+    if (!path || arrivalOriginalBucket(arrival) !== DOCUMENTS_BUCKET || !isDocumentKeyOfCompany(path, arrival.company_id)) continue
+    if (isCompanyFolderDocumentKey(path, arrival.company_id)) {
       allowed.add(originalKey(arrival.company_id, path))
       continue
     }

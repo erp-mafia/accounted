@@ -74,7 +74,7 @@ describe('POST /items/:id/retry-extraction and the purchase category', () => {
       error: null,
     })
     enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
-    enqueue({ data: { storage_path: 'p.pdf', mime_type: 'application/pdf', file_name: 'f.pdf' }, error: null })
+    enqueue({ data: { storage_path: 'documents/company-1/user-1/p.pdf', mime_type: 'application/pdf', file_name: 'f.pdf' }, error: null })
     enqueue({ data: null, error: null }) // supplier name lookup: no match
     enqueue({ data: null, error: null }) // inbox update
     serviceDownloadMock.mockResolvedValue({ data: new Blob([new Uint8Array([1])], { type: 'application/pdf' }), error: null })
@@ -110,7 +110,7 @@ describe('POST /items/:id/retry-extraction and the purchase category', () => {
       error: null,
     })
     enqueue({ data: { is_sandbox: false }, error: null })
-    enqueue({ data: { storage_path: 'p.pdf', mime_type: 'application/pdf', file_name: 'f.pdf' }, error: null })
+    enqueue({ data: { storage_path: 'documents/company-1/user-1/p.pdf', mime_type: 'application/pdf', file_name: 'f.pdf' }, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     serviceDownloadMock.mockResolvedValue({ data: new Blob([new Uint8Array([1])], { type: 'application/pdf' }), error: null })
@@ -139,7 +139,7 @@ describe('POST /items/:id/retry-extraction and the purchase category', () => {
       error: null,
     })
     enqueue({ data: { is_sandbox: false }, error: null })
-    enqueue({ data: { storage_path: 'p.pdf', mime_type: 'application/pdf', file_name: 'f.pdf' }, error: null })
+    enqueue({ data: { storage_path: 'documents/company-1/user-1/p.pdf', mime_type: 'application/pdf', file_name: 'f.pdf' }, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     serviceDownloadMock.mockResolvedValue({ data: new Blob([new Uint8Array([1])], { type: 'application/pdf' }), error: null })

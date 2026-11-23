@@ -186,6 +186,24 @@ describe('GET /api/documents/[id]', () => {
     // The user-bound client must not be used for signing at all.
     expect(mockSupabase.storage.from).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ['another company folder', 'documents/company-2/user-9/1767000000000_faktura.pdf'],
+    ['a key that leaves the company folder', 'documents/company-1/../company-2/user-9/1767000000000_faktura.pdf'],
+    ['a key outside the documents root', 'user-9/company-2/inbox/faktura.pdf'],
+  ])('answers 404 and signs nothing for a row whose key is in %s', async (_case, storagePath) => {
+    enqueue({ data: makeDocumentAttachment({ id: 'doc-3', company_id: 'company-1', storage_path: storagePath }), error: null })
+    const handler = vi.fn()
+    eventBus.on('document.accessed', handler)
+
+    const res = await GET(makeReq('GET'), createMockRouteParams({ id: 'doc-3' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('Document not found')
+    expect(createSignedUrlMock).not.toHaveBeenCalled()
+    expect(handler).not.toHaveBeenCalled()
+  })
 })
 
 describe('DELETE /api/documents/[id]', () => {
@@ -286,6 +304,28 @@ describe('DELETE /api/documents/[id]', () => {
         companyId: 'company-1',
       }),
     )
+  })
+
+  it('removes only keys inside the company: a row whose key is in another company folder loses its row, not that file', async () => {
+    enqueue({
+      data: {
+        id: 'doc-1',
+        file_name: 'faktura.pdf',
+        storage_path: 'documents/company-2/user-9/1767000000000_faktura.pdf',
+        journal_entry_id: null,
+        user_id: 'user-1',
+      },
+      error: null,
+    })
+    enqueuePins()
+    enqueue({ data: null, error: null }) // delete
+
+    const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    // The company's own preview goes; the other folder's object is never named.
+    expect(serviceRemoveMock).toHaveBeenCalledWith(['previews/company-1/doc-1-v1.jpg'])
   })
 
   it('returns 409 with BFL message when DB trigger blocks deletion (defense-in-depth)', async () => {

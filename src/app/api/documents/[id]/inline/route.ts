@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { OPAQUE_DOCUMENT_CSP, inlineSafeMimeType } from '@/lib/core/documents/storage-proxy'
+import { downloadDocumentObject, isDocumentKeyOfCompany } from '@/lib/core/documents/storage-key'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { HEIC_MIME_TYPES, decodeHeicToJpeg } from '@/lib/documents/read/image'
 import { PREVIEW_VERSION, ensurePreview, needsPreview } from '@/lib/documents/preview'
@@ -76,7 +77,8 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
       .single()
 
-    if (docError || !doc) {
+    // A row whose key is not inside the company has no file here (storage-key.ts).
+    if (docError || !doc || !isDocumentKeyOfCompany(doc.storage_path, companyId)) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
@@ -103,9 +105,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
-    const { data: blob, error: downloadError } = await serviceClient.storage
-      .from('documents')
-      .download(doc.storage_path)
+    const { blob, error: downloadError } = await downloadDocumentObject(serviceClient, doc.storage_path, companyId)
 
     if (downloadError || !blob) {
       return NextResponse.json(

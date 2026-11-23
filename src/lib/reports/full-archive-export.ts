@@ -12,6 +12,7 @@ import { generateJournalRegister } from './journal-register'
 import { calculateVatDeclaration } from './vat-declaration'
 import { getAuditLog, type AuditLogCursor } from '@/lib/core/audit/audit-service'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
+import { downloadCompanyFolderObject } from '@/lib/core/documents/storage-key'
 import { listAttachmentRowsInRange } from '@/lib/reconciliation/attachments-store'
 import { generateBokslutsbilagor } from './bokslutsbilagor'
 import { generateSystemdokumentation } from './systemdokumentation'
@@ -800,7 +801,8 @@ async function writeReconciliationAttachments(
       files.push({
         path: zipPath,
         read: storageRead(
-          () => supabase.storage.from(row.storage_bucket).download(row.storage_path),
+          // Only the company's own folder of the documents bucket, where the attachments are stored (storage-key.ts).
+          () => downloadCompanyFolderObject(supabase, row.storage_bucket, row.storage_path, companyId).then(({ blob, error }) => ({ data: blob, error })),
           (error) => { manifest[index] = { ...base, zip_path: null, status: 'error', error } },
         ),
       })

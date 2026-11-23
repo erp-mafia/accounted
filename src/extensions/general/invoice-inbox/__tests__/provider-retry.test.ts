@@ -59,7 +59,7 @@ function candidate(id: string, stamp = 'failed:provider_unavailable', over: Reco
     matched_supplier_id: null,
     document_attachments: {
       id: `doc-${id}`,
-      storage_path: `co-1/${id}.pdf`,
+      storage_path: `documents/co-1/user-1/${id}.pdf`,
       mime_type: 'application/pdf',
       file_name: `${id}.pdf`,
       extraction_model: stamp,
@@ -211,6 +211,18 @@ describe('retryProviderUnavailableReadings: one retry', () => {
     )
   })
 
+  it('reads no file whose key is not inside the item company', async () => {
+    const elsewhere = candidate('1', 'failed:provider_unavailable:2')
+    elsewhere.document_attachments = { ...elsewhere.document_attachments, storage_path: 'documents/co-2/user-9/1.pdf' }
+    const { supabase, download } = setup({ due: { 'failed:provider_unavailable:2': [elsewhere] } })
+
+    const summary = await retryProviderUnavailableReadings(supabase, NOW)
+
+    expect(summary).toEqual({ attempted: 1, read: 0, unavailable: 0 })
+    expect(download).not.toHaveBeenCalled()
+    expect(readForInbox).not.toHaveBeenCalled()
+  })
+
   it('writes the reading onto the item with a compare-and-set on updated_at, then mirrors it to the document', async () => {
     vi.mocked(matchSupplierId).mockResolvedValue('sup-1')
     const { supabase, calls, download } = setup({ due: { 'failed:provider_unavailable:2': [candidate('1', 'failed:provider_unavailable:2')] } })
@@ -218,7 +230,7 @@ describe('retryProviderUnavailableReadings: one retry', () => {
     const summary = await retryProviderUnavailableReadings(supabase, NOW)
 
     expect(summary).toEqual({ attempted: 1, read: 1, unavailable: 0 })
-    expect(download).toHaveBeenCalledWith('co-1/1.pdf')
+    expect(download).toHaveBeenCalledWith('documents/co-1/user-1/1.pdf')
     const [write] = chains(calls, 'invoice_inbox_items', 'update')
     expect(write[0].args[0]).toMatchObject({ matched_supplier_id: 'sup-1', extracted_data: expect.objectContaining({ totals: expect.objectContaining({ total: 1250 }) }) })
     expect(write.slice(1)).toEqual(

@@ -30,7 +30,7 @@ export const GET = withRouteContext<{ params: Promise<{ accountKey: string; atta
     if (!row) {
       return NextResponse.json({ error: 'Okänt underlag' }, { status: 404 })
     }
-    const { blob, error } = await downloadUnderlag(createServiceClient(), row)
+    const { blob, error } = await downloadUnderlag(createServiceClient(), row, companyId)
     if (error || !blob) {
       log.error('underlag download failed', error, { companyId, accountKey, attachmentId })
       return NextResponse.json({ error: 'Kunde inte hämta underlaget. Försök igen om en stund.' }, { status: 500 })

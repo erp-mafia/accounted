@@ -10,6 +10,7 @@ import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createLogger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import type { DocumentAttachment, InvoiceExtractionResult } from '@/types'
 import type { DocumentExtractionOwner } from '@/lib/events/types'
 
@@ -155,7 +156,8 @@ async function extractAndPersist(
   }
 
   // Download the file from Supabase Storage. The bucket is private: the
-  // service-role client can read any path.
+  // service-role client can read any path, so only a key inside the
+  // company is read (storage-key.ts).
   const storagePath = existing.storage_path as string | null
   if (!storagePath) {
     log.warn('document has no storage_path, skipping', { doc: document.id })
@@ -163,9 +165,7 @@ async function extractAndPersist(
     return
   }
 
-  const { data: blob, error: dlErr } = await supabase.storage
-    .from('documents')
-    .download(storagePath)
+  const { blob, error: dlErr } = await downloadDocumentObject(supabase, storagePath, companyId)
   if (dlErr || !blob) {
     log.warn('storage download failed', { doc: document.id, err: dlErr?.message })
     await stamp(supabase, document.id, 'failed:storage_download')

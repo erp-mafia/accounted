@@ -111,6 +111,24 @@ describe('GET /api/documents/[id]/integrity', () => {
     expect(body.error).toBe('Document not found')
   })
 
+  it('returns 404 and reads nothing for a document whose key is not inside its company', async () => {
+    enqueue({
+      data: {
+        id: validDocId,
+        company_id: companyId,
+        mime_type: 'application/pdf',
+        storage_path: 'documents/44444444-4444-4444-a444-444444444444/user-9/bar.pdf',
+      },
+      error: null,
+    })
+    enqueue({ data: { company_id: companyId }, error: null }) // membership
+    const res = await GET(req(), createMockRouteParams({ id: validDocId }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(404)
+    expect(body.error).toBe('Document not found')
+    expect(serviceStorageFromMock).not.toHaveBeenCalled()
+  })
+
   it('returns { valid: true } and skips download when mime_type is null', async () => {
     enqueue({
       data: {
