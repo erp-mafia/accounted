@@ -69,6 +69,13 @@ export interface IxbrlNote {
    * Absent on every other note and on versions locked before it existed.
    */
   fixedAssets?: import('@/lib/bokslut/arsredovisning/k2-fixed-asset-note').FixedAssetNoteTable[]
+  /**
+   * The rows of the K2 "Avskrivningar" note per balance sheet post: the
+   * document tags each as a tuple of its post's table of
+   * avskrivningsprinciper. Absent on every other note and on versions locked
+   * before it existed.
+   */
+  depreciationPrinciples?: import('@/lib/bokslut/arsredovisning/types').DepreciationPrinciple[]
 }
 
 export interface IxbrlSigner {

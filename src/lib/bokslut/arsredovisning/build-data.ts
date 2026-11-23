@@ -39,6 +39,7 @@ import {
   buildAnlaggningstillgangarNote,
   computeRollforwardTotals,
   depreciationPrincipleLines,
+  depreciationPrinciples,
   holdsWriteDowns,
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
@@ -1118,13 +1119,25 @@ async function buildK2Noter(
   }
 
   // Avskrivningstider: derive from asset register (supplementary
-  // disclosure; the statutory ÅRL 5:8 § roll-forward follows below).
-  const depreciationLines = depreciationPrincipleLines(assets)
+  // disclosure; the statutory ÅRL 5:8 § roll-forward follows below). Per
+  // balance sheet post, so the iXBRL document can tag each row as its post's
+  // table of avskrivningsprinciper.
+  // The register as it stood on the balance sheet date: an asset bought after
+  // it is not in this year's report, and one sold after it still was.
+  const heldAtYearEnd = assets
+    .filter((asset) => asset.acquisition_date <= periodEnd)
+    .map((asset) => (asset.disposed_at && asset.disposed_at > periodEnd ? { ...asset, disposed_at: null } : asset))
+  const depreciationPeriods = depreciationPrinciples(heldAtYearEnd, {
+    postOfAccount: (account) => k2BrPostForAccount(account, k2LegalFormOf(entityType)),
+    labelOfPost: (post) => k2AssetPostLabel(post) ?? post,
+  })
+  const depreciationLines = depreciationPrincipleLines(depreciationPeriods)
   if (depreciationLines.length > 0) {
     notes.push({
       number: notes.length + 1,
       title: 'Avskrivningar',
       body: depreciationLines.join('\n'),
+      ...(depreciationPeriods.rows.length > 0 ? { depreciationPrinciples: depreciationPeriods.rows } : {}),
     })
   }
 
