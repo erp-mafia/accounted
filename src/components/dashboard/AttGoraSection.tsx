@@ -583,6 +583,7 @@ export default function AttGoraSection({
       personAttestRows: attestSteps.length,
       openQuestions,
       bookingScreen,
+      toBook: worklist.toBook,
     }).map((spec) => [spec.key, spec]),
   )
   // A step that is many things names them: its heading says how many of what

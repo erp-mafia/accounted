@@ -3,6 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 vi.mock('../categories', () => ({
   countUnbookedTransactions: vi.fn().mockResolvedValue(4),
+  countOpenBankRows: vi.fn().mockResolvedValue(9),
+  countFoundPairs: vi.fn().mockResolvedValue(1),
   countUnbookedSkattekontoRows: vi.fn().mockResolvedValue(7),
   countInboxDocuments: vi.fn().mockResolvedValue(6),
   countSuggestedMatches: vi.fn().mockResolvedValue(2),
@@ -65,6 +67,30 @@ afterEach(() => {
   else process.env.ARKIV_COMPANY_IDS = savedEnv.section
   if (savedEnv.brain === undefined) delete process.env.ARKIV_BRAIN_COMPANY_IDS
   else process.env.ARKIV_BRAIN_COMPANY_IDS = savedEnv.brain
+})
+
+describe('getWorklistCounts: Att bokföra\'s figures', () => {
+  const before = process.env.BOOKING_SCREEN_COMPANY_IDS
+  beforeEach(() => {
+    delete process.env.BOOKING_SCREEN_COMPANY_IDS
+  })
+  afterEach(() => {
+    if (before === undefined) delete process.env.BOOKING_SCREEN_COMPANY_IDS
+    else process.env.BOOKING_SCREEN_COMPANY_IDS = before
+  })
+
+  it('answers the open bank rows and the found receipts where the booking screen is switched on', async () => {
+    process.env.BOOKING_SCREEN_COMPANY_IDS = '*'
+    const data = await getWorklistCounts(supabase, 'company-1')
+    expect(data.toBook).toEqual({ bankRows: 9, foundPairs: 1 })
+    // The triage count and the total are what they were.
+    expect(data.counts.book_transaction).toBe(4)
+  })
+
+  it('answers none without the booking screen', async () => {
+    const data = await getWorklistCounts(supabase, 'company-1')
+    expect(data).not.toHaveProperty('toBook')
+  })
 })
 
 describe('getWorklistCounts', () => {

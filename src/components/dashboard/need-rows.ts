@@ -52,9 +52,15 @@ export interface CountRowInput {
    * which leads to the list that holds them all.
    */
   bookingScreen?: boolean
+  /**
+   * Att bokföra's own figures (WorklistCounts.toBook): with them the row
+   * counts what the list holds, every open bank row and a receipt shown on
+   * its bank row once. Without them it sums the triage counts.
+   */
+  toBook?: { bankRows: number; foundPairs: number } | null
 }
 
-export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, personAttestRows, openQuestions = 0, bookingScreen = false }: CountRowInput): CountRowSpec[] {
+export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, personAttestRows, openQuestions = 0, bookingScreen = false, toBook = null }: CountRowInput): CountRowSpec[] {
   const specs: CountRowSpec[] = []
   const add = (count: number, spec: Omit<CountRowSpec, 'count' | 'things'> & { things?: number }) => {
     if (count > 0) specs.push({ ...spec, count, things: spec.things ?? count })
@@ -66,7 +72,9 @@ export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, person
   })
 
   if (bookingScreen) {
-    add(n('book_transaction') + n('book_skattekonto') + (hasAi ? n('inbox_document') : 0), {
+    const bankRows = toBook ? Math.max(0, toBook.bankRows) : n('book_transaction')
+    const documents = hasAi ? Math.max(0, n('inbox_document') - (toBook ? Math.max(0, toBook.foundPairs) : 0)) : 0
+    add(bankRows + n('book_skattekonto') + documents, {
       key: 'to-book', items: 'to_book', earliest: 'oldest', group: 'book', href: TO_BOOK_PATH, labelKey: 'row_to_book', category: 'book_transaction',
     })
   } else {
