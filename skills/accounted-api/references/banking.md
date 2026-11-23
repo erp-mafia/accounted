@@ -3465,6 +3465,7 @@ Returns matched / unmatched counts and the balance delta between the bank ledger
 - is_reconciled means |difference| < 0.01 for the window, an aggregate check, not a per-transaction guarantee.
 - Judge health on unexplained_difference, NOT on difference. difference is just the gap between the two sides and is expected to be large mid-year; it is fully explained while every krona of it sits in unmatched_transaction_total, unmatched_gl_line_total or settled_gl_line_total. A non-zero unexplained_difference is the real finding: a matched pair disagreeing in amount, a voucher with several lines on the account, or a storno/correction line the candidate list hides.
 - Ignored transactions are excluded from bank_transaction_total and difference (they never get a ledger counterpart); their count and sum are reported separately.
+- On a foreign-currency account gl_1930_balance and gl_1930_opening_balance are null when the opening balance is not known in that currency: it is booked in SEK, and the ledger before it does not say what it is in the currency (an imported first year, or history booked in SEK only). The account still reconciles on its movement: difference and is_reconciled do not use the opening balance.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3480,9 +3481,9 @@ Response `200`:
     bank_transaction_total: number,
     ignored_transaction_total: number,
     ignored_transaction_count: number,
-    gl_1930_balance: number,
+    gl_1930_balance: number | null,
     gl_1930_period_movement: number,
-    gl_1930_opening_balance: number,
+    gl_1930_opening_balance: number | null,
     gl_1930_correction_adjustment: number,
     difference: number,
     is_reconciled: boolean,
