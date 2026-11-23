@@ -988,15 +988,17 @@ export function getErrorMessage(
         return `${depthPart}${rootPart}. Räkna ut nettoeffekten av hela kedjan och gör EN rättelse istället, eller skicka allow_deep_chain=true för att rätta ändå.`
       }
 
-      if (structured.code === 'BOOKKEEPING_DATABASE_ERROR') {
+      if (structured.code === 'BOOKKEEPING_DATABASE_ERROR' || structured.code === 'PERIOD_LOCKED') {
         // A DB-layer error may carry a user-relevant cause (e.g. period lock
-        // trigger). Try the known-pattern map before falling back to the
-        // generic "kunde inte sparas" message.
+        // trigger), and a lock refusal the engine names PERIOD_LOCKED carries
+        // the trigger's own text, the lock date in it. Try the known-pattern
+        // map before falling back to the generic "kunde inte sparas" message,
+        // or, for a lock, to the registry's sentence below.
         if (typeof structured.message === 'string') {
           const matched = tryMatchKnownError(structured.message)
           if (matched) return matched
         }
-        return 'Verifikationen kunde inte sparas. Försök igen.'
+        if (structured.code === 'BOOKKEEPING_DATABASE_ERROR') return 'Verifikationen kunde inte sparas. Försök igen.'
       }
 
       if (locale === 'en' && typeof structured.message_en === 'string' && structured.message_en.trim()) {

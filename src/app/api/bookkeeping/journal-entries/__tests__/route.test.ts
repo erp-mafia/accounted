@@ -47,6 +47,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 }))
 
 import { GET, POST } from '../route'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
 describe('GET /api/bookkeeping/journal-entries', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -1211,6 +1212,36 @@ describe('POST /api/bookkeeping/journal-entries', () => {
     expect(status).toBe(400)
     // Untyped engine errors map to the Swedish context fallback (issue #337).
     expect(body.error).toBe('Kunde inte hantera verifikationen. Försök igen.')
+  })
+
+  it('answers a verifikat dated in a locked year as 400 PERIOD_LOCKED, not a 500 database failure', async () => {
+    // Production 2026-11-22: the year was locked three minutes before; the
+    // period-lock trigger refused the draft insert (P0001) and this door
+    // answered 500 BOOKKEEPING_DATABASE_ERROR.
+    mockCreateJournalEntry.mockRejectedValue(new BookkeepingDatabaseError(
+      'create_draft_entry',
+      'Cannot write to locked/closed fiscal period "Räkenskapsår 2025" (is_closed=t, locked_at=2026-11-22 11:03:58.82+00)',
+      'P0001',
+    ))
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      method: 'POST',
+      body: {
+        fiscal_period_id: VALID_UUID,
+        entry_date: '2025-11-30',
+        description: 'Bokat efter låsningen',
+        source_type: 'manual',
+        lines: [
+          { account_number: '6570', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
   })
 })
 
