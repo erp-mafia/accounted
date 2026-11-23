@@ -396,6 +396,7 @@ export async function stagedInvoiceParties(
       credited_invoice_id: invoice.credited_invoice_id ?? null,
       document_type: (invoice.document_type ?? 'invoice') as Invoice['document_type'],
       total: invoice.total,
+      vat_amount: invoice.vat_amount,
       total_sek: invoice.total_sek ?? null,
       currency: (invoice.currency ?? 'SEK') as Invoice['currency'],
       exchange_rate: invoice.exchange_rate ?? null,

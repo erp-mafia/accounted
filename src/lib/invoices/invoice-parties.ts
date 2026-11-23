@@ -10,10 +10,16 @@
  *     Sweden. A private buyer is asked for here when a line carries a ROT or
  *     grön teknik deduction (work on the buyer's home); any other invoice to a
  *     private person is outside 24 §.
+ *   - 12 §: no invoice is needed for most exempt supplies (real estate,
+ *     healthcare, education, insurance, finance and more). A domestic sale on
+ *     which a VAT-registered seller charges no VAT is such an exempt supply,
+ *     and nothing on it says it is one of the few that still need an invoice,
+ *     so it is not asked either.
  *   - 26 §: a förenklad faktura may be issued when the total is at most
  *     4 000 kr including moms (p.1), for a credit note (p.3, never asked here)
  *     or by a seller under the small-business exemption of 18 kap. (p.4): a
- *     seller outside the VAT register, exempt without a decision (18 kap. 8 §).
+ *     seller outside the VAT register, which 18 kap. 4 and 8 §§ exempt up to
+ *     120 000 kr a year without a decision.
  *   - 27 §: never where the buyer in another EU country pays the VAT: a
  *     reverse-charge sale, or an EU business buying from a seller outside the
  *     VAT register (a service is then supplied in the buyer's country, 7 §). A
@@ -23,9 +29,10 @@
  *
  * So issuing refuses a missing name or address only where a full faktura is
  * required, and says so where a förenklad faktura goes out without it.
- * issuable (issue-and-book-invoice.ts) asks this for every door; the editor
- * and the send dialog ask the same question before the confirm. Pure: no
- * client, no I/O, safe in client components.
+ * issuable (issue-and-book-invoice.ts) asks this for every door that issues
+ * through it (Peppol's own BIS validation asks for both addresses); the
+ * editor and the send dialog ask the same question before the confirm. Pure:
+ * no client, no I/O, safe in client components.
  */
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import type { PostalAddress } from '@/lib/invoices/postal-address'
@@ -85,10 +92,14 @@ export type InvoicePartiesVerdict =
   /** A förenklad faktura without the buyer's name or address: a warning. */
   | 'buyer_missing_simplified'
 
-export type InvoicePartiesInvoice = Pick<Invoice, 'credited_invoice_id' | 'document_type' | 'total' | 'currency' | 'vat_treatment'>
+export type InvoicePartiesInvoice = Pick<Invoice, 'credited_invoice_id' | 'document_type' | 'total' | 'vat_amount' | 'currency' | 'vat_treatment'>
   & Partial<Pick<Invoice, 'total_sek' | 'exchange_rate'>>
   & {
-    /** The lines' deductions: a ROT or grön teknik line is construction work on a private buyer's home. */
+    /**
+     * The lines' deductions: a ROT or grön teknik line is construction work on
+     * a private buyer's home. Lines the caller did not load leave a private
+     * buyer's invoice asked for, as if it were construction work.
+     */
     items?: ReadonlyArray<{ deduction_type?: DeductionType | null }> | null
   }
 
@@ -99,14 +110,33 @@ export type InvoicePartiesSeller = Pick<CompanySettings, 'company_name' | 'org_n
 /** The deductions for construction or installation work on a home (ML 17 kap. 11 § p.3). */
 const CONSTRUCTION_DEDUCTIONS: ReadonlySet<DeductionType> = new Set<DeductionType>(['rot', 'gron_teknik'])
 
+/** The treatments of a domestic sale, on which a VAT-registered seller charges Swedish VAT unless it is exempt. */
+const DOMESTIC_TREATMENTS: ReadonlySet<Invoice['vat_treatment']> = new Set<Invoice['vat_treatment']>([
+  'standard_25',
+  'reduced_12',
+  'reduced_6',
+  'exempt',
+])
+
 /**
  * Whether 17 kap. 24 § asks for the parties at all: a faktura issued under
- * 10 or 11 §. A sale to a business or another legal person always is; a sale
- * to a private person only as construction or installation work (11 § p.3).
+ * 10 or 11 §. A sale to a business or another legal person is one, unless it
+ * is an exempt supply 12 § frees from the invoice (a VAT-registered seller's
+ * domestic sale without VAT); a sale to a private person only as
+ * construction or installation work (11 § p.3).
  */
-function fullContentRulesApply(invoice: InvoicePartiesInvoice, customer: InvoicePartiesCustomer): boolean {
+function fullContentRulesApply(
+  invoice: InvoicePartiesInvoice,
+  customer: InvoicePartiesCustomer,
+  seller: InvoicePartiesSeller,
+): boolean {
+  const exemptDomesticSale = seller.vat_registered !== false
+    && DOMESTIC_TREATMENTS.has(invoice.vat_treatment)
+    && Number(invoice.vat_amount) === 0
+  if (exemptDomesticSale) return false
   if (customer.customer_type !== 'individual') return true
-  return (invoice.items ?? []).some((item) => !!item.deduction_type && CONSTRUCTION_DEDUCTIONS.has(item.deduction_type))
+  if (!invoice.items) return true
+  return invoice.items.some((item) => !!item.deduction_type && CONSTRUCTION_DEDUCTIONS.has(item.deduction_type))
 }
 
 /** An EU business in another EU country (or of no stated country). */
@@ -157,7 +187,7 @@ export function invoicePartiesVerdict(
   // The documents ML 17 kap. 24 § applies to: not a credit note, quote,
   // proforma or följesedel.
   if (!invoiceRequiresSellerVatNumber(invoice)) return 'ok'
-  if (!customer || !fullContentRulesApply(invoice, customer)) return 'ok'
+  if (!customer || !fullContentRulesApply(invoice, customer, seller)) return 'ok'
   const simplified = simplifiedInvoiceAllowed(invoice, customer, seller)
   const sellerNamed = !!seller.company_name?.trim() && hasPostalAddress(seller)
   const buyerNamed = !!customer.name?.trim() && hasPostalAddress(customer)

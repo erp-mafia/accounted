@@ -115,7 +115,7 @@ describe('invoicePartiesVerdict', () => {
 
   describe('a seller under the small-business exemption (26 § p.4)', () => {
     it('may issue a förenklad faktura at any amount', () => {
-      const invoice = makeInvoice({ total: 50000, vat_treatment: 'exempt' })
+      const invoice = makeInvoice({ total: 50000, vat_amount: 0, vat_treatment: 'exempt' })
       expect(invoicePartiesVerdict(invoice, makeCustomer(noAddress), momsfri)).toBe('buyer_missing_simplified')
     })
 
@@ -139,10 +139,14 @@ describe('invoicePartiesVerdict', () => {
   describe('a private buyer (10 and 11 §§)', () => {
     it('asks nothing of an invoice to a private person', () => {
       const bare = makeCompanySettings({ ...noAddress, vat_registered: true })
-      expect(invoicePartiesVerdict(makeInvoice({ total: 12500 }), privatePerson, seller)).toBe('ok')
-      expect(invoicePartiesVerdict(makeInvoice({ total: 12500 }), privatePerson, bare)).toBe('ok')
+      expect(invoicePartiesVerdict(makeInvoice({ total: 12500, items: [] }), privatePerson, seller)).toBe('ok')
+      expect(invoicePartiesVerdict(makeInvoice({ total: 12500, items: [] }), privatePerson, bare)).toBe('ok')
       const inFinland = makeCustomer({ ...noAddress, customer_type: 'individual', country: 'FI' })
-      expect(invoicePartiesVerdict(makeInvoice({ total: 500 }), inFinland, seller)).toBe('ok')
+      expect(invoicePartiesVerdict(makeInvoice({ total: 500, items: [] }), inFinland, seller)).toBe('ok')
+    })
+
+    it('asks for both when the lines were not loaded, as for construction work', () => {
+      expect(invoicePartiesVerdict(makeInvoice({ total: 12500 }), privatePerson, seller)).toBe('buyer_missing')
     })
 
     it('asks for both on construction work, a ROT or grön teknik line (11 § p.3)', () => {
@@ -157,6 +161,28 @@ describe('invoicePartiesVerdict', () => {
     it('asks nothing of a RUT line, which is not construction work', () => {
       const rut = makeInvoice({ total: 12500, items: [{ deduction_type: 'rut' }] as never })
       expect(invoicePartiesVerdict(rut, privatePerson, seller)).toBe('ok')
+    })
+  })
+
+  describe('an exempt supply (12 §)', () => {
+    it('asks nothing of a domestic sale on which a VAT-registered seller charges no VAT', () => {
+      const bare = makeCompanySettings({ ...noAddress, vat_registered: true })
+      const rent = makeInvoice({ total: 15000, vat_amount: 0, vat_treatment: 'standard_25' })
+      expect(invoicePartiesVerdict(rent, makeCustomer(noAddress), seller)).toBe('ok')
+      expect(invoicePartiesVerdict(rent, makeCustomer(noAddress), bare)).toBe('ok')
+    })
+
+    it('asks for both once any line carries VAT', () => {
+      const mixed = makeInvoice({ total: 15000, vat_amount: 1000, vat_treatment: 'standard_25' })
+      expect(invoicePartiesVerdict(mixed, makeCustomer(noAddress), seller)).toBe('buyer_missing')
+    })
+
+    it('keeps asking for a zero-rated reverse charge or export, which needs its invoice', () => {
+      const builder = makeInvoice({ total: 15000, vat_amount: 0, vat_treatment: 'reverse_charge_domestic' })
+      expect(invoicePartiesVerdict(builder, makeCustomer(noAddress), seller)).toBe('buyer_missing')
+      const buyer = makeCustomer({ ...noAddress, customer_type: 'non_eu_business', country: 'NO' })
+      const exported = makeInvoice({ total: 15000, vat_amount: 0, vat_treatment: 'export' })
+      expect(invoicePartiesVerdict(exported, buyer, seller)).toBe('buyer_missing')
     })
   })
 

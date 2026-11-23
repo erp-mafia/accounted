@@ -8165,7 +8165,7 @@
     "seller_simplified": "Företagets namn eller adress saknas, så fakturan blir en förenklad faktura utan säljarens adress. Fyll i företagsuppgifterna om du vill skicka en fullständig faktura.",
     "seller_fix": "Fyll i företagsuppgifter",
     "seller_ask_admin": "Be en administratör fylla i dem under Företagsuppgifter.",
-    "buyer_missing": "Kundens namn eller adress saknas. Båda måste stå på en faktura över 4 000 kr inklusive moms och när köparen i ett annat EU-land redovisar momsen.",
+    "buyer_missing": "Kundens namn eller adress saknas. De måste stå på fakturan när den är över 4 000 kr inklusive moms eller när köparen i ett annat EU-land redovisar momsen.",
     "buyer_simplified": "Kundens namn eller adress saknas, så fakturan blir en förenklad faktura utan köparens uppgifter. Lägg till dem på kunden om du vill skicka en fullständig faktura.",
     "open_customer": "Öppna kunden"
   },

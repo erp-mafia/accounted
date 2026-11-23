@@ -202,7 +202,12 @@ describe('issuable: seller and buyer name and address', () => {
 
   it('passes a sale to a private person without either address', () => {
     const privatePerson = makeCustomer({ ...noAddress, customer_type: 'individual' })
-    expect(issuable(draft({ customer: privatePerson }), makeCompanySettings({ ...settings, ...noAddress }))).toBeNull()
+    expect(issuable(draft({ customer: privatePerson, items: [] }), makeCompanySettings({ ...settings, ...noAddress }))).toBeNull()
+  })
+
+  it('passes an exempt supply without VAT: 17 kap. 12 § frees it from the invoice', () => {
+    const rent = draft({ total: 15000, vat_amount: 0, customer: makeCustomer(noAddress) })
+    expect(issuable(rent, settings)).toBeNull()
   })
 
   it('refuses construction work for a private person over 4 000 kr without the buyer address', () => {

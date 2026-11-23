@@ -3222,6 +3222,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             credited_invoice_id: null,
             document_type: watchDocumentType,
             total,
+            vat_amount: vatAmount,
             currency: watchCurrency,
             vat_treatment: headerVatTreatment,
             exchange_rate: pdf.exchangeRate,
