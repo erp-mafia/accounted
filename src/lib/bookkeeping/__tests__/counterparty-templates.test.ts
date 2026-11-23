@@ -712,6 +712,7 @@ describe('counterparty-templates', () => {
     /** A client that records every categorization_templates insert; no template exists yet. */
     const recordingClient = () => {
       const inserted: Record<string, unknown>[] = []
+      const updated: Record<string, unknown>[] = []
       const chain = {
         select: () => chain,
         eq: () => chain,
@@ -723,9 +724,13 @@ describe('counterparty-templates', () => {
           inserted.push(payload)
           return { error: null }
         },
+        update: (payload: Record<string, unknown>) => {
+          updated.push(payload)
+          return chain
+        },
       }
       const from = vi.fn(() => chain)
-      return { supabase: { from } as never, from, inserted }
+      return { supabase: { from } as never, from, inserted, updated }
     }
 
     it('learns an EU-services reverse-charge purchase and replays the same lines (round trip)', async () => {
@@ -771,9 +776,11 @@ describe('counterparty-templates', () => {
         'expense_software', tx, true, 'aktiebolag', 'reverse_charge', null, null, 'non_eu_services',
       )
       expect(booked.vat_lines.map((l) => l.account_number)).toContain('4531')
-      const { supabase, from } = recordingClient()
+      const { supabase, inserted, updated } = recordingClient()
+      // The lookup runs (a template it contradicts gives an occurrence back); no template holds the name, so nothing is written.
       await upsertCounterpartyTemplate(supabase, 'company-1', tx, booked, 'user_approved')
-      expect(from).not.toHaveBeenCalled()
+      expect(inserted).toEqual([])
+      expect(updated).toEqual([])
     })
 
     it('still learns a purchase booked straight on a basis account, which the pair replays as booked', async () => {
@@ -858,9 +865,10 @@ describe('counterparty-templates', () => {
       const first = row('2026-09-01')
       const firstBooking = bookFromCatalog(first)
       expect(firstBooking.template_id).toBe('it_saas_non_eu')
-      const { supabase, from } = recordingClient()
+      const { supabase, inserted, updated } = recordingClient()
       await upsertCounterpartyTemplate(supabase, 'company-1', first, firstBooking, 'user_approved')
-      expect(from).not.toHaveBeenCalled()
+      expect(inserted).toEqual([])
+      expect(updated).toEqual([])
 
       const secondBooking = bookFromCatalog(row('2026-10-01'))
       expect(secondBooking.template_id).toBe('it_saas_non_eu')

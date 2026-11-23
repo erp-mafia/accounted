@@ -281,6 +281,23 @@ describe('automatic links teach only once the same text repeats', () => {
     expect(result).toEqual({ outcome: 'conflicts_template' })
     expect(templateWrites()).toEqual([])
   })
+
+  it('never changes a template that books the same accounts with other moms', async () => {
+    const supabase = world({
+      rows: [bankRow('tx-1', 'je-1', { reconciliation_method: 'auto_exact', amount: -250 })],
+      entries: [verifikat('je-1', [['5420', 250, 0], ['1930', 0, 250]], { source_type: 'import' })],
+      templates: [{
+        id: 'tpl-1', company_id: COMPANY, counterparty_name: 'acme pension', counterparty_aliases: [], is_active: true,
+        debit_account: '5420', credit_account: '1930', vat_account: '2645', vat_treatment: 'reverse_charge',
+        line_pattern: null, occurrence_count: 3, source: 'user_approved', corrections: 0,
+      }],
+    })
+
+    const result = await learnFromBankLink(supabase as never, COMPANY, { transactionId: 'tx-1', journalEntryId: 'je-1' }, 'automatic')
+
+    expect(result).toEqual({ outcome: 'conflicts_template' })
+    expect(templateWrites()).toEqual([])
+  })
 })
 
 describe('never taught, whoever linked', () => {

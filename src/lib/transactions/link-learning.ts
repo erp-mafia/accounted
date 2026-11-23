@@ -57,6 +57,7 @@ import {
   findTemplateByKey,
   insertOrUpdateTemplate,
   isRoutineVoucherText,
+  learnsOtherMoms,
   namesCounterparty,
   normalizeCounterpartyName,
   samePairButBankLedger,
@@ -282,21 +283,18 @@ async function teach(
     // A template already holding this shape is the earlier occurrence; one
     // holding another is the person's or an earlier booking's, and the
     // matcher never overrides it.
-    // The same pair too, so insertOrUpdateTemplate counts it and never reads
-    // it as a correction.
+    // The same pair and the same moms too, so insertOrUpdateTemplate counts
+    // it and never reads it as a correction.
+    // The stored pattern stays: the matcher's link only counts.
+    const counted = { ...upsertParams(link, 1, 'auto_learned'), linePattern: undefined }
     if (
       templateAccountSet(existing) !== link.shape.accountSet ||
-      !samePairButBankLedger(existing, link.shape.debitAccount, link.shape.creditAccount)
+      !samePairButBankLedger(existing, link.shape.debitAccount, link.shape.creditAccount) ||
+      learnsOtherMoms(existing, counted)
     ) {
       return { outcome: 'conflicts_template' }
     }
-    const written = await insertOrUpdateTemplate(
-      supabase,
-      companyId,
-      // The stored pattern stays: the matcher's link only counts.
-      { ...upsertParams(link, 1, 'auto_learned'), linePattern: undefined },
-      existing,
-    )
+    const written = await insertOrUpdateTemplate(supabase, companyId, counted, existing)
     return { outcome: written ? 'reapproved' : 'write_failed' }
   }
 

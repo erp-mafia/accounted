@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { unlearnCounterpartyTemplate, type UnlearnOutcome } from '@/lib/bookkeeping/counterparty-templates'
 import { eventBus } from '@/lib/events/bus'
+import { isMomsAccount } from '@/lib/reports/vat-declaration'
 import type { EventPayload } from '@/lib/events/types'
 import type { JournalEntry } from '@/types'
 
@@ -38,12 +39,14 @@ export async function unlearnOnReversal({ originalEntry, companyId }: EventPaylo
 
 /**
  * The journal_entry.corrected handler. A correction that drops an account or
- * side the booking taught (another cost account, other moms) takes the
- * original's occurrence back, as a reversal does. One that keeps every taught
- * account on its side rejected nothing: a new date, amount or text, or lines
- * only added to it (the missing reverse-charge basis pair of
- * rc-basis-gaps/fix, a rounding line). A correction the system made
- * (keepLearnedTemplates: the kontantmetod cut-off) rejected nothing either.
+ * side the booking taught (another cost account, other moms), or adds a moms
+ * account it did not book (moms on a booking that had none, reverse charge on
+ * one learned without it), takes the original's occurrence back, as a
+ * reversal does. One that keeps every taught account on its side and adds no
+ * moms rejected nothing: a new date, amount or text, or lines only added to
+ * it (the missing reverse-charge basis pair of rc-basis-gaps/fix, a rounding
+ * line). A correction the system made (keepLearnedTemplates: the kontantmetod
+ * cut-off) rejected nothing either.
  */
 export async function unlearnOnCorrection({ original, corrected, companyId, keepLearnedTemplates }: EventPayload<'journal_entry.corrected'>): Promise<void> {
   if (keepLearnedTemplates) return
@@ -54,11 +57,11 @@ export async function unlearnOnCorrection({ original, corrected, companyId, keep
   const chain = await correctionChain(supabase, companyId, original)
   const booking = chain[chain.length - 1]
   const taught = konteringSides(await entryLines(supabase, booking))
-  if (!dropsAny(taught, await entryLines(supabase, corrected))) return
-  // An earlier correction that dropped a taught side already took the
+  if (!rejectsKontering(taught, await entryLines(supabase, corrected))) return
+  // An earlier correction that rejected the kontering already took the
   // occurrence back; a second withdrawal would take one the booking never gave.
   for (const link of chain.slice(0, -1)) {
-    if (dropsAny(taught, await entryLines(supabase, link))) return
+    if (rejectsKontering(taught, await entryLines(supabase, link))) return
   }
   await unlearnReversedBankBooking(supabase, companyId, booking)
 }
@@ -127,10 +130,14 @@ function konteringSides(lines: ReadonlyArray<VerifikatLine>): Set<string> {
   return sides
 }
 
-/** Whether these lines leave out an account or side the booking taught. */
-function dropsAny(taught: ReadonlySet<string>, lines: ReadonlyArray<VerifikatLine>): boolean {
+/**
+ * Whether these lines reject the booking's kontering: they leave out an
+ * account or side it taught, or book a moms account (26xx) it did not.
+ */
+function rejectsKontering(taught: ReadonlySet<string>, lines: ReadonlyArray<VerifikatLine>): boolean {
   const kept = konteringSides(lines)
   for (const side of taught) if (!kept.has(side)) return true
+  for (const side of kept) if (isMomsAccount(side.slice(1)) && !taught.has(side)) return true
   return false
 }
 
