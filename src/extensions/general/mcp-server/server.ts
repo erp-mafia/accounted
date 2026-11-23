@@ -111,6 +111,7 @@ import {
   DEFAULT_REVERSE_CHARGE_KIND,
   REVERSE_CHARGE_TREATMENT_KINDS,
   isReverseChargeBasisAccount,
+  isReverseChargeBasisLeg,
   reverseChargeKindOnOwnAccount,
   reverseChargeKindRuta,
   supplierInvoiceReverseChargeKind,
@@ -15169,7 +15170,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        account_from: { type: 'string', description: 'Lowest account number (inclusive). E.g. "4000" with account_to "4999" → all class-4 expenses.' },
+        account_from: { type: 'string', description: 'Lowest account number (inclusive). E.g. "4000" with account_to "4999" → class 4.' },
         account_to: { type: 'string', description: 'Highest account number (inclusive)' },
         accounts: { type: 'array', items: { type: 'string' }, description: 'Specific account numbers (overrides account_from/account_to). Up to 50.' },
         date_from: { type: 'string', description: 'Earliest entry date (YYYY-MM-DD, inclusive)' },
@@ -15656,6 +15657,19 @@ export const tools: McpTool[] = [
       }
       const totalsNote = noteParts.length > 0 ? noteParts.join(' ') : undefined
 
+      // A reverse-charge purchase books its VAT basis (44xx/45xx, ruta 20-24)
+      // and the 4598 offset beside the cost line. An account range over the
+      // cost classes lists that pair as if it were spend, so a summed account
+      // list counts every such purchase twice. The lines and account groups
+      // on either leg are marked, and the note says what the mark means; no
+      // amount changes.
+      const rcBasisNote = fullFiltered.some((r) => isReverseChargeBasisLeg(r.account_number))
+        ? 'Marked reverse_charge_basis: a reverse-charge VAT basis account (44xx/45xx, momsdeklaration ruta 20-24) ' +
+          "or its 4598 offset. Beside a purchase's cost line, the basis line and the 4598 line carry the same amount " +
+          "and net to zero; they are not a cost, which is on the purchase's own account. A 44xx/45xx amount that " +
+          '4598 does not offset is a cost booked directly there.'
+        : undefined
+
       const lines = filtered.map((r) => {
         return {
           line_id: r.id,
@@ -15675,13 +15689,21 @@ export const tools: McpTool[] = [
           cost_center: r.cost_center,
           ...(includeDimensions ? { dimensions: r.dimensions ?? {} } : {}),
           currency: r.currency,
+          ...(isReverseChargeBasisLeg(r.account_number) ? { reverse_charge_basis: true } : {}),
         }
       })
 
       // Optional group_by aggregation: over the same set totals used, so
       // group sums always reconcile with `totals`.
       let groups:
-        | Array<{ key: string; debit: number; credit: number; net: number; line_count: number }>
+        | Array<{
+            key: string
+            debit: number
+            credit: number
+            net: number
+            line_count: number
+            reverse_charge_basis?: true
+          }>
         | undefined
       if (wantsGroups) {
         const keyOf = (r: LineRow): string => {
@@ -15710,6 +15732,9 @@ export const tools: McpTool[] = [
             credit: roundOre(bucket.credit),
             net: roundOre(bucket.debit - bucket.credit),
             line_count: bucket.count,
+            ...(groupBy === 'account_number' && isReverseChargeBasisLeg(key)
+              ? { reverse_charge_basis: true as const }
+              : {}),
           }))
           .sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
       }
@@ -15758,6 +15783,7 @@ export const tools: McpTool[] = [
         },
         totals_scope: 'full_match',
         ...(totalsNote ? { totals_note: totalsNote } : {}),
+        ...(rcBasisNote ? { reverse_charge_basis_note: rcBasisNote } : {}),
         ...(statusFilterWarning ? { status_filter_warning: statusFilterWarning } : {}),
         ...(groups ? { groups } : {}),
         applied_filters: {
