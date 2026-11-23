@@ -73,14 +73,16 @@ export const FIXABLE_REFUSALS: Readonly<Record<string, FixableRefusal>> = {
   // link opens the import history, where Fortsätt and Ångra import are.
   SIE_IMPORT_UNFINISHED: { operationTypes: ['import_sie'], fixHref: IMPORT_HISTORY_HREF },
   // create_transaction: the bank account on the row's ledger_account is
-  // turned off and printed on invoices, and only an owner or admin turns a
-  // payee on (reenableIfUnused in lib/cash-accounts/service.ts). Refused in
+  // turned off and marked to be printed on invoices, which rows never turn
+  // back on (reenableIfUnused in lib/cash-accounts/service.ts). Refused in
   // ensureManualCashAccount after reads only, before the account is touched
   // or the row stored; the one write that can come first is the rate cache a
   // foreign row's exchange rate fills (no booking, the same value every
-  // time). The account's switch lies outside the proposal; once it is on the
-  // same proposal is right. The link opens the bookkeeping settings, where an
-  // owner or admin finds the account under Avstängda bankkonton.
+  // time). The fix lies outside the proposal: an owner or admin turns the
+  // account on (it is printed on invoices again) or hides it on invoices
+  // (the approval then turns it on as an ordinary account), and either way
+  // the same proposal is right. The link opens the bookkeeping settings,
+  // where the account is listed under Avstängda bankkonton.
   CASH_ACCOUNT_DISABLED_PAYEE: { operationTypes: ['create_transaction'], fixHref: '/settings/bookkeeping' },
 }
 

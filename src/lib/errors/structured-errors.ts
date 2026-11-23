@@ -2783,10 +2783,23 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det här är företagets primära bankkonto och kan inte stängas av. Välj "Gör primärt" på ett annat bankkonto först.',
     message_en: 'This is the company’s primary bank account and cannot be disabled. Choose "Make primary" on another bank account first.',
   },
+  // reenableIfUnused: rows were put on a turned-off account marked to be
+  // printed on invoices, which rows never turn back on (its payment details
+  // may be stale). A turned-off account is printed on no invoice, so the
+  // sentence says "marked". Either fix lets the rows land: turning it on
+  // prints it on invoices again, hiding it on invoices lets the rows turn it
+  // on as an ordinary account.
   CASH_ACCOUNT_DISABLED_PAYEE: {
     httpStatus: 409,
-    message_sv: 'Bankkontot är avstängt och visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar innan transaktioner kan läggas på det.',
-    message_en: 'This bank account is turned off and is printed on invoices. An owner or admin needs to turn it on in Settings before transactions can be put on it.',
+    message_sv:
+      'Bankkontot är avstängt och markerat att visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) eller dölja det på fakturor under Inställningar → Fakturering innan transaktioner kan läggas på det.',
+    message_en:
+      'This bank account is turned off and marked to be printed on invoices. An owner or admin needs to turn it on under Inställningar → Bokföring (Settings → Bookkeeping; it is then printed on invoices again) or hide it on invoices under Inställningar → Fakturering (Settings → Invoicing) before transactions can be put on it.',
+    remediation: {
+      description:
+        'Retrying does not help until an owner or admin turns the account on (it is then printed on invoices again) or hides it on invoices: gnubok_update_cash_account stages either (enabled or invoice_payee). Or send the row with the ledger_account of another bank account (gnubok_list_cash_accounts).',
+    },
+    retryable: false,
   },
   // ensureManualCashAccount: the kassakonto already on the row's ledger
   // account is in another currency, and a ledger holds one (cash_accounts is

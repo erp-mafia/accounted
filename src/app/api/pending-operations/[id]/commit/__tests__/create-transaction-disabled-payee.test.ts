@@ -10,11 +10,13 @@
  *
  * It is a refusal before anything is stored, and what is wrong lies outside
  * the proposal: the structured code, a Swedish sentence naming the account,
- * and the proposal kept for the same approval once the account is on
- * (fixable-refusals.ts).
+ * and the proposal kept for the same approval once an owner or admin has
+ * turned the account on or hidden it on invoices (fixable-refusals.ts).
  *
- * The route, the dispatcher, the executor and ensureManualCashAccount all
- * run for real here; only the database and ingest are stand-ins.
+ * The route, the dispatcher, the executor, ensureManualCashAccount and
+ * reenableIfUnused run for real here. Stand-ins: the database, ingest, the
+ * session's company and write permission, the approval record and the
+ * booking-review rules.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
@@ -94,10 +96,10 @@ const pendingOperations: TableMockResolver = (chain) => {
   return claim ? { data: { id: 'op-1', updated_at: '2026-11-22T21:10:00Z' } } : { data: null }
 }
 
-/** The manual SEK account on 1930: turned off, printed on invoices, held by no bank connection. */
-function accountOn1930(enabled: boolean) {
+/** The manual SEK account on 1930, held by no bank connection. */
+function accountOn1930(state: { enabled: boolean; invoice_payee: boolean }) {
   return {
-    data: { id: 'ca-1930', currency: 'SEK', enabled, bank_connection_id: null, invoice_payee: true },
+    data: { id: 'ca-1930', currency: 'SEK', bank_connection_id: null, ...state },
   }
 }
 
@@ -116,7 +118,7 @@ describe('POST /api/pending-operations/:id/commit: create_transaction on a turne
   })
 
   it('refuses with 409, the code and a Swedish sentence naming the account, storing nothing and keeping the proposal', async () => {
-    setTable('cash_accounts', accountOn1930(false))
+    setTable('cash_accounts', accountOn1930({ enabled: false, invoice_payee: true }))
 
     const { status, body } = await approve()
 
@@ -124,8 +126,9 @@ describe('POST /api/pending-operations/:id/commit: create_transaction on a turne
     const error = body.error as { code: string; message: string; details?: Record<string, unknown> }
     expect(error.code).toBe('CASH_ACCOUNT_DISABLED_PAYEE')
     expect(error.message).toBe(
-      'Bankkontot på 1930 är avstängt och visas på fakturor, så transaktionen sparades inte. ' +
-        'En ägare eller administratör behöver aktivera kontot under Inställningar, Bokföring.',
+      'Bankkontot på 1930 är avstängt och markerat att visas på fakturor, så transaktionen sparades inte. ' +
+        'En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) ' +
+        'eller dölja det på fakturor under Inställningar → Fakturering.',
     )
     expect(error.details).toEqual({ ledger_account: '1930', operation_status: 'pending' })
     expect(mockIngest).not.toHaveBeenCalled()
@@ -136,8 +139,25 @@ describe('POST /api/pending-operations/:id/commit: create_transaction on a turne
     expect(payloads('pending_operations', 'update').at(-1)).toEqual({ status: 'pending' })
   })
 
+  // The other fix the sentence names: hidden on invoices, the account is an
+  // ordinary turned-off account, which the same approval turns back on.
+  it('stores the row once the account is hidden on invoices, turning it on', async () => {
+    setTable('cash_accounts', [
+      accountOn1930({ enabled: false, invoice_payee: false }),
+      { data: [{ id: 'ca-1930' }] }, // the guarded re-enable matched the row
+    ])
+    mockIngest.mockResolvedValueOnce({ transaction_ids: ['tx-1'], skipped: [] })
+
+    const { status, body } = await approve()
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ transaction_id: 'tx-1', cash_account_id: 'ca-1930' })
+    expect(payloads('cash_accounts', 'update')).toEqual([{ enabled: true }])
+    expect(payloads('pending_operations', 'update').at(-1)).toMatchObject({ status: 'committed' })
+  })
+
   it('stores the row once the account is on, and answers 200 with the transaction', async () => {
-    setTable('cash_accounts', accountOn1930(true))
+    setTable('cash_accounts', accountOn1930({ enabled: true, invoice_payee: true }))
     mockIngest.mockResolvedValueOnce({ transaction_ids: ['tx-1'], skipped: [] })
 
     const { status, body } = await approve()
