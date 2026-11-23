@@ -167,7 +167,7 @@ import {
 import { isUuid } from '@/lib/invariants/uuid'
 import {
   buildIssuePreview,
-  BUYER_ADDRESS_SIMPLIFIED_NOTE,
+  simplifiedInvoiceNote,
   stagedInvoiceParties,
   buildMarkPaidPreview,
   buildPaidAtIssuePreview,
@@ -12550,6 +12550,7 @@ export const tools: McpTool[] = [
       const parties = await stagedInvoiceParties(supabase, companyId, invoice)
       if (parties === 'seller_missing') throw registryError('INVOICE_SEND_SELLER_ADDRESS_MISSING')
       if (parties === 'buyer_missing') throw registryError('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+      const partiesNote = simplifiedInvoiceNote(parties)
 
       // A draft has no number until approval: name it by customer and amount
       // instead of printing "null", and say what approval will number and post.
@@ -12595,7 +12596,7 @@ export const tools: McpTool[] = [
           ...issue,
         },
         actor,
-        ...(parties === 'buyer_missing_simplified' ? { complianceNote: BUYER_ADDRESS_SIMPLIFIED_NOTE } : {}),
+        ...(partiesNote ? { complianceNote: partiesNote } : {}),
         // crm#1202: a quote is an offer, not a claim. Its next step is the
         // customer's answer, never a payment.
         next: invoice.document_type === 'quote'
@@ -12966,8 +12967,10 @@ export const tools: McpTool[] = [
       const parties = await stagedInvoiceParties(supabase, companyId, invoice)
       if (parties === 'seller_missing') throw registryError('INVOICE_SEND_SELLER_ADDRESS_MISSING')
       if (parties === 'buyer_missing') throw registryError('INVOICE_SEND_BUYER_ADDRESS_MISSING')
-      // A förenklad faktura without the buyer's address (crm#2080).
-      const partiesNote = parties === 'buyer_missing_simplified' ? { complianceNote: BUYER_ADDRESS_SIMPLIFIED_NOTE } : {}
+      // A förenklad faktura without the seller's or the buyer's name or
+      // address (crm#2080).
+      const simplifiedNote = simplifiedInvoiceNote(parties)
+      const partiesNote = simplifiedNote ? { complianceNote: simplifiedNote } : {}
 
       // A draft has no number until approval: name it by customer and amount
       // instead of printing "null", and say what approval will number and post.

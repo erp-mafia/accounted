@@ -78,10 +78,10 @@ const ITEM = {
   revenue_account: null,
 }
 
-function setup(settings: Record<string, unknown>, invoice: Record<string, unknown>) {
+function setup(settings: Record<string, unknown>, invoice: Record<string, unknown>, items: unknown[] = [ITEM]) {
   const mock = createTableMockSupabase({
     invoices: { data: invoice },
-    invoice_items: { data: [ITEM] },
+    invoice_items: { data: items },
     company_settings: {
       data: { entity_type: 'enskild_firma', bookkeeping_locked_through: null, ...SELLER, ...settings },
     },
@@ -433,7 +433,7 @@ describe('gnubok_mark_invoice_as_sent with paid_at_issue_account (crm#1281)', ()
 
 // crm#2080: the seller's and the buyer's name and address (ML 17 kap 24 §
 // p.5-6), refused at staging by the verdict the approval's issuable gives.
-describe('gnubok_mark_invoice_as_sent / gnubok_send_invoice: names and addresses (crm#2080)', () => {
+describe('gnubok_mark_invoice_as_sent / gnubok_send_invoice: names and addresses', () => {
   const nameOnly = { name: 'Testkund AB', email: 'ekonomi@example.com', address_line1: null, postal_code: null, city: null, country: 'SE' }
   const run = (tool: typeof markSent, supabase: unknown) =>
     tool.execute({ invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never)
@@ -462,6 +462,42 @@ describe('gnubok_mark_invoice_as_sent / gnubok_send_invoice: names and addresses
       )
       await run(tool, supabase)
       expect(String(stagedInsert(findCall).preview_data.compliance_warning)).toContain('BUYER_ADDRESS_MISSING')
+    }
+  })
+
+  it('stages a förenklad faktura without the company address with the note', async () => {
+    for (const tool of [markSent, sendInvoice]) {
+      const { supabase, findCall } = setup(
+        { accounting_method: 'accrual', address_line1: null, postal_code: null, city: null },
+        sentInvoice({ status: 'draft', invoice_number: null, total: 1250, total_sek: 1250 }),
+      )
+      await run(tool, supabase)
+      expect(String(stagedInsert(findCall).preview_data.compliance_warning)).toContain('SELLER_ADDRESS_MISSING')
+    }
+  })
+
+  it('stages a sale to a private person without either address, with no note', async () => {
+    const privatePerson = { ...nameOnly, customer_type: 'individual' }
+    for (const tool of [markSent, sendInvoice]) {
+      const { supabase, findCall } = setup(
+        { accounting_method: 'accrual', address_line1: null, postal_code: null, city: null },
+        sentInvoice({ status: 'draft', invoice_number: null, customer: privatePerson }),
+      )
+      await run(tool, supabase)
+      expect(stagedInsert(findCall).preview_data.compliance_warning).toBeUndefined()
+    }
+  })
+
+  it('refuses construction work for a private person without the address, from the lines', async () => {
+    const privatePerson = { ...nameOnly, customer_type: 'individual' }
+    for (const tool of [markSent, sendInvoice]) {
+      const { supabase, findCall } = setup(
+        { accounting_method: 'accrual' },
+        sentInvoice({ status: 'draft', invoice_number: null, customer: privatePerson }),
+        [{ ...ITEM, deduction_type: 'rot' }],
+      )
+      await expect(run(tool, supabase)).rejects.toMatchObject({ code: 'INVOICE_SEND_BUYER_ADDRESS_MISSING' })
+      expect(findCall('pending_operations', 'insert')).toBeUndefined()
     }
   })
 })

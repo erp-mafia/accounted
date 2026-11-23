@@ -53,7 +53,7 @@ describe('resolveEditorStatusLine', () => {
     expect(resolveEditorStatusLine(input({ sellerVatMissing: false }))).toEqual({ kind: 'none' })
   })
 
-  it('then a missing name or address the send refuses (crm#2080)', () => {
+  it('then a missing name or address the send refuses', () => {
     const partiesMissing = { verdict: 'buyer_missing' as const, customerId: 'cust-1' }
     expect(resolveEditorStatusLine(input({ partiesMissing, missing: ['payee'], pageCount: 2 }))).toEqual({
       kind: 'parties_missing',

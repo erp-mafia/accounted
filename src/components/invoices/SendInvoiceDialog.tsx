@@ -229,7 +229,7 @@ export default function SendInvoiceDialog({
   const [swedishVatAcknowledged, setSwedishVatAcknowledged] = useState(false)
   // The seller's and the buyer's name and address (crm#2080): the answer the
   // send's issuable gives, so a refusal is said before the click and a
-  // förenklad faktura without the buyer's address goes out with a note.
+  // förenklad faktura without one goes out with a note.
   const partiesVerdict =
     invoice.status === 'draft' && companySettings
       ? invoicePartiesVerdict(invoice, invoice.customer, companySettings)

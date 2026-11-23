@@ -17,20 +17,21 @@ interface InvoicePartiesNoticeProps {
 /**
  * The seller's and the buyer's name and address before an invoice is issued
  * (crm#2080): a missing one that the send refuses, with where to fix it, or
- * the note that a förenklad faktura goes out without the buyer's address.
- * Nothing when both are there.
+ * the note that a förenklad faktura goes out without it. Nothing when both
+ * are there or the law asks for neither.
  */
 export function InvoicePartiesNotice({ verdict, customerId, canEditCompany, className }: InvoicePartiesNoticeProps) {
   const t = useTranslations('invoice_parties')
   if (verdict === 'ok') return null
-  if (verdict === 'seller_missing') {
+  if (verdict === 'seller_missing' || verdict === 'seller_missing_simplified') {
+    const text = t(verdict === 'seller_missing' ? 'seller_missing' : 'seller_simplified')
     return canEditCompany ? (
       <AttnLine className={className} action={{ label: t('seller_fix'), href: '/settings/company' }}>
-        {t('seller_missing')}
+        {text}
       </AttnLine>
     ) : (
       <AttnLine className={className}>
-        {t('seller_missing')} {t('seller_ask_admin')}
+        {text} {t('seller_ask_admin')}
       </AttnLine>
     )
   }

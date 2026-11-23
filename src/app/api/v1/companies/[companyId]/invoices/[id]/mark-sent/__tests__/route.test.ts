@@ -299,7 +299,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
   })
 
   // crm#2080: ML 17 kap 24 § p.5-6, the seller's and the buyer's name and address.
-  describe('names and addresses (crm#2080)', () => {
+  describe('names and addresses', () => {
     const nameOnly = { ...DRAFT_INVOICE.customer, address_line1: null, postal_code: null, city: null }
     const settings = { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER }
     const url = `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`
@@ -339,6 +339,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       for (const column of ['address_line1', 'postal_code', 'city']) {
         expect(projection).toMatch(new RegExp(`customer:customers\\([^)]*\\b${column}\\b`))
       }
+      // And the lines' deductions: construction work is the one sale to a
+      // private person that needs the addresses.
+      expect(projection).toMatch(/items:invoice_items\([^)]*\bdeduction_type\b/)
     })
 
     it('issues a förenklad faktura without the buyer address, with a warning', async () => {
@@ -356,6 +359,24 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.data.warnings).toEqual([expect.objectContaining({ code: 'BUYER_ADDRESS_MISSING' })])
+      expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    })
+
+    it('issues a förenklad faktura without the company address, with a warning', async () => {
+      const small = { ...DRAFT_INVOICE, subtotal: 1000, vat_amount: 250, total: 1250 }
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: small, error: null },
+          company_settings: { data: { ...settings, address_line1: null, postal_code: null, city: null }, error: null },
+        }).supabase,
+      )
+
+      const res = await markSent(makeMarkSentRequest(url), detailParams(COMPANY_ID, INVOICE_ID))
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data.warnings).toEqual([expect.objectContaining({ code: 'SELLER_ADDRESS_MISSING' })])
       expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
     })
   })

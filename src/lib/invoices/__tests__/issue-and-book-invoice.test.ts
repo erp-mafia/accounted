@@ -140,26 +140,32 @@ describe('issuable', () => {
   })
 })
 
-// crm#2080: a faktura names its seller and buyer with name and address (ML
-// 17 kap 24 § p.5-6). Only a förenklad faktura may leave the buyer out (ML 17
-// kap 26-28 §): at most 4 000 kr including moms, never an EU or a
-// reverse-charge sale; a seller outside the VAT register at any amount.
-describe('issuable: seller and buyer name and address (crm#2080)', () => {
+// crm#2080: a faktura to a business names its seller and buyer with name and
+// address (ML 17 kap 24 § p.5-6). A förenklad faktura may leave them out (ML
+// 17 kap 26-28 §§): at most 4 000 kr including moms, or a seller outside the
+// VAT register at any amount, never where the buyer in another EU country
+// pays the VAT. A sale to a private person needs neither unless it is
+// construction work (10-11 §§).
+describe('issuable: seller and buyer name and address', () => {
   const settings = makeCompanySettings({ bankgiro: '123-4567', vat_registered: true, vat_number: 'SE556677889901' })
   const noAddress = { address_line1: null, address_line2: null, postal_code: null, city: null }
   const draft = (overrides: Record<string, unknown> = {}) =>
     makeInvoice({ status: 'draft', total: 12500, customer: makeCustomer(), ...overrides })
 
-  it('refuses a seller without an address', () => {
+  it('refuses a seller without an address on a full faktura', () => {
     expect(issuable(draft(), makeCompanySettings({ ...settings, ...noAddress }))).toEqual({
       code: 'INVOICE_SEND_SELLER_ADDRESS_MISSING',
     })
   })
 
-  it('refuses a seller without a name, at any amount', () => {
-    expect(issuable(draft({ total: 100 }), makeCompanySettings({ ...settings, company_name: '  ' }))).toEqual({
+  it('refuses a seller without a name on a full faktura', () => {
+    expect(issuable(draft(), makeCompanySettings({ ...settings, company_name: '  ' }))).toEqual({
       code: 'INVOICE_SEND_SELLER_ADDRESS_MISSING',
     })
+  })
+
+  it('passes a förenklad faktura without the seller address: its organisationsnummer identifies it', () => {
+    expect(issuable(draft({ total: 1000 }), makeCompanySettings({ ...settings, ...noAddress }))).toBeNull()
   })
 
   it('refuses a buyer without an address over 4 000 kr including moms', () => {
@@ -189,9 +195,20 @@ describe('issuable: seller and buyer name and address (crm#2080)', () => {
     )
   })
 
-  it('refuses a buyer without an address on a domestic reverse-charge sale under 4 000 kr', () => {
+  it('passes a domestic reverse-charge sale under 4 000 kr without the buyer address: 27 § excludes only an EU buyer', () => {
     const invoice = draft({ total: 1000, vat_treatment: 'reverse_charge_domestic', customer: makeCustomer(noAddress) })
-    expect(issuable(invoice, settings)?.code).toBe('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+    expect(issuable(invoice, settings)).toBeNull()
+  })
+
+  it('passes a sale to a private person without either address', () => {
+    const privatePerson = makeCustomer({ ...noAddress, customer_type: 'individual' })
+    expect(issuable(draft({ customer: privatePerson }), makeCompanySettings({ ...settings, ...noAddress }))).toBeNull()
+  })
+
+  it('refuses construction work for a private person over 4 000 kr without the buyer address', () => {
+    const privatePerson = makeCustomer({ ...noAddress, customer_type: 'individual' })
+    const rot = draft({ customer: privatePerson, items: [{ deduction_type: 'rot' }] })
+    expect(issuable(rot, settings)?.code).toBe('INVOICE_SEND_BUYER_ADDRESS_MISSING')
   })
 
   it('measures a foreign invoice in kronor', () => {

@@ -3213,7 +3213,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     !hasRequiredSellerVatNumber(companySettings, { document_type: watchDocumentType, credited_invoice_id: null })
   // The seller's and the buyer's name and address (crm#2080): the answer the
   // send's issuable will give, said before the confirm. A foreign total is
-  // measured at the preview's rate.
+  // measured at the preview's rate; the lines' deductions say whether a sale
+  // to a private person is construction work.
   const partiesVerdict =
     !isSelfBilled && companySettings !== null
       ? invoicePartiesVerdict(
@@ -3224,6 +3225,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             currency: watchCurrency,
             vat_treatment: headerVatTreatment,
             exchange_rate: pdf.exchangeRate,
+            items: watchItems,
           },
           selectedCustomer,
           companySettings,
@@ -5578,9 +5580,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 )}
               </div>
             )}
-            {/* A förenklad faktura goes out without the buyer's address
-                (crm#2080): said before it is issued. */}
-            {confirmIntent?.kind !== 'create' && partiesVerdict === 'buyer_missing_simplified' && (
+            {/* A förenklad faktura goes out without the seller's or the
+                buyer's name or address (crm#2080): said before it is issued. */}
+            {confirmIntent?.kind !== 'create' &&
+              (partiesVerdict === 'seller_missing_simplified' || partiesVerdict === 'buyer_missing_simplified') && (
               <InvoicePartiesNotice
                 verdict={partiesVerdict}
                 customerId={selectedCustomer?.id}

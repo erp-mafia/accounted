@@ -7,8 +7,10 @@ export default {
     /!\w+\??\.moms_ruta\b/,
     /hasRequiredSellerVatNumber\(/,
     // The förenklad faktura limit (crm#2080): invoicePartiesVerdict decides
-    // when a faktura may leave the buyer out.
+    // when a faktura may leave a party's name or address out, written either
+    // way round.
     /\b\w*(?:total|amount|sek)\w*\s*(?:>|<=)\s*4[ _]?000\b/i,
+    /\b4[ _]?000\s*(?:<|>=)\s*\w*(?:total|amount|sek)\w*/i,
   ],
   sanctioned: ['lib/invoices/issue-and-book-invoice.ts', 'lib/invoices/seller-vat-number.ts', 'lib/invoices/invoice-parties.ts'],
   allowed: {

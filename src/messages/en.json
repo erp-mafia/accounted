@@ -8162,10 +8162,11 @@
   },
   "invoice_parties": {
     "seller_missing": "The company name or address is missing and must be on the invoice.",
+    "seller_simplified": "The company name or address is missing, so the invoice becomes a simplified invoice without the seller's address. Fill in the company details to send a full invoice.",
     "seller_fix": "Fill in company details",
     "seller_ask_admin": "Ask an administrator to fill them in under Company details.",
-    "buyer_missing": "The customer's name or address is missing. Both must be on an invoice over 4,000 kr including VAT and on a sale to another EU country or under reverse charge.",
-    "buyer_simplified": "The customer has no address, so the invoice becomes a simplified invoice without the buyer's address. Add the address to the customer to send a full invoice.",
+    "buyer_missing": "The customer's name or address is missing. Both must be on an invoice over 4,000 kr including VAT and where the buyer in another EU country accounts for the VAT.",
+    "buyer_simplified": "The customer's name or address is missing, so the invoice becomes a simplified invoice without the buyer's details. Add them to the customer to send a full invoice.",
     "open_customer": "Open the customer"
   },
   "invoice_send_dialog": {

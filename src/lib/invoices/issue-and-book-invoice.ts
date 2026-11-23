@@ -21,7 +21,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
-import { invoicePartiesVerdict, type InvoicePartiesCustomer } from '@/lib/invoices/invoice-parties'
+import { invoicePartiesVerdict, type InvoicePartiesCustomer, type InvoicePartiesInvoice } from '@/lib/invoices/invoice-parties'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -62,12 +62,14 @@ export interface IssueRefusal {
  * with a total below zero has no original to name (ML 17 kap 22 §).
  *
  * The seller's and the buyer's name and address (ML 17 kap 24 § p.5-6) are
- * read off the joined customer (invoicePartiesVerdict): every door selects
- * it with its address columns.
+ * read off the joined customer and the lines' deductions
+ * (invoicePartiesVerdict): every door selects the customer with its address
+ * columns and the items with deduction_type.
  */
 export function issuable(
   invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type' | 'total' | 'vat_treatment'>
     & Partial<Pick<Invoice, 'payment_details' | 'total_sek' | 'exchange_rate'>>
+    & Pick<InvoicePartiesInvoice, 'items'>
     & { customer?: InvoicePartiesCustomer | null },
   settings: CompanySettings,
 ): IssueRefusal | null {
