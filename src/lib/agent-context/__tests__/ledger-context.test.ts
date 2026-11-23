@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { buildLedgerContext, buildLedgerDigest } from '../ledger-context'
+import { buildLedgerContext, buildLedgerDigest, readExplicitRules } from '../ledger-context'
 
 const COMPANY_ID = 'company-1'
 const NOW = new Date('2026-07-07T10:00:00Z')
@@ -525,5 +525,71 @@ describe('buildLedgerContext', () => {
     expect(ctx.counterparty_patterns.every((p) => p.source === 'imported_vouchers')).toBe(true)
     expect(Buffer.byteLength(JSON.stringify(ctx), 'utf8')).toBeLessThan(12 * 1024)
     expect(Buffer.byteLength(JSON.stringify(buildLedgerDigest(ctx)), 'utf8')).toBeLessThan(2.5 * 1024)
+  })
+})
+
+describe('readExplicitRules', () => {
+  let mock: ReturnType<typeof createQueuedMockSupabase>
+
+  /** The rows of one company, as both reads select them. */
+  const ROWS = [
+    { rule_name: 'SL resor', merchant_pattern: 'SL*', description_pattern: null, debit_account: '5810', vat_treatment: 'standard_6' },
+    { rule_name: 'Bankavgift', merchant_pattern: null, description_pattern: 'MÅNADSAVGIFT', debit_account: '6570', vat_treatment: null },
+    { rule_name: 'Learned: INSÄTTNING', merchant_pattern: 'INSÄTTNING', description_pattern: null, debit_account: '1930', vat_treatment: null },
+    { rule_name: 'broken', merchant_pattern: null, description_pattern: null, debit_account: '4010', vat_treatment: null },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mock = createQueuedMockSupabase()
+  })
+
+  it('gives the rules the bookkeeping profile lists, from one read of the company\'s own rows', async () => {
+    mock.enqueue({ data: ROWS })
+    const rules = await readExplicitRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+
+    expect(rules).toEqual([
+      { rule_name: 'SL resor', match: 'SL*', account_number: '5810', vat_treatment: 'standard_6', source: 'mapping_rule' },
+      { rule_name: 'Bankavgift', match: 'MÅNADSAVGIFT', account_number: '6570', vat_treatment: null, source: 'mapping_rule' },
+    ])
+    expect(mock.supabase.from.mock.calls).toEqual([['mapping_rules']])
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
+    expect(mock.findCalls('mapping_rules', 'eq')).toEqual([['company_id', COMPANY_ID], ['is_active', true]])
+    expect(mock.findCalls('mapping_rules', 'limit')).toEqual([[25]])
+  })
+
+  it('is the list buildLedgerContext carries for the same rows', async () => {
+    mock.enqueue({ data: ROWS })
+    const alone = await readExplicitRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+    enqueueAll(mock, { rules: ROWS })
+    const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+
+    expect(alone).toEqual(ctx.explicit_rules)
+  })
+
+  it('keeps the first fifteen, as the profile does', async () => {
+    mock.enqueue({ data: Array.from({ length: 20 }, (_, i) => ({ rule_name: `Regel ${i}`, merchant_pattern: `LEVERANTÖR ${i} AB`, description_pattern: null, debit_account: '4010', vat_treatment: null })) })
+    const rules = await readExplicitRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+
+    expect(rules).toHaveLength(15)
+    expect(rules[0].rule_name).toBe('Regel 0')
+  })
+
+  it('leaves the auto-learned rows out of the read for a company that does not read them', async () => {
+    vi.stubEnv('BOOKING_PRECEDENT_COMPANY_IDS', COMPANY_ID)
+    try {
+      mock.enqueue({ data: [] })
+      await readExplicitRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+      expect(mock.findCalls('mapping_rules', 'neq')).toEqual([['source', 'auto']])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('is empty for a company with no rules, and throws when the read fails', async () => {
+    mock.enqueue({ data: [] })
+    await expect(readExplicitRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)).resolves.toEqual([])
+    mock.enqueue({ data: null, error: { message: 'rls denied' } })
+    await expect(readExplicitRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)).rejects.toThrow('explicit rules read failed: rls denied')
   })
 })

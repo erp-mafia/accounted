@@ -6,9 +6,10 @@ import en from '@/messages/en.json'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 // /rules with and without the agent picture (AGENT_PICTURE_COMPANY_IDS).
-// With it, one sentence above the list says how the company books; without
-// it the page is the list and the blocks alone, and reads nothing for the
-// sentence.
+// With it, one sentence above the list says how the company books, and the
+// rules the company set itself are listed under the list when it has any;
+// without it the page is the list and the blocks alone, and reads nothing
+// for either.
 
 const COMPANY = 'aaaaaaaa-0000-4000-8000-000000000001'
 const state = vi.hoisted(() => ({ locale: 'sv' as 'sv' | 'en', companyId: null as string | null }))
@@ -25,6 +26,7 @@ vi.mock('next-intl/server', () => ({
 }))
 vi.mock('@/components/rules/RulesList', () => ({ default: () => null }))
 vi.mock('@/components/rules/BookingBlocks', () => ({ default: () => null }))
+vi.mock('@/components/rules/HandWrittenRules', () => ({ default: () => null }))
 vi.mock('../../request-context', () => ({
   getDashboardCompanyId: async () => state.companyId,
   getDashboardAuthContext: () => getDashboardAuthContext(),
@@ -34,28 +36,52 @@ vi.mock('../../request-context', () => ({
 const { default: RulesPage } = await import('../page')
 const { default: RulesList } = await import('@/components/rules/RulesList')
 const { default: BookingBlocks } = await import('@/components/rules/BookingBlocks')
+const { default: HandWrittenRules } = await import('@/components/rules/HandWrittenRules')
 
 /** Every element of a tree that was built but not rendered, in order. */
-function elements(node: ReactNode): ReactElement<{ children?: ReactNode; className?: string }>[] {
+function elements(node: ReactNode): ReactElement<{ children?: ReactNode; className?: string; rules?: unknown }>[] {
   if (Array.isArray(node)) return node.flatMap(elements)
-  if (!isValidElement<{ children?: ReactNode; className?: string }>(node)) return []
+  if (!isValidElement<{ children?: ReactNode; className?: string; rules?: unknown }>(node)) return []
   return [node, ...elements(node.props.children)]
 }
 
-/** The page as its parts: the sentences in it, and what follows the top bar. */
+const PART = new Map<unknown, string>([
+  ['p', 'sentence'],
+  [RulesList, 'rules'],
+  [HandWrittenRules, 'own rules'],
+  [BookingBlocks, 'blocks'],
+])
+
+/** The page as its parts: the sentences in it, what follows the top bar, and the rules handed to the section of the company's own. */
 async function page() {
   const all = elements(await RulesPage())
   return {
     sentences: all.filter((el) => el.type === 'p').map((el) => el.props.children),
     sentenceClass: all.find((el) => el.type === 'p')?.props.className,
-    order: all.filter((el) => el.type === 'p' || el.type === RulesList || el.type === BookingBlocks).map((el) => (el.type === 'p' ? 'sentence' : el.type === RulesList ? 'rules' : 'blocks')),
+    order: all.filter((el) => PART.has(el.type)).map((el) => PART.get(el.type)),
     headings: all.filter((el) => typeof el.type === 'string' && /^h[1-6]$/.test(el.type)).length,
+    ownRules: all.find((el) => el.type === HandWrittenRules)?.props.rules,
   }
 }
 
 function settings(row: unknown, series: string[]) {
   mock.enqueue({ data: row })
   mock.enqueue({ data: series.map((voucher_series) => ({ voucher_series })) })
+}
+
+/** A mapping_rules row as the profile's read selects it. */
+const mappingRule = (rule_name: string, merchant_pattern: string | null, debit_account: string | null, vat_treatment: string | null = null, description_pattern: string | null = null) => ({
+  rule_name,
+  merchant_pattern,
+  description_pattern,
+  debit_account,
+  vat_treatment,
+})
+
+/** The page's three reads, in the order it makes them: the settings, the series, the company's own rules. */
+function reads(rules: { data?: unknown; error?: unknown }) {
+  settings({ vat_registered: true, moms_period: 'yearly', accounting_method: 'accrual' }, ['A'])
+  mock.enqueue(rules)
 }
 
 beforeEach(() => {
@@ -114,6 +140,56 @@ describe('/rules with the agent picture on', () => {
     await expect(RulesPage()).rejects.toThrow('NEXT_REDIRECT:/invoices')
     expect(mock.supabase.from).not.toHaveBeenCalled()
   })
+
+  it("lists the rules the company set itself under the list, as the bookkeeping profile's explicit rules", async () => {
+    reads({
+      data: [
+        mappingRule('Hyra', 'FASTIGHETS AB', '5010', 'exempt'),
+        mappingRule('Bankavgift', null, '6570', null, 'MÅNADSAVGIFT'),
+        // A text that names no one is never applied, and a rule that matches nothing says nothing: neither is listed.
+        mappingRule('Insättning', 'INSÄTTNING', '1930'),
+        mappingRule('Tom', null, '6990'),
+      ],
+    })
+    const shown = await page()
+    expect(shown.order).toEqual(['sentence', 'rules', 'own rules', 'blocks'])
+    expect(shown.ownRules).toEqual([
+      { rule_name: 'Hyra', match: 'FASTIGHETS AB', account_number: '5010', vat_treatment: 'exempt', source: 'mapping_rule' },
+      { rule_name: 'Bankavgift', match: 'MÅNADSAVGIFT', account_number: '6570', vat_treatment: null, source: 'mapping_rule' },
+    ])
+  })
+
+  it("reads them through the caller's own client, for the active company, the active ones", async () => {
+    reads({ data: [mappingRule('Hyra', 'FASTIGHETS AB', '5010')] })
+    await page()
+    expect(mock.supabase.from.mock.calls.map(([table]) => table)).toEqual(['company_settings', 'voucher_sequences', 'mapping_rules'])
+    expect(mock.findCalls('mapping_rules', 'eq')).toEqual([
+      ['company_id', COMPANY],
+      ['is_active', true],
+    ])
+  })
+
+  it('has no such section for a company with none: the root holds the list and the blocks alone', async () => {
+    for (const rules of [{ data: [] }, { data: null }, { data: [mappingRule('Insättning', 'INSÄTTNING', '1930')] }]) {
+      reads(rules)
+      const shown = await page()
+      expect(shown.order, JSON.stringify(rules)).toEqual(['sentence', 'rules', 'blocks'])
+      expect(shown.ownRules).toBeUndefined()
+    }
+  })
+
+  it('has the section without the sentence when the company has rules and none of the sentence\'s parts', async () => {
+    settings(null, [])
+    mock.enqueue({ data: [mappingRule('Hyra', 'FASTIGHETS AB', '5010')] })
+    expect((await page()).order).toEqual(['rules', 'own rules', 'blocks'])
+  })
+
+  it('leaves the section out when the rules cannot be read: the rest of the page stands', async () => {
+    reads({ data: null, error: { message: 'permission denied' } })
+    const shown = await page()
+    expect(shown.order).toEqual(['sentence', 'rules', 'blocks'])
+    expect(shown.sentences).toEqual(['Företaget bokför med fakturametoden, redovisar moms årsvis och använder serie A.'])
+  })
 })
 
 describe.each([
@@ -130,11 +206,19 @@ describe.each([
     expect(shown.order).toEqual(['rules', 'blocks'])
   })
 
-  it('reads nothing for the sentence', async () => {
+  it('reads nothing for the sentence or for the company\'s own rules', async () => {
     await page()
     expect(getDashboardAuthContext).not.toHaveBeenCalled()
     expect(redirectInvoicerOffPage).not.toHaveBeenCalled()
     expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('has no section of the company\'s own rules, whatever rules it has', async () => {
+    // A rule waiting in the queue is never asked for.
+    mock.enqueue({ data: [mappingRule('Hyra', 'FASTIGHETS AB', '5010')] })
+    const shown = await page()
+    expect(shown.order).toEqual(['rules', 'blocks'])
+    expect(shown.ownRules).toBeUndefined()
   })
 
   it('keeps the list and the blocks as the two children of the page root', async () => {

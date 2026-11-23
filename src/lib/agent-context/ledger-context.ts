@@ -179,6 +179,48 @@ function explicitRulesRead(supabase: SupabaseClient, companyId: string) {
     .limit(25)
 }
 
+/** A mapping_rules row as explicitRulesRead selects it. */
+interface ExplicitRuleRow {
+  rule_name: string
+  merchant_pattern: string | null
+  description_pattern: string | null
+  debit_account: string | null
+  vat_treatment: string | null
+}
+
+/**
+ * The explicit rules in the rows of explicitRulesRead, as the bookkeeping
+ * profile lists them and the briefing sends them. A rule on a text that
+ * names no one ("INSÄTTNING") is never applied (mapping-engine matchesRule),
+ * so it is no instruction to the agent; a rule that matches nothing is left
+ * out; the first MAX_EXPLICIT_RULES are kept. Pure.
+ */
+export function explicitRulesFrom(rows: ReadonlyArray<ExplicitRuleRow> | null | undefined): ExplicitRule[] {
+  return (rows ?? [])
+    .filter((r) => !r.merchant_pattern || mappingPatternNamesCounterparty(r.merchant_pattern))
+    .map((r) => ({
+      rule_name: r.rule_name,
+      match: r.merchant_pattern ?? r.description_pattern ?? '',
+      account_number: r.debit_account,
+      vat_treatment: r.vat_treatment,
+      source: 'mapping_rule' as const,
+    }))
+    .filter((r) => r.match !== '')
+    .slice(0, MAX_EXPLICIT_RULES)
+}
+
+/**
+ * The company's explicit rules alone: the same rows by the same read and the
+ * same rule as buildLedgerContext lists under explicit_rules, without the
+ * ledger statistics around them. Throws when the read fails: an empty list
+ * would claim the company has no rules.
+ */
+export async function readExplicitRules(supabase: SupabaseClient, companyId: string): Promise<ExplicitRule[]> {
+  const { data, error } = await explicitRulesRead(supabase, companyId)
+  if (error) throw new Error(`explicit rules read failed: ${error.message}`)
+  return explicitRulesFrom(data)
+}
+
 /** The voucher series a company has numbered in (voucher_sequences rows), each once, in order. */
 export function voucherSeriesInUse(rows: ReadonlyArray<{ voucher_series: unknown }> | null | undefined): string[] {
   return [...new Set((rows ?? []).map((v) => v.voucher_series as string))].sort()
@@ -362,19 +404,7 @@ export async function buildLedgerContext(
     })
   }
 
-  const explicitRules: ExplicitRule[] = (rulesRes.data ?? [])
-    // A rule on a text that names no one ("INSÄTTNING") is never applied
-    // (mapping-engine matchesRule), so it is no instruction to the agent.
-    .filter((r) => !r.merchant_pattern || mappingPatternNamesCounterparty(r.merchant_pattern))
-    .map((r) => ({
-      rule_name: r.rule_name,
-      match: r.merchant_pattern ?? r.description_pattern ?? '',
-      account_number: r.debit_account,
-      vat_treatment: r.vat_treatment,
-      source: 'mapping_rule' as const,
-    }))
-    .filter((r) => r.match !== '')
-    .slice(0, MAX_EXPLICIT_RULES)
+  const explicitRules = explicitRulesFrom(rulesRes.data)
 
   const voucherSeries = voucherSeriesInUse(voucherSeriesRes.data)
 
