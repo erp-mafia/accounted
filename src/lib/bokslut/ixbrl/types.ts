@@ -120,6 +120,16 @@ export interface IxbrlArsredovisningInput {
      *  Index 0/1 reuse period0/period1; 2/3 get their own contexts. */
     flerarsPerioder: Array<{ start: string; end: string }>
     egetKapital: EgetKapitalForandring
+    /**
+     * The year's changes in equity per post and kind of movement (the
+     * report's equity specification, as the PDF prints it): the K2 document
+     * prints it as one table with every figure tagged. Absent on versions
+     * locked before it existed, which print the collapsed table from
+     * `egetKapital`, as does one with nothing in it or with a post the
+     * document's taxonomy does not hold. The K3 document reads its own copy
+     * in `k3.equity`.
+     */
+    egetKapitalSpecifikation?: K3EquityInput
     resultatdisposition: Resultatdisposition
     /** The PDF's "Kontrollbalansräkning har upprättats …" statement (ABL 25
      *  kap.). Optional: versions locked before it existed lack the key. */

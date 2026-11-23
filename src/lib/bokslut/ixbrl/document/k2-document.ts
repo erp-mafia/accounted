@@ -16,15 +16,17 @@
  *     `sign="-"` is reserved for values deviating from the concept's nature
  *
  * The parts the K3 document shares (layout, title page, flerårsöversikt,
- * resultatdisposition, statements, notes, signatures) live in layout.ts,
- * sections.ts and statements.ts; what is K2's own is the förvaltnings-
- * berättelse's concepts and its equity table.
+ * the equity table per post, resultatdisposition, statements, notes,
+ * signatures) live in layout.ts, sections.ts, equity-table.ts and
+ * statements.ts; what is K2's own is the förvaltningsberättelse's concepts
+ * and the collapsed equity table it falls back to.
  */
 
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { getEntryPoint } from '../taxonomy/entry-points'
-import { getRegistry } from '../taxonomy/registry'
+import { getConcept, getRegistry } from '../taxonomy/registry'
 import type { IxbrlArsredovisningInput } from '../types'
+import { renderEquityTable } from './equity-table'
 import { FactWriter } from './ix'
 import { assembleXhtml, fmtRange, registerContexts, type GeneratedIxbrl } from './layout'
 import {
@@ -100,187 +102,209 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     const flerars = renderFlerarsoversikt(writer, fb.flerarsoversikt)
     if (flerars) parts.push(flerars)
 
-    // Förändringar i eget kapital
-    const ek = fb.egetKapital
-    const hasOvriga = ek.ovrigaPoster.ib !== 0 || ek.ovrigaPoster.ub !== 0
-    if (hasOvriga) {
-      warnings.push(
-        'Eget kapital innehåller poster utöver aktiekapital/balanserat resultat/årets resultat (t.ex. reservfond eller överkursfond). Kolumnen "Övriga poster" i förändringstabellen är inte XBRL-taggad: granska innan inlämning.',
-      )
-    }
-    const ekHead = el(
-      'tr',
-      {},
-      el('th', {}, 'Förändringar i eget kapital') +
-        el('th', { class: 'num' }, 'Aktiekapital') +
-        (hasOvriga ? el('th', { class: 'num' }, 'Övriga poster') : '') +
-        el('th', { class: 'num' }, 'Balanserat resultat') +
-        el('th', { class: 'num' }, 'Årets resultat') +
-        el('th', { class: 'num' }, 'Totalt'),
-    )
-    const ekRows: string[] = [ekHead]
-    const td = (content: string): string => el('td', { class: 'num' }, content)
-    // Untagged residual cells: plain text, but with the same sign handling as
-    // the other untagged rows (negative renders with a minus).
-    const signedSek = (value: number): string =>
-      escapeText(`${value < 0 ? '−' : ''}${formatSekAbs(value)}`)
-    const ibCells = [
-      writer.money('Aktiekapital', ctx.balans1 ?? ctx.balans0, ek.aktiekapital.ib),
-      ...(hasOvriga ? [signedSek(ek.ovrigaPoster.ib)] : []),
-      writer.money('BalanseratResultat', ctx.balans1 ?? ctx.balans0, ek.balanseratResultat.ib),
-      writer.money('AretsResultatEgetKapital', ctx.balans1 ?? ctx.balans0, ek.aretsResultat.ib),
-      writer.money('EgetKapital', ctx.balans1 ?? ctx.balans0, ek.totalt.ib),
-    ]
-    if (ctx.balans1) {
-      ekRows.push(
-        el('tr', {}, el('th', {}, 'Belopp vid årets ingång') + ibCells.map(td).join('')),
-      )
-    }
-    if (ek.balanserasINyRakning !== 0) {
-      ekRows.push(
-        el(
-          'tr',
-          {},
-          el('th', {}, 'Balanseras i ny räkning') +
-            td('') +
-            (hasOvriga ? td('') : '') +
-            td(
-              writer.money(
-                'ForandringEgetKapitalBalanseratResultatBalanserasNyRakning',
-                'period0',
-                ek.balanserasINyRakning,
-              ),
-            ) +
-            // "Ökning (minskning) av periodens resultat vid balansering i ny
-            // räkning": the column DECREASES by what is carried to balanserat
-            // resultat, so the fact is negative (sign="-"). The utdelning
-            // concepts below are defined as "Minskning …" instead and stay
-            // positive with a presentational minus.
-            td(
-              writer.money(
-                'ForandringEgetKapitalAretsResultatBalanserasNyRakning',
-                'period0',
-                -ek.balanserasINyRakning,
-              ),
-            ) +
-            td(''),
-        ),
-      )
-    }
-    if (ek.utdelning !== 0) {
-      ekRows.push(
-        el(
-          'tr',
-          {},
-          el('th', {}, 'Utdelning') +
-            td('') +
-            (hasOvriga ? td('') : '') +
-            td(
-              writer.money('ForandringEgetKapitalBalanseratResultatUtdelning', 'period0', ek.utdelning, {
-                displayMinus: true,
-              }),
-            ) +
-            td('') +
-            td(
-              writer.money('ForandringEgetKapitalTotaltUtdelning', 'period0', ek.utdelning, {
-                displayMinus: true,
-              }),
-            ),
-        ),
-      )
-    }
-    if (ek.forandringAktiekapital !== 0) {
-      ekRows.push(
-        el(
-          'tr',
-          {},
-          el('th', {}, 'Nyemission') +
-            td(
-              writer.money(
-                'ForandringEgetKapitalAktiekapitalNyemission',
-                'period0',
-                ek.forandringAktiekapital,
-              ),
-            ) +
-            (hasOvriga ? td('') : '') +
-            td('') +
-            td('') +
-            td(
-              writer.money(
-                'ForandringEgetKapitalTotaltNyemission',
-                'period0',
-                ek.forandringAktiekapital,
-              ),
-            ),
-        ),
-      )
-    }
-    if (ek.ovrigForandringBalanserat !== 0) {
-      warnings.push(
-        `Förändringen av balanserat resultat innehåller en post om ${ek.ovrigForandringBalanserat} kr som inte kan härledas till utdelning eller balansering: raden "Övrig förändring" är otaggad, granska den.`,
-      )
-      ekRows.push(
-        el(
-          'tr',
-          {},
-          el('th', {}, 'Övrig förändring') +
-            td('') +
-            (hasOvriga ? td('') : '') +
-            td(signedSek(ek.ovrigForandringBalanserat)) +
-            td('') +
-            td(signedSek(ek.ovrigForandringBalanserat)),
-        ),
-      )
-    }
-    if (hasOvriga && ek.ovrigaPoster.ib !== ek.ovrigaPoster.ub) {
-      ekRows.push(
-        el(
-          'tr',
-          {},
-          el('th', {}, 'Förändring övriga poster') +
-            td('') +
-            td(signedSek(ek.ovrigaPoster.ub - ek.ovrigaPoster.ib)) +
-            td('') +
-            td('') +
-            td(''),
-        ),
-      )
-    }
-    ekRows.push(
-      el(
+    // Förändringar i eget kapital: the report's specification per post and
+    // kind of movement, every figure tagged (equity-table.ts). The collapsed
+    // table stays where that table cannot be printed: a version locked
+    // before the input carried the specification, a specification with
+    // nothing in it (a legal form with no equity on the aktiebolag's
+    // accounts), and one with a post this document's taxonomy does not hold
+    // (an ekonomisk förening's insatser), which has no concept to tag.
+    const equitySpecification = fb.egetKapitalSpecifikation
+    const perPostTable =
+      equitySpecification && equitySpecification.posts.every((post) => getConcept(registry, post.concept) !== null)
+        ? renderEquityTable(
+            writer,
+            registry,
+            equitySpecification,
+            equitySpecification.posts,
+            { period: ctx.period0, opening: ctx.balans1, closing: ctx.balans0 },
+            warnings,
+          )
+        : ''
+    if (perPostTable) {
+      parts.push(perPostTable)
+    } else {
+      const ek = fb.egetKapital
+      const hasOvriga = ek.ovrigaPoster.ib !== 0 || ek.ovrigaPoster.ub !== 0
+      if (hasOvriga) {
+        warnings.push(
+          'Eget kapital innehåller poster utöver aktiekapital/balanserat resultat/årets resultat (t.ex. reservfond eller överkursfond). Kolumnen "Övriga poster" i förändringstabellen är inte XBRL-taggad: granska innan inlämning.',
+        )
+      }
+      const ekHead = el(
         'tr',
         {},
-        el('th', {}, 'Årets resultat') +
-          td('') +
-          (hasOvriga ? td('') : '') +
-          td('') +
-          td(
-            writer.money(
-              'ForandringEgetKapitalAretsResultatAretsResultat',
-              'period0',
-              ek.aretsResultatRorelse,
-            ),
-          ) +
-          td(
-            writer.money('ForandringEgetKapitalTotaltAretsResultat', 'period0', ek.aretsResultatRorelse),
+        el('th', {}, 'Förändringar i eget kapital') +
+          el('th', { class: 'num' }, 'Aktiekapital') +
+          (hasOvriga ? el('th', { class: 'num' }, 'Övriga poster') : '') +
+          el('th', { class: 'num' }, 'Balanserat resultat') +
+          el('th', { class: 'num' }, 'Årets resultat') +
+          el('th', { class: 'num' }, 'Totalt'),
+      )
+      const ekRows: string[] = [ekHead]
+      const td = (content: string): string => el('td', { class: 'num' }, content)
+      // Untagged residual cells: plain text, but with the same sign handling as
+      // the other untagged rows (negative renders with a minus).
+      const signedSek = (value: number): string =>
+        escapeText(`${value < 0 ? '−' : ''}${formatSekAbs(value)}`)
+      const ibCells = [
+        writer.money('Aktiekapital', ctx.balans1 ?? ctx.balans0, ek.aktiekapital.ib),
+        ...(hasOvriga ? [signedSek(ek.ovrigaPoster.ib)] : []),
+        writer.money('BalanseratResultat', ctx.balans1 ?? ctx.balans0, ek.balanseratResultat.ib),
+        writer.money('AretsResultatEgetKapital', ctx.balans1 ?? ctx.balans0, ek.aretsResultat.ib),
+        writer.money('EgetKapital', ctx.balans1 ?? ctx.balans0, ek.totalt.ib),
+      ]
+      if (ctx.balans1) {
+        ekRows.push(
+          el('tr', {}, el('th', {}, 'Belopp vid årets ingång') + ibCells.map(td).join('')),
+        )
+      }
+      if (ek.balanserasINyRakning !== 0) {
+        ekRows.push(
+          el(
+            'tr',
+            {},
+            el('th', {}, 'Balanseras i ny räkning') +
+              td('') +
+              (hasOvriga ? td('') : '') +
+              td(
+                writer.money(
+                  'ForandringEgetKapitalBalanseratResultatBalanserasNyRakning',
+                  'period0',
+                  ek.balanserasINyRakning,
+                ),
+              ) +
+              // "Ökning (minskning) av periodens resultat vid balansering i ny
+              // räkning": the column DECREASES by what is carried to balanserat
+              // resultat, so the fact is negative (sign="-"). The utdelning
+              // concepts below are defined as "Minskning …" instead and stay
+              // positive with a presentational minus.
+              td(
+                writer.money(
+                  'ForandringEgetKapitalAretsResultatBalanserasNyRakning',
+                  'period0',
+                  -ek.balanserasINyRakning,
+                ),
+              ) +
+              td(''),
           ),
-      ),
-    )
-    const ubCells = [
-      writer.money('Aktiekapital', 'balans0', ek.aktiekapital.ub),
-      ...(hasOvriga ? [signedSek(ek.ovrigaPoster.ub)] : []),
-      writer.money('BalanseratResultat', 'balans0', ek.balanseratResultat.ub),
-      writer.money('AretsResultatEgetKapital', 'balans0', ek.aretsResultat.ub),
-      writer.money('EgetKapital', 'balans0', ek.totalt.ub),
-    ]
-    ekRows.push(
-      el(
-        'tr',
-        { class: 'subtotal' },
-        el('th', {}, 'Belopp vid årets utgång') + ubCells.map(td).join(''),
-      ),
-    )
-    parts.push(el('table', {}, ekRows.join('')))
+        )
+      }
+      if (ek.utdelning !== 0) {
+        ekRows.push(
+          el(
+            'tr',
+            {},
+            el('th', {}, 'Utdelning') +
+              td('') +
+              (hasOvriga ? td('') : '') +
+              td(
+                writer.money('ForandringEgetKapitalBalanseratResultatUtdelning', 'period0', ek.utdelning, {
+                  displayMinus: true,
+                }),
+              ) +
+              td('') +
+              td(
+                writer.money('ForandringEgetKapitalTotaltUtdelning', 'period0', ek.utdelning, {
+                  displayMinus: true,
+                }),
+              ),
+          ),
+        )
+      }
+      if (ek.forandringAktiekapital !== 0) {
+        ekRows.push(
+          el(
+            'tr',
+            {},
+            el('th', {}, 'Nyemission') +
+              td(
+                writer.money(
+                  'ForandringEgetKapitalAktiekapitalNyemission',
+                  'period0',
+                  ek.forandringAktiekapital,
+                ),
+              ) +
+              (hasOvriga ? td('') : '') +
+              td('') +
+              td('') +
+              td(
+                writer.money(
+                  'ForandringEgetKapitalTotaltNyemission',
+                  'period0',
+                  ek.forandringAktiekapital,
+                ),
+              ),
+          ),
+        )
+      }
+      if (ek.ovrigForandringBalanserat !== 0) {
+        warnings.push(
+          `Förändringen av balanserat resultat innehåller en post om ${ek.ovrigForandringBalanserat} kr som inte kan härledas till utdelning eller balansering: raden "Övrig förändring" är otaggad, granska den.`,
+        )
+        ekRows.push(
+          el(
+            'tr',
+            {},
+            el('th', {}, 'Övrig förändring') +
+              td('') +
+              (hasOvriga ? td('') : '') +
+              td(signedSek(ek.ovrigForandringBalanserat)) +
+              td('') +
+              td(signedSek(ek.ovrigForandringBalanserat)),
+          ),
+        )
+      }
+      if (hasOvriga && ek.ovrigaPoster.ib !== ek.ovrigaPoster.ub) {
+        ekRows.push(
+          el(
+            'tr',
+            {},
+            el('th', {}, 'Förändring övriga poster') +
+              td('') +
+              td(signedSek(ek.ovrigaPoster.ub - ek.ovrigaPoster.ib)) +
+              td('') +
+              td('') +
+              td(''),
+          ),
+        )
+      }
+      ekRows.push(
+        el(
+          'tr',
+          {},
+          el('th', {}, 'Årets resultat') +
+            td('') +
+            (hasOvriga ? td('') : '') +
+            td('') +
+            td(
+              writer.money(
+                'ForandringEgetKapitalAretsResultatAretsResultat',
+                'period0',
+                ek.aretsResultatRorelse,
+              ),
+            ) +
+            td(
+              writer.money('ForandringEgetKapitalTotaltAretsResultat', 'period0', ek.aretsResultatRorelse),
+            ),
+        ),
+      )
+      const ubCells = [
+        writer.money('Aktiekapital', 'balans0', ek.aktiekapital.ub),
+        ...(hasOvriga ? [signedSek(ek.ovrigaPoster.ub)] : []),
+        writer.money('BalanseratResultat', 'balans0', ek.balanseratResultat.ub),
+        writer.money('AretsResultatEgetKapital', 'balans0', ek.aretsResultat.ub),
+        writer.money('EgetKapital', 'balans0', ek.totalt.ub),
+      ]
+      ekRows.push(
+        el(
+          'tr',
+          { class: 'subtotal' },
+          el('th', {}, 'Belopp vid årets utgång') + ubCells.map(td).join(''),
+        ),
+      )
+      parts.push(el('table', {}, ekRows.join('')))
+    }
 
     parts.push(...renderResultatdisposition(writer, fb.resultatdisposition))
 

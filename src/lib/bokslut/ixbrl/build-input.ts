@@ -371,6 +371,14 @@ export async function buildIxbrlInput(
       flerarsoversikt,
       flerarsPerioder,
       egetKapital,
+      // K2: the specification itself, per post and kind, so the document's
+      // table is the PDF's and tags every movement (the K3 document carries
+      // its own in `k3.equity`). The adapter is K3's: the shape is the same.
+      // The K2 table shows the year only, so the jämförelseår is left out
+      // of what a version stores.
+      ...(framework === 'k3'
+        ? {}
+        : { egetKapitalSpecifikation: { ...k3EquityInput(pdfData, mapping.br, 'k2'), previous: null } }),
       resultatdisposition,
       kontrollbalansrakningUpprattad: pdfData.forvaltningsberattelse.kontrollbalans_required === true,
     },

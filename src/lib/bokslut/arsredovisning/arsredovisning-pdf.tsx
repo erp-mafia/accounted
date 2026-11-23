@@ -327,9 +327,13 @@ export function ArsredovisningPDF({
         <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
         {/* ÅRL 6 kap. 2 § andra stycket: the changes against last year's
             balance sheet. A version saved before the specification keeps
-            its year-end list. */}
+            its year-end list, and one saved before the K2 taxonomy's row
+            labels keeps the labels it was signed with (row_labels). */}
         {data.equity_specification ? (
-          <EquitySpecificationTable year={data.equity_specification.current} />
+          <EquitySpecificationTable
+            year={data.equity_specification.current}
+            framework={data.equity_specification.row_labels ?? 'k3'}
+          />
         ) : (
           data.forvaltningsberattelse.egen_kapital_changes.map((r) => (
             <View key={r.label} style={styles.tableRow}>

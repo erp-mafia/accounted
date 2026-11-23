@@ -500,6 +500,8 @@ describe('buildArsredovisningData: K3', () => {
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.equity_specification?.placement).toBe('management_report')
     expect(data.equity_changes_statement).toBeUndefined()
+    // A K3 report prints the general row labels: it names no label set.
+    expect(data.equity_specification).not.toHaveProperty('row_labels')
   })
 
   it('emits the K3-style redovisningsprinciper note with framework citation', async () => {
@@ -1760,6 +1762,9 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
     expect(data.equity_specification?.current.totals.closing).toBe(
       data.balansrakning.equity_liabilities.find((r) => r.semantic_key === 'balance_sheet_equity_total')?.current,
     )
+    // A K2 report says it prints the K2 taxonomy's row labels, so the PDF of
+    // a version locked before those labels can tell it is not one of them.
+    expect(data.equity_specification?.row_labels).toBe('k2')
   })
 
   it('emits the K2-style redovisningsprinciper note (BFNAR 2016:10)', async () => {
