@@ -2016,8 +2016,8 @@ async function fetchPeriodAuditEntries(
  * row becomes text as its page arrives, so the rows are let go page by page
  * and the text is never one string. For a company with years of history both
  * run to hundreds of MB, more than a backup run has to spare. The text is
- * held deflated until the archive writes it: 574 000 rows are 1.2 GB as text,
- * and the archive holds it with everything else before its first byte.
+ * held deflated until the archive writes it: a long history can pass a
+ * gigabyte of text, held with everything else before the first byte.
  */
 async function fetchAllAuditJson(
   supabase: SupabaseClient,
