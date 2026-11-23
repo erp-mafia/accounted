@@ -90,9 +90,6 @@ import {
   resolveStoredMimeType,
   PENDING_DOCUMENT_UPLOAD_RETENTION_MS,
   SIGNED_DOCUMENT_UPLOAD_TTL_MS,
-  isCompanyScopedDocumentPath,
-  companyScopedDocumentPath,
-  legacyDocumentPath,
   documentStoragePathCandidates,
   downloadDocumentObject,
   _resetBucketVerified,
@@ -1566,36 +1563,14 @@ describe('storage key layout helpers', () => {
     }
   })
 
-  it('recognises company-scoped keys', () => {
-    expect(isCompanyScopedDocumentPath(`documents/${company}/${user}/1_a.pdf`, company)).toBe(true)
-    expect(isCompanyScopedDocumentPath(`documents/${user}/1_a.pdf`, company)).toBe(false)
-  })
-
-  it('translates legacy to company-scoped and back', () => {
-    const legacy = `documents/${user}/1_a.pdf`
-    const scoped = `documents/${company}/${user}/1_a.pdf`
-    expect(companyScopedDocumentPath(legacy, company)).toBe(scoped)
-    expect(legacyDocumentPath(scoped, company)).toBe(legacy)
-    // Already in the target layout: no translation offered.
-    expect(companyScopedDocumentPath(scoped, company)).toBeNull()
-    expect(legacyDocumentPath(legacy, company)).toBeNull()
-  })
-
-  it('offers no alternate for keys outside the documents/ root', () => {
-    // The MCP audit-package tool writes `{userId}/audit-packages/...`, which
-    // is not a document_attachments key and must never be rewritten.
-    const foreign = `${user}/audit-packages/1_archive.zip`
-    expect(companyScopedDocumentPath(foreign, company)).toBeNull()
-    expect(documentStoragePathCandidates(foreign, company)).toEqual([foreign])
-  })
-
-  it('lists the stored pointer first, then the alternate layout', () => {
+  it('re-exports the stored-key rule of storage-key.ts', () => {
+    // The rule's own cases are in storage-key.test.ts; the service keeps its exports.
     const legacy = `documents/${user}/1_a.pdf`
     const scoped = `documents/${company}/${user}/1_a.pdf`
     expect(documentStoragePathCandidates(legacy, company)).toEqual([legacy, scoped])
-    expect(documentStoragePathCandidates(scoped, company)).toEqual([scoped, legacy])
-    // No companyId: nothing to derive, stored pointer only.
-    expect(documentStoragePathCandidates(legacy, null)).toEqual([legacy])
+    expect(documentStoragePathCandidates(scoped, company)).toEqual([scoped])
+    // A key outside the documents/ root (the MCP audit-package keys) is never a document's.
+    expect(documentStoragePathCandidates(`${user}/audit-packages/1_archive.zip`, company)).toEqual([])
   })
 })
 
@@ -1621,7 +1596,7 @@ describe('dual-layout read helpers', () => {
     expect(download.mock.calls[0]![0]).toBe(legacy)
   })
 
-  it('downloadDocumentObject falls back to the legacy key', async () => {
+  it('downloadDocumentObject never falls back from a company-scoped key to another folder', async () => {
     const download = vi.fn(async (path: string) =>
       path === legacy
         ? { data: new Blob(['ok']), error: null }
@@ -1630,7 +1605,8 @@ describe('dual-layout read helpers', () => {
     const supabase = makeClient({ download })
 
     const result = await downloadDocumentObject(supabase as never, scoped, company)
-    expect(result.resolvedPath).toBe(legacy)
+    expect(result.resolvedPath).toBeNull()
+    expect(download.mock.calls.map((call) => call[0])).toEqual([scoped])
   })
 
   it('downloadDocumentObject reports the stored-pointer error when both fail', async () => {
@@ -2096,6 +2072,27 @@ describe('validated mime type persistence (stored type is what the bytes are)', 
 
     expect(completed.document).toEqual(document)
     expect(move).not.toHaveBeenCalled()
+  })
+
+  it('completePendingDocumentUpload retry reads no completed row whose key is not inside the company', async () => {
+    const buffer = isoBmff('heic')
+    const document = makeDocumentAttachment({
+      id: uploadId,
+      user_id: user,
+      company_id: company,
+      file_name: 'IMG_0001.heif',
+      mime_type: 'image/heic',
+      storage_path: 'documents/another-company/user-9/IMG_0001.heif',
+      sha256_hash: await computeSHA256(buffer),
+    })
+    results = [{ data: document, error: null }]
+    const download = vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null })
+    serviceClientOverride = makeClient({ download })
+
+    await expect(
+      completePendingDocumentUpload(makeClient() as never, company, user, uploadId, 'IMG_0001.heif', 'image/heif'),
+    ).rejects.toThrow(/Failed to read completed document upload/)
+    expect(download).not.toHaveBeenCalled()
   })
 
   it('completePendingDocumentUpload retry still rejects a genuinely different stored type', async () => {

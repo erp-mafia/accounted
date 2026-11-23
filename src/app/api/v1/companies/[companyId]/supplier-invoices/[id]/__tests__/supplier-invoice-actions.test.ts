@@ -350,6 +350,52 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/uncredit', () 
     expect((await res.json()).error.code).toBe('PERIOD_LOCKED')
   })
 
+  // A credit note rests at 'credited' like its original. Its own id was taken
+  // for the original's: the dry run promised to restore the credit note as an
+  // invoice to pay, and the commit tried to write that, which the database
+  // refuses (supplier_invoices_credit_note_not_payable).
+  it.each([
+    ['a dry run', '?dry_run=true'],
+    ['a commit', ''],
+  ])("refuses a credit note's own id on %s (400 SI_UNCREDIT_CREDIT_NOTE) and writes nothing", async (_door, query) => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: [
+        {
+          data: invoice({
+            id: CREDIT_ID,
+            status: 'credited',
+            is_credit_note: true,
+            credited_invoice_id: SI_ID,
+            invoice_date: '2026-09-10',
+            due_date: '2026-09-10',
+            remaining_amount: 0,
+            registration_journal_entry_id: 'credit-je',
+          }),
+        },
+        { data: null },
+        {
+          data: null,
+          error: { code: '23514', message: 'new row for relation "supplier_invoices" violates check constraint "supplier_invoices_credit_note_not_payable"' },
+        },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await uncredit(
+      request(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${CREDIT_ID}/uncredit${query}`, { method: 'POST' }),
+      params(CREDIT_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatchObject({
+      code: 'SI_UNCREDIT_CREDIT_NOTE',
+      details: { credit_note_id: CREDIT_ID, credited_invoice_id: SI_ID },
+    })
+    expect(body.error.message).toMatch(/originalfakturan/)
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(wrote(client)).toBe(false)
+  })
+
   it('cancels the credit verifikat with a storno, keeps the credit row as reversed, restores the original', async () => {
     reverseEntryMock.mockResolvedValue({ id: 'storno-1' })
     const client = makeClient({

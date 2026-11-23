@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { contentDisposition } from '@/lib/api/content-disposition'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { sessionFailureResponse } from '@/lib/operations/session'
@@ -43,7 +44,8 @@ export async function respondDocument(request: Request, { scope, log, requestId 
     .maybeSingle()
   const row = doc as { file_name: string; storage_path: string } | null
   if (!row) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'signing document missing' })
-  const { data: blob, error } = await service.storage.from('documents').download(row.storage_path)
+  // Only a key inside the request's company is read (storage-key.ts).
+  const { blob, error } = await downloadDocumentObject(service, row.storage_path, signing.company_id)
   if (error || !blob) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'signing document not downloadable' })
   return new NextResponse(blob, {
     status: 200,

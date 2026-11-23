@@ -437,7 +437,7 @@ describe('Arkiv tools', () => {
   })
 
   it('get_source returns the page text and a signed url', async () => {
-    enqueue({ data: { id: DOC, file_name: 'hyresavtal.pdf', storage_path: 'documents/x.pdf', page_count: 4 } })
+    enqueue({ data: { id: DOC, file_name: 'hyresavtal.pdf', storage_path: `documents/${CO}/user-1/x.pdf`, page_count: 4 } })
     enqueue({ data: { text: 'Hyran uppgår till 12 500 kr' } })
     const out = (await tool('gnubok_get_source').execute({ document_id: DOC, page: 2 }, CO, 'user-1', supabase)) as { page_no: number; text: string; notice: string; signed_url: string; signed_url_headers: Record<string, string>; app_url: string }
     expect(out).toMatchObject({ page_no: 2 })
@@ -456,8 +456,16 @@ describe('Arkiv tools', () => {
     expect(ensureDocumentRead).not.toHaveBeenCalled()
   })
 
+  it('get_source signs no file for a document whose key is not inside the company', async () => {
+    enqueue({ data: { id: DOC, file_name: 'faktura.pdf', storage_path: 'documents/company-2/user-9/faktura.pdf', page_count: 1 } })
+    enqueue({ data: { text: 'Faktura' } })
+    const storageCalls = vi.mocked(supabase.storage.from).mock.calls.length
+    await expect(tool('gnubok_get_source').execute({ document_id: DOC, page: 1 }, CO, 'user-1', supabase)).rejects.toThrow(/signed URL/)
+    expect(vi.mocked(supabase.storage.from).mock.calls.length).toBe(storageCalls)
+  })
+
   it('get_source reads a page the lanes left unread on demand, then answers with it', async () => {
-    enqueue({ data: { id: DOC, file_name: 'kvitto.jpg', storage_path: 'documents/x.jpg', page_count: null } })
+    enqueue({ data: { id: DOC, file_name: 'kvitto.jpg', storage_path: `documents/${CO}/user-1/x.jpg`, page_count: null } })
     enqueue({ data: null })
     ;(ensureDocumentRead as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ status: 'read', pages: 1, reader: 'claude_vision' })
     enqueue({ data: { text: 'ICA 349 kr' } })
@@ -467,7 +475,7 @@ describe('Arkiv tools', () => {
   })
 
   it('get_source takes a record_ref like every other Arkiv tool, and says what it wants otherwise', async () => {
-    enqueue({ data: { id: DOC, file_name: 'hyresavtal.pdf', storage_path: 'documents/x.pdf', page_count: 4 } })
+    enqueue({ data: { id: DOC, file_name: 'hyresavtal.pdf', storage_path: `documents/${CO}/user-1/x.pdf`, page_count: 4 } })
     enqueue({ data: { text: 'Hyran uppgår till 12 500 kr' } })
     const out = (await tool('gnubok_get_source').execute({ record_ref: `document:${DOC}`, page: 2 }, CO, 'user-1', supabase)) as { document_id: string; page_no: number }
     expect(out).toMatchObject({ document_id: DOC, page_no: 2 })

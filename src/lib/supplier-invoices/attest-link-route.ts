@@ -23,6 +23,7 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { readLiveMembership } from '@/lib/company/company-access'
 import { OPAQUE_DOCUMENT_CSP, inlineSafeMimeType } from '@/lib/core/documents/storage-proxy'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createLogger, type Logger } from '@/lib/logger'
 import type { OperationContext } from '@/lib/operations/types'
@@ -225,7 +226,8 @@ export async function attestInvoiceDocumentResponse(
     .maybeSingle()
   const row = doc as { file_name: string; mime_type: string | null; storage_path: string } | null
   if (!row) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'attest link document missing' })
-  const { data: blob, error } = await service.storage.from('documents').download(row.storage_path)
+  // Only a key inside the invoice's company is read (storage-key.ts).
+  const { blob, error } = await downloadDocumentObject(service, row.storage_path, companyId)
   if (error || !blob) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'attest link document not downloadable' })
   const ext = row.file_name.toLowerCase().split('.').pop() ?? ''
   const contentType =

@@ -39,11 +39,27 @@ function devKeyAllowed(): boolean {
   }
 }
 
+/**
+ * scrypt is slow on purpose (about 50 ms a derivation in production), and
+ * every encrypt and decrypt used to derive the same key again:
+ * gnubok_list_customers spent 145 s on a register with 2 149 sealed
+ * personnummer, with the event loop blocked throughout (crm#2151). The key is
+ * derived once per secret and salt, as lib/providers/consent-tokens.ts and
+ * migration-payload.ts already do; a changed secret is derived anew.
+ */
+let derived: { secret: string; salt: string; key: Buffer } | undefined
+function deriveKey(secret: string, salt: string): Buffer {
+  if (derived?.secret !== secret || derived.salt !== salt) {
+    derived = { secret, salt, key: scryptSync(secret, salt, 32) }
+  }
+  return derived.key
+}
+
 /** The key from the environment, or the dev key where devKeyAllowed(). */
 function getEncryptionKey(): Buffer {
   const envKey = process.env.PERSONNUMMER_ENCRYPTION_KEY
-  if (envKey) return scryptSync(envKey, 'gnubok-pnr-salt', 32)
-  if (devKeyAllowed()) return scryptSync('dev-only-key', 'gnubok-dev-salt', 32)
+  if (envKey) return deriveKey(envKey, 'gnubok-pnr-salt')
+  if (devKeyAllowed()) return deriveKey('dev-only-key', 'gnubok-dev-salt')
   throw Object.assign(
     new Error(
       process.env.NODE_ENV === 'production'

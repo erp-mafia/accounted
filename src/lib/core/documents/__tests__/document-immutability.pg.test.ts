@@ -262,7 +262,7 @@ describe('document-immutability.pg: version supersession on posted entries', () 
         [
           userId,
           docId,
-          `documents/${userId}/replacement.pdf`,
+          `documents/${companyId}/${userId}/replacement.pdf`,
           'replacement.pdf',
           2048,
           'application/pdf',
@@ -320,7 +320,7 @@ describe('document-immutability.pg: version supersession on posted entries', () 
          )`,
         [
           userId, docId,
-          `documents/${userId}/replacement.pdf`,
+          `documents/${companyId}/${userId}/replacement.pdf`,
           'replacement.pdf', 2048, 'application/pdf', 'c'.repeat(64),
         ],
       )

@@ -2,7 +2,8 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import { ArchiveFolder, ArchiveTooLargeError, collectBytes, jsonArray, jsonArrayElement, readAhead, type ArchiveRead } from './archive-folder'
+import { ArchiveFolder, ArchiveTooLargeError, collectBytes, deflatedJsonArray, deflatedJsonArrayElements, jsonArray, readAhead, type ArchiveRead, type DeflatedBytes } from './archive-folder'
+import type { ZipPart } from './zip-writer'
 import { generateSIEExport } from './sie-export'
 import { generateTrialBalance } from './trial-balance'
 import { generateIncomeStatement } from './income-statement'
@@ -12,6 +13,7 @@ import { generateJournalRegister } from './journal-register'
 import { calculateVatDeclaration } from './vat-declaration'
 import { getAuditLog, type AuditLogCursor } from '@/lib/core/audit/audit-service'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
+import { downloadCompanyFolderObject } from '@/lib/core/documents/storage-key'
 import { listAttachmentRowsInRange } from '@/lib/reconciliation/attachments-store'
 import { generateBokslutsbilagor } from './bokslutsbilagor'
 import { generateSystemdokumentation } from './systemdokumentation'
@@ -800,7 +802,8 @@ async function writeReconciliationAttachments(
       files.push({
         path: zipPath,
         read: storageRead(
-          () => supabase.storage.from(row.storage_bucket).download(row.storage_path),
+          // Only the company's own folder of the documents bucket, where the attachments are stored (storage-key.ts).
+          () => downloadCompanyFolderObject(supabase, row.storage_bucket, row.storage_path, companyId).then(({ blob, error }) => ({ data: blob, error })),
           (error) => { manifest[index] = { ...base, zip_path: null, status: 'error', error } },
         ),
       })
@@ -1933,12 +1936,14 @@ async function fetchPeriodAuditEntries(
   companyId: string,
   period: FiscalPeriodRow,
   budget?: AuditBudget
-): Promise<Uint8Array[]> {
-  // Each row as when it was logged and its text, made as its page arrives,
-  // so the rows themselves are let go page by page (fetchAllAuditJson).
-  const byId = new Map<string, { created_at: string; element: Uint8Array }>()
+): Promise<ZipPart[]> {
+  // Each row as when it was logged and its text, made as its page arrives
+  // and held deflated, so the rows themselves are let go page by page
+  // (fetchAllAuditJson).
+  const byId = new Map<string, { created_at: string; element: DeflatedBytes }>()
+  const hold = deflatedJsonArrayElements()
   const keep = (row: AuditLogEntry) => {
-    byId.set(row.id, { created_at: row.created_at, element: jsonArrayElement(row) })
+    byId.set(row.id, { created_at: row.created_at, element: hold(row) })
   }
   await forEachAuditPage(supabase, companyId, {
     from_date: period.period_start,
@@ -2010,18 +2015,19 @@ async function fetchPeriodAuditEntries(
  * The whole behandlingshistorik, newest first, as the parts of its JSON: each
  * row becomes text as its page arrives, so the rows are let go page by page
  * and the text is never one string. For a company with years of history both
- * run to hundreds of MB, more than a backup run has to spare.
+ * run to hundreds of MB, more than a backup run has to spare. The text is
+ * held deflated until the archive writes it: a long history can pass a
+ * gigabyte of text, held with everything else before the first byte.
  */
 async function fetchAllAuditJson(
   supabase: SupabaseClient,
   companyId: string,
   budget?: AuditBudget
-): Promise<Uint8Array[]> {
-  const elements: Uint8Array[] = []
-  await forEachAuditPage(supabase, companyId, {}, budget, (rows) => {
-    for (const row of rows) elements.push(jsonArrayElement(row))
-  })
-  return jsonArray(elements)
+): Promise<ZipPart[]> {
+  return deflatedJsonArray((push) =>
+    forEachAuditPage(supabase, companyId, {}, budget, (rows) => {
+      for (const row of rows) push(row)
+    }))
 }
 
 async function forEachAuditPage(

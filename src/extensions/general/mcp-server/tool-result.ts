@@ -56,12 +56,15 @@ export interface AgentToolError {
  * on an account no bank connection syncs), which the generic message cannot;
  * operation contracts promise it, and v1 carries it (crm#2158). An argument
  * refusal carries no details: its fields are in message_en already.
+ * SI_UNCREDIT_CREDIT_NOTE names the original to undo the credit on instead
+ * (details.credited_invoice_id, crm#2171).
  */
 const CODES_WITH_DETAILS = new Set([
   'DOC_ATTACH_OTHER_VERIFIKAT',
   'FORBIDDEN',
   'PREVIEW_STALE',
   'RATE_LIMITED',
+  'SI_UNCREDIT_CREDIT_NOTE',
   'TRANSACTION_ALREADY_STAGED',
   'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE',
   'SALARY_RUN_VACATION_PAY_UNDETERMINED',

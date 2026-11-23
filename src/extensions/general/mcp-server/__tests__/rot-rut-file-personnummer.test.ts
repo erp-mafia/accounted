@@ -80,7 +80,7 @@ describe('gnubok_generate_rot_rut_file: the file reaches the user, not the model
     vi.clearAllMocks()
     mockListCandidates.mockResolvedValue(candidates())
     mockCreateRequest.mockResolvedValue(created())
-    mockUploadDocument.mockResolvedValue({ id: DOCUMENT_ID, storage_path: `${USER}/${DOCUMENT_ID}.xml` })
+    mockUploadDocument.mockResolvedValue({ id: DOCUMENT_ID, storage_path: `documents/${COMPANY}/${USER}/${DOCUMENT_ID}.xml` })
   })
 
   it('archives the XML and returns a signed link, with no full personnummer in the result', async () => {

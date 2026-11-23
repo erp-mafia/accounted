@@ -249,6 +249,15 @@ describe('GET /api/signera/:token/document', () => {
     db.setTable('document_attachments', { data: null })
     expect((await documentRoute(get(`/api/signera/${token}/document`), params(token))).status).toBe(404)
   })
+
+  it('answers 404 and reads nothing for a document row whose key is not inside the request company', async () => {
+    const token = freshToken()
+    const storageFrom = vi.fn()
+    Object.assign(db.supabase, { storage: { from: storageFrom } })
+    db.setTable('document_attachments', { data: { file_name: 'hyresavtal.pdf', storage_path: 'documents/22222222-2222-4222-8222-222222222222/user-9/avtal.pdf' } })
+    expect((await documentRoute(get(`/api/signera/${token}/document`), params(token))).status).toBe(404)
+    expect(storageFrom).not.toHaveBeenCalled()
+  })
 })
 
 describe('the ceremony routes hand the resolved signer to the ceremony', () => {

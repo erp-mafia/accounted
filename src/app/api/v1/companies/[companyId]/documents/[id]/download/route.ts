@@ -18,6 +18,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { eventBus } from '@/lib/events'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { isDocumentKeyOfCompany, signDocumentObject } from '@/lib/core/documents/storage-key'
 
 const DocumentDownloadResponse = z.object({
   id: z.string().uuid(),
@@ -102,9 +103,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       .maybeSingle()
 
     if (docErr) return v1ErrorResponse(docErr, ctx.log, { requestId: ctx.requestId })
-    if (!doc) {
-      // Enumeration hardening: wrong id and cross-tenant id are
-      // indistinguishable from outside.
+    // Enumeration hardening: wrong id and cross-tenant id are
+    // indistinguishable from outside, and so is a row whose key is not
+    // inside the company (storage-key.ts).
+    if (!doc || !isDocumentKeyOfCompany((doc as { storage_path: string }).storage_path, ctx.companyId!)) {
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId,
         details: { resource: 'document' },
@@ -115,9 +117,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       storage_path: string; is_current_version: boolean;
     }
 
-    const { data: signed, error: signErr } = await ctx.supabase.storage
-      .from('documents')
-      .createSignedUrl(typed.storage_path, SIGNED_URL_TTL_SECONDS)
+    const { data: signed, error: signErr } = await signDocumentObject(ctx.supabase, typed.storage_path, ctx.companyId!, SIGNED_URL_TTL_SECONDS)
 
     if (signErr || !signed?.signedUrl) {
       ctx.log.error('createSignedUrl failed', signErr as Error, { documentId })

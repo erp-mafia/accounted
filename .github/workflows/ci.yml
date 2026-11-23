@@ -145,12 +145,13 @@ jobs:
           path: .ci-cache
           key: ${{ steps.checks-state.outputs.cache-primary-key }}
 
-  # Customer data in the pull request title, description or a commit message
+  # Customer data in the pull request title, description or a commit message,
+  # and a desk ticket reference in the title or the visible description
   # (scripts/check-mr-privacy.mjs lists the rules). Editing the title or the
-  # description starts no run, so an edit is scanned on the next push or
-  # rerun. Customer names come from the MR_PRIVACY_CUSTOMER_NAMES_B64 secret;
-  # without it, and on pull requests from forks, the job says so and runs the
-  # other rules.
+  # description starts no run, and a rerun reads them as they were, so an edit
+  # is scanned on the next push. Customer names come from the
+  # MR_PRIVACY_CUSTOMER_NAMES_B64 secret; without it, and on pull requests from
+  # forks, the job says so and runs the other rules.
   pr-privacy:
     name: PR privacy
     if: github.event_name == 'pull_request'
