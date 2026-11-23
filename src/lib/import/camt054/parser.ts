@@ -378,6 +378,10 @@ export function parseCamt054(content: string): Camt054ParseResult {
     }
   }
 
+  // A file cut short loses what was not yet closed: say so, as the BG Max reader does for a missing end record.
+  if (!/<\/BkToCstmrDbtCdtNtfctn\s*>/i.test(xml)) {
+    issues.unshift({ entry: 0, severity: 'warning', message: 'Filen saknar sitt slut (</BkToCstmrDbtCdtNtfctn>); den kan vara avkortad.' })
+  }
   if (entryNo === 0) {
     issues.push({ entry: 0, severity: 'error', message: 'Inga poster (<Ntry>) hittades i camt.054-filen.' })
   }

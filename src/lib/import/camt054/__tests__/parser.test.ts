@@ -315,6 +315,18 @@ describe('parseCamt054', () => {
     expect(one(entries, { owner, iban: null, giroTyped: '' }).deposits[0]).toMatchObject({ account: null, bankgiro: null })
   })
 
+  it('says so when the file is cut short, and still reads the notifications it holds whole', () => {
+    const whole = document([
+      notification({ entries: [entry({ amount: '10.00', date: '2026-12-01', payments: [payment({ amount: '10.00' })] })] }),
+      notification({ entries: [entry({ amount: '20.00', date: '2026-12-02', payments: [payment({ amount: '20.00' })] })] }),
+    ])
+    const cut = whole.slice(0, whole.lastIndexOf('<Ntry>') + 40)
+    const result = parseCamt054(cut)
+    expect(result.deposits).toMatchObject([{ amount: 10 }])
+    expect(result.issues).toEqual([expect.objectContaining({ entry: 0, severity: 'warning', message: expect.stringContaining('avkortad') })])
+    expect(parseCamt054(whole).issues).toEqual([])
+  })
+
   it('reports a file with no entries', () => {
     const result = parseCamt054(document([notification({ entries: [] })]))
     expect(result.deposits).toEqual([])

@@ -43,7 +43,8 @@ export const importsDepositSpecification = defineOperation({
     doNotUseFor:
       'Bank statements that should create bank rows (POST /imports/bank), or booking the payments (match the bank row to its invoices after this).',
     pitfalls: [
-      'Send the file bytes base64-encoded in content_base64, up to about 3 MB of file. The format is read from the content, not the file name.',
+      'Send the file bytes as standard, padded base64 in content_base64, up to about 3 MB of file. The format is read from the content, not the file name.',
+      'A file cut short still attaches the deposits it holds whole: issues then says the file may be truncated (a BG Max file without its end record, a camt.054 file without its closing element). Send the whole file again to attach the rest.',
       'A deposit whose bank row has not synced yet answers status no_row and attaches nothing: sync the bank and send the same file again.',
       'A deposit that fits two bank rows equally well answers status ambiguous and is left for a person.',
       'A deposit whose payments do not add up to it is left out and counted in rejected_deposits.',
@@ -85,7 +86,9 @@ export const importsDepositSpecification = defineOperation({
       .min(4)
       .max(MAX_BASE64_CHARS)
       .regex(/^[A-Za-z0-9+/\r\n]+={0,2}\s*$/, 'content_base64 must be base64.')
-      .describe('The file\'s bytes, base64-encoded (decoded server-side, whatever its text encoding).'),
+      // An encoding cut off in transport would decode to the first part of the file and attach only that.
+      .refine((value) => value.replace(/\s+/g, '').length % 4 === 0, 'content_base64 must be complete, padded base64: its length is not a multiple of 4.')
+      .describe('The file\'s bytes as standard, padded base64 (decoded server-side, whatever its text encoding).'),
   }),
   output: z.object({
     filename: z.string(),

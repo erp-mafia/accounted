@@ -116,6 +116,16 @@ describe('POST /api/v1/companies/:companyId/imports/deposit-specification', () =
     expect(attachMock).not.toHaveBeenCalled()
   })
 
+  it('400 VALIDATION_ERROR for an encoding cut off in transport, attaching nothing', async () => {
+    const encoded = b64(septemberFile())
+    for (const cut of [encoded.slice(0, -3), encoded.slice(0, 1001), encoded.slice(0, 1002)]) {
+      const res = await post({ filename: 'BGMAX.txt', content_base64: cut })
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+    }
+    expect(attachMock).not.toHaveBeenCalled()
+  })
+
   it('400 BGMAX_NOT_DEPOSIT_FILE for a bank statement, attaching nothing', async () => {
     const bank = ['Bokföringsdag;Valutadag;Verifikationsnummer;Text;Belopp;Saldo', '2026-12-01;2026-12-01;12345;BG 123-4567;1500,00;12345,67'].join('\n')
     const res = await post({ filename: 'seb.csv', content_base64: b64(bank) })
