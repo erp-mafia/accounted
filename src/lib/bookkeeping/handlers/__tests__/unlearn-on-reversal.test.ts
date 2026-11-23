@@ -312,6 +312,27 @@ describe('unlearnOnCorrection', () => {
     expect(mockUnlearn).not.toHaveBeenCalled()
   })
 
+  it('a correction that adds moms to a booking that had none takes the occurrence back', async () => {
+    const { client } = makeClient({ transaction: BANK_ROW })
+    mockServiceClient.mockReturnValue(client)
+    mockUnlearn.mockResolvedValue('deactivated')
+    const withoutMoms = [
+      { account_number: '5420', debit_amount: 40.72, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 40.72 },
+    ]
+    const nonEuReverseCharge = [
+      ...withoutMoms,
+      { account_number: '4531', debit_amount: 40.72, credit_amount: 0 },
+      { account_number: '4598', debit_amount: 0, credit_amount: 40.72 },
+      { account_number: '2645', debit_amount: 10.18, credit_amount: 0 },
+      { account_number: '2614', debit_amount: 0, credit_amount: 10.18 },
+    ]
+
+    await unlearnOnCorrection(corrected(withoutMoms, nonEuReverseCharge))
+
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, withoutMoms)
+  })
+
   it('a correction that adds lines but drops a taught account takes the occurrence back', async () => {
     const { client } = makeClient({ transaction: BANK_ROW })
     mockServiceClient.mockReturnValue(client)
