@@ -8,6 +8,7 @@ import {
   opensInBookingScreen,
   readAllToBookBankRows,
   toBookScreenSubject,
+  toBookReturnPath,
   toBookDoor,
   toBookCounts,
   toBookFilterFromSlug,
@@ -297,5 +298,19 @@ describe('skattekonto events', () => {
   it('write money into the skattekonto with a plus', () => {
     expect(toBookAmountLabel(skv[1])).toBe('+25\u00a0000')
     expect(toBookIsMoneyIn(skv[0])).toBe(false)
+  })
+})
+
+describe('toBookReturnPath', () => {
+  it('keeps a return address to the list, with its filter', () => {
+    expect(toBookReturnPath('/att-bokfora')).toBe('/att-bokfora')
+    expect(toBookReturnPath('/att-bokfora?visa=utan-bankrad')).toBe('/att-bokfora?visa=utan-bankrad')
+  })
+
+  it('refuses any other address', () => {
+    expect(toBookReturnPath('/transactions')).toBeNull()
+    expect(toBookReturnPath('https://evil.example/att-bokfora')).toBeNull()
+    expect(toBookReturnPath('//evil.example')).toBeNull()
+    expect(toBookReturnPath(null)).toBeNull()
   })
 })
