@@ -761,6 +761,7 @@ import {
   DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageRequest } from '@/lib/core/documents/storage-proxy'
+import { isDocumentKeyOfCompany, signDocumentObject } from '@/lib/core/documents/storage-key'
 import {
   appUrl,
   auditPackageAppUrl,
@@ -12849,7 +12850,8 @@ export const tools: McpTool[] = [
           .eq('company_id', companyId)
           .maybeSingle()
         if (docError) throw dbError(docError)
-        if (!doc) throw codedRefusal('INVOICE_RESEND_ARCHIVE_UNAVAILABLE', 'The archived copy of the sent invoice could not be read.')
+        // A row whose key is not inside the company has no archived copy here (storage-key.ts).
+        if (!doc || !isDocumentKeyOfCompany(doc.storage_path, companyId)) throw codedRefusal('INVOICE_RESEND_ARCHIVE_UNAVAILABLE', 'The archived copy of the sent invoice could not be read.')
         return {
           invoice_id: invoiceId,
           invoice_number: invoice.invoice_number ?? null,
@@ -20052,9 +20054,7 @@ export const tools: McpTool[] = [
       if (!doc) throw documentNotFound(documentId)
 
       const ttlSeconds = 300
-      const { data: signed, error: signError } = await supabase.storage
-        .from('documents')
-        .createSignedUrl(doc.storage_path, ttlSeconds)
+      const { data: signed, error: signError } = await signDocumentObject(supabase, doc.storage_path, companyId, ttlSeconds)
 
       if (signError || !signed) {
         throw new Error(`Failed to create signed URL: ${signError?.message ?? 'unknown error'}`)
@@ -23908,9 +23908,7 @@ export const tools: McpTool[] = [
       if (!archived.linked) log.error('rot/rut file archived but not linked to its begäran', { requestId, documentId: archived.documentId })
       // One hour, as gnubok_audit_package: long enough to save the file.
       const SIGNED_URL_TTL_SECONDS = 3600
-      const { data: signed, error: signError } = await supabase.storage
-        .from('documents')
-        .createSignedUrl(archived.storagePath, SIGNED_URL_TTL_SECONDS)
+      const { data: signed, error: signError } = await signDocumentObject(supabase, archived.storagePath, companyId, SIGNED_URL_TTL_SECONDS)
       if (signError || !signed) {
         warnings.push('Filen är arkiverad men länken kunde inte skapas: hämta en ny med gnubok_get_document_content (file_document_id) eller med Hämta fil under Fakturor > Begär utbetalning.')
       }

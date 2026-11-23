@@ -156,6 +156,25 @@ describe('POST /items/:id/retry-extraction', () => {
     expect(body.error).toMatch(/Ingen bilaga/i)
   })
 
+  it('returns 404 and reads nothing when the document key is not inside the company', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'item-1', document_id: 'doc-1', correlation_id: null, created_supplier_invoice_id: null },
+      error: null,
+    })
+    enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
+    enqueue({
+      data: { storage_path: 'documents/company-2/user-9/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      error: null,
+    })
+
+    const res = await retryRoute.handler(makeReq(), buildCtx(supabase))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(404)
+    expect(serviceDownloadMock).not.toHaveBeenCalled()
+    expect(extractInvoiceFields).not.toHaveBeenCalled()
+  })
+
   it('returns 200 with re-extracted data on the happy path', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
@@ -164,7 +183,7 @@ describe('POST /items/:id/retry-extraction', () => {
     })
     enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
     enqueue({
-      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      data: { storage_path: 'documents/company-1/user-1/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
       error: null,
     })
     enqueue({ data: null, error: null }) // supplier name lookup: no match
@@ -202,7 +221,7 @@ describe('POST /items/:id/retry-extraction', () => {
     })
     enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
     enqueue({
-      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      data: { storage_path: 'documents/company-1/user-1/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
       error: null,
     })
     enqueue({ data: null, error: null }) // supplier name lookup: no match
@@ -234,7 +253,7 @@ describe('POST /items/:id/retry-extraction', () => {
     })
     enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
     enqueue({
-      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      data: { storage_path: 'documents/company-1/user-1/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
       error: null,
     })
     enqueue({
@@ -276,7 +295,7 @@ describe('POST /items/:id/retry-extraction', () => {
     })
     enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
     enqueue({
-      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      data: { storage_path: 'documents/company-1/user-1/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
       error: null,
     })
     enqueue({ data: null, error: null }) // supplier name lookup: no match
@@ -304,7 +323,7 @@ describe('POST /items/:id/retry-extraction', () => {
     })
     enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
     enqueue({
-      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      data: { storage_path: 'documents/company-1/user-1/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
       error: null,
     })
     enqueue({ data: null, error: null }) // error-state update
@@ -332,7 +351,7 @@ describe('POST /items/:id/retry-extraction', () => {
     })
     enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
     enqueue({
-      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      data: { storage_path: 'documents/company-1/user-1/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
       error: null,
     })
     enqueue({ data: null, error: null }) // inbox update

@@ -148,7 +148,7 @@ function makeDoc(overrides: Partial<MockDoc> = {}): MockDoc {
     id: 'doc-1',
     user_id: 'user-1',
     company_id: 'company-1',
-    storage_path: 'user-1/company-1/inbox/file.pdf',
+    storage_path: 'documents/company-1/user-1/inbox/file.pdf',
     sha256_hash: 'deadbeef',
     file_name: 'file.pdf',
     last_checked_at: null,
@@ -296,8 +296,8 @@ describe('GET /api/documents/verify/cron', () => {
   })
 
   it('surfaces a missing storage object as an audit incident AND an object_missing ledger row', async () => {
-    const missing = makeDoc({ id: 'doc-missing', storage_path: 'user-1/company-1/gone.pdf' })
-    const healthy = makeDoc({ id: 'doc-healthy', storage_path: 'user-1/company-1/ok.pdf' })
+    const missing = makeDoc({ id: 'doc-missing', storage_path: 'documents/company-1/user-1/gone.pdf' })
+    const healthy = makeDoc({ id: 'doc-healthy', storage_path: 'documents/company-1/user-1/ok.pdf' })
     const healthyHash = registerObject(healthy.storage_path, 'healthy content')
     state.documents = [missing, { ...healthy, sha256_hash: healthyHash }]
 
@@ -334,7 +334,7 @@ describe('GET /api/documents/verify/cron', () => {
   })
 
   it('does not write a ledger row when the audit insert fails, so it retries next run', async () => {
-    const missing = makeDoc({ id: 'doc-missing', storage_path: 'user-1/company-1/gone.pdf' })
+    const missing = makeDoc({ id: 'doc-missing', storage_path: 'documents/company-1/user-1/gone.pdf' })
     state.documents = [missing]
     state.auditInsertError = { message: 'insert blocked' }
 
@@ -413,7 +413,7 @@ describe('GET /api/documents/verify/cron', () => {
   })
 
   it('writes nothing permanent when storage itself fails twice: the document stays in the queue', async () => {
-    const doc = makeDoc({ id: 'doc-outage', storage_path: 'user-1/company-1/outage.pdf' })
+    const doc = makeDoc({ id: 'doc-outage', storage_path: 'documents/company-1/user-1/outage.pdf' })
     state.documents = [doc]
     state.downloadResults.set(doc.storage_path, { data: null, error: { message: 'Bad Gateway', status: 502 } })
 
@@ -464,8 +464,8 @@ describe('GET /api/documents/verify/cron', () => {
 
   it('records a document storage refuses at every key as unreadable, never missing, so it moves behind the others', async () => {
     const refusal = { message: 'new row violates row-level security policy', status: 403, statusCode: '403' }
-    state.documents = [makeDoc({ id: 'doc-refused', storage_path: LEGACY }), makeDoc({ id: 'doc-next', storage_path: 'user-1/company-1/next.pdf' })]
-    state.documents[1] = { ...state.documents[1]!, sha256_hash: registerObject('user-1/company-1/next.pdf', 'served') }
+    state.documents = [makeDoc({ id: 'doc-refused', storage_path: LEGACY }), makeDoc({ id: 'doc-next', storage_path: 'documents/company-1/user-1/next.pdf' })]
+    state.documents[1] = { ...state.documents[1]!, sha256_hash: registerObject('documents/company-1/user-1/next.pdf', 'served') }
     state.downloadResults.set(LEGACY, { data: null, error: refusal })
     state.downloadResults.set(SCOPED, { data: null, error: refusal })
 
@@ -508,8 +508,8 @@ describe('GET /api/documents/verify/cron', () => {
   })
 
   it('never stops for documents storage refuses, however many in a row: only a failure of storage itself stops the run', async () => {
-    const refused = Array.from({ length: 7 }, (_, i) => makeDoc({ id: `doc-refused-${i}`, storage_path: `user-1/company-1/r${i}.pdf` }))
-    const served = makeDoc({ id: 'doc-served', storage_path: 'user-1/company-1/served.pdf' })
+    const refused = Array.from({ length: 7 }, (_, i) => makeDoc({ id: `doc-refused-${i}`, storage_path: `documents/company-1/user-1/r${i}.pdf` }))
+    const served = makeDoc({ id: 'doc-served', storage_path: 'documents/company-1/user-1/served.pdf' })
     state.documents = [...refused, { ...served, sha256_hash: registerObject(served.storage_path, 'served') }]
     for (const doc of refused) state.downloadResults.set(doc.storage_path, { data: null, error: { message: 'Forbidden', status: 403, statusCode: '403' } })
 
@@ -544,6 +544,17 @@ describe('GET /api/documents/verify/cron', () => {
     expect(await response.json()).toMatchObject({ processed: 1, writeFailures: 0, errors: 0, storageOutages: 1 })
   })
 
+  it('records a document whose key is not inside its company as unreadable, without reading it and without writing it missing', async () => {
+    state.documents = [makeDoc({ id: 'doc-elsewhere', storage_path: 'documents/company-2/user-9/1_faktura.pdf' })]
+
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
+
+    expect(await response.json()).toMatchObject({ processed: 1, unreadable: 1, missingObjects: 0 })
+    expect(state.downloadCalls).toEqual([])
+    expect(state.auditInserts).toHaveLength(0)
+    expect(state.ledgerInserts).toMatchObject([{ document_id: 'doc-elsewhere', result: 'unreadable' }])
+  })
+
   it('writes missing when every key answered not found, as Storage answers it (400 with statusCode 404)', async () => {
     state.documents = [makeDoc({ id: 'doc-gone', storage_path: LEGACY })]
     for (const path of [LEGACY, SCOPED]) state.downloadResults.set(path, { data: null, error: { message: 'Object not found', status: 400, statusCode: '404' } })
@@ -557,7 +568,7 @@ describe('GET /api/documents/verify/cron', () => {
 
   it('never takes a missing bucket for a missing document', async () => {
     state.documents = [makeDoc({ id: 'doc-1' })]
-    state.downloadResults.set('user-1/company-1/inbox/file.pdf', { data: null, error: { message: 'Bucket not found', status: 400, statusCode: '404' } })
+    state.downloadResults.set('documents/company-1/user-1/inbox/file.pdf', { data: null, error: { message: 'Bucket not found', status: 400, statusCode: '404' } })
 
     await GET(createCronRequest('/api/documents/verify/cron'))
 
@@ -566,7 +577,7 @@ describe('GET /api/documents/verify/cron', () => {
   })
 
   it('stops after five documents in a row storage could not serve, and answers one error', async () => {
-    const docs = Array.from({ length: 8 }, (_, i) => makeDoc({ id: `doc-${i}`, storage_path: `user-1/company-1/${i}.pdf` }))
+    const docs = Array.from({ length: 8 }, (_, i) => makeDoc({ id: `doc-${i}`, storage_path: `documents/company-1/user-1/${i}.pdf` }))
     state.documents = docs
     for (const doc of docs) state.downloadResults.set(doc.storage_path, { data: null, error: { message: 'Service Unavailable', status: 503 } })
 
@@ -594,7 +605,7 @@ describe('GET /api/documents/verify/cron', () => {
   }, 20_000) // five real 0.5 s retry pauses
 
   it('goes on when storage serves a document between failures', async () => {
-    const docs = Array.from({ length: 9 }, (_, i) => makeDoc({ id: `doc-${i}`, storage_path: `user-1/company-1/${i}.pdf` }))
+    const docs = Array.from({ length: 9 }, (_, i) => makeDoc({ id: `doc-${i}`, storage_path: `documents/company-1/user-1/${i}.pdf` }))
     state.documents = docs.map((doc, i) =>
       i === 4 ? { ...doc, sha256_hash: registerObject(doc.storage_path, 'served') } : doc,
     )
@@ -611,7 +622,7 @@ describe('GET /api/documents/verify/cron', () => {
   it('starts no document after 240 s and leaves the rest first in the queue', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
-      const docs = ['a', 'b', 'c'].map((name) => makeDoc({ id: `doc-${name}`, storage_path: `user-1/company-1/${name}.pdf` }))
+      const docs = ['a', 'b', 'c'].map((name) => makeDoc({ id: `doc-${name}`, storage_path: `documents/company-1/user-1/${name}.pdf` }))
       state.documents = docs.map((doc) => ({ ...doc, sha256_hash: registerObject(doc.storage_path, `content ${doc.id}`) }))
       // Every download takes 130 s: the third document would start at 260 s.
       state.onDownload = () => vi.setSystemTime(new Date(Date.now() + 130_000))

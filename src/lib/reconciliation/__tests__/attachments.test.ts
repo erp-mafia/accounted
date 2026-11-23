@@ -19,6 +19,7 @@ vi.mock('../attachments-store', async () => {
 import {
   attachUnderlag,
   attachmentStoragePath,
+  downloadUnderlag,
   listAttachments,
   ReconciliationAttachmentError,
   removeUnderlag,
@@ -177,5 +178,35 @@ describe('removeUnderlag', () => {
 
     getRowMock.mockResolvedValue(null)
     expect(await removeUnderlag(supabase as never, COMPANY, USER, 'manual:2350', row().id)).toBeNull()
+  })
+})
+
+describe('downloadUnderlag', () => {
+  function serviceClient() {
+    const download = vi.fn(async () => ({ data: new Blob(['%PDF']), error: null }))
+    const from = vi.fn(() => ({ download }))
+    return { client: { storage: { from } } as never, from, download }
+  }
+
+  it('reads the file from the company folder of the documents bucket', async () => {
+    const { client, from, download } = serviceClient()
+    const { blob, error } = await downloadUnderlag(client, row(), COMPANY)
+    expect(error).toBeNull()
+    expect(blob).not.toBeNull()
+    expect(from).toHaveBeenCalledWith('documents')
+    expect(download).toHaveBeenCalledWith(row().storage_path)
+  })
+
+  it.each([
+    ['another company folder', { storage_path: 'documents/company-2/reconciliation/manual_2350/2026-12-31/x.pdf' }],
+    ['a legacy uploader key', { storage_path: `documents/${USER}/1767000000000_x.pdf` }],
+    ['a key that leaves the company folder', { storage_path: `documents/${COMPANY}/../company-2/x.pdf` }],
+    ['another bucket', { storage_bucket: 'sie-files', storage_path: `documents/${COMPANY}/reconciliation/x.pdf` }],
+  ])('reads nothing for a row naming %s', async (_case, overrides) => {
+    const { client, from } = serviceClient()
+    const { blob, error } = await downloadUnderlag(client, row(overrides), COMPANY)
+    expect(blob).toBeNull()
+    expect(error).toBeInstanceOf(Error)
+    expect(from).not.toHaveBeenCalled()
   })
 })

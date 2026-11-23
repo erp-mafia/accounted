@@ -4,6 +4,7 @@ import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/ar
 import { dbError } from '@/lib/errors/db-error'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { toSameOriginStorageRequest } from '@/lib/core/documents/storage-proxy'
+import { signDocumentObject } from '@/lib/core/documents/storage-key'
 import { documentAppUrl } from './file-links'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { factHistory, listLiveFacts, type FactRow } from '@/lib/arkiv/facts/store'
@@ -1083,7 +1084,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
           }
         }
         const ttlSeconds = 300
-        const { data: signed, error: signError } = await supabase.storage.from('documents').createSignedUrl(d.storage_path, ttlSeconds)
+        const { data: signed, error: signError } = await signDocumentObject(supabase, d.storage_path, companyId, ttlSeconds)
         if (signError || !signed) throw new Error(`Failed to create signed URL: ${signError?.message ?? 'unknown error'}`)
         // The token travels in signed_url_headers, never in signed_url.
         const file = toSameOriginStorageRequest(signed.signedUrl)

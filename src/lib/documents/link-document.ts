@@ -47,10 +47,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   computeSHA256,
-  DOCUMENTS_BUCKET,
   linkToJournalEntry,
   uploadDocument,
 } from '@/lib/core/documents/document-service'
+import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { dbError } from '@/lib/errors/db-error'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import type { DocumentLinkHolder } from '@/lib/documents/link-holder'
@@ -379,10 +379,8 @@ export async function linkDocumentCopyToVoucher(
 
   // The row was read through the caller's client, company-scoped; the
   // service role only fetches the bytes that row names (as the upload
-  // completion does).
-  const { data: blob, error: downloadError } = await createServiceClientNoCookies()
-    .storage.from(DOCUMENTS_BUCKET)
-    .download(source.storage_path)
+  // completion does), and only from a key inside the company (storage-key.ts).
+  const { blob, error: downloadError } = await downloadDocumentObject(createServiceClientNoCookies(), source.storage_path, companyId)
   if (downloadError || !blob) {
     throw new Error(`document copy: failed to read the source file: ${downloadError?.message ?? 'no data returned'}`)
   }

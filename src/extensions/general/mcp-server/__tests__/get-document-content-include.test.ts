@@ -17,7 +17,7 @@ const DOC_ROW = {
   file_name: 'faktura-1001.pdf',
   mime_type: 'application/pdf',
   file_size_bytes: 48213,
-  storage_path: `${userId}/faktura-1001.pdf`,
+  storage_path: `documents/${userId}/faktura-1001.pdf`,
   original_id: null,
   page_count: 2,
   pages_read_at: '2026-10-01T10:00:00Z',
@@ -74,6 +74,14 @@ describe('gnubok_get_document_content include', () => {
     expect(tool.description).toContain('app_url for the user')
     expect(tables()).toEqual(['document_attachments'])
     expect(findCalls('document_attachments', 'eq')).toEqual(expect.arrayContaining([['company_id', companyId]]))
+  })
+
+  it('signs nothing for a row whose key is not inside the company', async () => {
+    const { client, createSignedUrl } = db({
+      document_attachments: { data: { ...DOC_ROW, storage_path: 'documents/33333333-3333-4333-8333-333333333333/user-9/faktura.pdf' } },
+    })
+    await expect(call({}, client)).rejects.toThrow(/signed URL/)
+    expect(createSignedUrl).not.toHaveBeenCalled()
   })
 
   it('adds the page text and the links when asked, next to the signed URL', async () => {

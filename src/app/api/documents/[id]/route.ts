@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
+import { isDocumentKeyOfCompany, signDocumentObject } from '@/lib/core/documents/storage-key'
 import { removeDocument } from '@/lib/documents/document-actions'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { eventBus } from '@/lib/events'
@@ -23,7 +24,8 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
       .single()
 
-    if (docError || !doc) {
+    // A row whose key is not inside the company has no file here (storage-key.ts).
+    if (docError || !doc || !isDocumentKeyOfCompany(doc.storage_path, companyId)) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
@@ -43,7 +45,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // route.
     const serviceClient = createServiceClient()
     const [signResult] = await Promise.all([
-      serviceClient.storage.from('documents').createSignedUrl(doc.storage_path, 3600),
+      signDocumentObject(serviceClient, doc.storage_path, companyId, 3600),
       eventBus.emit({
         type: 'document.accessed',
         payload: {
@@ -55,7 +57,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     ])
     const { data: signedUrl, error: signError } = signResult
 
-    if (signError) {
+    if (signError || !signedUrl) {
       return NextResponse.json(
         { error: `Failed to create download URL: ${getUserErrorMessage(signError)}` },
         { status: 500 }

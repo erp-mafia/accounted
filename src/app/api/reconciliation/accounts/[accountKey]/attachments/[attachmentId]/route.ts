@@ -7,6 +7,7 @@ import { getAttachmentRow } from '@/lib/reconciliation/attachments-store'
 import { downloadUnderlag, ReconciliationAttachmentError, removeUnderlag } from '@/lib/reconciliation/attachments'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { fileResponse } from '@/lib/api/file-response'
+import { isCompanyFolderObject } from '@/lib/core/documents/storage-key'
 
 const UUID = z.string().uuid()
 
@@ -27,10 +28,11 @@ export const GET = withRouteContext<{ params: Promise<{ accountKey: string; atta
       return NextResponse.json({ error: 'Okänt underlag' }, { status: 404 })
     }
     const row = await getAttachmentRow(supabase, companyId, accountKey, attachmentId)
-    if (!row) {
+    // A row whose key is not in the company's folder of the documents bucket has no file here (storage-key.ts).
+    if (!row || !isCompanyFolderObject(row.storage_bucket, row.storage_path, companyId)) {
       return NextResponse.json({ error: 'Okänt underlag' }, { status: 404 })
     }
-    const { blob, error } = await downloadUnderlag(createServiceClient(), row)
+    const { blob, error } = await downloadUnderlag(createServiceClient(), row, companyId)
     if (error || !blob) {
       log.error('underlag download failed', error, { companyId, accountKey, attachmentId })
       return NextResponse.json({ error: 'Kunde inte hämta underlaget. Försök igen om en stund.' }, { status: 500 })

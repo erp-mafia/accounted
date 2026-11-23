@@ -239,7 +239,7 @@ export async function sealSigningRequest(service: SupabaseClient, requestId: str
   if (request.signed_document_id && request.evidence_document_id) return null
   if (signers.some((s) => !privates.get(s.id)?.signature_xml)) throw new Error('A signed signer has no stored signature')
 
-  const original = await downloadDocumentBytes(service, document.storage_path)
+  const original = await downloadDocumentBytes(service, document.storage_path, request.company_id)
   if (!original) throw new Error('Original document not in storage')
   if (sha256Hex(original) !== request.document_sha256) throw new Error('Original document no longer matches the signed hash')
 

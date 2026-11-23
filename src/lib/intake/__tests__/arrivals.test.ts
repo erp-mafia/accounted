@@ -415,9 +415,9 @@ describe('read path', () => {
 describe('original bucket', () => {
   it("signs a documents original only from the arrival's own company: its folder or one of its documents", async () => {
     const OTHER = '55555555-5555-4555-8555-555555555555'
-    const legacy = arrivalRow({ id: 'a-legacy', original_path: 'user-1/1700000000000_faktura.pdf' })
-    const foreign = arrivalRow({ id: 'a-foreign', original_path: `documents/${OTHER}/user-9/1_hemlig.pdf` })
-    mock.enqueue({ data: [{ storage_path: 'user-1/1700000000000_faktura.pdf' }] }) // the company's documents among the paths
+    const legacy = arrivalRow({ id: 'a-legacy', original_path: 'documents/user-1/1700000000000_faktura.pdf' })
+    const foreign = arrivalRow({ id: 'a-foreign', original_path: `documents/${OTHER}/user-9/1_faktura.pdf` })
+    mock.enqueue({ data: [{ storage_path: 'documents/user-1/1700000000000_faktura.pdf' }] }) // the company's documents among the paths
 
     const summaries = await summariseArrivals(
       [legacy, foreign].map((row) => ({ ...row, outputs: [] })),
@@ -428,18 +428,25 @@ describe('original bucket', () => {
       [true, null],
     ])
     expect(createSignedUrl).toHaveBeenCalledTimes(1)
-    expect(createSignedUrl).toHaveBeenCalledWith('user-1/1700000000000_faktura.pdf', 300, { download: '1700000000000_faktura.pdf' })
+    expect(createSignedUrl).toHaveBeenCalledWith('documents/user-1/1700000000000_faktura.pdf', 300, { download: '1700000000000_faktura.pdf' })
     expect(mock.findCall('document_attachments', 'eq')).toEqual(['company_id', COMPANY])
-    expect(mock.findCall('document_attachments', 'in')).toEqual([
-      'storage_path',
-      ['user-1/1700000000000_faktura.pdf', `documents/${OTHER}/user-9/1_hemlig.pdf`],
-    ])
+    // Another company's folder is not even looked up: no row of this company can make it signable.
+    expect(mock.findCall('document_attachments', 'in')).toEqual(['storage_path', ['documents/user-1/1700000000000_faktura.pdf']])
+  })
+
+  it('signs no original whose key is not a plain key in the company folder, even when a document row of the company names it', async () => {
+    const OTHER = '55555555-5555-4555-8555-555555555555'
+    const key = `documents/${COMPANY}/../${OTHER}/user-9/1_faktura.pdf`
+    mock.enqueue({ data: [{ storage_path: key }] })
+    const [summary] = await summariseArrivals([{ ...arrivalRow({ original_path: key }), outputs: [] }], { storageClient: supabase })
+    expect(summary!.original_url).toBeNull()
+    expect(createSignedUrl).not.toHaveBeenCalled()
   })
 
   it('signs nothing outside the company folder when the documents cannot be checked', async () => {
     mock.enqueue({ error: { message: 'boom' } })
     const [summary] = await summariseArrivals(
-      [{ ...arrivalRow({ original_path: 'user-1/1_faktura.pdf' }), outputs: [] }],
+      [{ ...arrivalRow({ original_path: 'documents/user-1/1_faktura.pdf' }), outputs: [] }],
       { storageClient: supabase },
     )
     expect(summary!.original_url).toBeNull()
@@ -454,6 +461,10 @@ describe('original bucket', () => {
     expect(arrivalOriginalBucket(own)).toBe('sie-files')
     expect(arrivalOriginalBucket(foreign)).toBeNull()
     expect(arrivalOriginalBucket(unknown)).toBeNull()
+    // Only a plain key: no "." or ".." part, nothing a URL reads differently.
+    for (const key of [`${COMPANY}/../../documents/${ITEM_ID}/u/a.pdf`, `${COMPANY}/sie-originals/./a.se`, `${COMPANY}/sie-originals/a.se?x`, `${COMPANY}//a.se`]) {
+      expect(arrivalOriginalBucket(arrivalRow({ source: 'sie', original_path: key, source_meta: { original_bucket: 'sie-files' } })), key).toBeNull()
+    }
 
     const summaries = await summariseArrivals(
       [own, foreign, unknown].map((row) => ({ ...row, outputs: [] })),

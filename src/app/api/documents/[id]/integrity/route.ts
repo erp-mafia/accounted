@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { validateDocumentMagicBytes } from '@/lib/core/documents/document-service'
+import { downloadDocumentObject, isDocumentKeyOfCompany } from '@/lib/core/documents/storage-key'
 
 const ParamsSchema = z.object({ id: z.string().uuid() })
 
@@ -66,7 +67,8 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('user_id', user.id)
       .maybeSingle()
 
-    if (!membership) {
+    // A row whose key is not inside its company has no file here (storage-key.ts).
+    if (!membership || !isDocumentKeyOfCompany(doc.storage_path, doc.company_id)) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
@@ -81,9 +83,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // membership check above are the authorization (same model as the
     // inline proxy route).
     const serviceClient = createServiceClient()
-    const { data: blob, error: downloadError } = await serviceClient.storage
-      .from('documents')
-      .download(doc.storage_path)
+    const { blob, error: downloadError } = await downloadDocumentObject(serviceClient, doc.storage_path, doc.company_id)
 
     if (downloadError || !blob) {
       log.error('storage download failed for integrity check', downloadError as Error, {

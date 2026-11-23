@@ -13,6 +13,7 @@ import {
 } from '@/lib/documents/deletion'
 import { after } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { documentStoragePathCandidates, downloadDocumentObject, legacySourceOfDocumentKey } from '@/lib/core/documents/storage-key'
 import { dbError } from '@/lib/errors/db-error'
 import { isUuid } from '@/lib/invariants/uuid'
 import { eventBus } from '@/lib/events'
@@ -71,11 +72,11 @@ export function sanitizeFileName(name: string): string {
  *
  * Both layouts coexist until the Phase B backfill
  * (scripts/backfill-document-storage-paths.ts) has re-homed every legacy
- * object. Read paths must therefore tolerate both: use
- * documentStoragePathCandidates() (or the downloadDocumentObject helper
- * below) rather than trusting the stored pointer to be the only key that
- * resolves.
+ * object. Which stored key the service role follows, and how a legacy key
+ * finds its company-scoped copy, is storage-key.ts: read, sign and remove a
+ * row's object through it, never through the stored pointer alone.
  */
+export { documentStoragePathCandidates, downloadDocumentObject, isDocumentKeyOfCompany, signDocumentObject } from '@/lib/core/documents/storage-key'
 export const DOCUMENTS_BUCKET = 'documents'
 const DOCUMENTS_PATH_ROOT = 'documents'
 export const SIGNED_DOCUMENT_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000
@@ -133,85 +134,6 @@ export function buildReservedDocumentStoragePath(
   fileName: string
 ): string {
   return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/${issuedUploadId(uploadId)}_${sanitizeFileName(fileName)}`
-}
-
-/** True when the key already sits under the company-scoped prefix. */
-export function isCompanyScopedDocumentPath(storagePath: string, companyId: string): boolean {
-  return storagePath.startsWith(`${DOCUMENTS_PATH_ROOT}/${companyId}/`)
-}
-
-/**
- * Translate a legacy `documents/{userId}/...` key into its company-scoped
- * equivalent. Returns null when the key is not in the legacy layout (already
- * company-scoped, or one of the non-document shapes the bucket also holds,
- * e.g. the MCP audit-package `{userId}/audit-packages/...` keys).
- */
-export function companyScopedDocumentPath(
-  storagePath: string,
-  companyId: string
-): string | null {
-  if (isCompanyScopedDocumentPath(storagePath, companyId)) return null
-  const prefix = `${DOCUMENTS_PATH_ROOT}/`
-  if (!storagePath.startsWith(prefix)) return null
-  return `${prefix}${companyId}/${storagePath.slice(prefix.length)}`
-}
-
-/**
- * Translate a company-scoped key back into its legacy `documents/{userId}/...`
- * equivalent. Returns null when the key is not company-scoped.
- */
-export function legacyDocumentPath(storagePath: string, companyId: string): string | null {
-  const prefix = `${DOCUMENTS_PATH_ROOT}/${companyId}/`
-  if (!storagePath.startsWith(prefix)) return null
-  return `${DOCUMENTS_PATH_ROOT}/${storagePath.slice(prefix.length)}`
-}
-
-/**
- * Every key that could hold the bytes for a document row, most likely first.
- * The stored pointer always wins; the alternate layout is the fallback for
- * the window in which the Phase B backfill has moved (or not yet moved) an
- * object relative to the DB pointer.
- */
-export function documentStoragePathCandidates(
-  storagePath: string,
-  companyId: string | null | undefined
-): string[] {
-  const candidates = [storagePath]
-  if (companyId) {
-    const alternate =
-      companyScopedDocumentPath(storagePath, companyId) ??
-      legacyDocumentPath(storagePath, companyId)
-    if (alternate && alternate !== storagePath) candidates.push(alternate)
-  }
-  return candidates
-}
-
-type StorageErrorLike = { message?: string } | null
-
-/**
- * Download a document object, tolerating both key layouts.
- *
- * Returns the resolved key alongside the blob so callers can log or repair
- * a stale `document_attachments.storage_path` pointer. When every candidate
- * fails, the FIRST error is returned: it refers to the stored pointer, which
- * is the actionable one. `errors` holds every candidate's error, in order:
- * a caller that concludes the object is gone (the integrity check) needs
- * every key to have answered "not found", not only the first.
- */
-export async function downloadDocumentObject(
-  supabase: SupabaseClient,
-  storagePath: string,
-  companyId: string | null | undefined
-): Promise<{ blob: Blob | null; error: StorageErrorLike; errors: NonNullable<StorageErrorLike>[]; resolvedPath: string | null }> {
-  const errors: NonNullable<StorageErrorLike>[] = []
-  for (const candidate of documentStoragePathCandidates(storagePath, companyId)) {
-    const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).download(candidate)
-    if (!error && data) {
-      return { blob: data as Blob, error: null, errors: [], resolvedPath: candidate }
-    }
-    errors.push((error as StorageErrorLike) ?? { message: 'download returned no data' })
-  }
-  return { blob: null, error: errors[0] ?? null, errors, resolvedPath: null }
 }
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -754,7 +676,7 @@ export async function completePendingDocumentUpload(
   const existing = await findReservedDocument(supabase, companyId, userId, uploadId)
   if (existing) {
     validateReservedDocumentMetadata(existing, fileName, mimeType)
-    const { data, error } = await storage.download(existing.storage_path)
+    const { blob: data, error } = await downloadDocumentObject(serviceClient, existing.storage_path, companyId)
     if (error || !data) {
       throw new Error(`Failed to read completed document upload: ${error?.message ?? 'no data returned'}`)
     }
@@ -1500,10 +1422,14 @@ export async function deleteDocument(
   }
 
   if (doc.storage_path) {
-    // Remove BOTH key layouts. During the Phase B backfill a document can
-    // briefly exist under the legacy and the company-scoped key at once;
-    // removing only the stored pointer would leave a readable orphan copy of
-    // a document the user asked to erase.
+    // Remove the stored key and its other layout: a legacy key's
+    // company-scoped copy, or the legacy key a repointed row was copied from.
+    // During the Phase B backfill a document can briefly exist under both,
+    // and removing only the stored pointer would leave a readable orphan copy
+    // of a document the user asked to erase. Only keys inside this company
+    // are removed (storage-key.ts), and none that another row still names:
+    // one stored file can be the underlag of several rows (a copy on a second
+    // verifikat), and those are kept for the retention period.
     //
     // The removal runs on the service-role client: the documents bucket is
     // WORM by design (storage.objects has no DELETE policy), so the caller's
@@ -1513,9 +1439,21 @@ export async function deleteDocument(
     // above: the company-filtered row fetch plus the row delete that just
     // succeeded (with block_document_deletion() as the DB-level backstop).
     // The viewer's preview (lib/documents/preview.ts) goes with the file it was made from.
-    await createServiceClientNoCookies()
-      .storage.from(DOCUMENTS_BUCKET)
-      .remove([...documentStoragePathCandidates(doc.storage_path, companyId), previewPath(companyId, doc.id)])
+    const service = createServiceClientNoCookies()
+    const keys = [
+      ...documentStoragePathCandidates(doc.storage_path, companyId),
+      legacySourceOfDocumentKey(doc.storage_path, companyId, doc.user_id),
+    ].filter((key): key is string => !!key)
+    const { data: stillNamed, error: namedError } = keys.length > 0
+      ? await service.from('document_attachments').select('storage_path').in('storage_path', keys)
+      : { data: [], error: null }
+    if (namedError) {
+      // Whether another row names the file is unknown: it stays.
+      log.warn('document file kept: rows naming it could not be read', { companyId, documentId, reason: namedError.message })
+    }
+    const named = new Set(((stillNamed ?? []) as Array<{ storage_path: string }>).map((row) => row.storage_path))
+    const removable = namedError ? [] : keys.filter((key) => !named.has(key))
+    await service.storage.from(DOCUMENTS_BUCKET).remove([...removable, previewPath(companyId, doc.id)])
   }
 
   await eventBus.emit({

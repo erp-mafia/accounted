@@ -113,7 +113,7 @@ describe('document-extraction handler', () => {
   })
 
   it('does nothing for a row that was already attempted', async () => {
-    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: '2026-08-20T00:00:00Z' } })
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: '2026-08-20T00:00:00Z' } })
     await handler(payload())
     expect(findCalls('document_attachments', 'update')).toHaveLength(0)
     expect(extractMock).not.toHaveBeenCalled()
@@ -123,7 +123,7 @@ describe('document-extraction handler', () => {
   // 'disabled' on the first poll instead of after a 30 s timeout.
   it('stamps ai_unconfigured when the deployment has no AI', async () => {
     aiStatusMock.mockReturnValue({ configured: false, assistantAvailable: false })
-    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: null } })
     enqueue({ data: null })
     await handler(payload())
     expect(lastStamp()).toBe('skipped:ai_unconfigured')
@@ -135,7 +135,7 @@ describe('document-extraction handler', () => {
   // 30-day prod window belonged to companies without the ai capability.
   it('stamps no_ai_entitlement for companies without the ai capability', async () => {
     hasCapabilityMock.mockResolvedValue(false)
-    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: null } })
     enqueue({ data: null })
     await handler(payload())
     expect(lastStamp()).toBe('skipped:no_ai_entitlement')
@@ -143,7 +143,7 @@ describe('document-extraction handler', () => {
   })
 
   it('stamps a storage download failure', async () => {
-    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: null } })
     enqueue({ data: null })
     supabase.storage.from.mockReturnValueOnce({
       download: vi.fn().mockResolvedValue({ data: null, error: { message: 'boom' } }),
@@ -153,8 +153,18 @@ describe('document-extraction handler', () => {
     expect(extractMock).not.toHaveBeenCalled()
   })
 
+  it('reads no file whose key is not inside the company, and stamps it a download failure', async () => {
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-2/user-9/p.pdf', extracted_at: null } })
+    enqueue({ data: null })
+    const storageCalls = supabase.storage.from.mock.calls.length
+    await handler(payload())
+    expect(supabase.storage.from.mock.calls.length).toBe(storageCalls)
+    expect(lastStamp()).toBe('failed:storage_download')
+    expect(extractMock).not.toHaveBeenCalled()
+  })
+
   it('persists the result with the model that answered', async () => {
-    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: null } })
     enqueue({ data: null })
     await handler(payload())
     expect(extractMock).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'application/pdf', fileName: 'kvitto.pdf' }))
@@ -167,7 +177,7 @@ describe('document-extraction handler', () => {
 
   it('stamps the skip reason the extractor reports (no vision, rasterizer missing, ...)', async () => {
     extractMock.mockResolvedValue({ data: {}, rawText: null, skipped: 'pdf_rasterizer_missing' })
-    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: null } })
     enqueue({ data: null })
     await handler(payload())
     expect(lastStamp()).toBe('skipped:pdf_rasterizer_missing')
@@ -175,7 +185,7 @@ describe('document-extraction handler', () => {
 
   it('stamps failed:no_raw_text when the model call produced nothing parseable', async () => {
     extractMock.mockResolvedValue({ data: {}, rawText: null })
-    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: null } })
     enqueue({ data: null })
     await handler(payload())
     expect(lastStamp()).toBe('failed:no_raw_text')
@@ -183,7 +193,7 @@ describe('document-extraction handler', () => {
 
   it('stamps failed:exception when the extraction throws, then throws to the event bus (nothing retries it)', async () => {
     extractMock.mockRejectedValue(new Error('pdfjs blew up'))
-    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: null } })
     enqueue({ data: null })
     await expect(handler(payload())).rejects.toThrow('pdfjs blew up')
     expect(lastStamp()).toBe('failed:exception')
@@ -192,7 +202,7 @@ describe('document-extraction handler', () => {
   // PH 101: a receipt dropped into Dokument is queued in Underlag by Arkiv
   // seconds before this reading lands; the item used to stay unread.
   describe('the Underlag item queued before the reading landed', () => {
-    const fetched = { data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } }
+    const fetched = { data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'documents/company-1/user-1/p.pdf', extracted_at: null } }
 
     it('gets the reading, the supplier match and a bank check', async () => {
       matchSupplierMock.mockResolvedValue('sup-1')

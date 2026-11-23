@@ -102,6 +102,16 @@ describe('GET /api/documents/[id]/inline', () => {
     expect(status).toBe(404)
   })
 
+  it('returns 404 and reads nothing for a row whose key is not inside the company', async () => {
+    enqueue({ data: makeDoc({ storage_path: 'documents/company-2/user-9/1767000000000_faktura.pdf' }), error: null })
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(404)
+    expect(body.error).toBe('Document not found')
+    expect(downloadMock).not.toHaveBeenCalled()
+    expect(ensurePreviewMock).not.toHaveBeenCalled()
+  })
+
   it('returns 500 when the storage download fails', async () => {
     enqueue({ data: makeDoc(), error: null })
     downloadMock.mockResolvedValue({ data: null, error: { message: 'boom' } })

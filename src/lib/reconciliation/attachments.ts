@@ -10,6 +10,7 @@ import {
   validateDocumentFile,
   validateDocumentMagicBytes,
 } from '@/lib/core/documents/document-service'
+import { downloadCompanyFolderObject } from '@/lib/core/documents/storage-key'
 import { parseAccountKey, type ReconciliationAttachment } from './schemas'
 import {
   getAttachmentRow,
@@ -182,13 +183,15 @@ export async function removeUnderlag(
 /**
  * The bytes of one attachment, for the inline route and the archive. Takes
  * the row (already authorized through the caller's client) and a service
- * client for the bucket read.
+ * client for the bucket read. Only a key in the company's own folder of the
+ * documents bucket is read (storage-key.ts): where uploadUnderlag puts it.
  */
 export async function downloadUnderlag(
   serviceClient: SupabaseClient,
   row: Pick<AttachmentRow, 'storage_bucket' | 'storage_path'>,
+  companyId: string,
 ): Promise<{ blob: Blob | null; error: Error | null }> {
-  const { data, error } = await serviceClient.storage.from(row.storage_bucket).download(row.storage_path)
-  if (error || !data) return { blob: null, error: error ? new Error(error.message) : new Error('Download returned no data') }
-  return { blob: data, error: null }
+  const { blob, error } = await downloadCompanyFolderObject(serviceClient, row.storage_bucket, row.storage_path, companyId)
+  if (!blob) return { blob: null, error: new Error(error?.message ?? 'Download returned no data') }
+  return { blob, error: null }
 }
