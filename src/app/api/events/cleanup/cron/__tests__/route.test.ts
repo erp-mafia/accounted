@@ -1,10 +1,13 @@
 /**
- * Tests for the event_log cleanup cron: roll agent telemetry into the
- * anonymous daily tables first (rollup_agent_telemetry), then delete agent
- * telemetry (mcp.*, agent.*) past 180 days, only after a rollup that
- * succeeded. Event data is kept: no business event, outbox row or delivery
- * is deleted (prune_delivery_events and prune_event_outbox are never called).
- * The purge over real PostgREST: tests/tool-pg/events-cleanup.tool.test.ts.
+ * Tests for the event_log cleanup cron: take the personal details out of
+ * events past 30 days (remove_event_personal_details, a batch per call until
+ * none is left), roll agent telemetry into the anonymous daily tables
+ * (rollup_agent_telemetry), then delete agent telemetry (mcp.*, agent.*) past
+ * 180 days, only after a rollup that succeeded. Event data is kept: no
+ * business event, outbox row or delivery is deleted (prune_delivery_events
+ * and prune_event_outbox are never called). Over real PostgREST:
+ * tests/tool-pg/events-cleanup.tool.test.ts; the removal itself:
+ * tests/pg/event-personal-details.pg.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -31,9 +34,11 @@ let onDelete: (() => void) | null = null
 // What happened, in order: 'delete' per event_log delete, the RPC name per call.
 const timeline: string[] = []
 let rollupResults: RpcResult[] = []
+let removeResults: RpcResult[] = []
 function defaultRpc(name: string, _args?: unknown): Promise<RpcResult> {
   timeline.push(name)
   if (name === 'rollup_agent_telemetry') return Promise.resolve(rollupResults.shift() ?? { data: 0, error: null })
+  if (name === 'remove_event_personal_details') return Promise.resolve(removeResults.shift() ?? { data: 0, error: null })
   return Promise.resolve({ data: 0, error: null })
 }
 const rpc = vi.fn(defaultRpc)
@@ -85,8 +90,12 @@ beforeEach(() => {
   onDelete = null
   timeline.length = 0
   rollupResults = []
+  removeResults = []
   rpc.mockImplementation(defaultRpc)
 })
+
+const REMOVE = 'remove_event_personal_details'
+const ROLLUP = 'rollup_agent_telemetry'
 
 describe('GET /api/events/cleanup/cron', () => {
   it('rolls up, then deletes mcp.* and agent.* telemetry past 180 days and nothing else', async () => {
@@ -95,8 +104,8 @@ describe('GET /api/events/cleanup/cron', () => {
 
     const response = await GET(createCronRequest('/api/events/cleanup/cron'))
 
-    expect(await response.json()).toEqual({ success: true, deletedTelemetry: 4, rolledUpDays: 1 })
-    expect(timeline).toEqual(['rollup_agent_telemetry', 'rollup_agent_telemetry', 'delete', 'delete'])
+    expect(await response.json()).toEqual({ success: true, removedPersonalDetails: 0, deletedTelemetry: 4, rolledUpDays: 1 })
+    expect(timeline).toEqual([REMOVE, ROLLUP, ROLLUP, 'delete', 'delete'])
 
     const rollup = callsTo('rollup_agent_telemetry')[0][1] as { p_since: string; p_max_days: number }
     expect(rollup.p_max_days).toBe(1)
@@ -128,7 +137,7 @@ describe('GET /api/events/cleanup/cron', () => {
 
     await GET(createCronRequest('/api/events/cleanup/cron'))
 
-    expect(rpc.mock.calls.map(([name]) => name)).toEqual(['rollup_agent_telemetry', 'rollup_agent_telemetry'])
+    expect(rpc.mock.calls.map(([name]) => name)).toEqual([REMOVE, ROLLUP, ROLLUP])
     expect(callsTo('prune_delivery_events')).toHaveLength(0)
     expect(callsTo('prune_event_outbox')).toHaveLength(0)
   })
@@ -149,7 +158,7 @@ describe('GET /api/events/cleanup/cron', () => {
 
     expect(response.status).toBeGreaterThanOrEqual(500)
     // No telemetry row was deleted uncounted.
-    expect(timeline).toEqual(['rollup_agent_telemetry'])
+    expect(timeline).toEqual([REMOVE, ROLLUP])
     expect(deleteCalls).toHaveLength(0)
   })
 
@@ -159,7 +168,7 @@ describe('GET /api/events/cleanup/cron', () => {
     const response = await GET(createCronRequest('/api/events/cleanup/cron'))
 
     expect(response.status).toBeGreaterThanOrEqual(500)
-    expect(timeline).toEqual(['rollup_agent_telemetry', 'delete', 'delete'])
+    expect(timeline).toEqual([REMOVE, ROLLUP, 'delete', 'delete'])
   })
 
   it('starts no rollup after 250 s, names it for the next run and purges nothing uncounted', async () => {
@@ -168,6 +177,7 @@ describe('GET /api/events/cleanup/cron', () => {
     try {
       rpc.mockImplementation((name: string) => {
         timeline.push(name)
+        if (name === REMOVE) return Promise.resolve({ data: 0, error: null })
         vi.setSystemTime(new Date(Date.now() + 60_000))
         return Promise.resolve({ data: 1, error: null })
       })
@@ -177,11 +187,12 @@ describe('GET /api/events/cleanup/cron', () => {
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({
         success: true,
+        removedPersonalDetails: 0,
         deletedTelemetry: 0,
         rolledUpDays: 5,
         deferred: ['rollup'],
       })
-      expect(timeline).toEqual(Array(5).fill('rollup_agent_telemetry'))
+      expect(timeline).toEqual([REMOVE, ...Array(5).fill(ROLLUP)])
       expect(deleteCalls).toHaveLength(0)
     } finally {
       vi.useRealTimers()
@@ -200,13 +211,50 @@ describe('GET /api/events/cleanup/cron', () => {
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({
         success: true,
+        removedPersonalDetails: 0,
         deletedTelemetry: 6,
         rolledUpDays: 0,
         deferred: ['telemetry_purge'],
       })
-      expect(timeline).toEqual(['rollup_agent_telemetry', 'delete'])
+      expect(timeline).toEqual([REMOVE, ROLLUP, 'delete'])
     } finally {
       vi.useRealTimers()
     }
+  })
+  it('takes the personal details out of events past 30 days, a batch per call, until none is left', async () => {
+    removeResults = [{ data: 4000, error: null }, { data: 1200, error: null }, { data: 0, error: null }]
+
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+    expect(await response.json()).toEqual({ success: true, removedPersonalDetails: 5200, deletedTelemetry: 0, rolledUpDays: 0 })
+    expect(timeline).toEqual([REMOVE, REMOVE, REMOVE, ROLLUP, 'delete', 'delete'])
+    // The database defines the 30 days; the route only sizes the batch.
+    expect(callsTo(REMOVE).map(([, args]) => args)).toEqual(Array(3).fill({ p_limit: 2000 }))
+  })
+
+  it('stops after forty batches, names the step for the next run and still runs the telemetry steps', async () => {
+    removeResults = Array.from({ length: 50 }, () => ({ data: 4000, error: null }))
+
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      success: true,
+      removedPersonalDetails: 160_000,
+      deletedTelemetry: 0,
+      rolledUpDays: 0,
+      deferred: ['personal_details'],
+    })
+    expect(callsTo(REMOVE)).toHaveLength(40)
+    expect(timeline.slice(40)).toEqual([ROLLUP, 'delete', 'delete'])
+  })
+
+  it('ends the step at a failed batch, still runs the telemetry steps, and answers with an error', async () => {
+    removeResults = [{ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } }]
+
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+    expect(response.status).toBeGreaterThanOrEqual(500)
+    expect(timeline).toEqual([REMOVE, ROLLUP, 'delete', 'delete'])
   })
 })

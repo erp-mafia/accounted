@@ -3,7 +3,9 @@
  * supabase-js client and a real PostgREST: the telemetry purge's filters (a
  * range and a LIKE on event_type, a cutoff on created_at) reach Postgres as
  * written. Agent telemetry (mcp.*, agent.*) past 180 days is deleted; every
- * other event_log row and the event outbox are kept, however old.
+ * other event_log row and the event outbox are kept, however old, and a
+ * business event past 30 days keeps no personal details
+ * (remove_event_personal_details, called through PostgREST).
  */
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { seedCompany } from '@/tests/pg/fixtures'
@@ -100,5 +102,52 @@ describe('events cleanup cron over PostgREST', () => {
       { event_type: 'invoice.created', status: 'done' },
       { event_type: 'invoice.paid', status: 'dead' },
     ])
+  })
+  it('takes the personal details out of a business event past 30 days and keeps the event', async () => {
+    const { userId, companyId } = await seedCompany()
+    seeded.push(companyId)
+
+    const invoice = {
+      invoice: {
+        id: '5f0c8a1e-2b3c-4d5e-8f90-a1b2c3d4e5f6',
+        status: 'sent',
+        total: 1250,
+        invoice_date: '2026-10-01',
+        customer: { name: 'Anna Andersson', email: 'anna@example.se', country: 'SE' },
+      },
+    }
+    const { rows: inserted } = await getPool().query<{ sequence: string; days: number }>(
+      `INSERT INTO public.event_log (user_id, company_id, event_type, data, created_at)
+       SELECT $1, $2, 'invoice.created', $3::jsonb, now() - make_interval(days => d)
+         FROM unnest(ARRAY[31, 29]) AS d
+       RETURNING sequence, round(extract(epoch FROM now() - created_at) / 86400)::int AS days`,
+      [userId, companyId, JSON.stringify(invoice)],
+    )
+
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { success: boolean; removedPersonalDetails: number }
+    expect(body.success).toBe(true)
+    expect(body.removedPersonalDetails).toBeGreaterThanOrEqual(1)
+
+    const { rows } = await getPool().query<{ sequence: string; data: unknown; removed: boolean }>(
+      `SELECT sequence, data, personal_details_removed_at IS NOT NULL AS removed
+         FROM public.event_log WHERE sequence = ANY($1::bigint[])`,
+      [inserted.map((r) => r.sequence)],
+    )
+    const byAge = new Map(inserted.map((r) => [r.days, rows.find((row) => row.sequence === r.sequence)]))
+    expect(byAge.get(31)).toMatchObject({
+      removed: true,
+      data: {
+        invoice: {
+          id: '5f0c8a1e-2b3c-4d5e-8f90-a1b2c3d4e5f6',
+          status: 'sent',
+          total: 1250,
+          invoice_date: '2026-10-01',
+          customer: { name: null, email: null, country: 'SE' },
+        },
+      },
+    })
+    expect(byAge.get(29)).toMatchObject({ removed: false, data: invoice })
   })
 })

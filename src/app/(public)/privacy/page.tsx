@@ -139,7 +139,9 @@ export default function PrivacyPolicyPage() {
           När du raderar ditt konto tar vi direkt bort e-postadress, namn, BankID-uppgifter,
           inloggningssessioner, API-nycklar, inställningar och assistentkonversationer, och
           återkallar de bank-, e-post- och Skatteverketskopplingar du har godkänt. Kvar blir ett
-          spärrat konto-ID, som bokföringen i företagen pekar på. Har du rättat en verifikation i ett
+          spärrat konto-ID, som bokföringen i företagen pekar på. Står ditt namn eller din
+          e-postadress i en händelse i tjänstens händelselogg tas de bort när händelsen är 30 dagar
+          gammal. Har du rättat en verifikation i ett
           företags bokföring sparas ditt namn och din e-postadress ändå hos det företaget, eftersom
           bokföringslagen kräver att det framgår vem som har gjort rättelsen (5 kap. 5 §). De raderas
           när bevarandetiden har gått ut, efter det sjunde året efter det kalenderår då det senaste
