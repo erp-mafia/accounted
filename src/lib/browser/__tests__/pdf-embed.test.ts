@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { drawsPdfInPage } from '../pdf-embed'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { drawsPdfInPage, pdfBytesUrl, readPdfForDrawing } from '../pdf-embed'
 
 /**
  * Which browsers get the page's own PDF drawing instead of an
@@ -49,5 +49,51 @@ describe('drawsPdfInPage', () => {
   it('keeps the viewer when nothing is known (server render)', () => {
     expect(drawsPdfInPage(null, undefined)).toBe(false)
     expect(drawsPdfInPage('', undefined)).toBe(false)
+  })
+})
+
+describe('pdfBytesUrl', () => {
+  it('drops the viewer instructions, which only the browser viewer reads', () => {
+    expect(pdfBytesUrl('/api/documents/d1/inline#toolbar=0&navpanes=0&view=FitH')).toBe('/api/documents/d1/inline')
+    expect(pdfBytesUrl('/api/documents/d1/inline#page=3')).toBe('/api/documents/d1/inline')
+  })
+
+  it('keeps the query, which names the file', () => {
+    expect(pdfBytesUrl('/api/invoices/i1/archived-pdf?delivery=x1#view=FitH')).toBe('/api/invoices/i1/archived-pdf?delivery=x1')
+    expect(pdfBytesUrl('https://project.supabase.co/storage/v1/object/sign/documents/a.pdf?token=t')).toBe(
+      'https://project.supabase.co/storage/v1/object/sign/documents/a.pdf?token=t',
+    )
+  })
+})
+
+describe('readPdfForDrawing', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('reads the file without its #fragment, with the session cookie on the app\'s own routes only', async () => {
+    const pdf = new Blob(['%PDF-1.7'], { type: 'application/pdf' })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(pdf, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const file = await readPdfForDrawing('/api/documents/d1/inline#page=2')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/documents/d1/inline', expect.objectContaining({ credentials: 'same-origin' }))
+    expect(await file?.text()).toBe('%PDF-1.7')
+  })
+
+  it('answers null for a refused read, so an error envelope never reaches the drawing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ error: 'Document not found' }, { status: 404 })))
+    expect(await readPdfForDrawing('/api/documents/d1/inline')).toBeNull()
+  })
+
+  it('answers null when the network fails or the read is cancelled', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    expect(await readPdfForDrawing('/api/documents/d1/inline')).toBeNull()
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('aborted', 'AbortError')))
+    const controller = new AbortController()
+    controller.abort()
+    expect(await readPdfForDrawing('/api/documents/d1/inline', controller.signal)).toBeNull()
   })
 })
