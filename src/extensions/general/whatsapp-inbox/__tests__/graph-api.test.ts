@@ -14,6 +14,7 @@ import {
   resetDisplayNumberCacheForTests,
   GraphApiError,
   MAX_MEDIA_BYTES,
+  MediaTooLargeError,
 } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -312,7 +313,7 @@ describe('graph-api', () => {
           { status: 200 },
         ),
       )
-      await expect(downloadMedia('media-1')).rejects.toThrow(/size limit/)
+      await expect(downloadMedia('media-1')).rejects.toThrow(MediaTooLargeError)
       expect(fetchMock).toHaveBeenCalledTimes(1)
     })
 
@@ -327,7 +328,7 @@ describe('graph-api', () => {
             headers: { 'content-length': String(MAX_MEDIA_BYTES + 1) },
           }),
         )
-      await expect(downloadMedia('media-1')).rejects.toThrow(/size limit/)
+      await expect(downloadMedia('media-1')).rejects.toThrow(MediaTooLargeError)
     })
 
     it('rejects an oversized stream even without a content-length header', async () => {
@@ -345,7 +346,7 @@ describe('graph-api', () => {
         )
         .mockResolvedValueOnce(new Response(stream, { status: 200 }))
 
-      await expect(downloadMedia('media-1')).rejects.toThrow(/size limit/)
+      await expect(downloadMedia('media-1')).rejects.toThrow(MediaTooLargeError)
     })
 
     it('propagates timeouts as TimeoutError', async () => {

@@ -39,6 +39,7 @@ import {
   JournalEntryNotFoundError,
   UnattendedCommitLimitExceededError,
   AccrualDraftPostedByScheduleError,
+  isBankBookingContextRefusal,
   valueAdjustmentBlockFromRpc,
   type BookkeepingOperation,
 } from '@/lib/bookkeeping/errors'
@@ -124,12 +125,16 @@ const log = createLogger('bookkeeping.engine')
  * Log a failed journal write. A refusal the database raises on purpose is a
  * warning: a PT409 conflict (a busy bank account, a bank row that changed
  * under the booking), which the doors answer as a 409 to retry or refresh,
- * and a write behind a period lock or the lock date, answered as a 4xx.
+ * a write behind a period lock or the lock date, answered as a 4xx, and the
+ * bank-booking guard's refusal of a draft that does not name its bank row,
+ * answered as a 409 that says where to book it instead.
  * Logged at error they filled Vercel's runtime errors with expected
  * answers. Anything else stays an error.
  */
 function logWriteFailure(message: string, error: unknown, context: Record<string, unknown>): void {
-  const expected = (error as { code?: unknown } | null)?.code === 'PT409' || isPeriodLockRefusal(error)
+  const raised = error as { code?: unknown; message?: unknown } | null
+  const expected = raised?.code === 'PT409' || isPeriodLockRefusal(error) ||
+    isBankBookingContextRefusal(raised?.code, raised?.message)
   if (expected) log.warn(message, error, context)
   else log.error(message, error, context)
 }

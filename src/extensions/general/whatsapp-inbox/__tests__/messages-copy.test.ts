@@ -159,3 +159,20 @@ describe('replies that leave a list question open', () => {
     }
   })
 })
+
+describe('m29FileTooLarge, a file over the intake size limit', () => {
+  for (const locale of ['sv', 'en'] as const) {
+    it(`${locale}: says the file is too large and names the limit, without asking for the same file again`, () => {
+      const msg = botCopy(locale).m29FileTooLarge({ maxMb: 10 })
+      expect(msg).toMatch(locale === 'sv' ? /för stor/ : /too large/)
+      expect(msg).toMatch(/\b10 MB\b/)
+      // "Try again" is what M18 said, and the same file can never pass.
+      expect(msg).not.toMatch(locale === 'sv' ? /försök igen/i : /try again/i)
+      expect(msg).not.toMatch(/[–—]/)
+    })
+  }
+
+  it('has its own message id', () => {
+    expect(TEMPLATE.m29FileTooLarge).toBe('m29_file_too_large')
+  })
+})

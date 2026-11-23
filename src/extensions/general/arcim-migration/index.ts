@@ -100,6 +100,7 @@ import {
   classifyProviderError,
   fortnoxLoginLicenceRefusal,
   isMissingLicenseError,
+  isProviderRefusal,
   ProviderCallError,
   subscriptionRefusal,
 } from '@/lib/providers/with-provider-call'
@@ -341,6 +342,19 @@ function providerFailureResponse(error: unknown, fallbackCode: string): NextResp
     })
   }
   return errorResponseFromCode(classified ?? fallbackCode, moduleLog, ctx)
+}
+
+/**
+ * Log a failed preview or migration before it is answered. A provider's
+ * refusal (an API module not activated, an expired grant, a missing licence,
+ * a closed register) is the customer's own state at the provider, answered
+ * with a typed 4xx that says what to do: a warning. Logged at error, a Visma
+ * company without its API module and an expired Fortnox grant filled
+ * PostHog's error issues. Anything else stays an error.
+ */
+function logRunFailure(log: ExtensionContext['log'], message: string, error: unknown): void {
+  if (isProviderRefusal(error)) log.warn(message, error as Error)
+  else log.error(message, error as Error)
 }
 
 /**
@@ -1286,7 +1300,7 @@ export const arcimMigrationExtension: Extension = {
             hasSieData: (sieImportCount ?? 0) > 0,
           })
         } catch (error) {
-          log.error('arcim preview failed', error as Error)
+          logRunFailure(log, 'arcim preview failed', error)
           // Consent missing or owned by another company: same 404 either way.
           if (error instanceof ConsentNotFoundError) {
             return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', moduleLog, {
@@ -1912,7 +1926,7 @@ export const arcimMigrationExtension: Extension = {
                   await acceptConsent(consentId)
                   send({ kind: 'done', success: true, results })
                 } catch (error) {
-                  log.error('arcim migration failed', error as Error)
+                  logRunFailure(log, 'arcim migration failed', error)
                   const envelope = await migrateFailureResponse(error, consentId).json()
                   send({ kind: 'error', ...envelope })
                 } finally {
@@ -1943,7 +1957,7 @@ export const arcimMigrationExtension: Extension = {
 
           return NextResponse.json({ success: true, results })
         } catch (error) {
-          log.error('arcim migration failed', error as Error)
+          logRunFailure(log, 'arcim migration failed', error)
           return migrateFailureResponse(error, consentId)
         }
       },

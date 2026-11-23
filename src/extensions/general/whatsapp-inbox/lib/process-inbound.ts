@@ -13,11 +13,12 @@
  * its own debounce deadline and attempts the atomic pending_ack claim; the
  * single winner sends ONE message: M4 (single) or M5 (numbered list), with at
  * most ONE clarifying question merged in (M7/M9/M10, budgeted). Rejection
- * replies (M15/M17/M18/duplicate) stay immediate and per item.
+ * replies (M15/M17/M18/M29/duplicate) stay immediate and per item.
  *
  * Failure policy: NOTHING here returns a retryable status to Meta. Rejected
  * and rate-limited content acks in chat and lands as 'skipped'; real failures
- * land as 'error' + error_message with a single M18 to the user.
+ * land as 'error' + error_message with a single M18 to the user. A file over
+ * the size cap lands as 'error' too, with M29 naming the cap instead of M18.
  */
 
 import { after } from 'next/server'
@@ -37,7 +38,7 @@ import type {
   WhatsAppMessage,
   WhatsAppPhoneLink,
 } from '@/types'
-import { sendText, markReadWithTyping, downloadMedia, GraphApiError } from './graph-api'
+import { sendText, markReadWithTyping, downloadMedia, GraphApiError, MAX_MEDIA_BYTES, MediaTooLargeError } from './graph-api'
 import { botCopy, TEMPLATE, type TemplateId } from './messages'
 import {
   COMPANY_PIN_TTL_MS,
@@ -681,12 +682,23 @@ async function processMediaMessage(
   } catch (err) {
     const message =
       err instanceof GraphApiError || err instanceof Error ? err.message : String(err)
-    log.error('WhatsApp intake processing failed', err, { messageId: row.id, attempt })
+    // Our own size cap refused the sender's file: nothing failed, and M18's
+    // "försök igen" can never come true for it. Its own reply names the cap.
+    const tooLarge = err instanceof MediaTooLargeError
+    if (tooLarge) log.warn('WhatsApp file over the size limit', { messageId: row.id, attempt, maxBytes: MAX_MEDIA_BYTES })
+    else log.error('WhatsApp intake processing failed', err, { messageId: row.id, attempt })
     try {
       await markStatus(supabase, row.id, 'error', { errorMessage: message.slice(0, 500) })
-      // M18 at most once per message, tracked by the outbound row rather than
-      // the attempt counter (a first attempt that died still burned its).
-      if (to) {
+      if (to && tooLarge) {
+        await sendText(supabase, {
+          to,
+          body: copy.m29FileTooLarge({ maxMb: MAX_MEDIA_BYTES / (1024 * 1024) }),
+          template: TEMPLATE.m29FileTooLarge,
+          ...replyBase,
+        })
+      } else if (to) {
+        // M18 at most once per message, tracked by the outbound row rather than
+        // the attempt counter (a first attempt that died still burned its).
         await sendErrorNoticeOnce(supabase, { to, ...replyBase })
       }
     } catch (innerErr) {
