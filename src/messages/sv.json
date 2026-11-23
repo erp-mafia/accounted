@@ -16229,6 +16229,7 @@
     "folders_count": "{count, plural, =0 {Din agent får inga kunskapsområden i dag.} =1 {Din agent får # kunskapsområde i dag.} other {Din agent får # kunskapsområden i dag.}}",
     "folders_unknown": "Vilka kunskapsområden som gäller för företaget kunde inte läsas nu.",
     "folders_back": "Alla kunskapsområden",
+    "own_add": "Lägg till egen kunskap, ett arbetsflöde eller en analys",
     "ai_text_title": "Texten din AI läser",
     "reviewed_on": "Granskad {date}",
     "create_prompt_workflow": "Ladda skillen \"create-skill\" från Accounted (load_skill) och följ den. Jag vill skapa ett eget arbetsflöde.",
