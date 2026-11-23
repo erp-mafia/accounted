@@ -16220,6 +16220,14 @@
     "title": "Arbetssätt",
     "help": "Arbetssätt är det du ger din egen AI: arbetsflöden den gör, kunskap den följer och analyser den räknar fram. Koppla din AI för att använda dem.",
     "help_knowledge": "Det agenten kan om reglerna: svenska regler per område, för din bolagsform och bransch. Öppna ett område för att läsa det.",
+    "folders_general": "Regler",
+    "folders_form": "Er bolagsform",
+    "folders_also": "Finns också",
+    "folders_count": "{count, plural, =0 {Din agent får inga kunskapsområden i dag.} =1 {Din agent får # kunskapsområde i dag.} other {Din agent får # kunskapsområden i dag.}}",
+    "folders_unknown": "Vilka kunskapsområden som gäller för företaget kunde inte läsas nu.",
+    "folders_back": "Alla kunskapsområden",
+    "ai_text_title": "Texten din AI läser",
+    "reviewed_on": "Granskad {date}",
     "create_prompt_workflow": "Ladda skillen \"create-skill\" från Accounted (load_skill) och följ den. Jag vill skapa ett eget arbetsflöde.",
     "create_prompt_rules": "Ladda skillen \"create-skill\" från Accounted (load_skill) och följ den. Jag vill skriva ner egen kunskap som min AI ska följa.",
     "create_prompt_analysis": "Ladda skillen \"create-skill\" från Accounted (load_skill) och följ den. Jag vill skapa en egen analys.",
@@ -16750,6 +16758,7 @@
     "knowledge_save_failed": "Kunde inte ändra kunskapen. Försök igen.",
     "knowledge_all_added": "Allt finns redan med.",
     "knowledge_descs": {
+      "swedish-k3-k4-judgment": "K3 på djupet, K4 översiktligt och när en revisor bör avgöra.",
       "swedish-cash-register": "Kassaregister, personalliggare och hur dagskassan bokförs.",
       "swedish-daily-bookkeeping": "Hur vardagens bankrader och kvitton konteras, med rätt moms.",
       "swedish-ef-skatteplanering": "Egenavgifter, räntefördelning och periodiseringsfond för enskild firma.",
@@ -16779,6 +16788,7 @@
       "swedish-project-accounting": "Projekt, pågående arbeten, intäktsföring och bidrag."
     },
     "knowledge_names": {
+      "swedish-k3-k4-judgment": "K3 och K4",
       "swedish-cash-register": "Kassaregister",
       "swedish-daily-bookkeeping": "Löpande bokföring",
       "swedish-ef-skatteplanering": "Skatteplanering enskild firma",

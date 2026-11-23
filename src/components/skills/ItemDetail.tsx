@@ -39,19 +39,13 @@ import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
 import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, simulatedConnection, type CommunityMeta } from './data'
+import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readBody, readCatalog, readOptions, rulesSegment, simulatedClient, simulatedConnection, type CommunityMeta } from './data'
 import styles from './skills.module.css'
 
 // The Markdown parser loads with the first pack that is opened, not with the list.
 const Markdown = dynamic(() => import('@/components/agent/MarkdownMessage'))
 // Skriv själv, loaded when own knowledge or an analysis is edited.
 const CreateItem = dynamic(() => import('./CreateItem').then((m) => m.CreateItem))
-
-async function readBody(url: string): Promise<string> {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error('Item body request failed')
-  return ((await response.json()).data as { body: string }).body
-}
 
 type Item = {
   kind: ItemKind
