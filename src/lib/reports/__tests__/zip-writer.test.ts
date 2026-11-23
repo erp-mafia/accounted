@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
 import { collectBytes } from '../archive-folder'
-import { crc32, writeZip, type ZipEntry } from '../zip-writer'
+import { crc32, writeZip, type ZipEntry, type ZipPartSource } from '../zip-writer'
 
 const text = (value: string) => new TextEncoder().encode(value)
 
@@ -79,6 +79,34 @@ describe('writeZip', () => {
 
     expect(new Uint8Array(asParts)).toEqual(new Uint8Array(asWhole))
     expect((await readBack(asParts))['revision/b.json']).toEqual(whole)
+  })
+
+  it('reads a part made when it is read twice, for the CRC and to write it, and writes the same bytes', async () => {
+    const date = new Date(Date.UTC(2026, 10, 23, 4, 0, 0))
+    const whole = text(`[\n  {"text": "Faktura € mars ${'å'.repeat(3000)}"}\n]`)
+    let reads = 0
+    const rest: ZipPartSource = {
+      length: whole.length - 2,
+      bytes: () => {
+        reads++
+        return whole.slice(2)
+      },
+    }
+
+    const asSource = await collectBytes(writeZip([{ name: 'revision/b.json', data: [whole.subarray(0, 2), rest] }], { date }))
+    const asWhole = await collectBytes(writeZip([{ name: 'revision/b.json', data: whole }], { date }))
+
+    expect(new Uint8Array(asSource)).toEqual(new Uint8Array(asWhole))
+    expect(reads).toBe(2)
+  })
+
+  it('fails an entry whose part reads back other bytes, rather than write offsets that are wrong', async () => {
+    let reads = 0
+    const changing: ZipPartSource = { length: 4, bytes: () => text(reads++ === 0 ? 'abcd' : 'abc') }
+
+    await expect(collectBytes(writeZip([{ name: 'x.json', data: [changing] }]))).rejects.toThrow(
+      'changed while it was written',
+    )
   })
 
   it('writes no ZIP64 records while offsets and counts fit 32 and 16 bits', async () => {
