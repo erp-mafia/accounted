@@ -9,6 +9,7 @@ import { tools, isDefaultCatalogTool } from '../server'
 import { coerceStringifiedScalars, toolInputSchema } from '../operation-tools'
 import { toToolError } from '../tool-result'
 import { OPERATIONS } from '@/lib/operations/registry'
+import { createRowsMockSupabase } from '@/tests/helpers'
 
 describe('toolInputSchema', () => {
   it('is a closed object without the $schema header, uuid regexes or safe-integer bounds', () => {
@@ -123,6 +124,41 @@ describe('generated operation tools', () => {
     ).rejects.toMatchObject({ code: 'DIMENSION_SYSTEM_DELETE' })
     expect(inserts).toEqual([])
   })
+  // A credit note rests at 'credited' like its original, so its own id passed
+  // the uncredit's gate: the preview promised to restore the credit note as an
+  // invoice to pay, and the staged proposal could only fail at approval
+  // (supplier_invoices_credit_note_not_payable refuses that write).
+  it("refuses to stage undoing a credit from the credit note's own id, without staging anything", async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_uncredit_supplier_invoice')!
+    const original = '5b1e0000-0000-4000-8000-000000000001'
+    const creditNote = '5b1e0000-0000-4000-8000-000000000002'
+    const writes: { table: string; method: string; row: unknown }[] = []
+    const { supabase } = createRowsMockSupabase(
+      {
+        supplier_invoices: [
+          { id: original, company_id: 'company-1', status: 'credited', is_credit_note: false, credited_invoice_id: null, total: 1250, remaining_amount: 0, due_date: '2026-10-31', approved_at: null, registration_journal_entry_id: null, payments: [] },
+          { id: creditNote, company_id: 'company-1', status: 'credited', is_credit_note: true, credited_invoice_id: original, total: 1250, remaining_amount: 0, due_date: '2026-11-02', approved_at: null, registration_journal_entry_id: null, payments: [] },
+        ],
+        pending_operations: [],
+      },
+      writes,
+    )
+
+    const refusal = await tool
+      .execute({ supplier_invoice_id: creditNote }, 'company-1', 'user-1', supabase as never)
+      .then(
+        () => null,
+        (err: unknown) => err,
+      )
+
+    // Nothing staged: no proposal for an approver that could only fail.
+    expect(writes).toEqual([])
+    const { error } = toToolError(refusal)
+    expect(error).toMatchObject({ code: 'SI_UNCREDIT_CREDIT_NOTE', retryable: false })
+    expect(error.details).toMatchObject({ credit_note_id: creditNote, credited_invoice_id: original })
+    expect(error.remediation?.tool).toBe('gnubok_uncredit_supplier_invoice')
+  })
+
   it('refuses a sub-dimension whose parent is not in the registry at staging, without staging anything', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_create_dimension')!
     const written: string[] = []

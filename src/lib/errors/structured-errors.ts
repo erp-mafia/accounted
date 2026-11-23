@@ -7736,6 +7736,21 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_en:
       'The credit could not be undone. A locked or closed period refuses the storno of the credit note; details.reason names the cause.',
   },
+  // A credit note rests at 'credited' like its original, so its own id once
+  // passed for the original's: the preview restored the credit note as an
+  // invoice to pay, a write supplier_invoices_credit_note_not_payable refuses.
+  SI_UNCREDIT_CREDIT_NOTE: {
+    httpStatus: 400,
+    message_sv:
+      'En kreditering ångras på originalfakturan, inte på kreditfakturan. Gå till originalfakturan och välj "Ångra kreditering".',
+    message_en:
+      'This id is a credit note. A credit is undone on the original invoice: send the original\'s id (details.credited_invoice_id), not the credit note\'s.',
+    remediation: {
+      description:
+        'Call uncredit again with the original invoice id from details.credited_invoice_id. When it is null the credit note names no original (an imported one): find the original among the supplier\'s credited invoices.',
+      tool: 'gnubok_uncredit_supplier_invoice',
+    },
+  },
   SI_ITEM_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Fakturaraden kunde inte hittas.',

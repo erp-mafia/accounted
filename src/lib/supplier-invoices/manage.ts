@@ -17,6 +17,9 @@
  *     with a credit note (BFL 5 kap 5 §).
  *
  * Uncredit:
+ *   - only from the original: a credit note's own id is refused, whatever
+ *     its status (it rests at 'credited' too, so the status alone cannot
+ *     tell the two apart);
  *   - the credit note's posted verifikat is cancelled with a storno
  *     (reverseEntry, through the posting port), never edited or deleted; an
  *     already reversed or never posted verifikat is fine and the row cleanup
@@ -280,6 +283,20 @@ export async function uncreditSupplierInvoice(
     .single()
   if (fetchError || !row) return NOT_FOUND
   const original = row as OriginalWithPayments
+
+  // A credit is undone on the original, never on the credit note. The
+  // credit note rests at 'credited' too, so its id passed the gate below:
+  // the dry run (and with it the MCP staging) promised to restore the credit
+  // note as an invoice to pay, and the commit tried a write that
+  // supplier_invoices_credit_note_not_payable refuses. Refused before any
+  // other read, so the dry run and every door answer the same.
+  if (original.is_credit_note) {
+    return {
+      ok: false,
+      code: 'SI_UNCREDIT_CREDIT_NOTE',
+      details: { credit_note_id: original.id, credited_invoice_id: original.credited_invoice_id ?? null },
+    }
+  }
 
   // Idempotent no-op: an already-uncredited or never-credited invoice just
   // answers the row, so a client retry can call this blindly.

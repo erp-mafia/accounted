@@ -130,7 +130,7 @@ export const supplierInvoicesUncredit = defineOperation({
     doNotUseFor:
       'Crediting an invoice (POST /supplier-invoices/{id}/credit), deleting an unbooked invoice (DELETE /supplier-invoices/{id}) or reversing an arbitrary verifikat.',
     pitfalls: [
-      'Pass the ORIGINAL invoice id, not the credit note\'s.',
+      'Pass the ORIGINAL invoice id, not the credit note\'s: a credit note\'s id answers 400 SI_UNCREDIT_CREDIT_NOTE, on a dry run too, and details.credited_invoice_id names its original.',
       'The credit note\'s verifikat must lie in an open, unlocked period: otherwise the dry run answers 400 PERIOD_LOCKED and the commit 400 SI_UNCREDIT_FAILED.',
       'A credit verifikat already reversed by hand is fine: the row cleanup still runs and reversal_entry_id is null.',
     ],
@@ -164,7 +164,7 @@ export const supplierInvoicesUncredit = defineOperation({
     reversed_credit_note_id: z.string().uuid().nullable(),
     changed: z.boolean().describe('False when the invoice was not credited (nothing done).'),
   }),
-  errorCodes: ['SI_NOT_FOUND', 'PERIOD_LOCKED', 'SI_UNCREDIT_FAILED'],
+  errorCodes: ['SI_NOT_FOUND', 'SI_UNCREDIT_CREDIT_NOTE', 'PERIOD_LOCKED', 'SI_UNCREDIT_FAILED'],
   http: {
     method: 'POST',
     path: '/api/v1/companies/:companyId/supplier-invoices/:id/uncredit',
