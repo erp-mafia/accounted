@@ -159,6 +159,20 @@ const IN_PERSON_DESCRIPTOR =
  */
 const PROVIDER_OWN_ROW = /^(?:FEE-(?:CARD|TRANSFER|BALANCE)-\d+|BALANCE-\d+\s+Converted\b)/i
 
+/**
+ * transactions.import_source of the Stripe feed, which brings the Stripe
+ * balance in as a bank account (stripe/lib/transaction-sync.ts,
+ * STRIPE_IMPORT_SOURCE; a test there keeps the two equal). Every outflow on
+ * it is Stripe's own row: its fee on each payment ("Stripe-avgift
+ * (Stripe-betalning <payer>)", the payer being the company's customer), its
+ * usage fees, automatic tax, a refund to a buyer, a payout to the bank. No
+ * mailbox holds a receipt for one: Stripe bills its fees on a monthly invoice,
+ * and the rest is on its balance report. Read on the row's source, never its
+ * words: a card purchase paid through Stripe at another merchant
+ * ("STRIPE* ...") on the bank account has a receipt of its own.
+ */
+export const STRIPE_FEED_IMPORT_SOURCE = 'stripe'
+
 /** As much of a posted verifikat's line as the classifier reads. */
 export type BookedLine = Pick<PlausibilityLine, 'account_number' | 'debit_amount'>
 
@@ -194,7 +208,7 @@ function shiftDate(isoDate: string, days: number): string {
  * rows it already has without an agent having run, and the agent's sentence
  * and the app's summary then say the same thing by construction.
  */
-export type NextStepKind = 'imported' | 'not_mail' | 'no_purchase' | 'portal' | 'kivra' | 'paper' | 'mail'
+export type NextStepKind = 'imported' | 'not_mail' | 'no_purchase' | 'stripe' | 'portal' | 'kivra' | 'paper' | 'mail'
 
 /**
  * `companyPortals` are the company's own (public.company_portals); without
@@ -250,6 +264,8 @@ function nextStep(kind: NextStepKind, portal: AgentWorklistItem['portal']): stri
       return 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.'
     case 'no_purchase':
       return 'Inget inköp, så inget kvitto: underlaget är kontoutdraget eller betalleverantörens rapport.'
+    case 'stripe':
+      return 'Logga in på Stripe och ladda ner underlaget: månadsfakturan för Stripes avgifter, saldorapporten för övriga rader.'
     case 'portal':
       return `Logga in på ${portal?.vendor ?? 'leverantören'} och ladda ner fakturan: ${portal?.url ?? ''}`.trim()
     case 'kivra':
@@ -270,6 +286,7 @@ function withSearchHints(
   lines?: readonly BookedLine[],
   underlagOn: UnderlagElsewhere | null = null,
   sourceType?: string | null,
+  importSource?: string | null,
 ): AgentWorklistItem {
   const descriptor = base.counterparty ?? base.description
   // A payment that settles an invoice opens the window earlier: the invoice was
@@ -293,12 +310,15 @@ function withSearchHints(
       underlag_on: underlagOn,
     }
   }
-  // An unbooked bank row has no lines to say it bought nothing, only its words.
-  const kind =
-    base.kind === 'transaction' && PROVIDER_OWN_ROW.test(base.description ?? '')
-      ? 'no_purchase'
-      : nextStepKind(descriptor, companyPortals, lines, sourceType)
-  const mailSearchable = kind !== 'imported' && kind !== 'not_mail' && kind !== 'no_purchase'
+  // An unbooked bank row has no lines to say it bought nothing, only its words
+  // and the feed it came from.
+  const kind: NextStepKind =
+    base.kind === 'transaction' && importSource === STRIPE_FEED_IMPORT_SOURCE
+      ? 'stripe'
+      : base.kind === 'transaction' && PROVIDER_OWN_ROW.test(base.description ?? '')
+        ? 'no_purchase'
+        : nextStepKind(descriptor, companyPortals, lines, sourceType)
+  const mailSearchable = kind !== 'imported' && kind !== 'not_mail' && kind !== 'no_purchase' && kind !== 'stripe'
   // The company's own portal for the supplier first, then the directory's.
   const portal = mailSearchable ? resolvePortal(companyPortals, descriptor) : null
   const portalHint = portal ? { vendor: portal.vendor, url: portal.url, note: portal.note } : null
@@ -421,16 +441,20 @@ async function fetchVerifikatWindow(
   supabase: SupabaseClient,
   companyId: string,
   since: string | null,
+  until: string | null,
 ): Promise<{ rows: VerifikatRow[]; total: number }> {
   const rows: VerifikatRow[] = []
   let total = 0
   for (let offset = 0; offset < VERIFIKAT_WINDOW; offset += VERIFIKAT_PAGE) {
+    // p_until (inclusive) goes only with an until, as in
+    // gnubok_list_verifikat_without_documents.
     const { data, error } = await supabase.rpc('verifikat_without_documents', {
       p_company_id: companyId,
       p_since: since,
       p_min_amount: 0,
       p_limit: VERIFIKAT_PAGE,
       p_offset: offset,
+      ...(until ? { p_until: until } : {}),
     })
     if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
     const result = data as {
@@ -453,14 +477,16 @@ async function fetchVerifikatWindow(
 export async function resolveAgentWorklist(
   supabase: SupabaseClient,
   companyId: string,
-  opts: { limit?: number; offset?: number; since?: string | null } = {},
+  /** `since` and `until` are ISO dates, both inclusive, applied to both sources. */
+  opts: { limit?: number; offset?: number; since?: string | null; until?: string | null } = {},
 ): Promise<AgentWorklist> {
   const limit = Math.min(Math.max(1, opts.limit ?? 25), MAX_ITEMS)
   const offset = Math.max(0, Math.floor(opts.offset ?? 0))
   const since = opts.since ?? null
+  const until = opts.until ?? null
 
   const [verifikatWindow, transactions, claimed, inboxAddress, companyPortals] = await Promise.all([
-    fetchVerifikatWindow(supabase, companyId, since),
+    fetchVerifikatWindow(supabase, companyId, since, until),
     fetchPurchasesWithoutUnderlag(supabase, companyId),
     fetchClaimedTargets(supabase, companyId),
     resolveInboxAddress(supabase, companyId),
@@ -514,6 +540,7 @@ export async function resolveAgentWorklist(
     if (claimed.transactionIds.has(tx.id)) continue
     if (!tx.date || tx.amount == null) continue
     if (since && tx.date < since) continue
+    if (until && tx.date > until) continue
     ranked.push({
       sek: Math.abs(tx.amount_sek ?? tx.amount),
       item: withSearchHints({
@@ -527,7 +554,7 @@ export async function resolveAgentWorklist(
         counterparty: tx.merchant_name ?? null,
         description: tx.description ?? null,
         invoice_number: null,
-      }, companyPortals),
+      }, companyPortals, undefined, null, null, tx.import_source),
     })
   }
 

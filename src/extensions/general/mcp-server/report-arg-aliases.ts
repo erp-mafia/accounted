@@ -12,7 +12,8 @@
  * Covered: the report tools (income statement, balance sheet, trial balance,
  * general ledger, KPI report, query_journal) and, from the 2026-10 autopsy
  * of agent sessions, list_verifikat_without_documents, list_accounts,
- * load_skill and get_record; from the 2026-11 telemetry, get_measure.
+ * load_skill and get_record; from the 2026-11 telemetry, get_measure; and
+ * get_bokslutsbilagor, whose year-end siblings take fiscal_period_id.
  *
  * Deliberately narrow: only read-only tools (a wrong guess can at worst
  * answer the wrong question, never write), only explicit per-tool mappings
@@ -149,6 +150,9 @@ export const REPORT_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string,
     end_date: { to: ['as_of_date'] },
   },
   gnubok_get_trial_balance: {
+    ...PERIOD,
+  },
+  gnubok_get_bokslutsbilagor: {
     ...PERIOD,
   },
   gnubok_get_general_ledger: {

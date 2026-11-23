@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALL_STARTABLE, MAX_DECISION_ACTIONS, UNDO_OF, bookedOnAccount, canUndo, focusDecision, nothingRead, rowStatus, type DecisionAction, type InkorgStartable } from '../decision'
+import { ALL_STARTABLE, MAX_DECISION_ACTIONS, UNDO_OF, bookedOnAccount, canUndo, focusDecision, nothingRead, offersRemoval, rowStatus, type DecisionAction, type InkorgStartable } from '../decision'
 import { makeItem, reading } from './fixtures'
 
 describe('focusDecision', () => {
@@ -82,8 +82,23 @@ describe('focusDecision', () => {
   })
 
   it('offers to read again or to drop a document that could not be read', () => {
-    expect(focusDecision(makeItem({ status: 'error' })).actions).toEqual(['retry_reading', 'not_underlag'])
-    expect(focusDecision(makeItem({ status: 'error', document_id: null })).actions).toEqual(['not_underlag'])
+    const d = focusDecision(makeItem({ status: 'error' }))
+    expect(d.question).toBe('unreadable')
+    expect(d.evidence).toEqual({ kind: 'unreadable' })
+    expect(d.actions).toEqual(['retry_reading', 'not_underlag'])
+  })
+
+  it('asks for the file when a mail brought none: nothing to read again, only to drop', () => {
+    const mail = makeItem({ status: 'error', source: 'email', document_id: null, email_subject: 'Fwd: Betalning genomförd' })
+    for (const canRead of [false, true]) {
+      const d = focusDecision(mail, { canRead })
+      expect(d.question).toBe('no_file')
+      expect(d.evidence).toEqual({ kind: 'no_file' })
+      expect(d.actions).toEqual(['not_underlag'])
+      expect(d.quietActions).toEqual([])
+      expect(d.editorEscape).toBe(false)
+    }
+    expect(offersRemoval(mail)).toBe(true)
   })
 
   it('offers nothing while the reading is in flight', () => {
@@ -346,6 +361,7 @@ describe('rowStatus', () => {
 
   it('says where an item stands when that is the news: unreadable, reading, linked, done', () => {
     expect(rowStatus(makeItem({ status: 'error', extracted_data: null }))).toEqual({ kind: 'unreadable' })
+    expect(rowStatus(makeItem({ status: 'error', source: 'email', document_id: null, extracted_data: null }))).toEqual({ kind: 'no_file' })
     expect(rowStatus(makeItem({ status: 'processing', extracted_data: null }))).toEqual({ kind: 'reading' })
     expect(rowStatus(makeItem({ matched_transaction_id: 'tx-9', extracted_data: reading({ documentKind: 'receipt' }) }))).toEqual({ kind: 'linked' })
     expect(rowStatus(makeItem({ created_supplier_invoice_id: 'si-1' }))).toEqual({ kind: 'done' })

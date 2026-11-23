@@ -23,6 +23,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   reset()
   delete process.env.ARKIV_BRAIN_COMPANY_IDS
+  delete process.env.INKORG_V2_COMPANY_IDS
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })
@@ -62,6 +63,28 @@ describe('GET /api/documents/[id]/pipeline', () => {
     const { body } = await parseJsonResponse(await call('?advance=1'))
     expect(runDocumentJobFor).toHaveBeenCalledWith(mockSupabase, DOC, 'pipeline:user-1')
     expect(body).toMatchObject({ data: { stage: 'landing', title: 'Kvitto Balzac', landed: { kind: 'underlag', href: '/e/general/invoice-inbox', matched: true } } })
+  })
+
+  it('says a receipt landed in the new inbox page for a company in its rollout, and in the workspace for any other', async () => {
+    const landedHref = async () => {
+      enqueue({ data: { id: DOC } })
+      enqueue({ data: document({ doc_type: 'receipt' }) })
+      enqueue({
+        data: [
+          { kind: 'read', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+          { kind: 'classify', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+        ],
+      })
+      enqueue({ data: null })
+      enqueue({ data: null })
+      enqueue({ data: null })
+      const { body } = await parseJsonResponse<{ data: { landed: { kind: string; href: string } | null } }>(await call())
+      return body.data.landed
+    }
+    process.env.INKORG_V2_COMPANY_IDS = 'company-1'
+    expect(await landedHref()).toMatchObject({ kind: 'underlag', href: '/inkorg' })
+    process.env.INKORG_V2_COMPANY_IDS = 'company-2'
+    expect(await landedHref()).toMatchObject({ kind: 'underlag', href: '/e/general/invoice-inbox' })
   })
 
   it('ends the model calls of an advanced step before the function is killed: one call\'s own limit is twice the minute this route has', async () => {

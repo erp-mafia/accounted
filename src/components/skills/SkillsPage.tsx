@@ -20,7 +20,7 @@ import { KindsIntro } from './KindsIntro'
 import type { ItemKind } from './hues'
 import { trackInstructions } from './track'
 import { ConnectHero } from './ConnectHero'
-import { fetchConnections, readAgents, readCatalog, readOptions, readUsage, simulatedClient, simulatedConnection, type SkillSummary } from './data'
+import { fetchConnections, isOwnItem, readAgents, readCatalog, readOptions, readUsage, simulatedClient, simulatedConnection } from './data'
 import styles from './skills.module.css'
 
 
@@ -51,8 +51,7 @@ function Registry({ companyId, hrefBase, knowledgeOnly }: { companyId: string; h
   const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
   const options = useSWR(['/api/agents/knowledge', companyId], ([url]) => readOptions(url))
   const usage = useSWR(['/api/skills/usage', companyId], ([url]) => readUsage(url))
-  const own = (catalog.data ?? []).filter((skill): skill is SkillSummary & { installations: [{ installation_id: string }] } =>
-    skill.tier === 'own' && !!skill.installations[0])
+  const own = (catalog.data ?? []).filter(isOwnItem)
 
   // ── connection: asked on load and whenever the user comes back to the tab ──
   const [connection, setConnection] = useState<AiConnection | null>(null)

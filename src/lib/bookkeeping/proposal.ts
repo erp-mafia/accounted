@@ -35,9 +35,15 @@ import type {
  * it is exactly one of the shapes the categorize API accepts, so a
  * proposal is always bookable as shown.
  *
+ * 'precedent' is how the company last booked a bank row of the same
+ * counterparty, read from the posted verifikat where no counterparty rule
+ * proposes (lib/transactions/booking-precedent.ts): one account against the
+ * bank, with seen_count the earlier bookings that agree. It is no rule, and
+ * never books without a review.
+ *
  * Client-safe: pure data and pure functions over the static catalog.
  */
-export type ProposalSource = 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant' | 'manual' | 'clearing'
+export type ProposalSource = 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant' | 'manual' | 'clearing' | 'precedent'
 
 /**
  * What a clearing proposal (source 'clearing') rests on: another block's own
@@ -151,6 +157,14 @@ export interface BookingProposal {
   read_reverse_charge_kind?: ReverseChargeKind
   /** Source 'clearing': the record behind it. Never booked without a review. */
   clearing?: ClearingEvidence
+  /**
+   * Set on the assistant's proposal for a row that one of the company's
+   * auto-learned mapping rows would have proposed for, where those rows are
+   * not read (lib/bookkeeping/mapping-engine.ts readsAutoLearnedMappingRules):
+   * the read stands where the rule stood, and never books without a review.
+   * Set by proposeForTransactions.
+   */
+  replaces_learned_rule?: boolean
 }
 
 /** The leg that is not the bank: what the chip, the assistant and Claude call "the account". */
@@ -554,6 +568,8 @@ export function whyKeyFor(p: BookingProposal): { key: string; values?: Record<st
       return { key: 'rec_why_catalog' }
     case 'recent':
       return { key: 'rec_why_recent' }
+    case 'precedent':
+      return { key: 'rec_why_precedent', values: { count: p.seen_count ?? 1 } }
     case 'assistant':
       return { key: p.has_underlag ? 'rec_why_assistant_doc' : 'rec_why_assistant_row' }
     default:
@@ -709,6 +725,10 @@ function sourceWhySv(p: BookingProposal): string {
       return 'Känt mönster i bankens text'
     case 'recent':
       return 'Nyligen använd mall (matchade inte raden)'
+    case 'precedent': {
+      const count = p.seen_count ?? 1
+      return `Som förra gången: motparten är bokförd så ${count} ${count === 1 ? 'gång' : 'gånger'} tidigare. Ingen regel finns för motparten, så bokningen granskas`
+    }
     case 'assistant':
       return p.has_underlag ? 'Assistentens läsning av underlaget' : 'Assistentens läsning av raden'
     default:

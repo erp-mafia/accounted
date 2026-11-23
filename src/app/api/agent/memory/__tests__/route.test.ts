@@ -32,6 +32,7 @@ const mockUser = { id: 'user-1', email: 'test@test.se' }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.unstubAllEnvs()
   reset()
   service.reset()
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
@@ -126,6 +127,118 @@ describe('GET /api/agent/memory', () => {
     enqueue({ data: [] })
     await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
     expect(requireWritePermissionMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/agent/memory: the question behind a row', () => {
+  const QUESTION = 'Leverantören drog 4 990 kr den 3 november. Vad har ändrats?'
+  const memory = (id: string, content: string) => ({ id, kind: 'fact', content, source: 'user_taught', created_by_user_id: null, client: null })
+  const question = (id: string, factId: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    company_id: 'company-1',
+    status: 'answered',
+    close_reason: null,
+    question: QUESTION,
+    why: null,
+    options: [
+      { id: 'more', label: 'Fler licenser' },
+      { id: 'annual', label: 'Årsbetalning' },
+    ],
+    evidence: [],
+    actor_label: null,
+    client: null,
+    answer_option: null,
+    answer_text: null,
+    answered_at: '2026-11-20T08:00:00.000Z',
+    answered_via: 'app',
+    fact_id: factId,
+    created_at: '2026-11-19T08:00:00.000Z',
+    ...overrides,
+  })
+  type Listed = { data: Array<{ id: string; content: string; answered_question: { question: string; answer: string } | null }> }
+
+  it('returns 401 without reading a question when not authenticated', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
+    expect(response.status).toBe(401)
+    expect(findCalls('company_questions', 'select')).toEqual([])
+    expect(findCalls('agent_memory', 'select')).toEqual([])
+  })
+
+  it('adds the question and the answer as the person gave it: an option by its label, a written answer as written', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', 'company-1')
+    enqueue({
+      data: [
+        memory('mem-option', `${QUESTION} Svar: Årsbetalning`),
+        memory('mem-text', 'Varför två hyror i oktober? Svar: Vi betalade november i förskott.'),
+        memory('mem-plain', 'Räkenskapsår jan-dec'),
+      ],
+    })
+    enqueue({
+      data: [
+        question('q-1', 'mem-option', { answer_option: 'annual' }),
+        question('q-2', 'mem-text', { question: 'Varför två hyror i oktober?', options: [], answer_text: ' Vi betalade november i förskott. ' }),
+      ],
+    })
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<Listed>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.map((row) => [row.id, row.answered_question])).toEqual([
+      ['mem-option', { question: QUESTION, answer: 'Årsbetalning' }],
+      ['mem-text', { question: 'Varför två hyror i oktober?', answer: 'Vi betalade november i förskott.' }],
+      ['mem-plain', null],
+    ])
+    // The stored text is handed on as it is.
+    expect(body.data[0].content).toBe(`${QUESTION} Svar: Årsbetalning`)
+    // Read with the caller's own client, for this company's answered questions on exactly these rows.
+    expect(findCalls('company_questions', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['status', 'answered'],
+    ])
+    expect(findCalls('company_questions', 'in')).toEqual([['fact_id', ['mem-option', 'mem-text', 'mem-plain']]])
+    expect(service.findCalls('company_questions', 'select')).toEqual([])
+  })
+
+  it("adds nothing from another company's question, nor from a question answered by a saved fact alone", async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    enqueue({ data: [memory('mem-1', `${QUESTION} Svar: Årsbetalning`), memory('mem-2', 'Leverantören tar betalt per år.')] })
+    enqueue({
+      data: [
+        question('q-other', 'mem-1', { company_id: 'company-2', answer_option: 'annual' }),
+        question('q-fact-only', 'mem-2'),
+      ],
+    })
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<Listed>(response)
+    expect(status).toBe(200)
+    expect(body.data.map((row) => row.answered_question)).toEqual([null, null])
+  })
+
+  it('lists the rows without a question when no question names them, and when the questions cannot be read', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', '*')
+    enqueue({ data: [memory('mem-1', 'Räkenskapsår jan-dec')] })
+    enqueue({ data: [] })
+    const none = await parseJsonResponse<Listed>(await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({})))
+    expect(none.status).toBe(200)
+    expect(none.body.data.map((row) => [row.id, row.answered_question])).toEqual([['mem-1', null]])
+
+    enqueue({ data: [memory('mem-1', 'Räkenskapsår jan-dec')] })
+    enqueue({ data: null, error: { message: 'permission denied for table company_questions' } })
+    const failed = await parseJsonResponse<Listed>(await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({})))
+    expect(failed.status).toBe(200)
+    expect(failed.body.data.map((row) => [row.id, row.answered_question])).toEqual([['mem-1', null]])
+  })
+
+  it('reads no question for a company the question list is not switched on for', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', 'company-2')
+    enqueue({ data: [memory('mem-1', `${QUESTION} Svar: Årsbetalning`)] })
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<Listed>(response)
+    expect(status).toBe(200)
+    expect(body.data.map((row) => row.answered_question)).toEqual([null])
+    expect(findCalls('company_questions', 'select')).toEqual([])
   })
 })
 

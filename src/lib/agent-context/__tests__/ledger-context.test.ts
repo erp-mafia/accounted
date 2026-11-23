@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createQueuedMockSupabase } from '@/tests/helpers'
-import { buildLedgerContext, buildLedgerDigest } from '../ledger-context'
+import { createQueuedMockSupabase, createRowsMockSupabase } from '@/tests/helpers'
+import { buildLedgerContext, buildLedgerDigest, readWrittenRules } from '../ledger-context'
 
 const COMPANY_ID = 'company-1'
 const NOW = new Date('2026-07-07T10:00:00Z')
@@ -351,6 +351,33 @@ describe('buildLedgerContext', () => {
     expect(ctx.explicit_rules.map((r) => r.match)).toEqual(['KORTKÖP ICA MAXI'])
   })
 
+  it('reads every active mapping row of the company while its auto-learned rows are read', async () => {
+    enqueueAll(mock)
+    await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+
+    expect(mock.findCalls('mapping_rules', 'eq')).toEqual([['company_id', COMPANY_ID], ['is_active', true]])
+    expect(mock.findCalls('mapping_rules', 'neq')).toEqual([])
+    expect(mock.findCalls('mapping_rules', 'limit')).toEqual([[25]])
+  })
+
+  it('leaves the auto-learned rows out of the read for a company that does not read them', async () => {
+    vi.stubEnv('BOOKING_PRECEDENT_COMPANY_IDS', COMPANY_ID)
+    try {
+      enqueueAll(mock, {
+        rules: [
+          { rule_name: 'Described: SL', merchant_pattern: 'SL', description_pattern: null, debit_account: '5810', vat_treatment: null },
+        ],
+      })
+      const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+
+      expect(mock.findCalls('mapping_rules', 'neq')).toEqual([['source', 'auto']])
+      expect(mock.findCalls('mapping_rules', 'limit')).toEqual([[25]])
+      expect(ctx.explicit_rules.map((r) => r.rule_name)).toEqual(['Described: SL'])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('derives vat profile and conventions from settings, stats, and series', async () => {
     enqueueAll(mock, {
       stats: { ...emptyStats(), vat_treatments_used: ['standard_25'], median_booking_lag_days: 2.6 },
@@ -498,5 +525,133 @@ describe('buildLedgerContext', () => {
     expect(ctx.counterparty_patterns.every((p) => p.source === 'imported_vouchers')).toBe(true)
     expect(Buffer.byteLength(JSON.stringify(ctx), 'utf8')).toBeLessThan(12 * 1024)
     expect(Buffer.byteLength(JSON.stringify(buildLedgerDigest(ctx)), 'utf8')).toBeLessThan(2.5 * 1024)
+  })
+})
+
+describe('readWrittenRules', () => {
+  const OTHER_COMPANY = 'company-2'
+
+  /** A mapping_rules row as the table holds it: `source` says who wrote it, a booking ('auto') or a person ('user_description'). */
+  const row = (rule_name: string, source: 'auto' | 'user_description', priority: number, over: Record<string, unknown> = {}) => ({
+    company_id: COMPANY_ID,
+    is_active: true,
+    source,
+    priority,
+    rule_name,
+    merchant_pattern: `${rule_name.split(': ')[1].toUpperCase()} AB`,
+    description_pattern: null,
+    debit_account: '5010',
+    vat_treatment: null,
+    ...over,
+  })
+  const LEARNED = [row('Learned: Telia', 'auto', 8), row('Learned: Ica', 'auto', 9)]
+  const WRITTEN = [row('Described: Hyresvärden', 'user_description', 3, { vat_treatment: 'exempt' }), row('Described: Banken', 'user_description', 5, { debit_account: '6570' })]
+
+  /** The table with the read's own filters run over its rows, as the database runs them. */
+  const table = (rows: Record<string, unknown>[]) => createRowsMockSupabase({ mapping_rules: rows }).supabase as unknown as SupabaseClient
+  const written = async (rows: Record<string, unknown>[]) => (await readWrittenRules(table(rows), COMPANY_ID)).map((rule) => rule.rule_name)
+  const inProfile = async (rows: Record<string, unknown>[]) => (await buildLedgerContext(table(rows), COMPANY_ID, NOW)).explicit_rules.map((rule) => rule.rule_name)
+
+  /** Each case once for a company whose learned rows are read, and once for one in the precedent switch, where they are not. */
+  const SWITCH = [
+    ['outside the precedent switch', undefined],
+    ['inside the precedent switch', COMPANY_ID],
+  ] as const
+
+  describe.each(SWITCH)('%s', (_name, precedent) => {
+    beforeEach(() => {
+      if (precedent) vi.stubEnv('BOOKING_PRECEDENT_COMPANY_IDS', precedent)
+    })
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('is empty for a company with only learned rows', async () => {
+      expect(await written(LEARNED)).toEqual([])
+    })
+
+    it('holds only the written rules of a company with both', async () => {
+      expect(await written([...LEARNED, ...WRITTEN])).toEqual(['Described: Hyresvärden', 'Described: Banken'])
+    })
+
+    it('holds every written rule of a company with no learned rows', async () => {
+      expect(await written(WRITTEN)).toEqual(['Described: Hyresvärden', 'Described: Banken'])
+    })
+
+    it("leaves out another company's rules and a rule that is switched off", async () => {
+      const rows = [...WRITTEN, row('Described: Grannen', 'user_description', 1, { company_id: OTHER_COMPANY }), row('Described: Avslutad', 'user_description', 2, { is_active: false })]
+      expect(await written(rows)).toEqual(['Described: Hyresvärden', 'Described: Banken'])
+    })
+  })
+
+  it('gives each rule as the bookkeeping profile gives it', async () => {
+    expect(await readWrittenRules(table([...LEARNED, ...WRITTEN]), COMPANY_ID)).toEqual([
+      { rule_name: 'Described: Hyresvärden', match: 'HYRESVÄRDEN AB', account_number: '5010', vat_treatment: 'exempt', source: 'mapping_rule' },
+      { rule_name: 'Described: Banken', match: 'BANKEN AB', account_number: '6570', vat_treatment: null, source: 'mapping_rule' },
+    ])
+  })
+
+  it("leaves the profile's own list as it was: the learned rows are in it where they are read, and out where they are not", async () => {
+    const rows = [...LEARNED, ...WRITTEN]
+    expect(await inProfile(rows)).toEqual(['Described: Hyresvärden', 'Described: Banken', 'Learned: Telia', 'Learned: Ica'])
+    vi.stubEnv('BOOKING_PRECEDENT_COMPANY_IDS', COMPANY_ID)
+    try {
+      expect(await inProfile(rows)).toEqual(['Described: Hyresvärden', 'Described: Banken'])
+      // There the two lists are the same.
+      expect(await written(rows)).toEqual(await inProfile(rows))
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  describe('the read', () => {
+    let mock: ReturnType<typeof createQueuedMockSupabase>
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+      mock = createQueuedMockSupabase()
+    })
+
+    it("is one read of the company's own active rows, without the learned ones, for every company", async () => {
+      mock.enqueue({ data: [] })
+      await readWrittenRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+
+      expect(mock.supabase.from.mock.calls).toEqual([['mapping_rules']])
+      expect(mock.supabase.rpc).not.toHaveBeenCalled()
+      expect(mock.findCalls('mapping_rules', 'eq')).toEqual([['company_id', COMPANY_ID], ['is_active', true]])
+      // The mark of a learned row: the source the booking path writes.
+      expect(mock.findCalls('mapping_rules', 'neq')).toEqual([['source', 'auto']])
+      expect(mock.findCalls('mapping_rules', 'limit')).toEqual([[25]])
+    })
+
+    it('leaves out a rule on a text that names no one and a rule that matches nothing, as the profile does', async () => {
+      mock.enqueue({
+        data: [
+          { rule_name: 'Described: SL', merchant_pattern: 'SL*', description_pattern: null, debit_account: '5810', vat_treatment: 'standard_6' },
+          { rule_name: 'Described: avgift', merchant_pattern: null, description_pattern: 'MÅNADSAVGIFT', debit_account: '6570', vat_treatment: null },
+          { rule_name: 'Described: INSÄTTNING', merchant_pattern: 'INSÄTTNING', description_pattern: null, debit_account: '1930', vat_treatment: null },
+          { rule_name: 'broken', merchant_pattern: null, description_pattern: null, debit_account: '4010', vat_treatment: null },
+        ],
+      })
+      const rules = await readWrittenRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+
+      expect(rules).toEqual([
+        { rule_name: 'Described: SL', match: 'SL*', account_number: '5810', vat_treatment: 'standard_6', source: 'mapping_rule' },
+        { rule_name: 'Described: avgift', match: 'MÅNADSAVGIFT', account_number: '6570', vat_treatment: null, source: 'mapping_rule' },
+      ])
+    })
+
+    it('keeps the first fifteen, as the profile does', async () => {
+      mock.enqueue({ data: Array.from({ length: 20 }, (_, i) => ({ rule_name: `Regel ${i}`, merchant_pattern: `LEVERANTÖR ${i} AB`, description_pattern: null, debit_account: '4010', vat_treatment: null })) })
+      const rules = await readWrittenRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+
+      expect(rules).toHaveLength(15)
+      expect(rules[0].rule_name).toBe('Regel 0')
+    })
+
+    it('throws when the read fails', async () => {
+      mock.enqueue({ data: null, error: { message: 'rls denied' } })
+      await expect(readWrittenRules(mock.supabase as unknown as SupabaseClient, COMPANY_ID)).rejects.toThrow('written rules read failed: rls denied')
+    })
   })
 })

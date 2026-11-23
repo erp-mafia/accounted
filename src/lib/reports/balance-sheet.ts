@@ -9,6 +9,8 @@ import type {
   TrialBalanceRow,
 } from '@/types'
 
+const EQUITY_SECTION_TITLE = 'Eget kapital'
+
 /**
  * Generate Balance Sheet (Balansräkning)
  *
@@ -72,7 +74,7 @@ export async function balanceSheetFromTrialBalance(
   const equityLiabilitySections = buildBalanceSections(
     balanceRows.filter((r) => r.account_class === 2),
     {
-      '20': 'Eget kapital',
+      '20': EQUITY_SECTION_TITLE,
       '21': 'Obeskattade reserver',
       '22': 'Avsättningar',
       '23': 'Långfristiga skulder',
@@ -90,19 +92,18 @@ export async function balanceSheetFromTrialBalance(
   // differens and the imbalance diagnosis below.
   const periodResult = computedResult(rows)
 
-  // Add period result as a synthetic section under equity if non-zero
+  // The period result is part of eget kapital, as in the årsredovisning: a
+  // synthetic row inside the Eget kapital section and its subtotal, so that
+  // subtotal is the company's equity. The grand total is unchanged.
   if (Math.abs(periodResult) > 0.005) {
-    equityLiabilitySections.push({
-      title: 'Årets resultat',
-      rows: [
-        {
-          account_number: '',
-          account_name: 'Beräknat resultat',
-          amount: periodResult,
-        },
-      ],
-      subtotal: periodResult,
-    })
+    const resultRow = { account_number: '', account_name: 'Beräknat resultat', amount: periodResult }
+    const equity = equityLiabilitySections.find((s) => s.title === EQUITY_SECTION_TITLE)
+    if (equity) {
+      equity.rows.push(resultRow)
+      equity.subtotal = roundOre(equity.subtotal + periodResult)
+    } else {
+      equityLiabilitySections.unshift({ title: EQUITY_SECTION_TITLE, rows: [resultRow], subtotal: periodResult })
+    }
   }
 
   const totalAssets =

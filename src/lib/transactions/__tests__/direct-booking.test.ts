@@ -34,7 +34,7 @@ describe('DIRECT_BOOKING_POLICY_VERSION', () => {
     expect({
       revision: DIRECT_BOOKING_POLICY_REVISION,
       sha256: createHash('sha256').update(source).digest('hex'),
-    }).toEqual({ revision: 4, sha256: 'f6ca83f8320966e258c83720e93b274823a6589fc4b7e177863ca68417b666de' })
+    }).toEqual({ revision: 4, sha256: 'dd335070aa3f9310c59f1576281857222613e6d246b9d1e64b57945d91327771' })
   })
 
   it('a booking review rule match asks first, whatever the switch, the rule or the evidence (accounted#130 step 2)', () => {
@@ -144,6 +144,25 @@ describe('booksWithoutReview', () => {
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.9, has_underlag: false })).toBe(false)
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.7, has_underlag: true })).toBe(false)
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.85, has_underlag: true })).toBe(true)
+  })
+  it('never books a read that stands where an auto-learned mapping row no longer read would have proposed', () => {
+    const sure = { source: 'assistant' as const, confidence: 0.95, has_underlag: true }
+    expect(booksWithoutReview(sure)).toBe(true)
+    expect(booksWithoutReview({ ...sure, replaces_learned_rule: true })).toBe(false)
+    expect(reviewReason({ ...sure, replaces_learned_rule: true }, DIRECT_BOOKING_ON)).toBe('evidence')
+  })
+  it("never books the company's own earlier booking of the counterparty, whatever the count of earlier bookings", () => {
+    for (const seen_count of [1, 3, 20, 500]) {
+      const precedent = { source: 'precedent' as const, confidence: 0.95, seen_count }
+      expect(booksWithoutReview(precedent)).toBe(false)
+      expect(reviewReason(precedent, DIRECT_BOOKING_ON)).toBe('evidence')
+      expect(confidenceBand(precedent, DIRECT_BOOKING_ON)).toBe('review')
+    }
+    // No flag a rule or a read books by lifts it.
+    expect(
+      booksWithoutReview({ source: 'precedent', confidence: 1, seen_count: 50, rule_mode: 'auto', rule_own: true, has_underlag: true }),
+    ).toBe(false)
+    expect(reviewReason({ source: 'precedent', confidence: 1, seen_count: 50 }, OFF)).toBe('company_off')
   })
   it('never books a catalog keyword match without a review', () => {
     expect(booksWithoutReview({ source: 'catalog', confidence: 0.95 })).toBe(false)

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver, type TableMockResult } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 import type { CoreEvent } from '@/lib/events/types'
-import { linkQuestionOperation, questionOperations } from '../operations'
+import { linkQuestionOperation, operationsOfRows, questionOperations } from '../operations'
 import { QUESTION_LIMITS } from '../types'
 
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
@@ -292,16 +292,24 @@ describe('linkQuestionOperation', () => {
 
 describe('questionOperations', () => {
   const link = (questionId: string, operation: string, at: string) => ({ question_id: questionId, operation_id: operation, created_at: at })
+  const SELECT =
+    'id, operation_number, operation_type, title, status, result_data, transaction_id:params->>transaction_id, document_name:preview_data->>document_file_name, voucher_label:preview_data->>voucher_label'
   const operation = (n: number, overrides: Record<string, unknown> = {}) => ({
     id: operationId(n),
     operation_number: 100 + n,
+    operation_type: 'create_customer',
     title: `Förslag ${n}`,
     status: 'pending',
     result_data: null,
+    transaction_id: null,
+    document_name: null,
+    voucher_label: null,
     ...overrides,
   })
+  /** What an operation that names no bank row, file or verifikat carries beside its own fields. */
+  const bare = { operation_type: 'create_customer', bank_row: null, document_name: null, voucher_label: null }
 
-  it('gives each question its operations in the order they were linked, with number, title and status', async () => {
+  it('gives each question its operations in the order they were linked, with number, type, title and status', async () => {
     const mock = createTableMockSupabase({
       company_question_operations: {
         data: [
@@ -320,19 +328,66 @@ describe('questionOperations', () => {
 
     expect([...byQuestion.keys()]).toEqual([QUESTION_ID, OTHER_QUESTION_ID])
     expect(byQuestion.get(QUESTION_ID)).toEqual([
-      { operation_id: operationId(1), operation_number: 101, title: 'Förslag 1', status: 'pending', journal_entry_id: null },
-      { operation_id: operationId(2), operation_number: 102, title: 'Förslag 2', status: 'committed', journal_entry_id: ENTRY },
+      { operation_id: operationId(1), operation_number: 101, title: 'Förslag 1', status: 'pending', journal_entry_id: null, ...bare },
+      { operation_id: operationId(2), operation_number: 102, title: 'Förslag 2', status: 'committed', journal_entry_id: ENTRY, ...bare },
     ])
     expect(byQuestion.get(OTHER_QUESTION_ID)).toEqual([
-      { operation_id: operationId(3), operation_number: 103, title: 'Förslag 3', status: 'rejected', journal_entry_id: null },
+      { operation_id: operationId(3), operation_number: 103, title: 'Förslag 3', status: 'rejected', journal_entry_id: null, ...bare },
     ])
     // Both reads are scoped to the company, and name the questions and the operations.
     expect(mock.findCalls('company_question_operations', 'eq')).toEqual([['company_id', COMPANY]])
     expect(mock.findCalls('company_question_operations', 'in')).toEqual([['question_id', [QUESTION_ID, OTHER_QUESTION_ID]]])
     expect(mock.findCalls('pending_operations', 'eq')).toEqual([['company_id', COMPANY]])
     expect(mock.findCalls('pending_operations', 'in')).toEqual([['id', [operationId(1), operationId(3), operationId(2)]]])
-    // Never the staged input.
-    expect(mock.payloads('pending_operations', 'select')).toEqual(['id, operation_number, title, status, result_data'])
+    // Of the staged input only the id of the bank row it names, and of the preview only the file and the verifikat label.
+    expect(mock.payloads('pending_operations', 'select')).toEqual([SELECT])
+    // No operation names a bank row: none is read.
+    expect(mock.tables()).not.toContain('transactions')
+  })
+
+  it('gives an operation the bank row it names as the row itself reads, the file and the verifikat label of its preview', async () => {
+    const ROW = '10000000-0000-4000-8000-000000000001'
+    const OTHER_ROW = '10000000-0000-4000-8000-000000000002'
+    const mock = createTableMockSupabase({
+      company_question_operations: { data: [1, 2, 3, 4].map((n) => link(QUESTION_ID, operationId(n), `2026-11-20T10:0${n}:00.000Z`)) },
+      pending_operations: {
+        data: [
+          operation(1, { operation_type: 'categorize_transaction', status: 'committed', result_data: { journal_entry_id: ENTRY }, transaction_id: ROW }),
+          operation(2, { operation_type: 'attach_document_to_transaction', transaction_id: ROW, document_name: '  kvitto.pdf ' }),
+          operation(3, { operation_type: 'link_transaction_journal_entry', transaction_id: OTHER_ROW, voucher_label: 'A-12' }),
+          // A row id that is no id is never looked up.
+          operation(4, { operation_type: 'categorize_transaction', transaction_id: 'not-an-id' }),
+        ],
+      },
+      // The second row is not the company's to read: the read answers one.
+      transactions: { data: [{ id: ROW, date: '2026-11-03', description: 'KORTKOP 1234', merchant_name: 'Leverantören AB', amount: -4990.5, currency: 'SEK' }] },
+    })
+
+    const operations = (await questionOperations(mock.supabase as never, COMPANY, [QUESTION_ID])).get(QUESTION_ID) ?? []
+
+    expect(operations.map((entry) => [entry.operation_type, entry.bank_row, entry.document_name, entry.voucher_label])).toEqual([
+      ['categorize_transaction', { label: 'Leverantören AB', amount: -4990.5, currency: 'SEK' }, null, null],
+      ['attach_document_to_transaction', { label: 'Leverantören AB', amount: -4990.5, currency: 'SEK' }, 'kvitto.pdf', null],
+      ['link_transaction_journal_entry', null, null, 'A-12'],
+      ['categorize_transaction', null, null, null],
+    ])
+    // One read for the rows the operations name, each once, in this company.
+    expect(mock.findCalls('transactions', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCalls('transactions', 'in')).toEqual([['id', [ROW, OTHER_ROW]]])
+    expect(mock.payloads('transactions', 'select')).toEqual(['id, date, description, merchant_name, amount, currency'])
+  })
+
+  it('names a bank row by its bank text when it has no merchant', async () => {
+    const ROW = '10000000-0000-4000-8000-000000000001'
+    const mock = createTableMockSupabase({
+      company_question_operations: { data: [link(QUESTION_ID, operationId(1), '2026-11-20T10:00:00.000Z')] },
+      pending_operations: { data: [operation(1, { operation_type: 'categorize_transaction', transaction_id: ROW })] },
+      transactions: { data: [{ id: ROW, date: '2026-11-03', description: 'Okänd transaktion', merchant_name: null, amount: '-25000', currency: null }] },
+    })
+
+    const [only] = (await questionOperations(mock.supabase as never, COMPANY, [QUESTION_ID])).get(QUESTION_ID) ?? []
+
+    expect(only.bank_row).toEqual({ label: 'Okänd transaktion', amount: -25000, currency: null })
   })
 
   it('names the verifikat only of a committed operation whose result holds a journal entry id', async () => {
@@ -402,12 +457,9 @@ describe('questionOperations', () => {
     const byQuestion = await questionOperations(mock.supabase as never, COMPANY, [QUESTION_ID])
 
     expect(byQuestion.get(QUESTION_ID)).toEqual([
-      { operation_id: operationId(1), operation_number: null, title: 'Förslag 1', status: 'pending', journal_entry_id: null },
+      { operation_id: operationId(1), operation_number: null, title: 'Förslag 1', status: 'pending', journal_entry_id: null, ...bare, operation_type: '' },
     ])
-    expect(mock.payloads('pending_operations', 'select')).toEqual([
-      'id, operation_number, title, status, result_data',
-      'id, title, status, result_data',
-    ])
+    expect(mock.payloads('pending_operations', 'select')).toEqual([SELECT, SELECT.replace('operation_number, ', '')])
   })
 
   it('throws when a read fails', async () => {
@@ -420,5 +472,72 @@ describe('questionOperations', () => {
       pending_operations: failed,
     })
     await expect(questionOperations(operations.supabase as never, COMPANY, [QUESTION_ID])).rejects.toMatchObject({ code: '57014' })
+
+    const bankRows = createTableMockSupabase({
+      company_question_operations: { data: [link(QUESTION_ID, operationId(1), '2026-11-20T10:00:00.000Z')] },
+      pending_operations: { data: [operation(1, { transaction_id: '10000000-0000-4000-8000-000000000001' })] },
+      transactions: failed,
+    })
+    await expect(questionOperations(bankRows.supabase as never, COMPANY, [QUESTION_ID])).rejects.toMatchObject({ code: '57014' })
+  })
+})
+
+describe('operationsOfRows', () => {
+  const ROW = '10000000-0000-4000-8000-000000000001'
+  const row = (n: number, overrides: Record<string, unknown> = {}) => ({
+    id: operationId(n),
+    operation_type: 'categorize_transaction',
+    title: `Förslag ${n}`,
+    status: 'pending',
+    result_data: null,
+    transaction_id: null,
+    document_name: null,
+    voucher_label: null,
+    ...overrides,
+  })
+
+  it('answers the rows as operations, in the order given, with the bank rows they name read for the company', async () => {
+    const mock = createTableMockSupabase({
+      transactions: { data: [{ id: ROW, date: '2026-11-03', description: 'KORTKOP 1234', merchant_name: 'Leverantören AB', amount: -4990.5, currency: 'SEK' }] },
+    })
+
+    const operations = await operationsOfRows(mock.supabase as never, COMPANY, [
+      row(2, { transaction_id: ROW }),
+      row(1, { operation_type: 'create_customer', status: 'committed', result_data: { journal_entry_id: ENTRY } }),
+    ])
+
+    expect(operations).toEqual([
+      {
+        operation_id: operationId(2),
+        operation_number: null,
+        operation_type: 'categorize_transaction',
+        title: 'Förslag 2',
+        status: 'pending',
+        journal_entry_id: null,
+        bank_row: { label: 'Leverantören AB', amount: -4990.5, currency: 'SEK' },
+        document_name: null,
+        voucher_label: null,
+      },
+      {
+        operation_id: operationId(1),
+        operation_number: null,
+        operation_type: 'create_customer',
+        title: 'Förslag 1',
+        status: 'committed',
+        journal_entry_id: ENTRY,
+        bank_row: null,
+        document_name: null,
+        voucher_label: null,
+      },
+    ])
+    expect(mock.findCalls('transactions', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCalls('transactions', 'in')).toEqual([['id', [ROW]]])
+  })
+
+  it('reads no bank row when the rows name none, and answers nothing for no rows', async () => {
+    const mock = createTableMockSupabase({})
+    await expect(operationsOfRows(mock.supabase as never, COMPANY, [row(1)])).resolves.toHaveLength(1)
+    await expect(operationsOfRows(mock.supabase as never, COMPANY, [])).resolves.toEqual([])
+    expect(mock.tables()).toEqual([])
   })
 })

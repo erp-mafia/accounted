@@ -4,7 +4,7 @@
  * a failed read is an error, never "no gaps".
  */
 import { describe, expect, it } from 'vitest'
-import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
+import { createRowsMockSupabase, createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 import {
   checkVoucherGapExplanation,
   listVoucherGaps,
@@ -100,6 +100,99 @@ describe('listVoucherGaps', () => {
 
     expect(err).toBeInstanceOf(VoucherGapCheckError)
     expect(err.stage).toBe(stage)
+  })
+})
+
+// A97, A98 cancelled, A99 missing (explained), A100: the series an auditor
+// reads as A97, A100. A98 is no gap (detect_voucher_gaps counts it as used),
+// so it is listed apart, or it is accounted for nowhere.
+describe('listVoucherGaps withCancelled: numbers held by a cancelled verifikat', () => {
+  const ROW = { company_id: 'company-1', fiscal_period_id: 'fp-1', voucher_series: 'A' }
+  const tables = () => ({
+    voucher_sequences: [{ ...ROW }],
+    'rpc:detect_voucher_gaps': [{ gap_start: 99, gap_end: 99 }],
+    journal_entries: [
+      { ...ROW, id: 'je-97', status: 'posted', voucher_number: 97, entry_date: '2026-05-11', description: 'Hyra maj' },
+      { ...ROW, id: 'je-98', status: 'cancelled', voucher_number: 98, entry_date: '2026-05-12', description: 'Betalning leverantörsfaktura 1043' },
+      { ...ROW, id: 'je-100', status: 'posted', voucher_number: 100, entry_date: '2026-05-14', description: 'Kundbetalning' },
+      { ...ROW, id: 'je-draft', status: 'draft', voucher_number: 0, entry_date: '2026-05-15', description: 'Utkast' },
+      { ...ROW, id: 'je-cancelled-draft', status: 'cancelled', voucher_number: 0, entry_date: '2026-05-15', description: 'Makulerat utkast' },
+      { ...ROW, id: 'je-other-year', fiscal_period_id: 'fp-0', status: 'cancelled', voucher_number: 40, entry_date: '2025-05-12', description: 'Förra året' },
+      { ...ROW, id: 'je-other-company', company_id: 'company-2', status: 'cancelled', voucher_number: 5, entry_date: '2026-05-12', description: 'Annat bolag' },
+    ],
+    voucher_gap_explanations: [
+      { ...ROW, id: 'exp-99', gap_start: 99, gap_end: 99, explanation: 'Avbruten bokning', user_id: 'user-1', created_at: '2026-05-20' },
+      { ...ROW, id: 'exp-98', gap_start: 98, gap_end: 98, explanation: 'Betalningen kunde inte kopplas', user_id: 'user-1', created_at: '2026-05-12' },
+    ],
+  })
+
+  it('lists a cancelled numbered verifikat as its own kind, apart from the gaps, with its date, text and note', async () => {
+    const { supabase, calls } = createRowsMockSupabase(tables())
+
+    const listing = await listVoucherGaps(supabase as never, 'company-1', 'fp-1', { withCancelled: true })
+
+    expect(listing.gaps).toEqual([
+      {
+        series: 'A',
+        gap_start: 99,
+        gap_end: 99,
+        explanation: { id: 'exp-99', explanation: 'Avbruten bokning', user_id: 'user-1', created_at: '2026-05-20' },
+      },
+    ])
+    expect(listing.cancelled).toEqual([
+      {
+        id: 'je-98',
+        series: 'A',
+        voucher_number: 98,
+        entry_date: '2026-05-12',
+        description: 'Betalning leverantörsfaktura 1043',
+        explanation: { id: 'exp-98', explanation: 'Betalningen kunde inte kopplas', user_id: 'user-1', created_at: '2026-05-12' },
+      },
+    ])
+    // One explanation read serves the gaps and the cancelled numbers.
+    expect(calls.filter((c) => c.table === 'voucher_gap_explanations' && c.method === 'select')).toHaveLength(1)
+  })
+
+  it('never lists a draft or a cancelled draft: neither holds a number', async () => {
+    const { supabase, calls } = createRowsMockSupabase(tables())
+
+    const listing = await listVoucherGaps(supabase as never, 'company-1', 'fp-1', { withCancelled: true })
+
+    expect(listing.cancelled?.map((c) => c.id)).toEqual(['je-98'])
+    expect(calls).toContainEqual({ table: 'journal_entries', method: 'eq', args: ['status', 'cancelled'] })
+    expect(calls).toContainEqual({ table: 'journal_entries', method: 'gt', args: ['voucher_number', 0] })
+    expect(calls).toContainEqual({ table: 'journal_entries', method: 'in', args: ['voucher_series', ['A']] })
+  })
+
+  it('reads the explanations for a cancelled number even when the year has no gap', async () => {
+    const { supabase } = createRowsMockSupabase({ ...tables(), 'rpc:detect_voucher_gaps': [] })
+
+    const listing = await listVoucherGaps(supabase as never, 'company-1', 'fp-1', { withCancelled: true })
+
+    expect(listing.gaps).toEqual([])
+    expect(listing.cancelled?.[0]).toMatchObject({ voucher_number: 98, explanation: { id: 'exp-98' } })
+  })
+
+  it('does not read cancelled verifikat without withCancelled (the year-end gate needs only the gaps)', async () => {
+    const { supabase, calls } = createRowsMockSupabase(tables())
+
+    const listing = await listVoucherGaps(supabase as never, 'company-1', 'fp-1')
+
+    expect(listing.cancelled).toBeUndefined()
+    expect(calls.some((c) => c.table === 'journal_entries')).toBe(false)
+  })
+
+  it('throws when the cancelled read fails, never "none cancelled"', async () => {
+    const { client } = makeClient({
+      voucher_sequences: [{ data: [{ voucher_series: 'A' }] }],
+      'rpc:detect_voucher_gaps': [{ data: [] }],
+      journal_entries: [{ error: { message: 'timeout' } }],
+    })
+
+    const err = await listVoucherGaps(client as never, 'company-1', 'fp-1', { withCancelled: true }).catch((e) => e)
+
+    expect(err).toBeInstanceOf(VoucherGapCheckError)
+    expect(err.stage).toBe('cancelled_vouchers')
   })
 })
 

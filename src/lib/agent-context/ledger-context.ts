@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { mappingPatternNamesCounterparty } from '@/lib/bookkeeping/counterparty-templates'
+import { AUTO_LEARNED_MAPPING_SOURCE, readsAutoLearnedMappingRules } from '@/lib/bookkeeping/mapping-engine'
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
 // MCP resource. Everything here is computed by code from ledger data; the LLM
@@ -161,6 +162,74 @@ function share(agree: number, seen: number): number {
   return seen > 0 ? roundOre(agree / seen) : 0
 }
 
+/**
+ * The company's explicit rules: authoritative, listed separately from
+ * observed patterns (instruction vs observation). `autoLearned` says whether
+ * the rows a booking wrote are part of the read (a company's row with the
+ * source AUTO_LEARNED_MAPPING_SOURCE, mapping-engine isAutoLearnedMappingRule);
+ * without them it is the rows a person described. The one place a read of
+ * the explicit rules leaves the learned rows out.
+ */
+function explicitRulesRead(supabase: SupabaseClient, companyId: string, autoLearned: boolean) {
+  const rules = supabase
+    .from('mapping_rules')
+    .select('rule_name, merchant_pattern, description_pattern, debit_account, vat_treatment')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+  return (autoLearned ? rules : rules.neq('source', AUTO_LEARNED_MAPPING_SOURCE))
+    .order('priority', { ascending: true })
+    .limit(25)
+}
+
+/** A mapping_rules row as explicitRulesRead selects it. */
+interface ExplicitRuleRow {
+  rule_name: string
+  merchant_pattern: string | null
+  description_pattern: string | null
+  debit_account: string | null
+  vat_treatment: string | null
+}
+
+/**
+ * The explicit rules in the rows of explicitRulesRead, as the bookkeeping
+ * profile lists them and the briefing sends them. A rule on a text that
+ * names no one ("INSÄTTNING") is never applied (mapping-engine matchesRule),
+ * so it is no instruction to the agent; a rule that matches nothing is left
+ * out; the first MAX_EXPLICIT_RULES are kept. Pure.
+ */
+export function explicitRulesFrom(rows: ReadonlyArray<ExplicitRuleRow> | null | undefined): ExplicitRule[] {
+  return (rows ?? [])
+    .filter((r) => !r.merchant_pattern || mappingPatternNamesCounterparty(r.merchant_pattern))
+    .map((r) => ({
+      rule_name: r.rule_name,
+      match: r.merchant_pattern ?? r.description_pattern ?? '',
+      account_number: r.debit_account,
+      vat_treatment: r.vat_treatment,
+      source: 'mapping_rule' as const,
+    }))
+    .filter((r) => r.match !== '')
+    .slice(0, MAX_EXPLICIT_RULES)
+}
+
+/**
+ * The rules the company set itself: its explicit rules without the rows a
+ * booking learned, for every company, whether or not its learned rows are
+ * read elsewhere (readsAutoLearnedMappingRules). The same read and the same
+ * rule as buildLedgerContext lists under explicit_rules, less those rows and
+ * without the ledger statistics around them. Throws when the read fails: an
+ * empty list would claim the company has no rules.
+ */
+export async function readWrittenRules(supabase: SupabaseClient, companyId: string): Promise<ExplicitRule[]> {
+  const { data, error } = await explicitRulesRead(supabase, companyId, false)
+  if (error) throw new Error(`written rules read failed: ${error.message}`)
+  return explicitRulesFrom(data)
+}
+
+/** The voucher series a company has numbered in (voucher_sequences rows), each once, in order. */
+export function voucherSeriesInUse(rows: ReadonlyArray<{ voucher_series: unknown }> | null | undefined): string[] {
+  return [...new Set((rows ?? []).map((v) => v.voucher_series as string))].sort()
+}
+
 export async function buildLedgerContext(
   supabase: SupabaseClient,
   companyId: string,
@@ -183,15 +252,9 @@ export async function buildLedgerContext(
         .eq('company_id', companyId)
         .maybeSingle(),
 
-      // Explicit user-authored rules: authoritative, listed separately from
-      // observed patterns (instruction vs observation).
-      supabase
-        .from('mapping_rules')
-        .select('rule_name, merchant_pattern, description_pattern, debit_account, vat_treatment')
-        .eq('company_id', companyId)
-        .eq('is_active', true)
-        .order('priority', { ascending: true })
-        .limit(25),
+      // The learned rows are left out where they are not read: a row no
+      // reader takes is no instruction to the agent.
+      explicitRulesRead(supabase, companyId, readsAutoLearnedMappingRules(companyId)),
 
       // Learned counterparty templates carry vat_treatment, which the RPC's
       // journal-side aggregation cannot see; merged into patterns below.
@@ -347,23 +410,9 @@ export async function buildLedgerContext(
     })
   }
 
-  const explicitRules: ExplicitRule[] = (rulesRes.data ?? [])
-    // A rule on a text that names no one ("INSÄTTNING") is never applied
-    // (mapping-engine matchesRule), so it is no instruction to the agent.
-    .filter((r) => !r.merchant_pattern || mappingPatternNamesCounterparty(r.merchant_pattern))
-    .map((r) => ({
-      rule_name: r.rule_name,
-      match: r.merchant_pattern ?? r.description_pattern ?? '',
-      account_number: r.debit_account,
-      vat_treatment: r.vat_treatment,
-      source: 'mapping_rule' as const,
-    }))
-    .filter((r) => r.match !== '')
-    .slice(0, MAX_EXPLICIT_RULES)
+  const explicitRules = explicitRulesFrom(rulesRes.data)
 
-  const voucherSeries = [
-    ...new Set((voucherSeriesRes.data ?? []).map((v) => v.voucher_series as string)),
-  ].sort()
+  const voucherSeries = voucherSeriesInUse(voucherSeriesRes.data)
 
   return {
     meta: {

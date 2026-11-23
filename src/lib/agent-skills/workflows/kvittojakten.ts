@@ -138,13 +138,13 @@ Call \`gnubok_list_companies\`. One company: use it. Several: ask the user which
 
 ### Step 2: Get the worklist
 
-\`gnubok_call_tool({ tool: "gnubok_receipt_hunt_worklist", arguments: { limit: 25 } })\`. The worklist is not in tools/list, so it is always invoked through \`gnubok_call_tool\` (a chosen \`company_id\` goes inside \`arguments\`). Each item is one missing underlag: unbooked bank purchases first (a receipt found now lets the purchase be booked from it), then booked verifikat, largest first within each:
+\`gnubok_call_tool({ tool: "gnubok_receipt_hunt_worklist", arguments: { limit: 25 } })\`. The worklist is not in tools/list, so it is always invoked through \`gnubok_call_tool\` (a chosen \`company_id\` goes inside \`arguments\`). When the user names a period ("förra månaden"), add \`since\` and \`until\` (YYYY-MM-DD, both inclusive) to \`arguments\`. Each item is one missing underlag: unbooked bank purchases first (a receipt found now lets the purchase be booked from it), then booked verifikat, largest first within each:
 
 - \`kind: "verifikat"\` with a \`journal_entry_id\` (already booked), or \`kind: "transaction"\` with a \`transaction_id\` (a bank purchase not booked yet)
 - \`counterparty\`, \`description\`, \`invoice_number\`, \`amount\` + \`currency\`, \`date\`
 - \`search_from\` / \`search_to\`: the date window worth searching
 - \`underlag_on\`: the verifikat pays an invoice whose underlag is already on the invoice's own verifikat (\`underlag_on.voucher\`). Do not search mail: a forward only brings in the same invoice again. Stage \`underlag_on.document_id\` on this item in step 5 with \`copy: true\`
-- \`mail_searchable: false\` without \`underlag_on\`: salary, tax, bank fees, verifikat that bought nothing (money in, a share issue, a transfer between the company's own accounts), and verifikat imported from earlier books, whose underlag is where those books were kept. Skip the search and report it under "needs a human". If the user confirms an imported one's underlag is still there, stage \`gnubok_mark_no_document_required\` with the reason its \`next_step\` quotes
+- \`mail_searchable: false\` without \`underlag_on\`: salary, tax, bank fees, Stripe's own rows on the Stripe balance (its fees, refunds, payouts), verifikat that bought nothing (money in, a share issue, a transfer between the company's own accounts), and verifikat imported from earlier books, whose underlag is where those books were kept. Skip the search and report it under "needs a human". If the user confirms an imported one's underlag is still there, stage \`gnubok_mark_no_document_required\` with the reason its \`next_step\` quotes
 - \`portal\`: the vendor does not mail its invoices. Do not search mail. If "Your harness" has a portal section and you have its tools, handle the item there; otherwise give the user the \`portal.url\` in the final report
 - \`tip_possible: true\`: a restaurant or bar, where the card charge is the bill plus a tip
 - \`next_step\`: the one sentence to give the user for this item when you cannot bring the document in. Report it verbatim; do not invent your own wording

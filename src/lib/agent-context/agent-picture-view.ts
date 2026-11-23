@@ -1,7 +1,8 @@
 /**
  * What the agent picture says, worked out from the picture's data: which
- * counts to name, the sentence about the checks, the memory's dots, when the
- * company was last updated, how the agents are named and grouped.
+ * counts to name, what waits on the company's people, the sentence about the
+ * checks, the memory's dots, when the company was last updated, how the
+ * agents are named and grouped.
  *
  * Nothing here judges the books: the checks' own results are counted and
  * named, never weighed. Words stay with the screen: these helpers answer
@@ -12,7 +13,7 @@
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
-import type { PictureAgent, PictureChecks, PictureCounts, PictureSourceGroup } from './agent-picture'
+import type { PictureAgent, PictureChecks, PictureCounts, PictureSourceGroup, PictureWaiting } from './agent-picture'
 
 // ---------------------------------------------------------------- times
 
@@ -85,6 +86,24 @@ export function countParts(counts: PictureCounts): { parts: Array<{ kind: CountK
     return count !== null && count > 0 ? [{ kind, count }] : []
   })
   return { parts, unknown: COUNT_ORDER.every((kind) => counts[kind] === null) }
+}
+
+// ---------------------------------------------------------------- what waits
+
+/** What the company card's waiting line names: the questions and the proposals, or the one of them that waits. */
+export type WaitingLine = { kind: 'both'; questions: number; proposals: number } | { kind: 'questions'; count: number } | { kind: 'proposals'; count: number }
+
+/**
+ * The line under the company's name: what waits on the company's people.
+ * Null (no line) when nothing waits, and when it was not counted.
+ */
+export function waitingLine(waiting: PictureWaiting | null | undefined): WaitingLine | null {
+  if (!waiting) return null
+  const questions = Math.max(0, waiting.questions)
+  const proposals = Math.max(0, waiting.proposals)
+  if (questions > 0 && proposals > 0) return { kind: 'both', questions, proposals }
+  if (questions > 0) return { kind: 'questions', count: questions }
+  return proposals > 0 ? { kind: 'proposals', count: proposals } : null
 }
 
 // ---------------------------------------------------------------- memory dots

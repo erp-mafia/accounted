@@ -13,26 +13,42 @@ import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/c
 import { StatusGlyph, type StatusTone } from '@/components/ui/status-glyph'
 import { RawText } from '@/components/wiki/wiki-parts'
 import { formatCurrency } from '@/lib/utils'
-import type { PictureCheckLine, PictureChecks, PictureCheckStatus } from '@/lib/agent-context/agent-picture'
+import type { PictureActivity, PictureAgentCard, PictureCheckLine, PictureChecks, PictureCheckStatus } from '@/lib/agent-context/agent-picture'
+import { PICTURE_ROWS, isPictureRow, type PictureRow } from '@/lib/agent-context/wiki-views'
+import { AgentPanel, type AgentPanelCalls } from './AgentPanel'
+import type { PictureWords } from './agent-card-text'
 
-function ListSkeleton() {
+function FoldersSkeleton() {
   return (
-    <div aria-busy>
-      {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="flex h-11 items-center border-b-hairline">
-          <Skeleton className="h-3.5 w-2/3" />
-        </div>
+    <div aria-busy className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <Skeleton key={i} className="h-24 w-full rounded-lg" />
       ))}
     </div>
   )
 }
 
-// The catalogue's list brings the catalogue's own code with it: loaded when the Kunskap view is first opened.
-const KnowledgeList = dynamic(() => import('@/components/skills/KnowledgeList').then((m) => m.KnowledgeList), { loading: () => <ListSkeleton /> })
+// The folders bring the catalogue's folder mark and item view with them: loaded when the Kunskap view is first opened.
+const KnowledgeFolders = dynamic(() => import('@/components/skills/KnowledgeFolders').then((m) => m.KnowledgeFolders), { loading: () => <FoldersSkeleton /> })
 
-/** What a row of the company's card opens. */
-export type PictureView = 'context' | 'checks' | 'memory' | 'knowledge'
+/** What a row of the company's card opens: the rows are named where their addresses are (lib/agent-context/wiki-views.ts). */
+export { PICTURE_ROWS as PICTURE_VIEWS, isPictureRow as isPictureView }
+export type PictureView = PictureRow
 type SheetView = Exclude<PictureView, 'context'>
+
+/** An agent card as its panel shows it: the card, its name, and what the picture knows of its calls. */
+export interface PictureAgentView {
+  card: PictureAgentCard
+  name: string
+  /** The name is the company's own text (a hand-made key's, a service account's). */
+  maskName: boolean
+  /** The calls the card made today; null when it made none or the log could not be read. */
+  calls: AgentPanelCalls | null
+  activity: PictureActivity | null
+}
+
+/** What the side panel holds: a row's view, or an agent card. */
+type Shown = { sheet: SheetView } | { agent: PictureAgentView }
 
 /** The briefing, as the page that hosts the picture loads it (once): the context graph is drawn from its text. */
 export type PictureContext = { state: 'loading' } | { state: 'ok'; text: string } | { state: 'failed'; description: string; onRetry: () => void }
@@ -60,34 +76,51 @@ const REASONS = new Set([
  * view, titled with the row's name, with a close control and nothing to
  * switch between: Kontext the context graph in the app's wide dialog with
  * the raw text under it, Kontroller the check lines, Minne the memory as one
- * list, Kunskap the catalogue's knowledge list. The last three open in the
- * app's slide-over.
+ * list, Kunskap the knowledge items as folders, each opening in place. The
+ * last three open in the app's slide-over, and so does what is behind an
+ * agent card (`agent`, AgentPanel), titled with the card's name. A row and a
+ * card are not open at once: with both given, the row shows.
+ *
+ * `knowledgeItem` is the knowledge item the address names: the Kunskap view
+ * opens on its folder, and `onKnowledgeItemClose` is told when that folder
+ * is left.
  */
 export function PictureViews({
   view,
+  agent = null,
   onClose,
   companyName,
   context,
   checks,
-  industry,
+  activeKnowledge,
+  knowledgeItem = null,
+  onKnowledgeItemClose,
   when,
+  time,
 }: {
   view: PictureView | null
+  /** The agent card that is open; null when none is. */
+  agent?: PictureAgentView | null
   onClose: () => void
   companyName: string | null
   context: PictureContext
   checks: PictureChecks | null
-  /** The company's own industry item, which the knowledge list puts first. */
-  industry: string | null
+  /** The knowledge items the agent gets today, by id; null when that could not be read. */
+  activeKnowledge: readonly string[] | null
+  knowledgeItem?: string | null
+  onKnowledgeItemClose?: () => void
   /** An instant or a date in words: today (with its time), another day by its date. */
   when: (instant: string) => string
+  /** The time of day of an instant. */
+  time: PictureWords['time']
 }) {
   const t = useTranslations('wiki')
   const sheet: SheetView | null = view && view !== 'context' ? view : null
+  const current: Shown | null = sheet ? { sheet } : view === null && agent ? { agent } : null
   // The slide-over keeps its content while it slides away.
-  const [lastSheet, setLastSheet] = useState<SheetView | null>(sheet)
-  if (sheet && sheet !== lastSheet) setLastSheet(sheet)
-  const shown = sheet ?? lastSheet
+  const [last, setLast] = useState<Shown | null>(current)
+  if (current && !sameShown(current, last)) setLast(current)
+  const shown = current ?? last
 
   return (
     <>
@@ -112,15 +145,27 @@ export function PictureViews({
         </DialogContent>
       </Dialog>
 
-      <SlideOver open={sheet !== null} onOpenChange={(open) => !open && onClose()}>
+      <SlideOver open={current !== null} onOpenChange={(open) => !open && onClose()}>
         <SlideOverContent className="w-[560px]" aria-describedby={undefined}>
-          {shown && (
+          {shown && 'sheet' in shown && (
             <>
-              <SlideOverHeader kicker={companyName ? <span data-ph-mask="">{companyName}</span> : undefined} title={t(`picture.row_${shown}`)} />
+              <SlideOverHeader kicker={companyName ? <span data-ph-mask="">{companyName}</span> : undefined} title={t(`picture.row_${shown.sheet}`)} />
               <SlideOverBody className="space-y-5">
-                {shown === 'checks' && <ChecksView checks={checks} when={when} />}
-                {shown === 'memory' && <AgentMemoryPanel plain />}
-                {shown === 'knowledge' && <KnowledgeList industry={industry} />}
+                {shown.sheet === 'checks' && <ChecksView checks={checks} when={when} />}
+                {shown.sheet === 'memory' && <AgentMemoryPanel plain />}
+                {shown.sheet === 'knowledge' && <KnowledgeFolders active={activeKnowledge} item={knowledgeItem} onItemClose={onKnowledgeItemClose} />}
+              </SlideOverBody>
+            </>
+          )}
+          {shown && 'agent' in shown && (
+            <>
+              <SlideOverHeader
+                kicker={companyName ? <span data-ph-mask="">{companyName}</span> : undefined}
+                title={shown.agent.maskName ? <span data-ph-mask="">{shown.agent.name}</span> : shown.agent.name}
+              />
+              <SlideOverBody className="space-y-5">
+                {/* One read per card: another card's panel starts over. */}
+                <AgentPanel key={shown.agent.card.id} card={shown.agent.card} calls={shown.agent.calls} activity={shown.agent.activity} words={{ when, time }} />
               </SlideOverBody>
             </>
           )}
@@ -128,6 +173,13 @@ export function PictureViews({
       </SlideOver>
     </>
   )
+}
+
+/** Whether the panel already holds this: the same row's view, or the card as it was last given. */
+function sameShown(a: Shown, b: Shown | null): boolean {
+  if (!b) return false
+  if ('sheet' in a) return 'sheet' in b && a.sheet === b.sheet
+  return 'agent' in b && a.agent === b.agent
 }
 
 function ChecksView({ checks, when }: { checks: PictureChecks | null; when: (instant: string) => string }) {

@@ -1,8 +1,16 @@
 /**
  * AGENT_PICTURE_COMPANY_IDS: the picture of what a connected agent gets, on
  * the Kontext view of /wiki (what is connected, the company, the agents) and
- * its two routes under /api/wiki/picture. Unset = nobody: the Kontext view
+ * its routes under /api/wiki/picture. Unset = nobody: the Kontext view
  * keeps its graph for every company.
+ *
+ * Where it is on, the Agenter menu is the picture and Bokföringsregler
+ * (components/dashboard/nav-v3.ts), the addresses whose content the picture
+ * holds lead to it (lib/agent-context/wiki-views.ts: /skills and a knowledge
+ * item, the wiki's Minne and Arbetssätt views), and the bookkeeping profile
+ * leads to /rules, which says how the company books. The Chatt row is not
+ * the picture's to hide: it stays in the menu for as long as the built-in
+ * chat does (lib/env/assistant-chat-switch.ts).
  *
  * It rolls out per company, like COMPANY_QUESTIONS_COMPANY_IDS: `*` opens it
  * for every company, a comma-separated list of company ids for those only.

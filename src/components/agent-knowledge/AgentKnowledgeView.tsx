@@ -7,7 +7,6 @@ import {
   SettingsRow,
   SettingsSectionHeader,
 } from '@/components/settings/SettingsRows'
-import { AccountNumber } from '@/components/ui/account-number'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatDateLong } from '@/lib/utils'
 import type { LedgerContext } from '@/lib/agent-context/ledger-context'
@@ -15,6 +14,7 @@ import type { DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
 import type { AgentCompetence } from '@/lib/agent-context/agent-competence'
 import { vatLabel } from '@/lib/agent-context/vat-labels'
 import { CompetenceCard, FactsCard } from './AgentCompetenceSections'
+import { ExplicitRuleRows } from './ExplicitRuleRows'
 
 export function AgentKnowledgeView({
   context,
@@ -85,29 +85,7 @@ export function AgentKnowledgeView({
 
         {explicit_rules.length > 0 && (
           <SettingsGroup label={t('rules_title')} help={t('rules_description')}>
-            {explicit_rules.map((r, i) => {
-              const vat = vatLabel(r.vat_treatment)
-              return (
-                <div
-                  key={r.rule_name + r.match + i}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b-hairline px-1 py-3"
-                >
-                  <span className="text-sm">{r.rule_name}</span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-                    {r.match}
-                  </span>
-                  <span className="flex shrink-0 flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-                    {r.account_number ? (
-                      <AccountNumber number={r.account_number} showName size="sm" />
-                    ) : (
-                      <span>-</span>
-                    )}
-                    {vat && <span>· {vat}</span>}
-                    <span>· {t('src_rule')}</span>
-                  </span>
-                </div>
-              )
-            })}
+            <ExplicitRuleRows rules={explicit_rules} />
           </SettingsGroup>
         )}
 

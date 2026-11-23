@@ -6,13 +6,18 @@ import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
 import { stockholmWallTimeToUtc, todayIsoStockholm } from '@/lib/dates/iso'
 import { listConnections } from '@/lib/digital-mailboxes/connections'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
+import { isCompanyQuestionsEnabled } from '@/lib/env/company-questions-switch'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { inboxHref, isInkorgV2Enabled, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { createLogger } from '@/lib/logger'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { connectionKind, type ConnectionKind } from '@/lib/settings/mcp-connections'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createServiceClient } from '@/lib/supabase/server'
+import { loadCompanySkillRows } from '@/lib/agent-skills/company-skills'
 import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
-import { catalogueKnowledge } from '@/lib/agent-skills/knowledge-list'
+import { catalogueKnowledge, chosenKnowledge, isActiveKnowledge } from '@/lib/agent-skills/knowledge-list'
+import { agentCards, tallyWork, type CardConnection, type StagerRef } from './agent-cards'
 
 const log = createLogger('agent-picture')
 
@@ -20,8 +25,8 @@ const log = createLogger('agent-picture')
  * The picture of what a connected agent gets, as data: what is connected to
  * the company (the sources), the company itself (how much it holds, what it
  * remembers, what the agent knows, and whether the books agree with what
- * comes from outside) and the agents connected to it with what they did
- * today.
+ * comes from outside) and the agents connected to it, one card per product,
+ * with what they did today.
  *
  * Every part is best effort with a deadline of its own: a part that fails or
  * runs out of time comes back as unknown (null, or a source whose state is
@@ -34,8 +39,9 @@ const log = createLogger('agent-picture')
  *
  * Every read filters on the company. The exceptions are named where they
  * are made: the company's own row (by id), the signed-in person's WhatsApp
- * link and own connections (by user), and the knowledge catalogue, whose
- * registry is the same for every company.
+ * link and own connections (by user), the names of the people whose
+ * connections the person may list (by their ids), and the knowledge
+ * catalogue, whose registry is the same for every company.
  */
 
 /** A source or connection as the picture draws it. */
@@ -133,14 +139,24 @@ export interface PictureChecks {
 }
 
 export interface PictureKnowledge {
-  /** How many items the catalogue's knowledge list holds for the company (lib/agent-skills/knowledge-list.ts); null when it could not be read. */
+  /** How many knowledge items the company's agent gets today (lib/agent-skills/knowledge-list.ts); null when it could not be read. */
   items: number | null
-  /** The company's own industry item in that list, which the list puts first; null without one. */
-  industry: string | null
+  /** Those items, by id: the folders tell what the agent gets from what else exists with them. Null when it could not be read. */
+  active: string[] | null
+}
+
+/** What waits on the company's people: questions to answer and proposals to approve, across every agent. */
+export interface PictureWaiting {
+  /** Open questions; 0 for a company without the question list. */
+  questions: number
+  /** Proposals that wait for approval. */
+  proposals: number
 }
 
 export interface PictureCompany {
   name: string | null
+  /** What waits on the company's people, as Hem and the menu count it; null when it was not counted. */
+  waiting: PictureWaiting | null
   counts: PictureCounts
   /** Active remembered facts; null when the count could not be read. */
   memory_facts: number | null
@@ -152,6 +168,24 @@ export interface PictureCompany {
 export interface PictureActorActivity {
   calls_today: number
   last_call_at: string | null
+}
+
+/** How many questions a stager asked and how many proposals it prepared. */
+export interface PictureWorkCount {
+  questions: number
+  proposals: number
+}
+
+/**
+ * What the company's connections did for it today, from the question list
+ * and the staged operations: counts by who staged the row, never what a
+ * question or a proposal says. A row that names a connection by id is
+ * counted under that id; a row that carries a label and no id under the
+ * label. Which card a count belongs to is worked out in agent-cards.ts.
+ */
+export interface PictureWork {
+  by_connection: Record<string, PictureWorkCount>
+  by_label: Record<string, PictureWorkCount>
 }
 
 /** What the agents did, from the tool call log: counts and times, never which records were read. */
@@ -166,8 +200,11 @@ export interface PictureActivity {
   capped: boolean
   /** Active remembered facts right now, so a fact saved while the picture is open shows; null when the count could not be read. */
   memory_facts: number | null
+  /** The questions asked and the proposals prepared that day, by stager; null when they could not be read. */
+  work: PictureWork | null
 }
 
+/** One connection: an api key. */
 export interface PictureAgent {
   /** The connection's id (the api key's). */
   id: string
@@ -179,11 +216,37 @@ export interface PictureAgent {
   last_used_at: string | null
   calls_today: number
   last_call_at: string | null
+  /** When the connection was made. */
+  connected_at: string
+  /** The signed-in person's own connection. */
+  is_own: boolean
+  /** Whose a colleague's connection is (full name, else e-mail); null for the person's own, for a service account's, and when the name could not be read. */
+  owner_name: string | null
+}
+
+/**
+ * One card of the agents column: a product (every connection the screen
+ * names by the same kind), a connection with a name of its own, or a service
+ * account (agent-cards.ts).
+ */
+export interface PictureAgentCard {
+  /** Unique among the cards: the kind, `key:` and the connection's id, or `account:` and the service account's id. */
+  id: string
+  kind: ConnectionKind
+  /** The name of a card that is one named connection; null when the screen names the card by its kind or by its account. */
+  name: string | null
+  /** The service account the card stands for, by its name; null otherwise. */
+  service_account: string | null
+  /** The connections behind the card, the one that worked last first. */
+  connections: PictureAgent[]
+  /** The labels only this card's connections write in the records: a row that carries such a label and no id belongs to the card. */
+  labels: string[]
 }
 
 export interface PictureAgents {
-  list: PictureAgent[]
-  /** Connections past the listed ones. */
+  /** The cards, the ones that worked last first. */
+  list: PictureAgentCard[]
+  /** Cards past the listed ones. */
   more: number
   /** null when the tool call log could not be read: the counts above are then 0 and mean nothing. */
   activity: PictureActivity | null
@@ -199,7 +262,7 @@ export interface AgentPicture {
 
 /**
  * What the door wires in. The loader lives in the agent module and reads
- * the ledger and the registers only through their own readers; the two
+ * the ledger and the registers only through their own readers; the ones
  * below belong to other modules, so the route hands them over.
  */
 export interface AgentPicturePorts {
@@ -207,6 +270,8 @@ export interface AgentPicturePorts {
   ledgerRead?: <T>(read: () => Promise<T>) => Promise<T>
   /** The company's Skatteverket connection and when the skattekonto saldo was last fetched. */
   skatteverket?: () => Promise<{ state: 'connected' | 'not_connected' | 'unknown'; last_sync_at: string | null }>
+  /** What waits on the company's people, from the counters Hem and the menu read. */
+  waiting?: () => Promise<PictureWaiting>
 }
 
 /** A part's deadline. The reads behind it keep running; their answer is just no longer waited for. */
@@ -214,7 +279,7 @@ const PART_DEADLINE_MS = 2500
 /** The checks read the reports, so they get longer. */
 const CHECKS_DEADLINE_MS = 6000
 
-/** Connections listed on the picture; the rest are a number. */
+/** Cards listed in the agents column; the rest are a number. */
 const MAX_AGENTS = 6
 /** Not connected sources offered beside the connected ones. */
 const MAX_NOT_CONNECTED = 2
@@ -225,7 +290,8 @@ const HREF: Record<PictureSourceKey, string> = {
   bank: '/settings/banking',
   skatteverket: '/settings/skatteverket',
   bolagsverket: '/settings/company',
-  inbox: '/e/general/invoice-inbox',
+  // The workspace's address; loadSources puts the company's own inbox in its place.
+  inbox: LEGACY_INBOX_HREF,
   whatsapp: '/settings/whatsapp',
   kivra: '/settings/connections',
   billo: '/settings/connections',
@@ -490,6 +556,8 @@ async function loadSources(
   ])
 
   const present = (items: Array<PictureSource | null>): PictureSource[] => items.filter((item): item is PictureSource => item !== null)
+  // The inbox card leads to the company's inbox: the new Inkorg page inside its rollout, the workspace outside it.
+  const inboxLink = inboxHref(isInkorgV2Enabled(companyId))
   return limitNotConnected([
     // A failed read is unknown, never "not connected".
     { id: 'bank', items: bank ?? [source('bank', 'unknown')] },
@@ -503,7 +571,7 @@ async function loadSources(
     {
       id: 'documents',
       items: present([
-        has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? (inbox ?? source('inbox', 'unknown')) : null,
+        has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? { ...(inbox ?? source('inbox', 'unknown')), href: inboxLink } : null,
         whatsapp,
         ...(mailboxes ?? []),
         gmail,
@@ -544,21 +612,28 @@ async function loadMemoryFacts(supabase: SupabaseClient, companyId: string): Pro
 }
 
 /**
- * The catalogue's knowledge list for the company, as a number, and the
- * company's own industry item in it (the first live industry item of its
- * profile, as the catalogue page picks it). The registry behind the list is
- * the same for every company, so that read has no company filter.
+ * The knowledge items the company's agent gets today: the items of the
+ * catalogue's knowledge list that are active for the company, by the
+ * catalogue's own rule (lib/agent-skills/knowledge-list.ts: a general item
+ * always, an industry or company-form item when the profile names it or the
+ * company installed it). The registry behind the list is the same for every
+ * company, so that read has no company filter.
+ *
+ * Throws when the profile cannot be read: which items are active is then not
+ * known, and nothing is guessed.
  */
-async function loadKnowledge(supabase: SupabaseClient, companyId: string): Promise<{ items: number; industry: string | null }> {
-  const [options, profile] = await Promise.all([
+async function loadKnowledge(supabase: SupabaseClient, companyId: string): Promise<{ items: number; active: string[] }> {
+  const [options, profile, installed] = await Promise.all([
     loadKnowledgeOptions(supabase, companyId),
-    supabase.from('agent_profiles').select('vertical_atoms').eq('company_id', companyId).maybeSingle(),
+    supabase.from('agent_profiles').select('vertical_atoms, modifier_atoms').eq('company_id', companyId).maybeSingle(),
+    loadCompanySkillRows(supabase, companyId),
   ])
-  const list = catalogueKnowledge(options)
-  // The industry only orders the list: a failed profile read leaves it unordered.
-  const chosen = profile.error ? [] : ((profile.data as { vertical_atoms: string[] | null } | null)?.vertical_atoms ?? [])
-  const industry = chosen.find((id) => list.some((option) => option.id === id && option.tier === 'vertical')) ?? null
-  return { items: list.length, industry }
+  if (profile.error) failed('agent profile', profile.error)
+  const chosen = chosenKnowledge(profile.data as { vertical_atoms: string[] | null; modifier_atoms: string[] | null } | null, installed)
+  const active = catalogueKnowledge(options)
+    .filter((option) => isActiveKnowledge(option.tier, option.id, chosen))
+    .map((option) => option.id)
+  return { items: active.length, active }
 }
 
 // ---------------------------------------------------------------- checks
@@ -704,21 +779,85 @@ const ACTIVITY_MAX_PAGES = 5
  * from the newest rows of the tool call log backwards, a page at a time,
  * until a page reaches before today. The log holds the tool's name and who
  * called, never the arguments or what was read. The answer also carries the
+ * questions asked and the proposals prepared today, by stager, and the
  * number of remembered facts right now, so the picture's memory follows a
  * fact saved while it is open.
  *
  * Throws when the log cannot be read.
  */
 export async function loadAgentActivity(supabase: SupabaseClient, companyId: string, now: Date = new Date()): Promise<PictureActivity> {
-  const [calls, memoryFacts] = await Promise.all([readToolCalls(supabase, companyId, now), loadMemoryFacts(supabase, companyId)])
-  return { ...calls, memory_facts: memoryFacts }
+  const [calls, memoryFacts, work] = await Promise.all([
+    readToolCalls(supabase, companyId, now),
+    loadMemoryFacts(supabase, companyId),
+    workTodayOrUnknown(supabase, companyId, now),
+  ])
+  return { ...calls, memory_facts: memoryFacts, work }
+}
+
+/** The actor types a connection stages a proposal as (lib/auth/api-keys.ts credentialActor). */
+export const CONNECTION_ACTOR_TYPES = ['api_key', 'mcp_oauth', 'service_account'] as const
+/** Proposals read for one day at most: past it the day's counts are lower bounds. */
+const WORK_MAX_ROWS = 5000
+
+/**
+ * The questions asked and the proposals prepared today (the Stockholm
+ * calendar day), counted by who staged them. Only who staged each row is
+ * read, never what it says. A question its asker took back and a proposal a
+ * newer one replaced are left out: neither is something done for the
+ * company. The questions are read only where the company has the question
+ * list.
+ *
+ * Throws when a read fails.
+ */
+async function readWorkToday(supabase: SupabaseClient, companyId: string, now: Date): Promise<PictureWork> {
+  const dayStart = stockholmWallTimeToUtc(todayIsoStockholm(now), '00:00').toISOString()
+  const [questions, proposals] = await Promise.all([
+    (async (): Promise<StagerRef[]> => {
+      if (!isCompanyQuestionsEnabled(companyId)) return []
+      const { data, error } = await supabase
+        .from('company_questions')
+        .select('actor_id, actor_label')
+        .eq('company_id', companyId)
+        .gte('created_at', dayStart)
+        .or('close_reason.is.null,close_reason.neq.withdrawn')
+      if (error) failed('questions asked today', error)
+      return (data ?? []) as StagerRef[]
+    })(),
+    fetchAllRows<StagerRef>(
+      ({ from, to }) =>
+        supabase
+          .from('pending_operations')
+          .select('actor_id, actor_label')
+          .eq('company_id', companyId)
+          .in('actor_type', [...CONNECTION_ACTOR_TYPES])
+          .gte('created_at', dayStart)
+          .or('rejection_category.is.null,rejection_category.neq.superseded')
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { maxRows: WORK_MAX_ROWS },
+    ),
+  ])
+  return tallyWork(questions, proposals)
+}
+
+/** The day's work, or null (with a log line) when it cannot be read: the calls are still answered. */
+async function workTodayOrUnknown(supabase: SupabaseClient, companyId: string, now: Date): Promise<PictureWork | null> {
+  try {
+    return await readWorkToday(supabase, companyId, now)
+  } catch (err) {
+    log.warn('work of the day unavailable', { companyId, reason: err instanceof Error ? err.message : String(err) })
+    return null
+  }
 }
 
 /** The tool call log's part of the activity. Throws when the log cannot be read. */
-async function readToolCalls(supabase: SupabaseClient, companyId: string, now: Date): Promise<Omit<PictureActivity, 'memory_facts'>> {
+async function readToolCalls(supabase: SupabaseClient, companyId: string, now: Date): Promise<Omit<PictureActivity, 'memory_facts' | 'work'>> {
   const day = todayIsoStockholm(now)
   const dayStart = stockholmWallTimeToUtc(day, '00:00').getTime()
-  const actors: Record<string, PictureActorActivity> = {}
+  // No prototype: the key is text read from the log, and a table without one
+  // holds any text as an ordinary entry.
+  const actors: Record<string, PictureActorActivity> = Object.create(null) as Record<string, PictureActorActivity>
   let capped = false
 
   for (let page = 0; page < ACTIVITY_MAX_PAGES; page += 1) {
@@ -824,49 +963,127 @@ async function serviceAccountNames(companyId: string, ids: readonly string[]): P
   return names
 }
 
-/** The connections with their tool calls; the picture adds the memory count it reads in its own part. */
-type AgentsRead = Omit<PictureAgents, 'activity'> & { activity: Omit<PictureActivity, 'memory_facts'> | null }
+/**
+ * The names of the other people whose connections are listed, by user id:
+ * full name, else e-mail, as the API settings page says whose a colleague's
+ * sign-in is. Read with the service role, keyed by the owners of keys the
+ * person's own access already listed. Empty when they cannot be read.
+ */
+async function ownerNames(companyId: string, userIds: readonly string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (userIds.length === 0) return names
+  // People, not company rows: the filter is their ids.
+  const { data, error } = await createServiceClient().from('profiles').select('id, full_name, email').in('id', userIds)
+  if (error) {
+    log.warn('connection owner names unavailable', { companyId, reason: error.message })
+    return names
+  }
+  for (const row of (data ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>) {
+    const name = row.full_name?.trim() || row.email
+    if (name) names.set(row.id, name)
+  }
+  return names
+}
 
-async function loadAgents(supabase: SupabaseClient, companyId: string, userId: string, now: Date): Promise<AgentsRead> {
-  const [keys, activity] = await Promise.all([
-    loadConnectionKeys(supabase, companyId, userId),
-    readToolCalls(supabase, companyId, now).catch((err: unknown) => {
-      log.warn('tool call log unavailable', { companyId, reason: err instanceof Error ? err.message : String(err) })
-      return null
-    }),
-  ])
+/** A connection as it is read: what the picture shows of it, and what puts it on a card. */
+type ReadConnection = PictureAgent & CardConnection
+
+/**
+ * The company's connections as the person may list them, the ones that
+ * worked last first, each with the calls `toolCalls` holds for it (the log
+ * is read beside the reads here). Throws when the connections cannot be
+ * read.
+ */
+async function readConnections(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  toolCalls: Promise<Omit<PictureActivity, 'memory_facts' | 'work'> | null>,
+): Promise<ReadConnection[]> {
+  const keys = await loadConnectionKeys(supabase, companyId, userId)
 
   const partnerSlugs = keys.map((key) => partnerSlugOf(key.client)).filter((slug): slug is string => slug !== null)
   const accountIds = [...new Set(keys.map((key) => key.service_account_id).filter((id): id is string => id !== null))]
-  const [partnerNames, accountNames] = await Promise.all([
+  const colleagueIds = [...new Set(keys.filter((key) => key.user_id !== userId && !key.service_account_id).map((key) => key.user_id))]
+  const [partnerNames, accountNames, owners, activity] = await Promise.all([
     partnerSlugs.length > 0 ? partnerClientNames(createServiceClient(), partnerSlugs) : new Map<string, string>(),
     serviceAccountNames(companyId, accountIds),
+    ownerNames(companyId, colleagueIds),
+    toolCalls,
   ])
 
-  const agents = keys.map((key): PictureAgent => {
+  const connections = keys.map((key): ReadConnection => {
+    const partnerSlug = partnerSlugOf(key.client)
+    const partnerName = partnerNames.get(partnerSlug ?? '') ?? null
     // Who a key is comes from its one definition (credentialActor): a key the sign-in minted is a client.
     const actor = credentialActor({
       apiKeyName: key.name,
       client: key.client,
-      serviceAccount: key.service_account_id ? { id: key.service_account_id, name: key.name } : null,
+      clientName: partnerName,
+      serviceAccount: key.service_account_id ? { id: key.service_account_id, name: accountNames.get(key.service_account_id) ?? key.name } : null,
     })
     const kind = connectionKind({ source: actor.type === 'mcp_oauth' ? 'signin' : 'manual', client: key.client })
+    // What the key's records call it. Not known for an account or a partner whose name could
+    // not be read, nor for a client that registered itself (its name is read when it calls).
+    const labelKnown = key.service_account_id
+      ? accountNames.has(key.service_account_id)
+      : partnerSlug
+        ? partnerName !== null
+        : !key.client?.startsWith('registered:')
     const seen = activity?.actors[key.id]
     return {
       id: key.id,
       kind,
-      name: kind === 'key' ? key.name : kind === 'partner' ? (partnerNames.get(partnerSlugOf(key.client) ?? '') ?? null) : null,
+      name: kind === 'key' ? key.name : kind === 'partner' ? partnerName : null,
       // Without the account's name the key's own stands in: the connection is still the account's.
       service_account: key.service_account_id ? (accountNames.get(key.service_account_id) ?? key.name) : null,
+      service_account_id: key.service_account_id,
+      label: labelKnown ? actor.label : null,
       last_used_at: key.last_used_at,
       calls_today: seen?.calls_today ?? 0,
       last_call_at: seen?.last_call_at ?? null,
+      connected_at: key.created_at,
+      is_own: key.user_id === userId,
+      owner_name: key.user_id === userId || key.service_account_id ? null : (owners.get(key.user_id) ?? null),
     }
   })
   // The ones that worked last come first.
   const latest = (agent: PictureAgent) => Date.parse(agent.last_call_at ?? agent.last_used_at ?? '') || 0
-  agents.sort((a, b) => latest(b) - latest(a))
-  return { list: agents.slice(0, MAX_AGENTS), more: Math.max(0, agents.length - MAX_AGENTS), activity }
+  return connections.sort((a, b) => latest(b) - latest(a))
+}
+
+/** A connection as the picture hands it out: without what only put it on its card. */
+function shownConnection({ service_account_id: _accountId, label: _label, ...connection }: ReadConnection): PictureAgent {
+  return connection
+}
+
+/**
+ * Every card of the company's connections as the person may list them: the
+ * ones the picture lists and the ones past them. The tool call log is not
+ * read, so a connection's calls are 0 here. Throws when the connections
+ * cannot be read.
+ */
+export async function loadAgentCards(supabase: SupabaseClient, companyId: string, userId: string): Promise<PictureAgentCard[]> {
+  const connections = await readConnections(supabase, companyId, userId, Promise.resolve(null))
+  return agentCards(connections).map((card): PictureAgentCard => ({ ...card, connections: card.connections.map(shownConnection) }))
+}
+
+/** The cards with their tool calls and the day's work; the picture adds the memory count it reads in its own part. */
+type AgentsRead = Omit<PictureAgents, 'activity'> & { activity: Omit<PictureActivity, 'memory_facts'> | null }
+
+async function loadAgents(supabase: SupabaseClient, companyId: string, userId: string, now: Date): Promise<AgentsRead> {
+  const toolCalls = readToolCalls(supabase, companyId, now).catch((err: unknown) => {
+    log.warn('tool call log unavailable', { companyId, reason: err instanceof Error ? err.message : String(err) })
+    return null
+  })
+  const [connections, calls, work] = await Promise.all([
+    readConnections(supabase, companyId, userId, toolCalls),
+    toolCalls,
+    workTodayOrUnknown(supabase, companyId, now),
+  ])
+  // One card per product (agent-cards.ts), in the order of each card's newest connection.
+  const cards = agentCards(connections).map((card): PictureAgentCard => ({ ...card, connections: card.connections.map(shownConnection) }))
+  return { list: cards.slice(0, MAX_AGENTS), more: Math.max(0, cards.length - MAX_AGENTS), activity: calls && { ...calls, work } }
 }
 
 // ---------------------------------------------------------------- the picture
@@ -884,9 +1101,11 @@ export async function loadAgentPicture(
 ): Promise<AgentPicture> {
   const part = <T>(name: string, read: () => Promise<T>, ms = PART_DEADLINE_MS) => within(name, companyId, ms, read)
 
-  const [sources, name, counts, memoryFacts, knowledge, checks, agents] = await Promise.all([
+  const [sources, name, waiting, counts, memoryFacts, knowledge, checks, agents] = await Promise.all([
     loadSources(supabase, companyId, userId, ports, now),
     part('company', async () => ({ name: await loadCompanyName(supabase, companyId) })),
+    // Not counted without the door's counters: nothing is said about what waits.
+    part('waiting', async () => (ports.waiting ? await ports.waiting() : null)),
     part('counts', () => loadCounts(supabase, companyId)),
     part('memory', async () => ({ facts: await loadMemoryFacts(supabase, companyId) })),
     part('knowledge', () => loadKnowledge(supabase, companyId)),
@@ -899,9 +1118,10 @@ export async function loadAgentPicture(
     sources,
     company: {
       name: name?.name ?? null,
+      waiting: waiting ?? null,
       counts: counts ?? NO_COUNTS,
       memory_facts: memoryFacts?.facts ?? null,
-      knowledge: { items: knowledge?.items ?? null, industry: knowledge?.industry ?? null },
+      knowledge: { items: knowledge?.items ?? null, active: knowledge?.active ?? null },
       checks: checks?.checks ?? null,
     },
     agents: agents && { ...agents, activity: agents.activity && { ...agents.activity, memory_facts: memoryFacts?.facts ?? null } },

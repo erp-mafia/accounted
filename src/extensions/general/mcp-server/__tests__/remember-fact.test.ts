@@ -1,10 +1,11 @@
 /**
- * gnubok_remember_fact: where a fact came from (origin, the MCP client) and
- * updating an older fact (replaces), which retires it so agents stop seeing it.
+ * gnubok_remember_fact: where a fact came from (origin, the MCP client),
+ * updating an older fact (replaces), which retires it so agents stop seeing
+ * it, and what its description says memory is for.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { tools } from '../server'
+import { isDefaultCatalogTool, tools } from '../server'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -97,5 +98,27 @@ describe('gnubok_remember_fact', () => {
     enqueue({ data: saved('fact-4', 'Bokslut görs av byrån.') })
     await tool.execute({ content: 'Bokslut görs av byrån.' }, 'company-a', 'user-1', supabase as never, { type: 'user' })
     expect(findCalls('agent_memory', 'insert')[0][0]).toMatchObject({ client: null })
+  })
+})
+
+describe("gnubok_remember_fact's description", () => {
+  /** The sentence that says where a note about one purchase belongs. */
+  const PURCHASE_NOTE_PLACE =
+    "A note about one purchase or verifikat (who took part, what a receipt was for) goes on that verifikat with gnubok_set_voucher_note or in the booking's description, not here."
+
+  it('says memory is for what holds for the company over time, and that the fact is saved at once', () => {
+    expect(tool.description).toMatch(/^Save what holds for the company over time: /)
+    expect(tool.description).toMatch(/ Saves at once\.$/)
+  })
+
+  it('says a note about one purchase goes on its verifikat or in the booking, not into memory', () => {
+    expect(tool.description).toContain(PURCHASE_NOTE_PLACE)
+  })
+
+  it('stays within the description limit, and sends the agent to a tool that tools/list carries', () => {
+    expect(tool.description.length).toBeLessThanOrEqual(280)
+    const noteTool = tools.find((t) => t.name === 'gnubok_set_voucher_note')
+    expect(noteTool).toBeDefined()
+    expect(isDefaultCatalogTool(noteTool!)).toBe(true)
   })
 })
