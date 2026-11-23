@@ -31,9 +31,15 @@ on:
 permissions:
   contents: read
 
+# As in ci.yml: a newer push to a pull request cancels the run it supersedes;
+# on main the run in progress always finishes and only the newest push waits.
+# A run cancelled mid-way leaves a cancelled check on its commit, which reads
+# as a red main, and an unfinished run on main switches off the incremental
+# (overlay) mode for every later run. A waiting run that is replaced has no
+# jobs yet, so it leaves nothing on its commit.
 concurrency:
   group: codeql-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
