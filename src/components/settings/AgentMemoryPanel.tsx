@@ -11,11 +11,12 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsSeg, SettingsSelect, SettingsTextarea } from '@/components/settings/SettingsRows'
+import { memoryLineWordsFrom, memoryRowLine, memoryRowText } from '@/components/settings/agent-memory-row'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatDateLong } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { attributionWordsFrom, formatActorAttribution, mcpClientDisplayName } from '@/lib/attribution/format-actor'
 import type { Creator } from '@/lib/attribution/person-names'
+import type { AnsweredQuestionOfFact } from '@/lib/questions/fact-questions'
 
 import type { FactKind as Kind, FactSource as Source } from '@/lib/agent-context/agent-competence'
 
@@ -35,6 +36,8 @@ interface AgentMemoryRow {
   created_by?: Creator | null
   /** The MCP client label that wrote it; null outside MCP. */
   client: string | null
+  /** The question the row answered, with the answer as the person gave it (GET only). */
+  answered_question?: AnsweredQuestionOfFact | null
 }
 
 const KIND_LABEL: Record<Kind, string> = {
@@ -42,13 +45,6 @@ const KIND_LABEL: Record<Kind, string> = {
   preference: 'Preferens',
   pattern: 'Mönster',
   correction: 'Korrigering',
-}
-
-const SOURCE_LABEL: Record<Source, string> = {
-  composer: 'Inläst vid uppstart',
-  user_taught: 'Du lärde mig',
-  agent_learned: 'Jag noterade',
-  derived: 'Härlett',
 }
 
 const KIND_FILTER: { value: 'all' | Kind; label: string }[] = [
@@ -71,25 +67,18 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
   const { canWrite } = useCanWrite()
   const errorLocale = useLocale() as ErrorLocale
   const t = useTranslations('settings')
+  const tKnowledge = useTranslations('agentKnowledge')
   const tAttribution = useTranslations('attribution')
-  const attributionWords = useMemo(() => attributionWordsFrom((key, values) => tAttribution(key, values)), [tAttribution])
-
-  // "Sparad av ...": the person, or the agent and the person it acted for
-  // ("Claude åt Jonas Ek"), worded like Bokförd av. An MCP write carries the
-  // client label; agent_learned rows from before that column read as an AI
-  // connection. Nothing when the row records no one.
-  function savedBy(row: AgentMemoryRow): string | null {
-    if (!row.created_by) return null
-    const personName = row.created_by.name ?? (row.created_by.deleted ? t('memory_creator_deleted') : null)
-    const byAgent = Boolean(row.client) || row.source === 'agent_learned'
-    return formatActorAttribution(
-      byAgent
-        ? { actorType: 'mcp_oauth', actorLabel: mcpClientDisplayName(row.client), personName }
-        : { actorType: 'user', personName },
-      attributionWords,
-      { inline: true },
-    )
-  }
+  // The words of the line under a row (who saved it and when): agent-memory-row.ts builds the line.
+  const lineWords = useMemo(
+    () =>
+      memoryLineWordsFrom({
+        settings: (key, values) => t(key, values),
+        knowledge: (key, values) => tKnowledge(key, values),
+        attribution: (key, values) => tAttribution(key, values),
+      }),
+    [t, tKnowledge, tAttribution],
+  )
 
   // null = the memory list is not known: still loading, or the read failed
   // (loadError). A failed read must never render the "Inga minnen ännu"
@@ -379,7 +368,7 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
             const isEditing = editingId === row.id
             const isBusy = busyId === row.id
             const dimmed = !row.is_active
-            const who = savedBy(row)
+            const text = memoryRowText(row)
             return (
               <li key={row.id} className={cn('group flex items-start gap-3 border-b-hairline py-3.5', dimmed && 'opacity-60')}>
                 {canWrite && row.is_active ? (
@@ -423,14 +412,12 @@ export function AgentMemoryPanel({ plain = false }: { plain?: boolean } = {}) {
                       </div>
                     </div>
                   ) : (
-                    <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{row.content}</p>
+                    <>
+                      {text.quiet && <p className="break-words text-[13px] leading-6 text-muted-foreground">{text.quiet}</p>}
+                      <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{text.main}</p>
+                    </>
                   )}
-                  <p className="mt-1 text-xs tabular-nums text-muted-foreground">
-                    {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]} · {formatDateLong(row.created_at)}
-                    {who && ` · ${t('memory_saved_by', { who })}`}
-                    {row.updated_at !== row.created_at && ` · uppdaterad ${formatDateLong(row.updated_at)}`}
-                    {dimmed && ' · dold'}
-                  </p>
+                  <p className="mt-1 text-xs tabular-nums text-muted-foreground">{memoryRowLine(row, lineWords, errorLocale)}</p>
                 </div>
                 {canWrite && !isEditing && (
                   <div className={cn('flex shrink-0 items-center gap-3 pt-0.5', HOVER_REVEAL_CLASS)}>

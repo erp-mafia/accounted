@@ -4765,12 +4765,20 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 const REMEMBER_ORIGINS = ['conversation', 'session_sync', 'onboarding_import'] as const
 
 /**
+ * Where a note about one purchase belongs: on its verifikat, not in memory.
+ * One sentence, said in gnubok_remember_fact's description and in the
+ * briefing's memory line.
+ */
+const PURCHASE_NOTE_PLACE =
+  "A note about one purchase or verifikat (who took part, what a receipt was for) goes on that verifikat with gnubok_set_voucher_note or in the booking's description, not here."
+
+/**
  * The briefing's directions to everything an agent may need about the
  * company, so it reads the right place instead of guessing. Plain lines:
  * undeclared in outputSchema like the other briefing guidance (tools/list budget).
  */
 const WHERE_TO_FIND = [
-  'memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one.',
+  `memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one. ${PURCHASE_NOTE_PLACE}`,
   'ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier.',
   'Documents: gnubok_search_records and gnubok_read_document (arkiv explains, when present).',
   'Workflows: gnubok_list_skills, then gnubok_load_skill; a curated workflow arrives with the company facts inline.',
@@ -8035,14 +8043,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_remember_fact',
     title: 'Remember Company Fact',
-    description: 'Save a durable fact about the company that affects money, bookings or tax: a new employee, customer abroad, lease, loan, car, how the owner is paid, the accountant\'s advice. Works from any chat. Pass replaces when it updates an older fact. Saves at once, no approval.',
+    description: `Save what holds for the company over time: an employee, lease, loan, how the owner is paid. ${PURCHASE_NOTE_PLACE} Saves at once.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         content: {
           type: 'string',
-          description: 'The full fact text in the user\'s language. Self-contained: readable without prior context. Example: "Företaget hyr lagerplats av AB Foo, hyresfaktura kommer 25:e varje månad."',
+          description: 'The full fact text in the user\'s language, readable without prior context. Example: "Företaget hyr lagerplats av AB Foo, hyresfaktura kommer 25:e varje månad."',
         },
         kind: {
           type: 'string',

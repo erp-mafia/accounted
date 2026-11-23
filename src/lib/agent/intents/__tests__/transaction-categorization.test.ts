@@ -138,12 +138,23 @@ describe('transaction.categorization prompt template', () => {
     expect(out.toLowerCase()).toContain('så har du gjort förut')
   })
 
-  it('instructs the agent to persist user answers via memory tool', () => {
-    // Follow-up answers (rep vs intern, kund vs anställd) should be saved
-    // so the agent doesn't re-ask next time a similar counterparty
-    // appears.
+  it('sends an answer about one purchase to the booking, and keeps memory for what holds going forward', () => {
+    // A follow-up answer (rep vs intern, kund vs anställd) describes this one
+    // purchase: it goes into the booking's notes and lands on the verifikat.
+    // The memory tool is for what the user says applies going forward.
     const out = renderPrompt({ hasUnderlag: true })
-    expect(out).toContain('gnubok_remember_fact')
+    expect(out).toContain('Svaret om det här köpet skriver du i bokningens notes så att det landar i verifikationen, inte i minnet')
+    expect(out).toContain('använd gnubok_remember_fact bara för det användaren säger gäller framåt')
+    expect(out).not.toContain('Spara användarens svar via gnubok_remember_fact')
+  })
+
+  it('keeps the participants and the purpose of a meal on the booking, never in memory', () => {
+    const out = renderPrompt({ hasUnderlag: true })
+    expect(out).toContain('stagea med notes="X deltagare: [namn + företag]. Syfte: [text]." så det landar i verifikationen; spara dem inte i minnet.')
+    expect(out).not.toContain('anropa gnubok_remember_fact med content')
+    // The memory tool is named once in the working rules, for what holds going forward.
+    const rules = out.slice(out.indexOf('Arbetssätt:'))
+    expect(rules.split('gnubok_remember_fact').length - 1).toBe(1)
   })
 
   it('forbids redundant staging narration that the ApprovalCard already shows', () => {
