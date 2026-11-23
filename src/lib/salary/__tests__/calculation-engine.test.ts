@@ -18,6 +18,8 @@ vi.mock('../personnummer', () => ({
     if (encrypted === 'mock_old_person') return '193501011234'
     if (encrypted === 'mock_young_person') return '200301011234'
     if (encrypted === 'mock_senior_person') return '195801011234'
+    // A value the key cannot open (a missing or wrong key in that environment).
+    if (encrypted === 'mock_unreadable') throw new Error('Unsupported state or unable to authenticate data')
     // Generic helper: 'mock_born_YYYY' resolves to a Jan-1 birth in YYYY.
     // Used by ungdomsrabatt boundary tests so each case names its own year
     // explicitly rather than depending on a global mock alias.
@@ -1292,6 +1294,33 @@ describe('calculateAvgifterRate', () => {
 
     expect(result.rate).toBe(0)
     expect(result.category).toBe('exempt')
+  })
+
+  it('marks an unreadable personnummer instead of passing the standard rate off as the answer', () => {
+    const result = calculateAvgifterRate(
+      makeBasicInput({ personnummer: 'mock_unreadable' }),
+      config2026,
+      2026
+    )
+
+    expect(result.personnummerUnreadable).toBe(true)
+  })
+
+  it('flags the whole result when the personnummer cannot be read, and only then', () => {
+    const unreadable = calculateSalary(makeBasicInput({ personnummer: 'mock_unreadable' }), config2026, emptyTaxRates)
+    expect(unreadable.personnummerUnreadable).toBe(true)
+
+    for (const personnummer of ['mock_standard', 'mock_senior_person', 'mock_old_person', 'mock_born_2004']) {
+      const readable = calculateSalary(makeBasicInput({ personnummer, paymentDate: '2026-05-25' }), config2026, emptyTaxRates)
+      expect(readable.personnummerUnreadable).toBe(false)
+    }
+    // F-skatt needs no age: no personnummer is read, nothing is missing.
+    const fSkatt = calculateSalary(
+      makeBasicInput({ fSkattStatus: 'f_skatt', personnummer: 'mock_unreadable' }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(fSkatt.personnummerUnreadable).toBe(false)
   })
 
   it('keeps the full rate for a växa-stöd employee inside the window (Lag 2025:1334)', () => {
