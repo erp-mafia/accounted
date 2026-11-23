@@ -2,7 +2,8 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import { ArchiveFolder, ArchiveTooLargeError, collectBytes, jsonArray, jsonArrayElement, readAhead, type ArchiveRead } from './archive-folder'
+import { ArchiveFolder, ArchiveTooLargeError, collectBytes, deflatedJsonArray, deflatedJsonArrayElements, jsonArray, readAhead, type ArchiveRead, type DeflatedBytes } from './archive-folder'
+import type { ZipPart } from './zip-writer'
 import { generateSIEExport } from './sie-export'
 import { generateTrialBalance } from './trial-balance'
 import { generateIncomeStatement } from './income-statement'
@@ -1933,12 +1934,14 @@ async function fetchPeriodAuditEntries(
   companyId: string,
   period: FiscalPeriodRow,
   budget?: AuditBudget
-): Promise<Uint8Array[]> {
-  // Each row as when it was logged and its text, made as its page arrives,
-  // so the rows themselves are let go page by page (fetchAllAuditJson).
-  const byId = new Map<string, { created_at: string; element: Uint8Array }>()
+): Promise<ZipPart[]> {
+  // Each row as when it was logged and its text, made as its page arrives
+  // and held deflated, so the rows themselves are let go page by page
+  // (fetchAllAuditJson).
+  const byId = new Map<string, { created_at: string; element: DeflatedBytes }>()
+  const hold = deflatedJsonArrayElements()
   const keep = (row: AuditLogEntry) => {
-    byId.set(row.id, { created_at: row.created_at, element: jsonArrayElement(row) })
+    byId.set(row.id, { created_at: row.created_at, element: hold(row) })
   }
   await forEachAuditPage(supabase, companyId, {
     from_date: period.period_start,
@@ -2010,18 +2013,19 @@ async function fetchPeriodAuditEntries(
  * The whole behandlingshistorik, newest first, as the parts of its JSON: each
  * row becomes text as its page arrives, so the rows are let go page by page
  * and the text is never one string. For a company with years of history both
- * run to hundreds of MB, more than a backup run has to spare.
+ * run to hundreds of MB, more than a backup run has to spare. The text is
+ * held deflated until the archive writes it: 574 000 rows are 1.2 GB as text,
+ * and the archive holds it with everything else before its first byte.
  */
 async function fetchAllAuditJson(
   supabase: SupabaseClient,
   companyId: string,
   budget?: AuditBudget
-): Promise<Uint8Array[]> {
-  const elements: Uint8Array[] = []
-  await forEachAuditPage(supabase, companyId, {}, budget, (rows) => {
-    for (const row of rows) elements.push(jsonArrayElement(row))
-  })
-  return jsonArray(elements)
+): Promise<ZipPart[]> {
+  return deflatedJsonArray((push) =>
+    forEachAuditPage(supabase, companyId, {}, budget, (rows) => {
+      for (const row of rows) push(row)
+    }))
 }
 
 async function forEachAuditPage(
