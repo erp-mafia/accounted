@@ -152,6 +152,8 @@ function world(
     role?: string | null
     /** Outbound rows already on record. */
     outbound?: Record<string, unknown>[]
+    /** The linked operation as its row stands; null for none. Waiting for approval by default. */
+    operation?: Record<string, unknown> | null
   } = {},
 ) {
   const writes: Write[] = []
@@ -163,6 +165,7 @@ function world(
       whatsapp_conversations: (opts.conversations ?? [makeConversation()]).map((conversation) => ({ ...conversation })),
       company_members: role === null ? [] : [{ user_id: USER, company_id: COMPANY, role, companies: { name: 'Bolag A AB' } }],
       whatsapp_messages: opts.outbound ?? [],
+      pending_operations: opts.operation === null ? [] : [{ id: OPERATION_ID, company_id: COMPANY, status: 'pending', ...(opts.operation ?? {}) }],
     },
     writes,
   )
@@ -259,12 +262,29 @@ describe('a staged operation linked to a question that was answered in the chat'
       ['operation_id', { ascending: true }],
     ])
     expect(mock.findCalls('company_question_operations', 'limit')).toEqual([[1]])
+    expect(mock.findCalls('pending_operations', 'eq')).toEqual([
+      ['id', OPERATION_ID],
+      ['company_id', COMPANY],
+    ])
     expect(mock.findCalls('whatsapp_phone_links', 'eq')).toEqual([['user_id', USER]])
     expect(mock.findCalls('whatsapp_phone_links', 'is')).toEqual([
       ['revoked_at', null],
       ['muted_at', null],
     ])
     expect(mock.findCalls('whatsapp_conversations', 'eq')).toEqual([['phone_link_id', 'link-1']])
+  })
+
+  it('sends nothing for an operation that no longer waits for approval, or that is not in the company', async () => {
+    for (const status of ['committed', 'committing', 'rejected', 'failed_partial', 'unknown']) {
+      const { supabase } = world({ operation: { status } })
+      await tellListPrepared(supabase, prepared)
+      expect(sendTextMock, status).not.toHaveBeenCalled()
+    }
+    for (const operation of [null, { company_id: OTHER_COMPANY }]) {
+      const { supabase } = world({ operation })
+      await tellListPrepared(supabase, prepared)
+      expect(sendTextMock).not.toHaveBeenCalled()
+    }
   })
 
   it('sends nothing for a second operation of the same question', async () => {
