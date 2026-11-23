@@ -10,7 +10,8 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn } from '@/lib/utils'
-import { flowLayout, hitTest, isReadingNow, type FlowCard, type FlowLayout } from '@/lib/agent-context/agent-picture-lines'
+import { agentCardState } from '@/lib/agent-context/agent-cards'
+import { flowLayout, hitTest, type FlowCard, type FlowLayout } from '@/lib/agent-context/agent-picture-lines'
 import {
   agentName,
   countParts,
@@ -27,7 +28,7 @@ import {
 import type {
   AgentPicture as AgentPictureData,
   PictureActivity,
-  PictureAgent,
+  PictureAgentCard,
   PictureCompany,
   PictureLinkState,
   PictureSource,
@@ -35,6 +36,7 @@ import type {
 import type { ConnectionKind } from '@/lib/settings/mcp-connections'
 import { withoutPictureRow } from '@/lib/agent-context/wiki-views'
 import { PictureViews, isPictureView, type PictureContext, type PictureView } from './PictureViews'
+import { agentCardDetail, type PictureWords } from './agent-card-text'
 import { AgentMark, LogoTile, SourceMark } from './picture-marks'
 
 export type { PictureContext } from './PictureViews'
@@ -109,10 +111,13 @@ function forgetInAddress(options?: { keepRow?: boolean }): void {
  * the company in the middle, the agents on the right, and a line from every
  * card to the company's card (GET /api/wiki/picture). Every card leads to
  * where its connection is managed; every row of the company's card opens its
- * own view. While the tab is visible the agents' activity and the memory's
- * count are asked for again every 30 seconds (GET
- * /api/wiki/picture/activity): a connection that just made a call says so,
- * gets a ring and a moving line, and a newly remembered thing gets its dot.
+ * own view. The agents are one card per product: the connections the screen
+ * names by the same kind share a card (lib/agent-context/agent-cards.ts).
+ * While the tab is visible the agents' activity and the memory's count are
+ * asked for again every 30 seconds (GET /api/wiki/picture/activity): a card
+ * whose connection just made a call says so, gets a ring and a moving line,
+ * a card says what it did for the company today, and a newly remembered
+ * thing gets its dot.
  *
  * `context` is the briefing as the page that hosts the picture loads it: the
  * Kontext row draws the context graph from it.
@@ -280,7 +285,7 @@ interface AgentCard {
   kind: ConnectionKind
   group: AgentGroupId
   name: string
-  detail: string
+  detail: CardDetail
   state: PictureLinkState
   /** A call in the last minute. */
   active: boolean
@@ -355,36 +360,24 @@ function PictureFigure({
     }
   }
 
-  /** A connection's name, as the API settings page names its row. */
-  const nameOf = (agent: Pick<PictureAgent, 'kind' | 'name' | 'service_account'>): string => {
+  /** A card's name, as the API settings page names a connection's row. */
+  const nameOf = (agent: Pick<PictureAgentCard, 'kind' | 'name' | 'service_account'>): string => {
     const name = agentName(agent)
     return 'text' in name ? name.text : tKeys(name.message)
   }
 
+  const words: PictureWords = { time: (instant) => timeOf(new Date(instant)), when }
   const agentCards: AgentCard[] = (picture.agents?.list ?? []).map((agent) => {
-    // The newest answer of the log wins over the one the picture came with.
-    const seen = activity ? activity.actors[agent.id] : undefined
-    const calls = activity ? (seen?.calls_today ?? 0) : agent.calls_today
-    const lastCall = activity ? (seen?.last_call_at ?? null) : agent.last_call_at
-    const active = activity ? isReadingNow(lastCall, activity.now) : false
-    const last = lastCall ?? agent.last_used_at
-    const detail = active
-      ? t('picture.reading_now')
-      : activity && calls > 0 && lastCall
-        ? activity.capped
-          ? t('picture.calls_today_capped', { count: calls, time: timeOf(new Date(lastCall)) })
-          : t('picture.calls_today', { count: calls, time: timeOf(new Date(lastCall)) })
-        : last
-          ? t('picture.last_used', { when: when(last) })
-          : t('picture.never_used')
+    // The newest answer of the log wins over the one the picture came with (agentCardState).
+    const state = agentCardState(agent, activity)
     return {
       id: agent.id,
       kind: agent.kind,
       group: 'clients',
       name: nameOf(agent),
-      detail,
+      detail: agentCardDetail(state, t, words),
       state: 'connected',
-      active,
+      active: state.active,
       maskName: agent.kind === 'key' || agent.service_account !== null,
     }
   })
@@ -400,7 +393,7 @@ function PictureFigure({
         kind,
         group: 'clients',
         name: nameOf({ kind, name: null, service_account: null }),
-        detail: t('picture.not_connected'),
+        detail: { lead: t('picture.not_connected') },
         state: 'not_connected',
         active: false,
         maskName: false,
@@ -558,7 +551,7 @@ function PictureFigure({
                     // The host's own service account carries the host's mark.
                     mark={group.id === 'brand' ? <LogoTile src={brandMark} /> : <AgentMark kind={card.kind} off={card.state === 'not_connected'} />}
                     name={card.name}
-                    detail={{ lead: card.detail }}
+                    detail={card.detail}
                     maskName={card.maskName}
                   />
                 ))}

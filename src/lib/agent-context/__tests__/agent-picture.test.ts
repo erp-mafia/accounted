@@ -138,6 +138,8 @@ function tables(over: Record<string, Handler> = {}): Record<string, Handler> {
         { created_at: '2026-03-01T20:00:00.000Z', actor_id: 'key-claude' },
       ],
     },
+    company_questions: { data: [] },
+    pending_operations: { data: [] },
     ...over,
   }
 }
@@ -214,6 +216,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('RESEND_INBOUND_DOMAIN', 'inbox.example')
   vi.stubEnv('INKORG_V2_COMPANY_IDS', '')
+  vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', COMPANY)
   enabled.clear()
   for (const id of ALL_EXTENSIONS) enabled.add(id)
   service = fakeSupabase({ api_key_companies: { data: [] }, oauth_partner_clients: { data: [] } })
@@ -588,31 +591,187 @@ describe('loadAgentPicture: checks', () => {
   })
 })
 
+/** A connection row as the key table holds it. */
+const keyRow = (id: string, over: Record<string, unknown> = {}) => ({
+  id,
+  name: OAUTH_KEY_NAME,
+  client: 'claude',
+  last_used_at: null,
+  created_at: '2026-01-01T00:00:00.000Z',
+  user_id: USER,
+  service_account_id: null,
+  company_id: COMPANY,
+  ...over,
+})
+/** The key table answering `rows` for the company, and nothing for the person's keys elsewhere. */
+const homedKeys = (rows: unknown[]): Handler => (call) => (filtered(call, 'eq', 'company_id') ? { data: rows } : { data: [] })
+
 describe('loadAgentPicture: agents', () => {
-  it('lists the company\'s connections with what each did today', async () => {
+  it('lists one card per product, each with its connections and what they did today', async () => {
     const picture = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
     expect(picture.agents!.list).toEqual([
-      { id: 'key-claude', kind: 'claude', name: null, service_account: null, last_used_at: '2026-03-02T08:59:30.000Z', calls_today: 2, last_call_at: '2026-03-02T08:59:30.000Z' },
-      { id: 'key-manual', kind: 'key', name: 'Nattjobbet', service_account: null, last_used_at: null, calls_today: 0, last_call_at: null },
+      {
+        id: 'claude',
+        kind: 'claude',
+        name: null,
+        service_account: null,
+        labels: ['Claude (Anthropic)'],
+        connections: [
+          {
+            id: 'key-claude',
+            kind: 'claude',
+            name: null,
+            service_account: null,
+            last_used_at: '2026-03-02T08:59:30.000Z',
+            calls_today: 2,
+            last_call_at: '2026-03-02T08:59:30.000Z',
+            connected_at: '2026-01-04T00:00:00.000Z',
+            is_own: true,
+            owner_name: null,
+          },
+        ],
+      },
+      {
+        id: 'key:key-manual',
+        kind: 'key',
+        name: 'Nattjobbet',
+        service_account: null,
+        labels: ['Nattjobbet'],
+        connections: [
+          {
+            id: 'key-manual',
+            kind: 'key',
+            name: 'Nattjobbet',
+            service_account: null,
+            last_used_at: null,
+            calls_today: 0,
+            last_call_at: null,
+            connected_at: '2026-01-05T00:00:00.000Z',
+            is_own: true,
+            owner_name: null,
+          },
+        ],
+      },
     ])
     expect(picture.agents!.more).toBe(0)
     // The memory count the picture read in its own part rides along with the activity.
-    expect(picture.agents!.activity).toMatchObject({ day: '2026-03-02', now: NOW.toISOString(), capped: false, memory_facts: 23 })
+    expect(picture.agents!.activity).toMatchObject({ day: '2026-03-02', now: NOW.toISOString(), capped: false, memory_facts: 23, work: { by_connection: {}, by_label: {} } })
   })
 
-  it('says whose a service account\'s connection is, by the account\'s name', async () => {
-    const account = (id: string, accountId: string) => ({ id, name: `nyckel ${id}`, client: null, last_used_at: null, created_at: '2026-01-01T00:00:00.000Z', user_id: USER, service_account_id: accountId, company_id: COMPANY })
-    const api_keys: Handler = (call) => (filtered(call, 'eq', 'company_id') ? { data: [account('k1', 'sa-1'), account('k2', 'sa-2')] } : { data: [] })
+  it('puts every connection the screen names by the same kind on one card, the newest first', async () => {
+    const api_keys = homedKeys([
+      keyRow('claude-old', { last_used_at: '2026-02-01T00:00:00.000Z' }),
+      keyRow('local-1', { client: 'local', last_used_at: '2026-02-10T00:00:00.000Z' }),
+      keyRow('claude-new', { last_used_at: '2026-02-20T00:00:00.000Z' }),
+      // A sign-in from before the client was recorded: an MCP client the screen cannot name.
+      keyRow('mcp-1', { client: null }),
+      keyRow('mcp-2', { client: null, last_used_at: '2026-01-15T00:00:00.000Z' }),
+      keyRow('claude-unused'),
+    ])
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.agents!.list.map((card) => [card.id, card.connections.map((c) => c.id)])).toEqual([
+      ['claude', ['claude-new', 'claude-old', 'claude-unused']],
+      ['local', ['local-1']],
+      ['mcp', ['mcp-2', 'mcp-1']],
+    ])
+    expect(picture.agents!.more).toBe(0)
+  })
+
+  it('keeps a hand-made key and a partner\'s key as cards of their own', async () => {
+    const api_keys = homedKeys([
+      keyRow('k1', { name: 'Nattjobbet', client: null }),
+      keyRow('k2', { name: 'Nattjobbet', client: null }),
+      keyRow('p1', { client: 'partner:byran' }),
+      keyRow('p2', { client: 'partner:byran' }),
+      keyRow('p3', { client: 'partner:okand' }),
+    ])
+    service = fakeSupabase({ oauth_partner_clients: { data: [{ slug: 'byran', name: 'Byrån', created_at: '2026-01-01T00:00:00.000Z' }] } })
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.agents!.list.map((card) => [card.id, card.kind, card.name, card.connections.length, card.labels])).toEqual([
+      // Two keys with one name are two cards, and neither owns the name as a label.
+      ['key:k1', 'key', 'Nattjobbet', 1, []],
+      ['key:k2', 'key', 'Nattjobbet', 1, []],
+      ['key:p1', 'partner', 'Byrån', 1, []],
+      ['key:p2', 'partner', 'Byrån', 1, []],
+      // A partner whose name could not be read is named by its kind, and its label is not known.
+      ['partner', 'partner', null, 1, []],
+    ])
+  })
+
+  it('puts a service account\'s connections on one card per account, named by the account', async () => {
+    const account = (id: string, accountId: string) => keyRow(id, { name: `nyckel ${id}`, client: null, service_account_id: accountId })
+    const api_keys = homedKeys([account('k1', 'sa-1'), account('k2', 'sa-2'), account('k3', 'sa-1')])
     service = fakeSupabase({ service_accounts: { data: [{ id: 'sa-1', name: 'Accounteds agent' }] } })
     const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
-    expect(picture.agents!.list.map((a) => [a.id, a.kind, a.service_account])).toEqual([
-      ['k1', 'key', 'Accounteds agent'],
-      // An account whose name could not be read keeps its key's name: the connection is still an account's.
-      ['k2', 'key', 'nyckel k2'],
+    expect(picture.agents!.list.map((card) => [card.id, card.kind, card.name, card.service_account, card.connections.map((c) => c.id), card.labels])).toEqual([
+      ['account:sa-1', 'key', null, 'Accounteds agent', ['k1', 'k3'], ['Accounteds agent']],
+      // An account whose name could not be read keeps its key's name: the card is still an account's, and owns no label.
+      ['account:sa-2', 'key', null, 'nyckel k2', ['k2'], []],
     ])
+    expect(picture.agents!.list[0].connections[0]).toMatchObject({ kind: 'key', name: 'nyckel k1', service_account: 'Accounteds agent', owner_name: null })
     const names = service.calls.find((c) => c.table === 'service_accounts')!
     expect(filtered(names, 'eq', 'company_id', COMPANY)).toBe(true)
     expect(names.ops.find((op) => op.method === 'in')!.args).toEqual(['id', ['sa-1', 'sa-2']])
+  })
+
+  it('says whose a colleague\'s connection is, and never whose the person\'s own or an account\'s is', async () => {
+    const api_keys = homedKeys([
+      keyRow('mine'),
+      keyRow('hers', { user_id: 'user-2' }),
+      keyRow('unnamed', { user_id: 'user-3' }),
+      keyRow('sponsored', { name: 'nyckel', client: null, user_id: 'user-2', service_account_id: 'sa-1' }),
+    ])
+    service = fakeSupabase({
+      profiles: { data: [{ id: 'user-2', full_name: ' Anna Ek ', email: 'anna@example.com' }, { id: 'user-3', full_name: null, email: 'bo@example.com' }] },
+      service_accounts: { data: [{ id: 'sa-1', name: 'Lönesystemet' }] },
+    })
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    const connections = picture.agents!.list.flatMap((card) => card.connections)
+    expect(connections.map((c) => [c.id, c.is_own, c.owner_name])).toEqual([
+      ['mine', true, null],
+      ['hers', false, 'Anna Ek'],
+      ['unnamed', false, 'bo@example.com'],
+      ['sponsored', false, null],
+    ])
+    // Read by the ids of the other people whose connections were listed, once each.
+    const owners = service.calls.find((c) => c.table === 'profiles')!
+    expect(owners.ops.find((op) => op.method === 'select')!.args[0]).toBe('id, full_name, email')
+    expect(owners.ops.find((op) => op.method === 'in')!.args).toEqual(['id', ['user-2', 'user-3']])
+  })
+
+  it('leaves a colleague unnamed when the names cannot be read, and reads no names when every connection is the person\'s own', async () => {
+    service = fakeSupabase({ profiles: { error: { message: 'boom' } } })
+    const api_keys = homedKeys([keyRow('hers', { user_id: 'user-2' })])
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.agents!.list[0].connections[0]).toMatchObject({ id: 'hers', is_own: false, owner_name: null })
+
+    service = fakeSupabase({})
+    await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(service.calls.some((c) => c.table === 'profiles')).toBe(false)
+  })
+
+  it('hands out nothing of what only put a connection on its card', async () => {
+    const picture = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    for (const connection of picture.agents!.list.flatMap((card) => card.connections)) {
+      expect(Object.keys(connection).sort()).toEqual(['calls_today', 'connected_at', 'id', 'is_own', 'kind', 'last_call_at', 'last_used_at', 'name', 'owner_name', 'service_account'])
+    }
+  })
+
+  it('gives a card the labels its connections alone write, and none for a client that registered itself', async () => {
+    const api_keys = homedKeys([
+      keyRow('claude-1'),
+      keyRow('claude-2'),
+      keyRow('chatgpt-1', { client: 'chatgpt' }),
+      keyRow('registered-1', { client: 'registered:0d6f6f0e-0000-4000-8000-000000000001' }),
+      keyRow('old-1', { client: null }),
+    ])
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.agents!.list.map((card) => [card.id, card.labels])).toEqual([
+      ['claude', ['Claude (Anthropic)']],
+      ['chatgpt', ['ChatGPT (OpenAI)']],
+      // The registered client and the old sign-in share a card: the label of the old one is the card's alone.
+      ['mcp', ['MCP-klient (OAuth)']],
+    ])
   })
 
   it('reads only live keys, and the person\'s own keys by user', async () => {
@@ -626,7 +785,7 @@ describe('loadAgentPicture: agents', () => {
   })
 
   it('adds the person\'s own connection homed in another company when it reaches this one', async () => {
-    const elsewhere = (id: string) => ({ id, name: OAUTH_KEY_NAME, client: 'chatgpt', last_used_at: null, created_at: '2026-01-01T00:00:00.000Z', user_id: USER, service_account_id: null, company_id: 'company-2' })
+    const elsewhere = (id: string) => keyRow(id, { client: 'chatgpt', company_id: 'company-2' })
     const api_keys: Handler = (call) => (filtered(call, 'eq', 'company_id') ? { data: [] } : { data: [elsewhere('open'), elsewhere('listed'), elsewhere('other')] })
     service = fakeSupabase({
       api_key_companies: {
@@ -637,35 +796,49 @@ describe('loadAgentPicture: agents', () => {
       },
     })
     const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys })).client, COMPANY, USER, ports(), NOW)
-    // No company list reaches every company; a list reaches the ones on it.
-    expect(picture.agents!.list.map((a) => a.id).sort()).toEqual(['listed', 'open'])
-    expect(picture.agents!.list[0].kind).toBe('chatgpt')
+    // No company list reaches every company; a list reaches the ones on it. Both are ChatGPT: one card.
+    expect(picture.agents!.list.map((card) => [card.id, card.connections.map((c) => c.id).sort()])).toEqual([['chatgpt', ['listed', 'open']]])
     const lists = service.calls.find((c) => c.table === 'api_key_companies')!
     expect(lists.ops.find((op) => op.method === 'in')!.args).toEqual(['api_key_id', ['open', 'listed', 'other']])
   })
 
   it('leaves out connections homed elsewhere when their company lists cannot be read', async () => {
-    const api_keys: Handler = (call) =>
-      filtered(call, 'eq', 'company_id')
-        ? { data: [] }
-        : { data: [{ id: 'open', name: OAUTH_KEY_NAME, client: 'claude', last_used_at: null, created_at: '2026-01-01T00:00:00.000Z', user_id: USER, service_account_id: null, company_id: 'company-2' }] }
+    const api_keys: Handler = (call) => (filtered(call, 'eq', 'company_id') ? { data: [] } : { data: [keyRow('open', { company_id: 'company-2' })] })
     service = fakeSupabase({ api_key_companies: { error: { message: 'boom' } } })
     const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys })).client, COMPANY, USER, ports(), NOW)
     expect(picture.agents!.list).toEqual([])
   })
 
-  it('lists six connections, the ones that worked last first, and counts the rest', async () => {
-    const key = (n: number) => ({ id: `k${n}`, name: `Nyckel ${n}`, client: null, last_used_at: `2026-02-0${n}T00:00:00.000Z`, created_at: '2026-01-01T00:00:00.000Z', user_id: USER, service_account_id: null, company_id: COMPANY })
-    const api_keys: Handler = (call) => (filtered(call, 'eq', 'company_id') ? { data: [1, 2, 3, 4, 5, 6, 7, 8].map(key) } : { data: [] })
+  it('lists six cards, the ones that worked last first, and counts the cards past them, not the connections', async () => {
+    const key = (n: number) => keyRow(`k${n}`, { name: `Nyckel ${n}`, client: null, last_used_at: `2026-02-0${n}T00:00:00.000Z` })
+    // Eight named keys are eight cards; four Claude sign-ins are one more.
+    const claude = [1, 2, 3, 4].map((n) => keyRow(`c${n}`, { last_used_at: `2026-01-0${n}T00:00:00.000Z` }))
+    const api_keys = homedKeys([...[1, 2, 3, 4, 5, 6, 7, 8].map(key), ...claude])
     const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
-    expect(picture.agents!.list.map((a) => a.id)).toEqual(['k8', 'k7', 'k6', 'k5', 'k4', 'k3'])
-    expect(picture.agents!.more).toBe(2)
+    expect(picture.agents!.list.map((card) => card.id)).toEqual(['key:k8', 'key:k7', 'key:k6', 'key:k5', 'key:k4', 'key:k3'])
+    expect(picture.agents!.more).toBe(3)
+
+    // Twelve connections of two products are two cards, and nothing is past them.
+    const few = homedKeys([...claude, ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => keyRow(`g${n}`, { client: 'chatgpt' }))])
+    const two = await loadAgentPicture(fakeSupabase(tables({ api_keys: few, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    expect(two.agents!.list.map((card) => [card.id, card.connections.length])).toEqual([['claude', 4], ['chatgpt', 8]])
+    expect(two.agents!.more).toBe(0)
   })
 
-  it('keeps the connections when the tool call log cannot be read, and says the activity is unknown', async () => {
+  it('works out which labels a card owns over every card, the ones past the listed six too', async () => {
+    const key = (n: number) => keyRow(`k${n}`, { name: n === 8 ? 'Samma' : `Nyckel ${n}`, client: null, last_used_at: `2026-02-0${n}T00:00:00.000Z` })
+    const api_keys = homedKeys([...[2, 3, 4, 5, 6, 7, 8].map(key), keyRow('k1', { name: 'Samma', client: null, last_used_at: '2026-02-01T00:00:00.000Z' })])
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.agents!.more).toBe(2)
+    // k8 is listed and k1 is not: both can have written "Samma", so the listed card does not own it.
+    expect(picture.agents!.list.find((card) => card.id === 'key:k8')!.labels).toEqual([])
+    expect(picture.agents!.list.find((card) => card.id === 'key:k7')!.labels).toEqual(['Nyckel 7'])
+  })
+
+  it('keeps the cards when the tool call log cannot be read, and says the activity is unknown', async () => {
     const picture = await loadAgentPicture(fakeSupabase(tables({ event_log: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
     expect(picture.agents!.activity).toBeNull()
-    expect(picture.agents!.list.map((a) => a.id)).toEqual(['key-claude', 'key-manual'])
+    expect(picture.agents!.list.map((a) => a.id)).toEqual(['claude', 'key:key-manual'])
   })
 
   it('answers unknown agents when the connections cannot be read, and the rest still renders', async () => {
@@ -673,6 +846,55 @@ describe('loadAgentPicture: agents', () => {
     expect(picture.agents).toBeNull()
     expect(picture.company.name).toBe('Exempelbolaget AB')
     expect(sourceOf(picture, 'bank:cash-1')).toBeDefined()
+  })
+})
+
+describe('loadAgentPicture: what the connections did today', () => {
+  const staged = { data: [{ actor_id: 'key-claude', actor_label: 'Claude (Anthropic)' }, { actor_id: 'key-claude', actor_label: 'Claude (Anthropic)' }, { actor_id: null, actor_label: 'Nattjobbet' }] }
+  const asked = { data: [{ actor_id: 'key-claude', actor_label: 'Claude (Anthropic)' }] }
+
+  it('counts the questions asked and the proposals prepared today by who staged them, and reads only that', async () => {
+    const { client, calls } = fakeSupabase(tables({ company_questions: asked, pending_operations: staged }))
+    const picture = await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
+    expect(picture.agents!.activity!.work).toEqual({
+      by_connection: { 'key-claude': { questions: 1, proposals: 2 } },
+      by_label: { Nattjobbet: { questions: 0, proposals: 1 } },
+    })
+
+    const questions = calls.find((c) => c.table === 'company_questions')!
+    expect(questions.ops.find((op) => op.method === 'select')!.args[0]).toBe('actor_id, actor_label')
+    expect(filtered(questions, 'eq', 'company_id', COMPANY)).toBe(true)
+    // From midnight in Stockholm, and not a question its asker took back.
+    expect(questions.ops.find((op) => op.method === 'gte')!.args).toEqual(['created_at', '2026-03-01T23:00:00.000Z'])
+    expect(questions.ops.find((op) => op.method === 'or')!.args).toEqual(['close_reason.is.null,close_reason.neq.withdrawn'])
+
+    const proposals = calls.find((c) => c.table === 'pending_operations')!
+    expect(proposals.ops.find((op) => op.method === 'select')!.args[0]).toBe('actor_id, actor_label')
+    expect(filtered(proposals, 'eq', 'company_id', COMPANY)).toBe(true)
+    // Staged by a connection, today, and not replaced by a newer proposal.
+    expect(proposals.ops.find((op) => op.method === 'in')!.args).toEqual(['actor_type', ['api_key', 'mcp_oauth', 'service_account']])
+    expect(proposals.ops.find((op) => op.method === 'gte')!.args).toEqual(['created_at', '2026-03-01T23:00:00.000Z'])
+    expect(proposals.ops.find((op) => op.method === 'or')!.args).toEqual(['rejection_category.is.null,rejection_category.neq.superseded'])
+    expect(proposals.ops.find((op) => op.method === 'range')!.args).toEqual([0, 999])
+  })
+
+  it('reads no questions for a company without the question list, and still counts its proposals', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', 'company-2')
+    const { client, calls } = fakeSupabase(tables({ company_questions: asked, pending_operations: staged }))
+    const picture = await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
+    expect(calls.some((c) => c.table === 'company_questions')).toBe(false)
+    expect(picture.agents!.activity!.work).toEqual({
+      by_connection: { 'key-claude': { questions: 0, proposals: 2 } },
+      by_label: { Nattjobbet: { questions: 0, proposals: 1 } },
+    })
+  })
+
+  it('says the work is unknown when it cannot be read, and keeps the cards and their calls', async () => {
+    for (const broken of [{ company_questions: { error: { message: 'boom' } } }, { pending_operations: { error: { message: 'boom' } } }]) {
+      const picture = await loadAgentPicture(fakeSupabase(tables(broken)).client, COMPANY, USER, ports(), NOW)
+      expect(picture.agents!.activity).toMatchObject({ work: null, actors: { 'key-claude': { calls_today: 2 } } })
+      expect(picture.agents!.list.map((card) => card.id)).toEqual(['claude', 'key:key-manual'])
+    }
   })
 })
 
@@ -717,6 +939,8 @@ describe('loadAgentActivity', () => {
   it('counts today\'s calls per connection by the Stockholm day and keeps each one\'s last call', async () => {
     const { client, calls } = fakeSupabase({
       agent_memory: { count: 7 },
+      company_questions: { data: [{ actor_id: 'a', actor_label: 'Claude (Anthropic)' }] },
+      pending_operations: { data: [{ actor_id: 'a', actor_label: 'Claude (Anthropic)' }] },
       event_log: {
         data: [
           { created_at: '2026-03-02T08:59:30.000Z', actor_id: 'a' },
@@ -740,9 +964,16 @@ describe('loadAgentActivity', () => {
         b: { calls_today: 1, last_call_at: '2026-03-02T08:00:00.000Z' },
         c: { calls_today: 0, last_call_at: '2026-03-01T10:00:00.000Z' },
       },
+      work: { by_connection: { a: { questions: 1, proposals: 1 } }, by_label: {} },
     })
-    // One read of the log and one count of the memory.
-    expect(calls.map((c) => c.table).sort()).toEqual(['agent_memory', 'event_log'])
+    // One read of the log, one count of the memory, and the day's questions and proposals.
+    expect(calls.map((c) => c.table).sort()).toEqual(['agent_memory', 'company_questions', 'event_log', 'pending_operations'])
+    for (const table of ['company_questions', 'pending_operations']) {
+      const work = calls.find((c) => c.table === table)!
+      expect(filtered(work, 'eq', 'company_id', COMPANY)).toBe(true)
+      // Only who staged the row: not a word of a question or a proposal.
+      expect(work.ops.find((op) => op.method === 'select')!.args[0]).toBe('actor_id, actor_label')
+    }
     expect(filtered(calls.find((c) => c.table === 'agent_memory')!, 'eq', 'company_id', COMPANY)).toBe(true)
     const read = calls.find((c) => c.table === 'event_log')!
     expect(filtered(read, 'eq', 'company_id', COMPANY)).toBe(true)
@@ -769,6 +1000,13 @@ describe('loadAgentActivity', () => {
     const activity = await loadAgentActivity(client, COMPANY, NOW)
     expect(activity.memory_facts).toBeNull()
     expect(activity.actors).toEqual({})
+  })
+
+  it('says the day\'s work is unknown when it cannot be read, and still answers the log', async () => {
+    const { client } = fakeSupabase({ event_log: { data: [{ created_at: '2026-03-02T08:00:00.000Z', actor_id: 'a' }] }, agent_memory: { count: 1 }, pending_operations: { error: { message: 'boom' } } })
+    const activity = await loadAgentActivity(client, COMPANY, NOW)
+    expect(activity.work).toBeNull()
+    expect(activity.actors.a.calls_today).toBe(1)
   })
 
   it('throws when the log cannot be read', async () => {
