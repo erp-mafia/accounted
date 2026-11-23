@@ -139,6 +139,17 @@ describe('the own items in the Kunskap panel', () => {
   })
 })
 
+describe('the label over the company-form folders', () => {
+  it('names the legal form in a word that fits every form: a sole trader has no bolag', () => {
+    state.reads = { '/api/agents/knowledge': { data: OPTIONS }, '/api/skills': { data: [] } }
+    const html = renderInLocale(createElement(KnowledgeFolders, { active: ['horizontal/swedish-vat', 'modifier/holding-ab'] }), 'sv')
+    expect(groups(html)).toEqual([sv.skills_registry.folders_general, sv.skills_registry.folders_form])
+    expect(sv.skills_registry.folders_form).toBe('Er företagsform')
+    expect(sv.skills_registry.folders_form.toLowerCase()).not.toContain('bolag')
+    expect(en.skills_registry.folders_form).toBe('Your legal form')
+  })
+})
+
 describe('the link to add an own item', () => {
   it('opens the existing page that adds one, on knowledge', () => {
     expect(links(render({ data: [] }))).toEqual([ADD])
