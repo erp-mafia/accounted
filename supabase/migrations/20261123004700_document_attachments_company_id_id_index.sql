@@ -25,7 +25,17 @@
 
 SET statement_timeout = 0;
 
+-- The drop of a half-built index takes an exclusive lock on the table, and
+-- with no statement timeout it could hold every read and upload behind a
+-- long transaction. lock_timeout makes it give up within seconds instead, as
+-- in 20261112214701 on this table, and the run is retried. It is reset
+-- before the build: the build's waits for older transactions are lock waits
+-- too. On a normal run the drop finds nothing and takes no lock.
+SET lock_timeout = '5s';
+
 DROP INDEX IF EXISTS public.idx_document_attachments_company_id_id;
+
+RESET lock_timeout;
 
 CREATE INDEX CONCURRENTLY idx_document_attachments_company_id_id
   ON public.document_attachments (company_id, id);
