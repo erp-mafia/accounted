@@ -201,15 +201,20 @@ export function vatCodeRuleForAccount(
 
 /**
  * Why a reverse-charge purchase cannot have its cost booked on `account`, or
- * null when it can. Every door that books one asks this (the utlägg, bank
- * categorization), read from the account's chart row as vatCodeRuleForAccount
- * reads it:
+ * null when it can. The utlägg and bank categorization ask this, read from
+ * the account's chart row as vatCodeRuleForAccount reads it. A purchase cost
+ * account (BAS class 4-6) that takes no momskod would get the basis pair
+ * beside a box of its own, declaring the purchase a second time:
  *
- *  - other_box: a purchase cost account (BAS class 4-6) that takes no
- *    momskod: the 4598 offset, an account that reports a box outside ruta
- *    20-24 (trepartshandel ruta 37, the import basis ruta 50), or one whose
- *    reverse-charge momskod has no momssats of 25, 12 or 6 %. The basis pair
- *    beside it would declare the purchase a second time.
+ *  - basis_offset: 4598, the basis pair's own offset, is no cost account.
+ *  - other_box: the account reports a box outside ruta 20-24 itself (`box`):
+ *    trepartshandel ruta 37 or the import basis ruta 50, by its number or
+ *    its momskod. Such a purchase is no omvänd betalningsskyldighet at all.
+ *  - no_rate: the account's reverse-charge momskod has no momssats of 25, 12
+ *    or 6 %, so the declaration buckets its basis at none.
+ *
+ * And one with its own ruta 20-24 can carry only that box:
+ *
  *  - other_kind: the account reports its own ruta 20-24 (`box`) for another
  *    purchase (`kind`) than the one stated, so the purchase would land in a
  *    box other than the one asked. Only a `statedKind` is compared: without
@@ -219,7 +224,9 @@ export function vatCodeRuleForAccount(
  * outside class 4-6, with the basis pair; one with its own box without it.
  */
 export type ReverseChargeAccountConflict =
-  | { reason: 'other_box' }
+  | { reason: 'basis_offset' }
+  | { reason: 'other_box'; box: keyof VatDeclarationRutor }
+  | { reason: 'no_rate' }
   | { reason: 'other_kind'; box: RcBasisBox; kind: ReverseChargeKind }
 
 /** See ReverseChargeAccountConflict. `row` is the account's chart row; null or undefined when the chart holds none. */
@@ -232,7 +239,12 @@ export function reverseChargeAccountConflict(
   if (rule.mode === 'fixed') {
     return statedKind && statedKind !== rule.code.kind ? { reason: 'other_kind', box: rule.box, kind: rule.code.kind } : null
   }
-  return rule.mode === 'none' && COST_ACCOUNT.test(account) ? { reason: 'other_box' } : null
+  if (rule.mode === 'free' || !COST_ACCOUNT.test(account)) return null
+  if (account === RC_BASIS_OFFSET_ACCOUNT) return { reason: 'basis_offset' }
+  // vatCodeRuleForAccount's two other ways to none: a box outside 20-24, or
+  // one inside them with no own code (its momskod has no Swedish rate).
+  const box = purchaseBox(account, row?.default_vat_treatment ?? null)
+  return box && !RC_BASIS_BOXES.has(box) ? { reason: 'other_box', box } : { reason: 'no_rate' }
 }
 
 /** The box the purchase's base lands in: the account's own on a fixed account, the kind's basis box otherwise. */

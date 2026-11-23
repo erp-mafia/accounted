@@ -2780,8 +2780,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT')
-    expect(body.error.message).toContain(`Konto ${account} redovisar själv en annan momsruta än 20-24`)
-    expect(body.error.details).toMatchObject({ reason: 'other_box', account_number: account })
+    expect(body.error.message).toContain(`Konto ${account} är beskattningsunderlaget vid import (ruta 50)`)
+    expect(body.error.message).toContain('utan omvänd betalningsskyldighet')
+    expect(body.error.details).toMatchObject({ reason: 'other_box', account_number: account, account_box: 'ruta50' })
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
   })
 
@@ -2823,6 +2824,59 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(status, JSON.stringify(body)).toBe(200)
     const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
     expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+  })
+
+  // Bokför valda: the person chooses the box for a whole selection and no
+  // review shows an account's own box, so the box chosen is compared with it
+  // as a named one is. The same request for one row books the account's box.
+  it.each([
+    [true, 400],
+    [false, 200],
+  ] as const)('a box chosen for a selection (in_bulk %s) that the account contradicts answers %s', async (inBulk, expected) => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Vercel', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 62.5, credit_amount: 0, description: '' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 62.5, description: '' },
+        { account_number: '4531', debit_amount: 250, credit_amount: 0, description: '' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 250, description: '' },
+      ],
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    // The company's momskoder: 5420 reports ruta 21 itself.
+    enqueue({ data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.25 }], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: {
+          is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services',
+          ...(inBulk ? { in_bulk: true } : {}),
+        },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error?: { code: string; message: string; details: Record<string, unknown> } }>(response)
+    expect(status, JSON.stringify(body)).toBe(expected)
+    if (inBulk) {
+      expect(body.error?.code).toBe('TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT')
+      expect(body.error?.message).toContain('Konto 5420 redovisar själv ruta 21, men den valda rutan är 22')
+      expect(body.error?.details).toMatchObject({ reason: 'other_kind', account_box: 'ruta21', requested_box: 'ruta22' })
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    } else {
+      const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+      expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    }
   })
 
   it('posts no basis pair when the category account itself has a reverse-charge momskod (crm#1096)', async () => {

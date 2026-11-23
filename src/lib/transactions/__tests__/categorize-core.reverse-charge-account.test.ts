@@ -7,7 +7,7 @@
  * accounts; so must every categorize door.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, makeCategorizationTemplate } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
 const mockCreateJE = vi.fn()
@@ -27,7 +27,8 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
 vi.mock('@/lib/transactions/inbox-underlag', () => ({
   propagateUnderlagForBookedTransaction: vi.fn().mockResolvedValue(undefined),
 }))
-vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
+vi.mock('@/lib/bookkeeping/counterparty-templates', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/counterparty-templates')>()),
   upsertCounterpartyTemplate: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@/lib/transactions/link-journal-entry', () => ({
@@ -141,15 +142,19 @@ describe('categorize: reverse charge on a cost account that reports a box itself
     const { result, posted } = await approve('4545', 'non_eu_services')
     expect(posted).toBeNull()
     expect(result).toMatchObject({ status: 400, errorCode: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT' })
-    expect(result.error).toMatch(/Konto 4545 redovisar själv en annan momsruta än 20-24/)
+    // The reverse charge is what is wrong on an import base, not the account.
+    expect(result.error).toMatch(/Konto 4545 är beskattningsunderlaget vid import \(ruta 50\)/)
+    expect(result.error).toMatch(/Bokför importen utan omvänd betalningsskyldighet, med importmomsen/)
   })
 
   it('refuses trepartshandel (4512, ruta 37) and the 4598 offset as the cost account', async () => {
-    for (const account of ['4512', '4598']) {
-      const { result, posted } = await approve(account, 'eu_services')
-      expect(posted, account).toBeNull()
-      expect(result, account).toMatchObject({ status: 400, errorCode: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT' })
-    }
+    const triangulation = await approve('4512', 'eu_services')
+    expect(triangulation.posted).toBeNull()
+    expect(triangulation.result).toMatchObject({ status: 400, errorCode: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT' })
+    expect(triangulation.result.error).toMatch(/ruta 37.*ingen omvänd betalningsskyldighet: bokför det utan den/)
+    const offset = await approve('4598', 'eu_services')
+    expect(offset.posted).toBeNull()
+    expect(offset.result.error).toMatch(/Konto 4598 är motkontot till underlaget/)
   })
 
   it('refuses a cost account whose momskod is import or trepartshandel, or reverse charge without a Swedish rate', async () => {
@@ -163,6 +168,8 @@ describe('categorize: reverse charge on a cost account that reports a box itself
       expect(posted, account).toBeNull()
       expect(result, account).toMatchObject({ status: 400, errorCode: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT' })
     }
+    // Only the momskod without a sats is answered with the kontoplan.
+    expect((await approve('6552', 'eu_services', codes)).result.error).toMatch(/Rätta kontots momssats i kontoplanen/)
   })
 
   it("refuses the category's own account too when its momskod declares another box (no override)", async () => {
@@ -188,6 +195,74 @@ describe('categorize: reverse charge on a cost account that reports a box itself
     expect(configured).toMatchObject({ ok: false, details: { reason: 'other_kind', account_box: 'ruta21' } })
     // The box it reports itself is accepted.
     expect(await viaApi('4531', 'non_eu_services')).toMatchObject({ ok: true })
+  })
+
+  it('refuses a catalog template whose cost account the company set to the import basis', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: txRow })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    // it_saas_eu books reverse charge on 5420, which this company reports in ruta 50.
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', 'company-1', TX_ID, {
+      is_business: true,
+      template_id: 'it_saas_eu',
+    }, {
+      dryRun: true,
+      onBooked: 'refuse',
+      invoiceMatchIntercept: false,
+      loadChart: async () => new Map([['5420', { default_vat_treatment: 'import_goods', default_vat_rate: 0.25 }]]),
+    })
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT',
+      details: { reason: 'other_box', account_number: '5420', account_box: 'ruta50' },
+    })
+  })
+
+  /** A learned pair on `account` with reverse charge, booked on a row of `amount`. */
+  async function learned(amount: number, account = '4545') {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...txRow, amount, amount_sek: amount } })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } })
+    enqueue({
+      data: makeCategorizationTemplate({
+        id: 'tmpl-rc',
+        counterparty_name: 'Freight forwarder',
+        debit_account: account,
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+        vat_account: '2645',
+        category: 'expense_other',
+      }),
+    })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    return categorizeTransaction(supabase as never, 'user-1', 'company-1', TX_ID, {
+      is_business: true,
+      counterparty_template_id: 'tmpl-rc',
+    }, {
+      dryRun: true,
+      onBooked: 'refuse',
+      invoiceMatchIntercept: false,
+      loadChart: async () => new Map(),
+    })
+  }
+
+  it('refuses a learned template on the import basis, on a purchase and on its refund (the credit side)', async () => {
+    const refused = { ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT', details: { reason: 'other_box', account_number: '4545' } }
+    expect(await learned(-1000)).toMatchObject(refused)
+    // Money back against the learned direction mirrors the set: the basis and
+    // the cost line sit on the credit side, and the rule reads them there.
+    expect(await learned(1000)).toMatchObject(refused)
+    // On an ordinary cost account the refund books the mirrored set: the rule
+    // read the credit side, not an empty one.
+    const refund = await learned(1000, '6540')
+    expect(refund).toMatchObject({ ok: true, preview: { mappingResult: { credit_account: '6540' } } })
+    const lines = refund.ok && refund.dryRun ? refund.preview.mappingResult.vat_lines : []
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['2645', 0, 250], ['2614', 250, 0], ['4535', 0, 1000], ['4598', 1000, 0],
+    ])
   })
 
   it('still books an ordinary cost account with the pair, and an own-box account without it', async () => {

@@ -272,14 +272,18 @@ describe('vatCodeRuleForAccount', () => {
 
 describe('reverseChargeAccountConflict', () => {
   it('refuses a purchase cost account that declares another box itself, whatever box is stated', () => {
-    const cases: Array<[string, VoucherVatCodeAccountRow | undefined]> = [
-      ['4598', undefined], ['4512', undefined], ['4545', undefined], ['4547', undefined],
-      ['6540', treatment('triangulation_eu_goods')], ['6540', treatment('import_goods')],
-      ['6540', treatment('reverse_charge_eu_services', 0)],
+    const cases: Array<[string, VoucherVatCodeAccountRow | undefined, unknown]> = [
+      ['4598', undefined, { reason: 'basis_offset' }],
+      ['4512', undefined, { reason: 'other_box', box: 'ruta37' }],
+      ['4545', undefined, { reason: 'other_box', box: 'ruta50' }],
+      ['4547', undefined, { reason: 'other_box', box: 'ruta50' }],
+      ['6540', treatment('triangulation_eu_goods'), { reason: 'other_box', box: 'ruta37' }],
+      ['6540', treatment('import_goods'), { reason: 'other_box', box: 'ruta50' }],
+      ['6540', treatment('reverse_charge_eu_services', 0), { reason: 'no_rate' }],
     ]
-    for (const [account, row] of cases) {
-      expect(reverseChargeAccountConflict(account, row), account).toEqual({ reason: 'other_box' })
-      expect(reverseChargeAccountConflict(account, row, 'eu_services'), account).toEqual({ reason: 'other_box' })
+    for (const [account, row, conflict] of cases) {
+      expect(reverseChargeAccountConflict(account, row), account).toEqual(conflict)
+      expect(reverseChargeAccountConflict(account, row, 'eu_services'), account).toEqual(conflict)
     }
   })
 
