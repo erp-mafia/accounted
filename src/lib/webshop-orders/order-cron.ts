@@ -9,11 +9,14 @@
  *     this runner is reached, and whose service client arrives as ctx.supabase;
  *   - candidates are the active, opted-in connections, oldest cursor first,
  *     snapshotted page by page before any sync moves a cursor;
- *   - a connection whose company is not entitled is skipped without using
- *     the cap or touching its cursor, so a front of such rows cannot starve
- *     the entitled ones behind it;
- *   - at most MAX_SYNCED syncs inside a 240 s budget, shared with each sync,
- *     which stops between pages and keeps its cursor for the next run;
+ *   - a connection whose company is not entitled is skipped without touching
+ *     its cursor;
+ *   - connections are synced in that order until the 240 s budget runs out,
+ *     shared with each sync, which stops between pages and keeps its cursor
+ *     for the next run. A connection the budget does not reach keeps its
+ *     older cursor, so the next night it goes ahead of the ones synced
+ *     tonight. No count cap: one of 50 would leave connections out of a run
+ *     with most of its budget left (crm#2164);
  *   - rows a sync could not write (OrderSyncSummary.errors) are logged as an
  *     error per connection: the sync logs each at warn and holds its cursor
  *     below a failed write, so before this a failing connection read as
@@ -42,8 +45,6 @@ import { hasCapability } from '@/lib/entitlements/has-capability'
 import type { CapabilityKey } from '@/lib/entitlements/keys'
 import type { Logger } from '@/lib/logger'
 
-/** Cap of entitled connections synced per cron invocation. */
-export const MAX_SYNCED = 50
 /** Page size when scanning candidates ordered by their order cursor. */
 export const CANDIDATE_PAGE_SIZE = 100
 /** Hard stop so a flood of non-entitled rows cannot burn the budget scanning. */
@@ -236,7 +237,6 @@ export async function runWebshopOrderCron<C extends CronConnection>(
   let scanned = 0
   let rowErrors = 0
   for (const connection of candidates) {
-    if (results.length >= MAX_SYNCED) break
     if (now() >= deadlineMs) {
       ctx.log.info('time budget reached', { processedSoFar: results.length, scanned })
       break

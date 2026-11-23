@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase, createTableMockSupabase } from '@/tests/helpers'
 import type { Logger } from '@/lib/logger'
@@ -6,7 +6,8 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 
 vi.mock('@/lib/entitlements/has-capability', () => ({ hasCapability: vi.fn(async () => true) }))
 
-import { failureNote, runWebshopOrderCron, type WebshopOrderCronSpec } from '../order-cron'
+import { hasCapability } from '@/lib/entitlements/has-capability'
+import { failureNote, runWebshopOrderCron, TIME_BUDGET_MS, type WebshopOrderCronSpec } from '../order-cron'
 
 type Connection = { id: string; company_id: string }
 
@@ -192,5 +193,79 @@ describe('runWebshopOrderCron writes a failed sync on its connection', () => {
       const note = failureNote('WooCommerce', { code: '23505', message: 'duplicate key value violates unique constraint "x"' })
       expect(note).toBe('Den senaste automatiska hämtningen från WooCommerce misslyckades. En post med samma uppgifter finns redan.')
     })
+  })
+})
+
+// crm#2164: a run stopped after 50 synced connections, whatever was left of
+// its budget, so the 51st entitled connection was left out of a night that
+// had time for it.
+describe('runWebshopOrderCron syncs connections until its budget runs out', () => {
+  type Row = { id: string; company_id: string; error_message: string | null }
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+  const sync = vi.fn()
+  const spec: WebshopOrderCronSpec<Row> = {
+    extensionId: 'stripe',
+    label: 'Stripe Connect',
+    table: 'stripe_connections',
+    cursorColumn: 'last_balance_txn_synced_at',
+    capability: CAPABILITY.stripe_payments,
+    isConfigured: () => true,
+    sync,
+  }
+
+  const rows = (prefix: string, n: number): Row[] =>
+    Array.from({ length: n }, (_, i) => ({ id: `${prefix}-${i}`, company_id: `${prefix}-company-${i}`, error_message: null }))
+
+  // The candidates as the database orders them, least recently synced first.
+  async function run(candidates: Row[], now?: () => number) {
+    const mock = createTableMockSupabase({ stripe_connections: [{ data: candidates }] })
+    const ctx = { requestId: 'cron_1', log: log as unknown as Logger, supabase: mock.supabase as unknown as SupabaseClient }
+    const response = await runWebshopOrderCron(ctx, spec, now)
+    return { mock, body: await response.json() }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sync.mockResolvedValue({ inserted: 0, updated: 0 })
+  })
+
+  afterEach(() => {
+    vi.mocked(hasCapability).mockImplementation(async () => true)
+  })
+
+  it('syncs every entitled connection while there is time, also past 50', async () => {
+    // As in production, connections that are not entitled sit among the entitled.
+    const entitled = rows('paid', 51)
+    const free = rows('free', 13)
+    const candidates = entitled.flatMap((row, i) => (i < free.length ? [free[i], row] : [row]))
+    vi.mocked(hasCapability).mockImplementation(async (_supabase, companyId) => companyId.startsWith('paid-'))
+
+    const { mock, body } = await run(candidates)
+
+    expect(mock.findCall('stripe_connections', 'order')).toEqual(['last_balance_txn_synced_at', { ascending: true, nullsFirst: true }])
+    expect(sync.mock.calls.map(([, connection]) => connection.id)).toEqual(entitled.map((row) => row.id))
+    expect(body.processed).toBe(51)
+    expect(log.info).toHaveBeenCalledWith('stripe order sync summary', expect.objectContaining({ processed: 51, scanned: 64 }))
+  })
+
+  it('stops when the budget runs out and leaves the rest untouched for the next night', async () => {
+    // Each sync takes a third of the budget: three start, the other two wait.
+    // Each row carries an earlier night's failure text, which the runner
+    // clears on a connection whose sync ran through, so a write shows which
+    // connections it touched.
+    let clock = 0
+    sync.mockImplementation(async () => {
+      clock += TIME_BUDGET_MS / 3
+      return { inserted: 1, updated: 0 }
+    })
+    const candidates = rows('c', 5).map((row) => ({ ...row, error_message: failureNote('Stripe Connect', new Error('boom')) }))
+
+    const { mock, body } = await run(candidates, () => clock)
+
+    expect(sync.mock.calls.map(([, connection]) => connection.id)).toEqual(['c-0', 'c-1', 'c-2'])
+    expect(body.results.map((result: { connectionId: string }) => result.connectionId)).toEqual(['c-0', 'c-1', 'c-2'])
+    expect(mock.payloads('stripe_connections', 'update')).toEqual([{ error_message: null }, { error_message: null }, { error_message: null }])
+    expect(mock.findCalls('stripe_connections', 'eq').filter(([column]) => column === 'id')).toEqual([['id', 'c-0'], ['id', 'c-1'], ['id', 'c-2']])
+    expect(log.info).toHaveBeenCalledWith('time budget reached', { processedSoFar: 3, scanned: 3 })
   })
 })

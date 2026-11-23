@@ -720,8 +720,8 @@ export async function syncShopifyOrders(
     // Watermark advance: a fully-listed window means "scanned through run
     // start", even when it produced no rows. Without this, an empty first run
     // keeps a NULL cursor forever, and the cron's oldest-first selection
-    // (nullsFirst, limit 50) lets quiet stores permanently occupy the batch
-    // and starve other connections. Capped by the failure floor like every
+    // (nullsFirst) lets quiet stores permanently take the front of every
+    // night's run. Capped by the failure floor like every
     // other cursor write; the 24h overlap re-poll still covers updates that
     // landed while the run was in flight.
     if (windowExhausted) {
