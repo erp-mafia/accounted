@@ -495,9 +495,13 @@ describe('loadAgentPicture: checks', () => {
   })
 
   it('runs the queue through the door\'s ledger read, and keeps the bank feed when the queue cannot be read', async () => {
-    const ledgerRead = vi.fn(async <T,>(read: () => Promise<T>) => read())
+    const entered = vi.fn()
+    const ledgerRead = <T,>(read: () => Promise<T>): Promise<T> => {
+      entered()
+      return read()
+    }
     await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, { ...ports(), ledgerRead }, NOW)
-    expect(ledgerRead).toHaveBeenCalledTimes(1)
+    expect(entered).toHaveBeenCalledTimes(1)
 
     const refused = vi.fn(async () => {
       throw new Error('import in progress')
