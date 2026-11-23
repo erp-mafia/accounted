@@ -22,9 +22,14 @@ export function parseWikiView(raw: string | null | undefined): WikiView {
 /** The views of the old "Vad din agent vet" page (?view=), each to its wiki view. */
 const LEGACY_VIEW: Readonly<Record<string, WikiView>> = { knowledge: 'map', facts: 'facts', memory: 'memory', skills: 'skills' }
 
-/** Where an old /agent-knowledge link lands: its view, or the wiki's landing. */
-export function legacyKnowledgeHref(view: string | null | undefined): string {
-  return wikiViewHref((view && LEGACY_VIEW[view]) || 'context')
+/**
+ * Where an old /agent-knowledge link lands: its view, or the wiki's landing.
+ * With `picture` (the company has the agent picture on) it is where that
+ * view is for such a company (pictureHrefOfView).
+ */
+export function legacyKnowledgeHref(view: string | null | undefined, { picture = false }: { picture?: boolean } = {}): string {
+  const wikiView = (view && LEGACY_VIEW[view]) || 'context'
+  return picture ? pictureHrefOfView(wikiView) : wikiViewHref(wikiView)
 }
 
 /** The rows of the company's card in the agent picture (components/agent-picture); each opens its own view. */

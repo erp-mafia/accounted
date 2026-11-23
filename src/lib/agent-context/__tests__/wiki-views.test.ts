@@ -31,6 +31,20 @@ describe('wiki views', () => {
     expect(legacyKnowledgeHref('memory')).toBe('/wiki?view=memory')
     expect(legacyKnowledgeHref('skills')).toBe('/wiki?view=skills')
     expect(legacyKnowledgeHref('nonsense')).toBe('/wiki')
+    // Said outright, a company without the picture gets the same answers.
+    for (const view of [undefined, 'knowledge', 'facts', 'memory', 'skills', 'nonsense']) {
+      expect(legacyKnowledgeHref(view, { picture: false })).toBe(legacyKnowledgeHref(view))
+    }
+  })
+
+  it('sends each old link to where the view is for a company with the picture', () => {
+    const picture = { picture: true }
+    expect(legacyKnowledgeHref(undefined, picture)).toBe('/wiki')
+    expect(legacyKnowledgeHref('knowledge', picture)).toBe('/rules')
+    expect(legacyKnowledgeHref('facts', picture)).toBe('/wiki?view=facts')
+    expect(legacyKnowledgeHref('memory', picture)).toBe('/wiki?view=memory')
+    expect(legacyKnowledgeHref('skills', picture)).toBe('/wiki?view=knowledge')
+    expect(legacyKnowledgeHref('nonsense', picture)).toBe('/wiki')
   })
 })
 
