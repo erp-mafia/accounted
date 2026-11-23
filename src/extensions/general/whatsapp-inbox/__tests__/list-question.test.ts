@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createRowsMockSupabase, createTableMockSupabase } from '@/tests/helpers'
+import { createRowsMockSupabase, createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 import type { CompanyQuestion } from '@/lib/questions/types'
 import type { WhatsAppConversation, WhatsAppPhoneLink } from '@/types'
 
@@ -31,7 +31,7 @@ vi.mock('@/lib/questions/rows', async () => {
   return { ...actual, readQuestionRow: vi.fn() }
 })
 
-import { INTERACTIVE_BODY_MAX, sendReplyButtons, sendText } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
+import { INTERACTIVE_BODY_MAX, TEXT_BODY_MAX, sendReplyButtons, sendText } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { resolveRoutedCompany } from '@/extensions/general/whatsapp-inbox/lib/routing'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { answerAsPerson, closeAsPerson } from '@/lib/questions/app-answer'
@@ -54,6 +54,7 @@ import {
   expireListQuestions,
   listQuestionBody,
   listQuestionReplyMarker,
+  listSettledBody,
   offerFiledListQuestion,
   offerListQuestionAfterBurst,
   offerListQuestionOnText,
@@ -63,6 +64,7 @@ import {
   pendingListQuestion,
   questionButtonId,
   sendListQuestion,
+  settleListQuestion,
   type QuestionTap,
 } from '@/extensions/general/whatsapp-inbox/lib/list-question'
 
@@ -2322,6 +2324,371 @@ describe('a written reply when the company has a reply reader', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(answerMock).toHaveBeenCalledTimes(1)
     expect(closeMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the message that says a question is settled', () => {
+  const SENTENCE = { sv: 'Den här frågan är löst, du behöver inte svara.', en: 'This question is settled, you do not need to answer.' } as const
+
+  for (const locale of ['sv', 'en'] as const) {
+    it(`${locale}: is one sentence, with the note of the close on a line of its own when it has one`, () => {
+      expect(listSettledBody('Betalningen är bokförd mot fakturan.', locale)).toBe(`${SENTENCE[locale]}\nBetalningen är bokförd mot fakturan.`)
+      for (const none of [null, undefined, '', '   ', '\n\t\u0000']) expect(listSettledBody(none, locale)).toBe(SENTENCE[locale])
+    })
+  }
+
+  it('writes in Swedish unless told otherwise', () => {
+    expect(listSettledBody(null)).toBe(SENTENCE.sv)
+  })
+
+  it('takes the control characters out of the note and keeps one space per run of whitespace', () => {
+    expect(listSettledBody('  Bokfört\u0000 mot\r\n\r\nfakturan\t F-1042.\u0007\u009f ')).toBe(`${SENTENCE.sv}\nBokfört mot fakturan F-1042.`)
+    expect(listSettledBody('Rad ett\nRad två').split('\n')).toEqual([SENTENCE.sv, 'Rad ett Rad två'])
+  })
+
+  it('keeps at most 300 characters of the note, and stays within what a text message holds', () => {
+    expect(listSettledBody('a'.repeat(300))).toBe(`${SENTENCE.sv}\n${'a'.repeat(300)}`)
+    expect(listSettledBody('a'.repeat(301))).toBe(`${SENTENCE.sv}\n${'a'.repeat(300)}`)
+    expect(TEXT_BODY_MAX).toBe(4096)
+    for (const note of ['a'.repeat(10_000), '😀'.repeat(10_000)]) {
+      expect(listSettledBody(note).length).toBeLessThanOrEqual(TEXT_BODY_MAX)
+      expect(listSettledBody(note, 'en').length).toBeLessThanOrEqual(TEXT_BODY_MAX)
+    }
+  })
+})
+
+describe('a question closed as settled through another door', () => {
+  const settled = { companyId: COMPANY, questionId: QUESTION_ID }
+  const NOTE = 'Betalningen på 4 990 kr är bokförd mot leverantörens faktura.'
+  const SENTENCE = 'Den här frågan är löst, du behöver inte svara.'
+  type QuestionRowRead = Awaited<ReturnType<typeof readQuestionRow>>
+  const settledRow = (overrides: Partial<QuestionRowRead> = {}): QuestionRowRead => ({
+    id: QUESTION_ID,
+    status: 'closed',
+    close_reason: 'settled',
+    close_note: NOTE,
+    close_evidence: [{ kind: 'transaction', id: '10000000-0000-4000-8000-000000000001' }],
+    question: 'Gäller hyran på 12 000 kr kontoret eller lagret?',
+    why: null,
+    options: [],
+    evidence: [],
+    actor_label: null,
+    client: null,
+    answer_option: null,
+    answer_text: null,
+    answered_at: '2026-11-20T09:59:00.000Z',
+    answered_via: 'claude',
+    fact_id: null,
+    created_at: '2026-11-19T08:00:00.000Z',
+    ...overrides,
+  })
+
+  type Chain = Parameters<TableMockResolver>[0]
+  const filters = (chain: Chain): Array<[string, unknown]> =>
+    chain.filter((call) => call.method === 'eq').map((call) => [String(call.args[0]), call.args[1]])
+  const filterOn = (chain: Chain, column: string): unknown => filters(chain).find(([name]) => name === column)?.[1]
+  const heldQuestion = (conversation: WhatsAppConversation): string | undefined =>
+    (conversation.context as ConversationContext).pending_question?.question_id
+
+  /**
+   * Conversations and links kept as rows that take their own writes: a write
+   * goes through only on the revision it was read at, and a read sees what
+   * the writes before it left.
+   */
+  function world(opts: { conversations?: WhatsAppConversation[]; links?: WhatsAppPhoneLink[]; lostRace?: boolean; role?: string | null } = {}) {
+    const conversations = new Map<string, WhatsAppConversation>()
+    for (const conversation of opts.conversations ?? [makeConversation({ context: pendingContext() })]) conversations.set(conversation.id, conversation)
+    const links = new Map<string, WhatsAppPhoneLink>()
+    for (const link of opts.links ?? [makeLink()]) links.set(link.id, link)
+    const contextWrites: Array<{ conversationId: string; context: ConversationContext }> = []
+    let revision = 0
+    let raced = opts.lostRace !== true
+
+    const conversationsTable: TableMockResolver = (chain) => {
+      const id = filterOn(chain, 'id')
+      const update = chain.find((call) => call.method === 'update')
+      if (update) {
+        const current = typeof id === 'string' ? conversations.get(id) : undefined
+        if (!current) return { data: [] }
+        if (!raced) {
+          // Another write takes the question out between the read and this write.
+          raced = true
+          conversations.set(current.id, { ...current, context: {}, updated_at: `revision-${++revision}` })
+          return { data: [] }
+        }
+        if (current.updated_at !== filterOn(chain, 'updated_at')) return { data: [] }
+        const patch = update.args[0] as { context?: ConversationContext }
+        const next: WhatsAppConversation = {
+          ...current,
+          ...(patch.context ? { context: patch.context as Record<string, unknown> } : {}),
+          updated_at: `revision-${++revision}`,
+        }
+        conversations.set(current.id, next)
+        if (patch.context) contextWrites.push({ conversationId: current.id, context: patch.context })
+        return { data: [next] }
+      }
+      const held = filterOn(chain, 'context->pending_question->>question_id')
+      if (held !== undefined) return { data: [...conversations.values()].filter((conversation) => heldQuestion(conversation) === held) }
+      return { data: typeof id === 'string' ? (conversations.get(id) ?? null) : null }
+    }
+    const linksTable: TableMockResolver = (chain) => {
+      const id = filterOn(chain, 'id')
+      return { data: typeof id === 'string' ? (links.get(id) ?? null) : null }
+    }
+    // One membership, read as one row for a single company and as a list for all of the person's.
+    const role = opts.role === undefined ? 'owner' : opts.role
+    const membersTable: TableMockResolver = (chain) =>
+      chain.some((call) => call.method === 'maybeSingle')
+        ? { data: role === null ? null : { role } }
+        : { data: role === null ? [] : [{ company_id: COMPANY, role, companies: { name: COMPANY_NAME } }] }
+
+    const mock = createTableMockSupabase({
+      whatsapp_conversations: conversationsTable,
+      whatsapp_phone_links: linksTable,
+      company_members: membersTable,
+    })
+    return { supabase: mock.supabase as unknown as SupabaseClient, mock, conversations, contextWrites }
+  }
+
+  const sentTemplates = (): string[] => sendTextMock.mock.calls.map((call) => call[1].template)
+  const nextQuestion = makeQuestion({ question_id: OTHER_QUESTION_ID })
+
+  beforeEach(() => {
+    readRowMock.mockResolvedValue(settledRow())
+    // Another open question waits: it shows whether a next question is offered.
+    listMock.mockResolvedValue(openOf([nextQuestion]))
+  })
+
+  it('says so with the note of the close while the window is open, then sends the next open question', async () => {
+    const { supabase, conversations, contextWrites } = world()
+
+    await settleListQuestion(supabase, settled)
+
+    expect(readRowMock).toHaveBeenCalledWith(supabase, COMPANY, QUESTION_ID)
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1]).toEqual({
+      to: PHONE,
+      body: `${SENTENCE}\n${NOTE}`,
+      template: 'm30_list_settled',
+      senderPhoneHash: 'hash-1',
+      phoneLinkId: 'link-1',
+      conversationId: 'conv-1',
+    })
+    expect(TEMPLATE.m30ListSettled).toBe('m30_list_settled')
+    // The settled question left the slot before anything was sent.
+    expect(contextWrites[0].context.pending_question).toBeUndefined()
+    // The next open question follows the message, with no burst slot, and the conversation holds it.
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendButtonsMock.mock.calls[0][1].buttons[0].id).toBe(`cq:${COMPANY}:${OTHER_QUESTION_ID}:o:office`)
+    expect(sendButtonsMock.mock.invocationCallOrder[0]).toBeGreaterThan(sendTextMock.mock.invocationCallOrder[0])
+    const held = conversations.get('conv-1')?.context as ConversationContext
+    expect(held.pending_question).toMatchObject({ type: 'list_question', question_id: OTHER_QUESTION_ID, company_id: COMPANY })
+    expect(held.list_question_slots).toBeUndefined()
+    expect(listMock).toHaveBeenCalledWith(supabase, [COMPANY])
+  })
+
+  it('says only the sentence when the close has no note', async () => {
+    readRowMock.mockResolvedValue(settledRow({ close_note: null }))
+    const { supabase } = world()
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1]).toMatchObject({ body: SENTENCE, template: 'm30_list_settled' })
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends the note without its control characters', async () => {
+    readRowMock.mockResolvedValue(settledRow({ close_note: 'Bokfört\u0000 mot\nfakturan\t F-1042.\u0007' }))
+    const { supabase } = world()
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sendTextMock.mock.calls[0][1].body).toBe(`${SENTENCE}\nBokfört mot fakturan F-1042.`)
+  })
+
+  it('sends nothing outside the service window, and still takes the question out of the conversation', async () => {
+    const closed = makeConversation({ context: pendingContext(), service_window_expires_at: new Date(NOW.getTime() - 1000).toISOString() })
+    const { supabase, conversations, contextWrites } = world({ conversations: [closed] })
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(contextWrites).toHaveLength(1)
+    expect(heldQuestion(conversations.get('conv-1') as WhatsAppConversation)).toBeUndefined()
+  })
+
+  const quiet: Array<[string, () => { conversations?: WhatsAppConversation[]; links?: WhatsAppPhoneLink[] }]> = [
+    ['the link is paused', () => ({ links: [makeLink({ muted_at: '2026-11-19T00:00:00.000Z' })] })],
+    ['the link is revoked', () => ({ links: [makeLink({ revoked_at: '2026-11-19T00:00:00.000Z' })] })],
+    ['the link has no number left', () => ({ links: [makeLink({ phone_enc: '' })] })],
+    ['the question sits past its 48 hours in the conversation', () => ({ conversations: [makeConversation({ context: pendingContext(QUESTION_TTL_MS + 60 * 1000) })] })],
+  ]
+
+  it.each(quiet)('sends nothing when %s, and still takes the question out of the conversation', async (_name, build) => {
+    const { supabase, conversations } = world(build())
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(heldQuestion(conversations.get('conv-1') as WhatsAppConversation)).toBeUndefined()
+  })
+
+  it.each(['viewer', 'invoicer', null])('sends nothing to a person whose role in the company is %s, and still takes the question out', async (role) => {
+    const { supabase, conversations, mock } = world({ role })
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(heldQuestion(conversations.get('conv-1') as WhatsAppConversation)).toBeUndefined()
+    // The membership is read for this person in the question's company.
+    expect(mock.findCalls('company_members', 'eq')).toEqual(expect.arrayContaining([['user_id', USER], ['company_id', COMPANY]]))
+  })
+
+  it('sends nothing, and reads no question, when no conversation holds the question', async () => {
+    const elsewhere = [makeConversation(), makeConversation({ id: 'conv-2', context: pendingContext(5 * 60 * 1000, OTHER_QUESTION_ID) })]
+    const { supabase, contextWrites } = world({ conversations: elsewhere })
+
+    await settleListQuestion(supabase, settled)
+
+    expect(readRowMock).not.toHaveBeenCalled()
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(contextWrites).toEqual([])
+  })
+
+  const notSettledOnItsRow: Array<[string, () => void]> = [
+    ['closed with another reason', () => readRowMock.mockResolvedValue(settledRow({ close_reason: 'dont_know', close_note: null }))],
+    ['answered', () => readRowMock.mockResolvedValue(settledRow({ status: 'answered', close_reason: null, close_note: null }))],
+    ['open again', () => readRowMock.mockResolvedValue(settledRow({ status: 'open', close_reason: null, close_note: null, answered_at: null }))],
+    ['not there to read', () => readRowMock.mockRejectedValue(codedRefusal('COMPANY_QUESTION_NOT_FOUND', 'No question in this company.'))],
+  ]
+
+  it.each(notSettledOnItsRow)('only takes the question out when its row says it is %s', async (_name, arrange) => {
+    arrange()
+    const { supabase, conversations } = world()
+
+    await expect(settleListQuestion(supabase, settled)).resolves.toBeUndefined()
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(heldQuestion(conversations.get('conv-1') as WhatsAppConversation)).toBeUndefined()
+  })
+
+  it('tells each conversation that holds the question, each under its own conditions', async () => {
+    const open = makeConversation({ id: 'conv-1', phone_link_id: 'link-1', context: pendingContext() })
+    const windowClosed = makeConversation({
+      id: 'conv-2',
+      phone_link_id: 'link-2',
+      context: pendingContext(),
+      service_window_expires_at: new Date(NOW.getTime() - 1000).toISOString(),
+    })
+    const alsoOpen = makeConversation({ id: 'conv-3', phone_link_id: 'link-3', context: pendingContext() })
+    const { supabase, conversations } = world({
+      conversations: [open, windowClosed, alsoOpen],
+      links: [
+        makeLink({ id: 'link-1', phone_hash: 'hash-1' }),
+        makeLink({ id: 'link-2', user_id: OTHER_USER, phone_hash: 'hash-2' }),
+        makeLink({ id: 'link-3', user_id: OTHER_USER, phone_hash: 'hash-3', phone_enc: encryptPhone('46709999999') }),
+      ],
+    })
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sendTextMock.mock.calls.map((call) => [call[1].conversationId, call[1].to, call[1].template])).toEqual([
+      ['conv-1', PHONE, 'm30_list_settled'],
+      ['conv-3', '46709999999', 'm30_list_settled'],
+    ])
+    expect(sendButtonsMock.mock.calls.map((call) => call[1].conversationId)).toEqual(['conv-1', 'conv-3'])
+    // The question is out of all three; the two that were told hold the next one.
+    expect([...conversations.values()].map((conversation) => heldQuestion(conversation))).toEqual([OTHER_QUESTION_ID, undefined, OTHER_QUESTION_ID])
+    // The question is read once, whatever the number of conversations.
+    expect(readRowMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('goes on to the other conversations when one of them fails', async () => {
+    sendTextMock.mockRejectedValueOnce(new Error('boom'))
+    const { supabase } = world({
+      conversations: [
+        makeConversation({ id: 'conv-1', phone_link_id: 'link-1', context: pendingContext() }),
+        makeConversation({ id: 'conv-2', phone_link_id: 'link-2', context: pendingContext() }),
+      ],
+      links: [makeLink({ id: 'link-1' }), makeLink({ id: 'link-2', user_id: OTHER_USER, phone_hash: 'hash-2' })],
+    })
+
+    await expect(settleListQuestion(supabase, settled)).resolves.toBeUndefined()
+
+    expect(sendTextMock.mock.calls.map((call) => call[1].conversationId)).toEqual(['conv-1', 'conv-2'])
+  })
+
+  it('sends nothing a second time when the same close is delivered again', async () => {
+    // The next question that follows is the last open one.
+    listMock.mockResolvedValueOnce(openOf([nextQuestion])).mockResolvedValue([])
+    const { supabase, contextWrites } = world()
+
+    await settleListQuestion(supabase, settled)
+    const writesAfterFirst = contextWrites.length
+    await settleListQuestion(supabase, settled)
+    await settleListQuestion(supabase, settled)
+
+    expect(sentTemplates()).toEqual(['m30_list_settled'])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(contextWrites).toHaveLength(writesAfterFirst)
+    // A delivery that finds no conversation holding the question reads nothing more.
+    expect(readRowMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends nothing when another write took the question out of the conversation first', async () => {
+    const { supabase, contextWrites } = world({ lostRace: true })
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(contextWrites).toEqual([])
+  })
+
+  const noNext: Array<[string, () => WhatsAppConversation]> = [
+    ['the day has no question left: list questions used it', () =>
+      makeConversation({ context: { ...pendingContext(), list_question_budget: { day_key: todayIsoStockholm(), count: MAX_QUESTIONS_PER_DAY } } })],
+    ['the day has no question left: receipt questions used it', () =>
+      makeConversation({ context: { ...pendingContext(), budget: { day_key: todayIsoStockholm(), count: MAX_QUESTIONS_PER_DAY } } })],
+    ['a burst of receipts waits for its ack', () => makeConversation({ context: pendingContext(), pending_ack: true })],
+    ['a receipt question waits in the queue', () =>
+      makeConversation({ context: { ...pendingContext(), question_queue: [{ type: 'context', inbox_item_id: 'item-2' }] } })],
+  ]
+
+  it.each(noNext)('says the question is settled and sends no next question when %s', async (_name, build) => {
+    const { supabase } = world({ conversations: [build()] })
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sentTemplates()).toEqual(['m30_list_settled'])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+  })
+
+  it('says the question is settled and sends no next question when none is open', async () => {
+    listMock.mockResolvedValue([])
+    const { supabase, conversations } = world()
+
+    await settleListQuestion(supabase, settled)
+
+    expect(sentTemplates()).toEqual(['m30_list_settled'])
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(heldQuestion(conversations.get('conv-1') as WhatsAppConversation)).toBeUndefined()
+  })
+
+  it('never throws, and reads nothing for an id that is not a question id', async () => {
+    const failing = createTableMockSupabase({ whatsapp_conversations: { error: { message: 'boom' } } })
+    await expect(settleListQuestion(failing.supabase as unknown as SupabaseClient, settled)).resolves.toBeUndefined()
+    expect(sendTextMock).not.toHaveBeenCalled()
+
+    const untouched = createTableMockSupabase()
+    await settleListQuestion(untouched.supabase as unknown as SupabaseClient, { companyId: COMPANY, questionId: 'not-an-id' })
+    expect(untouched.supabase.from).not.toHaveBeenCalled()
   })
 })
 

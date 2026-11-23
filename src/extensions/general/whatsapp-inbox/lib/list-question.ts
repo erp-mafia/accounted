@@ -62,6 +62,13 @@
  * the person and no next question (replyToOpenQuestion). Without a reader,
  * and without a usable reading, the reply is the answer as written.
  *
+ * A question that ends through another door leaves every conversation it is
+ * in flight in, and nothing is said (clearEndedListQuestion). One ending is
+ * told: a question closed as settled. Where it was in flight, the service
+ * window is open and the person still keeps the books of the company, they
+ * get one message saying so, with the note of the close, and the next open
+ * list question follows as after an answer in the chat (settleListQuestion).
+ *
  * The plaintext phone is never stored: it is decrypted from the link for the
  * send only. Asked, answered and expired go to processing_history.
  */
@@ -76,11 +83,12 @@ import { APP_ANSWER_MAX, WHATSAPP_DOOR, answerAsPerson, closeAsPerson } from '@/
 import { listOpenQuestionsAcross, type OpenQuestionOfCompany } from '@/lib/questions/list'
 import { hasReplyReader, readReply, type ReplyReading } from '@/lib/questions/reply-reader'
 import { readQuestionRow, toQuestion } from '@/lib/questions/rows'
-import type { CompanyQuestion } from '@/lib/questions/types'
+import { QUESTION_LIMITS, type CompanyQuestion } from '@/lib/questions/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { WhatsAppConversation, WhatsAppPhoneLink } from '@/types'
 import {
   INTERACTIVE_BODY_MAX,
+  TEXT_BODY_MAX,
   sendReplyButtons,
   sendText,
   type ChoiceOption,
@@ -610,7 +618,7 @@ export async function offerListQuestionWhenDone(supabase: SupabaseClient, conver
 async function offerNextWithoutSlot(
   supabase: SupabaseClient,
   conversationId: string,
-  moment: 'text' | 'answer',
+  moment: 'text' | 'answer' | 'settled',
 ): Promise<ListQuestionOffer> {
   try {
     if (listIsOnForNobody()) return 'not_sent'
@@ -764,18 +772,23 @@ export function parseListQuestionReplyMarker(marker: string | null | undefined):
 
 type ListAnswer = { optionId: string } | { text: string } | { dontKnow: true }
 
-/** Takes the question out of the conversation's slot when it is the one in it. */
+/**
+ * Takes the question out of the conversation's slot when it is the one in
+ * it. True when this call took it out: false when it was no longer there,
+ * or another write took it out first.
+ */
 async function clearListQuestion(
   supabase: SupabaseClient,
   conversation: WhatsAppConversation,
   questionId: string,
-): Promise<void> {
-  await updateConversation(supabase, conversation, (_current, context) => {
+): Promise<boolean> {
+  const written = await updateConversation(supabase, conversation, (_current, context) => {
     if (listQuestionOf(context)?.questionId !== questionId) return null
     const next: ConversationContext = { ...context }
     delete next.pending_question
     return { context: next }
   })
+  return written !== null
 }
 
 function refusalCode(error: unknown): string | null {
@@ -1094,6 +1107,17 @@ export async function applyListQuestionText(
 
 // ── Other doors, and the 48 hours ────────────────────────────
 
+/** The conversations that hold the question in their slot. Throws when the read fails. */
+async function conversationsHolding(supabase: SupabaseClient, questionId: string): Promise<WhatsAppConversation[]> {
+  const { data, error } = await supabase
+    .from('whatsapp_conversations')
+    .select('*')
+    .eq('context->pending_question->>question_id', questionId)
+    .limit(SCAN_LIMIT)
+  if (error) throw new Error(`conversations could not be read: ${error.message}`)
+  return (data ?? []) as WhatsAppConversation[]
+}
+
 /**
  * The question was answered or closed through some door: it is taken out of
  * every conversation it is in flight in. Nothing is sent. Never throws.
@@ -1101,18 +1125,122 @@ export async function applyListQuestionText(
 export async function clearEndedListQuestion(supabase: SupabaseClient, questionId: string): Promise<void> {
   try {
     if (!isUuid(questionId)) return
-    const { data, error } = await supabase
-      .from('whatsapp_conversations')
-      .select('*')
-      .eq('context->pending_question->>question_id', questionId)
-      .limit(SCAN_LIMIT)
-    if (error) throw new Error(`conversations could not be read: ${error.message}`)
-    for (const conversation of (data ?? []) as WhatsAppConversation[]) {
+    for (const conversation of await conversationsHolding(supabase, questionId)) {
       await clearListQuestion(supabase, conversation, questionId)
     }
   } catch (err: unknown) {
     log.warn('an ended question was not cleared from its conversations', {
       questionId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+/**
+ * The body of the message that says a question is settled: the fixed
+ * sentence, then the note of the close on a line of its own when it has one.
+ * The note goes out without control characters, each run of whitespace one
+ * space, at most QUESTION_LIMITS.maxCloseNote characters and never past what
+ * a text message holds.
+ */
+export function listSettledBody(note: string | null | undefined, locale: BotLocale = 'sv'): string {
+  const copy = botCopy(locale)
+  const sentence = copy.m30ListSettled({})
+  const text = (note ?? '').replace(/\p{Cc}/gu, ' ').replace(/\s+/gu, ' ').trim()
+  const room = Math.min(QUESTION_LIMITS.maxCloseNote, TEXT_BODY_MAX - sentence.length - 1)
+  const kept = [...text].slice(0, room).join('').trim()
+  return kept ? copy.m30ListSettled({ note: kept }) : sentence
+}
+
+/**
+ * The note of the question's close when its row says it is closed as
+ * settled (null: settled without a note), or undefined when the row says
+ * anything else or cannot be read.
+ */
+async function settledNoteOf(
+  supabase: SupabaseClient,
+  settled: { companyId: string; questionId: string },
+): Promise<string | null | undefined> {
+  try {
+    const question = toQuestion(await readQuestionRow(supabase, settled.companyId, settled.questionId))
+    if (question.status !== 'closed' || question.close_reason !== 'settled') return undefined
+    return question.close_note ?? null
+  } catch (err: unknown) {
+    log.warn('a settled question could not be read', {
+      companyId: settled.companyId,
+      questionId: settled.questionId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return undefined
+  }
+}
+
+/**
+ * Tells the person of the conversation that the question is settled, then
+ * sends the next open list question as after an answer in the chat. Nothing
+ * is sent to a link that is revoked or paused, outside the service window,
+ * or to a person who no longer keeps the books of the question's company.
+ */
+async function tellSettled(
+  supabase: SupabaseClient,
+  conversationId: string,
+  companyId: string,
+  note: string | null,
+): Promise<void> {
+  const loaded = await loadConversationWithLink(supabase, conversationId)
+  if (!loaded) return
+  const { conversation, link } = loaded
+  if (link.revoked_at != null || link.muted_at != null) return
+  if (!serviceWindowOpen(conversation, new Date())) return
+  if ((await keepsTheBooks(supabase, link.user_id, companyId)) !== true) return
+  const to = linkRecipient(link)
+  if (!to) return
+  await sendText(supabase, {
+    to,
+    body: listSettledBody(note),
+    template: TEMPLATE.m30ListSettled,
+    senderPhoneHash: link.phone_hash,
+    phoneLinkId: link.id,
+    conversationId: conversation.id,
+  })
+  await offerNextWithoutSlot(supabase, conversation.id, 'settled')
+}
+
+/**
+ * The question was closed as settled through another door. It is taken out
+ * of every conversation it is in flight in, as any question that ended
+ * elsewhere is. Each conversation where this call took it out, and where it
+ * was in flight (pendingListQuestion), is told (tellSettled). The write that
+ * takes the question out is what a second delivery of the same event finds
+ * done: it sends nothing. A question whose row does not say closed as
+ * settled is only taken out. Never throws.
+ */
+export async function settleListQuestion(
+  supabase: SupabaseClient,
+  settled: { companyId: string; questionId: string },
+): Promise<void> {
+  try {
+    if (!isUuid(settled.questionId)) return
+    const holding = await conversationsHolding(supabase, settled.questionId)
+    if (holding.length === 0) return
+    const note = await settledNoteOf(supabase, settled)
+    const now = new Date()
+    for (const conversation of holding) {
+      try {
+        const inFlight = pendingListQuestion(conversation, now)?.questionId === settled.questionId
+        const tookOut = await clearListQuestion(supabase, conversation, settled.questionId)
+        if (tookOut && inFlight && note !== undefined) await tellSettled(supabase, conversation.id, settled.companyId, note)
+      } catch (err: unknown) {
+        log.warn('a settled question was not told in one of its conversations', {
+          questionId: settled.questionId,
+          conversationId: conversation.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  } catch (err: unknown) {
+    log.warn('a settled question was not cleared from its conversations', {
+      questionId: settled.questionId,
       error: err instanceof Error ? err.message : String(err),
     })
   }

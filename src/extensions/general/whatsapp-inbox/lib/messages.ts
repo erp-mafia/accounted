@@ -69,6 +69,7 @@ export const TEMPLATE = {
   m27ListLater: 'm27_list_later',
   m28ListQuestionBack: 'm28_list_question_back',
   m29FileTooLarge: 'm29_file_too_large',
+  m30ListSettled: 'm30_list_settled',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
@@ -300,6 +301,13 @@ const SV = {
   // has the same cap, so the way forward is a smaller file.
   m29FileTooLarge: ({ maxMb }: { maxMb: number }) =>
     `Filen är för stor. Jag tar emot filer på högst ${maxMb} MB. Skicka en mindre fil, till exempel ett foto av dokumentet eller en PDF med färre sidor.`,
+
+  // A list question in flight that was closed as settled through another
+  // door: one sentence, then the note of the close on a line of its own when
+  // it has one. listSettledBody (lib/list-question.ts) cleans and cuts the
+  // note.
+  m30ListSettled: ({ note }: { note?: string | null }) =>
+    note ? `Den här frågan är löst, du behöver inte svara.\n${note}` : 'Den här frågan är löst, du behöver inte svara.',
 }
 
 const EN: typeof SV = {
@@ -461,6 +469,9 @@ const EN: typeof SV = {
 
   m29FileTooLarge: ({ maxMb }: { maxMb: number }) =>
     `The file is too large. I accept files of at most ${maxMb} MB. Send a smaller file, for example a photo of the document or a PDF with fewer pages.`,
+
+  m30ListSettled: ({ note }: { note?: string | null }) =>
+    note ? `This question is settled, you do not need to answer.\n${note}` : 'This question is settled, you do not need to answer.',
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }
