@@ -33,6 +33,10 @@ tr { page-break-inside: avoid; }
 th, td { text-align: left; vertical-align: bottom; padding: 0.15em 0.4em 0.15em 0; font-size: 95%; }
 th.indent { padding-left: 1.2em; }
 th.num, td.num { text-align: right; white-space: nowrap; }
+table.ar-equity th.num { white-space: normal; }
+table.ar-cols-m th, table.ar-cols-m td { font-size: 80%; }
+table.ar-cols-l th, table.ar-cols-l td { font-size: 65%; }
+table.ar-cols-xl th, table.ar-cols-xl td { font-size: 55%; }
 tr.subtotal th, tr.subtotal td { border-top: 1px solid #000; font-weight: bold; }
 tr.total th, tr.total td { border-top: 1px solid #000; border-bottom: 3px double #000; font-weight: bold; }
 tr.section th { font-weight: bold; padding-top: 0.8em; }

@@ -58,8 +58,24 @@ export const EQUITY_MOVEMENT_KINDS: readonly EquityMovementKindInfo[] = [
 
 const KIND_INFO = new Map(EQUITY_MOVEMENT_KINDS.map((info) => [info.kind, info]))
 
-export function equityMovementLabel(kind: EquityMovementKind): string {
-  return KIND_INFO.get(kind)?.label ?? kind
+/**
+ * The row labels of a K2 årsredovisning where the K2 taxonomy names the row
+ * differently (se-gen-base, "Förändringar i eget kapital"): the document
+ * prints the taxonomy's own rubrik, so nothing has to be logged as a changed
+ * rubrik in the iXBRL document (Bolagsverket's tillämpningsanvisning 2.20).
+ * A kind the K2 taxonomy has no row for keeps the general label.
+ */
+const K2_LABELS: Partial<Record<EquityMovementKind, string>> = {
+  resultatdisposition: 'Balanseras i ny räkning',
+  utdelning: 'Vinstutdelning',
+  aktieagartillskott: 'Erhållna aktieägartillskott',
+  aterbetalt_tillskott: 'Återbetalning av aktieägartillskott',
+  uppskrivning: 'Uppskrivning av anläggningstillgång',
+}
+
+/** The row label of a kind, as the year's regelverk prints it (K3 when not said). */
+export function equityMovementLabel(kind: EquityMovementKind, framework: 'k2' | 'k3' = 'k3'): string {
+  return (framework === 'k2' ? K2_LABELS[kind] : undefined) ?? KIND_INFO.get(kind)?.label ?? kind
 }
 
 /** Kinds the user may assign to a verifikat the ledger cannot classify. */

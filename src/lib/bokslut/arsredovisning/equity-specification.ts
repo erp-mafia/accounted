@@ -13,9 +13,10 @@
  * The result is keyed by concept (the BR post: 'Aktiekapital',
  * 'BalanseratResultat', ...) and by movement kind (EquityMovementKind), never
  * by label or account, so other documents can map it:
- *   - the K2 iXBRL equity table (lib/bokslut/ixbrl/build-input.ts,
- *     k2EquityTableInput below);
- *   - the K3 iXBRL fscie concepts (P3: map concept x kind to the taxonomy);
+ *   - the K2 and K3 iXBRL equity tables, per post and kind
+ *     (lib/bokslut/ixbrl/k3-adapters.ts, document/equity-table.ts map
+ *     concept x kind to the taxonomy), and the K2 document's collapsed table
+ *     for the inputs that cannot print that one (k2EquityTableInput below);
  *   - ekonomisk förening insatser (P4: insatser_inbetalda/_aterbetalda on the
  *     Medlemsinsatser/Forlagsinsatser posts of the förening post table).
  *
@@ -39,6 +40,7 @@ import {
   type K2LegalForm,
   type K2MappingResult,
 } from '@/lib/bokslut/ixbrl/k2-mapper'
+import { roundWhole } from '@/lib/bokslut/ixbrl/whole-kronor'
 import type { TrialBalanceRow } from '@/types'
 import type { EgetKapitalForandring } from '@/lib/bokslut/ixbrl/types'
 
@@ -51,7 +53,7 @@ export {
   type EquityMovementKind,
   type EquityMovementKindInfo,
 } from './equity-kinds'
-import { EQUITY_MOVEMENT_KINDS, type EquityMovementKind } from './equity-kinds'
+import { EQUITY_MOVEMENT_KINDS, equityMovementLabel, type EquityMovementKind } from './equity-kinds'
 
 // ─── Posts ─────────────────────────────────────────────────────────────────
 
@@ -229,6 +231,13 @@ export interface EquitySpecification {
   previous: EquitySpecificationYear | null
   /** Kinds with a movement in either year, in presentation order. */
   kinds: EquityMovementKind[]
+  /**
+   * 'k2' on a report that prints the K2 taxonomy's row labels
+   * (equityMovementLabel). Absent on a K3 report, and on a K2 report built
+   * before those labels existed: a locked version keeps the row labels it
+   * was signed with.
+   */
+  row_labels?: 'k2'
   warnings: string[]
   /** Where the books and the balance sheet disagree (empty when they tie). */
   integrity_issues: string[]
@@ -565,13 +574,16 @@ export interface BuildEquitySpecificationInput {
   balanceSheet: EquityBalanceSheet
   overrides?: EquityMovementOverrides
   placement?: EquitySpecification['placement']
+  rowLabels?: EquitySpecification['row_labels']
 }
 
-/** Whole kronor, -0 read as 0. */
-function kr(n: number): number {
-  const rounded = Math.round(roundOre(n))
-  return rounded === 0 ? 0 : rounded
-}
+/**
+ * Whole kronor as the balance sheet rounds them (whole-kronor.ts: a half
+ * away from zero, -0 read as 0), so a figure and its negative round alike:
+ * what leaves one post in a transfer is what reaches the other, and the
+ * year's result is the balance sheet's.
+ */
+const kr = roundWhole
 
 /**
  * The exact (öre) year as the årsredovisning prints it, in whole kronor: each
@@ -762,6 +774,7 @@ export function buildEquitySpecification(input: BuildEquitySpecificationInput): 
     current,
     previous,
     kinds: EQUITY_MOVEMENT_KINDS.map((info) => info.kind).filter((kind) => present.has(kind)),
+    ...(input.rowLabels ? { row_labels: input.rowLabels } : {}),
     warnings,
     integrity_issues: integrityIssues,
   }
@@ -826,9 +839,10 @@ export interface EquityTable {
 /**
  * The year as a table: one column per post that holds anything, rows from
  * the opening balance through each kind to the closing balance. Shared by
- * the K2 and K3 PDFs and the in-app preview so they cannot differ.
+ * the K2 and K3 PDFs and the in-app preview so they cannot differ; the row
+ * labels are the regelverk's (equityMovementLabel).
  */
-export function equitySpecificationTable(year: EquitySpecificationYear): EquityTable {
+export function equitySpecificationTable(year: EquitySpecificationYear, framework: 'k2' | 'k3' = 'k3'): EquityTable {
   const columns = year.posts.map((post) => ({ concept: post.concept, label: post.label }))
   const rows: EquityTableRow[] = [
     {
@@ -843,7 +857,7 @@ export function equitySpecificationTable(year: EquitySpecificationYear): EquityT
     const total = year.totals.movements[info.kind]
     const cells = year.posts.map((post) => post.movements[info.kind] ?? 0)
     if (total === undefined && cells.every((cell) => isZeroOre(cell))) continue
-    rows.push({ key: info.kind, label: info.label, cells, total: total ?? 0, is_total: false })
+    rows.push({ key: info.kind, label: equityMovementLabel(info.kind, framework), cells, total: total ?? 0, is_total: false })
   }
   rows.push({
     key: 'closing',
@@ -856,8 +870,11 @@ export function equitySpecificationTable(year: EquitySpecificationYear): EquityT
 }
 
 /**
- * The K2 iXBRL equity table's input (types EgetKapitalForandring), from the
- * specification instead of balance residuals. The k2 document has columns
+ * The input of the K2 iXBRL document's collapsed equity table (types
+ * EgetKapitalForandring), from the specification instead of balance
+ * residuals. The document prints the specification per post where it can
+ * (ixbrl/document/equity-table.ts); this table stays for an input that
+ * cannot (k2-document.ts says which). It has columns
  * for Aktiekapital, Balanserat resultat and Årets resultat (the rest in one
  * untagged "Övriga poster" column) and rows for balansering, utdelning,
  * nyemission (the change in aktiekapital), an untagged "Övrig förändring" of
@@ -1037,6 +1054,7 @@ export async function loadEquitySpecification(
     balanceSheet: EquityBalanceSheet
     overrides?: EquityMovementOverrides
     placement?: EquitySpecification['placement']
+    rowLabels?: EquitySpecification['row_labels']
   },
 ): Promise<EquitySpecification> {
   const accounts = equityAccountNumbers(input.posts)
@@ -1078,5 +1096,6 @@ export async function loadEquitySpecification(
     balanceSheet: input.balanceSheet,
     overrides: input.overrides,
     placement: input.placement,
+    rowLabels: input.rowLabels,
   })
 }
