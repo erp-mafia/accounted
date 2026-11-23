@@ -50,6 +50,8 @@ vi.mock('@/lib/processing-history/append', () => ({
 }))
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import type { EventPayload } from '@/lib/events/types'
+import type { ExtensionContext } from '@/lib/extensions/types'
 import { whatsappInboxExtension } from '@/extensions/general/whatsapp-inbox'
 import { sendReplyButtons, sendText } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { interpretChatAnswer } from '@/extensions/general/whatsapp-inbox/lib/interpret-answer'
@@ -854,6 +856,151 @@ describe('a written reply when the company has a reply reader', () => {
     const [answered] = writesTo(current.writes, 'company_questions')
     expect(answered).toMatchObject({ status: 'answered', answer_option: 'office', answered_via: 'whatsapp' })
     expect(sendTextMock.mock.calls.map((call) => call[1].template)).toEqual([TEMPLATE.m24ListAnswered])
+  })
+})
+
+describe('a question in flight that ends through another door', () => {
+  const originalEnv = { ...process.env }
+  const NOTE = 'Betalningen på 12 000 kr är bokförd mot hyresfakturan.'
+  const SENTENCE = 'Den här frågan är löst, du behöver inte svara.'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sendTextMock.mockResolvedValue(SENT)
+    sendButtonsMock.mockResolvedValue(SENT)
+    process.env.COMPANY_QUESTIONS_COMPANY_IDS = COMPANY
+    process.env.WHATSAPP_APP_SECRET = SECRET
+    process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
+    process.env.WHATSAPP_PHONE_ENCRYPTION_KEY = 'a'.repeat(64)
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+  })
+
+  /** The extension's own handler of the event, as the event bus calls it. */
+  const closed = (supabase: SupabaseClient, closeReason: EventPayload<'company_question.closed'>['closeReason']): Promise<void> | void => {
+    const registration = (whatsappInboxExtension.eventHandlers ?? []).find((entry) => entry.eventType === 'company_question.closed')
+    if (!registration) throw new Error('no handler for company_question.closed')
+    const payload: EventPayload<'company_question.closed'> = {
+      questionId: OLDER_QUESTION,
+      status: 'closed',
+      closeReason,
+      answeredVia: 'claude',
+      answeredAt: '2026-11-20T10:05:00.000Z',
+      userId: USER,
+      companyId: COMPANY,
+    }
+    return registration.handler(payload, { supabase } as unknown as ExtensionContext)
+  }
+  const answered = (supabase: SupabaseClient): Promise<void> | void => {
+    const registration = (whatsappInboxExtension.eventHandlers ?? []).find((entry) => entry.eventType === 'company_question.answered')
+    if (!registration) throw new Error('no handler for company_question.answered')
+    const payload: EventPayload<'company_question.answered'> = {
+      questionId: OLDER_QUESTION,
+      status: 'answered',
+      answeredVia: 'app',
+      answeredAt: '2026-11-20T10:05:00.000Z',
+      userId: USER,
+      companyId: COMPANY,
+    }
+    return registration.handler(payload, { supabase } as unknown as ExtensionContext)
+  }
+
+  /**
+   * The conversation holds the older question as the first text left it, the
+   * window is open, and the older question has ended on its row the way
+   * `ending` says. The other question is still open.
+   */
+  async function withQuestionInFlight(ending: Row, conversation: Row = {}) {
+    const first = world()
+    await route.handler(signedText('Hey', 'wamid.TXT1'))
+    const [held] = contextWrites(first.writes)
+    expect(held.pending_question).toMatchObject({ type: 'list_question', question_id: OLDER_QUESTION })
+    vi.clearAllMocks()
+    sendTextMock.mockResolvedValue(SENT)
+    sendButtonsMock.mockResolvedValue(SENT)
+    return world({
+      conversation: {
+        context: held as Row,
+        // The column the scan for a question in flight filters on.
+        'context->pending_question->>question_id': OLDER_QUESTION,
+        service_window_expires_at: new Date(Date.now() + HOUR).toISOString(),
+        ...conversation,
+      },
+      questions: [
+        questionRow(NEWER_QUESTION, '2026-11-20T08:00:00.000Z', { question: 'Är kortköpet på 499 kr privat?', why: null, options: [] }),
+        questionRow(OLDER_QUESTION, '2026-11-18T08:00:00.000Z', { answered_at: '2026-11-20T10:05:00.000Z', ...ending }),
+      ],
+    })
+  }
+  const settledEnding = (note: string | null): Row => ({ status: 'closed', close_reason: 'settled', close_note: note, close_evidence: [], answered_via: 'claude' })
+  const heldQuestion = (current: ReturnType<typeof world>): string | undefined =>
+    (current.conversation.context as ConversationContext).pending_question?.question_id
+
+  it('closed as settled: the chat says so with the note of the close, and the other open question follows', async () => {
+    const current = await withQuestionInFlight(settledEnding(NOTE))
+
+    await closed(current.supabase, 'settled')
+
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1]).toMatchObject({ to: PHONE, template: 'm30_list_settled', body: `${SENTENCE}\n${NOTE}`, conversationId: 'conv-1' })
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    const next = sendButtonsMock.mock.calls[0][1]
+    expect(next.body).toBe('Är kortköpet på 499 kr privat?\n\nDu kan också svara med egna ord.')
+    expect(next.buttons).toEqual([{ id: `cq:${COMPANY}:${NEWER_QUESTION}:k`, title: 'Vet inte' }])
+    expect(sendButtonsMock.mock.invocationCallOrder[0]).toBeGreaterThan(sendTextMock.mock.invocationCallOrder[0])
+    expect(heldQuestion(current)).toBe(NEWER_QUESTION)
+    // Nothing is written on the question: it ended where it was closed.
+    expect(writesTo(current.writes, 'company_questions')).toEqual([])
+    expect(writesTo(current.writes, 'agent_memory')).toEqual([])
+
+    // The same close delivered again says nothing more.
+    await closed(current.supabase, 'settled')
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(heldQuestion(current)).toBe(NEWER_QUESTION)
+  })
+
+  it('closed as settled without a note: the chat says only that it is settled', async () => {
+    const current = await withQuestionInFlight(settledEnding(null))
+
+    await closed(current.supabase, 'settled')
+
+    expect(sendTextMock.mock.calls.map((call) => [call[1].template, call[1].body])).toEqual([['m30_list_settled', SENTENCE]])
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('closed as settled outside the service window: nothing is sent, and the question leaves the conversation', async () => {
+    const current = await withQuestionInFlight(settledEnding(NOTE), { service_window_expires_at: new Date(Date.now() - HOUR).toISOString() })
+
+    await closed(current.supabase, 'settled')
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(heldQuestion(current)).toBeUndefined()
+  })
+
+  it.each(['dont_know', 'not_relevant', 'withdrawn'] as const)('closed as %s: nothing is said, and the question leaves the conversation', async (reason) => {
+    const current = await withQuestionInFlight({ status: 'closed', close_reason: reason, answered_via: 'claude' })
+
+    await closed(current.supabase, reason)
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(heldQuestion(current)).toBeUndefined()
+  })
+
+  it('answered through another door: nothing is said, and the question leaves the conversation', async () => {
+    const current = await withQuestionInFlight({ status: 'answered', answer_text: 'Kontoret', answered_via: 'app' })
+
+    await answered(current.supabase)
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(heldQuestion(current)).toBeUndefined()
   })
 })
 

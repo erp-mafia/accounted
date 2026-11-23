@@ -176,3 +176,30 @@ describe('m29FileTooLarge, a file over the intake size limit', () => {
     expect(TEMPLATE.m29FileTooLarge).toBe('m29_file_too_large')
   })
 })
+
+describe('m30ListSettled, a question in flight that was closed as settled', () => {
+  const sentence = { sv: 'Den här frågan är löst, du behöver inte svara.', en: 'This question is settled, you do not need to answer.' } as const
+
+  it('has its own message id, shared with no other message', () => {
+    expect(TEMPLATE.m30ListSettled).toBe('m30_list_settled')
+    const ids = Object.values(TEMPLATE)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  for (const locale of ['sv', 'en'] as const) {
+    it(`${locale}: says the question is settled and that no answer is needed, in one sentence without a dash`, () => {
+      const line = botCopy(locale).m30ListSettled({})
+      expect(line).toBe(sentence[locale])
+      expect(botCopy(locale).m30ListSettled({ note: null })).toBe(sentence[locale])
+      expect(botCopy(locale).m30ListSettled({ note: '' })).toBe(sentence[locale])
+      expect(line).not.toMatch(/\n/)
+      expect(line).not.toMatch(/[–—]/)
+      expect(line.length).toBeLessThanOrEqual(120)
+    })
+
+    it(`${locale}: puts the note of the close on a line of its own after the sentence`, () => {
+      expect(botCopy(locale).m30ListSettled({ note: 'Betalningen är bokförd mot fakturan.' })).toBe(`${sentence[locale]}\nBetalningen är bokförd mot fakturan.`)
+    })
+  }
+})
+
