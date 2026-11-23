@@ -40,7 +40,7 @@ vi.mock('@/lib/cash-accounts/service', async () => {
 import { commitPendingOperation } from '../commit'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { cashAccountCurrencyMismatch, ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { cashAccountCurrencyMismatch, ensureManualCashAccount, reenableIfUnused } from '@/lib/cash-accounts/service'
 
 const mockIngest = vi.mocked(ingestTransactions)
 
@@ -212,6 +212,71 @@ describe('commitPendingOperation: create_transaction through ingestTransactions'
 
       expect(result).toMatchObject({ status: 'failed', http_status: 500 })
       expect(result.code).toBeUndefined()
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('ledger_account whose bank account is a turned-off invoice payee', () => {
+    // The refusal as ensureManualCashAccount throws it: reenableIfUnused's
+    // own, which refuses before it touches the database.
+    async function disabledPayeeRefusal(): Promise<unknown> {
+      return reenableIfUnused({} as never, 'company-1', {
+        id: 'ca-1930',
+        enabled: false,
+        bank_connection_id: null,
+        invoice_payee: true,
+      }).catch((err: unknown) => err)
+    }
+
+    async function commitOnDisabledPayee(opts: { keepFixableRefusals?: boolean }) {
+      vi.mocked(ensureManualCashAccount).mockRejectedValueOnce(await disabledPayeeRefusal())
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-7f3a' }, error: null }) // CAS claim
+      enqueue({ data: null, error: null }) // the dispatcher's status write
+      const result = await commitPendingOperation(
+        supabase as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ date: '2026-11-20', amount: -1250, description: 'Hyra november', currency: 'SEK', ledger_account: '1930' }),
+        opts,
+      )
+      return { result, statusWrites: findCalls('pending_operations', 'update').map(([payload]) => payload) }
+    }
+
+    it('the app\'s single approval: 409 CASH_ACCOUNT_DISABLED_PAYEE in Swedish, the proposal kept pending, before ingest', async () => {
+      const { result, statusWrites } = await commitOnDisabledPayee({ keepFixableRefusals: true })
+
+      expect(result).toMatchObject({
+        status: 'failed',
+        http_status: 409,
+        code: 'CASH_ACCOUNT_DISABLED_PAYEE',
+        data: { ledger_account: '1930' },
+        operation_status: 'pending',
+      })
+      expect(result.error).toBe(
+        'Bankkontot på 1930 är avstängt och visas på fakturor, så transaktionen sparades inte. ' +
+          'En ägare eller administratör behöver aktivera kontot under Inställningar, Bokföring.',
+      )
+      expect(statusWrites.at(-1)).toEqual({ status: 'pending' })
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
+
+    it('every other door (bulk, keys, agents): the same refusal closes the proposal as one to stage again', async () => {
+      const { result, statusWrites } = await commitOnDisabledPayee({})
+
+      expect(result).toMatchObject({
+        status: 'rejected',
+        auto_rejected: true,
+        http_status: 409,
+        code: 'CASH_ACCOUNT_DISABLED_PAYEE',
+        data: { ledger_account: '1930' },
+        operation_status: 'rejected',
+      })
+      expect(statusWrites.at(-1)).toMatchObject({
+        status: 'rejected',
+        rejection_category: 'failed',
+        result_data: { auto_rejected: true, error_code: 'CASH_ACCOUNT_DISABLED_PAYEE', details: { ledger_account: '1930' } },
+      })
       expect(mockIngest).not.toHaveBeenCalled()
     })
   })

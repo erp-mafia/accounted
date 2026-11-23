@@ -21,6 +21,7 @@ import {
   ensureManualCashAccount,
   findCashAccountCurrencyMismatch,
   isCashAccountCurrencyMismatch,
+  isCashAccountDisabledPayee,
 } from '../service'
 import { pickKeeper } from '../twins'
 import { defaultLedgerForCurrency } from '../ledger-slots'
@@ -974,9 +975,12 @@ describe('ensureManualCashAccount', () => {
         inserted: [],
         lookupCount: 0,
       }
-      await expect(
-        ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1930', 'SEK'),
-      ).rejects.toMatchObject({ code: 'CASH_ACCOUNT_DISABLED_PAYEE' })
+      const err = await ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1930', 'SEK').catch((e: unknown) => e)
+      expect(err).toMatchObject({ code: 'CASH_ACCOUNT_DISABLED_PAYEE' })
+      // A caller answers it as a refusal (the create_transactions approval
+      // did not, and answered a 500); a failure stays a failure.
+      expect(isCashAccountDisabledPayee(err)).toBe(true)
+      expect(isCashAccountDisabledPayee(new Error('ensureManualCashAccount lookup failed: timeout'))).toBe(false)
       expect(stub.updated ?? []).toHaveLength(0)
       expect(stub.inserted).toHaveLength(0)
     })

@@ -21,6 +21,11 @@ describe('fixable refusals', () => {
     // waits, and the link opens the import history.
     expect(fixableRefusalFor('import_sie', 'SIE_IMPORT_UNFINISHED')?.fixHref).toBe('/import?history=sie')
     expect(fixableRefusalFor('create_voucher', 'SIE_IMPORT_UNFINISHED')).toBeNull()
+    // A staged bank row on a turned-off invoice payee: refused before the
+    // account or the row is written, and an owner or admin turns it on in the
+    // bookkeeping settings.
+    expect(fixableRefusalFor('create_transaction', 'CASH_ACCOUNT_DISABLED_PAYEE')?.fixHref).toBe('/settings/bookkeeping')
+    expect(fixableRefusalFor('categorize_transaction', 'CASH_ACCOUNT_DISABLED_PAYEE')).toBeNull()
   })
 
   it('is null for an unlisted code, no code, and an inherited property name', () => {
