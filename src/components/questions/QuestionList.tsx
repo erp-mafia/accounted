@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { EllipsisHorizontalIcon } from '@/components/icons'
+import { operationLabel } from '@/components/pending-operations/vocabulary'
 import { ATTN_ACTION_CLASS } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { LIST_BLEED_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -24,6 +25,7 @@ import {
   closedState,
   listItems,
   operationLines,
+  operationText,
   ownWordsBody,
   questionSections,
   type AppCloseChoice,
@@ -80,25 +82,20 @@ function EvidenceRow({ line, t }: { line: EvidenceLine; t: T }) {
   )
 }
 
-function operationText(line: OperationLine, t: T): string {
-  switch (line.state) {
-    case 'prepared':
-      return t('operation_prepared', { title: line.title })
-    case 'booked':
-      return t('operation_booked', { title: line.title })
-    case 'rejected':
-      return t('operation_rejected', { title: line.title })
-  }
-}
-
-/** One line per staged operation linked to the question: how it stands, its title, and where it opens. */
+/**
+ * One line per staged operation linked to the question: what was done, to
+ * what and for how much (operationText), and where it opens. An operation
+ * without a sentence of its own is named as the review list names its type.
+ */
 function OperationRows({ lines, t }: { lines: OperationLine[]; t: T }) {
+  const tPending = useTranslations('pending')
   if (lines.length === 0) return null
+  const typeName = (operationType: string) => operationLabel(operationType, tPending)
   return (
     <ul aria-label={t('operations_label')} className="space-y-1">
       {lines.map((line) => (
         <li key={line.operation_id} className="text-[13px] text-foreground">
-          <span data-ph-mask="">{operationText(line, t)}</span>
+          <span data-ph-mask="">{operationText(line, t, typeName)}</span>
           {line.href && (
             <>
               {' '}
