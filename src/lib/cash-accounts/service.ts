@@ -1088,6 +1088,17 @@ export async function reenableIfUnused(
   return true
 }
 
+export type CashAccountDisabledPayee = Error & { code: 'CASH_ACCOUNT_DISABLED_PAYEE' }
+
+/**
+ * reenableIfUnused's refusal of a turned-off invoice payee, so a caller can
+ * answer it as a refusal instead of a failure (the create_transactions
+ * approval in commit.ts).
+ */
+export function isCashAccountDisabledPayee(err: unknown): err is CashAccountDisabledPayee {
+  return err instanceof Error && (err as { code?: unknown }).code === 'CASH_ACCOUNT_DISABLED_PAYEE'
+}
+
 /** What CASH_ACCOUNT_CURRENCY_MISMATCH names: the ledger, the currency its account holds, the row's. */
 export interface CashAccountCurrencyMismatchDetails {
   ledger_account: string

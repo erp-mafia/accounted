@@ -46,6 +46,7 @@ import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import {
   ensureManualCashAccount,
   isCashAccountCurrencyMismatch,
+  isCashAccountDisabledPayee,
   resolveDefaultCashAccount,
   type CashAccountCurrencyMismatch,
 } from '@/lib/cash-accounts/service'
@@ -2038,6 +2039,28 @@ function cashAccountCurrencyRefusal(mismatch: CashAccountCurrencyMismatch): Exec
 }
 
 /**
+ * CASH_ACCOUNT_DISABLED_PAYEE as an approval's answer, naming the ledger:
+ * the bank account on ledger_account is turned off and marked to be printed
+ * on invoices, which rows never turn back on (reenableIfUnused). Refused
+ * before anything is stored. What is wrong lies outside the proposal (an
+ * owner or admin turns the account on, or hides it on invoices), so the
+ * app's single approval keeps it pending for the same approval once that is
+ * done (fixable-refusals.ts); every other door closes it, as any 409 does.
+ */
+function cashAccountDisabledPayeeRefusal(ledgerAccount: string): ExecutorResult {
+  const code = 'CASH_ACCOUNT_DISABLED_PAYEE'
+  return {
+    error:
+      `Bankkontot på ${ledgerAccount} är avstängt och markerat att visas på fakturor, så transaktionen sparades inte. ` +
+      'En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) ' +
+      'eller dölja det på fakturor under Inställningar → Fakturering.',
+    errorCode: code,
+    status: getErrorEntry(code)?.httpStatus ?? 409,
+    data: { ledger_account: ledgerAccount },
+  }
+}
+
+/**
  * An approved gnubok_create_transactions row. Stored through
  * ingestTransactions, the pipeline every other door that stores a bank row
  * runs (PSD2 sync, bank-file import, v1 POST /transactions/ingest): its
@@ -2164,10 +2187,13 @@ async function commitCreateTransaction(
     try {
       cashAccount = { id: await ensureManualCashAccount(supabase, companyId, ledgerAccount, currency), ledger_account: ledgerAccount }
     } catch (err) {
-      // The kassakonto on ledger_account is in another currency, and a ledger
-      // holds one: refused before anything is stored. It used to reach the
-      // dispatcher's catch as a 500 that told the approver to try again.
+      // Two refusals before anything is stored, which used to reach the
+      // dispatcher's catch as a 500 that told the approver to try again: the
+      // kassakonto on ledger_account is in another currency (a ledger holds
+      // one), or it is a turned-off invoice payee that only an owner or admin
+      // turns on.
       if (isCashAccountCurrencyMismatch(err)) return cashAccountCurrencyRefusal(err)
+      if (isCashAccountDisabledPayee(err)) return cashAccountDisabledPayeeRefusal(ledgerAccount)
       throw err
     }
   } else {

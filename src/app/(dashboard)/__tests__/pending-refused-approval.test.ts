@@ -86,6 +86,8 @@ describe('/pending, a refused approval', () => {
       'refusal_fix_vat_number',
       'refusal_fix_invoicing_link',
       'refusal_fix_tax_link',
+      'refusal_fix_disabled_payee',
+      'refusal_fix_bookkeeping_link',
     ] as const
     for (const key of keys) {
       expect(sv.pending[key]).toBeTruthy()
