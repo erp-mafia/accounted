@@ -31,13 +31,22 @@ export function useKnowledgeName() {
   return useCallback((id: string, title: string) => knowledgeNameIn({ has: (key) => t.has(key), text: (key) => t(key) }, id, title), [t])
 }
 
-/** A pack's one-line description for people; the registry's own is written for agent routing. */
+/**
+ * A knowledge pack's one-line description for people in the messages given,
+ * falling back to the one it is handed (the registry's own is written for
+ * agent routing). The one lookup of that line: the catalogue, the knowledge
+ * folders and the context graph's knowledge dots read it through
+ * useKnowledgeDesc.
+ */
+export function knowledgeDescIn(messages: KnowledgeMessages, id: string, fallback: string): string {
+  const key = `knowledge_descs.${packSlug(id)}`
+  return messages.has(key) ? messages.text(key) : fallback
+}
+
+/** A pack's one-line description for people; the registry's own is written for agent routing. The same function for as long as the messages are. */
 export function useKnowledgeDesc() {
   const t = useTranslations('skills_registry')
-  return (id: string, fallback: string) => {
-    const key = `knowledge_descs.${packSlug(id)}`
-    return t.has(key) ? t(key) : fallback
-  }
+  return useCallback((id: string, fallback: string) => knowledgeDescIn({ has: (key) => t.has(key), text: (key) => t(key) }, id, fallback), [t])
 }
 
 /**

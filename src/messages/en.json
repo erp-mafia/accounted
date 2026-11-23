@@ -299,7 +299,6 @@
         "suggestion": "Suggestion",
         "deadline": "Deadline",
         "question": "The agent's question",
-        "skill": "Skill",
         "workflows": "Workflows",
         "permissions": "What it may do",
         "more": "More"
