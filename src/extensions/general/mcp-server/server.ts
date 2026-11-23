@@ -28290,7 +28290,12 @@ export const tools: McpTool[] = [
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { buildAccrualsProposal } = await import('@/lib/bokslut/accruals/accrual-detector')
-      return buildAccrualsProposal(supabase, companyId, fiscalPeriodId)
+      // Per-employee figures (names, day value, pay) are payroll data: only
+      // for a key that holds payroll:read. Unknown scopes (no __keyScopes, as
+      // in a gnubok_run_across_companies inner call) get counts only.
+      const keyScopes = Array.isArray(args.__keyScopes) ? (args.__keyScopes as ApiKeyScope[]) : null
+      const employeeDetail = keyScopes !== null && hasScope(keyScopes, 'payroll:read')
+      return buildAccrualsProposal(supabase, companyId, fiscalPeriodId, { employeeDetail })
     },
   },
 
@@ -32631,6 +32636,8 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
           toolName === 'gnubok_match_batch_allocate' ||
           // Says whether this key can approve, so the widget can hide its buttons.
           toolName === 'gnubok_list_pending_operations' ||
+          // Names employees and their pay only for a key with payroll:read.
+          toolName === 'gnubok_propose_accruals' ||
           // The cross-company tools check the INNER tool's scope per call.
           isScopedTool(toolName)
         ) {
