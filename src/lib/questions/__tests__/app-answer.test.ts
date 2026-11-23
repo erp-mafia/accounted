@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 import {
+  ANSWERED_SHOWN_MAX,
   answerAsPerson,
   answerFactContent,
   closeAsPerson,
   countOpenQuestions,
+  listAppAnsweredQuestions,
   listAppQuestions,
   listAppSettledQuestions,
   listQuestionPage,
@@ -575,3 +577,225 @@ describe('reopenQuestion on a close that said where the answer is', () => {
   })
 })
 
+
+describe('the answered questions and the operations linked to a question, as the page lists them', () => {
+  const NOW = new Date('2026-11-23T12:00:00.000Z')
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const ANSWERED_ID = 'e0000000-0000-4000-8000-000000000004'
+  const WRITTEN_ID = 'e0000000-0000-4000-8000-000000000005'
+  const SETTLED_ID = 'e0000000-0000-4000-8000-000000000002'
+  const ENTRY = '50000000-0000-4000-8000-000000000001'
+  const operationId = (n: number) => `0b000000-0000-4000-8000-00000000000${n}`
+
+  const answeredRow = (overrides: Record<string, unknown> = {}) =>
+    row({
+      id: ANSWERED_ID,
+      status: 'answered',
+      answer_option: 'annual',
+      answered_at: '2026-11-22T09:00:00.000Z',
+      answered_via: 'whatsapp',
+      fact_id: FACT_ID,
+      ...overrides,
+    })
+  const settledRow = (overrides: Record<string, unknown> = {}) =>
+    row({ id: SETTLED_ID, status: 'closed', close_reason: 'settled', answered_at: '2026-11-21T09:00:00.000Z', answered_via: 'claude', ...overrides })
+
+  type Chain = Parameters<TableMockResolver>[0]
+  const asksFor = (chain: Chain, method: string, column: string): unknown[] | undefined =>
+    chain.find((call) => call.method === method && call.args[0] === column)?.args
+  /** company_questions by what the read asks for: the open ones, the answered ones, or those closed as settled. */
+  const questions =
+    (rows: { open?: unknown[]; answered?: unknown[]; settled?: unknown[] }): TableMockResolver =>
+    (chain) => {
+      if (asksFor(chain, 'eq', 'close_reason')) return { data: rows.settled ?? [] }
+      if (asksFor(chain, 'in', 'status')) return { data: rows.answered ?? [] }
+      return { data: rows.open ?? [] }
+    }
+  const records = {
+    transactions: { data: [{ id: TX, date: '2026-11-03', description: 'KORTKOP', merchant_name: 'Leverantören AB', amount: -4990, currency: 'SEK' }] },
+  }
+  const link = (questionId: string, n: number) => ({
+    question_id: questionId,
+    operation_id: operationId(n),
+    created_at: `2026-11-22T10:0${n}:00.000Z`,
+  })
+  const operation = (n: number, overrides: Record<string, unknown> = {}) => ({
+    id: operationId(n),
+    operation_number: 100 + n,
+    title: `Förslag ${n}`,
+    status: 'pending',
+    result_data: null,
+    ...overrides,
+  })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('lists a question answered with an option with the label of that option, and when', async () => {
+    const mock = createTableMockSupabase({ company_questions: questions({ answered: [answeredRow()] }), ...records })
+
+    const answered = await listAppAnsweredQuestions(mock.supabase as never, COMPANY)
+
+    expect(answered).toEqual([
+      {
+        question_id: ANSWERED_ID,
+        question: QUESTION,
+        why: 'Svaret avgör vad som väntas framåt.',
+        options: [
+          { id: 'more', label: 'Fler licenser' },
+          { id: 'annual', label: 'Årsbetalning' },
+        ],
+        evidence: [expect.objectContaining({ kind: 'transaction', id: TX, found: true })],
+        asked_at: '2026-11-19T08:00:00.000Z',
+        answered: { answer: 'Årsbetalning', answered_at: '2026-11-22T09:00:00.000Z' },
+      },
+    ])
+  })
+
+  it('lists a written answer as it was written, and a question answered by a saved fact alone without an answer', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questions({
+        answered: [
+          answeredRow({ id: WRITTEN_ID, answer_option: null, answer_text: '  Vi bytte till årsbetalning.  ' }),
+          answeredRow({ answer_option: null, answer_text: null }),
+          // An option the question does not have names no label.
+          answeredRow({ id: 'e0000000-0000-4000-8000-000000000006', answer_option: 'gone', answer_text: null }),
+        ],
+      }),
+      ...records,
+    })
+
+    const answered = await listAppAnsweredQuestions(mock.supabase as never, COMPANY)
+
+    expect(answered.map((question) => question.answered?.answer)).toEqual(['Vi bytte till årsbetalning.', null, null])
+  })
+
+  it('reads the questions answered in the last 90 days, the latest first, at most twenty', async () => {
+    expect(ANSWERED_SHOWN_MAX).toBe(20)
+    const mock = createTableMockSupabase({ company_questions: questions({ answered: [answeredRow()] }), ...records })
+
+    await listAppAnsweredQuestions(mock.supabase as never, COMPANY)
+
+    expect(mock.findCalls('company_questions', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCalls('company_questions', 'in')).toEqual([['status', ['answered']]])
+    expect(mock.findCalls('company_questions', 'gte')).toEqual([['answered_at', new Date(NOW.getTime() - 90 * DAY_MS).toISOString()]])
+    expect(mock.findCalls('company_questions', 'order')).toEqual([['answered_at', { ascending: false }]])
+    expect(mock.findCalls('company_questions', 'limit')).toEqual([[ANSWERED_SHOWN_MAX]])
+  })
+
+  it('hands on only answered questions, whatever the read answers', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questions({ answered: [row(), answeredRow(), settledRow()] }),
+      ...records,
+    })
+    const answered = await listAppAnsweredQuestions(mock.supabase as never, COMPANY)
+    expect(answered.map((question) => question.question_id)).toEqual([ANSWERED_ID])
+  })
+
+  it('gives the page the open questions, then the answered ones, then the settled ones, the last two with their operations', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questions({
+        open: [row()],
+        answered: [answeredRow(), answeredRow({ id: WRITTEN_ID, answer_option: null, answer_text: 'Årsavgift.', answered_at: '2026-11-20T09:00:00.000Z' })],
+        settled: [settledRow()],
+      }),
+      ...records,
+      company_question_operations: { data: [link(ANSWERED_ID, 1), link(ANSWERED_ID, 2), link(SETTLED_ID, 3), link(ANSWERED_ID, 4)] },
+      pending_operations: {
+        data: [
+          operation(1),
+          operation(2, { status: 'committed', result_data: { journal_entry_id: ENTRY } }),
+          operation(3, { status: 'rejected' }),
+          operation(4, { status: 'committed', result_data: {} }),
+        ],
+      },
+    })
+
+    const page = await listQuestionPage(mock.supabase as never, COMPANY)
+
+    expect(page.map((question) => question.question_id)).toEqual([QUESTION_ID, ANSWERED_ID, WRITTEN_ID, SETTLED_ID])
+    // An open question carries neither an answer nor operations.
+    expect(page[0]).not.toHaveProperty('answered')
+    expect(page[0]).not.toHaveProperty('operations')
+    expect(page[1].answered).toEqual({ answer: 'Årsbetalning', answered_at: '2026-11-22T09:00:00.000Z' })
+    expect(page[1].operations).toEqual([
+      { operation_id: operationId(1), operation_number: 101, title: 'Förslag 1', status: 'pending', journal_entry_id: null },
+      { operation_id: operationId(2), operation_number: 102, title: 'Förslag 2', status: 'committed', journal_entry_id: ENTRY },
+      { operation_id: operationId(4), operation_number: 104, title: 'Förslag 4', status: 'committed', journal_entry_id: null },
+    ])
+    // An answered question nothing is linked to carries an empty list.
+    expect(page[2].operations).toEqual([])
+    expect(page[3].settled).toBeDefined()
+    expect(page[3].operations).toEqual([
+      { operation_id: operationId(3), operation_number: 103, title: 'Förslag 3', status: 'rejected', journal_entry_id: null },
+    ])
+    // The links are read for the answered and the settled questions, in this company.
+    expect(mock.findCalls('company_question_operations', 'in')).toEqual([['question_id', [ANSWERED_ID, WRITTEN_ID, SETTLED_ID]]])
+    expect(mock.findCalls('company_question_operations', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCalls('pending_operations', 'eq')).toEqual([['company_id', COMPANY]])
+  })
+
+  it('gives a reader whose client reads no pending operation no operation, id or title', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questions({ answered: [answeredRow()], settled: [settledRow()] }),
+      ...records,
+      company_question_operations: { data: [link(ANSWERED_ID, 1), link(SETTLED_ID, 3)] },
+      // What the reader's own access to pending_operations answers: nothing.
+      pending_operations: { data: [] },
+    })
+
+    const page = await listQuestionPage(mock.supabase as never, COMPANY)
+
+    expect(page.map((question) => question.operations)).toEqual([[], []])
+    expect(JSON.stringify(page)).not.toContain(operationId(1))
+    expect(JSON.stringify(page)).not.toContain(operationId(3))
+    // The questions and the answer are listed as for everyone else.
+    expect(page[0].answered?.answer).toBe('Årsbetalning')
+  })
+
+  it('gives a reader whose client reads no link no operation either, and reads no pending operation', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questions({ answered: [answeredRow()] }),
+      ...records,
+      company_question_operations: { data: [] },
+      pending_operations: { data: [operation(1)] },
+    })
+
+    const page = await listQuestionPage(mock.supabase as never, COMPANY)
+
+    expect(page[0].operations).toEqual([])
+    expect(mock.tables()).not.toContain('pending_operations')
+  })
+
+  it('lists the questions without operations when the operations cannot be read', async () => {
+    const mock = createTableMockSupabase({
+      company_questions: questions({ open: [row()], answered: [answeredRow()] }),
+      ...records,
+      company_question_operations: { error: { code: '42P01', message: 'relation "company_question_operations" does not exist' } },
+    })
+
+    const page = await listQuestionPage(mock.supabase as never, COMPANY)
+
+    expect(page.map((question) => question.question_id)).toEqual([QUESTION_ID, ANSWERED_ID])
+    expect(page[1].operations).toEqual([])
+  })
+
+  it('reads no link when no question is answered or settled', async () => {
+    const mock = createTableMockSupabase({ company_questions: questions({ open: [row()] }), ...records })
+    const page = await listQuestionPage(mock.supabase as never, COMPANY)
+    expect(page.map((question) => question.question_id)).toEqual([QUESTION_ID])
+    expect(mock.tables()).not.toContain('company_question_operations')
+  })
+
+  it('refuses for a company the list is not switched on for, and reads nothing', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', 'another-company')
+    const mock = createTableMockSupabase()
+    expect(await refusalOf(listAppAnsweredQuestions(mock.supabase as never, COMPANY))).toMatchObject({ code: 'COMPANY_QUESTIONS_OFF' })
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+})

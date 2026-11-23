@@ -54,6 +54,8 @@ export const QUESTION_LIMITS = {
   maxCloseNote: 300,
   /** Days an answered or closed question stays in the list. */
   recentDays: 90,
+  /** Staged operations linked to one question. */
+  maxOperations: 5,
 } as const
 
 /** Who filed a question, as the credential is named in the records it writes. */

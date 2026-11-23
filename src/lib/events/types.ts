@@ -498,19 +498,22 @@ export type CoreEvent =
       userId: string
     }}
   // The question list (lib/questions): a question filed for a company,
-  // answered, closed without an answer, and opened again by an undo. Ids and
-  // state only: the text of a question, its options, its evidence and the
-  // text of an answer never travel on the bus. `status` is the question's
-  // status after the write; `createdAt` is when it was filed and `answeredAt`
-  // when it was answered or closed, as the question records them;
-  // `answeredVia` is the door the answer or the close came through. userId is
-  // the person behind the write, null when there is none. Public: listed in
-  // the webhook catalogue (lib/webhooks/public-events.ts), so delivered to
-  // webhooks and persisted to event_log.
+  // answered, closed without an answer, and opened again by an undo; and a
+  // staged operation linked to a question (prepared). Ids and state only: the
+  // text of a question, its options, its evidence and the text of an answer
+  // never travel on the bus. `status` is the question's status after the
+  // write; `createdAt` is when it was filed and `answeredAt` when it was
+  // answered or closed, as the question records them; `answeredVia` is the
+  // door the answer or the close came through; `operationId` is the pending
+  // operation that was linked. userId is the person behind the write, null
+  // when there is none. Public: listed in the webhook catalogue
+  // (lib/webhooks/public-events.ts), so delivered to webhooks and persisted
+  // to event_log.
   | { type: 'company_question.filed'; payload: { questionId: string; status: 'open'; createdAt: string; userId: string | null; companyId: string } }
   | { type: 'company_question.answered'; payload: { questionId: string; status: 'answered'; answeredVia: string | null; answeredAt: string | null; userId: string | null; companyId: string } }
   | { type: 'company_question.closed'; payload: { questionId: string; status: 'closed'; closeReason: QuestionCloseReason; answeredVia: string | null; answeredAt: string | null; userId: string | null; companyId: string } }
   | { type: 'company_question.reopened'; payload: { questionId: string; status: 'open'; createdAt: string; userId: string | null; companyId: string } }
+  | { type: 'company_question.prepared'; payload: { questionId: string; operationId: string; userId: string | null; companyId: string } }
   // Agent self-reported feedback (gnubok_feedback tool). The product team
   // queries event_log for `agent.feedback` and routes to a backlog.
   | { type: 'agent.feedback'; payload: {

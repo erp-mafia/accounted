@@ -38,6 +38,7 @@ const INDEX: Partial<Record<CoreEventType, readonly string[]>> = {
   'company_question.answered': ['event-log', 'webhooks', 'ext:whatsapp-inbox'],
   'company_question.closed': ['event-log', 'webhooks', 'ext:whatsapp-inbox'],
   'company_question.filed': ['event-log', 'webhooks', 'ext:whatsapp-inbox'],
+  'company_question.prepared': ['event-log', 'webhooks', 'ext:whatsapp-inbox'],
   'company_question.reopened': ['event-log', 'webhooks'],
   'credit_note.created': ['event-log', 'webhooks', 'ext:stripe'],
   'customer.created': ['event-log', 'webhooks'],

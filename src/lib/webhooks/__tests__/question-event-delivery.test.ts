@@ -1,10 +1,11 @@
 /**
- * The question list events as public events: each of the four, emitted by the
- * write that files, answers, closes or reopens a question, reaches the
- * webhooks subscribed to its type as a webhook_deliveries row and the event
- * feed as an event_log row. Both carry the question by id and its state, and
- * never the text of the question, why it is asked, its options, its evidence,
- * the answer or the actor's user id.
+ * The question list events as public events: each of the five, emitted by the
+ * write that files, answers, closes or reopens a question, or links a staged
+ * operation to one, reaches the webhooks subscribed to its type as a
+ * webhook_deliveries row and the event feed as an event_log row. Both carry
+ * the question by id and its state (the linked operation by id for a link),
+ * and never the text of the question, why it is asked, its options, its
+ * evidence, the answer, the operation's title or the actor's user id.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -24,6 +25,7 @@ import { writeEventLog } from '@/lib/events/handlers/event-log-handler'
 import { answerQuestion, closeQuestion } from '@/lib/questions/answer'
 import { reopenQuestion } from '@/lib/questions/app-answer'
 import { fileQuestion } from '@/lib/questions/file'
+import { linkQuestionOperation } from '@/lib/questions/operations'
 import { fanOutEvent } from '../handler'
 import { PUBLIC_WEBHOOK_EVENTS, SCOPED_EVENT_FAMILIES, isEventOfFamily } from '../public-events'
 import { WebhookEventTypeListSchema } from '../subscription-event-types'
@@ -32,6 +34,8 @@ const COMPANY = 'c0000000-0000-4000-8000-000000000001'
 const USER = 'a0000000-0000-4000-8000-000000000001'
 const QUESTION_ID = 'e0000000-0000-4000-8000-000000000001'
 const TX = '10000000-0000-4000-8000-000000000001'
+const OPERATION_ID = '0b000000-0000-4000-8000-000000000001'
+const KEY_ID = 'key-1'
 const FILED_AT = '2026-11-19T08:00:00.000Z'
 const ENDED_AT = '2026-11-19T09:00:00.000Z'
 
@@ -39,12 +43,14 @@ const QUESTION_TEXT = 'Vad avser betalningen?'
 const WHY_TEXT = 'Den avviker från tidigare månader.'
 const OPTION_LABEL = 'Årsbetalning'
 const ANSWER_TEXT = 'Det var en årsavgift.'
+const OPERATION_TITLE = 'Bokför årsavgiften'
 
 const TYPES = [
   'company_question.filed',
   'company_question.answered',
   'company_question.closed',
   'company_question.reopened',
+  'company_question.prepared',
 ] as const
 type QuestionEventType = (typeof TYPES)[number]
 
@@ -155,13 +161,27 @@ const SCENARIOS: Scenario[] = [
       ),
     state: { status: 'open', createdAt: FILED_AT },
   },
+  {
+    type: 'company_question.prepared',
+    run: () =>
+      linkQuestionOperation(
+        client({
+          company_questions: { data: row({ status: 'answered', answer_text: ANSWER_TEXT, answered_at: ENDED_AT, answered_via: 'whatsapp' }) },
+          pending_operations: { data: { id: OPERATION_ID, user_id: USER, actor_id: KEY_ID, title: OPERATION_TITLE } },
+          // Nothing linked before; the insert answers no error.
+          company_question_operations: (calls) => (calls.some((call) => call.method === 'insert') ? { data: null } : { data: [] }),
+        }),
+        { companyId: COMPANY, questionId: QUESTION_ID, operationId: OPERATION_ID, userId: USER, actorId: KEY_ID },
+      ),
+    state: { operationId: OPERATION_ID },
+  },
 ]
 
 /** The keys a public question payload may carry, whatever the event. */
-const ALLOWED_KEYS = new Set(['questionId', 'companyId', 'status', 'answeredVia', 'closeReason', 'createdAt', 'answeredAt'])
+const ALLOWED_KEYS = new Set(['questionId', 'companyId', 'status', 'answeredVia', 'closeReason', 'createdAt', 'answeredAt', 'operationId'])
 
-/** What a public question payload must never carry: text of the question or the answer, records, the actor. */
-const FORBIDDEN_TEXT = [QUESTION_TEXT, WHY_TEXT, OPTION_LABEL, ANSWER_TEXT, TX, USER, 'Example key', 'example-client']
+/** What a public question payload must never carry: text of the question, the answer or the operation, records, the actor. */
+const FORBIDDEN_TEXT = [QUESTION_TEXT, WHY_TEXT, OPTION_LABEL, ANSWER_TEXT, OPERATION_TITLE, TX, USER, KEY_ID, 'Example key', 'example-client']
 
 function expectIdsAndStateOnly(payload: Record<string, unknown>): void {
   expect(Object.keys(payload).filter((key) => !ALLOWED_KEYS.has(key))).toEqual([])

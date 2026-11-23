@@ -13966,6 +13966,21 @@ const COMPANY_QUESTIONS: Record<string, StructuredErrorEntry> = {
     message_en: 'The answer can no longer be undone.',
     retryable: false,
   },
+  // Linking a staged operation to a question that is open, or closed with a
+  // reason other than settled. The thrown text says how the question stands.
+  COMPANY_QUESTION_NOT_ANSWERED: {
+    httpStatus: 409,
+    message_sv: 'Frågan är varken besvarad eller löst av bokföringen, så inget förslag kan kopplas till den.',
+    message_en: 'The question is neither answered nor closed as settled, so no operation can be linked to it.',
+    retryable: false,
+  },
+  // The question already holds the most staged operations one question takes.
+  COMPANY_QUESTION_OPERATION_LIMIT: {
+    httpStatus: 409,
+    message_sv: 'Frågan har redan fem kopplade förslag, vilket är gränsen.',
+    message_en: 'The question already has five linked operations, which is the limit.',
+    retryable: false,
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

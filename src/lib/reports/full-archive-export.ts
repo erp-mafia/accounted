@@ -1641,6 +1641,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     'which suggestions are open, snoozed or declined; the proposals and decisions are pending_operations rows and every package switch an audit_log row',
   company_questions:
     'questions put to the company and how each ended; an answer worth keeping is saved as an agent_memory fact. AI assistant state, not räkenskapsinformation',
+  company_question_operations:
+    'which staged operations were linked to which question; the operations themselves are pending_operations rows. AI assistant state, not räkenskapsinformation',
   company_inbound_domains: 'inbound-mail infrastructure',
   company_inboxes: 'inbound-mail infrastructure',
   company_sending_domains: 'outbound-mail infrastructure (sender domain verification state)',

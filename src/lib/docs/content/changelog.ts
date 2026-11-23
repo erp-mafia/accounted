@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Webhooks: an operation linked to a question (2026-11)
+
+- **New webhook: \`company_question.prepared\`** (2026-11-23): a staged operation was linked to a question on the company's question list, with the new MCP tool \`accounted_link_question_operation\` (\`question_id\`, \`operation_id\`; scope \`agent:write\`). The tool links an operation the calling connection staged itself to a question that is answered, or closed as settled; a question takes at most five operations, and linking the same pair again answers \`linked\` and writes nothing. The payload carries \`questionId\` and \`operationId\` (the pending operation, as \`GET /pending-operations/{id}\` reads it) and nothing else about either. It is sent once per question and operation. Like the other \`company_question.*\` types it needs \`agent:read\` in addition to \`webhooks:manage\`, and it is in \`GET /api/events\` for a key that holds \`agent:read\` beside \`events:read\`. Additive; the API version date is unchanged.
+
 ### Supplier invoices: undoing a credit refuses the credit note's own id (2026-11)
 
 - **Fix: \`POST /supplier-invoices/{id}/uncredit\` with a credit note's id answers \`400 SI_UNCREDIT_CREDIT_NOTE\`** (crm#2171, 2026-11-23), on a dry run too, whatever the credit note's status; \`details.credited_invoice_id\` names the original to send instead, and is null for a credit note linked to no original, whose credit cannot be undone here; \`details.credit_note_status\` is \`reversed\` when the credit is already undone. **Before**, a credit note's id was taken for the original's: the dry run answered 200 with a preview that restored the credit note as an invoice to pay, and the commit answered \`400 SI_UNCREDIT_FAILED\` without saying why (the database refuses a credit note in a payable status, so nothing was written). An already undone credit note's id answered a no-op. The API version date is unchanged.
