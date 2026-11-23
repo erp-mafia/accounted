@@ -695,6 +695,7 @@ import {
   SALARY_RUN_MISSING_HINT,
   type SalaryRunPayout,
 } from '@/lib/transactions/salary-run-payouts'
+import { isStripeSaleRow, latestStripeSalesVoucher, stripeDailySalesProposal } from './stripe-sales'
 import { businessAccount, categorizeArgsFor, reverseChargeBoxDispute, reverseChargeBoxNumber, whyTextSv } from '@/lib/bookkeeping/proposal'
 import { reviewRequired } from '@/lib/transactions/direct-booking'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
@@ -14036,6 +14037,22 @@ export const tools: McpTool[] = [
             (p as { id?: string }).id === 'personnel_salary' ? { ...(p as object), hint: SALARY_RUN_MISSING_HINT } : p,
           )
         }
+      }
+
+      // A Stripe sale carries neither moms nor the buyer's country: it leads
+      // with how Stripe sales are booked, the verifikat that booked the
+      // latest one, and where the moms comes from (./stripe-sales.ts). A
+      // failed read of that verifikat is logged and only leaves it out.
+      const stripeSales = (transactions as Transaction[]).filter(isStripeSaleRow)
+      if (stripeSales.length > 0) {
+        const example = await latestStripeSalesVoucher(supabase, companyId).catch((error: unknown) => {
+          log.warn('gnubok_suggest_categories latest Stripe sale verifikat read failed', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+          return null
+        })
+        const stripeProposal = stripeDailySalesProposal(example)
+        for (const tx of stripeSales) proposals[tx.id] = [stripeProposal, ...(proposals[tx.id] ?? [])]
       }
 
       // Honest absence beats fabricated confidence: mark transactions where
