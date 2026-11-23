@@ -493,10 +493,9 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.preview.total_credit).toBe(250)
 
     // The momsdeklaration impact (crm#1447) is computed from the lines that
-    // post, in the resolved fiscal period, and carried in the preview.
+    // post, in the period that holds their date, and carried in the preview.
     expect(previewVoucherVatDeclaration).toHaveBeenCalledWith(supabase, 'company-1', {
       entryDate: '2026-05-12',
-      fiscalPeriodId: 'fp-1',
       lines: expect.arrayContaining([
         expect.objectContaining({ account_number: '1010', debit_amount: 250 }),
         expect.objectContaining({ account_number: '1930', credit_amount: 250 }),

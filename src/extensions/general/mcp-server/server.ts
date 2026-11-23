@@ -27468,7 +27468,6 @@ export const tools: McpTool[] = [
       // Read-only and never throws: a failed read says unavailable.
       const vatDeclaration = await previewVoucherVatDeclaration(supabase, companyId, {
         entryDate,
-        fiscalPeriodId,
         lines: bookedLines,
         isOpeningBalance,
       })
