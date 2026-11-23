@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre } from '@/lib/money'
 import { dbError } from '@/lib/errors/db-error'
 import { getOpeningBalances } from './opening-balances'
 import { arrangeLedgerRows, type LedgerRowSort } from './general-ledger-rows'
@@ -53,14 +53,38 @@ interface LedgerLineRow {
 }
 
 /**
+ * How generateGeneralLedger reads the period's lines. A ledger of at most
+ * `singleRead` lines comes in one get_general_ledger_lines call; a larger one
+ * account by account, at most `page` lines a call, through
+ * get_general_ledger_account_page (the reads the huvudbok view pages with).
+ * Both give the same lines in the same order.
+ *
+ * Why: for the largest ledgers one call for the year outlasts the 8 s
+ * statement timeout every PostgREST call runs under whenever their lines are
+ * not cached, so their full-year huvudbok failed. A cold read costs a disk
+ * read per block. A verifikat's lines sit together, so the one call reads
+ * about a block per entry and one per few lines; an account's lines each sit
+ * on their own verifikat, so a page costs about two reads a line. Both limits
+ * keep a fully cold call a few seconds long.
+ */
+export interface LedgerReadLimits {
+  singleRead: number
+  /** At most GENERAL_LEDGER_ARRANGE_READ_SIZE, the most a page call returns. */
+  page: number
+}
+
+export const LEDGER_READ_LIMITS: LedgerReadLimits = { singleRead: 5_000, page: 2_000 }
+
+/**
  * Generate general ledger (huvudbok) for a fiscal period.
  * BFL 5 kap. 1 §: systematisk ordning: all transactions grouped by account.
  *
- * The period's lines come from one get_general_ledger_lines call, in report
- * order (account, date, voucher number, line id) and already narrowed to the
- * account range, the dimension filter and the window's end. Every line is
- * returned, so this is for exports and integrations; the huvudbok view reads
- * generateGeneralLedgerOverview and one account page at a time.
+ * The period's lines come in report order (account, date, voucher number,
+ * line id), already narrowed to the account range, the dimension filter and
+ * the window's end: in one call, or a page at a time for a large ledger
+ * (LedgerReadLimits). Every line is returned, so this is for exports and
+ * integrations; the huvudbok view reads generateGeneralLedgerOverview and one
+ * account page at a time.
  *
  * Opening balances use the opening_balance_entry set by year-end closing
  * when available; falls back to summing prior-period entries. They are
@@ -86,6 +110,8 @@ export async function generateGeneralLedger(
      *  (parseReportDateRange). */
     fromDate?: string
     toDate?: string
+    /** Defaults to LEDGER_READ_LIMITS; a test lowers them to compare the two reads. */
+    readLimits?: LedgerReadLimits
   }
 ): Promise<GeneralLedgerReport> {
   const dimensionFilter =
@@ -119,8 +145,8 @@ export async function generateGeneralLedger(
   // ── Period lines (excluding OB entry) ──
   // Race condition note: if year-end closing runs concurrently and creates
   // the OB entry between the period query and this query, the entry could
-  // be missed. The window is sub-second and the consequence is a single
-  // stale report: acceptable.
+  // be missed. The window is the read's length (seconds for a ledger read in
+  // pages) and the consequence is a single stale report: acceptable.
   const rawLines = await fetchLedgerLines(supabase, {
     companyId,
     periodId,
@@ -129,7 +155,7 @@ export async function generateGeneralLedger(
     toDate: options?.toDate,
     obEntryId,
     dimensions: dimensionFilter,
-  })
+  }, options?.readLimits ?? LEDGER_READ_LIMITS)
 
   if (rawLines.length === 0 && openingBalances.size === 0) {
     return {
@@ -199,8 +225,7 @@ export async function generateGeneralLedger(
 
   for (const [accNum, accLines] of accountLines) {
     // Apply optional account range filter
-    if (accountFrom && accNum < accountFrom) continue
-    if (accountTo && accNum > accountTo) continue
+    if (!inAccountRange({ accountFrom, accountTo }, accNum)) continue
 
     // Sort by date, then voucher number
     accLines.sort((a, b) => {
@@ -268,19 +293,318 @@ function toLedgerLine(row: LedgerLineRow): GeneralLedgerLine {
   }
 }
 
-/** Every line of the posted period in [fromDate, toDate] in report order, without the OB entry. */
+interface LedgerLinesScope {
+  companyId: string
+  periodId: string
+  accountFrom?: string
+  accountTo?: string
+  fromDate?: string
+  toDate?: string
+  obEntryId: string | null
+  dimensions?: Record<string, string>
+}
+
+/** Accounts whose pages are read side by side in a large ledger. */
+const ACCOUNTS_IN_FLIGHT = 3
+
+/**
+ * Every line of the posted period in [fromDate, toDate] in report order,
+ * without the OB entry: in one call when the scope holds at most
+ * `limits.singleRead` lines, otherwise account by account a page at a time,
+ * the accounts in the order the single call sorts them.
+ *
+ * The one call reads one state of the ledger. Pages are separate statements,
+ * so a verifikat booked, corrected or retagged while they run could show one
+ * way in some accounts' pages and another way in others'. readWasWhole says
+ * whether that happened; if it did, the ledger is read again, and a second
+ * time is a retryable conflict (40001).
+ */
 async function fetchLedgerLines(
   supabase: SupabaseClient,
-  scope: {
-    companyId: string
-    periodId: string
-    accountFrom?: string
-    accountTo?: string
-    fromDate?: string
-    toDate?: string
-    obEntryId: string | null
-    dimensions?: Record<string, string>
-  },
+  scope: LedgerLinesScope,
+  limits: LedgerReadLimits,
+): Promise<LedgerLineRow[]> {
+  const planned = await ledgerLineCountsInScope(supabase, scope)
+  const total = planned.reduce((sum, account) => sum + account.lines, 0)
+  if (total <= limits.singleRead) return readLedgerLinesAtOnce(supabase, scope)
+
+  for (let attempt = 1; ; attempt++) {
+    // The marks first, then the accounts to read: an account booked after
+    // the marks were read moves them, one booked before is in the list.
+    const marks = await ledgerMarks(supabase, scope)
+    const accounts = await ledgerLineCountsInScope(supabase, scope)
+    const rows = await readLedgerLinesByAccount(supabase, scope, accounts, limits.page)
+    if (await readWasWhole(supabase, scope, rows, marks)) return rows
+    if (attempt === 2) {
+      throw dbError({ code: '40001', message: 'the ledger changed while its pages were read' }, 'general ledger read')
+    }
+  }
+}
+
+/**
+ * Whether the pages are one state of the ledger: no write to it landed while
+ * they were read. The marks (ledgerMarks) must be as before the pages. Under
+ * no filter or one dimension value the summaries answer the filter too, and
+ * each account's lines read, debit and credit must equal them, which also
+ * catches a page cut short.
+ */
+async function readWasWhole(
+  supabase: SupabaseClient,
+  scope: LedgerLinesScope,
+  rows: LedgerLineRow[],
+  marksBefore: LedgerMarks,
+): Promise<boolean> {
+  const summariesAnswer = !scope.dimensions || Object.keys(scope.dimensions).length === 1
+  const [marks, totals] = await Promise.all([
+    ledgerMarks(supabase, scope),
+    summariesAnswer ? ledgerTotalsInScope(supabase, scope) : null,
+  ])
+  if (!sameMarks(marks, marksBefore)) return false
+  return totals === null || sameTotals(totalsOfLines(rows), totals)
+}
+
+/**
+ * What every write to the period's ledger moves:
+ * - the period's posted and reversed verifikat, how many and when one was
+ *   last written: a booking, a deletion, a storno, a status change or a
+ *   rättelse of a verifikat's own fields (drafts are not the ledger);
+ * - the company's rättelse and retag logs: a rättelse of lines and a
+ *   dimension retag each add a row, and no row is ever removed.
+ *
+ * The last write is a transaction's start time, so an update that began
+ * before the marks were read and lands during the pages can hide behind a
+ * later one; that window is the length of one write.
+ */
+interface LedgerMarks {
+  entries: number
+  lastWritten: string | null
+  rattelser: number
+  retags: number
+}
+
+async function ledgerMarks(supabase: SupabaseClient, scope: LedgerLinesScope): Promise<LedgerMarks> {
+  const [entries, rattelser, retags] = await Promise.all([
+    // The last write, with how many there are (the count of every row the filter matches).
+    supabase
+      .from('journal_entries')
+      .select('updated_at', { count: 'exact' })
+      .eq('company_id', scope.companyId)
+      .eq('fiscal_period_id', scope.periodId)
+      .in('status', ['posted', 'reversed'])
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .limit(1),
+    supabase.from('journal_entry_rattelse_log').select('id', { count: 'exact', head: true }).eq('company_id', scope.companyId),
+    supabase.from('dimension_retag_log').select('id', { count: 'exact', head: true }).eq('company_id', scope.companyId),
+  ])
+  if (entries.error) throw dbError(entries.error, 'journal_entries marks failed')
+  if (rattelser.error) throw dbError(rattelser.error, 'journal_entry_rattelse_log count failed')
+  if (retags.error) throw dbError(retags.error, 'dimension_retag_log count failed')
+  const latest = (Array.isArray(entries.data) ? entries.data[0] : null) as { updated_at?: string | null } | null | undefined
+  return {
+    entries: entries.count ?? 0,
+    lastWritten: latest?.updated_at ?? null,
+    rattelser: rattelser.count ?? 0,
+    retags: retags.count ?? 0,
+  }
+}
+
+function sameMarks(a: LedgerMarks, b: LedgerMarks): boolean {
+  return a.entries === b.entries && a.lastWritten === b.lastWritten && a.rattelser === b.rattelser && a.retags === b.retags
+}
+
+/** The accounts' lines in the accounts' order, ACCOUNTS_IN_FLIGHT accounts read side by side. */
+async function readLedgerLinesByAccount(
+  supabase: SupabaseClient,
+  scope: LedgerLinesScope,
+  accounts: ReadonlyArray<{ account_number: string }>,
+  pageLines: number,
+): Promise<LedgerLineRow[]> {
+  // One failed account fails the read: the accounts beside it stop at their next page.
+  const read = { failed: false }
+  const rows: LedgerLineRow[] = []
+  for (let i = 0; i < accounts.length; i += ACCOUNTS_IN_FLIGHT) {
+    const batch = await Promise.all(
+      accounts
+        .slice(i, i + ACCOUNTS_IN_FLIGHT)
+        .map((account) => readAccountLines(supabase, scope, account.account_number, pageLines, read)),
+    )
+    for (const accountRows of batch) {
+      for (const row of accountRows) rows.push(row)
+    }
+  }
+  return rows
+}
+
+/** An account inside the huvudbok's account range (either bound open when empty). */
+function inAccountRange(range: { accountFrom?: string; accountTo?: string }, accNum: string): boolean {
+  return !(range.accountFrom && accNum < range.accountFrom) && !(range.accountTo && accNum > range.accountTo)
+}
+
+/**
+ * The accounts with lines in the scope's window and account range, with how
+ * many, in account order. Counted without the dimension filter, which the
+ * summaries answer for any filter: a filtered ledger holds at most these
+ * lines, so the count still bounds every read.
+ */
+async function ledgerLineCountsInScope(
+  supabase: SupabaseClient,
+  scope: LedgerLinesScope,
+): Promise<Array<{ account_number: string; lines: number }>> {
+  const { data, error } = await supabase.rpc('get_ledger_line_counts', {
+    p_company_id: scope.companyId,
+    p_fiscal_period_id: scope.periodId,
+    p_from_date: scope.fromDate ?? null,
+    p_to_date: scope.toDate ?? null,
+    p_exclude_entry_id: scope.obEntryId,
+    p_dimensions: null,
+  })
+  if (error) throw dbError(error, 'get_ledger_line_counts failed')
+  const counts: Array<{ account_number: string; lines: number }> = []
+  for (const raw of (Array.isArray(data) ? data : []) as Array<{ account_number?: unknown; line_count?: unknown }>) {
+    const accNum = String(raw.account_number ?? '')
+    if (inAccountRange(scope, accNum)) counts.push({ account_number: accNum, lines: Number(raw.line_count) || 0 })
+  }
+  return counts
+}
+
+interface AccountTotals {
+  lines: number
+  debit: number
+  credit: number
+}
+
+/**
+ * Per account in the scope's range: its lines, debit and credit in the
+ * window, under the filter, from the summaries (the counts, and the trial
+ * balance with the closing included).
+ */
+async function ledgerTotalsInScope(
+  supabase: SupabaseClient,
+  scope: LedgerLinesScope,
+): Promise<Map<string, AccountTotals>> {
+  const window = {
+    p_company_id: scope.companyId,
+    p_fiscal_period_id: scope.periodId,
+    p_from_date: scope.fromDate ?? null,
+    p_to_date: scope.toDate ?? null,
+    p_exclude_entry_id: scope.obEntryId,
+    p_dimensions: scope.dimensions ?? null,
+  }
+  const [counts, sums] = await Promise.all([
+    supabase.rpc('get_ledger_line_counts', window),
+    supabase.rpc('get_trial_balance_aggregates', { ...window, p_closing_mode: 'include' }),
+  ])
+  if (counts.error) throw dbError(counts.error, 'get_ledger_line_counts failed')
+  if (sums.error) throw dbError(sums.error, 'get_trial_balance_aggregates failed')
+
+  const totals = new Map<string, AccountTotals>()
+  const totalsOf = (accNum: string) => {
+    let account = totals.get(accNum)
+    if (!account) totals.set(accNum, (account = { lines: 0, debit: 0, credit: 0 }))
+    return account
+  }
+  for (const raw of (Array.isArray(counts.data) ? counts.data : []) as Array<{ account_number?: unknown; line_count?: unknown }>) {
+    const accNum = String(raw.account_number ?? '')
+    if (inAccountRange(scope, accNum)) totalsOf(accNum).lines += Number(raw.line_count) || 0
+  }
+  for (const raw of (Array.isArray(sums.data) ? sums.data : []) as Array<{
+    bucket?: unknown
+    account_number?: unknown
+    debit?: unknown
+    credit?: unknown
+  }>) {
+    const accNum = String(raw.account_number ?? '')
+    if (raw.bucket !== 'period' || !inAccountRange(scope, accNum)) continue
+    const account = totalsOf(accNum)
+    account.debit += Number(raw.debit) || 0
+    account.credit += Number(raw.credit) || 0
+  }
+  return totals
+}
+
+/** Per account: the lines read, their debit and their credit. */
+function totalsOfLines(rows: LedgerLineRow[]): Map<string, AccountTotals> {
+  const totals = new Map<string, AccountTotals>()
+  for (const row of rows) {
+    let account = totals.get(row.account_number)
+    if (!account) totals.set(row.account_number, (account = { lines: 0, debit: 0, credit: 0 }))
+    account.lines += 1
+    account.debit += Number(row.debit_amount) || 0
+    account.credit += Number(row.credit_amount) || 0
+  }
+  return totals
+}
+
+/** The same accounts with as many lines and the same debit and credit, to the öre. */
+function sameTotals(read: Map<string, AccountTotals>, ledger: Map<string, AccountTotals>): boolean {
+  if (read.size !== ledger.size) return false
+  for (const [accNum, a] of read) {
+    const b = ledger.get(accNum)
+    if (!b || a.lines !== b.lines || !equalOre(a.debit, b.debit) || !equalOre(a.credit, b.credit)) return false
+  }
+  return true
+}
+
+/** One account's lines in the scope, in line order, read a page at a time to its end. */
+async function readAccountLines(
+  supabase: SupabaseClient,
+  scope: LedgerLinesScope,
+  accountNumber: string,
+  pageLines: number,
+  read: { failed: boolean },
+): Promise<LedgerLineRow[]> {
+  // A page shorter than asked for ends the account, so never ask for more
+  // than the call returns.
+  const limit = Math.min(Math.max(Math.floor(pageLines), 1), GENERAL_LEDGER_ARRANGE_READ_SIZE)
+  const rows: LedgerLineRow[] = []
+  let after: GeneralLedgerCursor | null = null
+  while (!read.failed) {
+    const { data, error } = await supabase.rpc('get_general_ledger_account_page', {
+      p_company_id: scope.companyId,
+      p_fiscal_period_id: scope.periodId,
+      p_account_number: accountNumber,
+      p_from_date: scope.fromDate ?? null,
+      p_to_date: scope.toDate ?? null,
+      p_exclude_entry_id: scope.obEntryId,
+      p_dimensions: scope.dimensions ?? null,
+      p_after_date: after?.date ?? null,
+      p_after_voucher: after?.voucher_number ?? null,
+      p_after_line_id: after?.line_id ?? null,
+      p_limit: limit,
+    })
+    if (error) {
+      read.failed = true
+      throw dbError(error, 'get_general_ledger_account_page failed')
+    }
+    const page = (data ?? {}) as { lines?: LedgerLineRow[] }
+    const lines = Array.isArray(page.lines) ? page.lines : []
+    for (const line of lines) rows.push(line)
+    const last = lines[lines.length - 1]
+    if (lines.length < limit || !last) return rows
+    const next = { date: last.entry_date, voucher_number: last.voucher_number, line_id: last.line_id }
+    // Every page starts after the one before; a full page that does not move
+    // the cursor would be read forever.
+    if (after && !cursorAfter(next, after)) {
+      read.failed = true
+      throw new Error(`get_general_ledger_account_page did not move past ${after.date} ${after.voucher_number} on ${accountNumber}`)
+    }
+    after = next
+  }
+  // Another account failed: this read is discarded with it.
+  return rows
+}
+
+/** Whether `a` comes after `b` in line order: date, voucher number, line id (a uuid orders as its text). */
+function cursorAfter(a: GeneralLedgerCursor, b: GeneralLedgerCursor): boolean {
+  if (a.date !== b.date) return a.date > b.date
+  if (a.voucher_number !== b.voucher_number) return a.voucher_number > b.voucher_number
+  return a.line_id > b.line_id
+}
+
+/** The scope's lines in one get_general_ledger_lines call. */
+async function readLedgerLinesAtOnce(
+  supabase: SupabaseClient,
+  scope: LedgerLinesScope,
 ): Promise<LedgerLineRow[]> {
   const { data, error } = await supabase.rpc('get_general_ledger_lines', {
     p_company_id: scope.companyId,
@@ -452,7 +776,7 @@ export async function generateGeneralLedgerOverview(
   for (const [accNum, balance] of opening) {
     if (Math.abs(balance) > 0.005) accountNumbers.add(accNum)
   }
-  const inRange = (accNum: string) => !(accountFrom && accNum < accountFrom) && !(accountTo && accNum > accountTo)
+  const inRange = (accNum: string) => inAccountRange({ accountFrom, accountTo }, accNum)
 
   const accounts: GeneralLedgerOverviewAccount[] = Array.from(accountNumbers)
     .filter(inRange)
@@ -476,9 +800,10 @@ export async function generateGeneralLedgerOverview(
     return { accounts, period: window, lines_included: false }
   }
 
+  // At most GENERAL_LEDGER_INLINE_LINES lines, counted above: one call.
   const rows = totalLines === 0
     ? []
-    : await fetchLedgerLines(supabase, {
+    : await readLedgerLinesAtOnce(supabase, {
         companyId,
         periodId,
         accountFrom,
