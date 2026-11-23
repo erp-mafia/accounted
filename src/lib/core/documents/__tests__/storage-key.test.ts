@@ -5,6 +5,8 @@ import {
   downloadDocumentObject,
   isCompanyFolderDocumentKey,
   isDocumentKeyOfCompany,
+  isPlainStorageKey,
+  legacySourceOfDocumentKey,
   signDocumentObject,
 } from '../storage-key'
 
@@ -69,6 +71,49 @@ describe('isDocumentKeyOfCompany', () => {
   })
 })
 
+describe('company ids written in capitals', () => {
+  const UPPER = COMPANY.toUpperCase()
+
+  it('reads a company id in either case as the same company', () => {
+    expect(isDocumentKeyOfCompany(scoped, UPPER)).toBe(true)
+    expect(isDocumentKeyOfCompany(`documents/${UPPER}/${USER}/1767000000000_kvitto.pdf`, COMPANY)).toBe(true)
+    expect(isCompanyFolderDocumentKey(scoped, UPPER)).toBe(true)
+    expect(documentStoragePathCandidates(scoped, UPPER)).toEqual([scoped])
+  })
+
+  it('derives the company-scoped copy of a legacy key in lower case, as uploads write it', () => {
+    expect(documentStoragePathCandidates(legacy, UPPER)).toEqual([legacy, scoped])
+  })
+})
+
+describe('isPlainStorageKey', () => {
+  it('takes a key as uploads write it, in any bucket', () => {
+    expect(isPlainStorageKey(scoped)).toBe(true)
+    expect(isPlainStorageKey(`${COMPANY}/sie-originals/${'a'.repeat(64)}.se`)).toBe(true)
+    expect(isPlainStorageKey('documents/user-1/kvitto mars, 2026.pdf')).toBe(true)
+  })
+
+  it('refuses a key with an empty, "." or ".." part or a character a URL reads differently', () => {
+    for (const key of [`${COMPANY}/../../documents/${OTHER}/x.pdf`, `${COMPANY}/./x.se`, `${COMPANY}//x.se`, `/${COMPANY}/x.se`, `${COMPANY}/x.se?a`, `${COMPANY}/x.se#a`, `${COMPANY}/%2e%2e/x.se`, `${COMPANY}\\x.se`, '', null]) {
+      expect(isPlainStorageKey(key), String(key)).toBe(false)
+    }
+  })
+})
+
+describe('legacySourceOfDocumentKey', () => {
+  it('gives the legacy key a repointed row was copied from: the row user\'s own folder, one level', () => {
+    expect(legacySourceOfDocumentKey(scoped, COMPANY, USER)).toBe(legacy)
+  })
+
+  it('gives nothing for any other key', () => {
+    expect(legacySourceOfDocumentKey(scoped, COMPANY, OTHER_USER)).toBeNull()
+    expect(legacySourceOfDocumentKey(legacy, COMPANY, USER)).toBeNull()
+    expect(legacySourceOfDocumentKey(otherCompany, COMPANY, OTHER_USER)).toBeNull()
+    expect(legacySourceOfDocumentKey(`documents/${COMPANY}/${USER}/inbox/1_kvitto.pdf`, COMPANY, USER)).toBeNull()
+    expect(legacySourceOfDocumentKey(scoped, COMPANY, null)).toBeNull()
+  })
+})
+
 describe('isCompanyFolderDocumentKey', () => {
   it('takes the company folder only, never a legacy key', () => {
     expect(isCompanyFolderDocumentKey(scoped, COMPANY)).toBe(true)
@@ -87,7 +132,7 @@ describe('documentStoragePathCandidates', () => {
     expect(documentStoragePathCandidates(scoped, COMPANY)).toEqual([scoped])
   })
 
-  it('never takes a folder off a key to reach another company folder', () => {
+  it('offers only the stored key for a key in the company folder, however deep', () => {
     const nested = `documents/${COMPANY}/${OTHER}/${OTHER_USER}/1767000000000_faktura.pdf`
     expect(documentStoragePathCandidates(nested, COMPANY)).toEqual([nested])
   })

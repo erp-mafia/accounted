@@ -59,6 +59,7 @@ function candidate(id: string, stamp = 'failed:provider_unavailable', over: Reco
     matched_supplier_id: null,
     document_attachments: {
       id: `doc-${id}`,
+      company_id: 'co-1',
       storage_path: `documents/co-1/user-1/${id}.pdf`,
       mime_type: 'application/pdf',
       file_name: `${id}.pdf`,
@@ -221,6 +222,19 @@ describe('retryProviderUnavailableReadings: one retry', () => {
     expect(summary).toEqual({ attempted: 1, read: 0, unavailable: 0 })
     expect(download).not.toHaveBeenCalled()
     expect(readForInbox).not.toHaveBeenCalled()
+  })
+
+  it('reads no document of another company, whatever its key', async () => {
+    const otherCompany = candidate('1', 'failed:provider_unavailable:2')
+    otherCompany.document_attachments = { ...otherCompany.document_attachments, company_id: 'co-2', storage_path: 'documents/user-9/1.pdf' }
+    const { supabase, download, calls } = setup({ due: { 'failed:provider_unavailable:2': [otherCompany] } })
+
+    await retryProviderUnavailableReadings(supabase, NOW)
+
+    expect(download).not.toHaveBeenCalled()
+    expect(readForInbox).not.toHaveBeenCalled()
+    // Not even claimed: the stamp stays as it was.
+    expect(chains(calls, 'document_attachments', 'update')).toEqual([])
   })
 
   it('writes the reading onto the item with a compare-and-set on updated_at, then mirrors it to the document', async () => {

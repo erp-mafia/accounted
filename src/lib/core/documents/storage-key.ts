@@ -30,13 +30,27 @@ const DOCUMENTS_BUCKET = 'documents'
 const DOCUMENTS_ROOT = 'documents'
 const UNSAFE_KEY_CHARACTER = /[\u0000-\u001f\u007f\\%?#]/
 
-/** The key's parts when it is a well-formed key under the documents/ root, else null. */
-function documentKeyParts(storagePath: string | null | undefined): string[] | null {
-  if (!storagePath || UNSAFE_KEY_CHARACTER.test(storagePath)) return null
-  const parts = storagePath.split('/')
-  if (parts[0] !== DOCUMENTS_ROOT || parts.some((part) => part === '' || part === '.' || part === '..')) return null
-  return parts
+/**
+ * True when a key, in any bucket, is in the plain form uploads give it: no
+ * empty, "." or ".." part and no control character, \, %, ? or #. Storage
+ * builds its request URL from the key as written, so only a plain key names
+ * the object it appears to name.
+ */
+export function isPlainStorageKey(storagePath: string | null | undefined): storagePath is string {
+  if (!storagePath || UNSAFE_KEY_CHARACTER.test(storagePath)) return false
+  return !storagePath.split('/').some((part) => part === '' || part === '.' || part === '..')
 }
+
+/** The key's parts when it is a plain key under the documents/ root, else null. */
+function documentKeyParts(storagePath: string | null | undefined): string[] | null {
+  if (!isPlainStorageKey(storagePath)) return null
+  const parts = storagePath.split('/')
+  return parts[0] === DOCUMENTS_ROOT ? parts : null
+}
+
+/** A company id as it appears in a key: ids are UUIDs, and a caller may write one in capitals. */
+const sameCompany = (segment: string | undefined, companyId: string): boolean =>
+  segment !== undefined && segment.toLowerCase() === companyId.toLowerCase()
 
 /** True when the key lies in the company's own folder, documents/{companyId}/... */
 export function isCompanyFolderDocumentKey(
@@ -44,7 +58,7 @@ export function isCompanyFolderDocumentKey(
   companyId: string | null | undefined
 ): boolean {
   const parts = documentKeyParts(storagePath)
-  return !!parts && !!companyId && parts[1] === companyId && parts.length >= 3
+  return !!parts && !!companyId && sameCompany(parts[1], companyId) && parts.length >= 3
 }
 
 /** True when the service role may follow this key for a document row of this company: its folder, or a legacy key. */
@@ -54,7 +68,7 @@ export function isDocumentKeyOfCompany(
 ): boolean {
   const parts = documentKeyParts(storagePath)
   if (!parts || !companyId) return false
-  return parts[1] === companyId ? parts.length >= 3 : parts.length === 3
+  return sameCompany(parts[1], companyId) ? parts.length >= 3 : parts.length === 3
 }
 
 /**
@@ -71,8 +85,25 @@ export function documentStoragePathCandidates(
 ): string[] {
   if (!companyId || !isDocumentKeyOfCompany(storagePath, companyId)) return []
   const parts = storagePath.split('/')
-  if (parts[1] === companyId) return [storagePath]
-  return [storagePath, [DOCUMENTS_ROOT, companyId, ...parts.slice(1)].join('/')]
+  if (sameCompany(parts[1], companyId)) return [storagePath]
+  return [storagePath, [DOCUMENTS_ROOT, companyId.toLowerCase(), ...parts.slice(1)].join('/')]
+}
+
+/**
+ * The legacy key a company-scoped key was copied from, for a row the Phase B
+ * backfill repointed: documents/{companyId}/{userId}/{file} came from
+ * documents/{userId}/{file}, the uploader being the row's user. Null for any
+ * other key. Only for cleaning up after an erased row, and only when no row
+ * still names the key (deleteDocument).
+ */
+export function legacySourceOfDocumentKey(
+  storagePath: string,
+  companyId: string,
+  userId: string | null | undefined
+): string | null {
+  const parts = documentKeyParts(storagePath)
+  if (!parts || !userId || parts.length !== 4 || !sameCompany(parts[1], companyId) || parts[2] !== userId) return null
+  return [DOCUMENTS_ROOT, userId, parts[3]].join('/')
 }
 
 type StorageErrorLike = { message?: string; status?: number } | null

@@ -16,9 +16,14 @@
 --
 -- The same rule in TypeScript is src/lib/core/documents/storage-key.ts
 -- (isDocumentKeyOfCompany), which every service-role read, signature and
--- removal of a document key goes through; create_document_version
--- (20261016180700) checks its own key against the company folder too. The
--- register entry is scripts/checks/one-definition/document-key-of-company.mjs.
+-- removal of a document key goes through. The register entry is
+-- scripts/checks/one-definition/document-key-of-company.mjs.
+--
+-- create_document_version (20261016180700) checks its own key too, and also
+-- takes the caller's own legacy folder, documents/{caller}/...: its insert
+-- passes this trigger, so such a version key is now refused unless another
+-- row of the company already holds it. The app's createNewVersion() builds a
+-- key in the company folder.
 --
 -- Server code (the service role, migrations, scripts) builds its keys itself
 -- and is not checked here, as in enforce_company_writer_role. A write that
@@ -64,6 +69,8 @@ BEGIN
     USING ERRCODE = '42501';
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.guard_document_storage_path() FROM PUBLIC, anon, authenticated;
 
 COMMENT ON FUNCTION public.guard_document_storage_path() IS
   'A member''s document row keeps storage_path inside its own company: the company folder, or a key another row of the company already holds. Same rule as src/lib/core/documents/storage-key.ts.';

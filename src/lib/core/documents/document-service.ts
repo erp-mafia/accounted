@@ -13,7 +13,7 @@ import {
 } from '@/lib/documents/deletion'
 import { after } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { documentStoragePathCandidates, downloadDocumentObject } from '@/lib/core/documents/storage-key'
+import { documentStoragePathCandidates, downloadDocumentObject, legacySourceOfDocumentKey } from '@/lib/core/documents/storage-key'
 import { dbError } from '@/lib/errors/db-error'
 import { isUuid } from '@/lib/invariants/uuid'
 import { eventBus } from '@/lib/events'
@@ -1422,11 +1422,14 @@ export async function deleteDocument(
   }
 
   if (doc.storage_path) {
-    // Remove the stored key and, for a legacy key, its company-scoped copy:
-    // during the Phase B backfill a document can briefly exist under both,
+    // Remove the stored key and its other layout: a legacy key's
+    // company-scoped copy, or the legacy key a repointed row was copied from.
+    // During the Phase B backfill a document can briefly exist under both,
     // and removing only the stored pointer would leave a readable orphan copy
     // of a document the user asked to erase. Only keys inside this company
-    // are removed (storage-key.ts).
+    // are removed (storage-key.ts), and none that another row still names:
+    // one stored file can be the underlag of several rows (a copy on a second
+    // verifikat), and those are kept for the retention period.
     //
     // The removal runs on the service-role client: the documents bucket is
     // WORM by design (storage.objects has no DELETE policy), so the caller's
@@ -1436,9 +1439,21 @@ export async function deleteDocument(
     // above: the company-filtered row fetch plus the row delete that just
     // succeeded (with block_document_deletion() as the DB-level backstop).
     // The viewer's preview (lib/documents/preview.ts) goes with the file it was made from.
-    await createServiceClientNoCookies()
-      .storage.from(DOCUMENTS_BUCKET)
-      .remove([...documentStoragePathCandidates(doc.storage_path, companyId), previewPath(companyId, doc.id)])
+    const service = createServiceClientNoCookies()
+    const keys = [
+      ...documentStoragePathCandidates(doc.storage_path, companyId),
+      legacySourceOfDocumentKey(doc.storage_path, companyId, doc.user_id),
+    ].filter((key): key is string => !!key)
+    const { data: stillNamed, error: namedError } = keys.length > 0
+      ? await service.from('document_attachments').select('storage_path').in('storage_path', keys)
+      : { data: [], error: null }
+    if (namedError) {
+      // Whether another row names the file is unknown: it stays.
+      log.warn('document file kept: rows naming it could not be read', { companyId, documentId, reason: namedError.message })
+    }
+    const named = new Set(((stillNamed ?? []) as Array<{ storage_path: string }>).map((row) => row.storage_path))
+    const removable = namedError ? [] : keys.filter((key) => !named.has(key))
+    await service.storage.from(DOCUMENTS_BUCKET).remove([...removable, previewPath(companyId, doc.id)])
   }
 
   await eventBus.emit({

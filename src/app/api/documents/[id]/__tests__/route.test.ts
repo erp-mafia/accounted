@@ -42,8 +42,12 @@ vi.mock('@/lib/supabase/server', () => ({
 // client: the documents bucket is WORM (no DELETE policy on storage.objects),
 // so a caller-bound remove() is silently blocked by RLS.
 const serviceRemoveMock = vi.fn()
+// The rows that still name a key, read before a file is removed (a copy of the
+// file on another verifikat keeps it).
+const stillNamedMock = vi.fn()
 vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: () => ({
+    from: vi.fn(() => ({ select: vi.fn(() => ({ in: (...args: unknown[]) => stillNamedMock(...args) })) })),
     storage: { from: vi.fn(() => ({ remove: serviceRemoveMock })) },
   }),
 }))
@@ -66,6 +70,7 @@ beforeEach(() => {
     error: null,
   })
   serviceRemoveMock.mockResolvedValue({ data: [], error: null })
+  stillNamedMock.mockResolvedValue({ data: [], error: null })
 })
 
 function makeReq(method: 'GET' | 'DELETE' = 'DELETE') {
@@ -304,6 +309,40 @@ describe('DELETE /api/documents/[id]', () => {
         companyId: 'company-1',
       }),
     )
+  })
+
+  it('keeps a file another row still names, and removes the rest', async () => {
+    enqueue({
+      data: { id: 'doc-1', file_name: 'kvitto.pdf', storage_path: 'documents/user-1/kvitto.pdf', journal_entry_id: null, user_id: 'user-1' },
+      error: null,
+    })
+    enqueuePins()
+    enqueue({ data: null, error: null }) // delete
+    stillNamedMock.mockResolvedValue({ data: [{ storage_path: 'documents/user-1/kvitto.pdf' }], error: null })
+
+    const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+
+    expect(res.status).toBe(200)
+    expect(stillNamedMock).toHaveBeenCalledWith('storage_path', ['documents/user-1/kvitto.pdf', 'documents/company-1/user-1/kvitto.pdf'])
+    expect(serviceRemoveMock).toHaveBeenCalledWith(['documents/company-1/user-1/kvitto.pdf', 'previews/company-1/doc-1-v1.jpg'])
+  })
+
+  it('removes the legacy key a repointed row was copied from, and keeps every file when the rows naming it cannot be read', async () => {
+    const repointed = { id: 'doc-1', file_name: 'kvitto.pdf', storage_path: 'documents/company-1/user-1/kvitto.pdf', journal_entry_id: null, user_id: 'user-1' }
+    enqueue({ data: repointed, error: null })
+    enqueuePins()
+    enqueue({ data: null, error: null }) // delete
+    expect((await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))).status).toBe(200)
+    expect(serviceRemoveMock).toHaveBeenCalledWith(['documents/company-1/user-1/kvitto.pdf', 'documents/user-1/kvitto.pdf', 'previews/company-1/doc-1-v1.jpg'])
+
+    serviceRemoveMock.mockClear()
+    reset()
+    enqueue({ data: repointed, error: null })
+    enqueuePins()
+    enqueue({ data: null, error: null }) // delete
+    stillNamedMock.mockResolvedValue({ data: null, error: { message: 'timeout' } })
+    expect((await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))).status).toBe(200)
+    expect(serviceRemoveMock).toHaveBeenCalledWith(['previews/company-1/doc-1-v1.jpg'])
   })
 
   it('removes only keys inside the company: a row whose key is in another company folder loses its row, not that file', async () => {
