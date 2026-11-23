@@ -32,6 +32,16 @@ describe('normalizeReportArgAliases', () => {
     expect(conflicts).toEqual([])
   })
 
+  it('reads fiscal_period_id as period_id on bokslutsbilagor, like the year-end tools beside it', () => {
+    const { args, conflicts } = normalizeReportArgAliases('gnubok_get_bokslutsbilagor', { fiscal_period_id: 'fp-1' })
+    expect(args).toEqual({ period_id: 'fp-1' })
+    expect(conflicts).toEqual([])
+    // Both names at once is ambiguous: refused, never resolved.
+    expect(
+      normalizeReportArgAliases('gnubok_get_bokslutsbilagor', { fiscal_period_id: 'fp-1', period_id: 'fp-2' }).conflicts,
+    ).toEqual([{ alias: 'fiscal_period_id', readsAs: ['period_id'], overlaps: 'period_id' }])
+  })
+
   it('wraps a scalar metric into the metrics array', () => {
     const { args } = normalizeReportArgAliases('gnubok_get_kpi_report', { metric: 'cash_position' })
     expect(args).toEqual({ metrics: ['cash_position'] })
