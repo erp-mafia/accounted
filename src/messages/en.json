@@ -14320,7 +14320,9 @@
     "cashflow_omit": "Omit cash flow statement",
     "cashflow_confirm": "I confirm that the company is not a larger company under ÅRL 1 kap. 3 §.",
     "cashflow_omitted_notice": "The document follows the K3 template: changes in equity as a separate statement and notes under K3. The cash flow statement is omitted as you chose.",
-    "cashflow_withheld": "The cash flow statement is not included: it is voluntary for a smaller company (ÅRL 2 kap. 1 §) and Accounted's cash flow statement does not yet meet K3 chapter 7."
+    "cashflow_withheld": "The cash flow statement is not included: it is voluntary for a smaller company (ÅRL 2 kap. 1 §) and Accounted's cash flow statement does not yet meet K3 chapter 7.",
+    "overview_tkr": "Show the multi-year overview in thousands of kronor (tkr)",
+    "overview_tkr_hint": "Net sales and the result after financial items are rounded to whole thousands of kronor in the multi-year overview, both in the PDF and in the file submitted to Bolagsverket. The income statement, the balance sheet and the notes are always shown in whole kronor."
   },
   "annualReportStudio": {
     "choose": "Choose",
