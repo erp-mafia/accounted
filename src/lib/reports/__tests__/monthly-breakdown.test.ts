@@ -3,7 +3,7 @@ import { createMockSupabase } from '@/tests/helpers'
 
 const { supabase, mockResult } = createMockSupabase()
 
-import { generateMonthlyBreakdown } from '../monthly-breakdown'
+import { assembleMonthlyBreakdown, generateMonthlyBreakdown } from '../monthly-breakdown'
 
 // Minimal chainable query mock: every filter/order method returns the same
 // object; .single()/.range() resolve to the queued result. Tolerant of
@@ -317,5 +317,40 @@ describe('generateMonthlyBreakdown: no dimension filter', () => {
     await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')).rejects.toMatchObject({
       code: '57014',
     })
+  })
+})
+
+describe('assembleMonthlyBreakdown: month labels', () => {
+  it('labels a calendar year by month name only', () => {
+    const { months } = assembleMonthlyBreakdown('2026-01-01', '2026-12-31', [])
+    expect(months.map((m) => m.label)).toEqual([
+      'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec',
+    ])
+  })
+
+  // An 18-month first räkenskapsår has July twice: without the year the two
+  // months read the same, and React keyed the bars by label.
+  it('names the year on every month when the months span calendar years', () => {
+    const { months } = assembleMonthlyBreakdown('2025-07-17', '2026-12-31', [
+      { year: 2025, month0: 6, income: 100, expenses: 0 },
+      { year: 2026, month0: 6, income: 0, expenses: 40 },
+    ])
+    const labels = months.map((m) => m.label)
+    expect(labels).toHaveLength(18)
+    expect(labels[0]).toBe('Jul 2025')
+    expect(labels[5]).toBe('Dec 2025')
+    expect(labels[6]).toBe('Jan 2026')
+    expect(labels[17]).toBe('Dec 2026')
+    expect(new Set(labels).size).toBe(18)
+    expect(months.find((m) => m.label === 'Jul 2025')).toMatchObject({ income: 100, expenses: 0, net: 100 })
+    expect(months.find((m) => m.label === 'Jul 2026')).toMatchObject({ income: 0, expenses: 40, net: -40 })
+  })
+
+  it('names the year on a broken räkenskapsår', () => {
+    const { months } = assembleMonthlyBreakdown('2025-05-01', '2026-04-30', [])
+    expect(months.map((m) => m.label)).toEqual([
+      'Maj 2025', 'Jun 2025', 'Jul 2025', 'Aug 2025', 'Sep 2025', 'Okt 2025', 'Nov 2025', 'Dec 2025',
+      'Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026',
+    ])
   })
 })

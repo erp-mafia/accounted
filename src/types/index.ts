@@ -5073,7 +5073,7 @@ export interface KPIReport {
   cashPosition: number             // SEK (sum of 19xx account balances)
   outstandingReceivables: number   // SEK
   overdueReceivables: number       // SEK
-  vatLiability: number             // SEK, ruta 49 (positive = owe, negative = refund)
+  vatLiability: number             // SEK, moms on 26xx not yet moved by a momsredovisning (positive = owe, negative = refund); not ruta 49
   totalRevenue: number             // SEK
   totalExpenses: number            // SEK
   grossMargin: number | null       // percentage, null if no revenue

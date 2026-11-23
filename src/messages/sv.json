@@ -10369,7 +10369,7 @@
     "def_outstandingReceivables_formula": "Summa obetalda kundfakturor",
     "def_outstandingReceivables_accounts": "Kundfordringar (1510)",
     "def_vatLiability_label": "Moms",
-    "def_vatLiability_description": "Momsskuld eller momsfordran för perioden",
+    "def_vatLiability_description": "Moms på 26xx-kontona som ännu inte förts över till 2650 eller 1650 med en momsredovisning",
     "def_vatLiability_formula": "Utgående moms (rutor 10-12, 30-32, 60-62) − Ingående moms (ruta 48): samma konton som momsdeklarationen",
     "def_vatLiability_accounts": "Utgående moms inkl. omvänd skattskyldighet och import (2610-2638), Ingående moms (2640-2649)",
     "def_grossMargin_label": "Bruttomarginal",
@@ -10559,7 +10559,7 @@
     "kpi_result": "Resultat",
     "kpi_margin": "Marginal",
     "kpi_cash": "Likvida medel",
-    "kpi_vat": "Moms att betala",
+    "kpi_vat": "Moms på 26xx",
     "kpi_row_failed": "Kunde inte hämta siffror",
     "kpi_failed_notice": "{count, plural, one {Ett klientbolag} other {# klientbolag}} kunde inte hämtas och ingår inte i summorna."
   },
