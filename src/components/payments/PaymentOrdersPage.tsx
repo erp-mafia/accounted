@@ -535,11 +535,11 @@ export function PaymentOrdersPage() {
                     <tr>
                       {isToSign && <th className={cn(TH_CLASS, 'w-10')} aria-hidden="true"></th>}
                       <th className={cn(TH_CLASS, 'w-full')}>{t('th_invoice')}</th>
-                      <th className={TH_CLASS}>{t('th_payee')}</th>
-                      <th className={TH_CLASS}>{t('th_date')}</th>
-                      {showStatus && <th className={TH_CLASS}>{t('th_status')}</th>}
+                      <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_payee')}</th>
+                      <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_date')}</th>
+                      {showStatus && <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_status')}</th>}
                       <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
-                      <th className={cn(TH_CLASS, 'w-[200px]')} aria-hidden="true"></th>
+                      <th className={cn(TH_CLASS, 'hidden w-[200px] sm:table-cell')} aria-hidden="true"></th>
                     </tr>
                   </thead>
                   <tbody className="stagger-enter">
@@ -549,6 +549,89 @@ export function PaymentOrdersPage() {
                       const silentSince = bankSilentSince(order)
                       const checked = selected.has(order.id)
                       const canPick = isToSign && canWrite && available && selectable(order)
+                      // The payee warning, the status and the row's actions are
+                      // written once: on a phone (below sm) their columns hide
+                      // and the same content folds under the label.
+                      const payeeWarning =
+                        order.supplier_invoice_id && payeeMarkers.has(order.supplier_invoice_id) && (order.status === 'draft' || order.status === 'approved') ? (
+                          <Badge variant="warning" className="ml-2 font-normal">
+                            {tStatus('payee_alert_badge')}
+                          </Badge>
+                        ) : (
+                          (order.payee_check === 'new' || order.payee_check === 'changed') &&
+                          order.status === 'draft' && (
+                            <Badge variant={order.payee_check === 'changed' ? 'warning' : 'outline'} className="ml-2 font-normal">
+                              {tStatus(order.payee_check === 'changed' ? 'payee_changed' : 'payee_new')}
+                            </Badge>
+                          )
+                        )
+                      const statusContent = showStatus && (
+                        <>
+                          {held ? (
+                            <Badge variant="warning" className="font-normal">
+                              {tStatus('status_outcome_unknown')}
+                            </Badge>
+                          ) : order.bank_confirming ? (
+                            <Badge variant="outline" className="font-normal">
+                              {tStatus('status_bank_confirming')}
+                            </Badge>
+                          ) : variant ? (
+                            <Badge variant={variant} className="font-normal">
+                              {order.sign_second ? tStatus('status_awaiting_second_signer_here') : statusLabel(order.status)}
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">{statusLabel(order.status)}</span>
+                          )}
+                          {order.status === 'approved' && linkByOrder.has(order.id) && (
+                            <SigningLinkRowNote link={linkByOrder.get(order.id)!} canCancel={canWrite} onCancelled={refresh} />
+                          )}
+                          {order.provider_error_code && (order.status === 'failed' || order.status === 'rejected') && (
+                            <span className="ml-2 text-xs text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
+                          )}
+                          {silentSince && (
+                            <span className="ml-2 text-xs text-muted-foreground">{tStatus('bank_silent_since', { date: formatDate(silentSince) })}</span>
+                          )}
+                        </>
+                      )
+                      const actions = canWrite && (
+                        <>
+                          {order.status === 'draft' && available && (
+                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setApproving([order])} disabled={busyId !== null}>
+                              {t('approve_one')}
+                            </button>
+                          )}
+                          {order.status === 'approved' && available && (
+                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSigning([order])} disabled={busyId !== null}>
+                              {t('sign_one')}
+                            </button>
+                          )}
+                          {order.status === 'approved' && (
+                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => unapprove(order)} disabled={busyId !== null}>
+                              {t('unapprove')}
+                            </button>
+                          )}
+                          {order.sign_again && available && (
+                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => signAgain(order)} disabled={busyId !== null}>
+                              {t('sign_again')}
+                            </button>
+                          )}
+                          {order.sign_second && available && (
+                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => signSecond(order)} disabled={busyId !== null}>
+                              {t('sign_second')}
+                            </button>
+                          )}
+                          {held && available && (
+                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setResolving(order)} disabled={busyId !== null}>
+                              {t('resolve')}
+                            </button>
+                          )}
+                          {canCancel(order) && !held && (
+                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => cancel(order)} disabled={busyId !== null}>
+                              {order.bank_confirming ? t('cancel_bank_confirming_one') : t('cancel_one')}
+                            </button>
+                          )}
+                        </>
+                      )
                       return (
                         <tr
                           key={order.id}
@@ -585,56 +668,28 @@ export function PaymentOrdersPage() {
                                 <span className="min-w-0 flex-1 basis-0 truncate text-xs text-muted-foreground">{order.reference}</span>
                               ) : null}
                             </span>
+                            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground sm:hidden [&>*]:ml-0">
+                              <span className="date-figures">{formatDate(order.requested_execution_date)}</span>
+                              {payeeWarning}
+                              {statusContent}
+                              {canWrite && <span className={cn('flex flex-wrap items-center gap-x-4 gap-y-1', HOVER_REVEAL_CLASS)}>{actions}</span>}
+                            </span>
                           </td>
-                          <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                          <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums sm:table-cell')}>
                             {payeeLabel(order)}
-                            {order.supplier_invoice_id && payeeMarkers.has(order.supplier_invoice_id) && (order.status === 'draft' || order.status === 'approved') ? (
-                              <Badge variant="warning" className="ml-2 font-normal">
-                                {tStatus('payee_alert_badge')}
-                              </Badge>
-                            ) : (order.payee_check === 'new' || order.payee_check === 'changed') && order.status === 'draft' && (
-                              <Badge variant={order.payee_check === 'changed' ? 'warning' : 'outline'} className="ml-2 font-normal">
-                                {tStatus(order.payee_check === 'changed' ? 'payee_changed' : 'payee_new')}
-                              </Badge>
-                            )}
+                            {payeeWarning}
                           </td>
-                          <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>{formatDate(order.requested_execution_date)}</td>
-                          {showStatus && (
-                            <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
-                              {held ? (
-                                <Badge variant="warning" className="font-normal">
-                                  {tStatus('status_outcome_unknown')}
-                                </Badge>
-                              ) : order.bank_confirming ? (
-                                <Badge variant="outline" className="font-normal">
-                                  {tStatus('status_bank_confirming')}
-                                </Badge>
-                              ) : variant ? (
-                                <Badge variant={variant} className="font-normal">
-                                  {order.sign_second ? tStatus('status_awaiting_second_signer_here') : statusLabel(order.status)}
-                                </Badge>
-                              ) : (
-                                <span className="text-muted-foreground">{statusLabel(order.status)}</span>
-                              )}
-                              {order.status === 'approved' && linkByOrder.has(order.id) && (
-                                <SigningLinkRowNote link={linkByOrder.get(order.id)!} canCancel={canWrite} onCancelled={refresh} />
-                              )}
-                              {order.provider_error_code && (order.status === 'failed' || order.status === 'rejected') && (
-                                <span className="ml-2 text-xs text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
-                              )}
-                              {silentSince && (
-                                <span className="ml-2 text-xs text-muted-foreground">{tStatus('bank_silent_since', { date: formatDate(silentSince) })}</span>
-                              )}
-                            </td>
-                          )}
+                          <td className={cn(TD_CLASS, 'hidden whitespace-nowrap date-figures sm:table-cell')}>{formatDate(order.requested_execution_date)}</td>
+                          {showStatus && <td className={cn(TD_CLASS, 'hidden whitespace-nowrap sm:table-cell')}>{statusContent}</td>}
                           {/* The paying account sits before the amount on the
-                              same line, so the amounts still align right. */}
+                              same line, so the amounts still align right. A
+                              phone shows the amount alone. */}
                           <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                             <span className="inline-flex items-center justify-end gap-2">
                               {(() => {
                                 const from = availability?.accounts.find((a) => a.id === order.cash_account_id)
                                 return from ? (
-                                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                                  <span className="hidden items-center gap-1 text-xs text-muted-foreground sm:inline-flex">
                                     <BankMark bankName={from.bank_name} size={14} />
                                     {from.ledger_account}
                                   </span>
@@ -643,46 +698,8 @@ export function PaymentOrdersPage() {
                               {formatRowAmount(Number(order.amount), order.currency)}
                             </span>
                           </td>
-                          <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
-                            {canWrite && (
-                              <span className={cn('flex items-center justify-end gap-4', HOVER_REVEAL_CLASS)}>
-                                {order.status === 'draft' && available && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setApproving([order])} disabled={busyId !== null}>
-                                    {t('approve_one')}
-                                  </button>
-                                )}
-                                {order.status === 'approved' && available && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSigning([order])} disabled={busyId !== null}>
-                                    {t('sign_one')}
-                                  </button>
-                                )}
-                                {order.status === 'approved' && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => unapprove(order)} disabled={busyId !== null}>
-                                    {t('unapprove')}
-                                  </button>
-                                )}
-                                {order.sign_again && available && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => signAgain(order)} disabled={busyId !== null}>
-                                    {t('sign_again')}
-                                  </button>
-                                )}
-                                {order.sign_second && available && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => signSecond(order)} disabled={busyId !== null}>
-                                    {t('sign_second')}
-                                  </button>
-                                )}
-                                {held && available && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setResolving(order)} disabled={busyId !== null}>
-                                    {t('resolve')}
-                                  </button>
-                                )}
-                                {canCancel(order) && !held && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => cancel(order)} disabled={busyId !== null}>
-                                    {order.bank_confirming ? t('cancel_bank_confirming_one') : t('cancel_one')}
-                                  </button>
-                                )}
-                              </span>
-                            )}
+                          <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right sm:table-cell')}>
+                            {canWrite && <span className={cn('flex items-center justify-end gap-4', HOVER_REVEAL_CLASS)}>{actions}</span>}
                           </td>
                         </tr>
                       )

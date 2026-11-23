@@ -785,7 +785,10 @@ export default function SupplierInvoicesPage() {
            short Kvar header; fakturadatum lives in the detail view. The
            trailing column is one slot for the row's next step: Godkänn while
            attest is pending, the I banken bock (#2220) once attested; it is
-           sized for the bock plus its label, the wider of the two. */
+           sized for the bock plus its label, the wider of the two. On a phone
+           (below sm) the row is Leverantör, Förfaller, Belopp and that slot,
+           sized to what it holds: Fakturanr and Status are in the detail view
+           the row opens. */
         <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
@@ -799,12 +802,13 @@ export default function SupplierInvoicesPage() {
                 />
                 <SortableTh
                   label={t('th_invoice_number')}
+                  className="hidden sm:table-cell"
                   direction={sort?.column === 'number' ? sort.direction : null}
                   onSort={() => updateSort('number')}
                 />
                 <SortableTh
                   label={t('th_due_date')}
-                  className="hidden text-right sm:table-cell"
+                  className="text-right"
                   align="right"
                   direction={sort?.column === 'due' ? sort.direction : null}
                   onSort={() => updateSort('due')}
@@ -825,10 +829,11 @@ export default function SupplierInvoicesPage() {
                 />
                 <SortableTh
                   label={t('th_status')}
+                  className="hidden sm:table-cell"
                   direction={sort?.column === 'status' ? sort.direction : null}
                   onSort={() => updateSort('status')}
                 />
-                <th className={cn(TH_CLASS, 'w-[108px]')} aria-hidden="true"></th>
+                <th className={cn(TH_CLASS, 'sm:w-[108px]')} aria-hidden="true"></th>
               </tr>
             </thead>
             <tbody className="stagger-enter">
@@ -927,7 +932,7 @@ export default function SupplierInvoicesPage() {
                         )}
                       </span>
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums sm:table-cell')}>
                       <IntentLink
                         href={`/supplier-invoices/${inv.id}`}
                         className="hover:underline"
@@ -947,7 +952,7 @@ export default function SupplierInvoicesPage() {
                         </Badge>
                       )}
                     </td>
-                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right date-figures text-muted-foreground sm:table-cell')}>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right date-figures text-muted-foreground')}>
                       {formatDate(inv.due_date)}
                     </td>
                     {/* Belopp rounds like the detail page when the invoice's
@@ -963,7 +968,7 @@ export default function SupplierInvoicesPage() {
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums rr-mask lg:table-cell')}>
                       {formatRowAmount(inv.remaining_amount, inv.currency)}
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap date-figures sm:table-cell')}>
                       <span className="inline-flex items-center gap-1">
                         {chipVariant ? (
                           <Badge variant={chipVariant} className="font-normal">

@@ -182,14 +182,16 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
         />
       ) : (
         <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
-          <table className="w-full min-w-[720px] border-collapse text-sm">
+          {/* On a phone (below sm) the row is Datum, Vad and Belopp: Betalning
+              and Underlag hide, and the table drops its minimum width. */}
+          <table className="w-full border-collapse text-sm sm:min-w-[720px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_date')}</th>
                 {/* w-full: the name takes the width the other columns leave, and truncates only past it. */}
                 <th className={cn(TH_CLASS, 'w-full')}>{t('col_what')}</th>
-                <th className={TH_CLASS}>{t('col_payment')}</th>
-                <th className={TH_CLASS}>{t('col_underlag')}</th>
+                <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('col_payment')}</th>
+                <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('col_underlag')}</th>
                 <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>
                 <th className={cn(TH_CLASS, 'w-8')} aria-hidden="true" />
               </tr>
@@ -229,7 +231,7 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
                       )}
                     </div>
                   </td>
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                  <td className={cn(TD_CLASS, 'hidden whitespace-nowrap sm:table-cell')}>
                     {row.kind === 'bank' ? (
                       <span className="text-foreground/80">{accountName(row.cashAccountId) ?? t('payment_bank')}</span>
                     ) : row.kind === 'skattekonto' ? (
@@ -238,7 +240,7 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
                       <Badge variant="secondary">{t('payment_none')}</Badge>
                     )}
                   </td>
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                  <td className={cn(TD_CLASS, 'hidden whitespace-nowrap sm:table-cell')}>
                     {/* Missing is most rows, so it is muted text; the chip
                         marks the exception, a receipt found for the row. */}
                     {row.underlag === 'missing' ? (
