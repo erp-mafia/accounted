@@ -37,7 +37,7 @@ The first stable release of the public REST API. Six phases of development cover
 
 ### Assets and the K3 transition: a locked period is a refusal, not a server error (2026-11)
 
-- **Fix: a posting that the bookkeeping engine's own lock check refuses, because its fiscal year is locked or closed or its date is on or before the company lock date, answers \`400 PERIOD_LOCKED\`** (2026-11-23) on \`POST /assets/{id}/dispose\`, \`POST /assets/{id}/value-adjustments\`, \`POST /assets/{id}/components/{componentId}/replace\` and \`POST /k3-transition/commit\`; \`message\` and \`recovery_hint\` are the code's own. **Before**, such a refusal, met for example when the year was locked or the lock date moved after the endpoint's own checks, answered \`500 BOOKKEEPING_DATABASE_ERROR\`, which is retryable, so a retry met the same lock. The API version date is unchanged.
+- **Fix: a posting that the bookkeeping engine's own lock check refuses, because its fiscal year is locked or closed or its date is on or before the company lock date, answers \`400 PERIOD_LOCKED\`** (2026-11-23) on \`POST /assets/{id}/dispose\`, \`POST /assets/{id}/value-adjustments\`, \`POST /assets/{id}/components/{componentId}/replace\` and \`POST /k3-transition/commit\`; \`message\` and \`recovery_hint\` are the code's own. **Before**, such a refusal, met for example when the year was locked or the lock date moved after the endpoint's own checks, answered \`500 BOOKKEEPING_DATABASE_ERROR\`, which is retryable, so a retry met the same lock. Once the lock is removed, send the request again with a new \`Idempotency-Key\`: a 4xx answer can be kept under its key for 24 hours. The API version date is unchanged.
 
 ### Journal entries: a locked period is a refusal, not a server error (2026-11)
 
