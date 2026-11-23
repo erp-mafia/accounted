@@ -155,6 +155,7 @@ const RETAINED = new Set([
   'tax_loss_carryforwards.updated_by', // Who last saved a year of the underskottsregister; the company keeps the record.
   'fiscal_periods.user_id',
   'journal_entries.user_id',
+  'rattelse_actor_names.user_id', // The name of who corrected an entry, kept until that year's bevarandetid ends (BFL 5 kap. 5 §), then deleted daily.
   'journal_entry_no_doc_required.user_id',
   'operations.user_id',
   'payment_match_log.user_id',

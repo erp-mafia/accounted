@@ -852,7 +852,7 @@ export async function getJournalEntryRattelseLog(
   let labels = new Map<string, string>()
   if (actorIds.length > 0) {
     try {
-      labels = await resolveUserLabelsFromProfiles(profilesClient(), actorIds)
+      labels = await resolveUserLabelsFromProfiles(profilesClient(), actorIds, ctx.companyId)
     } catch {
       labels = new Map()
     }

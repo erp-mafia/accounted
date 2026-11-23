@@ -39,7 +39,7 @@ export const GET = withRouteContext('report.systemdokumentation', async (request
     // Fire and forget: the helper never throws and is a no-op once recorded.
     void recordAppRelease(serviceClient)
     const report = await generateSystemdokumentation(supabase, companyId, periodId, {
-      resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(serviceClient, ids),
+      resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(serviceClient, ids, companyId),
       serviceClient,
       appVersion: currentAppVersion(),
     })
