@@ -372,14 +372,22 @@ function scopeRpcRequest(scope: CompanyScope, fn: string, method: string, url: U
   return { url: scoped, parents: null }
 }
 
-/** Is this object key inside the company's folder of the bucket? `encoded`: it came from the URL path. */
-function inCompanyFolder(scope: CompanyScope, bucket: unknown, key: unknown, encoded: boolean): boolean {
+/**
+ * Is this key inside the company's folder of the bucket? An object key names
+ * something beneath the folder. A list prefix (`folder`) may be the folder
+ * itself, with or without a closing slash. `encoded`: it came from the URL path.
+ */
+function inCompanyFolder(
+  scope: CompanyScope,
+  bucket: unknown,
+  key: unknown,
+  { encoded, folder: listing }: { encoded: boolean; folder: boolean },
+): boolean {
   if (typeof bucket !== 'string' || typeof key !== 'string' || !Object.hasOwn(COMPANY_FOLDERS, bucket)) return false
   const folder = COMPANY_FOLDERS[bucket](scope.companyId)
   const segments = key.split('/')
-  // A folder prefix may end in a slash: documents/<company>/.
-  if (segments.length > folder.length && segments.at(-1) === '') segments.pop()
-  if (segments.length < folder.length) return false
+  if (listing && segments.length > folder.length && segments.at(-1) === '') segments.pop()
+  if (listing ? segments.length < folder.length : segments.length <= folder.length) return false
   return segments.every((raw, i) => {
     const segment = encoded ? decodeSegment(raw) : raw
     if (segment === '' || segment === '.' || segment === '..' || /[/\\]/.test(segment)) return false
@@ -414,21 +422,22 @@ function scopeStorageRequest(scope: CompanyScope, rest: string, body: unknown, u
     refuse('storage objects may not move to another bucket')
   }
 
-  const objects: { key: unknown; encoded: boolean }[] = []
-  if (!moving && keyParts.join('/') !== '') objects.push({ key: keyParts.join('/'), encoded: true })
+  // Every key names an object, except the folder a list reads (`prefix`).
+  const objects: { key: unknown; encoded: boolean; folder: boolean }[] = []
+  if (!moving && keyParts.join('/') !== '') objects.push({ key: keyParts.join('/'), encoded: true, folder: false })
   for (const field of ['prefix', 'sourceKey', 'destinationKey']) {
-    if (Object.hasOwn(record, field)) objects.push({ key: record[field], encoded: false })
+    if (Object.hasOwn(record, field)) objects.push({ key: record[field], encoded: false, folder: field === 'prefix' })
   }
   for (const field of ['prefixes', 'paths']) {
     if (!Object.hasOwn(record, field)) continue
     const keys = record[field]
     if (!Array.isArray(keys)) refuse(`storage ${field} is not a list`)
-    for (const key of keys) objects.push({ key, encoded: false })
+    for (const key of keys) objects.push({ key, encoded: false, folder: false })
   }
 
   if (objects.length === 0) refuse('a storage request must name its objects')
-  for (const { key, encoded } of objects) {
-    if (!inCompanyFolder(scope, bucket, key, encoded)) refuse(`storage object ${String(bucket)}/${String(key)} is outside the company`)
+  for (const { key, ...how } of objects) {
+    if (!inCompanyFolder(scope, bucket, key, how)) refuse(`storage object ${String(bucket)}/${String(key)} is outside the company`)
   }
   return { url: new URL(url), parents: null }
 }
@@ -485,7 +494,7 @@ async function confirmParents(
   if (profile) readHeaders.set('accept-profile', profile)
   let rows: unknown = null
   try {
-    const response = await baseFetch(parents.read.toString(), { method: 'GET', headers: readHeaders })
+    const response = await baseFetch(parents.read.toString(), { method: 'GET', headers: readHeaders, redirect: 'manual' })
     if (response.ok) rows = await response.json()
   } catch {
     // Not dropped: an unanswered read becomes the refusal below, which is logged.
@@ -503,9 +512,9 @@ function refusalResponse(message: string): Response {
 }
 
 /**
- * A fetch that sends only what scopeSupabaseRequest lets through. Given the
- * client's Supabase URL, it also refuses any other origin and reads each path
- * under that URL's own path.
+ * A fetch that sends only what scopeSupabaseRequest lets through, and follows
+ * no redirect. Given the client's Supabase URL, it also refuses any other
+ * origin and reads each path under that URL's own path.
  */
 export function companyScopedFetch(
   scope: CompanyScope,
@@ -537,7 +546,8 @@ export function companyScopedFetch(
       })
       return refusalResponse(err.message)
     }
-    return baseFetch(request ? new Request(scoped.url, request) : scoped.url.toString(), init)
+    // A redirect is answered, never followed: where it points was not checked.
+    return baseFetch(request ? new Request(scoped.url, request) : scoped.url.toString(), { ...init, redirect: 'manual' })
   }
 }
 

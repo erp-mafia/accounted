@@ -310,9 +310,13 @@ describe('company-scoped client: RPC, storage and the rest', () => {
     const moved = await client.storage
       .from('documents')
       .move(`documents/${COMPANY}/a.pdf`, `documents/${COMPANY}/b.pdf`, { destinationBucket: 'logos' })
-    for (const result of [later, restInKey, bareCompany, otherBucket, climbs, encoded, moved]) expect(result.error).not.toBeNull()
+    const folderAsObject = await client.storage.from('documents').download(`documents/${COMPANY}`)
+    const closingSlash = await client.storage.from('documents').download(`documents/${COMPANY}/a/`)
+    const results = [later, restInKey, bareCompany, otherBucket, climbs, encoded, moved, folderAsObject, closingSlash]
+    for (const result of results) expect(result.error).not.toBeNull()
     await client.storage.from('documents').move(`documents/${COMPANY}/a.pdf`, `documents/${COMPANY}/b.pdf`)
-    expect(paths(sent)).toEqual(['POST /storage/v1/object/move'])
+    await client.storage.from('documents').list(`documents/${COMPANY}/`)
+    expect(paths(sent)).toEqual(['POST /storage/v1/object/move', 'POST /storage/v1/object/list/documents'])
   })
 
   it('refuses auth, edge functions and anything else', () => {
@@ -348,6 +352,18 @@ describe('company-scoped client: RPC, storage and the rest', () => {
     expect(outsideBase.status).toBe(403)
     expect(otherOrigin.status).toBe(403)
     expect(sent).toEqual([`${BASE}/supabase/rest/v1/invoices?select=id&company_id=eq.${COMPANY}`])
+  })
+
+  it('follows no redirect, for the request or for the parent read', async () => {
+    const redirects: (RequestRedirect | undefined)[] = []
+    const scopedFetch = companyScopedFetch(SCOPE, (async (input: RequestInfo | URL, init?: RequestInit) => {
+      redirects.push(init?.redirect)
+      const parentRead = String(input).includes('/rest/v1/invoices?')
+      return new Response(parentRead ? JSON.stringify([{ id: OWN_INVOICE }]) : '[]', { status: 200 })
+    }) as typeof fetch)
+    await scopedFetch(`${BASE}/rest/v1/customers?select=id`)
+    await scopedFetch(`${BASE}/rest/v1/invoice_items?select=id&invoice_id=eq.${OWN_INVOICE}`)
+    expect(redirects).toEqual(['manual', 'manual', 'manual'])
   })
 
   it('refuses a request whose body it cannot read', async () => {
