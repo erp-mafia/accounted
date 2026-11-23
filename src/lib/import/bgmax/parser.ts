@@ -121,7 +121,7 @@ function isoDate(value: string): string | null {
 }
 
 /** A zero-padded giro number: digits without the padding, formatted when it is a valid bankgiro. */
-function bankgiro(value: string): string | null {
+export function bankgiro(value: string): string | null {
   const digits = value.replace(/\D/g, '').replace(/^0+/, '')
   if (!digits) return null
   return validateBankgiroNumber(digits) ? formatBankgiroNumber(digits) : digits
@@ -133,7 +133,7 @@ function text(value: string): string | null {
 }
 
 /** TK29: 12 positions, zero-padded, "anges med 10 siffror". */
-function orgNumber(value: string): string | null {
+export function orgNumber(value: string): string | null {
   const digits = value.replace(/\D/g, '')
   if (!digits || /^0+$/.test(digits)) return null
   return digits.length > 10 ? digits.slice(-10) : digits

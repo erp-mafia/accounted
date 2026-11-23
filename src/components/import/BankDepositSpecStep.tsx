@@ -19,15 +19,15 @@ type DepositSpecResponse = AttachSummary & {
 }
 
 interface BankDepositSpecStepProps {
-  /** The BG Max file the bank-file parse recognized (crm#1170). */
+  /** The BG Max or camt.054 file the bank-file parse recognized (crm#1170, crm#1883). */
   file: File
   onNewImport: () => void
 }
 
 /**
- * Bankgirot's deposit specification (BG Max) in the bank-file import: the
- * file creates no bank rows, it attaches each deposit's payments to the row
- * that is the deposit. Shows what would be attached (the route's preview),
+ * A deposit specification (Bankgirot's BG Max or the bank's camt.054) in the
+ * bank-file import: the file creates no bank rows, it attaches each
+ * deposit's payments to the row that is the deposit. Shows what would be attached (the route's preview),
  * attaches on one click, and says what is left: deposits whose row has not
  * synced attach when the same file is uploaded again.
  */
