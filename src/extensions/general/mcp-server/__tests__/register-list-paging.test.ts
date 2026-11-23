@@ -278,6 +278,32 @@ describe('gnubok_list_customers: limit and offset', () => {
       expect(customer.personal_number_masked).toBe('********-9802')
     }
   })
+
+  it('opens only the first page when an unpaged register is too large for one answer, and each row once when it fits', async () => {
+    const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
+    const sealed = encryptPersonnummer('199001019802')
+    const individuals = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...customerRow(i),
+        customer_type: 'individual',
+        org_number: null,
+        vat_number: null,
+        personal_number: sealed,
+      }))
+
+    mocks.tables.customers = individuals(20_000)
+    const oversized = await callTool(listCustomers, {})
+    expect(oversized.has_more).toBe(true)
+    expect(oversized.count).toBe(100)
+    expect(mocks.masked).toHaveLength(100)
+
+    mocks.masked = []
+    mocks.tables.customers = individuals(300)
+    const whole = await callTool(listCustomers, {})
+    expect(whole.count).toBe(300)
+    expect(mocks.masked).toHaveLength(300)
+    expect((whole.customers as Array<Record<string, unknown>>)[0].personal_number_masked).toBe('********-9802')
+  }, 60_000)
 })
 
 describe('gnubok_list_customers: a register too large for one answer', () => {

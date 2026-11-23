@@ -261,7 +261,11 @@ import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
 } from '@/lib/invariants/personal-number-shape'
-import { agentCustomerIdentifiers, isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
+import {
+  agentCustomerIdentifiers,
+  isMaskedPersonalNumber,
+  UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+} from '@/lib/customers/mask-personal-number'
 import {
   encryptCustomerPersonalNumber,
   maskStoredCustomerPersonalNumber,
@@ -4959,19 +4963,23 @@ const REGISTER_PAGE_SIZE = 100
  * always answered, when it fits one answer; a register too large for one
  * answer, which could not be answered at all before, gets its first page,
  * with has_more, next_offset and total_count saying there is more. `present`
- * shapes the rows answered (the customer list opens personnummer there): a
- * paged call presents only its page, an unpaged one the whole register.
+ * shapes the rows answered and runs on them alone (the customer list opens
+ * personnummer there). Whether the whole register fits is measured on
+ * `measure`, which must answer rows at least as large as `present`'s without
+ * opening anything.
  */
 function registerAnswer<Row, Out>(
   key: string,
   sorted: Row[],
   args: Record<string, unknown>,
   present: (rows: Row[]) => Out[],
+  measure: (rows: Row[]) => unknown[] = present,
 ): Record<string, unknown> {
   if (args.limit == null && args.offset == null) {
-    const rows = present(sorted)
-    const whole = { [key]: rows, ...pageTail(rows, rows.length, 0) }
-    if (fitsOneAnswer(whole)) return whole
+    if (fitsOneAnswer({ [key]: measure(sorted), ...pageTail(sorted, sorted.length, 0) })) {
+      const rows = present(sorted)
+      return { [key]: rows, ...pageTail(rows, rows.length, 0) }
+    }
   }
   const limit = Math.min(Math.max(1, Math.floor(Number(args.limit)) || REGISTER_PAGE_SIZE), REGISTER_PAGE_SIZE)
   const offset = Math.max(0, Math.floor(Number(args.offset)) || 0)
@@ -10053,15 +10061,24 @@ export const tools: McpTool[] = [
       // number built on one is nulled: that covers a Swedish enskild firma
       // (its org number is the owner's personnummer) and the legacy rows
       // that carry one in org_number under another customer type.
-      return registerAnswer('customers', rows, args, (answered) =>
+      //
+      // Only the customers answered are opened. Whether the whole register
+      // fits one answer is measured without opening anything: a mask is
+      // always as long as UNDECRYPTABLE_PERSONAL_NUMBER_MASK ('********-1234'
+      // or '********-????') or null, so that mask stands in for each stored
+      // number (crm#2151).
+      const shape = (answered: ListedCustomer[], open: boolean) =>
         answered.map(({ personal_number, ...customer }) => {
-          const identifiers = agentCustomerIdentifiers(customer, maskStoredCustomerPersonalNumber(personal_number))
+          const masked = open
+            ? maskStoredCustomerPersonalNumber(personal_number)
+            : personal_number ? UNDECRYPTABLE_PERSONAL_NUMBER_MASK : null
+          const identifiers = agentCustomerIdentifiers(customer, masked)
           const masksNothing =
             identifiers.org_number === customer.org_number && identifiers.vat_number === customer.vat_number
           if (customer.customer_type !== 'individual' && masksNothing) return customer
           return { ...customer, ...identifiers }
-        }),
-      )
+        })
+      return registerAnswer('customers', rows, args, (answered) => shape(answered, true), (all) => shape(all, false))
     },
   },
 
