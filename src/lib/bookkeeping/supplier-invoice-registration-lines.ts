@@ -36,6 +36,7 @@ import { netVat } from './gross-split'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from './line-side'
 import { isSupplierInvoiceRoundingItem } from '@/lib/bookkeeping/supplier-invoice-rounding-item'
+import { reverseChargeAccountConflict, type ReverseChargeAccountConflict } from './voucher-line-vat-code'
 import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 /**
@@ -304,6 +305,35 @@ export function groupReverseChargeByRate<T extends SupplierInvoiceBookingItem>(
     byRate.set(rate, group)
   }
   return byRate
+}
+
+/**
+ * The first line of a reverse-charge supplier invoice whose cost account
+ * cannot take the reverse charge (reverseChargeAccountConflict, the rule the
+ * utlägg and bank categorization book by), or null. Such an account declares
+ * the purchase in a box of its own (the import basis 4545-4547 in ruta 50,
+ * trepartshandel 4512 in ruta 37, a momskod for either), is the basis pair's
+ * offset 4598, or carries a reverse-charge momskod without a sats of 25, 12
+ * or 6 %: the basis pair beside it would declare the purchase a second time.
+ * Read on the account the line's cost is for: a reverse-charge invoice takes
+ * no periodisering, so that is the account it is booked on. Asked by every
+ * door that stores a line (reverseChargeAccountRefusal), never by the
+ * builders: the review dialog builds the verifikat while it renders.
+ *
+ * No box is compared (no stated kind): the invoice's box is read off the
+ * supplier, and an account with its own ruta 20-24 keeps deciding it
+ * (reverseChargeOnAccount), as bank categorization lets it for a box read
+ * off the underlag.
+ */
+export function supplierInvoiceReverseChargeAccountConflict(
+  items: ReadonlyArray<Pick<SupplierInvoiceBookingItem, 'account_number'>>,
+  chart: ChartVatTreatments,
+): { index: number; account: string; conflict: ReverseChargeAccountConflict } | null {
+  for (const [index, item] of items.entries()) {
+    const conflict = reverseChargeAccountConflict(item.account_number, chart.get(item.account_number))
+    if (conflict) return { index, account: item.account_number, conflict }
+  }
+  return null
 }
 
 /**

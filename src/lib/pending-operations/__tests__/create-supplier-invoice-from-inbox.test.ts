@@ -15,6 +15,12 @@ import type { PendingOperation, SupplierInvoice, SupplierInvoiceItem } from '@/t
 // suggestion_log records each inbox decision; its reads and writes are
 // covered in lib/suggestion-log, not by this file's queued client.
 // The pair guard's own reads have their suite (lib/operations/__tests__/inbox-pair-guard.test.ts).
+// The company's momskoder, read by the reverse-charge account check
+// (reverseChargeAccountRefusal): none configured.
+vi.mock('@/lib/bookkeeping/chart-vat-treatments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/chart-vat-treatments')>()),
+  fetchChartVatTreatments: vi.fn(async () => new Map()),
+}))
 vi.mock('@/lib/operations/inbox-pair-guard', () => ({ refuseWhenPairBooked: vi.fn(async () => null) }))
 // The hard-block gate reads the company's blocks before the claim; this company has none.
 vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
