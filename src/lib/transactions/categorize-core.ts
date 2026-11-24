@@ -721,9 +721,11 @@ export async function buildCategorizeMapping(
   // 13 kap. 4 §, 2 kap. 12 §), and without moms, none of the reverse charge.
   // Refused, the preview as the booking. The kind the template books is
   // compared (momsKindOfTemplate), not its lines: a reverse-charge sale
-  // rightly books no fiktiv moms. A learned sale without moms is refused too:
-  // its accounts cannot tell it from a refund of a purchase, which would drop
-  // the reversed reverse charge. It books by category instead.
+  // rightly books no fiktiv moms. A learned template without moms is refused
+  // on money in too, where it would book the same lines as the category path
+  // (a sale or a supplier refund under reverse charge books no moms there,
+  // booksReverseChargePurchase): one rule for every direction, and a refusal
+  // books nothing. The caller books by category instead.
   if (bookedByTemplate && input.vat_treatment === 'reverse_charge' && bookedByTemplate.moms !== 'reverse_charge') {
     return refuse(
       'VALIDATION_ERROR',

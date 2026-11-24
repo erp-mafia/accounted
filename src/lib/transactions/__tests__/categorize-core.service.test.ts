@@ -748,9 +748,9 @@ describe('categorizeTransaction: refusals every door shares', () => {
       })
 
       // A learned sale at a rate would charge output VAT on a sale stated as
-      // reverse charge. One without moms is refused too: its accounts are
-      // those of a refund of a purchase, which would drop the reversed
-      // reverse charge.
+      // reverse charge. One without moms is refused too, sale or refund, though
+      // the category path books the same lines on money in: one rule for
+      // every direction, and a refusal books nothing.
       it.each([
         ['a learned sale at 25 %', { vat_treatment: 'standard_25', vat_account: '2611', credit_account: '3308' }],
         ['a learned sale without moms', { vat_treatment: null, vat_account: null, credit_account: '3308' }],
