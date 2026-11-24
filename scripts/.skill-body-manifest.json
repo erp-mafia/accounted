@@ -60,8 +60,8 @@
     "version": 2
   },
   "horizontal/swedish-daily-bookkeeping/payment-providers": {
-    "hash": "f6ecc4197547bc88eb32039f52e1bf015e593be2faa43a998721eaafbf561d65",
-    "version": 1
+    "hash": "7037f78858f35687ca041d340e13eea090658d6600045af2f25ff609588d5672",
+    "version": 2
   },
   "horizontal/swedish-daily-bookkeeping/skattekonto-and-owner": {
     "hash": "135e4ac877ab1641c62515fc4304cb72566211f6c3d7c9f458a509f84e8b2c75",
@@ -476,8 +476,8 @@
     "version": 4
   },
   "vertical/e-handel": {
-    "hash": "3537d3b4be8b70767fbba8f1f3e55265e15cd2492023aff6e5202e314cfc3baf",
-    "version": 4
+    "hash": "af507f3a1a542491a0124a18370c4ee24aeeee078838c1a9ff10429e01d214d3",
+    "version": 5
   },
   "vertical/e-handel/dac7-rapportering": {
     "hash": "a9a46caa9c17e2677e5d3361ef337528c78df74505f439e05dbe702ec668f3dc",
@@ -504,20 +504,20 @@
     "version": 3
   },
   "vertical/e-handel/payment-providers": {
-    "hash": "174a340f6f2e0393c0a95410c3fb41f9b491b9e0727a05baf895f5e379f67b0e",
-    "version": 4
+    "hash": "670db26463c3729d721c92a75cf9b65fa8175e809e5f0baef1d493cebe081141",
+    "version": 5
   },
   "vertical/e-handel/skv-stallningstaganden-katalog": {
-    "hash": "c7e1222c83bba733fbacfd389dd59f5819f914c145fc96d1f3b560b4f525989a",
-    "version": 2
+    "hash": "b3e3eb9e789bd8525ed4af45896d70c8d79b8c207d4efb729d039b9d3734b498",
+    "version": 3
   },
   "vertical/e-handel/vouchers-presentkort": {
     "hash": "040d98acadd3cc53cac93be1c9487cdb1104892d0aa4318c5df8e3308c7ad579",
     "version": 4
   },
   "vertical/konsult-it": {
-    "hash": "7a3d2c2d11f3bdd007b5edcba5e81ef59491ddf1a4dea3e0e81862996e929cb1",
-    "version": 4
+    "hash": "776d39fa07f278ba2047577d8cb4c6d9cf1254af279df6e7f15bf3437c5b101a",
+    "version": 5
   },
   "vertical/konsult-it/3-12-rules": {
     "hash": "341d013b503161dbc6ebafaaa2171c9cabfc6d200483f375ea2ce744ccbb7bef",
@@ -560,8 +560,8 @@
     "version": 1
   },
   "vertical/software-saas-ai": {
-    "hash": "81e92668a91465e4da0881929c64afe893ff71b5f84bffec00dc93473bf44dec",
-    "version": 4
+    "hash": "dd8a7b99b20e4c87e388b2899fe91442513837b0e8f48c285132a13ec5008065",
+    "version": 5
   },
   "vertical/vard-halsa": {
     "hash": "2c54cb41a496d773c168e3cbfa7390d44d871353d9d6102abe747ff9b836006d",

@@ -135,7 +135,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "icon": "CreditCard",
           "dataPattern": "manual",
           "description": "Betalningslänkar på fakturor och automatisk avprickning via Stripe",
-          "longDescription": "Koppla företagets Stripe-konto så skapas en betalningslänk automatiskt när du skickar en faktura. Betalningar prickas av mot rätt faktura och Stripe-utbetalningar bokförs med avgifter och moms.",
+          "longDescription": "Koppla företagets Stripe-konto så skapas en betalningslänk automatiskt när du skickar en faktura. Betalningar prickas av mot rätt faktura, och Stripe-saldots betalningar, avgifter och utbetalningar hämtas till transaktionsinkorgen, där du bokför dem som vanligt.",
           "hasOwnData": true,
           "subscriptionNotice": "Denna integration kräver ett eget Stripe-konto. Stripes transaktionsavgifter tillkommer enligt ditt avtal med Stripe."
     },

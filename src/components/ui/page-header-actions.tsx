@@ -195,10 +195,12 @@ function foldBar(root: HTMLElement): { folded: FoldedAction[]; hosted: boolean }
   }
 
   // Still no room for the title beside a long primary: a primary with a
-  // symbol shows only that. Its label stays in the markup as its name.
+  // symbol shows only that. Its label stays in the markup as its name. The
+  // symbol must be on screen: every Button carries a hidden spinner, and a
+  // primary compacted on that showed an empty box.
   if (title && title.clientWidth < Math.min(MIN_TITLE_WIDTH, title.scrollWidth)) {
     const primary = controls.find((el) => !foldedSet.has(el) && !staysInBar(el) && isFilled(el))
-    if (primary?.querySelector('svg')) primary.setAttribute(COMPACT_ATTR, '')
+    if (primary && iconOf(primary)) primary.setAttribute(COMPACT_ATTR, '')
   }
 
   const host = root.querySelector<HTMLElement>('[data-topbar-overflow-host]')

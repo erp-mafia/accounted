@@ -273,15 +273,15 @@ describe("the company card's memory line", () => {
   const wikiSv = createTranslator({ locale: 'sv', messages: sv, namespace: 'wiki' }) as unknown as Line
   const wikiEn = createTranslator({ locale: 'en', messages: en, namespace: 'wiki' }) as unknown as Line
 
-  it('says in English who was told, as a whole sentence', () => {
+  it('says in English what is saved', () => {
     expect(wikiEn('picture.memory_line', { count: 0 })).toBe('Nothing saved yet')
-    expect(wikiEn('picture.memory_line', { count: 1 })).toBe('1 thing you have told the agent')
-    expect(wikiEn('picture.memory_line', { count: 12 })).toBe('12 things you have told the agent')
+    expect(wikiEn('picture.memory_line', { count: 1 })).toBe('1 thing saved')
+    expect(wikiEn('picture.memory_line', { count: 12 })).toBe('12 things saved')
   })
 
-  it('reads in Swedish as before', () => {
+  it('says in Swedish what is saved', () => {
     expect(wikiSv('picture.memory_line', { count: 0 })).toBe('Inget sparat än')
-    expect(wikiSv('picture.memory_line', { count: 1 })).toBe('1 sak ni har berättat')
-    expect(wikiSv('picture.memory_line', { count: 12 })).toBe('12 saker ni har berättat')
+    expect(wikiSv('picture.memory_line', { count: 1 })).toBe('1 sak sparad')
+    expect(wikiSv('picture.memory_line', { count: 12 })).toBe('12 saker sparade')
   })
 })

@@ -1014,6 +1014,12 @@ describe('tools/list payload size guard', () => {
     // examples and leaves replaces to the parameter's own note, and the
     // content note is one clause shorter. Measured 63 097 (full catalog
     // 67 526; main 63 097 and 67 526). Ceiling unchanged.
+    // 2026-11-24: confirm_foreign_seller_vat on
+    // gnubok_categorize_transaction also covers a Swedish VAT number beside
+    // an address abroad whose seller is not established here for the sale.
+    // Prose, paid for on the same tool: allow_duplicate drops the clause
+    // that repeats what the guard is. Measured 63 095 (full catalog 67 525;
+    // main 63 097 and 67 526). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

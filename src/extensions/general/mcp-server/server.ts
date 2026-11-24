@@ -482,7 +482,7 @@ import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFo
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
 import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
 import { previewVoucherVatDeclaration } from '@/lib/vat/voucher-vat-impact'
-import { FOREIGN_SELLER_VAT_NOTE, FOREIGN_SELLER_VAT_RATE_WARNING } from '@/lib/vat/reverse-charge-box'
+import { FOREIGN_SELLER_VAT_NOTE, FOREIGN_SELLER_VAT_RATE_WARNING, swedishVatNumberAbroadNote } from '@/lib/vat/reverse-charge-box'
 import { runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
@@ -9827,8 +9827,8 @@ export const tools: McpTool[] = [
           additionalProperties: { type: 'string' },
           description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"1":"KS01","6":"P001"}. Tags the expense/business lines of the generated voucher: never the bank or VAT lines. Unknown values rejected, never auto-created.',
         },
-        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard. Set true ONLY after the user confirms this bank line is a separate event: the guard blocks a second verifikat for an event already booked.' },
-        confirm_foreign_seller_vat: { type: 'boolean', description: 'reverse_charge on an underlag with VAT: it is FOREIGN VAT charged in error. Never deducted.' },
+        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard. Set true ONLY after the user confirms this bank line is a separate event.' },
+        confirm_foreign_seller_vat: { type: 'boolean', description: 'reverse_charge on an underlag with VAT: charged in error (FOREIGN VAT, or an SE VAT number abroad and the seller not established here for the sale). Never deducted.' },
         proposal_id: { type: 'string', maxLength: 200, description: 'Id of the suggestion booked from (in its categorize_args). Recorded only.' },
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
       },
@@ -9967,7 +9967,11 @@ export const tools: McpTool[] = [
       // the document cannot tell the charge from Swedish VAT.
       const foreignSellerVat = preview.underlag?.foreign_seller_vat
       const foreignSellerVatNote = foreignSellerVat
-        ? [FOREIGN_SELLER_VAT_NOTE.sv, ...(foreignSellerVat.could_be_swedish_vat ? [FOREIGN_SELLER_VAT_RATE_WARNING.sv] : [])].join(' ')
+        ? [
+            ...(foreignSellerVat.address_country ? [swedishVatNumberAbroadNote(foreignSellerVat.address_country).sv] : []),
+            FOREIGN_SELLER_VAT_NOTE.sv,
+            ...(foreignSellerVat.could_be_swedish_vat ? [FOREIGN_SELLER_VAT_RATE_WARNING.sv] : []),
+          ].join(' ')
         : undefined
 
       // Resolve-don't-select: codes AND natural-language names resolve against
