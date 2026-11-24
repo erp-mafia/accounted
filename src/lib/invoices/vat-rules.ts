@@ -178,7 +178,24 @@ export interface VatRule {
  */
 export const EU_REVERSE_CHARGE_NOTICE =
   'Omvänd skattskyldighet / Reverse charge - VAT to be accounted for by the recipient as per Article 196, Council Directive 2006/112/EC'
-export const EXPORT_NOTICE_SV = 'Omsättning utanför EU, ML 10 kap.'
+/**
+ * A service to a business outside the EU (treatment export, ruta 40): under
+ * the main rule for services to a beskattningsbar person (ML 6 kap. 33 §) it is
+ * supplied where the buyer is established, so it is supplied abroad and
+ * carries no Swedish VAT. Not an exemption: 10 kap. does not apply.
+ */
+export const EXPORT_SERVICES_NOTICE_SV = 'Tjänst tillhandahållen utomlands, ej svensk moms, ML 6 kap. 33 §'
+/**
+ * Goods delivered to a place outside the EU (treatment export with a delivery
+ * country, ruta 36): exempt under ML 10 kap. 64 §, the reference ML 17 kap.
+ * 24 § p. 13 asks for on an exempt supply.
+ */
+export const EXPORT_GOODS_NOTICE_SV = 'Export, undantagen från skatteplikt, ML 10 kap. 64 §'
+/**
+ * The export notice invoices were stamped with before the two above. Stored
+ * invoices keep it, so the PDF still renders it in the document language.
+ */
+export const LEGACY_EXPORT_NOTICE_SV = 'Omsättning utanför EU, ML 10 kap.'
 /**
  * Unionsintern leverans av varor (ML 10 kap. 42 §): the exemption reference
  * ML 17 kap. 24 § requires, in the wording the swedish-invoice-compliance
@@ -246,7 +263,7 @@ export function getVatRules(
         treatment: 'export',
         rate: 0,
         momsRuta: '40',
-        reverseChargeText: EXPORT_NOTICE_SV,
+        reverseChargeText: EXPORT_SERVICES_NOTICE_SV,
       }
 
     default:
@@ -552,7 +569,7 @@ const EXPORT_GOODS_RULE: VatRule = {
   treatment: 'export',
   rate: 0,
   momsRuta: '36',
-  reverseChargeText: EXPORT_NOTICE_SV,
+  reverseChargeText: EXPORT_GOODS_NOTICE_SV,
 }
 const EU_GOODS_RULE: VatRule = {
   treatment: 'reverse_charge',

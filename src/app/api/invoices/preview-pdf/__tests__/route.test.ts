@@ -9,7 +9,7 @@ import {
   makeInvoice,
 } from '@/tests/helpers'
 import { contentDispositionFilename } from '@/lib/api/content-disposition'
-import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import { EXPORT_GOODS_NOTICE_SV } from '@/lib/invoices/vat-rules'
 
 const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
@@ -399,7 +399,7 @@ describe('POST /api/invoices/preview-pdf', () => {
       expect(invoice).toMatchObject({
         vat_treatment: 'export',
         moms_ruta: '36',
-        reverse_charge_text: EXPORT_NOTICE_SV,
+        reverse_charge_text: EXPORT_GOODS_NOTICE_SV,
         vat_treatment_override: 'export',
         delivery_country: 'NO',
         total: 50000,

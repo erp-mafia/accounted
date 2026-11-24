@@ -206,8 +206,9 @@ describe('getVatRules', () => {
     expect(rules.treatment).toBe('export')
     expect(rules.rate).toBe(0)
     expect(rules.momsRuta).toBe('40')
-    // Verify text references ML 10 kap
-    expect(rules.reverseChargeText).toContain('ML 10 kap')
+    // A service to a business outside the EU is supplied abroad under the
+    // place-of-supply main rule, not exempt under 10 kap.
+    expect(rules.reverseChargeText).toContain('ML 6 kap. 33 §')
   })
 
   it('defaults to standard_25 for unknown customerType', () => {

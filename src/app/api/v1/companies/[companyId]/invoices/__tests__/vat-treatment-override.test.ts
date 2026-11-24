@@ -27,7 +27,7 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { DOMESTIC_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import { DOMESTIC_REVERSE_CHARGE_NOTICE, EXPORT_GOODS_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import { POST as createInvoice } from '../route'
 import { POST as bulkCreateInvoices } from '../bulk-create/route'
 
@@ -197,7 +197,7 @@ describe('POST /invoices with vat_treatment + delivery_country (#2906)', () => {
       status: 'draft',
       vat_treatment: 'export',
       moms_ruta: '36',
-      reverse_charge_text: EXPORT_NOTICE_SV,
+      reverse_charge_text: EXPORT_GOODS_NOTICE_SV,
       vat_treatment_override: 'export',
       delivery_country: 'NO',
       subtotal: 10000,
@@ -228,7 +228,7 @@ describe('POST /invoices with vat_treatment + delivery_country (#2906)', () => {
     expect(invoiceInsert).toMatchObject({
       vat_treatment: 'export',
       moms_ruta: '36',
-      reverse_charge_text: EXPORT_NOTICE_SV,
+      reverse_charge_text: EXPORT_GOODS_NOTICE_SV,
       vat_amount: 0,
       total: 10000,
       vat_treatment_override: 'export',

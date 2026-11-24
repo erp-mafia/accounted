@@ -22,7 +22,7 @@ import {
 } from '../register-booked-invoice'
 import { REGISTER_BOOKED_INVOICE_MODE, isRegisterBookedInvoiceParams } from '../register-booked-invoice-mode'
 import { rateGivingBack } from '../register-booked-rules'
-import { DOMESTIC_REVERSE_CHARGE_NOTICE, EU_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '../vat-rules'
+import { DOMESTIC_REVERSE_CHARGE_NOTICE, EU_REVERSE_CHARGE_NOTICE, EXPORT_SERVICES_NOTICE_SV } from '../vat-rules'
 
 // Reminder sending is off product-wide (reminders-enabled.ts). The warning
 // must follow that switch, so the tests set it per case.
@@ -179,7 +179,7 @@ describe('deriveInvoiceVatFromVoucher', () => {
 
   it.each<[string, VatTreatment, string, string | null]>([
     ['3308', 'reverse_charge', '39', EU_REVERSE_CHARGE_NOTICE],
-    ['3305', 'export', '40', EXPORT_NOTICE_SV],
+    ['3305', 'export', '40', EXPORT_SERVICES_NOTICE_SV],
     ['3231', 'reverse_charge_domestic', '41', DOMESTIC_REVERSE_CHARGE_NOTICE],
     ['3004', 'exempt', '', null],
   ])('reads a sale without output VAT on %s as %s', (account, treatment, ruta, notice) => {

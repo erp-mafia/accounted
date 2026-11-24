@@ -2,17 +2,20 @@
  * Statutory notices on the invoice PDF follow the document language.
  *
  * reverse_charge_text is stamped in Swedish at create time and stored on the
- * invoice, so an English PDF used to print "Omsättning utanför EU, ML 10 kap."
- * verbatim, and the F-skatt footer was hard-wired to Swedish. Known statutory
- * defaults now render from LABELS; custom text is printed as stored.
+ * invoice, so an English PDF used to print the Swedish export notice verbatim,
+ * and the F-skatt footer was hard-wired to Swedish. Known statutory defaults,
+ * including the export notice older invoices were stamped with, render from
+ * LABELS; custom text is printed as stored.
  */
 import { describe, expect, it } from 'vitest'
 import { InvoicePDF, localizeVatNotice, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import {
   DOMESTIC_REVERSE_CHARGE_NOTICE,
   EU_REVERSE_CHARGE_NOTICE,
-  EXPORT_NOTICE_SV,
+  EXPORT_GOODS_NOTICE_SV,
+  EXPORT_SERVICES_NOTICE_SV,
   getVatRules,
+  LEGACY_EXPORT_NOTICE_SV,
   resolveInvoiceVatRules,
 } from '@/lib/invoices/vat-rules'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
@@ -69,16 +72,28 @@ const exportInvoice = (overrides: Partial<InvoicePdfInvoice> = {}): InvoicePdfIn
   })
 
 describe('invoice PDF statutory notices follow the document language', () => {
-  it('renders the stored Swedish export notice in English on an English PDF', () => {
+  it('renders the stored Swedish services notice in English on an English PDF', () => {
     const text = renderText(exportInvoice(), 'en')
-    expect(text).toContain('Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).')
-    expect(text).not.toContain(EXPORT_NOTICE_SV)
+    expect(text).toContain('Service supplied outside Sweden, not subject to Swedish VAT (ML 6 kap. 33 §, Swedish VAT Act).')
+    expect(text).not.toContain(EXPORT_SERVICES_NOTICE_SV)
   })
 
-  it('keeps the Swedish export notice on a Swedish PDF', () => {
+  it('keeps the Swedish services notice on a Swedish PDF', () => {
     const text = renderText(exportInvoice(), 'sv')
-    expect(text).toContain(EXPORT_NOTICE_SV)
-    expect(text).not.toContain('Sale outside the EU')
+    expect(text).toContain(EXPORT_SERVICES_NOTICE_SV)
+    expect(text).not.toContain('Service supplied outside Sweden')
+  })
+
+  it('renders the goods export notice in the document language', () => {
+    const goods = exportInvoice({ moms_ruta: '36', reverse_charge_text: EXPORT_GOODS_NOTICE_SV })
+    expect(renderText(goods, 'en')).toContain('Export outside the EU, exempt from Swedish VAT (ML 10 kap. 64 §, Swedish VAT Act).')
+    expect(renderText(goods, 'sv')).toContain(EXPORT_GOODS_NOTICE_SV)
+  })
+
+  it('prints an older invoice stamped with the earlier export notice as it was issued', () => {
+    const older = exportInvoice({ reverse_charge_text: LEGACY_EXPORT_NOTICE_SV })
+    expect(renderText(older, 'en')).toContain('Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).')
+    expect(renderText(older, 'sv')).toContain(LEGACY_EXPORT_NOTICE_SV)
   })
 
   it('prints the F-skatt footer as Approved for F-tax with the Swedish term kept', () => {
@@ -100,7 +115,7 @@ describe('invoice PDF statutory notices follow the document language', () => {
   })
 
   it('stamps the shared constants at create time so the PDF match cannot drift', () => {
-    expect(getVatRules('non_eu_business').reverseChargeText).toBe(EXPORT_NOTICE_SV)
+    expect(getVatRules('non_eu_business').reverseChargeText).toBe(EXPORT_SERVICES_NOTICE_SV)
     expect(getVatRules('eu_business', true, 'DE').reverseChargeText).toBe(EU_REVERSE_CHARGE_NOTICE)
   })
 })

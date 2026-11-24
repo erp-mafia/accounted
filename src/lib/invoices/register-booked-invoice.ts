@@ -98,7 +98,7 @@ import { remindersActiveFor } from './reminders-enabled'
 import {
   DOMESTIC_REVERSE_CHARGE_NOTICE,
   EU_REVERSE_CHARGE_NOTICE,
-  EXPORT_NOTICE_SV,
+  EXPORT_SERVICES_NOTICE_SV,
 } from './vat-rules'
 
 const log = createLogger('register-booked-invoice')
@@ -175,7 +175,7 @@ interface ZeroRatedSale {
 function zeroRatedSaleOn(account: string): ZeroRatedSale | null {
   switch (account) {
     case '3305':
-      return { treatment: 'export', momsRuta: '40', notice: EXPORT_NOTICE_SV }
+      return { treatment: 'export', momsRuta: '40', notice: EXPORT_SERVICES_NOTICE_SV }
     case '3308':
       return { treatment: 'reverse_charge', momsRuta: '39', notice: EU_REVERSE_CHARGE_NOTICE }
     case '3231':

@@ -266,7 +266,8 @@ describe('buildInvoiceWriteData', () => {
     expect(result.invoiceFields.vat_amount).toBe(0)
     expect(result.invoiceFields.vat_treatment).toBe('export')
     expect(result.invoiceFields.moms_ruta).toBe('40')
-    expect(result.invoiceFields.reverse_charge_text).toContain('ML 10 kap')
+    // A service to a business outside the EU is supplied abroad (ML 6 kap. 33 §), not exempt.
+    expect(result.invoiceFields.reverse_charge_text).toContain('ML 6 kap. 33 §')
   })
 
   it('keeps the RC notation on a mixed invoice that still has zero-rated lines', async () => {

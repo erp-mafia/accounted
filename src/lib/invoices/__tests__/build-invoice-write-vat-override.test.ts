@@ -14,7 +14,7 @@ import {
 import {
   DOMESTIC_REVERSE_CHARGE_NOTICE,
   EU_GOODS_SUPPLY_NOTICE,
-  EXPORT_NOTICE_SV,
+  EXPORT_GOODS_NOTICE_SV,
   type InvoiceVatOverride,
 } from '@/lib/invoices/vat-rules'
 import type { Customer, InvoiceDocumentType } from '@/types'
@@ -80,7 +80,7 @@ describe('buildInvoiceWriteData: per-invoice VAT treatment', () => {
       vat_treatment: 'export',
       vat_rate: 0,
       moms_ruta: '36',
-      reverse_charge_text: EXPORT_NOTICE_SV,
+      reverse_charge_text: EXPORT_GOODS_NOTICE_SV,
       subtotal: 10000,
       vat_amount: 0,
       total: 10000,
