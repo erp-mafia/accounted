@@ -347,7 +347,12 @@ describe('gnubok_year_end_readiness: execute', () => {
     expect(result.ready).toBe(true)
     expect(result.preview).toBeNull()
     expect(vi.mocked(previewYearEndClosing)).not.toHaveBeenCalled()
-    expect(result.summary).toMatch(/Klart för bokslut/)
+    // No blockers is not a finished bokslut: the summary names the checklist
+    // instead of saying the bokslut is done.
+    expect(result.summary).toBe(
+      'Inga blockerare kvar. Vad bokslutet kräver i övrigt (avstämningar, periodiseringar, skatt) står i checklistan i gnubok_get_bokslutsbilagor.',
+    )
+    expect(result.summary).not.toMatch(/Klart för bokslut/)
   })
 
   it('warns before closing when the booked bolagsskatt is not the tax on the ledger', async () => {
@@ -380,7 +385,9 @@ describe('gnubok_year_end_readiness: execute', () => {
 
     expect(result.ready).toBe(true)
     expect(result.warnings).toEqual(['Bokförd skatt är 60 000 kr, men bokföringen som den ser ut nu ger 104 236 kr.'])
-    expect(result.summary).toBe('Klart för bokslut. 1 varning(ar) att granska.')
+    expect(result.summary).toBe(
+      'Inga blockerare kvar. Vad bokslutet kräver i övrigt (avstämningar, periodiseringar, skatt) står i checklistan i gnubok_get_bokslutsbilagor. 1 varning(ar) att granska.',
+    )
     expect(bookedTaxCorrection).toHaveBeenCalledWith(supabase, 'company-1', 'period-1')
   })
 

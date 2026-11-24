@@ -1,4 +1,7 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { chartAccountNamesLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { RECORD_KIND_DETAIL_SCOPES, scopeSatisfied, type ApiKeyScope } from '@/lib/auth/scope-catalog'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/arkiv/untrusted'
 import { dbError } from '@/lib/errors/db-error'
@@ -522,17 +525,121 @@ async function partyRecord(supabase: SupabaseClient, companyId: string, partyId:
   }
 }
 
-async function journalEntryRecord(supabase: SupabaseClient, companyId: string, journalEntryId: string) {
+interface JournalEntryLineRow {
+  id: string
+  account_number: string
+  debit_amount: number | string
+  credit_amount: number | string
+  line_description: string | null
+  currency: string | null
+  amount_in_currency: number | string | null
+  sort_order: number | null
+}
+
+/**
+ * The two ways a posted verifikat is corrected (BFL 5 kap 5 §), on the
+ * record itself: an agent asked to fix a verifikat read only gnubok_correct_entry
+ * in tools/list and never learnt of the inline rättelse. Both paths refuse a
+ * date in a closed or locked period or on or before the company lock date
+ * (correct_entry_lines_inline, correct_entry_metadata, assertStornoTarget).
+ */
+const CORRECTION_HINT =
+  'Correcting a posted verifikat (BFL 5 kap 5 §): inline rättelse inside it with gnubok_correct_entry_lines ' +
+  '(strike lines by line_id, add balanced replacement lines; SEK lines only) or gnubok_correct_entry_metadata (text or date), ' +
+  'both reached through gnubok_search_tools; anything else with gnubok_correct_entry (a storno and a corrected verifikat). ' +
+  'Each path needs the verifikat\'s date in an open, unlocked period after the company lock date.'
+
+/** The kontoplan names of a verifikat's accounts. A failed lookup leaves the names null and never fails the record read. */
+async function lineAccountNames(supabase: SupabaseClient, companyId: string, accounts: string[], journalEntryId: string): Promise<ReadonlyMap<string, string>> {
+  try {
+    return await chartAccountNamesLoader(supabase, companyId)(accounts)
+  } catch (err) {
+    receiptLog.warn('account name lookup failed', { journalEntryId, error: err instanceof Error ? err.message : String(err) })
+    return new Map()
+  }
+}
+
+/**
+ * A verifikat's ledger part: its status, lines, the storno chain (reverses:
+ * this is the storno of; reversed_by: the storno of this; correction_of: this
+ * replaces), the inline rättelser made inside it (newest first; the struck and
+ * added lines are in gnubok_get_rattelse_log) and, when posted, both
+ * correction paths. A failed rättelse lookup says rattelser_unavailable,
+ * never an empty history.
+ */
+async function ledgerPart(
+  supabase: SupabaseClient,
+  companyId: string,
+  e: { id: string; status: string; reverses_id: string | null; reversed_by_id: string | null; correction_of_id: string | null },
+  lines: unknown[],
+) {
+  const { data: rattelseRows, error: rattelseError } = await supabase
+    .from('journal_entry_rattelse_log')
+    .select('id, rattelse_type, created_at')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', e.id)
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (rattelseError) receiptLog.warn('rättelse log lookup failed', { journalEntryId: e.id, error: rattelseError.message })
+  const chainRef = (id: string | null) => (id ? recordRef('journal_entry', id) : null)
+  return {
+    status: e.status,
+    lines,
+    corrections: {
+      reverses: chainRef(e.reverses_id),
+      reversed_by: chainRef(e.reversed_by_id),
+      correction_of: chainRef(e.correction_of_id),
+      ...(rattelseError
+        ? { rattelser_unavailable: true }
+        : {
+            rattelser: ((rattelseRows ?? []) as unknown as Array<{ id: string; rattelse_type: string; created_at: string }>).map((r) => ({
+              rattelse_id: r.id,
+              rattelse_type: r.rattelse_type,
+              created_at: r.created_at,
+            })),
+          }),
+    },
+    ...(e.status === 'posted' ? { hint: CORRECTION_HINT } : {}),
+  }
+}
+
+const JE_HEADER_COLUMNS = 'id, voucher_series, voucher_number, entry_date, description'
+// The lines ride along in the same read, as in the v1 GET of a verifikat.
+const JE_LEDGER_COLUMNS =
+  'id, voucher_series, voucher_number, entry_date, description, status, reverses_id, reversed_by_id, correction_of_id, lines:journal_entry_lines(id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, sort_order)'
+
+/**
+ * A verifikat as a record. `ledger` (the key holds the journal_entry detail
+ * scope, RECORD_KIND_DETAIL_SCOPES) adds its lines, status and correction
+ * history; without it the record is the header and documents only, and the
+ * ledger is not read.
+ */
+async function journalEntryRecord(supabase: SupabaseClient, companyId: string, journalEntryId: string, opts: { ledger: boolean }) {
   const { data: entry, error } = await supabase
     .from('journal_entries')
-    .select('id, voucher_series, voucher_number, entry_date, description')
+    .select(opts.ledger ? JE_LEDGER_COLUMNS : JE_HEADER_COLUMNS)
     .eq('id', journalEntryId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) throw dbError(error)
   if (!entry) return null
-  const { data: docs, error: docError } = await supabase.from('document_attachments').select('id, created_at, sha256_hash').eq('journal_entry_id', journalEntryId).eq('company_id', companyId).limit(50)
+  const lineRows = (opts.ledger ? ((entry as unknown as { lines?: JournalEntryLineRow[] | null }).lines ?? []) : [])
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const [names, { data: docs, error: docError }] = await Promise.all([
+    lineAccountNames(supabase, companyId, [...new Set(lineRows.map((l) => l.account_number))], journalEntryId),
+    supabase.from('document_attachments').select('id, created_at, sha256_hash').eq('journal_entry_id', journalEntryId).eq('company_id', companyId).limit(50),
+  ])
   if (docError) throw dbError(docError)
+  const lines = lineRows.map((l) => ({
+    line_id: l.id,
+    account_number: l.account_number,
+    account_name: names.get(l.account_number) ?? null,
+    debit: Number(l.debit_amount) || 0,
+    credit: Number(l.credit_amount) || 0,
+    line_description: l.line_description,
+    ...(isLedgerCurrency(l.currency) ? {} : { currency: l.currency, amount_in_currency: l.amount_in_currency == null ? null : Number(l.amount_in_currency) }),
+  }))
   const rows = (docs ?? []) as Array<{ id: string; created_at: string; sha256_hash: string | null }>
   // A later copy of the same file or text says so, so a sum over the verifikat counts it once.
   const originals = await originalsOf(supabase, companyId, rows)
@@ -541,7 +648,13 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
     const record = await documentRecord(supabase, companyId, d.id)
     if (record) documents.push({ ...record, duplicate_of: originals.has(d.id) ? `document:${originals.get(d.id)}` : null })
   }
-  const e = entry as Record<string, unknown> & { id: string }
+  const e = entry as unknown as Record<string, unknown> & {
+    id: string
+    status: string
+    reverses_id: string | null
+    reversed_by_id: string | null
+    correction_of_id: string | null
+  }
   // The decision receipt, only when one was recorded: who decided, which
   // suggestions were on offer and which was booked. Lives inside the open
   // journal_entry object, so tools/list pays nothing for it.
@@ -576,10 +689,14 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
     }),
     entry_date: e.entry_date,
     description: e.description,
+    ...(opts.ledger ? await ledgerPart(supabase, companyId, e, lines) : {}),
     documents,
     ...(decision ? { decision } : {}),
     ...(decisionUnavailable ? { decision_unavailable: true } : {}),
-    ...(links ? { links, books } : { links_unavailable: true }),
+    // books names only the invoice, supplier invoice and skattekonto rows the
+    // verifikat books, so it is left out when there are none: an empty list
+    // beside a verifikat read as "books nothing" (the lines are what it books).
+    ...(links ? { links, ...(books.length > 0 ? { books } : {}) } : { links_unavailable: true }),
   }
 }
 
@@ -739,7 +856,12 @@ export function createArkivTools(deps: Deps): McpTool[] {
             return { ...base, party }
           }
           case 'journal_entry': {
-            const journalEntry = await journalEntryRecord(supabase, companyId, ref.id)
+            // The ledger part only for a key the dispatcher named a detail
+            // scope for (__keyScopes); a call without the marker gets the
+            // header and documents, as a documents:read key does.
+            const keyScopes = Array.isArray(args.__keyScopes) ? (args.__keyScopes as ApiKeyScope[]) : null
+            const ledger = keyScopes !== null && scopeSatisfied(keyScopes, RECORD_KIND_DETAIL_SCOPES.journal_entry)
+            const journalEntry = await journalEntryRecord(supabase, companyId, ref.id, { ledger })
             if (!journalEntry) throw recordNotFound('journal_entry', ref.id)
             return { ...base, journal_entry: journalEntry }
           }

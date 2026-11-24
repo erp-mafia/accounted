@@ -101,7 +101,7 @@ export type HeadlineKind = 'clear' | 'waiting' | 'urgent' | 'urgent_only' | 'not
 
 /**
  * Which headline template applies and its counts:
- * clear ("Allt är klart."), waiting ("Inget brådskar. N saker väntar."),
+ * clear ("Allt är klart."), waiting ("N saker väntar."),
  * urgent ("N saker brådskar. M till väntar.") and urgent_only when nothing
  * else waits behind the urgent rows. An empty list for a company that has not
  * got going (`started` false: nothing booked and nothing on its way) is

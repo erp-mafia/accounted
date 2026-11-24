@@ -27,3 +27,35 @@ export function drawsPdfInPage(
   // with a Chrome/ (or Chromium/, Edg/) token.
   return /AppleWebKit\//.test(userAgent) && !/(?:Chrome|Chromium|Edg)\//.test(userAgent)
 }
+
+/**
+ * The address a drawn PDF's bytes are read from: the URL without its
+ * #fragment. `#page=2` and `#toolbar=0&view=FitH` are instructions to the
+ * browser's own viewer, which the page's drawing does not have, and a page
+ * jump must not read the same file again.
+ */
+export function pdfBytesUrl(src: string): string {
+  const hash = src.indexOf('#')
+  return hash === -1 ? src : src.slice(0, hash)
+}
+
+/**
+ * A stored PDF's bytes for the page's own drawing, read the way the
+ * `<object>` it replaces loads them: the session cookie on the app's own
+ * routes (the /api/documents/:id/inline proxy, an invoice's archived PDF),
+ * none on a signed Storage URL, which carries its own token. Null when the
+ * file could not be read; the caller then shows its link to open the file
+ * instead.
+ */
+export async function readPdfForDrawing(src: string, signal?: AbortSignal): Promise<Blob | null> {
+  try {
+    const res = await fetch(pdfBytesUrl(src), { credentials: 'same-origin', signal })
+    // A refused read answers with a JSON error envelope: never hand that to pdf.js.
+    if (!res.ok) return null
+    return await res.blob()
+  } catch {
+    // The network failed or the viewer closed (an aborted read): the person
+    // gets the link to open the file, which reports its own failure.
+    return null
+  }
+}

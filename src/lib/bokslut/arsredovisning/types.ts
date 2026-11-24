@@ -50,11 +50,32 @@ export interface NoteEntry {
   /** The generated text, present only when the user replaced the body. */
   generated_body?: string
   /**
+   * The rows of the K2 "Avskrivningar" note per balance sheet post: the
+   * iXBRL document tags each as its post's table of avskrivningsprinciper.
+   * The body carries the same rows as text. Absent on every other note and
+   * on versions locked before it existed.
+   */
+  depreciationPrinciples?: DepreciationPrinciple[]
+  /**
    * The K2 note on anläggningstillgångar as tables per balance sheet post
    * (k2-fixed-asset-note.ts): the body is the same rows as text, and the
    * iXBRL document tags the figures from these.
    */
   fixedAssets?: FixedAssetNoteTable[]
+}
+
+/** One row of the "Avskrivningar" note: a kind of asset and the period it is depreciated over. */
+export interface DepreciationPrinciple {
+  /** What the row is called ("Inventarier"). */
+  label: string
+  /** The nyttjandeperiod as printed ("5 år", "3-5 år"). */
+  period: string
+  /**
+   * The balance sheet post the assets are booked on (K2 concept), which
+   * names the taxonomy's table the row is tagged as. Null when no post
+   * covers the assets' account.
+   */
+  post: string | null
 }
 
 /** See cash-flow-omission.ts for the legal rule behind these values. */
@@ -163,6 +184,12 @@ export interface ArsredovisningData {
     /** Har kontrollbalansräkning upprättats? */
     kontrollbalans_required: boolean
     flerarsoversikt: FlerarsoversiktRow[]
+    /** The year states the flerårsöversikt's amounts in thousands of kronor
+     *  (arsredovisning_narratives.flerarsoversikt_tkr). The rows above stay
+     *  whole kronor: the PDF and the iXBRL document round them with
+     *  roundThousands. Present only when true, so the content hash of every
+     *  other report is unchanged. */
+    flerarsoversikt_tkr?: boolean
     /** The equity posts at year end (kept for versions saved before the
      *  specification; a new report prints `equity_specification`). */
     egen_kapital_changes: EgenKapitalRow[]

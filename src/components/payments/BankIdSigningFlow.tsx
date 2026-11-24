@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +13,7 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency } from '@/lib/utils'
 import { BankIdChallengeQr } from './BankIdChallengeQr'
 import { BankIdMark } from '@/components/bankid/BankIdMark'
+import { detectBankIdDevice } from '@/components/bankid/autostart'
 import { BankMark } from '@/components/banks/BankMark'
 import { PsuAuthoriserField } from '@/components/bankid/PsuAuthoriserField'
 import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/psu-authoriser'
@@ -22,6 +23,7 @@ import { VerificationStateText } from './VerificationStateText'
 import { verificationStep } from '@/lib/payments/orders/readiness'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
 import { RequestSigningLinkPanel } from './RequestSigningLinkDialog'
+import { autoStartSigningMethod, leadingSigningMethod, otherSigningMethod, type BankIdSigningWay } from './signing-method'
 import {
   allowanceRefusalOf,
   bankIdAutostartHref,
@@ -58,6 +60,9 @@ const QR_LIFETIME_S = 30
 
 /** The steps a bank may chain, in the order they come; a bank skips the ones it does not need. */
 const STEP_ORDER: SigningStep[] = ['identify', 'approve_payee', 'sign']
+
+/** The user agent has no change events: read once, nothing to subscribe to. */
+const noSubscription = () => () => {}
 
 /** What the flow needs to show per order: the rest stays on the server. */
 export interface SigningOrderSummary {
@@ -119,7 +124,11 @@ interface BankIdSigningFlowProps {
   onSentToBank?: () => void
   /** Called with every stage change, so a parent can keep its title in step. */
   onStageChange?: (stage: SigningFlowStage) => void
-  /** Start the QR signing at once when the person has a BankID login on file: no method step to click through. */
+  /**
+   * Start the QR signing at once when the person has a BankID login on file:
+   * no method step to click through. A computer only: a phone opens on the
+   * method step with BankID on this device first (signing-method).
+   */
   autoStart?: boolean
   /** The bank the payments leave from, named with its mark on the signing step. */
   bankName?: string | null
@@ -237,6 +246,14 @@ export function BankIdSigningFlow({
   const [stepSince, setStepSince] = useState<number | null>(null)
   const [stepsSeen, setStepsSeen] = useState<SigningStep[]>([])
   const [now, setNow] = useState(() => Date.now())
+  // A phone carries the BankID app and cannot scan its own screen: BankID on
+  // this device is the filled button there, the QR the other (signing-method).
+  const mobile = useSyncExternalStore(noSubscription, () => detectBankIdDevice().mobile, () => false)
+  const leading = leadingSigningMethod({ mobile })
+  const other = otherSigningMethod({ mobile })
+  // On a phone the QR is for a BankID on another device, and its button says so.
+  const methodLabel = (way: BankIdSigningWay) =>
+    way === 'same_device' ? t('method_same_device') : mobile ? t('method_qr_other_device') : t('method_qr')
 
   const setStage = useCallback(
     (next: SigningFlowStage) => {
@@ -428,13 +445,18 @@ export function BankIdSigningFlow({
     }
   }
 
-  // One automatic start per mount; a failed start lands on the method stage
-  // where the person chooses again.
+  // One automatic start per mount, a QR on a computer; a failed start lands on
+  // the method stage where the person chooses again. A phone never starts by
+  // itself: it stays on the method stage, where the person's tap starts BankID
+  // on this device. The device is read here, not from the render: an effect
+  // runs only in the browser.
   const autoStarted = useRef(false)
   useEffect(() => {
     if (!autoStart || needsPersonalNumber || autoStarted.current || orders.length === 0) return
+    const chosen = autoStartSigningMethod(detectBankIdDevice())
+    if (!chosen) return
     autoStarted.current = true
-    void begin('qr')
+    void begin(chosen)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart, signerKnown])
 
@@ -668,11 +690,11 @@ export function BankIdSigningFlow({
         <BankPaymentsAllowanceLine usage={usage} count={orders.length} refusal={allowance} canRequest={Boolean(client.usage)} onIncluded={raiseIncluded} />
         <DialogFooter>
           {closeButton}
-          <Button variant="outline" onClick={() => begin('same_device')} loading={busy && method === 'same_device'} disabled={disabled}>
-            {t('method_same_device')}
+          <Button variant="outline" onClick={() => begin(other)} loading={busy && method === other} disabled={disabled}>
+            {methodLabel(other)}
           </Button>
-          <Button onClick={() => begin('qr')} loading={busy && method === 'qr'} disabled={disabled}>
-            {t('method_qr')}
+          <Button onClick={() => begin(leading)} loading={busy && method === leading} disabled={disabled}>
+            {methodLabel(leading)}
           </Button>
         </DialogFooter>
       </div>
@@ -772,10 +794,10 @@ export function BankIdSigningFlow({
             )}
             {signableAgain && !redirect && (
               <div className="flex flex-wrap justify-center gap-2">
-                <Button variant="outline" onClick={() => signAgain('same_device')} loading={busy && method === 'same_device'} disabled={busy}>
-                  {t('method_same_device')}
+                <Button variant="outline" onClick={() => signAgain(other)} loading={busy && method === other} disabled={busy}>
+                  {methodLabel(other)}
                 </Button>
-                <Button onClick={() => signAgain('qr')} loading={busy && method === 'qr'} disabled={busy}>
+                <Button onClick={() => signAgain(leading)} loading={busy && method === leading} disabled={busy}>
                   {t('try_again')}
                 </Button>
               </div>

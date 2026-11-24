@@ -29,6 +29,7 @@ import { createLogger } from '@/lib/logger'
 import { ownerSettlementAccount } from '@/lib/company/entity-type'
 import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
 import { resolveSkattekontoAccount, templateTouchesSkattekonto } from '@/lib/skatteverket/skattekonto-account'
+import { isBookingPrecedentEnabled } from '@/lib/env/booking-precedent-switch'
 
 const log = createLogger('mapping-engine')
 
@@ -72,6 +73,43 @@ function transactionSek(transaction: Transaction): number | null {
   return resolveSekAmountOrNull(transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate)
 }
 
+/** The `source` of the row saveUserMappingRule's plain path writes ("Learned: <merchant>"). */
+export const AUTO_LEARNED_MAPPING_SOURCE = 'auto'
+
+/**
+ * A company's auto-learned mapping row: written by the plain path of
+ * saveUserMappingRule on a booking, never by a person. A system default
+ * (company_id null) is never one, whatever its source says; a row a person
+ * described (source 'user_description') is not one either.
+ */
+export function isAutoLearnedMappingRule(rule: Pick<MappingRule, 'company_id' | 'source'>): boolean {
+  return rule.company_id != null && rule.source === AUTO_LEARNED_MAPPING_SOURCE
+}
+
+/**
+ * Whether the company's auto-learned mapping rows are written and read. They
+ * are, except for a company in BOOKING_PRECEDENT_COMPANY_IDS
+ * (lib/env/booking-precedent-switch.ts): there no booking writes one and no
+ * reader takes one, while the rows already stored stay as they are.
+ */
+export function readsAutoLearnedMappingRules(companyId: string): boolean {
+  return !isBookingPrecedentEnabled(companyId)
+}
+
+/**
+ * The mapping rules a reader takes for the company: every row it was handed,
+ * or those without the company's auto-learned rows where they are not read
+ * (readsAutoLearnedMappingRules). Every reader of mapping_rules passes here:
+ * the proposals (lib/transactions/propose.ts), evaluateMappingRules below and
+ * the MCP suggestion tool.
+ */
+export function mappingRulesRead<T extends Pick<MappingRule, 'company_id' | 'source'>>(
+  companyId: string,
+  rules: readonly T[],
+): T[] {
+  return readsAutoLearnedMappingRules(companyId) ? [...rules] : rules.filter((rule) => !isAutoLearnedMappingRule(rule))
+}
+
 /**
  * Evaluate all mapping rules against a transaction and return the best match
  *
@@ -83,6 +121,10 @@ function transactionSek(transaction: Transaction): number | null {
  * 5. Counterparty templates (learned from history, fuzzy matching)
  * 6. Static booking templates (keyword/MCC matching)
  * 7. Default fallback (uncategorized)
+ *
+ * Steps 1-4 read the rows mappingRulesRead keeps: for a company whose
+ * auto-learned rows are not read, the rows a person described and the system
+ * defaults.
  *
  * A matched rule (1-4) still takes the learned dimensions of the counterparty
  * template the transaction matches, when that template books the same
@@ -163,12 +205,14 @@ async function evaluateMappingRulesUnsettled(
   }
 
   // Fetch all active rules (user-specific + system defaults), ordered by priority
-  const { data: rules, error } = await supabase
+  const { data: storedRules, error } = await supabase
     .from('mapping_rules')
     .select('*')
     .eq('is_active', true)
     .or(`company_id.eq.${companyId},company_id.is.null`)
     .order('priority', { ascending: true })
+  // Without the company's auto-learned rows where they are not read.
+  const rules = storedRules ? mappingRulesRead(companyId, storedRules as MappingRule[]) : storedRules
 
   if (error || !rules || rules.length === 0) {
     // Try counterparty templates before static template fallback
@@ -183,7 +227,7 @@ async function evaluateMappingRulesUnsettled(
   }
 
   // Evaluate each rule in priority order
-  for (const rule of rules as MappingRule[]) {
+  for (const rule of rules) {
     if (matchesRule(rule, transaction)) {
       const ruleResult = buildResult(rule, transaction, entityType, vatRegistered)
       return settle(await withLearnedDimensions(supabase, companyId, transaction, entityType, ruleResult, vatRegistered))
@@ -621,6 +665,10 @@ export function applySettlementAccount(
  * User-described rules for the same merchant replace prior user-described rules
  * (latest description wins).
  *
+ * Without a description the rule is auto-learned ("Learned: <merchant>"). A
+ * company that does not read auto-learned rows (readsAutoLearnedMappingRules)
+ * gets none written; a described rule is saved for every company.
+ *
  * A merchant text that only says how the money moved ("INSÄTTNING",
  * "KORTKÖP", "ÖVERFÖRING", "BG-BETALNING") names no one and teaches nothing:
  * the next row with that text is someone else (crm#1707). No rule is saved
@@ -671,6 +719,9 @@ export async function saveUserMappingRule(
       // Silently fail: saving learned rules is non-critical
     }
   } else {
+    // No auto-learned row is written for a company that does not read them.
+    if (!readsAutoLearnedMappingRules(companyId)) return
+
     const { error } = await supabase.from('mapping_rules').insert({
       company_id: companyId,
       rule_name: `Learned: ${merchantName}`,
@@ -683,7 +734,7 @@ export async function saveUserMappingRule(
       default_private: isPrivate,
       requires_review: false,
       confidence_score: 0.95,
-      source: 'auto',
+      source: AUTO_LEARNED_MAPPING_SOURCE,
     })
 
     if (error) {

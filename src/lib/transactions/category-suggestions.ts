@@ -343,6 +343,38 @@ export function getRecentlyUsedTemplates(
 }
 
 /**
+ * The proposals of the mapping rules that match this row, one per template,
+ * in the rules' order: the template the rule names, or the catalog template
+ * booking to the rule's account. A rule that matches but resolves to no
+ * template proposes nothing.
+ */
+export function matchedRuleProposals(
+  transaction: Transaction,
+  entityType: EntityType | undefined,
+  mappingRules: MappingRule[],
+): SuggestedTemplate[] {
+  const seen = new Set<string>()
+  const results: SuggestedTemplate[] = []
+  const direction = transaction.amount < 0 ? 'expense' : 'income'
+  for (const rule of mappingRules) {
+    if (!rule.is_active || rule.default_private) continue
+    if (!mappingRuleMatches(rule, transaction)) continue
+    const template =
+      (rule.template_id ? getTemplateById(rule.template_id) : undefined) ??
+      (rule.debit_account ? templateForAccount(rule.debit_account, direction, entityType) : undefined)
+    if (!template || seen.has(template.id)) continue
+    seen.add(template.id)
+    results.push({
+      ...proposalFromTemplate(template, 'rule', Math.max(rule.confidence_score || 0, 0.9)),
+      rule_own: !!rule.company_id,
+      rule_requires_review: !!rule.requires_review,
+      requires_review: template.requires_review || !!rule.requires_review,
+    })
+  }
+  return results
+}
+
+/**
  * Get suggested booking templates for a transaction.
  * Keyword matching as primary, AI embedding search as optional enhancer.
  */
@@ -351,30 +383,11 @@ export async function getSuggestedTemplates(
   entityType?: EntityType,
   mappingRules?: MappingRule[]
 ): Promise<SuggestedTemplate[]> {
-  const seen = new Set<string>()
-  const results: SuggestedTemplate[] = []
-
   const direction = transaction.amount < 0 ? 'expense' : 'income'
 
-  // 0. The company's rules that match this row: the template the rule
-  //    names, or the catalog template booking to the rule's account.
-  if (mappingRules) {
-    for (const rule of mappingRules) {
-      if (!rule.is_active || rule.default_private) continue
-      if (!mappingRuleMatches(rule, transaction)) continue
-      const template =
-        (rule.template_id ? getTemplateById(rule.template_id) : undefined) ??
-        (rule.debit_account ? templateForAccount(rule.debit_account, direction, entityType) : undefined)
-      if (!template || seen.has(template.id)) continue
-      seen.add(template.id)
-      results.push({
-        ...proposalFromTemplate(template, 'rule', Math.max(rule.confidence_score || 0, 0.9)),
-        rule_own: !!rule.company_id,
-        rule_requires_review: !!rule.requires_review,
-        requires_review: template.requires_review || !!rule.requires_review,
-      })
-    }
-  }
+  // 0. The company's rules that match this row.
+  const results: SuggestedTemplate[] = mappingRules ? matchedRuleProposals(transaction, entityType, mappingRules) : []
+  const seen = new Set<string>(results.map((r) => r.template_id))
 
   // 1. Templates the company's rules point at, used lately
   if (mappingRules) {

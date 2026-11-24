@@ -645,6 +645,52 @@ exports[`annual report over a ledger: aktiebolag > builds the canonical model, i
         },
         "utdelning": 0,
       },
+      "egetKapitalSpecifikation": {
+        "kinds": [
+          {
+            "kind": "resultatdisposition",
+            "label": "Balanseras i ny räkning",
+          },
+          {
+            "kind": "arets_resultat",
+            "label": "Årets resultat",
+          },
+        ],
+        "placement": "management_report",
+        "posts": [
+          {
+            "bound": true,
+            "closing": 25000,
+            "concept": "Aktiekapital",
+            "label": "Aktiekapital",
+            "movements": {},
+            "opening": 25000,
+          },
+          {
+            "bound": false,
+            "closing": 21753,
+            "concept": "BalanseratResultat",
+            "label": "Balanserat resultat",
+            "movements": {
+              "resultatdisposition": 15876,
+            },
+            "opening": 5877,
+          },
+          {
+            "bound": false,
+            "closing": 25876,
+            "concept": "AretsResultatEgetKapital",
+            "label": "Årets resultat",
+            "movements": {
+              "arets_resultat": 25876,
+              "resultatdisposition": -15876,
+            },
+            "opening": 15876,
+          },
+        ],
+        "previous": null,
+        "source": "ledger",
+      },
       "flerarsPerioder": [
         {
           "end": "2025-12-31",
@@ -1305,6 +1351,7 @@ exports[`annual report over a ledger: aktiebolag > builds the canonical model, i
         },
         "unclassified": [],
       },
+      "row_labels": "k2",
       "warnings": [],
     },
     "fiscal_period": {
@@ -1925,6 +1972,52 @@ exports[`annual report over a ledger: aktiebolag > builds the iXBRL input on its
         "ub": 72629,
       },
       "utdelning": 0,
+    },
+    "egetKapitalSpecifikation": {
+      "kinds": [
+        {
+          "kind": "resultatdisposition",
+          "label": "Balanseras i ny räkning",
+        },
+        {
+          "kind": "arets_resultat",
+          "label": "Årets resultat",
+        },
+      ],
+      "placement": "management_report",
+      "posts": [
+        {
+          "bound": true,
+          "closing": 25000,
+          "concept": "Aktiekapital",
+          "label": "Aktiekapital",
+          "movements": {},
+          "opening": 25000,
+        },
+        {
+          "bound": false,
+          "closing": 21753,
+          "concept": "BalanseratResultat",
+          "label": "Balanserat resultat",
+          "movements": {
+            "resultatdisposition": 15876,
+          },
+          "opening": 5877,
+        },
+        {
+          "bound": false,
+          "closing": 25876,
+          "concept": "AretsResultatEgetKapital",
+          "label": "Årets resultat",
+          "movements": {
+            "arets_resultat": 25876,
+            "resultatdisposition": -15876,
+          },
+          "opening": 15876,
+        },
+      ],
+      "previous": null,
+      "source": "ledger",
     },
     "flerarsPerioder": [
       {
@@ -2889,6 +2982,13 @@ exports[`annual report over a ledger: enskild_firma > builds the canonical model
         },
         "utdelning": 0,
       },
+      "egetKapitalSpecifikation": {
+        "kinds": [],
+        "placement": "management_report",
+        "posts": [],
+        "previous": null,
+        "source": "ledger",
+      },
       "flerarsPerioder": [
         {
           "end": "2025-12-31",
@@ -3482,6 +3582,7 @@ exports[`annual report over a ledger: enskild_firma > builds the canonical model
         },
         "unclassified": [],
       },
+      "row_labels": "k2",
       "warnings": [],
     },
     "fiscal_period": {
@@ -4167,6 +4268,13 @@ exports[`annual report over a ledger: enskild_firma > builds the iXBRL input on 
         "ub": 0,
       },
       "utdelning": 0,
+    },
+    "egetKapitalSpecifikation": {
+      "kinds": [],
+      "placement": "management_report",
+      "posts": [],
+      "previous": null,
+      "source": "ledger",
     },
     "flerarsPerioder": [
       {

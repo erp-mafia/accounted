@@ -37,8 +37,8 @@ export interface BankLineOffers {
 export interface BankLineSuggestions {
   /** The module that owns the code behind the answers (lib/modules/manifest.ts). */
   readonly module: ModuleId
-  /** The revision of the rules the offers come from (suggestion_log.rule_version, with the program version). */
-  rulesRevision(): string
+  /** The revision of the rules this company's offers come from (suggestion_log.rule_version, with the program version). */
+  rulesRevision(companyId: string): string
   /** The approval policy a band is evaluated under (suggestion_log.policy_version). */
   policyVersion(): string
   /** What the bank side offers for the rows right now, in its order. */

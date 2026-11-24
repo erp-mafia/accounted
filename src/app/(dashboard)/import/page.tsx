@@ -126,6 +126,7 @@ const BankFileColumnMappingStep = dynamic(() => import('@/components/import/Bank
 const BankFileConfirmStep = dynamic(() => import('@/components/import/BankFileConfirmStep'), { loading: ImportStepLoading })
 const BankFileResultStep = dynamic(() => import('@/components/import/BankFileResultStep'), { loading: ImportStepLoading })
 const BankDepositSpecStep = dynamic(() => import('@/components/import/BankDepositSpecStep'), { loading: ImportStepLoading })
+const KustomSettlementImport = dynamic(() => import('@/components/import/KustomSettlementImport'), { loading: ImportStepLoading })
 const OpeningBalanceUploadStep = dynamic(() => import('@/components/import/OpeningBalanceUploadStep'), { loading: ImportStepLoading })
 const OpeningBalanceColumnMappingStep = dynamic(() => import('@/components/import/OpeningBalanceColumnMappingStep'), { loading: ImportStepLoading })
 const OpeningBalanceEditStep = dynamic(() => import('@/components/import/OpeningBalanceEditStep'), { loading: ImportStepLoading })
@@ -1722,7 +1723,7 @@ const ZettlePanel = getSettingsPanel('zettle')
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'zettle' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'zettle' | 'kustom' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
 // Query params the URL sync effect turns into an open mode (and its
 // preselects). "Tillbaka till val" removes them.
@@ -1774,8 +1775,8 @@ export default function ImportPage() {
     // third-party credentials, so their deep links are ignored in the sandbox.
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
-      ? ['bank', 'skattekonto', 'sie', 'underlag', 'csv_data']
-      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'zettle', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
+      ? ['kustom', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data']
+      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'zettle', 'kustom', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
     // A read-only member gets no import wizard from a deep link.
     if (!canWrite) {
       // stays on the choices
@@ -1995,6 +1996,16 @@ export default function ImportPage() {
                     onClick={() => setMode('zettle')}
                   />
                 )}
+                {/* A file, not a connection: no extension, no credentials, so
+                    the sandbox keeps it like the other file imports. */}
+                <ImportRow
+                  title={t('kustom_title')}
+                  action={t('tab_import')} icon="upload"
+                  sub={t('kustom_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
+                  onClick={() => setMode('kustom')}
+                />
                 {hasMigrationExtension && (
                   <ImportRow
                     title={t('migration_title')}
@@ -2253,6 +2264,7 @@ export default function ImportPage() {
           />
         )
       )}
+      {mode === 'kustom' && <KustomSettlementImport />}
       {mode === 'bank' && <BankFileImportWizard onBack={backToChoices} />}
       {mode === 'skattekonto' && <SkattekontoImportWizard onBack={backToChoices} />}
       {/* The CSV/Excel wizard opens on "Ingående balanser" by default, which is

@@ -10,12 +10,12 @@
  * plug-in point existed.
  */
 import type { BankLineSuggestions } from '@/lib/suggestion-log/bank-line-suggestions'
-import { BANK_PROPOSAL_RULES_REVISION, proposeForTransactions } from '@/lib/transactions/propose'
+import { bankProposalRulesRevision, proposeForTransactions } from '@/lib/transactions/propose'
 import { confidenceBand, DIRECT_BOOKING_POLICY_VERSION } from '@/lib/transactions/direct-booking'
 
 export const BANK_LINE_SUGGESTIONS: BankLineSuggestions = Object.freeze<BankLineSuggestions>({
   module: 'transactions',
-  rulesRevision: () => BANK_PROPOSAL_RULES_REVISION,
+  rulesRevision: (companyId) => bankProposalRulesRevision(companyId),
   policyVersion: () => DIRECT_BOOKING_POLICY_VERSION,
   propose: (...args) => proposeForTransactions(...args),
   confidenceBand: (proposal, directBooking) => confidenceBand(proposal, directBooking),

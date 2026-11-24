@@ -725,6 +725,9 @@ const POS_AND_WEBSHOP: PackageDoors = {
     'POST /api/webshop-orders/:id/mark-booked',
     'POST /api/webshop-orders/:id/underlag',
     'POST /api/webshop-orders/bulk-book',
+    // A Kustom settlement report read by hand opens no connection, as a
+    // document upload opens no mailbox: it starts nothing that stays open.
+    'POST /api/webshop-orders/kustom-settlement',
     'PUT /api/webshop-orders/settings',
     'op:pos-sales.day-book',
     'op:pos-sales.disconnect',

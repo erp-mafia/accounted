@@ -42,7 +42,8 @@ import { itemHue, seedOf, type ItemKind } from './hues'
 import { cn } from '@/lib/utils'
 import { StrataField } from './StrataField'
 import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, rulesSegment, type CommunityMeta, type SkillSummary } from './data'
+import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, ownItemHref, type CommunityMeta, type SkillSummary } from './data'
+import { knowledgeRows } from './knowledge-rows'
 import styles from './skills.module.css'
 
 const KINDS: ItemKind[] = ['workflow', 'rules', 'analysis']
@@ -78,8 +79,11 @@ interface Item {
  * in one toolbar. Upptäck opens on a featured item, the most used and the
  * categories (industries and company forms) with counts; a category or a
  * search shows the full list. Egna is what the company made or uses.
+ *
+ * `knowledgeOnly`: the page shows the knowledge kind alone. The kinds and
+ * Egna | Upptäck are not offered, whatever the URL says.
  */
-export function Catalog({ hrefBase, catalog, options, overview, usage, own, companyIndustry, client, aiReady, canWrite, onCreate, gate, pending }: {
+export function Catalog({ hrefBase, catalog, options, overview, usage, own, companyIndustry, client, aiReady, canWrite, onCreate, gate, pending, knowledgeOnly = false }: {
   hrefBase: string
   catalog: SkillSummary[]
   options: KnowledgeOption[]
@@ -102,6 +106,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
    * on top, so a connect started from Egna or a search keeps the address.
    */
   pending?: ReactNode
+  knowledgeOnly?: boolean
 }) {
   const t = useTranslations('skills_registry')
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
@@ -111,8 +116,8 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
-  const kind = kindFromParams(params)
-  const view: 'discover' | 'own' = params.get('vy') === 'egna' ? 'own' : 'discover'
+  const kind = knowledgeOnly ? 'rules' : kindFromParams(params)
+  const view: 'discover' | 'own' = !knowledgeOnly && params.get('vy') === 'egna' ? 'own' : 'discover'
   const category = params.get('kategori')?.replace('.', '/') ?? null
   const [q, setQ] = useState('')
   const [sort, setSort] = useState<'popular' | 'name'>('popular')
@@ -150,15 +155,12 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
     status: agentStatus({ id: s.id, aiKnown: true, overview, waiting: undefined, lastAt: undefined, t: (key, values) => t(key, values), formatDate: (iso) => iso }),
   }))
   // Accounted's packs only: the company's own knowledge is listed under Egna from the catalog.
-  const packs: Item[] = options.filter((o) => o.tier !== 'community' && o.tier !== 'own').map((o) => ({
-    key: o.id, kind: 'rules', title: knowledgeName(o.id, o.title), desc: knowledgeDesc(o.id, o.summary), href: `${hrefBase}/${rulesSegment(o.id)}`,
-    source: 'accounted', meta: null, categories: o.tier === 'vertical' || o.tier === 'modifier' ? [o.id] : [], popularity: usedByFlows(o.id), usedByFlows: usedByFlows(o.id),
-  }))
+  const packs: Item[] = knowledgeRows(options, hrefBase, { name: knowledgeName, desc: knowledgeDesc }, usedByFlows)
   // Own items: a flow opens the flow page; own knowledge and analyses open the item page (egen.<id>).
   const ownItems: Item[] = own.map((s) => {
     const k = s.itemKind ?? 'workflow'
     // A draft your AI saved waits for you: say so on the card, not only on its page.
-    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: k === 'workflow' ? `${hrefBase}/${agentSegment(s.slug)}` : `${hrefBase}/egen.${s.slug.slice(4)}`, source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
+    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: ownItemHref(hrefBase, s.slug, k), source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
       ...(s.draft ? { status: { presence: 'busy' as const, text: t('draft_tag') } } : {}) }
   })
   // Accounted's own analyses: examples of what an analysis is, next to the community's.
@@ -201,18 +203,22 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
     <div className={styles.catalog}>
       {/* V7 list toolbar: the kinds, then Egna | Upptäck, then search with the category and sort pickers at the right end. Skapa sits in the top bar (CatalogCreateMenu). */}
       <div className="flex flex-wrap items-center gap-2">
-        <SegmentedControl<ItemKind>
-          aria-label={t('kinds_label')}
-          value={kind}
-          onChange={(k) => go({ typ: k, kategori: null })}
-          options={KINDS.map((k) => ({ value: k, label: t(`kind_${k}`) }))}
-        />
-        <SegmentedControl<'own' | 'discover'>
-          aria-label={t('view_label')}
-          value={view}
-          onChange={(vy) => go({ vy, kategori: null })}
-          options={[{ value: 'own', label: t('view_own') }, { value: 'discover', label: t('view_discover') }]}
-        />
+        {!knowledgeOnly && (
+          <>
+            <SegmentedControl<ItemKind>
+              aria-label={t('kinds_label')}
+              value={kind}
+              onChange={(k) => go({ typ: k, kategori: null })}
+              options={KINDS.map((k) => ({ value: k, label: t(`kind_${k}`) }))}
+            />
+            <SegmentedControl<'own' | 'discover'>
+              aria-label={t('view_label')}
+              value={view}
+              onChange={(vy) => go({ vy, kategori: null })}
+              options={[{ value: 'own', label: t('view_own') }, { value: 'discover', label: t('view_discover') }]}
+            />
+          </>
+        )}
         <ToolbarSearch containerClassName={TOOLBAR_SEARCH_END_CLASS} aria-label={t('search_label')} placeholder={t(`search_${kind}`)} value={q} onChange={(e) => setQ(e.target.value)} />
         {view === 'discover' && categories.length > 0 && (
           <DropdownMenu>

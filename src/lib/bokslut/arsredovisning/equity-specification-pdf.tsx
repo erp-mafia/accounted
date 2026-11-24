@@ -51,12 +51,15 @@ const styles = StyleSheet.create({
 export function EquitySpecificationTable({
   year,
   caption,
+  framework = 'k3',
 }: {
   year: EquitySpecificationYear
   /** Printed above the table (the year's name when both years are shown). */
   caption?: string
+  /** The year's regelverk: a K2 årsredovisning prints the K2 taxonomy's row labels. */
+  framework?: 'k2' | 'k3'
 }) {
-  const table = equitySpecificationTable(year)
+  const table = equitySpecificationTable(year, framework)
   return (
     <View wrap={false}>
       {caption ? <Text style={styles.caption}>{caption}</Text> : null}

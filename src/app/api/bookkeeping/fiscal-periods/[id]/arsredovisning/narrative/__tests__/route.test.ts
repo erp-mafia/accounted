@@ -250,6 +250,49 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     ).not.toHaveProperty('vasentliga_handelser_efter_balansdagen')
   })
 
+  it('returns 400 when flerarsoversikt_tkr is not a boolean', async () => {
+    for (const value of ['tkr', 1, null]) {
+      setupSupabase()
+      expect((await POST(postReq({ flerarsoversikt_tkr: value }), idParams)).status).toBe(400)
+    }
+  })
+
+  it('saves the choice to state the flerårsöversikt in tkr, and to state it in kronor again', async () => {
+    for (const tkr of [true, false]) {
+      const { enqueue, findCall } = setupSupabase()
+      enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+      enqueue({ data: null }) // no registrerad submission
+      enqueue({ data: { ...narrativeRow, flerarsoversikt_tkr: tkr } }) // upsert
+      enqueue({ data: null }) // clear narrative confirmation
+      const { status, body } = await parseJsonResponse<{ data: typeof narrativeRow & { flerarsoversikt_tkr: boolean } }>(
+        await POST(postReq({ flerarsoversikt_tkr: tkr }), idParams),
+      )
+      expect(status).toBe(200)
+      expect(body.data.flerarsoversikt_tkr).toBe(tkr)
+      expect(findCall('arsredovisning_narratives', 'upsert')?.[0]).toMatchObject({ flerarsoversikt_tkr: tkr })
+    }
+  })
+
+  it('saves the texts in the minutes before the flerarsoversikt_tkr column exists', async () => {
+    // The editor sends the choice with every save. Off is what a database
+    // without the column holds, so the save goes through without it.
+    const { enqueue, findCalls } = setupSupabase()
+    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: null }) // no registrerad submission
+    enqueue({ error: Object.assign(new Error("Could not find the 'flerarsoversikt_tkr' column"), { code: 'PGRST204' }) })
+    enqueue({ data: { ...narrativeRow, description: 'Ny text.' } }) // upsert without the column
+    enqueue({ data: null }) // clear narrative confirmation
+    const { status, body } = await parseJsonResponse<{ data: typeof narrativeRow }>(
+      await POST(postReq({ description: 'Ny text.', flerarsoversikt_tkr: false }), idParams),
+    )
+    expect(status).toBe(200)
+    expect(body.data.description).toBe('Ny text.')
+    const writes = findCalls('arsredovisning_narratives', 'upsert').map((args) => args[0])
+    expect(writes).toHaveLength(2)
+    expect(writes[1]).toMatchObject({ description: 'Ny text.' })
+    expect(writes[1]).not.toHaveProperty('flerarsoversikt_tkr')
+  })
+
   it('returns 400 when the payload contains an unknown field', async () => {
     setupSupabase()
     const res = await POST(

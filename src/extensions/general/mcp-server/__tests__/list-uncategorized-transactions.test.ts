@@ -161,6 +161,73 @@ describe('gnubok_list_uncategorized_transactions', () => {
     ).rejects.toThrow(/cash_account_id must be a cash account UUID/)
   })
 
+  it('narrows the page and total_count to a date range in the query itself, not one page in memory', async () => {
+    // Hundreds of unbooked rows, mostly Stripe: the first page covered three
+    // days, so "last week's rows" meant paging through all of them.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(
+      enqueue,
+      [{ id: 't-1', date: '2026-11-18', description: 'Stripe', amount: 100, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null }],
+      31,
+    )
+
+    const result = (await tool.execute(
+      { limit: 1, date_from: '2026-11-16', date_to: '2026-11-22' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { total_count: number; has_more: boolean; next_offset?: number }
+
+    expect(findCalls('open_bank_rows', 'gte')).toEqual([['date', '2026-11-16']])
+    expect(findCalls('open_bank_rows', 'lte')).toEqual([['date', '2026-11-22']])
+    // The count is the filtered query's own, not the whole queue's.
+    expect(findCalls('open_bank_rows', 'select')[0][1]).toEqual({ count: 'exact' })
+    expect(result).toMatchObject({ total_count: 31, has_more: true, next_offset: 1 })
+  })
+
+  it('finds a row by text over description, merchant and reference, the filter-DSL characters stripped', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, [], 0)
+
+    const result = (await tool.execute(
+      { text: 'Acme (AB),company_id.neq.x' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { total_count: number }
+
+    const term = 'Acme  AB  company_id.neq.x'
+    expect(findCalls('open_bank_rows', 'or')).toEqual([
+      [`description.ilike.%${term}%,merchant_name.ilike.%${term}%,reference.ilike.%${term}%`],
+    ])
+    // The company scope stays the only eq: the text cannot widen it.
+    expect(findCalls('open_bank_rows', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(result.total_count).toBe(0)
+  })
+
+  it('adds no filter when none is given', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, [])
+
+    await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)
+
+    expect(findCalls('open_bank_rows', 'gte')).toEqual([])
+    expect(findCalls('open_bank_rows', 'lte')).toEqual([])
+    expect(findCalls('open_bank_rows', 'or')).toEqual([])
+  })
+
+  it('refuses a date that is not one, a reversed range and a text too short to search, before any read', async () => {
+    const { supabase, findCalls } = createQueuedMockSupabase()
+    const call = (args: Record<string, unknown>) => tool.execute(args, 'company-1', 'user-1', supabase as never)
+
+    await expect(call({ date_from: '2026-02-30' })).rejects.toThrow(/date_from 2026-02-30 does not exist/)
+    await expect(call({ date_to: 'last week' })).rejects.toThrow(/date_to must be one date, YYYY-MM-DD/)
+    await expect(call({ date_from: '2026-11-22', date_to: '2026-11-16' })).rejects.toThrow(/date_from must not be after date_to/)
+    await expect(call({ text: 'A,' })).rejects.toThrow(/text needs at least 2 characters/)
+    await expect(call({ text: 42 })).rejects.toThrow(/text must be a string/)
+    expect(findCalls('open_bank_rows', 'select')).toEqual([])
+  })
+
   it('returns the counterparty IBAN the bank sent, the only payee a foreign payment may name (PH 196)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueuePage(enqueue, [

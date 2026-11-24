@@ -10,6 +10,7 @@ const report: VacationLiabilityReport = {
       employeeName: 'Åsa Öberg',
       personnummerLast4: '0000',
       vacationRule: 'procentregeln',
+      employmentStart: '2020-01-01',
       vacationDaysEntitled: 25,
       vacationDaysTaken: 5.5,
       vacationDaysRemaining: 19.5,

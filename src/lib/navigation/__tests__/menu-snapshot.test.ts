@@ -30,6 +30,7 @@ beforeEach(() => {
   vi.stubEnv('ARKIV_COMPANY_IDS', FIRST)
   vi.stubEnv('AGENTS_PAGE_COMPANY_IDS', FIRST)
   vi.stubEnv('INKORG_V2_COMPANY_IDS', '')
+  vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', '')
   vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
 })
 

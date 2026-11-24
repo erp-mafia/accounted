@@ -834,6 +834,8 @@ function Evidence({ evidence, suggestion }: { evidence: DecisionEvidence | null;
         return t('ev_reading')
       case 'unreadable':
         return t('ev_unreadable')
+      case 'no_file':
+        return t('ev_no_file')
       case 'not_read':
         return evidence.retry ? t(`ev_not_read_${evidence.retry}`) : t('ev_not_read')
       case 'booked':

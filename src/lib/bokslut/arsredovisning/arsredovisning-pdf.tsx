@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
+import { roundThousands } from '@/lib/bokslut/ixbrl/thousand-kronor'
 import { pdfTextDeep } from '@/lib/pdf/number-text'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { EquitySpecificationTable } from './equity-specification-pdf'
@@ -231,6 +232,10 @@ export function ArsredovisningPDF({
   // typed texts (förvaltningsberättelse, resultatdisposition, notes) are
   // made safe here, once, like the amounts are in fmt (crm#1887).
   const data = pdfTextDeep(reportData)
+  // The year's choice to state the flerårsöversikt in thousands of kronor:
+  // the figures the iXBRL document tags (roundThousands), so the two agree.
+  const overviewTkr = data.forvaltningsberattelse.flerarsoversikt_tkr === true
+  const overviewAmount = (kronor: number) => fmt(overviewTkr ? roundThousands(kronor) : kronor)
   // An ekonomisk förening adopts the statements at its ordinarie
   // föreningsstämma (EFL 6 kap. 9-10 §§), owns no share capital and must add
   // the ÅRL 6 kap. 3 § member disclosures to förvaltningsberättelsen.
@@ -286,7 +291,7 @@ export function ArsredovisningPDF({
           </>
         )}
 
-        <Text style={styles.sectionTitle}>Flerårsöversikt (kr)</Text>
+        <Text style={styles.sectionTitle}>Flerårsöversikt ({overviewTkr ? 'tkr' : 'kr'})</Text>
         <View style={styles.tableHeader}>
           <Text style={styles.colLabel}>År</Text>
           <Text style={styles.colAmount}>Nettoomsättning</Text>
@@ -296,8 +301,8 @@ export function ArsredovisningPDF({
         {data.forvaltningsberattelse.flerarsoversikt.map((row) => (
           <View key={row.year} style={styles.tableRow}>
             <Text style={styles.colLabel}>{row.year}</Text>
-            <Text style={styles.colAmount}>{fmt(row.net_revenue)}</Text>
-            <Text style={styles.colAmount}>{fmt(row.result_after_financial)}</Text>
+            <Text style={styles.colAmount}>{overviewAmount(row.net_revenue)}</Text>
+            <Text style={styles.colAmount}>{overviewAmount(row.result_after_financial)}</Text>
             <Text style={styles.colAmount}>
               {row.soliditet_pct === null ? '-' : row.soliditet_pct.toFixed(1)}
             </Text>
@@ -327,9 +332,13 @@ export function ArsredovisningPDF({
         <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
         {/* ÅRL 6 kap. 2 § andra stycket: the changes against last year's
             balance sheet. A version saved before the specification keeps
-            its year-end list. */}
+            its year-end list, and one saved before the K2 taxonomy's row
+            labels keeps the labels it was signed with (row_labels). */}
         {data.equity_specification ? (
-          <EquitySpecificationTable year={data.equity_specification.current} />
+          <EquitySpecificationTable
+            year={data.equity_specification.current}
+            framework={data.equity_specification.row_labels ?? 'k3'}
+          />
         ) : (
           data.forvaltningsberattelse.egen_kapital_changes.map((r) => (
             <View key={r.label} style={styles.tableRow}>

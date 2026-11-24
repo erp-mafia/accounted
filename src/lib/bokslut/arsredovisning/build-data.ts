@@ -39,6 +39,7 @@ import {
   buildAnlaggningstillgangarNote,
   computeRollforwardTotals,
   depreciationPrincipleLines,
+  depreciationPrinciples,
   holdsWriteDowns,
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
@@ -393,6 +394,10 @@ export async function buildArsredovisningReport(
     balanceSheet: balanceSheetMapping,
     overrides: equityMovementOverridesFrom(narrative?.equity_movement_overrides),
     placement: k3Presentation && narrative?.equity_statement_separate ? 'separate_statement' : 'management_report',
+    // A K2 report names the rows as the K2 taxonomy does, as its iXBRL
+    // document must (build-input.ts); the report says so itself, so a
+    // version locked before those labels keeps the ones it was signed with.
+    rowLabels: accountingFramework === 'k2' ? 'k2' : undefined,
   })
   const memberDisclosures = isForening ? memberDisclosuresFrom(narrative) : null
   const proposedDividend = narrative?.proposed_dividend ?? 0
@@ -642,6 +647,9 @@ export async function buildArsredovisningReport(
         'Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.',
       kontrollbalans_required: overrides.kontrollbalans_required ?? false,
       flerarsoversikt,
+      // The year's choice to state the flerårsöversikt in tkr. Only present
+      // when on: an absent key keeps the content hash of every other report.
+      ...(narrative?.flerarsoversikt_tkr === true ? { flerarsoversikt_tkr: true } : {}),
       egen_kapital_changes,
       resultatdisposition:
         overrides.resultatdisposition ??
@@ -1118,13 +1126,25 @@ async function buildK2Noter(
   }
 
   // Avskrivningstider: derive from asset register (supplementary
-  // disclosure; the statutory ÅRL 5:8 § roll-forward follows below).
-  const depreciationLines = depreciationPrincipleLines(assets)
+  // disclosure; the statutory ÅRL 5:8 § roll-forward follows below). Per
+  // balance sheet post, so the iXBRL document can tag each row as its post's
+  // table of avskrivningsprinciper.
+  // The register as it stood on the balance sheet date: an asset bought after
+  // it is not in this year's report, and one sold after it still was.
+  const heldAtYearEnd = assets
+    .filter((asset) => asset.acquisition_date <= periodEnd)
+    .map((asset) => (asset.disposed_at && asset.disposed_at > periodEnd ? { ...asset, disposed_at: null } : asset))
+  const depreciationPeriods = depreciationPrinciples(heldAtYearEnd, {
+    postOfAccount: (account) => k2BrPostForAccount(account, k2LegalFormOf(entityType)),
+    labelOfPost: (post) => k2AssetPostLabel(post) ?? post,
+  })
+  const depreciationLines = depreciationPrincipleLines(depreciationPeriods)
   if (depreciationLines.length > 0) {
     notes.push({
       number: notes.length + 1,
       title: 'Avskrivningar',
       body: depreciationLines.join('\n'),
+      ...(depreciationPeriods.rows.length > 0 ? { depreciationPrinciples: depreciationPeriods.rows } : {}),
     })
   }
 

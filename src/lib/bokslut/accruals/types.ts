@@ -39,6 +39,24 @@ export interface AccrualProposal {
 }
 
 /**
+ * One employee in the semesterlöneskuld proposal's `computation.employees`:
+ * liability = valued_days x day_value + earning_pay + variable_pay.
+ */
+export interface VacationProposalEmployee {
+  employee_id: string
+  employee_name: string
+  employment_start: string
+  vacation_rule: string
+  entitled_days: number
+  valued_days: number
+  day_value: number
+  day_value_estimated: boolean
+  earning_pay: number
+  variable_pay: number
+  liability: number
+}
+
+/**
  * Snapshot of accrual proposals for a fiscal period.
  */
 export interface AccrualsProposal {

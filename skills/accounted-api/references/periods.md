@@ -3301,7 +3301,8 @@ Request body:
   disclosure_answers?: Record<string, { applies?: boolean | null, text?: string | null, choice?: string | null, confirmed?: boolean } | null>,
   equity_movement_overrides?: Record<string, "rattelse_av_fel" | "andrad_redovisningsprincip" | "uppskrivning" | "verkligt_varde" | "ovriga_direkt_mot_eget_kapital" | "utdelning" | "aktieagartillskott" | "aterbetalt_tillskott" | "nyemission" | "andra_vardeoverforingar" | "omforing" | null>,
   equity_statement_separate?: boolean,
-  fixed_asset_note_rows?: Record<string, Record<string, number | null> | null> | null
+  fixed_asset_note_rows?: Record<string, Record<string, number | null> | null> | null,
+  flerarsoversikt_tkr?: boolean
 }
 ```
 

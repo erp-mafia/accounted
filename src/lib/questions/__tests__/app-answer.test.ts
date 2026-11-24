@@ -622,11 +622,17 @@ describe('the answered questions and the operations linked to a question, as the
   const operation = (n: number, overrides: Record<string, unknown> = {}) => ({
     id: operationId(n),
     operation_number: 100 + n,
+    operation_type: 'create_customer',
     title: `Förslag ${n}`,
     status: 'pending',
     result_data: null,
+    transaction_id: null,
+    document_name: null,
+    voucher_label: null,
     ...overrides,
   })
+  /** What an operation that names no bank row, file or verifikat carries beside its own fields. */
+  const bare = { operation_type: 'create_customer', bank_row: null, document_name: null, voucher_label: null }
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -709,7 +715,8 @@ describe('the answered questions and the operations linked to a question, as the
       pending_operations: {
         data: [
           operation(1),
-          operation(2, { status: 'committed', result_data: { journal_entry_id: ENTRY } }),
+          // A bank row booked: the operation names the row, and the page gets the row as its own records read it.
+          operation(2, { operation_type: 'categorize_transaction', status: 'committed', result_data: { journal_entry_id: ENTRY }, transaction_id: TX }),
           operation(3, { status: 'rejected' }),
           operation(4, { status: 'committed', result_data: {} }),
         ],
@@ -724,15 +731,24 @@ describe('the answered questions and the operations linked to a question, as the
     expect(page[0]).not.toHaveProperty('operations')
     expect(page[1].answered).toEqual({ answer: 'Årsbetalning', answered_at: '2026-11-22T09:00:00.000Z' })
     expect(page[1].operations).toEqual([
-      { operation_id: operationId(1), operation_number: 101, title: 'Förslag 1', status: 'pending', journal_entry_id: null },
-      { operation_id: operationId(2), operation_number: 102, title: 'Förslag 2', status: 'committed', journal_entry_id: ENTRY },
-      { operation_id: operationId(4), operation_number: 104, title: 'Förslag 4', status: 'committed', journal_entry_id: null },
+      { operation_id: operationId(1), operation_number: 101, title: 'Förslag 1', status: 'pending', journal_entry_id: null, ...bare },
+      {
+        operation_id: operationId(2),
+        operation_number: 102,
+        title: 'Förslag 2',
+        status: 'committed',
+        journal_entry_id: ENTRY,
+        ...bare,
+        operation_type: 'categorize_transaction',
+        bank_row: { label: 'Leverantören AB', amount: -4990, currency: 'SEK' },
+      },
+      { operation_id: operationId(4), operation_number: 104, title: 'Förslag 4', status: 'committed', journal_entry_id: null, ...bare },
     ])
     // An answered question nothing is linked to carries an empty list.
     expect(page[2].operations).toEqual([])
     expect(page[3].settled).toBeDefined()
     expect(page[3].operations).toEqual([
-      { operation_id: operationId(3), operation_number: 103, title: 'Förslag 3', status: 'rejected', journal_entry_id: null },
+      { operation_id: operationId(3), operation_number: 103, title: 'Förslag 3', status: 'rejected', journal_entry_id: null, ...bare },
     ])
     // The links are read for the answered and the settled questions, in this company.
     expect(mock.findCalls('company_question_operations', 'in')).toEqual([['question_id', [ANSWERED_ID, WRITTEN_ID, SETTLED_ID]]])

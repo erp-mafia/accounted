@@ -58,6 +58,8 @@ export interface NavGateContext {
   bolagetMoneyEnabled?: boolean
   /** The question list is switched on for the company (lib/env/company-questions-switch.ts). Absent reads as off. */
   companyQuestionsEnabled?: boolean
+  /** The agent picture is switched on for the company (lib/env/agent-picture-switch.ts): the Agenter area is then the picture and the rules, with Chatt by its own switch. Absent reads as off. */
+  agentPictureEnabled?: boolean
   /** The MCP server extension is built in (ENABLED_EXTENSION_IDS): the Koppla en agent row. Absent reads as off. */
   mcpExtensionEnabled?: boolean
   /**
@@ -144,6 +146,12 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   // The Agenter page is hidden in production while it is finished.
   if (item.requiresAgents && !ctx.agentsEnabled) return false
   if (item.hiddenWithAgents && ctx.agentsEnabled) return false
+  // Where the agent picture is on, the Agenter area is the picture (Kontext)
+  // and Bokföringsregler, listed without a group label: the rows the picture
+  // replaces hide, and the hidden pages keep their addresses. Chatt is not
+  // one of them: it has its own gate, below.
+  if (item.requiresAgentPicture && !ctx.agentPictureEnabled) return false
+  if (item.hiddenWithAgentPicture && ctx.agentPictureEnabled) return false
   // Fakta exists only where Arkiv reads the documents; elsewhere the view is not offered.
   if (item.requiresArkivBrain && !ctx.arkivBrainEnabled) return false
   // The new Inkorg page rolls out per company, and Underlag under Inköp

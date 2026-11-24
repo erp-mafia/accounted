@@ -10,12 +10,45 @@ import { creatorOf, resolveCreators, type Creator } from '@/lib/attribution/pers
  * All of them, newest first, instead of a ranked top few: a company holds a
  * handful (median 4 in seen 2026-10; the largest about 48k characters), so a
  * cap only hid facts. Newest first so a later fact can settle an earlier one.
- * A fact retired by `replaces` (is_active false, superseded_by set) is left out.
+ * A fact retired by `replaces` (is_active false, superseded_by set) is left
+ * out: filterGivenFacts is the rule, and the memory list a person reads
+ * beside the agent picture (GET /api/agent/memory?given=true) applies it too.
  *
  * The character budget only guards an outlier: when the facts pass it, the
  * newest that fit are kept and `truncated` says so.
  */
 export const REMEMBERED_FACTS_CHAR_BUDGET = 60_000
+
+/**
+ * The PostgREST filters the rule needs. The constraint names the methods
+ * only: checking their full signatures against a PostgrestFilterBuilder makes
+ * tsc give up (TS2589), the same reason lib/deadlines/open.ts does this.
+ */
+interface FactFilterQuery {
+  eq(column: string, value: boolean): FactFilterQuery
+  is(column: string, value: null): FactFilterQuery
+}
+
+type FilterableQuery = { [K in keyof FactFilterQuery]: unknown }
+
+/**
+ * Narrows an `agent_memory` query to the rows no later fact has replaced.
+ * gnubok_remember_fact with `replaces` points the old row at the new one
+ * (superseded_by) and hides it. The pointer stays when the row is shown
+ * again, so such a row is replaced whether it is hidden or not, and no agent
+ * is given it.
+ */
+export function filterNotReplacedFacts<Q extends FilterableQuery>(query: Q): Q {
+  return (query as unknown as FactFilterQuery).is('superseded_by', null) as unknown as Q
+}
+
+/**
+ * Narrows an `agent_memory` query to the facts an agent is given: the ones
+ * that are not hidden (is_active) and that no later fact has replaced.
+ */
+export function filterGivenFacts<Q extends FilterableQuery>(query: Q): Q {
+  return filterNotReplacedFacts((query as unknown as FactFilterQuery).eq('is_active', true)) as unknown as Q
+}
 
 /** Upper bound on rows read, far above any company today. */
 const ROW_BOUND = 500
@@ -57,23 +90,23 @@ interface Row {
  */
 export async function loadRememberedFacts(supabase: SupabaseClient, companyId: string): Promise<RememberedFacts> {
   // Literal selects, twice, so the schema guard (tests/schema) can check them.
-  let result: { data: unknown; error: { code?: string; message: string } | null } = await supabase
-    .from('agent_memory')
-    .select('id, kind, content, relevance_score, created_at, created_by_user_id, origin, client')
-    .eq('company_id', companyId)
-    .eq('is_active', true)
-    .is('superseded_by', null)
+  let result: { data: unknown; error: { code?: string; message: string } | null } = await filterGivenFacts(
+    supabase
+      .from('agent_memory')
+      .select('id, kind, content, relevance_score, created_at, created_by_user_id, origin, client')
+      .eq('company_id', companyId),
+  )
     .order('created_at', { ascending: false, nullsFirst: false })
     .limit(ROW_BOUND)
   // origin and client arrive with migration 20261029122000, which applies
   // after the merge deploys: until then the read goes without them.
   if (isMissingColumnError(result.error)) {
-    result = await supabase
-      .from('agent_memory')
-      .select('id, kind, content, relevance_score, created_at, created_by_user_id')
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .is('superseded_by', null)
+    result = await filterGivenFacts(
+      supabase
+        .from('agent_memory')
+        .select('id, kind, content, relevance_score, created_at, created_by_user_id')
+        .eq('company_id', companyId),
+    )
       .order('created_at', { ascending: false, nullsFirst: false })
       .limit(ROW_BOUND)
   }

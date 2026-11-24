@@ -458,7 +458,7 @@
       "lib/salary/semesterberedning.ts": 8,
       "lib/skatteverket/skattekonto-account-service.ts": 1,
       "lib/skatteverket/skattekonto-account.ts": 2,
-      "lib/suggestion-log/classify.ts": 2,
+      "lib/suggestion-log/business-account.ts": 2,
       "lib/suggestion-log/inbox-classify.ts": 3,
       "lib/supplier-invoices/create.ts": 1,
       "lib/supplier-invoices/register-booked.ts": 1,

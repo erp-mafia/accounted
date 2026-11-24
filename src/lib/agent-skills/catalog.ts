@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadAtomsAsSkills, loadReferenceById } from './atoms'
 import { loadCompanySkillRows, ownSkill, type CompanySkillRow } from './company-skills'
 import { workflowSkills } from './workflows'
+import { chosenKnowledge, isActiveKnowledge } from './knowledge-list'
 import { communityPageUrl } from './community-repo'
 import { kvittojaktenSkills } from './workflows/kvittojakten'
 import type { Skill } from './types'
@@ -38,14 +39,14 @@ export async function loadSkillCatalog(supabase: SupabaseClient, companyId: stri
     ? await resolveCreators(options.creators, rows.flatMap((row) => row.atom_id ? [] : [row.created_by]))
     : undefined
   const profile = profileResult.data
-  const selected = new Set<string>([...(profile?.vertical_atoms ?? []), ...(profile?.modifier_atoms ?? [])])
+  const chosen = chosenKnowledge(profile, rows)
   return [
     ...[...workflowSkills, ...atoms].map((skill): CatalogSkill => {
       const installs = rows.filter((row) => row.atom_id === skill.slug)
       return {
         ...skill,
         source: skill.tier === 'community' ? 'community' : 'accounted',
-        active: skill.tier === 'horizontal' || skill.tier === 'workflow' || selected.has(skill.slug) || installs.length > 0,
+        active: skill.tier === 'workflow' || isActiveKnowledge(skill.tier, skill.slug, chosen),
         installations: installs.map((row) => ({ installation_id: row.id, scope: row.team_id ? 'team' : 'company' })),
       }
     }),

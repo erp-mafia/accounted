@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
@@ -270,5 +270,53 @@ describe('skills HTTP routes', () => {
   it('blocks viewer writes', async () => {
     vi.mocked(requireWritePermission).mockResolvedValue({ ok: false, response: NextResponse.json({}, { status: 403 }) })
     expect((await POST(request('POST', {}), staticParams)).status).toBe(403)
+  })
+})
+
+// The routes an own item's pages call do not read the Agenter page's switch
+// (AGENTS_PAGE_COMPANY_IDS): with it off for the company they answer as
+// above, with the agent picture (AGENT_PICTURE_COMPANY_IDS) on or off.
+describe.each([
+  ['on', 'company-a'],
+  ['off', 'another-company'],
+])('skills HTTP routes with the Agenter page switched off and the agent picture %s', (_name, picture) => {
+  beforeEach(() => {
+    vi.stubEnv('AGENTS_PAGE_COMPANY_IDS', 'another-company')
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', picture)
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('lists the own items', async () => {
+    vi.mocked(loadSkillCatalog).mockResolvedValue([{ slug: `own/${id}`, body: 'B', name: 'Own' }] as never)
+    const result = await GET(request('GET'), staticParams)
+    expect(result.status).toBe(200)
+    expect((await result.json()).data).toEqual([{ slug: `own/${id}`, name: 'Own' }])
+  })
+  it('reads one own item\'s text', async () => {
+    vi.mocked(loadCatalogSkill).mockResolvedValue({ slug: `own/${id}`, body: 'Review first.', name: 'Own' } as never)
+    const result = await GET(request('GET', undefined, `?slug=own/${id}`), staticParams)
+    expect(result.status).toBe(200)
+    expect((await result.json()).data.body).toBe('Review first.')
+  })
+  it('creates an own item', async () => {
+    enqueue({ data: { id } })
+    expect((await POST(request('POST', { kind: 'own', item_kind: 'rules', name: 'Name', description: 'Desc', body: 'Use mappings.' }), staticParams)).status).toBe(201)
+    expect(findCall('company_skills', 'insert')?.[0]).toMatchObject({ company_id: 'company-a', kind: 'rules' })
+  })
+  it('edits an own item', async () => {
+    enqueue({ data: { id } })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(200)
+    expect(findCall('company_skills', 'update')?.[0]).toEqual({ name: 'N', description: 'D', body: 'Changed' })
+  })
+  it('shares an own item', async () => {
+    enqueue({ data: { id } })
+    expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'author', confirmed_no_customer_data: true }), params)).status).toBe(200)
+    expect(findCall('company_skills', 'update')?.[0]).toMatchObject({ share_status: 'submitted' })
+  })
+  it('deletes an own item', async () => {
+    enqueue({ data: { id } })
+    enqueue({ data: null })
+    expect((await DELETE(request('DELETE'), params)).status).toBe(200)
+    expect(findCall('company_skills', 'delete')).toBeDefined()
   })
 })

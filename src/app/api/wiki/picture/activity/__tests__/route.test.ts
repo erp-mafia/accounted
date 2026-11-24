@@ -1,5 +1,5 @@
 /**
- * GET /api/wiki/picture/activity: what the company's connections did today.
+ * GET /api/wiki/picture/activity: what the company's connections did today, and the memory's count.
  * Runs through the real withRouteContext wrapper with auth, the company and
  * the loader mocked.
  */
@@ -32,6 +32,7 @@ const ACTIVITY = {
   day: '2026-03-02',
   actors: { 'key-1': { calls_today: 14, last_call_at: '2026-03-02T08:59:30.000Z' } },
   capped: false,
+  memory_facts: 23,
 }
 
 const call = () => GET(createMockRequest('/api/wiki/picture/activity'), { params: Promise.resolve({}) })

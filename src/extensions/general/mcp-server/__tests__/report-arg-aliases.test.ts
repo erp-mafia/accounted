@@ -32,6 +32,16 @@ describe('normalizeReportArgAliases', () => {
     expect(conflicts).toEqual([])
   })
 
+  it('reads fiscal_period_id as period_id on bokslutsbilagor, like the year-end tools beside it', () => {
+    const { args, conflicts } = normalizeReportArgAliases('gnubok_get_bokslutsbilagor', { fiscal_period_id: 'fp-1' })
+    expect(args).toEqual({ period_id: 'fp-1' })
+    expect(conflicts).toEqual([])
+    // Both names at once is ambiguous: refused, never resolved.
+    expect(
+      normalizeReportArgAliases('gnubok_get_bokslutsbilagor', { fiscal_period_id: 'fp-1', period_id: 'fp-2' }).conflicts,
+    ).toEqual([{ alias: 'fiscal_period_id', readsAs: ['period_id'], overlaps: 'period_id' }])
+  })
+
   it('wraps a scalar metric into the metrics array', () => {
     const { args } = normalizeReportArgAliases('gnubok_get_kpi_report', { metric: 'cash_position' })
     expect(args).toEqual({ metrics: ['cash_position'] })
@@ -405,9 +415,9 @@ describe('suggestArgKey: the synonyms agents sent, against real schemas', () => 
     ['date_from', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
     ['from_date', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
     ['start_date', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
-    ['until', 'gnubok_get_income_statement', 'to_date', 'gnubok_receipt_hunt_worklist'],
+    ['until', 'gnubok_get_income_statement', 'to_date', 'gnubok_list_transactions_without_documents'],
     ['until', 'gnubok_list_reconciliation_items', 'date_to', 'gnubok_list_transactions_without_documents'],
-    ['date_to', 'gnubok_get_ar_ledger', 'as_of_date', 'gnubok_receipt_hunt_worklist'],
+    ['date_to', 'gnubok_get_ar_ledger', 'as_of_date', 'gnubok_list_transactions_without_documents'],
     ['offset', 'gnubok_list_salary_runs', 'cursor', 'gnubok_search_tools'],
   ])('%s -> %s names "%s"; %s gets no hint', (unknownKey, withTarget, expected, without) => {
     expect(hintOn(withTarget, unknownKey)).toBe(expected)
@@ -416,7 +426,7 @@ describe('suggestArgKey: the synonyms agents sent, against real schemas', () => 
 
   it('never points an upper bound at the lower bound of a since-only list', () => {
     for (const key of ['until', 'date_to', 'to_date', 'end_date']) {
-      expect(hintOn('gnubok_receipt_hunt_worklist', key), key).toBeNull()
+      expect(hintOn('gnubok_list_transactions_without_documents', key), key).toBeNull()
     }
   })
 })

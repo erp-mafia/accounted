@@ -28,6 +28,7 @@ import { chartVatTreatmentsOf, type ChartVatTreatments } from '../vat-entries'
 import { buildMappingResultFromCategory } from '../category-mapping'
 import { buildMappingResultFromTemplate, findMatchingTemplates, getTemplateById } from '../booking-templates'
 import { roundOre } from '@/lib/money'
+import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import type { TemplateUpsertParams } from '../counterparty-templates'
 import type { CategorizationTemplate, LinePatternEntry } from '@/types'
 import type { SIETransactionLine } from '@/lib/import/types'
@@ -593,6 +594,69 @@ describe('counterparty-templates', () => {
       ])('mappingPatternNamesCounterparty(%j) is %s', (pattern, expected) => {
         expect(mappingPatternNamesCounterparty(pattern)).toBe(expected)
       })
+
+      // The bank feed stores FALLBACK_DESCRIPTION on a row the bank sent no
+      // text for. Every such row carries it, so it names no one: a transfer
+      // between the company's own accounts booked on one of them (D 1930 /
+      // K 1931) was proposed for every later row without text.
+      describe('the title the feed stores on a row without text', () => {
+        const placeholderTemplate = (overrides: Parameters<typeof makeCategorizationTemplate>[0] = {}) =>
+          makeCategorizationTemplate({
+            id: 'tmpl-placeholder',
+            counterparty_name: normalizeCounterpartyName(FALLBACK_DESCRIPTION),
+            counterparty_aliases: [FALLBACK_DESCRIPTION.toLowerCase()],
+            debit_account: '1930',
+            credit_account: '1931',
+            vat_treatment: null,
+            vat_account: null,
+            occurrence_count: 1,
+            confidence: calculateConfidence(1),
+            source: 'user_approved',
+            ...overrides,
+          })
+
+        it.each([
+          [FALLBACK_DESCRIPTION, false],
+          ['OKÄND TRANSAKTION', false],
+          [' okänd transaktion ', false],
+          [normalizeCounterpartyName(FALLBACK_DESCRIPTION), false],
+          ['Okänd transaktion Telia', true],
+        ])('namesCounterparty(%j) is %s', (text, expected) => {
+          expect(namesCounterparty(text)).toBe(expected)
+        })
+
+        it('a template learned under it is not proposed for the next row without text', async () => {
+          const { supabase, enqueue } = createQueuedMockSupabase()
+          enqueue({ data: [placeholderTemplate()] })
+
+          const result = await findCounterpartyTemplate(supabase as never, 'company-1', bankLine(FALLBACK_DESCRIPTION))
+
+          expect(result).toBeNull()
+        })
+
+        it('a counterpart that took it as an alias is not proposed for a row without text either', async () => {
+          const telia = makeCategorizationTemplate({
+            id: 'tmpl-telia',
+            counterparty_aliases: ['telia sverige ab', FALLBACK_DESCRIPTION.toLowerCase()],
+          })
+          const { supabase, enqueue } = createQueuedMockSupabase()
+          enqueue({ data: [telia] })
+
+          const result = await findCounterpartyTemplate(supabase as never, 'company-1', bankLine(FALLBACK_DESCRIPTION))
+
+          expect(result).toBeNull()
+        })
+
+        it('a real counterparty still matches beside such a template', async () => {
+          const telia = makeCategorizationTemplate({ id: 'tmpl-telia' })
+          const { supabase, enqueue } = createQueuedMockSupabase()
+          enqueue({ data: [placeholderTemplate({ occurrence_count: 9 }), telia] })
+
+          const result = await findCounterpartyTemplate(supabase as never, 'company-1', bankLine('Telia Sverige AB'))
+
+          expect(result?.template.id).toBe('tmpl-telia')
+        })
+      })
     })
   })
 
@@ -1127,6 +1191,37 @@ describe('counterparty-templates', () => {
       )
 
       expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('learns nothing from a row the bank sent no text for (the feed stored FALLBACK_DESCRIPTION)', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: FALLBACK_DESCRIPTION,
+        original_description: FALLBACK_DESCRIPTION,
+      })
+      // An own-account transfer, the booking that taught every later row without text.
+      const transfer = { ...mappingResult, debit_account: '1930', credit_account: '1931' }
+
+      await upsertCounterpartyTemplate(
+        supabase as never, 'user-1', tx, transfer, 'user_approved'
+      )
+
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('still learns a row whose text names its counterparty', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const tx = makeTransaction({ merchant_name: null, description: 'Telia Sverige AB', original_description: 'Telia Sverige AB' })
+
+      enqueue({ data: null }) // No existing template
+      enqueue({ data: null }) // Insert succeeds
+
+      await upsertCounterpartyTemplate(
+        supabase as never, 'user-1', tx, mappingResult, 'user_approved'
+      )
+
+      expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
     })
 
     // accounted#36: the bank abbreviates the party, so its text shares no

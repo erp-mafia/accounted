@@ -10,7 +10,7 @@ import type { AccountCandidate } from './select-account'
  * The same proposals the transactions page and the MCP suggestion tool
  * show (lib/transactions/propose.ts), reduced to the accounts the Tier-2
  * selector reasons over: a learned counterpart, a rule that matched, the
- * catalog's patterns. The assistant's own earlier read is left out, so the
+ * company's own earlier booking of the counterparty, the catalog's patterns. The assistant's own earlier read is left out, so the
  * model never argues from itself. No model call here.
  *
  * Company-scoped throughout. Returns at most `limit` candidates, de-duplicated
@@ -34,7 +34,14 @@ export function candidateFromProposal(p: BookingProposal): AccountCandidate {
     account: slateAccount(p),
     label: p.name_sv,
     vatTreatment: (p.booking.kind === 'account' ? p.booking.vat_treatment : p.vat_treatment) as VatTreatment | null,
-    source: p.source === 'counterparty' ? 'counterparty_template' : p.source === 'rule' ? 'mapping_rule' : 'pattern',
+    source:
+      p.source === 'counterparty'
+        ? 'counterparty_template'
+        : p.source === 'rule'
+          ? 'mapping_rule'
+          : p.source === 'precedent'
+            ? 'history'
+            : 'pattern',
     confidence: p.confidence,
     matchReason: p.description_sv || undefined,
   }

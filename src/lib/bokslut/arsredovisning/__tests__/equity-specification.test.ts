@@ -283,6 +283,24 @@ describe('buildEquitySpecification and integrity', () => {
     expect(table.rows[1]).toMatchObject({ cells: [0, 120_000, -120_000], total: 0 })
     expect(table.rows[3]).toMatchObject({ cells: [25_000, 320_000, 90_000], total: 435_000 })
   })
+
+  it('names the rows as the K2 taxonomy does for a K2 year, with the same figures', () => {
+    const spec = buildEquitySpecification({ posts: POSTS, current, previous, balanceSheet: mapping })
+    const k2 = equitySpecificationTable(spec.current, 'k2')
+    expect(k2.rows.map((r) => r.label)).toEqual([
+      'Belopp vid årets ingång',
+      'Balanseras i ny räkning',
+      'Årets resultat',
+      'Belopp vid årets utgång',
+    ])
+    const general = equitySpecificationTable(spec.current)
+    expect(k2.rows.map((r) => [r.key, r.cells, r.total])).toEqual(general.rows.map((r) => [r.key, r.cells, r.total]))
+  })
+
+  it('names the K2 row labels on the report only when asked to, so an older report is told apart', () => {
+    expect(buildEquitySpecification({ posts: POSTS, current, previous, balanceSheet: mapping })).not.toHaveProperty('row_labels')
+    expect(buildEquitySpecification({ posts: POSTS, current, previous, balanceSheet: mapping, rowLabels: 'k2' }).row_labels).toBe('k2')
+  })
 })
 
 describe('presentation in whole kronor', () => {
@@ -301,6 +319,37 @@ describe('presentation in whole kronor', () => {
     expect(post).toMatchObject({ opening: 100_000, closing: 100_101 })
     expect(post.opening + Object.values(post.movements).reduce((a, b) => a + (b ?? 0), 0)).toBe(post.closing)
     expect(spec.integrity_issues).toEqual([])
+  })
+
+  it('rounds a figure and its negative alike, as the balance sheet does: a result on 50 öre leaves no krona on its disposition', () => {
+    // Last year's result of 40 000,50 is carried forward and this year's is
+    // a loss of 20 000,50. The balance sheet rounds a half away from zero
+    // whatever the sign (ixbrl/whole-kronor.ts): 40 001 and -20 001.
+    const current = year(
+      [tb('2081', 25_000, 25_000), tb('2098', 60_000, 100_000.5), tb('2099', 40_000.5, -20_000.5)],
+      [
+        entry([['2099', 40_000.5, 0], ['2098', 0, 40_000.5]]),
+        entry([['2099', 20_000.5, 0], ['8999', 0, 20_000.5]], { source_type: 'year_end' }),
+      ],
+    )
+    const previous = year(
+      [tb('2081', 25_000, 25_000), tb('2098', 60_000, 60_000), tb('2099', 0, 40_000.5)],
+      [entry([['8999', 40_000.5, 0], ['2099', 0, 40_000.5]], { source_type: 'year_end' })],
+      { fiscal_period_id: 'fp-2025', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+    )
+    const mapping = balanceSheet(
+      { Aktiekapital: 25_000, BalanseratResultat: 100_001, AretsResultatEgetKapital: -20_001 },
+      { Aktiekapital: 25_000, BalanseratResultat: 60_000, AretsResultatEgetKapital: 40_001 },
+    )
+    const spec = buildEquitySpecification({ posts: POSTS, current, previous, balanceSheet: mapping })
+    const movements = (concept: string) => spec.current.posts.find((p) => p.concept === concept)?.movements
+    // What leaves Årets resultat is what reaches Balanserat resultat, and
+    // the year's result is the balance sheet's, not a krona beside it.
+    expect(movements('BalanseratResultat')).toEqual({ resultatdisposition: 40_001 })
+    expect(movements('AretsResultatEgetKapital')).toEqual({ resultatdisposition: -40_001, arets_resultat: -20_001 })
+    expect(spec.current.totals.movements).toEqual({ arets_resultat: -20_001 })
+    expect(spec.warnings).toEqual([])
+    expect(equitySpecificationIssues(spec, mapping)).toEqual([])
   })
 })
 

@@ -1,8 +1,9 @@
 /**
  * runSalaryCalculation orchestration around the engine: the run totals use
  * the effective figures (review-step overrides applied, an F-skatt row
- * ignoring an avgifter override), and a row whose salary_type snapshot is
- * stale is brought in line with the employee before it is priced.
+ * ignoring an avgifter override), a row whose salary_type snapshot is
+ * stale is brought in line with the employee before it is priced, and a row
+ * whose personnummer could not be read is left uncalculated.
  *
  * The engine itself is mocked (its maths has its own tests): this file pins
  * what run-calculation does with the engine's answer.
@@ -40,6 +41,8 @@ vi.mock('../calculation-engine', async (importOriginal) => {
 
 import { calculateSalary } from '../calculation-engine'
 import { runSalaryCalculation } from '../run-calculation'
+import { runCalculationState } from '../calculation-state'
+import { validateRunForApproval, type ApprovalRosterRow } from '../approve-run'
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111'
 const COMPANY_ID = '22222222-2222-4222-8222-222222222222'
@@ -336,5 +339,48 @@ describe('runSalaryCalculation: a stale salary_type snapshot (agent feedback seq
     expect(result.ok).toBe(true)
     expect(mock.findCalls('salary_line_items', 'insert')).toHaveLength(0)
     expect(mock.findCalls('salary_run_employees', 'update')).toHaveLength(1) // the row write only
+  })
+})
+
+describe('runSalaryCalculation: a personnummer that cannot be read', () => {
+  const STEPS = [{ label: 'Avgiftskategori', formula: 'Standard 31,42 %', input: { age: 36 }, output: null }]
+
+  beforeEach(() => {
+    vi.mocked(calculateSalary).mockReset()
+  })
+
+  it('leaves the row without a calculation and warns, so approval and booking refuse the run', async () => {
+    vi.mocked(calculateSalary).mockReturnValue(engineResult({ personnummerUnreadable: true, steps: STEPS }) as never)
+    const mock = client([rosterRow({ calculation_breakdown: { steps: STEPS } })])
+
+    const result = await calculate(mock)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.warnings[0]).toContain('Personnumret kunde inte läsas för Test Testsson')
+    expect(result.warnings[0]).toContain('Beräkna om lönekörningen')
+    // An earlier calculation's proof is cleared too, not left standing.
+    const row = rosterWrite(mock)
+    expect(row.calculation_breakdown).toBeNull()
+
+    // The rule review, approval, booking and the AGI share reads it as uncalculated.
+    const stored = { employee_id: 'emp-1', ...row, employee: EMPLOYEE } as unknown as ApprovalRosterRow
+    const run = { status: 'draft', calculation_params: {} }
+    expect(runCalculationState(run, [stored])).toBe('stale')
+    const verdict = validateRunForApproval([stored], run)
+    expect(verdict.uncalculated).toEqual(['Test Testsson'])
+    expect(verdict.blocking).toHaveLength(1)
+  })
+
+  it('records the calculation and adds no such warning when the personnummer is read', async () => {
+    vi.mocked(calculateSalary).mockReturnValue(engineResult({ personnummerUnreadable: false, steps: STEPS }) as never)
+    const mock = client([rosterRow()])
+
+    const result = await calculate(mock)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.warnings.some((warning) => warning.includes('Personnumret'))).toBe(false)
+    expect(rosterWrite(mock).calculation_breakdown).toEqual({ steps: STEPS })
   })
 })

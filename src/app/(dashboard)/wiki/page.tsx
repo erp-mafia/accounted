@@ -1,11 +1,11 @@
 import { Suspense } from 'react'
+import { redirect } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { WikiViews } from '@/components/wiki/WikiViews'
-import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
-import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
-import { parseWikiView } from '@/lib/agent-context/wiki-views'
+import { wikiCompany } from '@/lib/agent-context/wiki-company'
+import { wikiPlace } from '@/lib/agent-context/wiki-views'
 import { getDashboardCompanyId } from '../request-context'
 
 /**
@@ -17,23 +17,34 @@ import { getDashboardCompanyId } from '../request-context'
  * inside the Arkiv rollout. Outside it nothing reads the documents, so the
  * view is not offered.
  *
- * For a company in AGENT_PICTURE_COMPANY_IDS the context view opens with the
- * agent picture in place of the graph. The switch is read here, on the
- * server: the browser gets a boolean.
+ * For a company in AGENT_PICTURE_COMPANY_IDS the context view is the agent
+ * picture, and its help says what the picture is. A `view` that names a row
+ * of the picture (wikiPlace) shows the picture with that row open, under the
+ * picture's own title, and the map leads to Bokföringsregler, where its
+ * lines are. The switch is read here, on the server: the browser gets a
+ * boolean.
+ *
+ * On an installation without the agent connection (the MCP server
+ * extension) there is no picture to show, and the menu has no Kontext row
+ * (nav-v3.ts): an address that would show the picture leads to
+ * Bokföringsregler instead (wikiPlace). The pages that forward into /wiki
+ * ask the same function about the same company (wikiCompany,
+ * wikiDestination), so each of them names the final place itself.
  */
 export default async function WikiPage({ searchParams }: { searchParams: Promise<{ view?: string | string[] }> }) {
-  const t = await getTranslations('wiki')
   const companyId = await getDashboardCompanyId()
-  const facts = !!companyId && isArkivBrainEnabled(companyId)
-  const picture = isAgentPictureEnabled(companyId)
+  const company = wikiCompany(companyId)
+  const { facts, picture } = company
+  const raw = (await searchParams).view
+  const place = wikiPlace({ view: Array.isArray(raw) ? raw[0] : raw }, company)
+  if (place.show === 'redirect') redirect(place.href)
+  const t = await getTranslations('wiki')
   // The top bar names the view, as the menu does: Kontext and Minne are rows
   // of Agenter, Karta a row of Företaget (nav-v3.ts), all views of this page.
-  const raw = (await searchParams).view
-  const parsed = parseWikiView(Array.isArray(raw) ? raw[0] : raw)
-  const view = parsed === 'facts' && !facts ? 'context' : parsed
+  const view = place.show === 'view' ? place.view : 'context'
   return (
     <>
-      <PageHeader title={t(`view_${view}`)} help={<HelpPopover>{t('help')}</HelpPopover>} />
+      <PageHeader title={t(`view_${view}`)} help={<HelpPopover>{place.show === 'picture' ? t('picture.help') : t('help')}</HelpPopover>} />
       <Suspense>
         <WikiViews facts={facts} picture={picture} />
       </Suspense>

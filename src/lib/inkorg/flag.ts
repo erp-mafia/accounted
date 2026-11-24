@@ -1,10 +1,17 @@
 /**
  * The new Inkorg page (/inkorg) rolls out per company (product decision
- * 2026-10-16). With the flag on, the sidebar shows Inkorg as a top-level
- * entry under Att göra and Inköp no longer lists Underlag; with it off,
- * nothing changes and the workspace under Inköp (/e/general/invoice-inbox)
- * stays the inbox. The old workspace keeps working for everyone either way,
- * so a flagged company can always fall back to it.
+ * 2026-10-16). A company has one inbox, and the menu's Inkommande row leads
+ * to it: the new page inside the rollout, the workspace
+ * (/e/general/invoice-inbox) outside it.
+ *
+ * The two addresses lead to the same one inbox (lib/inkorg/inbox-page.ts).
+ * For a company whose inbox is the new page (in the rollout, the extension
+ * installed, no sandbox lock, the capability held), a request for the
+ * workspace's address is redirected to the new page. For every other
+ * company a request for the new page's address is redirected to the
+ * workspace, which is also where the paywall and the sandbox lock are shown.
+ * So a link to either address reaches the company's inbox, and a company on
+ * the new page never opens the workspace.
  *
  * INKORG_V2_COMPANY_IDS lists the companies (comma-separated ids, or `*`
  * for everyone); unset means nobody, so a deploy never moves anyone's inbox.
@@ -23,11 +30,14 @@ export function isInkorgV2Enabled(companyId: string | null | undefined): boolean
   return rollout === 'all' || rollout.includes(companyId)
 }
 
-/** Where the inbox lives without the flag: the workspace under Inköp. */
+/** Where the inbox lives without the flag: the workspace of the invoice-inbox extension. */
 export const LEGACY_INBOX_HREF = '/e/general/invoice-inbox'
 
 /** The new page. */
 export const INKORG_HREF = '/inkorg'
+
+/** `/inkorg?view=<key>` opens that view of the list (lib/inkorg/items.ts parseViewKey); without it, Behöver dig. */
+export const INKORG_VIEW_QUERY = 'view'
 
 /**
  * `/inkorg?fokus=<item id>` opens that document in the focus view, and
@@ -40,8 +50,10 @@ export const INKORG_FOCUS_FIRST = 'forsta'
 
 /**
  * Where the inbox lives for a company, for anything that links to it
- * outside the menu (the command palette): the new page in the rollout,
- * else the workspace under Inköp, the same split the menu makes.
+ * outside the menu (the worklist, the agent picture, a landed document): the
+ * new page in the rollout, else the workspace, the same split the menu
+ * makes. A link that was built without the flag and names the other address
+ * still arrives: the routes redirect (lib/inkorg/inbox-page.ts).
  */
 export function inboxHref(inkorgV2Enabled: boolean): string {
   return inkorgV2Enabled ? INKORG_HREF : LEGACY_INBOX_HREF

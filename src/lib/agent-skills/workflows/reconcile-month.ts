@@ -15,6 +15,8 @@ Scope: this skill is the per-account bridge and the sign-off. Choosing how to bo
 
 Each account has an \`account_key\`: \`bank:<cash_account_id>\`, \`skattekonto\` or \`manual:<BAS>\` (for example \`manual:1510\`). The engine compares outside balance with ledger balance and explains the gap line by line: unmatched outside rows, unmatched ledger lines, ignored rows, and for the skattekonto an opening difference before the fetched history. \`unexplained_difference\` is the number you judge on: at 0 every difference is explained and the account can be signed off. \`is_reconciled\` (status and sign-off preview alike) is true only when, beyond that, nothing is left open. \`difference\` is the raw gap and is normally non-zero while the bridge explains it. A link between an outside row and a verifikat never writes to the ledger; booking does. A link explains exactly the linked rows' amount: on the skattekonto, a verifikat that holds more on 1630 than the rows linked to it stays in \`unmatched_ledger\` with what remains (\`partially_linked\`: \`entry_amount\`, \`linked_amount\`, \`linked_count\`), so linking never changes \`unexplained_difference\`.
 
+On a bank account the bridge compares movements inside the window, not balances: \`external_balance\` is null, \`ledger_balance\` is only what the books moved on the account in the window, and the opening balance and ignored rows are outside it. A bank row with no verifikat counts as explained, because it is listed in \`unmatched_external\`. So a bank account at \`unexplained_difference\` 0 can still have unbooked rows and still differ from the bank's own balance. The one comparison with the bank's balance is \`bank.balance_check\` (Step 1).
+
 ## Step 0: Orient before acting
 
 Answer these before touching an account. Do not ask the user what a tool can tell you.
@@ -31,6 +33,16 @@ Then tell the user in two lines what you found: the month, the accounts, which a
 
 \`gnubok_get_reconciliation_status({ account_key, date_from, date_to })\` with the month (for \`manual:\` keys, \`date_to\` is the balansdag). It returns outside balance, ledger balance, \`difference\`, \`unexplained_difference\`, the bridge lines, counts per bucket and the latest sign-off. Work one account at a time, in this order: bank accounts, skattekonto, then manual accounts.
 
+### The bank's own balance (bank accounts)
+
+\`bank.balance_check\` is the bank's reported balance (\`bank_balance\`) against the booked balance on the account (\`booked_balance\`, opening balance included), both at the end of \`as_of\`: the bank's day for its last balance fetch, usually today, not the month you read. \`difference\` is \`bank_balance - booked_balance\` and its parts sum to it to the öre:
+
+- \`unbooked\` (\`count\`, \`total\`): bank rows through \`as_of\` with no verifikat. Those dated in the month are in \`unmatched_external\`: book them (Step 2). Later ones belong to later months.
+- \`before_history\` (\`history_start\`, \`difference\`): the bank's balance before its first row against the books the day before. Non-zero is usually an opening balance that never reached the books (see "The opening balance is wrong"), or an ignored row that was a real payment (\`ignored\` counts them).
+- \`rest\`: what the books moved on the account since the bank's first row beyond the rows booked against it: a verifikat with no bank row, or a row booked on another account or amount.
+
+Read it before you tell the user a bank account is avstämt, and give its date. When \`as_of\` is after the month end, say so plainly ("Banken och bokföringen jämförs per 23 november, inte per 31 oktober"): it does not show the balance on the month's last day. For that, ask the user for the statement's closing balance that day and compare it with the account's closing balance from \`gnubok_get_general_ledger({ from_date, to_date, account_from, account_to })\`. \`balance_check\` null comes with \`balance_check_refusal\`: NO_BANK_BALANCE (the bank reported no balance) or FOREIGN_CURRENCY_ACCOUNT: ask for the statement's balance in the same way; NO_FISCAL_PERIOD: no fiscal year holds \`as_of\`.
+
 ## Step 2: Work the buckets
 
 \`gnubok_list_reconciliation_items({ account_key, bucket, date_from, date_to })\` (limit default 50, max 200; page with \`offset\`). Each item carries \`item_id\`, \`side\`, \`amount\`, a \`proposal\` and the \`actions\` it allows.
@@ -40,7 +52,7 @@ Then tell the user in two lines what you found: the month, the accounts, which a
 3. **unmatched_ledger** (only in the books): see the same section.
 4. **matched**, **ignored**, **upcoming**: explain the bridge and need no work. \`upcoming\` skattekonto rows are not yet settled at Skatteverket and cannot be booked. On a bank account \`matched\` also holds verifikat settled against each other (ledger rows carrying \`settlement\`, see below).
 
-Re-read the status after every approved round. Stop working an account when \`unexplained_difference\` is 0, or when what remains needs the user.
+Re-read the status after every approved round. Stop working an account when \`unexplained_difference\` is 0 and no open row is left that you can book or link (\`is_reconciled\` is true when none is left at all), or when what remains needs the user. On a bank account, read \`bank.balance_check\` before you stop.
 
 ### Items on one side only
 
@@ -108,7 +120,7 @@ The summary also lists balance accounts without a feed. For 1510 (kundreskontra)
 
 ## Step 4: Sign off
 
-When \`unexplained_difference\` is 0 through the month end: \`gnubok_reconcile_signoff({ account_key, through_date: "YYYY-MM-DD", dry_run: true })\` with the last day of the month, then without \`dry_run\`. It stages; the user approves. Refusals are policy:
+When \`unexplained_difference\` is 0 through the month end: \`gnubok_reconcile_signoff({ account_key, through_date: "YYYY-MM-DD", dry_run: true })\` with the last day of the month, then without \`dry_run\`. It stages; the user approves. The sign-off judges the bridge only, not \`bank.balance_check\`: on a bank account, show the user the balance check with its date and parts beside the preview, so they approve knowing both. Refusals are policy:
 
 - NOT_RECONCILED: something is still unexplained. Back to Step 3.
 - OUTSIDE_UNKNOWN: no outside balance (manual account without underlag, or no fetched data). Ask for the underlag or the fetch.
@@ -162,7 +174,7 @@ Stop, and say "Det här behöver ett beslut av dig (eller er redovisningskonsult
 
 - Links and sign-offs never touch the ledger. Booking does, and always stages.
 - Never delete, never edit a posted verifikat, never book a plug entry to force a zero, never invent an amount or an \`external_balance\`.
-- Judge on \`unexplained_difference\`, never on \`difference\`.
+- Judge on \`unexplained_difference\`, never on \`difference\`. On a bank account it compares movements only: never call the account avstämt without \`bank.balance_check\`.
 - Round money to whole öre (two decimals), never with toFixed. Account numbers are strings ("1930").
 - One or more outside rows link to one verifikat. On the skattekonto the rows must sum to what the verifikat settles on 1630, unless the pair carries \`allow_remainder: true\` for a summarised verifikat. One row may also settle several verifikat: pass \`journal_entry_ids\` with several ids. On a bank account (a lump payout over utlägg, a Bankgirot deposit over two customer payments) optionally with \`allocations: [{ journal_entry_id, amount }]\` (signed, summing to the row). On the skattekonto (one event booked as a verifikat and its correction) the verifikat's open amounts on 1630 must sum exactly to the event; the verifikat then leave \`unmatched_ledger\` and are listed under \`matched\` with \`settlement\`. Unlinking the row undoes it all. A pair with no \`external_ids\` and two or more verifikat settles them against each other (SEK bank accounts, summing to 0). Other shapes come back as UNSUPPORTED_PAIR_SHAPE.
 - A wrong link is undone with \`gnubok_reconcile_unmatch({ account_key, external_id })\`; verifikat settled against each other with \`gnubok_reconcile_unmatch({ account_key, settlement_id })\`. The verifikat stay untouched either way.
@@ -171,7 +183,7 @@ Stop, and say "Det här behöver ett beslut av dig (eller er redovisningskonsult
 
 End with short groups, in the user's language:
 
-- **Klart**: per account, outside vs ledger and the sign-off date approved
+- **Klart**: per account, outside vs ledger and the sign-off date approved; for a bank account, the bank's balance against the booked one from \`bank.balance_check\`, with its date
 - **Väntar på godkännande**: what is staged, per account
 - **Behöver ditt svar**: each open question, with the facts
 - **Kunde inte göras**: what and why (not connected, locked period, stale data)
@@ -185,7 +197,7 @@ End with short groups, in the user's language:
 - \`gnubok_reconcile_match\`, \`gnubok_reconcile_unmatch\`, \`gnubok_reconcile_residual\`, \`gnubok_reconcile_signoff\` (staged writes)
 - \`gnubok_categorize_transaction\`, \`gnubok_link_transaction_to_journal_entry\`, \`gnubok_ignore_transaction\`, \`gnubok_auto_match_period\` (bank rows; details in \`bank-reconciliation\`)
 - \`gnubok_book_skattekonto_rows\`, \`gnubok_book_skattekonto_row\` (skattekonto rows)
-- \`gnubok_get_trial_balance\`, \`gnubok_query_journal\`, \`gnubok_set_opening_balances\` (opening balance checks)
+- \`gnubok_get_trial_balance\`, \`gnubok_get_general_ledger\`, \`gnubok_query_journal\`, \`gnubok_set_opening_balances\` (balance and opening balance checks)
 - \`gnubok_reverse_journal_entry\`, \`gnubok_correct_entry\` (only on the user's decision, open periods)
 - \`gnubok_list_pending_operations\`, \`gnubok_approve_pending_operation\` (approval)
 - \`gnubok_search_tools\`, \`gnubok_call_tool\`, \`gnubok_stage_tool\` (reaching unlisted tools)

@@ -230,6 +230,10 @@ export default function ArsredovisningPage() {
   const [savedOmitCashFlow, setSavedOmitCashFlow] = useState(false)
   const [cashFlowOmissionConfirmed, setCashFlowOmissionConfirmed] = useState(false)
   const [savedCashFlowOmissionConfirmed, setSavedCashFlowOmissionConfirmed] = useState(false)
+  // The flerårsöversikt in thousands of kronor (tkr) in the PDF and the
+  // iXBRL document; the statements stay in whole kronor.
+  const [overviewTkr, setOverviewTkr] = useState(false)
+  const [savedOverviewTkr, setSavedOverviewTkr] = useState(false)
   const [savingNarrative, setSavingNarrative] = useState(false)
   const { canWrite, lockedTitle } = useViewerLock()
   const [k3DisclosuresDirty, setK3DisclosuresDirty] = useState(false)
@@ -429,6 +433,8 @@ export default function ArsredovisningPage() {
         setSavedCashFlowOmissionConfirmed(
           d.disclosures.kassaflodesanalys_omission_confirmed ?? false,
         )
+        setOverviewTkr(d.forvaltningsberattelse.flerarsoversikt_tkr ?? false)
+        setSavedOverviewTkr(d.forvaltningsberattelse.flerarsoversikt_tkr ?? false)
         setSignatures(signerRows ?? [])
         setSignaturesFailed(signerRows === null)
       })
@@ -471,7 +477,8 @@ export default function ArsredovisningPage() {
     parentCompanyConfirmed !== savedParentCompanyConfirmed ||
     !sameNoteOverrides(noteOverrides, savedNoteOverrides) ||
     omitCashFlow !== savedOmitCashFlow ||
-    cashFlowOmissionConfirmed !== savedCashFlowOmissionConfirmed
+    cashFlowOmissionConfirmed !== savedCashFlowOmissionConfirmed ||
+    overviewTkr !== savedOverviewTkr
   const hasUnsavedNarrative = hasUnsavedContent || hasUnsavedAgm || k3DisclosuresDirty
 
   // The K3 disclosure answers save on their own; the document and the check
@@ -597,6 +604,7 @@ export default function ArsredovisningPage() {
             note_overrides: noteOverrides,
             omit_kassaflodesanalys: omitCashFlow,
             kassaflodesanalys_omission_confirmed: cashFlowOmissionConfirmed,
+            flerarsoversikt_tkr: overviewTkr,
           }),
         },
       )
@@ -634,6 +642,7 @@ export default function ArsredovisningPage() {
       setSavedNoteOverrides(noteOverrides)
       setSavedOmitCashFlow(omitCashFlow)
       setSavedCashFlowOmissionConfirmed(cashFlowOmissionConfirmed)
+      setSavedOverviewTkr(overviewTkr)
       // Whether the cash-flow choice is honoured, and the generated note
       // texts, are decided server-side: refresh the document data quietly
       // so the verdict and the K3 summary reflect what was just saved.
@@ -682,6 +691,7 @@ export default function ArsredovisningPage() {
     noteOverrides,
     omitCashFlow,
     cashFlowOmissionConfirmed,
+    overviewTkr,
     toast,
   ])
 
@@ -1598,6 +1608,15 @@ export default function ArsredovisningPage() {
                     ))}
                   </TableBody>
                 </Table>
+                <label className="flex cursor-pointer items-center gap-3 text-sm">
+                  <Checkbox
+                    id="ar-overview-tkr"
+                    checked={overviewTkr}
+                    onCheckedChange={(checked) => setOverviewTkr(Boolean(checked))}
+                  />
+                  {tNotes('overview_tkr')}
+                </label>
+                <p className="text-xs text-muted-foreground">{tNotes('overview_tkr_hint')}</p>
               </div>
 
               <div className="flex items-center justify-between pt-2">

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useViewerLock } from '@/components/ui/viewer-lock'
@@ -12,13 +13,16 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ArrowRightIcon } from '@/components/icons'
-import { formatCurrency } from '@/lib/utils'
+import { AttnLine } from '@/components/ui/attn-line'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
-import type { AccrualsProposal } from '@/lib/bokslut/accruals/types'
+import type { AccrualsProposal, VacationProposalEmployee } from '@/lib/bokslut/accruals/types'
 import { buildAccrualItems, type AuditFeeState, type ManualAccrualEntry } from '@/lib/bokslut/accruals/manual-items'
 import { ManualAccrualsEditor } from './ManualAccrualsEditor'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+
+const DAYS = new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 2 })
 
 interface AccrualsStepProps {
   periodId: string
@@ -32,6 +36,7 @@ interface AutoState {
 
 export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps) {
   const { toast } = useToast()
+  const tReports = useTranslations('reports')
   const { company } = useCompany()
   // An enskild firma has no revisor and normally closes under K1 (BFNAR
   // 2006:1, förenklat årsbokslut): its arvode row is the bokslutsarvode
@@ -133,6 +138,10 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
   if (!proposal) return null
 
   const vacation = proposal.proposals.find((p) => p.kind === 'vacation_liability_change')
+  const vacationEmployeesRaw: unknown = vacation?.computation?.employees
+  const vacationEmployees = Array.isArray(vacationEmployeesRaw)
+    ? (vacationEmployeesRaw as VacationProposalEmployee[])
+    : []
 
   return (
     <div className="space-y-6">
@@ -175,7 +184,44 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
               </p>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            {/* Per employee: what the target sums (days x day value, plus
+                earning and variable pay), so the figure can be traced. */}
+            {vacationEmployees.length > 0 && (
+              <ul className="space-y-2">
+                {vacationEmployees.map((employee) => (
+                  <li key={employee.employee_id} className="text-xs tabular-nums">
+                    <div className="flex items-baseline justify-between gap-4 text-sm">
+                      <span className="min-w-0 truncate">{employee.employee_name}</span>
+                      <span className="shrink-0">{formatRowAmount(employee.liability)}</span>
+                    </div>
+                    <div className="text-muted-foreground">
+                      {tReports('ss_detail_days', {
+                        days: DAYS.format(employee.valued_days),
+                        value: formatCurrency(employee.day_value),
+                      })}
+                    </div>
+                    {employee.earning_pay !== 0 && (
+                      <div className="text-muted-foreground">
+                        {tReports('ss_detail_earning', { amount: formatCurrency(employee.earning_pay) })}
+                      </div>
+                    )}
+                    {employee.variable_pay !== 0 && (
+                      <div className="text-muted-foreground">
+                        {tReports('ss_detail_variable', { amount: formatCurrency(employee.variable_pay) })}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {vacation.warnings.length > 0 && (
+              <div role="status" className="space-y-1">
+                {vacation.warnings.map((warning) => (
+                  <AttnLine key={warning}>{warning}</AttnLine>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Checkbox
                 id="accept-vacation"

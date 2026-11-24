@@ -190,6 +190,13 @@ export interface SalaryCalculationResult {
   totalEmployerCost: number
   /** Växa-stöd refund to apply for on this payment, null outside a växa-stöd month. */
   vaxaStodRefund: VaxaStodRefund | null
+  /**
+   * True when the personnummer could not be decrypted, so the age that
+   * decides the avgift rate is unknown: the avgifter figures are the standard
+   * rate's placeholder, not this employee's. Not a calculation; the caller
+   * must not record it as one (run-calculation.ts).
+   */
+  personnummerUnreadable: boolean
   steps: CalculationStep[]
 }
 
@@ -209,6 +216,8 @@ export interface AvgifterCalculation {
   // Never 'vaxa_stod': växa-stöd is a refund, not a sats (lib/salary/vaxa-stod.ts).
   // Rows stored before that keep the value in salary_run_employees.avgifter_category.
   category: 'standard' | 'reduced_65plus' | 'youth' | 'exempt'
+  /** The personnummer could not be decrypted: rate and category are a placeholder (SalaryCalculationResult). */
+  personnummerUnreadable?: true
   steps: CalculationStep[]
 }
 
@@ -978,6 +987,7 @@ export function calculateSalary(
     vacationCompensation,
     totalEmployerCost,
     vaxaStodRefund: vaxaStod?.refund ?? null,
+    personnummerUnreadable: avgifterCalc.personnummerUnreadable === true,
     steps,
   }
 }
@@ -1071,12 +1081,16 @@ export function calculateAvgifterRate(
   try {
     pnr = decryptPersonnummer(input.personnummer)
   } catch {
-    // If decryption fails, assume standard rate
+    // Without the age the rate is unknown. The standard rate is only a
+    // placeholder that keeps the figures defined; personnummerUnreadable
+    // tells the caller this is no calculation (run-calculation.ts leaves the
+    // row uncalculated, so approval, booking and the AGI refuse it).
     return {
       rate: config.avgifterTotal,
       amount: 0,
       basis: 0,
       category: 'standard',
+      personnummerUnreadable: true,
       steps: [{
         label: 'Avgiftskategori',
         formula: `Standard ${fmtPct(config.avgifterTotal)} (personnummer kunde inte dekrypteras)`,

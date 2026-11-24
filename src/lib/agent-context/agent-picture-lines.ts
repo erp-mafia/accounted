@@ -80,7 +80,9 @@ function straight(a: readonly [number, number], b: readonly [number, number]): s
  * Side by side (the first card ends left of the company's card): one curve
  * per card, into the middle of the company card's left edge and out of the
  * middle of its right edge. Stacked: one straight connector from the left
- * column down into the company's card and one from it down to the agents.
+ * column down into the company's card and one from it down to the agents,
+ * each solid when a card of its side is connected and dashed when none is,
+ * as a card's own line is side by side.
  */
 export function flowLayout(input: FlowInput): FlowLayout | null {
   const { map, core, cards } = input
@@ -116,11 +118,13 @@ export function flowLayout(input: FlowInput): FlowLayout | null {
   } else {
     const cx = x(core.left + core.width / 2)
     const activeOn = (side: FlowCard['side']) => cards.some((card) => card.side === side && card.active)
+    // One connector stands for every card of its side: it is dashed only when not one of them is connected.
+    const nothingConnectedOn = (side: FlowCard['side']) => !cards.some((card) => card.side === side && card.connected)
     if (input.inColumn && cards.some((card) => card.side === 'in')) {
-      lines.push({ id: 'in', d: straight([cx, y(bottom(input.inColumn))], [cx, y(core.top)]), dashed: false, active: activeOn('in') })
+      lines.push({ id: 'in', d: straight([cx, y(bottom(input.inColumn))], [cx, y(core.top)]), dashed: nothingConnectedOn('in'), active: activeOn('in') })
     }
     if (input.outColumn && cards.some((card) => card.side === 'out')) {
-      lines.push({ id: 'out', d: straight([cx, y(bottom(core))], [cx, y(input.outColumn.top)]), dashed: false, active: activeOn('out') })
+      lines.push({ id: 'out', d: straight([cx, y(bottom(core))], [cx, y(input.outColumn.top)]), dashed: nothingConnectedOn('out'), active: activeOn('out') })
     }
   }
 
@@ -143,4 +147,18 @@ export function isReadingNow(lastCallAt: string | null | undefined, now: string 
   // The log's clock and the server's can differ by a moment: a call stamped
   // slightly ahead is still a call made just now.
   return Math.abs(at - last) / 1000 <= windowSeconds
+}
+
+/**
+ * Which of some measured targets holds a point: the first one, by id, or
+ * null when none does. For a press that has to be placed by where it landed
+ * (a press on a row of the company's card while a view is still closing over
+ * the page reaches the page as coordinates only).
+ */
+export function hitTest(targets: ReadonlyArray<{ id: string; rect: FlowRect }>, x: number, y: number): string | null {
+  for (const target of targets) {
+    const { left, top, width, height } = target.rect
+    if (x >= left && x <= left + width && y >= top && y <= top + height) return target.id
+  }
+  return null
 }
