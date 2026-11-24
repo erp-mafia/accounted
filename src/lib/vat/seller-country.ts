@@ -111,7 +111,7 @@ const COUNTRY_NAMES: ReadonlyArray<readonly [string, string]> = [
 
 const US_STATE_NAMES = [
   'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida',
-  'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland',
+  'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland',
   'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada',
   'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma',
   'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah',
@@ -208,29 +208,48 @@ export function swedishVatNumberAbroad(identity: SellerIdentity | null | undefin
  */
 const AFTER_COUNTRY = /^(?:[\s\d.,-]*|[\s.,-]*(?=[A-Za-z0-9 -]*\d)[A-Za-z0-9][A-Za-z0-9 -]{0,9}[\s.,]*)$/
 
-/** A phone number with its label, to the end of the text: "Tel +65 6123 4567", "Phone: (555) 123". */
-const LABELLED_PHONE = /\b(?:tel|tfn|telefon|phone|fax|mob|mobile)\b\.?\s*:?\s*[+(\d][\s\S]*$/i
-
-/** A part of an address that is contact details or a number alone: an e-mail, a web address, a phone number or a postcode. */
-const NOT_A_PLACE = /^(?:[^\p{L}]*|\S*@\S*|(?:www\.|https?:\/\/)\S*)$/iu
+/** A phone number with its label, to the end of its part: "Tel +65 6123 4567", "Ph. (555) 123". */
+const LABELLED_PHONE = /\b(?:tel|tfn|telefon|phone|ph|fax|mob|mobile)\b\.?\s*:?\s*[+(\d][^,\n]*/gi
 
 /**
- * The address without what may follow its country: a labelled phone number,
- * and last parts (by comma or line) that are an e-mail, a web address, or
- * digits alone.
+ * A part of an address that is no place: digits alone (a postcode, a phone
+ * number), an e-mail, a web address, or a labelled e-mail, web address or
+ * registration number ("VAT: SE...", "Org.nr 556...").
  */
+const NOT_A_PLACE = /^(?:[^\p{L}]*|.*@.*|(?:www\.|https?:\/\/).*|(?:e-?mail|e-?post|web(?:site)?|webb|vat|tax|gst|org|reg|momsreg)\b.*[\d.].*)$/iu
+
+/** The address without what may follow its country: labelled phone numbers, and last parts (by comma or line) that are no place. */
 function withoutTrailingContact(text: string): string {
   const parts = text.replace(LABELLED_PHONE, '').split(/[,\n]/)
   while (parts.length > 0 && NOT_A_PLACE.test(parts[parts.length - 1]!.trim())) parts.pop()
   return parts.join(',').trim()
 }
 
-/** The last part of an address (by comma or line) without a postcode before or after it: "Malaysia" of "50000 Kuala Lumpur, Malaysia". */
-function lastPartWithoutPostcode(text: string): string {
-  const words = (text.split(/[,\n]/).pop() ?? '').trim().split(/\s+/)
+/** A name without the postcode words before or after it: "Malaysia" of "50000 Malaysia". */
+function withoutPostcode(text: string): string {
+  const words = text.trim().split(/\s+/)
   while (words.length > 0 && /\d/.test(words[0]!)) words.shift()
   while (words.length > 0 && /\d/.test(words[words.length - 1]!)) words.pop()
   return words.join(' ')
+}
+
+/**
+ * The country an address's last part (by comma or line) names, or null. A
+ * code counts only as the whole part ("..., DE", "..., U.K."): two letters
+ * left beside a number are a floor, a giro or a box ("4 tr", "BG 5050-1055").
+ * A name of three letters or more counts with a postcode beside it, or as
+ * one side of a slash, a dash or brackets ("Schweiz/Suisse", "Norway (NO)").
+ */
+function countryOfLastPart(text: string): string | null {
+  const part = (text.split(/[,\n]/).pop() ?? '').trim()
+  if (/^[A-Za-z]{2}$/.test(part) || /^(?:[A-Za-z]\.){2,3}$/.test(part)) return countryCodeOfPrintedName(part.replace(/\./g, ''))
+  for (const piece of [part, ...part.split(/\s*[/()]\s*|\s+-\s+/)]) {
+    const name = withoutPostcode(piece)
+    if (name.replace(/[^\p{L}]/gu, '').length < 3) continue
+    const code = countryCodeOfPrintedName(name)
+    if (code) return code
+  }
+  return null
 }
 
 /**
@@ -255,7 +274,7 @@ function countryEndingAddress(address: string | null | undefined): string | null
     const last = named.reduce((latest, one) => (one.at > latest.at ? one : latest))
     if (AFTER_COUNTRY.test(text.slice(last.end))) return last.code
   }
-  const printed = countryCodeOfPrintedName(lastPartWithoutPostcode(text))
+  const printed = countryOfLastPart(text)
   return printed && printed !== SWEDEN ? printed : null
 }
 

@@ -727,6 +727,34 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
     expect(atTheDashboard).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT', details: { reason: 'not_confirmed' } })
   })
 
+  it('checks the inbox items matched to the row when the caller names none, as the agent door sends it', async () => {
+    const { supabase } = ledger({
+      invoice_inbox_items: { data: [{ document_id: 'doc-7', extracted_data: { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250, vatAmount: 216.94 } } }], error: null },
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, software, api)
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT', details: { document_id: 'doc-7', reason: 'not_confirmed' } })
+  })
+
+  it('checks the inbox item\'s document beside the row\'s own, since the booking anchors both', async () => {
+    const { supabase } = ledger({
+      transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
+      document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: { vatNumber: 'IE3668997OH' }, totals: { total: 1250, vatAmount: 0 } } }, error: null },
+      invoice_inbox_items: { data: { document_id: 'doc-9', extracted_data: { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250, vatAmount: 216.94 } } }, error: null },
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT', details: { document_id: 'doc-9', reason: 'not_confirmed' } })
+  })
+
+  it('reads the charge off the VAT breakdown when the total states none, as the bulk door does', async () => {
+    const { supabase } = inboxItem({ supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250 }, vatBreakdown: [{ rate: 21, amount: 216.94 }] })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+      details: { document_id: 'doc-9', seller_vat_amount: 216.94, reason: 'not_confirmed' },
+    })
+  })
+
   it('with the flag, books the inbox item\'s purchase in the address\'s box and tells the approver', async () => {
     const singapore = { vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' }
     const { supabase } = inboxItem({ supplier: singapore, totals: { total: 1250, vatAmount: 250 } })

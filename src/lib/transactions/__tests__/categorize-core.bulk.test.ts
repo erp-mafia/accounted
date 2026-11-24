@@ -303,6 +303,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       // 3. company_settings
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
+      { data: [] }, // the seller-VAT check: no other inbox item matched to the row
       // 4. ensureFiscalPeriod → existing period
       { data: [{ id: 'fp-1' }] },
       // 5. transactions update (mark booked)
@@ -453,12 +454,14 @@ describe('bulkBookMatchedInboxItems: booking', () => {
 // ruta 21 by default.
 describe('bulkBookMatchedInboxItems: the reverse-charge box per item', () => {
   /** The categorize chain of one booked item after its inbox row (see the booking tests above). */
-  function bookedChain(txId: string) {
+  function bookedChain(txId: string, reverseCharge = true) {
     return [
       { data: { id: txId, date: '2026-10-01', amount: -500, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
+      // A reverse charge's seller-VAT check reads the inbox items matched to the row.
+      ...(reverseCharge ? [{ data: [] }] : []),
       { data: [{ id: 'fp-1' }] },
       { data: [{ id: txId }], error: null },
       { data: { document_id: null } }, // propagation: tx pin lookup
@@ -571,7 +574,7 @@ describe('bulkBookMatchedInboxItems: the reverse-charge box per item', () => {
   it('books the same reading under its own VAT: only reverse charge is refused', async () => {
     const supabase = queuedSupabase([
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null, extracted_data: { totals: { vatAmount: 100 } } } },
-      ...bookedChain('tx-1'),
+      ...bookedChain('tx-1', false),
     ])
     const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
       item_ids: ['i1'], category: 'expense_software', vat_treatment: 'standard_25',
@@ -581,7 +584,7 @@ describe('bulkBookMatchedInboxItems: the reverse-charge box per item', () => {
   })
 
   it('reads no box for a treatment other than reverse charge', async () => {
-    const supabase = queuedSupabase([item('i1', 'tx-1', null), ...bookedChain('tx-1')])
+    const supabase = queuedSupabase([item('i1', 'tx-1', null), ...bookedChain('tx-1', false)])
     const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
       item_ids: ['i1'], category: 'expense_software', vat_treatment: 'standard_25',
     })

@@ -188,9 +188,10 @@ function foldPrintedName(value: string): string {
 let printedNames: Map<string, string> | null = null
 
 /**
- * Every assigned code's name in English, in Swedish and in the country's own
- * main language, long and short ("Saudi Arabia", "Saudiarabien", "Nederland",
- * "España", "UK"), from the runtime's CLDR data. Built on first use; the
+ * Every assigned code's name in English, in Swedish, in the country's own
+ * main language and in the other large European ones, long and short
+ * ("Saudi Arabia", "Saudiarabien", "Nederland", "España", "Belgique", "UK"),
+ * from the runtime's CLDR data. Built on first use; the
  * first name taken for a spelling keeps it. A runtime without region names
  * gives none, and only normalizeCountryCode's names are read then.
  */
@@ -217,7 +218,9 @@ function printedNameToCode(): Map<string, string> {
       }
     }
     const codes = [...ASSIGNED_COUNTRY_CODES]
-    for (const locale of ['en', 'sv', null]) {
+    // English and Swedish first, then each country's own main language, then the
+    // other languages of the many countries that print more than one (Belgique, Suisse).
+    for (const locale of ['en', 'sv', null, 'de', 'fr', 'it', 'es', 'nl', 'pt']) {
       for (const code of codes) {
         const language = locale ?? ownLanguage(code)
         if (!language || language === 'und') continue
