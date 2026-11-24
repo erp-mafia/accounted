@@ -123,6 +123,7 @@ import {
 import { linkBasisColumns } from '@/lib/links/stamp'
 import {
   confirmedAbroadRegion,
+  isReverseChargeGoods,
   purchaseSellerRegion,
   reverseChargeBoxAsk,
   reverseChargeBoxFor,
@@ -1099,21 +1100,24 @@ export async function categorizeTransaction(
   ) {
     // A Swedish VAT number beside an address abroad, confirmed as a seller not established here: the address's
     // country, for a service.
-    const item = input.inbox_item_id ? await inboxItemSellerById(supabase, companyId, input.inbox_item_id) : null
+    const documentRegion =
+      purchaseSellerRegion(documentSeller) ??
+      (input.confirm_foreign_seller_vat === true ? confirmedAbroadRegion(documentSeller, finalCategory) : null)
+    // The inbox item is read only where it can change the box: for the region when the row's document names none,
+    // and for goods, which a Swedish VAT number abroad on any underlag leaves unboxed.
+    const item =
+      input.inbox_item_id && (!documentRegion || isReverseChargeGoods(finalCategory))
+        ? await inboxItemSellerById(supabase, companyId, input.inbox_item_id)
+        : null
     if (item === 'unread') {
       // An item that could not be read is not one that names nobody: it may show a Swedish VAT number beside an
-      // address abroad, so no box is taken from the rest.
-      txLog.warn('inbox item unreadable for the reverse-charge box', { inboxItemId: input.inbox_item_id })
-      boxUnknown = 'seller_country_unknown'
-    } else {
-      const region =
-        purchaseSellerRegion(documentSeller) ??
-        (input.confirm_foreign_seller_vat === true ? confirmedAbroadRegion(documentSeller, finalCategory) : null) ??
-        (item?.region ?? null)
-      const box = reverseChargeBoxFor(region, finalCategory, [documentSeller, item?.seller])
-      if (box.ok) input = { ...input, reverse_charge_kind: box.kind }
-      else boxUnknown = box.reason
+      // address abroad. A failure of ours to retry, not a box for the caller to name.
+      txLog.error('inbox item unreadable for the reverse-charge box', { inboxItemId: input.inbox_item_id })
+      return refuseFor('INTERNAL_ERROR')
     }
+    const box = reverseChargeBoxFor(documentRegion ?? item?.region ?? null, finalCategory, [documentSeller, item?.seller])
+    if (box.ok) input = { ...input, reverse_charge_kind: box.kind }
+    else boxUnknown = box.reason
   }
 
   const mapped = await buildCategorizeMapping(supabase, companyId, transaction, input, context, {

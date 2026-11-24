@@ -732,7 +732,7 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
     }
   })
 
-  it('takes no box when the inbox item could not be read, whatever the row\'s document says', async () => {
+  it('takes no box for goods when the inbox item could not be read, whatever the row\'s document says', async () => {
     const { supabase } = ledger({
       transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
       document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: { vatNumber: 'DE123456789' }, totals: { total: 1250, vatAmount: 0 } } }, error: null },
@@ -746,7 +746,18 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
       { ...software, category: 'expense_equipment', inbox_item_id: 'item-1' },
       api,
     )
-    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN', details: { reason: 'seller_country_unknown' } })
+    // A failure of ours to retry: no box, and no refusal that says the underlag named no country.
+    expect(outcome).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+  })
+
+  it('boxes a service by the row\'s document without reading the inbox item, which cannot change it', async () => {
+    const { supabase } = ledger({
+      transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
+      document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: { vatNumber: 'DE123456789' }, totals: { total: 1250, vatAmount: 0 } } }, error: null },
+      invoice_inbox_items: { data: null, error: { message: 'connection reset' } },
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
   })
 
   it('still boxes a service from the same seller by its supplier card', async () => {

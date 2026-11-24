@@ -196,14 +196,15 @@ describe('sellerVatOnReverseCharge', () => {
   })
 
   // Ruta 20 is goods sent here from another EU country (ML 2023:200 5 kap. 22 §); the invoice shows the
-  // number the goods were supplied under (17 kap. 24 § p. 3). An SE number may be a purchase in Sweden.
+  // number the goods were supplied under (17 kap. 24 § p. 3). An SE number may be a purchase in Sweden, where
+  // the seller owes the VAT (16 kap. 5 §) and only certain goods are the buyer's, in ruta 23 (16 kap. 6 §).
   it('boxes no goods sold under a Swedish VAT number abroad, whatever region a card or a statement gives', () => {
     const LUXEMBOURG = { vatNumber: 'SE502012345601', address: '38 Example Avenue, L-1855 Luxembourg' }
     for (const category of ['expense_equipment', 'expense_consumables'] as const) {
       for (const region of ['eu', 'non_eu', null] as const) {
         const box = reverseChargeBoxFor(region, category, [{}, LUXEMBOURG])
         expect(box).toMatchObject({ ok: false, reason: 'goods_under_swedish_vat_number' })
-        if (!box.ok) expect(box.messageSv).toMatch(/ruta 20\).*ruta 23\).*svensk moms/)
+        if (!box.ok) expect(box.messageSv).toMatch(/ruta 20\).*säljaren normalt tar ut svensk moms.*ruta 23 gäller bara vissa varor/)
       }
     }
     // A service from the same seller keeps its region (#3814), and goods from another state's number box in ruta 20.
@@ -212,10 +213,10 @@ describe('sellerVatOnReverseCharge', () => {
     expect(reverseChargeBoxFor(purchaseSellerRegion(null, 'eu_business'), 'expense_equipment', [null])).toEqual({ ok: true, kind: 'eu_goods' })
   })
 
-  it('asks for the box of such goods naming ruta 23, in both locales', () => {
+  it('asks for the box of such goods, naming ruta 23 only for certain goods, in both locales', () => {
     const ask = reverseChargeBoxAsk('goods_under_swedish_vat_number', 'reverse_charge_kind')
-    expect(ask.sv).toMatch(/svenskt momsnummer med adress utomlands.*ruta 23/)
-    expect(ask.en).toMatch(/Swedish VAT number beside an address abroad.*box 23/)
+    expect(ask.sv).toMatch(/svenskt momsnummer med adress utomlands.*normalt tar ut svensk moms.*ruta 23 gäller bara vissa varor/)
+    expect(ask.en).toMatch(/Swedish VAT number beside an address abroad.*normally charges Swedish VAT.*box 23 covers only certain goods/)
   })
 
   it('words each refusal in both locales: the flag by name, or why it is not honoured', () => {
