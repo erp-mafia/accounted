@@ -2555,6 +2555,8 @@ describe('commitPendingOperation: categorize_transaction reverse_charge_kind', (
         category: 'expense_software',
         vat_treatment: 'reverse_charge',
         reverse_charge_kind: 'non_eu_services',
+        // Named by the caller at staging, not read off the underlag.
+        reverse_charge_box_param: 'vat_treatment',
         // crm#1765: staged on the caller's word that the underlag's VAT is foreign.
         confirm_foreign_seller_vat: true,
       },
@@ -2566,6 +2568,7 @@ describe('commitPendingOperation: categorize_transaction reverse_charge_kind', (
     const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
     expect(opts.vatTreatment).toBe('reverse_charge')
     expect(opts.reverseChargeKind).toBe('non_eu_services')
+    expect(opts.reverseChargeBoxParam).toBe('vat_treatment')
     expect(opts.confirmForeignSellerVat).toBe(true)
   })
 
@@ -2587,8 +2590,33 @@ describe('commitPendingOperation: categorize_transaction reverse_charge_kind', (
 
     const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
     expect(opts.reverseChargeKind).toBeUndefined()
+    expect(opts.reverseChargeBoxParam).toBeUndefined()
     // Never assumed: an operation staged without the statement books without it.
     expect(opts.confirmForeignSellerVat).toBe(false)
+  })
+
+  it('rejects loudly when a stored box parameter is present but unknown (tamper/drift)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: {
+        transaction_id: 'tx-1',
+        category: 'expense_software',
+        vat_treatment: 'reverse_charge',
+        reverse_charge_kind: 'eu_services',
+        reverse_charge_box_param: 'underlag',
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('reverse_charge_box_param')
+    expect(categorizeMatchedTransaction).not.toHaveBeenCalled()
   })
 
   it('rejects loudly when a stored kind is present but unknown (tamper/drift)', async () => {

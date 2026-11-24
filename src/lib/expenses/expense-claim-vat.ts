@@ -25,7 +25,11 @@
 
 import type { CreateJournalEntryLineInput } from '@/types'
 import { generateReverseChargePurchaseLines, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
-import { vatCodeRuleForAccount, type VoucherVatCodeAccountRow } from '@/lib/bookkeeping/voucher-line-vat-code'
+import {
+  reverseChargeAccountConflict,
+  vatCodeRuleForAccount,
+  type VoucherVatCodeAccountRow,
+} from '@/lib/bookkeeping/voucher-line-vat-code'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 
 /**
@@ -40,14 +44,12 @@ export const EXPENSE_CLAIM_REVERSE_CHARGE_KINDS = [
 
 export type ExpenseClaimReverseCharge = (typeof EXPENSE_CLAIM_REVERSE_CHARGE_KINDS)[number]
 
-/** A purchase cost account (BAS class 4-6), where vatCodeRuleForAccount reads a momskod. */
-const PURCHASE_ACCOUNT = /^[4-6]\d{3}$/
-
 /**
  * The reverse-charge lines of an utlägg on its purchase amount (`base`: the
  * receipt carries no VAT, so the amount is the beskattningsunderlag), or null
- * when the cost account cannot carry them. The account decides as it does on
- * a konteringsrad (vatCodeRuleForAccount, crm#1096), read from its chart row
+ * when the cost account cannot carry them (reverseChargeAccountConflict, as
+ * bank categorization refuses it). The account decides as it does on a
+ * konteringsrad (vatCodeRuleForAccount, crm#1096), read from its chart row
  * (`row`, null or undefined when the chart holds none):
  *
  *   - an account that reports ruta 20-24 itself (4531, or one whose kontoplan
@@ -68,12 +70,11 @@ export function expenseClaimReverseChargeLines(
   expenseAccount: string,
   row: VoucherVatCodeAccountRow | null | undefined,
 ): CreateJournalEntryLineInput[] | null {
+  if (reverseChargeAccountConflict(expenseAccount, row, kind)) return null
   const rule = vatCodeRuleForAccount(expenseAccount, row)
   if (rule.mode === 'fixed') {
-    if (rule.code.kind !== kind) return null
     return generateReverseChargePurchaseLines({ base, rate: rule.code.rate, kind, basisBase: 0 })
   }
-  if (rule.mode === 'none' && PURCHASE_ACCOUNT.test(expenseAccount)) return null
   return generateReverseChargePurchaseLines({ base, kind })
 }
 

@@ -1179,6 +1179,25 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
         'Resend with reverse_charge_kind eu_services, non_eu_services or eu_goods (MCP: vat_treatment reverse_charge_eu_services, reverse_charge_non_eu_services or reverse_charge_eu_goods), read off the seller country on the invoice. details.reason says why the box could not be read.',
     },
   },
+  // A reverse charge on a cost account that cannot take it
+  // (reverseChargeAccountConflict, the rule the utlägg books by): one that
+  // declares a box of its own, where the basis pair would declare the
+  // purchase twice, or one whose own ruta 20-24 is another than the box the
+  // caller stated. The service names the account, the boxes and the remedy;
+  // this is the fallback.
+  TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Omvänd betalningsskyldighet kan inte bokföras på det valda kostnadskontot: kontot redovisar själv en momsruta som köpet då också skulle deklareras i, eller en annan ruta än den angivna. Redovisar kontot trepartshandel (ruta 37) eller import (ruta 50) ska köpet bokföras utan omvänd betalningsskyldighet.',
+    message_en:
+      'Reverse charge cannot be booked on the chosen cost account: the account reports a VAT box of its own that the purchase would then also be declared in, or another box than the one stated. If the account reports triangulation (box 37) or import (box 50), book the purchase without reverse charge.',
+    thrown_message_sv: true,
+    remediation: {
+      description:
+        'details.reason "other_box": details.account_number reports details.account_box itself (ruta37 trepartshandel, ruta50 import); such a purchase is not reverse charge, so book it without reverse charge (trepartshandel without VAT, an import with its import VAT). "basis_offset": 4598 is the basis offset, book the purchase on its cost account. "no_rate": the account\'s reverse-charge momskod has no rate of 25, 12 or 6 %; correct the rate in the chart of accounts or book on an ordinary cost account. "other_kind": the account reports details.account_box itself, not details.requested_box; resend with no box (or with that box when it is ruta20, ruta21 or ruta22, the boxes a caller can name), or book the purchase on an ordinary cost account.',
+      resource: 'Accounted://chart-of-accounts',
+    },
+  },
   TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT: {
     httpStatus: 400,
     message_sv:
@@ -1187,7 +1206,7 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       'Reverse charge refused: the attached document shows the seller charged VAT. If it is foreign VAT the seller charged in error, confirm it (confirm_foreign_seller_vat): the purchase is then booked as reverse charge on the whole amount paid and the foreign VAT is not deducted. Swedish VAT is booked at its rate.',
     remediation: {
       description:
-        'details.reason "not_confirmed": if the VAT on the document is another country\'s VAT the seller charged in error, resend with confirm_foreign_seller_vat=true. That states the VAT is foreign: the reverse charge is booked on the whole amount paid (the foreign VAT included, never deducted), and the user should ask the seller for a credit note. If it is Swedish VAT, resend with the rate (standard_25) and no reverse charge. details.reason "seller_vat_swedish": the document names a Swedish seller, so the flag is not honoured; book with the rate.',
+        'details.reason "not_confirmed" with details.address_country: the document\'s VAT number is Swedish but its address is in that country. Ask the user. If the purchase is a service taxed in Sweden under the main rule and the seller is not established in Sweden for the sale (ML 16 kap. 4 and 9 §§), resend with confirm_foreign_seller_vat=true: the reverse charge is booked on the whole amount paid and the VAT the seller charged is never deducted. If the seller\'s establishment in Sweden takes part in the sale, resend with the rate (standard_25). details.reason "not_confirmed" without it: if the VAT on the document is another country\'s VAT the seller charged in error, resend with confirm_foreign_seller_vat=true. That states the VAT is foreign: the reverse charge is booked on the whole amount paid (the foreign VAT included, never deducted), and the user should ask the seller for a credit note. If it is Swedish VAT, resend with the rate (standard_25) and no reverse charge. details.reason "seller_vat_swedish": the document names a Swedish seller, so the flag is not honoured; book with the rate.',
     },
   },
   // The row's one click (review_shown false) on a proposal the direct-booking
