@@ -48,6 +48,8 @@ export interface VacationLiabilityRow {
   employeeName: string
   personnummerLast4: string
   vacationRule: string
+  /** First day of employment (employees.employment_start), which the computed liability's days start from. */
+  employmentStart: string
   /** Paid semesterdagar (Semesterlagen 4 §), as are taken, remaining and saved. */
   vacationDaysEntitled: number
   vacationDaysTaken: number
@@ -243,7 +245,7 @@ export async function generateBookedVacationSpec(
   const employees = await fetchAllRows(({ from, to }) =>
     supabase
       .from('employees')
-      .select('id, first_name, last_name, personnummer_last4, employment_type, personnel_category, vacation_rule, vacation_days_per_year, vacation_days_saved, workdays_per_week')
+      .select('id, first_name, last_name, personnummer_last4, employment_type, personnel_category, employment_start, vacation_rule, vacation_days_per_year, vacation_days_saved, workdays_per_week')
       .eq('company_id', companyId)
       .eq('is_active', true)
       .not('vacation_rule', 'in', '(none,semesterersattning)')
@@ -481,6 +483,7 @@ export async function generateBookedVacationSpec(
       employeeName: `${emp.first_name} ${emp.last_name}`,
       personnummerLast4: emp.personnummer_last4,
       vacationRule: emp.vacation_rule,
+      employmentStart: emp.employment_start,
       vacationDaysEntitled: daysEntitled,
       vacationDaysTaken: daysTaken,
       vacationDaysRemaining: daysRemaining,

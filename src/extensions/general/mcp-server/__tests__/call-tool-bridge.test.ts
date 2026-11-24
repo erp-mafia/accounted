@@ -791,6 +791,35 @@ describe('dispatcher injects __keyScopes into gnubok_match_batch_allocate', () =
   })
 })
 
+// A verifikat's lines and correction history are served by gnubok_get_record
+// only to a key with reports:read; the tool can tell only from the scopes the
+// dispatcher hands it, so a documents-only key must arrive as one.
+describe('dispatcher injects __keyScopes into gnubok_get_record', () => {
+  beforeEach(() => {
+    vi.mocked(validateApiKey).mockResolvedValueOnce({
+      userId: 'user-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      scopes: ['documents:read'],
+      apiKeyId: 'key-1',
+      apiKeyName: 'Documents only',
+      mode: 'live',
+    } as never)
+  })
+
+  it('passes a documents-only key as __keyScopes', async () => {
+    const getRecord = tools.find((t) => t.name === 'gnubok_get_record')!
+    const spy = vi.spyOn(getRecord, 'execute').mockResolvedValue({ stubbed: true })
+    try {
+      await handleMcpRequest(mcpToolCall('gnubok_get_record', { record_ref: 'journal_entry:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' }))
+      expect(spy).toHaveBeenCalledTimes(1)
+      const args = spy.mock.calls[0][0] as Record<string, unknown>
+      expect(args.__keyScopes).toEqual(['documents:read'])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
 // tools/list advertises company_id on the bridge itself, so agents send it
 // next to `tool`. It used to be dropped there and the inner tool ran on the
 // key's default company (feedback seq 561118, 694132): another company's data,

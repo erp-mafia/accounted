@@ -89,6 +89,28 @@ describe('palettePages: the shell tree is the page list', () => {
     expect(v2.map((p) => p.href)).toEqual(['/inkorg'])
     expect(v2[0].extension).toEqual({ sector: 'general', id: 'invoice-inbox' })
   })
+
+  it('offers a company one inbox, never both: the Dokumentinkorg and Inkorg aliases name the same entry', () => {
+    const INBOXES = ['/inkorg', '/e/general/invoice-inbox']
+    const inboxes = (entries: { href: string }[]) => entries.map((entry) => entry.href).filter((href) => INBOXES.includes(href.split('?')[0]))
+    const onNewPage = pagesFor({ inkorgV2Enabled: true })
+    const onWorkspace = pagesFor({ inkorgV2Enabled: false })
+    expect(inboxes(onNewPage)).toEqual(['/inkorg'])
+    expect(inboxes(onWorkspace)).toEqual(['/e/general/invoice-inbox'])
+    // Both aliases stay in the list of words, each for the address its row has.
+    expect(PAGE_ALIASES.filter((alias) => INBOXES.includes(alias.href)).map((alias) => [alias.id, alias.href])).toEqual([
+      ['dokumentinkorg', '/e/general/invoice-inbox'],
+      ['inkorg', '/inkorg'],
+    ])
+    // Typed by either name, one entry answers, on the page the company has.
+    for (const word of ['dokumentinkorg', 'inkorg', 'kvitto']) {
+      expect(inboxes(onNewPage.filter((p) => matches(p, word))), word).toEqual(['/inkorg'])
+      expect(inboxes(onWorkspace.filter((p) => matches(p, word))), word).toEqual(['/e/general/invoice-inbox'])
+    }
+    // No action opens an inbox by a fixed address either.
+    expect(inboxes(actionEntries(null))).toEqual([])
+    expect(inboxes(actionEntries(null, { bookingScreen: true }))).toEqual([])
+  })
 })
 
 describe('palettePages: nothing the old hand-written list found is lost', () => {
@@ -340,5 +362,87 @@ describe('localizeEntry: the palette in the language of the reader', () => {
   it('leaves an entry with no message as it is', () => {
     const entry = { id: 'add-company', label: 'Lägg till företag', icon: actionEntries(null)[0].icon, href: '/companies/new' }
     expect(localizeEntry(entry, palette(en))).toBe(entry)
+  })
+})
+
+
+/**
+ * Where the agent picture is on (AGENT_PICTURE_COMPANY_IDS) the Agenter area
+ * is the picture and the rules, and the addresses the picture took over
+ * lead to it: /skills and the wiki's Minne and Arbetssätt views to the
+ * picture, the bookkeeping profile to Bokföringsregler. The palette offers
+ * where they lead, once, and none of the addresses that only lead on. Chatt
+ * is offered as everywhere else: by the chat's own switch.
+ */
+describe('the palette where the agent picture is on', () => {
+  const withPicture = (overrides: Parameters<typeof gateContext>[0] = {}) => pagesFor({ agentPictureEnabled: true, ...overrides })
+  /** Addresses that lead elsewhere for such a company. */
+  const LEFT = ['/skills', '/wiki?view=map', '/wiki?view=memory', '/wiki?view=skills', '/agent-knowledge', '/settings/assistant']
+
+  it('offers Kontext, Bokföringsregler, Chatt and Koppla en agent under Agenter, and nothing else there', () => {
+    const agents = withPicture().filter((p) => p.group === nav.v3_agents)
+    expect(agents.map((p) => [p.label, p.href])).toEqual([
+      [nav.v3_context, '/wiki'],
+      [nav.v2_rules, '/rules'],
+      [nav.v3_chat, '/chat'],
+      [nav.v3_connect_agent, '/settings/api'],
+    ])
+  })
+
+  it('offers each place once in the whole list', () => {
+    const hrefs = withPicture().map((p) => p.href)
+    for (const href of ['/wiki', '/rules', '/chat', '/settings/api']) expect(hrefs.filter((h) => h === href), href).toHaveLength(1)
+  })
+
+  it('offers no address that only leads on, under any name', () => {
+    const pages = withPicture()
+    for (const href of LEFT) expect(pages.some((p) => p.href === href), href).toBe(false)
+    expect(pages.filter((p) => /^\/(skills|agent-knowledge)(\/|\?|$)/.test(p.href) || p.href.startsWith('/wiki?'))).toEqual([])
+    // The names those rows had find no page, instead of one that would only lead on.
+    for (const word of ['arbetssätt', 'kompetens', 'instruktioner', 'minne', 'bokföringsprofil']) {
+      expect(pages.filter((p) => matches(p, word)).map((p) => p.href), word).toEqual([])
+    }
+  })
+
+  it('offers the chat by its row and its old name while the chat is on, and not once it is switched off', () => {
+    const on = withPicture()
+    expect(on.filter((p) => matches(p, 'chatt')).map((p) => p.href)).toContain('/chat')
+    expect(on.find((p) => matches(p, 'assistent'))?.href).toBe('/chat')
+    // As for a company without the picture: the same chat pages, by the same switch.
+    const chatPages = (pages: ReturnType<typeof pagesFor>) => pages.filter((p) => p.href === '/chat' || p.href.startsWith('/chat/')).map((p) => p.href)
+    expect(chatPages(on)).toEqual(chatPages(pagesFor()))
+
+    const off = withPicture({ assistantChatEnabled: false })
+    expect(chatPages(off)).toEqual([])
+    for (const word of ['chatt', 'assistent']) expect(off.filter((p) => matches(p, word)).map((p) => p.href), word).toEqual([])
+    expect(off.filter((p) => p.group === nav.v3_agents).map((p) => p.href)).toEqual(['/wiki', '/rules', '/settings/api'])
+  })
+
+  it('finds the picture and the rules by the words people type', () => {
+    const pages = withPicture()
+    const first = (query: string) => pages.find((p) => matches(p, query))?.href
+    expect(first('kontext')).toBe('/wiki')
+    expect(first('wiki')).toBe('/wiki')
+    expect(first('bokföringsregler')).toBe('/rules')
+    expect(first('regler')).toBe('/rules')
+    expect(first('koppla en agent')).toBe('/settings/api')
+    expect(first('api och mcp')).toBe('/settings/api')
+  })
+
+  it('changes nothing outside the Agenter area', () => {
+    const outside = (pages: ReturnType<typeof pagesFor>) => pages.filter((p) => p.group !== nav.v3_agents)
+    expect(outside(withPicture())).toEqual(outside(pagesFor()))
+  })
+
+  it('leaves the palette of a company outside the switch as it was', () => {
+    // Absent and off read the same.
+    expect(pagesFor({ agentPictureEnabled: false })).toEqual(pagesFor())
+    const agents = pagesFor().filter((p) => p.group === nav.v3_agents).map((p) => p.href)
+    expect(agents).toEqual(['/rules', '/skills', '/wiki', '/wiki?view=map', '/wiki?view=memory', '/chat', '/settings/api'])
+    const first = (query: string) => pagesFor().find((p) => matches(p, query))?.href
+    expect(first('arbetssätt')).toBe('/skills')
+    expect(first('minne')).toBe('/wiki?view=memory')
+    expect(first('bokföringsprofil')).toBe('/wiki?view=map')
+    expect(first('assistent')).toBe('/chat')
   })
 })

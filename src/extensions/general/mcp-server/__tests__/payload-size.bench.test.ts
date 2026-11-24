@@ -1001,6 +1001,19 @@ describe('tools/list payload size guard', () => {
     // said on useful_life_months and paid for with the category note the
     // tool description repeats. Measured 63 085 (full catalog 67 515; main
     // 63 058 and 67 487). Ceiling unchanged.
+    // 2026-11-23: date_from, date_to and text on
+    // gnubok_list_uncategorized_transactions (a week's rows, or a payer's,
+    // without paging the whole queue), bare and named in the description;
+    // paid for in part on the same tool (the limit note, the paging example
+    // and a shorter description). Measured 63 097 (full catalog 67 526; main
+    // 63 085 and 67 515). Ceiling unchanged.
+    // 2026-11-23: the gnubok_remember_fact description says where a note
+    // about one purchase or verifikat goes (on that verifikat, with
+    // gnubok_set_voucher_note, or in the booking's description). Prose, so
+    // paid for in full on the same tool: the description names fewer
+    // examples and leaves replaces to the parameter's own note, and the
+    // content note is one clause shorter. Measured 63 097 (full catalog
+    // 67 526; main 63 097 and 67 526). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

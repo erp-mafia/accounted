@@ -901,6 +901,19 @@ const RECORD_KIND_SCOPES: Record<string, ApiKeyScope> = {
 }
 
 /**
+ * The part of a gnubok_get_record answer a kind serves only under a further
+ * scope, while the rest stays under documents:read. A journal_entry's lines,
+ * status and correction history are the ledger, read under the scope of
+ * gnubok_query_journal; its header and documents are not. The tool reads the
+ * key's scopes from the dispatcher's __keyScopes and answers without the part
+ * when they are missing (a call the dispatcher did not make), as
+ * gnubok_propose_accruals does for payroll detail.
+ */
+export const RECORD_KIND_DETAIL_SCOPES: Readonly<Record<string, ApiKeyScope>> = {
+  journal_entry: 'reports:read',
+}
+
+/**
  * Number of MCP tools gated by each scope, derived from TOOL_SCOPE_MAP at
  * module load. 0 means the scope only gates REST endpoints. Never hand-write
  * these numbers into labels: they drift the moment a tool is added.

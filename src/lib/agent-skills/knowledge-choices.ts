@@ -28,10 +28,41 @@ export const PACK_LEGAL_FORMS: Readonly<Record<string, readonly EntityType[]>> =
   'modifier/single-shareholder-ab-fmb': ['aktiebolag'],
 }
 
+/**
+ * General packs whose own text says which legal form they are written for:
+ * the `description` and the opening lines of .claude/skills/<pack>/SKILL.md.
+ *
+ * - swedish-ef-skatteplanering: "Swedish tax planning for enskild firma (sole
+ *   proprietorship)", and "for AB planning use `swedish-tax-planning`".
+ * - swedish-tax-planning: "Scope: AB only; for enskild firma tax planning use
+ *   swedish-ef-skatteplanering".
+ * - swedish-sru-filing: "Swedish SRU file generation for Skatteverket digital
+ *   tax filing (INK2, INK2R, INK2S declarations for aktiebolag)".
+ *
+ * A company of a form that a pack here is written for is offered the packs
+ * written for its own form and none of those written for another. A form no
+ * text here names is offered every one of them: nothing is decided for it.
+ * A pack whose text names no legal form, or more than one, is not listed and
+ * fits every company.
+ *
+ * A Map: it is read by a pack id that comes from the registry.
+ */
+export const PACK_WRITTEN_FOR: ReadonlyMap<string, readonly EntityType[]> = new Map<string, readonly EntityType[]>([
+  ['horizontal/swedish-ef-skatteplanering', ['enskild_firma']],
+  ['horizontal/swedish-tax-planning', ['aktiebolag']],
+  ['horizontal/swedish-sru-filing', ['aktiebolag']],
+])
+
+/** The legal forms that some pack of PACK_WRITTEN_FOR is written for: the forms those texts tell apart. */
+const FORMS_WITH_OWN_PACK: ReadonlySet<EntityType> = new Set<EntityType>([...PACK_WRITTEN_FOR.values()].flat())
+
 /** Whether a pack applies to a company of this legal form. */
 export function packFitsForm(atomId: string, entityType: EntityType): boolean {
   const forms = PACK_LEGAL_FORMS[atomId]
-  return !forms || forms.includes(entityType)
+  if (forms && !forms.includes(entityType)) return false
+  // A pack written for one form is left out only for a form that has packs written for it.
+  const writtenFor = PACK_WRITTEN_FOR.get(atomId)
+  return !writtenFor || writtenFor.includes(entityType) || !FORMS_WITH_OWN_PACK.has(entityType)
 }
 
 /**

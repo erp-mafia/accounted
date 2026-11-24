@@ -4,8 +4,11 @@ import { loadAgentPicture } from '@/lib/agent-context/agent-picture'
 import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
+import { isPosConnectConfigured } from '@/lib/pos-sales/connect-client'
+import { countOpenQuestions } from '@/lib/questions/app-answer'
 import { readSkatteverketConnection } from '@/lib/skatteverket/connection-state'
 import { readReportedSkattekontoSaldo } from '@/lib/skatteverket/skattekonto-ocr'
+import { countPendingOperations } from '@/lib/worklist/categories'
 
 // GET /api/wiki/picture
 //
@@ -18,10 +21,15 @@ import { readReportedSkattekontoSaldo } from '@/lib/skatteverket/skattekonto-ocr
 //
 // 404 for a company outside AGENT_PICTURE_COMPANY_IDS.
 //
-// The route wires in the two readers that belong to other modules: the
+// The route wires in the readers that belong to other modules: the
 // checks run behind the SIE import lease, like every other door to the
 // unexplained queue, and the Skatteverket connection is read by its own
 // rule, with the time of the last fetched skattekonto saldo while connected.
+// What waits on the company's people is counted by the counters Hem and the
+// menu read (the open questions, none for a company without the question
+// list, and the proposals that wait for approval), so the picture says the
+// same numbers. A cash register is offered only where the installation has
+// the connector it is connected through.
 export const GET = withRouteContext('wiki.picture.get', async (_request, ctx) => {
   const { supabase, companyId, user, log, requestId } = ctx
   if (!isAgentPictureEnabled(companyId)) return errorResponseFromCode('NOT_FOUND', log, { requestId })
@@ -36,6 +44,11 @@ export const GET = withRouteContext('wiki.picture.get', async (_request, ctx) =>
       // The saldo snapshot outlives a disconnect: its time counts only while connected.
       return { state, last_sync_at: state === 'connected' ? (saldo?.fetched_at ?? null) : null }
     },
+    waiting: async () => {
+      const [questions, proposals] = await Promise.all([countOpenQuestions(supabase, companyId), countPendingOperations(supabase, companyId)])
+      return { questions, proposals }
+    },
+    posConnector: () => isPosConnectConfigured(),
   })
   return NextResponse.json({ data: picture })
 })

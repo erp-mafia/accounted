@@ -1016,6 +1016,15 @@ export const TRANSACTION_METHODS = [
 
 export type TransactionMethod = (typeof TRANSACTION_METHODS)[number]
 
+/**
+ * The title a bank row is stored with when its source gave none
+ * (normalizeImportedDescription in lib/transactions/external-id.ts, which
+ * exports it as FALLBACK_DESCRIPTION). It sits beside the row's type because
+ * the ledger reads it too: a row with only this title names no counterparty
+ * (namesCounterparty in lib/bookkeeping/counterparty-templates.ts).
+ */
+export const TRANSACTION_FALLBACK_DESCRIPTION = 'Okänd transaktion'
+
 // Transaction
 export interface Transaction {
   id: string
@@ -4811,9 +4820,9 @@ export interface IngestResult {
   first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
 }
 
-// ── Webshop orders (Orders page; synced by the woocommerce/shopify/zettle extensions) ──
+// ── Webshop orders (Orders page; synced by the woocommerce/shopify/zettle extensions, read from a Kustom settlement file) ──
 
-export type WebshopPlatform = 'woocommerce' | 'shopify' | 'zettle'
+export type WebshopPlatform = 'woocommerce' | 'shopify' | 'zettle' | 'kustom'
 export type WebshopOrderRowType = 'order' | 'refund'
 
 /** One VAT rate bucket of an order, in the order's currency. */
@@ -5073,7 +5082,7 @@ export interface KPIReport {
   cashPosition: number             // SEK (sum of 19xx account balances)
   outstandingReceivables: number   // SEK
   overdueReceivables: number       // SEK
-  vatLiability: number             // SEK, ruta 49 (positive = owe, negative = refund)
+  vatLiability: number             // SEK, moms on 26xx not yet moved by a momsredovisning (positive = owe, negative = refund); not ruta 49
   totalRevenue: number             // SEK
   totalExpenses: number            // SEK
   grossMargin: number | null       // percentage, null if no revenue

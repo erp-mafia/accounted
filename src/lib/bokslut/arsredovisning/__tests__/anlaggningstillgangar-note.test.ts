@@ -3,6 +3,8 @@ import {
   buildAnlaggningstillgangarNote,
   computeRollforwardTotals,
   depreciationPrincipleLines,
+  depreciationPrinciples,
+  isDepreciationPrincipleRow,
   holdsWriteDowns,
   _buildRollforwardForTests,
   type AnlaggningAsset,
@@ -280,12 +282,14 @@ describe('computeRollforwardTotals', () => {
   })
 })
 
-describe('depreciationPrincipleLines (the K2 Avskrivningar note)', () => {
+describe('depreciationPrinciples (the K2 Avskrivningar note)', () => {
+  const lines = (assets: Parameters<typeof depreciationPrinciples>[0]) => depreciationPrincipleLines(depreciationPrinciples(assets))
+
   // F3: "• land: 0 år" under "Avskrivningar görs linjärt" reached the filed
   // K2 document.
   it('states that mark is not depreciated instead of listing it with 0 år', () => {
     expect(
-      depreciationPrincipleLines([
+      lines([
         { category: 'building', useful_life_months: 600, disposed_at: null },
         { category: 'land', useful_life_months: 0, disposed_at: null },
         { category: 'equipment', useful_life_months: 60, disposed_at: null },
@@ -296,10 +300,73 @@ describe('depreciationPrincipleLines (the K2 Avskrivningar note)', () => {
       '• Inventarier: 5 år',
       'Mark skrivs inte av.',
     ])
-    expect(depreciationPrincipleLines([{ category: 'land', useful_life_months: 0, disposed_at: null }])).toEqual([
-      'Mark skrivs inte av.',
-    ])
-    expect(depreciationPrincipleLines([{ category: 'land', useful_life_months: 0, disposed_at: '2025-03-01' }])).toEqual([])
+    expect(lines([{ category: 'land', useful_life_months: 0, disposed_at: null }])).toEqual(['Mark skrivs inte av.'])
+    expect(lines([{ category: 'land', useful_life_months: 0, disposed_at: '2025-03-01' }])).toEqual([])
+  })
+
+  it('gives a category one row with the span of its periods, and leaves disposed assets out', () => {
+    expect(
+      depreciationPrinciples([
+        { category: 'computer', useful_life_months: 36, disposed_at: null },
+        { category: 'computer', useful_life_months: 60, disposed_at: null },
+        { category: 'computer', useful_life_months: 120, disposed_at: '2025-03-01' },
+      ]),
+    ).toEqual({ rows: [{ label: 'Datorer', period: '3-5 år', post: null }], holdsLand: false })
+  })
+
+  describe('per balance sheet post', () => {
+    const posts = {
+      postOfAccount: (account: string) => (account < '1220' ? 'MaskinerAndraTekniskaAnlaggningar' : 'InventarierVerktygInstallationer'),
+      labelOfPost: (post: string) => (post === 'MaskinerAndraTekniskaAnlaggningar' ? 'Maskiner och andra tekniska anläggningar' : 'Inventarier, verktyg och installationer'),
+    }
+
+    it('names the post each row is booked on', () => {
+      expect(
+        depreciationPrinciples(
+          [
+            { category: 'machinery', useful_life_months: 120, disposed_at: null, bas_asset_account: '1210' },
+            { category: 'equipment', useful_life_months: 60, disposed_at: null, bas_asset_account: '1220' },
+            { category: 'computer', useful_life_months: 36, disposed_at: null, bas_asset_account: '1250' },
+          ],
+          posts,
+        ).rows,
+      ).toEqual([
+        { label: 'Maskiner', period: '10 år', post: 'MaskinerAndraTekniskaAnlaggningar' },
+        { label: 'Inventarier', period: '5 år', post: 'InventarierVerktygInstallationer' },
+        { label: 'Datorer', period: '3 år', post: 'InventarierVerktygInstallationer' },
+      ])
+    })
+
+    it('splits a category booked on two posts into a row per post, each named with its post', () => {
+      const principles = depreciationPrinciples(
+        [
+          { category: 'vehicle', useful_life_months: 60, disposed_at: null, bas_asset_account: '1215' },
+          { category: 'vehicle', useful_life_months: 96, disposed_at: null, bas_asset_account: '1240' },
+        ],
+        posts,
+      )
+      expect(principles.rows).toEqual([
+        { label: 'Fordon (Maskiner och andra tekniska anläggningar)', period: '5 år', post: 'MaskinerAndraTekniskaAnlaggningar' },
+        { label: 'Fordon (Inventarier, verktyg och installationer)', period: '8 år', post: 'InventarierVerktygInstallationer' },
+      ])
+      expect(depreciationPrincipleLines(principles)).toEqual([
+        'Avskrivningar görs linjärt över bedömd nyttjandeperiod:',
+        '• Fordon (Maskiner och andra tekniska anläggningar): 5 år',
+        '• Fordon (Inventarier, verktyg och installationer): 8 år',
+      ])
+    })
+
+    it('keeps an asset without an account in a post as a row without one', () => {
+      expect(
+        depreciationPrinciples([{ category: 'equipment', useful_life_months: 60, disposed_at: null }], posts).rows,
+      ).toEqual([{ label: 'Inventarier', period: '5 år', post: null }])
+    })
+  })
+
+  it('tells a row of the text from its other lines', () => {
+    expect(isDepreciationPrincipleRow('• Inventarier: 5 år')).toBe(true)
+    expect(isDepreciationPrincipleRow('Avskrivningar görs linjärt över bedömd nyttjandeperiod:')).toBe(false)
+    expect(isDepreciationPrincipleRow('Mark skrivs inte av.')).toBe(false)
   })
 })
 

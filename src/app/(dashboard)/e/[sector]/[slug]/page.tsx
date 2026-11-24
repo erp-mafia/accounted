@@ -8,6 +8,13 @@ import { ExtensionUpsellState } from '@/components/extensions/ExtensionUpsellSta
 import { ExtensionSandboxLockState } from '@/components/extensions/ExtensionSandboxLockState'
 import { extensionDescriptionKey, extensionNameKey } from '@/lib/extensions/i18n'
 import {
+  companyInboxReads,
+  inboxIsNewPage,
+  inkorgHrefFromWorkspaceQuery,
+  isInboxWorkspace,
+  type RouteQuery,
+} from '@/lib/inkorg/inbox-page'
+import {
   getDashboardAuthContext,
   getDashboardCompanyId,
   getDashboardSettings,
@@ -16,8 +23,10 @@ import {
 
 export default async function ExtensionWorkspacePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ sector: string; slug: string }>
+  searchParams: Promise<RouteQuery>
 }) {
   const { sector, slug } = await params
   const [{ supabase, user }, companyId] = await Promise.all([
@@ -28,6 +37,15 @@ export default async function ExtensionWorkspacePage({
   ])
 
   if (!user) redirect('/login')
+
+  // The inbox workspace's address leads to the new Inkorg page for a company
+  // whose inbox is that page: the one rule /inkorg asks too
+  // (lib/inkorg/inbox-page.ts), so the two routes never send a request back
+  // and forth. For every other company nothing below changes.
+  if (isInboxWorkspace(sector, slug)) {
+    const reads = companyInboxReads(supabase, companyId, async () => (await getDashboardSettings()).data?.is_sandbox === true)
+    if (await inboxIsNewPage(reads)) redirect(inkorgHrefFromWorkspaceQuery(await searchParams))
+  }
 
   const definition = getExtensionDefinition(sector, slug)
   if (!definition) notFound()

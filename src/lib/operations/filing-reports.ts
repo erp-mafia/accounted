@@ -729,6 +729,7 @@ export const reportsKpi = defineOperation({
     pitfalls: [
       'With a dimension filter, cashPosition, receivables, vatLiability and topSuppliers are still company-wide: do not present them as the dimension\'s.',
       'topSuppliersUnconvertedFxCount counts foreign-currency invoices left out of topSuppliers for lack of a SEK amount.',
+      'vatLiability is the moms on the 26xx accounts that no momsredovisning has moved to 2650 or 1650 yet, not ruta 49: moms a booked momsredovisning moved is no longer in it. The declared figure is the vat_payable measure.',
       'dim_no and dim_code must be sent together.',
     ],
     example: {

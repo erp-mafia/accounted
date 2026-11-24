@@ -11336,6 +11336,83 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       "The lines do not book the transaction's amount on its bank account, so it cannot be linked to the order's voucher. Nothing was booked. Book the payment on the transaction's account (details.account_number).",
   },
+  KUSTOM_SETTLEMENT_NO_FILE: {
+    httpStatus: 400,
+    message_sv: 'Ingen fil bifogad. Välj Kustoms settlement-rapport (CSV) och försök igen.',
+    message_en: 'No file attached. Choose the Kustom settlement report (CSV) and try again.',
+  },
+  KUSTOM_SETTLEMENT_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Filen är för stor. Maxstorlek är 10 MB.',
+    message_en: 'File exceeds the 10 MB size limit.',
+  },
+  KUSTOM_SETTLEMENT_NOT_RECOGNIZED: {
+    httpStatus: 400,
+    message_sv:
+      'Filen känns inte igen som en settlement-rapport från Kustom. Ladda ner rapporten för utbetalningen som CSV i Kustoms portal och försök igen.',
+    message_en:
+      'The file was not recognised as a Kustom settlement report. Download the payout report as CSV in the Kustom portal and try again.',
+  },
+  KUSTOM_SETTLEMENT_NO_CONSUMER_VAT: {
+    httpStatus: 400,
+    message_sv:
+      'Rapporten saknar momsen per order. Kryssa i kundmomsen i rapportinställningarna i Kustoms portal, ladda ner rapporten igen och läs in den.',
+    message_en:
+      'The report has no VAT per order. Turn on consumer VAT in the report settings of the Kustom portal, download the report again and upload it.',
+  },
+  KUSTOM_SETTLEMENT_AMOUNT_FORMAT: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppen i rapporten går inte att läsa. Välj belopp med decimaler (till exempel 100.00) i rapportinställningarna i Kustoms portal och ladda ner rapporten igen.',
+    message_en:
+      'The amounts in the report cannot be read. Choose decimal amounts (for example 100.00) in the report settings of the Kustom portal and download the report again.',
+  },
+  KUSTOM_SETTLEMENT_DATE_FORMAT: {
+    httpStatus: 400,
+    message_sv:
+      'Datumen i rapporten går inte att läsa. Välj datum med klockslag (Kustoms standard, till exempel 2026-11-18T09:00:00.000Z) i rapportinställningarna i Kustoms portal och ladda ner rapporten igen. Utan klockslag går det inte att avgöra vilken svensk dag ett köp gjordes.',
+    message_en:
+      "The dates in the report cannot be read. Choose dates with the time (Kustom's default, for example 2026-11-18T09:00:00.000Z) in the report settings of the Kustom portal and download the report again. Without the time, the Swedish day of a sale cannot be told.",
+  },
+  KUSTOM_SETTLEMENT_ID_COLUMNS_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Rapporten saknar kolumnen capture_id eller refund_id, som håller isär köp och returer. Lägg till dem i rapportinställningarna i Kustoms portal och ladda ner rapporten igen.',
+    message_en:
+      'The report lacks the capture_id or refund_id column, which tells sales and returns apart. Add them in the report settings of the Kustom portal and download the report again.',
+  },
+  KUSTOM_SETTLEMENT_DUPLICATE_ROW: {
+    httpStatus: 400,
+    message_sv:
+      'Samma köp eller retur står två gånger i rapporten, så den går inte att läsa in säkert. Ladda ner rapporten igen från Kustom.',
+    message_en:
+      'The same sale or return appears twice in the report, so it cannot be uploaded safely. Download the report again from Kustom.',
+  },
+  KUSTOM_SETTLEMENT_TOTALS_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Raderna i rapporten summerar inte till rapportens totaler, så filen verkar avkortad eller ändrad. Ladda ner rapporten igen från Kustom.',
+    message_en:
+      'The rows of the report do not add up to its totals, so the file looks cut or edited. Download the report again from Kustom.',
+  },
+  KUSTOM_SETTLEMENT_CUT_SHORT: {
+    httpStatus: 400,
+    message_sv: 'Filen tar slut mitt i en rad, så den verkar avkortad. Ladda ner rapporten igen från Kustom.',
+    message_en: 'The file ends in the middle of a row, so it looks cut short. Download the report again from Kustom.',
+  },
+  KUSTOM_SETTLEMENT_TOO_MANY_ROWS: {
+    httpStatus: 400,
+    message_sv:
+      'Rapporten har fler än 10 000 köp och returer, mer än en uppladdning läser in. Ladda ner rapporten för en utbetalning i taget från Kustom.',
+    message_en:
+      'The report holds more than 10,000 sales and returns, more than one upload reads. Download the report for one payout at a time from Kustom.',
+  },
+  KUSTOM_SETTLEMENT_IMPORT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Det gick inte att spara alla ordrar från rapporten. Försök igen: ordrar som redan sparats läses inte in två gånger.',
+    message_en: 'Not every order from the report could be saved. Try again: orders already saved are not imported twice.',
+    retryable: true,
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

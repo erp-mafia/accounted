@@ -91,12 +91,15 @@ export interface NarrativeOverrides {
    *  nedskrivning outside the register came from or went), per balance sheet
    *  post (k2-fixed-asset-note.ts). */
   fixed_asset_note_rows: FixedAssetNoteRows
+  /** State the flerårsöversikt's amounts in thousands of kronor (tkr) in
+   *  the PDF and the iXBRL document; the statements stay in whole kronor. */
+  flerarsoversikt_tkr: boolean
 }
 
 /**
  * Shape returned from getNarrative / upsertNarrative. user_id and
  * created_at are deliberately excluded from the API projection (see
- * NARRATIVE_API_COLUMNS below).
+ * NARRATIVE_BASE_COLUMNS below).
  */
 export interface NarrativeRow {
   id: string
@@ -137,8 +140,10 @@ export interface NarrativeRow {
   disclosure_answers: DisclosureAnswers
   equity_movement_overrides: EquityMovementOverridesRow
   equity_statement_separate: boolean
-  /** Absent until the column's migration has run (NARRATIVE_API_COLUMNS). */
+  /** Absent until the column's migration has run (NEWER_COLUMNS). */
   fixed_asset_note_rows?: FixedAssetNoteRows
+  /** Absent until the column's migration has run (NEWER_COLUMNS). */
+  flerarsoversikt_tkr?: boolean
   updated_at: string
 }
 
@@ -151,19 +156,45 @@ const NARRATIVE_BASE_COLUMNS =
   'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, member_count_change, insatser_repayable_next_year, forlagsinsatser_dividend_right, forlagsinsatser_redeemable_two_years, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, note_overrides, omit_kassaflodesanalys, kassaflodesanalys_omission_confirmed, disclosure_answers, equity_movement_overrides, equity_statement_separate, updated_at'
 
 /**
- * fixed_asset_note_rows is the newest column. The code is live a few minutes
- * before the migration that adds it runs (it applies after the merge), so a
- * read or a save that fails on a missing column falls back to the columns
- * before it: the årsredovisning then has no stated rows, which is what an
- * unmigrated database holds.
+ * The columns added after the base set, oldest first. The code is live a few
+ * minutes before the migration that adds a column runs (it applies after the
+ * merge), so a read or a save that fails on a missing column is tried again
+ * without the newest one, then without the one before it: the årsredovisning
+ * is then built as a database without the column holds it, instead of
+ * without any of the texts the user wrote.
+ *
+ * `needs` says when a save cannot do without the column. Such a save fails
+ * on an unmigrated database and is not tried again: what it states would be
+ * lost silently.
  */
-const NARRATIVE_API_COLUMNS = `${NARRATIVE_BASE_COLUMNS}, fixed_asset_note_rows`
+const NEWER_COLUMNS: Array<{ column: string; needs: (payload: Record<string, unknown>) => boolean }> = [
+  // A save that names the stated rows needs the column: without it they
+  // would be lost.
+  { column: 'fixed_asset_note_rows', needs: (payload) => 'fixed_asset_note_rows' in payload },
+  // false is what a database without the column holds: only a save that
+  // turns tkr on needs it.
+  { column: 'flerarsoversikt_tkr', needs: (payload) => payload.flerarsoversikt_tkr === true },
+]
 
-async function withNewestColumn<T extends { error: { code?: string } | null }>(
-  run: (columns: string) => PromiseLike<T>,
+const newerColumns = (count: number): string[] => NEWER_COLUMNS.slice(0, count).map((newer) => newer.column)
+
+/**
+ * Run a read or a save with every column, and while it fails on a missing
+ * column, again without the newest one still asked for. `run` gets the
+ * projection and the columns left out of it. `payload` is what a save
+ * writes: a column it needs is never left out.
+ */
+async function withNewerColumns<T extends { error: { code?: string } | null }>(
+  run: (columns: string, leftOut: string[]) => PromiseLike<T>,
+  payload: Record<string, unknown> = {},
 ): Promise<T> {
-  const first = await run(NARRATIVE_API_COLUMNS)
-  return isMissingColumnError(first.error) ? run(NARRATIVE_BASE_COLUMNS) : first
+  for (let count = NEWER_COLUMNS.length; ; count -= 1) {
+    const result = await run(
+      [NARRATIVE_BASE_COLUMNS, ...newerColumns(count)].join(', '),
+      NEWER_COLUMNS.slice(count).map((newer) => newer.column),
+    )
+    if (count === 0 || !isMissingColumnError(result.error) || NEWER_COLUMNS[count - 1].needs(payload)) return result
+  }
 }
 
 /**
@@ -252,7 +283,7 @@ export async function getNarrative(
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<NarrativeRow | null> {
-  const { data, error } = await withNewestColumn((columns) =>
+  const { data, error } = await withNewerColumns((columns) =>
     supabase
       .from(TABLE)
       .select(columns)
@@ -261,7 +292,9 @@ export async function getNarrative(
       .maybeSingle(),
   )
   if (error) throw error
-  return (data as NarrativeRow | null) ?? null
+  // The projection is a runtime string (a newer column may be missing), so
+  // the client cannot type the row.
+  return (data as unknown as NarrativeRow | null) ?? null
 }
 
 /**
@@ -286,21 +319,23 @@ export async function upsertNarrative(
   for (const [key, value] of Object.entries(input)) {
     payload[key] = value ?? null
   }
-  // A save that names fixed_asset_note_rows itself fails on an unmigrated
-  // database and is not retried: the rows would be lost silently.
-  const run = (columns: string) =>
-    supabase
+  // On a database without a newer column the save goes through without it,
+  // unless the save needs that column (NEWER_COLUMNS): everything else the
+  // payload holds is written either way.
+  const { data, error } = await withNewerColumns((columns, leftOut) => {
+    const row = Object.fromEntries(Object.entries(payload).filter(([key]) => !leftOut.includes(key)))
+    return supabase
       .from(TABLE)
-      .upsert(payload, { onConflict: 'company_id,fiscal_period_id' })
+      .upsert(row, { onConflict: 'company_id,fiscal_period_id' })
       .select(columns)
       .single()
-  const { data, error } = 'fixed_asset_note_rows' in payload ? await run(NARRATIVE_API_COLUMNS) : await withNewestColumn(run)
+  }, payload)
   if (error) throw error
   // `.single()` always reports a missing row as an error, so this is a
   // belt-and-braces guard rather than a reachable branch: keep it a plain
   // Error (no SQLSTATE to preserve) so it maps to 500.
   if (!data) throw new Error('Failed to save narrative: no row returned')
-  // The projection is a runtime string (the newest column may be missing),
+  // The projection is a runtime string (a newer column may be missing),
   // so the client cannot type the row.
   return data as unknown as NarrativeRow
 }

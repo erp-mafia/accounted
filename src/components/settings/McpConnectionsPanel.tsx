@@ -32,7 +32,7 @@ import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
 import { claudeConnectorLink } from '@/lib/onboarding/checklist'
 import { getBranding } from '@/lib/branding/service'
 import { ALL_SCOPES } from '@/lib/auth/scope-catalog'
-import { STALE_AFTER_DAYS, connectionKind, isStaleConnection, type ConnectionKind } from '@/lib/settings/mcp-connections'
+import { STALE_AFTER_DAYS, connectionKind, isStaleConnection, sharedNames, type ConnectionKind } from '@/lib/settings/mcp-connections'
 import { cn, formatDateLong } from '@/lib/utils'
 
 const branding = getBranding()
@@ -48,6 +48,8 @@ const LOGO: Partial<Record<ConnectionKind | ConnectTarget, string>> = {
   grok: AI_CLIENTS.find((c) => c.id === 'grok')?.logo,
   // Claude Code carries Anthropic's Claude mark; it is the same product family.
   'claude-code': AI_CLIENTS.find((c) => c.id === 'claude')?.logo,
+  // Copilot Studio carries Microsoft's Copilot mark.
+  copilot: '/logos/copilot.webp',
 }
 
 /**
@@ -84,8 +86,6 @@ const ICON = {
   local: CommandLineIcon,
   cursor: CursorMark,
   gemini: GeminiMark,
-  // No vendor mark for Copilot Studio: the generic MCP mark.
-  copilot: McpMark,
   mcp: McpMark,
   other: McpMark,
   key: KeyIcon,
@@ -187,6 +187,16 @@ function PermissionSummary({ scopes, source }: { scopes: readonly string[]; sour
  * sign-ins from the MCP OAuth flow (one per client sign-in) and
  * keys made by hand under Utvecklare. With nothing connected, Claude is the
  * hero: it is the path for nearly everyone and the only one-click link.
+ *
+ * Several rows can carry one name (two sign-ins from Claude are both
+ * "Claude"). Such a row also says, as quiet text after its name and badges,
+ * since when it has been connected ("sedan 4 jan. 2026"): the date is what
+ * tells two such rows apart, so the text is short enough to be shown whole
+ * (SHARED_NAME_TEXT_BUDGET) and, where the row is short of room, the name of
+ * a hand-made key and the badges give way before it. Whose the row is stays
+ * where it was: a colleague's row names its owner in its badge, and the
+ * viewer's own row says in the text's title that they connected it. A row
+ * whose name no other row carries shows nothing more.
  */
 export function McpConnectionsPanel({
   keys,
@@ -258,6 +268,9 @@ export function McpConnectionsPanel({
     if (kind === 'partner') return key.client_label ?? t('kind_partner')
     return t(`kind_${kind}`)
   }
+
+  // The names more than one row is shown with: those rows cannot be told apart by the name.
+  const shared = sharedNames(keys.map(rowName))
 
   async function disconnect(key: ApiKeyRow) {
     const isSignin = key.source === 'signin'
@@ -430,13 +443,17 @@ export function McpConnectionsPanel({
           <ul className="pt-2">
             {keys.map((key) => {
               const kind = connectionKind(key)
+              // A name another row carries too: the row also says since when (from created_at).
+              const since = shared.has(rowName(key)) ? t('shared_name_since', { date: formatDateLong(key.created_at, locale) }) : null
+              // Beside that text, what can be cut gives way first: the text holds the date.
+              const yields = since ? 'shrink-[100]' : 'shrink'
               return (
                 <li key={key.id} className="flex items-center gap-3 border-b-hairline px-1 py-2">
                   <ClientMark kind={kind} />
                   <span className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
                     {/* A client's name is a word or two and must stay whole; a
                         hand-made key's name can be long and truncates. */}
-                    <span className={cn('truncate', kind !== 'key' && 'shrink-0')}>{rowName(key)}</span>
+                    <span className={cn('truncate', kind !== 'key' ? 'shrink-0' : since && 'shrink-[100]')}>{rowName(key)}</span>
                     {key.mode === 'test' && (
                       <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-xs font-normal">
                         {t('badge_test')}
@@ -446,7 +463,7 @@ export function McpConnectionsPanel({
                       <Badge
                         variant="secondary"
                         title={key.owner_name ?? undefined}
-                        className="max-w-56 shrink truncate px-1.5 py-0 text-xs font-normal"
+                        className={cn('max-w-56 truncate px-1.5 py-0 text-xs font-normal', yields)}
                       >
                         {key.owner_name ? t('badge_colleague_named', { name: key.owner_name }) : t('badge_colleague')}
                       </Badge>
@@ -455,9 +472,18 @@ export function McpConnectionsPanel({
                         the person who sponsors it: marked so it is not read
                         as one of their own connections. */}
                     {key.service_account && (
-                      <Badge variant="secondary" className="max-w-48 shrink truncate px-1.5 py-0 text-xs font-normal">
+                      <Badge variant="secondary" className={cn('max-w-48 truncate px-1.5 py-0 text-xs font-normal', yields)}>
                         {t('badge_service_account', { name: key.service_account.name })}
                       </Badge>
+                    )}
+                    {/* The viewer's own row says who connected it in the title; a colleague's row says it in its badge. */}
+                    {since && (
+                      <span
+                        className="min-w-0 truncate text-xs text-muted-foreground"
+                        title={key.is_own !== false ? t('shared_name_since_you', { date: formatDateLong(key.created_at, locale) }) : since}
+                      >
+                        {since}
+                      </span>
                     )}
                   </span>
                   <span className="hidden w-40 shrink-0 truncate text-xs text-muted-foreground md:block">

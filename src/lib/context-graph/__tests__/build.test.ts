@@ -134,7 +134,7 @@ describe('buildContextGraph', () => {
     expect(m.edges).toHaveLength(1)
   })
 
-  it('caps each kind and folds the rest into one "+N" dot, with the chips keeping the full counts', () => {
+  it('caps each kind and folds the rest into one "+N" dot, with the model keeping the full counts', () => {
     const m = buildContextGraph({
       memory: Array.from({ length: 40 }, (_, i) => fact(i, `Fakta nummer ${i}.`)),
       atoms: BRIEFING.atoms,

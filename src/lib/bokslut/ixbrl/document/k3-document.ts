@@ -26,6 +26,7 @@ import { getEntryPoint } from '../taxonomy/entry-points'
 import { getConcept, getRegistry, type TaxonomyRegistry } from '../taxonomy/registry'
 import type { IxbrlArsredovisningInput, K3CashFlowInput, K3EquityInput } from '../types'
 import { K3_CASH_FLOW_RESULT_LINES, k3ConceptAmounts } from '../k3-adapters'
+import { flowFact, renderEquityTable, signedSek } from './equity-table'
 import { FactWriter } from './ix'
 import { assembleXhtml, fmtRange, registerContexts, type Ctx, type GeneratedIxbrl } from './layout'
 import {
@@ -43,164 +44,7 @@ import {
   renderStatementRows,
   statementHead,
 } from './statements'
-import { el, escapeText, formatSekAbs, paragraphs } from './xml'
-
-/** How the fscie concepts name each equity post (ForandringEgetKapital<Post><Movement>). */
-const FSCIE_POST_KEY: Record<string, string> = {
-  Aktiekapital: 'Aktiekapital',
-  EjRegistreratAktiekapital: 'EjRegistreratAktiekapital',
-  OverkursfondBunden: 'BundenOverkursfond',
-  Uppskrivningsfond: 'Uppskrivningsfond',
-  Reservfond: 'Reservfond',
-  Kapitalandelsfond: 'Kapitalandelsfond',
-  FondUtvecklingsutgifter: 'FondUtvecklingsutgifter',
-  Overkursfond: 'Overkursfond',
-  FondVerkligtVarde: 'FondVerkligtVarde',
-  BalanseratResultat: 'BalanseratResultat',
-  AretsResultatEgetKapital: 'AretsResultat',
-}
-
-/**
- * Movement kind (the equity specification's keys) → the fscie movement
- * suffix. Kinds without one (an omföring, other direct-to-equity items, an
- * unclassified change) have no single concept in the taxonomy and stay
- * untagged, with a warning.
- */
-const FSCIE_MOVEMENT: Record<string, string> = {
-  arets_resultat: 'AretsResultat',
-  resultatdisposition: 'BalanserasNyRakning',
-  utdelning: 'Utdelning',
-  aktieagartillskott: 'ErhallnaAktieagartillskott',
-  aterbetalt_tillskott: 'AterbetalningAktieagartillskott',
-  nyemission: 'Nyemission',
-  fondemission: 'Fondemission',
-  rattelse_av_fel: 'EffektRattelseFel',
-  andrad_redovisningsprincip: 'EffektByteRedovisningsprincip',
-  uppskrivning: 'UppskrivningAnlaggningstillgang',
-  verkligt_varde: 'VarderingVerkligtVarde',
-}
-
-/**
- * A flow fact oriented by its concept's label: "Minskning av …" concepts
- * (utdelning, betald skatt, investeringar) count a decrease as positive and
- * print with a presentational minus; every other concept ("Ökning
- * (minskning) …", "Ökning av …", "Positiv (negativ) …") carries the signed
- * amount, a negative one with sign="-". `amount` is the signed effect (an
- * increase of equity or of cash is > 0). Null when the registry has no such
- * concept or the context is not declared.
- */
-function flowFact(
-  writer: FactWriter,
-  registry: TaxonomyRegistry,
-  concept: string,
-  contextRef: string | null,
-  amount: number,
-): string | null {
-  const definition = getConcept(registry, concept)
-  if (!definition || contextRef === null || !writer.hasContext(contextRef)) return null
-  const decrease = /^minskning/i.test(definition.label)
-  // A zero prints as 0 whatever the orientation, never as "−0".
-  return writer.money(concept, contextRef, decrease ? -amount : amount, { displayMinus: decrease && amount !== 0 })
-}
-
-const signedSek = (value: number): string => escapeText(`${value < 0 ? '−' : ''}${formatSekAbs(value)}`)
-
-/** The contexts one year of the equity specification is tagged in. */
-interface EquityYearContexts {
-  /** The year's duration context. */
-  period: string
-  /** Balance at the year's start (the previous balance date), when declared. */
-  opening: string | null
-  /** Balance at the year's end. */
-  closing: string
-}
-
-/**
- * One year of the equity specification as a table: one column per post with
- * anything in it, plus the total. Returns the table without a heading.
- */
-function renderEquityTable(
-  writer: FactWriter,
-  registry: TaxonomyRegistry,
-  equity: Pick<K3EquityInput, 'kinds'>,
-  yearPosts: K3EquityInput['posts'],
-  ctx: EquityYearContexts,
-  warnings: string[],
-): string {
-  const posts = yearPosts.filter(
-    (post) => post.opening !== 0 || post.closing !== 0 || Object.values(post.movements).some((amount) => amount !== 0),
-  )
-  if (posts.length === 0) return ''
-  const td = (content: string): string => el('td', { class: 'num' }, content)
-  const head = el(
-    'tr',
-    {},
-    el('th', {}, 'Förändringar i eget kapital') +
-      posts.map((post) => el('th', { class: 'num' }, escapeText(post.label))).join('') +
-      el('th', { class: 'num' }, 'Totalt'),
-  )
-  const rows: string[] = [head]
-  const total = (pick: (post: (typeof posts)[number]) => number) => posts.reduce((sum, post) => sum + pick(post), 0)
-
-  // A first year has no balance date before it: no opening row.
-  const opening = ctx.opening
-  if (opening) {
-    rows.push(
-      el(
-        'tr',
-        {},
-        el('th', {}, 'Belopp vid årets ingång') +
-          posts.map((post) => td(writer.money(post.concept, opening, post.opening))).join('') +
-          td(writer.money('EgetKapital', opening, total((post) => post.opening))),
-      ),
-    )
-  }
-
-  const untagged = new Set<string>()
-  for (const { kind, label } of equity.kinds) {
-    const amounts = posts.map((post) => post.movements[kind] ?? 0)
-    if (amounts.every((amount) => amount === 0)) continue
-    const suffix = FSCIE_MOVEMENT[kind] ?? null
-    // An instant movement concept (the effect of a correction or a change
-    // of principle) adjusts the opening balance: it is tagged at the year's
-    // start, the previous year's balance date.
-    const contextFor = (concept: string): string | null => {
-      const definition = getConcept(registry, concept)
-      if (!definition) return null
-      return definition.periodType === 'instant' ? ctx.opening : ctx.period
-    }
-    const cells = posts.map((post, index) => {
-      const amount = amounts[index]
-      if (amount === 0) return td('')
-      const postKey = FSCIE_POST_KEY[post.concept]
-      const concept = suffix && postKey ? `ForandringEgetKapital${postKey}${suffix}` : null
-      const fact = concept ? flowFact(writer, registry, concept, contextFor(concept), amount) : null
-      if (fact === null) untagged.add(`${label} (${post.label})`)
-      return td(fact ?? signedSek(amount))
-    })
-    const sum = amounts.reduce((a, b) => a + b, 0)
-    const totalConcept = suffix ? `ForandringEgetKapitalTotalt${suffix}` : null
-    const totalFact = totalConcept ? flowFact(writer, registry, totalConcept, contextFor(totalConcept), sum) : null
-    if (totalFact === null) untagged.add(`${label} (totalt)`)
-    rows.push(el('tr', {}, el('th', {}, escapeText(label)) + cells.join('') + td(totalFact ?? signedSek(sum))))
-  }
-  if (untagged.size > 0) {
-    warnings.push(
-      `Förändringar i eget kapital: ${[...untagged].join(', ')} har inget eget begrepp i K3-taxonomin och lämnas otaggade: granska raderna innan inlämning.`,
-    )
-  }
-
-  rows.push(
-    el(
-      'tr',
-      { class: 'subtotal' },
-      el('th', {}, 'Belopp vid årets utgång') +
-        posts.map((post) => td(writer.money(post.concept, ctx.closing, post.closing))).join('') +
-        td(writer.money('EgetKapital', ctx.closing, total((post) => post.closing))),
-    ),
-  )
-  return el('table', {}, rows.join(''))
-}
+import { el, escapeText, paragraphs } from './xml'
 
 /**
  * The equity specification where the report places it: in the
@@ -382,7 +226,7 @@ export function generateK3IxbrlDocument(input: IxbrlArsredovisningInput): Genera
         ),
       )
     }
-    const flerars = renderFlerarsoversikt(writer, fb.flerarsoversikt)
+    const flerars = renderFlerarsoversikt(writer, fb.flerarsoversikt, { tkr: fb.flerarsoversiktTkr })
     if (flerars) parts.push(flerars)
     if (k3.equity.placement === 'management_report') {
       const equity = renderEquity(writer, registry, input, k3.equity, ctx, warnings)

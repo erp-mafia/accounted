@@ -49,6 +49,14 @@ export interface IncomeFigureDefinition {
 }
 
 /**
+ * The name of net_result wherever the income statement shows it: the page,
+ * the PDF and the xlsx. The figure leaves out every bokslut entry (see
+ * basis), so it is not the årsredovisning's "Årets resultat", which comes
+ * after bokslutsdispositioner and skatt.
+ */
+export const NET_RESULT_LABEL = 'Resultat före bokslutstransaktioner'
+
+/**
  * Returned next to the figures (income statement, MCP, v1) so a caller
  * never has to guess which accounts a number sums or which entries it
  * leaves out. `basis` comes first because it qualifies every figure after it.
@@ -90,6 +98,6 @@ export const INCOME_STATEMENT_DEFINITIONS = {
   },
   net_result: {
     accounts: '3000-8989',
-    definition: 'Resultat före bokslutstransaktioner: rorelseresultat + total_financial. Not årets resultat once bokslut entries are booked; see basis.',
+    definition: `${NET_RESULT_LABEL}: rorelseresultat + total_financial. Not årets resultat once bokslut entries are booked; see basis.`,
   },
 } as const satisfies Record<string, IncomeFigureDefinition>

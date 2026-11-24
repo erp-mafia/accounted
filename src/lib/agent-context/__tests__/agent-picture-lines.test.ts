@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { flowLayout, isReadingNow, type FlowCard, type FlowRect } from '../agent-picture-lines'
+import { flowLayout, hitTest, isReadingNow, type FlowCard, type FlowRect } from '../agent-picture-lines'
 
 const rect = (left: number, top: number, width: number, height: number): FlowRect => ({ left, top, width, height })
 
@@ -91,6 +91,46 @@ describe('flowLayout', () => {
     expect(layout.lines.find((l) => l.id === 'claude')).toMatchObject({ dashed: false, active: true })
   })
 
+  it('dashes a stacked connector when not one card of its side is connected, and keeps it solid while any is', () => {
+    // A phone, for a company with nothing connected: two offered sources above, two offered clients below.
+    const core = rect(16, 300, 300, 200)
+    const stackedWith = (cards: FlowCard[]) =>
+      flowLayout({ map: rect(0, 0, 332, 700), core, cards, inColumn: rect(16, 20, 300, 240), outColumn: rect(16, 540, 300, 120) })!
+    const nothing = stackedWith([
+      card('bank', 'in', rect(16, 20, 300, 52), { connected: false }),
+      card('skv', 'in', rect(16, 80, 300, 52), { connected: false }),
+      card('offer:claude', 'out', rect(16, 560, 300, 52), { connected: false }),
+      card('offer:chatgpt', 'out', rect(16, 620, 300, 52), { connected: false }),
+    ])
+    expect(nothing.stacked).toBe(true)
+    expect(nothing.lines).toEqual([
+      { id: 'in', d: 'M166.0 260.0 L166.0 300.0', dashed: true, active: false },
+      { id: 'out', d: 'M166.0 500.0 L166.0 540.0', dashed: true, active: false },
+    ])
+
+    // Each connector follows its own side: sources connected, no agent yet.
+    const sourcesOnly = stackedWith([
+      card('bank', 'in', rect(16, 20, 300, 52)),
+      card('skv', 'in', rect(16, 80, 300, 52), { connected: false }),
+      card('offer:claude', 'out', rect(16, 560, 300, 52), { connected: false }),
+    ])
+    expect(sourcesOnly.lines.map((l) => [l.id, l.dashed])).toEqual([
+      ['in', false],
+      ['out', true],
+    ])
+
+    // One connected card among several is enough for a solid connector.
+    const oneAgent = stackedWith([
+      card('bank', 'in', rect(16, 20, 300, 52), { connected: false }),
+      card('claude', 'out', rect(16, 560, 300, 52)),
+      card('offer:chatgpt', 'out', rect(16, 620, 300, 52), { connected: false }),
+    ])
+    expect(oneAgent.lines.map((l) => [l.id, l.dashed])).toEqual([
+      ['in', true],
+      ['out', false],
+    ])
+  })
+
   it('joins stacked columns with one straight connector each way', () => {
     // A narrow screen: every card is as wide as the company card and above or below it.
     const core = rect(16, 300, 300, 200)
@@ -142,5 +182,29 @@ describe('isReadingNow', () => {
 
   it('takes a call stamped a moment ahead of the server clock as made now', () => {
     expect(isReadingNow('2026-03-02T10:00:02.000Z', new Date(now))).toBe(true)
+  })
+})
+
+describe('hitTest', () => {
+  const rows = [
+    { id: 'context', rect: rect(400, 100, 300, 50) },
+    { id: 'checks', rect: rect(400, 150, 300, 50) },
+    { id: 'memory', rect: rect(400, 200, 300, 80) },
+  ]
+
+  it('names the target a point lands in', () => {
+    expect(hitTest(rows, 550, 120)).toBe('context')
+    expect(hitTest(rows, 401, 199)).toBe('checks')
+    expect(hitTest(rows, 699, 279)).toBe('memory')
+  })
+
+  it('takes the first target on a shared edge', () => {
+    expect(hitTest(rows, 500, 150)).toBe('context')
+  })
+
+  it('answers nothing for a point outside every target', () => {
+    expect(hitTest(rows, 399, 120)).toBeNull()
+    expect(hitTest(rows, 550, 281)).toBeNull()
+    expect(hitTest([], 0, 0)).toBeNull()
   })
 })

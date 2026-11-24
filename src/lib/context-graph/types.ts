@@ -10,7 +10,9 @@
  * Who stands behind a dot. The four chip families are taught (what people
  * and agents saved), read (what Accounted reads from the books), wait (what
  * is waiting on someone) and instructions; agent is the dot in the middle and
- * ref a neutral thing others point at (an account, the group).
+ * ref a neutral thing others point at (an account, the group). The legend
+ * names taught and instructions with the words of the agent picture's card,
+ * Minne and Kunskap (familyLabel in components/context-graph/node-text.ts).
  */
 export type GraphFamily = 'agent' | 'taught' | 'read' | 'wait' | 'instructions' | 'ref'
 
@@ -53,6 +55,8 @@ export interface GraphNode {
   text: string | null
   /** A second line from the briefing (a skill's description, what a question is about, a deadline's state). */
   detail?: string | null
+  /** A knowledge area's id as the briefing sends it (atom_id): the name people read is looked up by it. */
+  atomId?: string | null
   /** A date the briefing gives for it (saved, last booked, last synced, due, asked), as sent. */
   date?: string | null
   /** A counterparty's account, or an account's own number. */
@@ -86,7 +90,16 @@ export type GraphEdge = readonly [string, string]
 export interface ContextGraphModel {
   nodes: GraphNode[]
   edges: GraphEdge[]
-  /** How many things each chip family holds in the briefing, the ones behind a "+N" dot included. */
+  /**
+   * How many things each chip family holds in the briefing, the ones behind a
+   * "+N" dot included. taught: the company's remembered facts and its
+   * group's. read: the connections, the owners, the archive and the
+   * counterparties. wait: the checks that differ, the suggestions, the
+   * deadlines and the questions. instructions: the knowledge areas the
+   * briefing lists (`atoms`), plus one for the workflows and one for the
+   * permissions when it carries them. The legend draws a chip for a family
+   * whose count is above zero and shows no number.
+   */
   counts: Record<ChipFamily, number>
   /** How many things the caps left out of the picture (they stay in the lists below it). */
   hidden: number

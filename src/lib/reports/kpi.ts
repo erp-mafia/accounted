@@ -49,13 +49,17 @@ export function cashPositionRows(rows: TrialBalanceRow[], accounts?: string[]): 
 }
 
 /**
- * Calculate net VAT liability (positive = att betala) or receivable
- * (negative = att återfå) from trial balance rows.
+ * The moms on the 26xx accounts that no momsredovisning has moved yet
+ * (positive = att betala, negative = att återfå), from trial balance rows:
+ * closing balances of the momsdeklaration's output VAT accounts (rutor 10-12,
+ * 30-32, 60-62) minus its input VAT accounts (ruta 48).
  *
- * Uses the same 26xx accounts as the momsdeklaration so the result mirrors
- * ruta 49: output VAT (rutor 10-12, 30-32, 60-62) − input VAT (ruta 48).
- * Reverse-charge and import pairs (e.g. 2614 credit + 2645 debit) therefore
- * net to zero instead of inflating the receivable (#715).
+ * Not ruta 49 of a declaration: the default accounts leave out 2650 and 1650,
+ * so once a momsredovisning has cleared 26xx to 2650 (or 1650) that amount
+ * drops out, and what remains is everything booked on 26xx since. The
+ * declared figure is the vat_payable measure. Reverse-charge and import
+ * pairs (e.g. 2614 credit + 2645 debit) net to zero instead of inflating the
+ * receivable (#715).
  *
  * `accounts` overrides the default list (user KPI preferences); accounts in
  * the 264x range count as input VAT, all other 26xx accounts as output VAT.

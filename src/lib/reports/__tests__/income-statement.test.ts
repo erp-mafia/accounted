@@ -7,6 +7,7 @@ vi.mock('../trial-balance', () => ({
 import { generateIncomeStatement } from '../income-statement'
 import { generateTrialBalance } from '../trial-balance'
 import { roundOre } from '@/lib/money'
+import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
@@ -333,6 +334,27 @@ describe('generateIncomeStatement', () => {
     expect(report.net_result).toBe(82000) // was 100000 before the fix
     const expenseAccounts = report.expense_sections.flatMap((s) => s.rows.map((r) => r.account_number))
     expect(expenseAccounts).toContain('5310')
+  })
+
+  it('names group 54 as the BAS group does, so 5420 Programvaror sits under förbrukningsmaterial too', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '5410', account_name: 'Förbrukningsinventarier', account_class: 5, closing_debit: 4000, closing_credit: 0 }),
+        makeRow({ account_number: '5420', account_name: 'Programvaror', account_class: 5, closing_debit: 6000, closing_credit: 0 }),
+      ],
+      totalDebit: 10000,
+      totalCredit: 0,
+      isBalanced: false,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    const basGroupName = BAS_REFERENCE.find((a) => a.account_number === '5400')!.account_name.replace(' (gruppkonto)', '')
+    expect(basGroupName).toBe('Förbrukningsinventarier och förbrukningsmaterial')
+    expect(report.expense_sections).toHaveLength(1)
+    expect(report.expense_sections[0].title).toBe(basGroupName)
+    expect(report.expense_sections[0].rows.map((r) => r.account_number)).toEqual(['5410', '5420'])
+    expect(report.expense_sections[0].subtotal).toBe(10000)
   })
 
   it('routes accounts from every unmapped group (48, 53, 67) into a catch-all, never dropping them', async () => {

@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createTableMockSupabase } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { buildAccrualsProposal } from '@/lib/bokslut/accruals/accrual-detector'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { currentStagingBatchId } from '@/lib/pending-operations/batch-context'
 import { currentAgentReason } from '@/lib/pending-operations/agent-reason'
@@ -37,6 +39,9 @@ vi.mock('@/lib/clients/fetch-client-overview', () => ({
   getByraMembership: vi.fn().mockResolvedValue(null),
 }))
 vi.mock('@/lib/processing-history/append', () => ({ appendProcessingHistory: vi.fn() }))
+vi.mock('@/lib/bokslut/accruals/accrual-detector', () => ({
+  buildAccrualsProposal: vi.fn().mockResolvedValue({ fiscalPeriod: null, proposals: [], notices: [] }),
+}))
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return { ...actual, hasCapability: (...args: unknown[]) => mocks.hasCapability(...args) }
@@ -362,6 +367,114 @@ describe('gnubok_run_across_companies', () => {
     // The paywall's own code, as on a direct call: it read as UNKNOWN_ERROR.
     expect(result.results[0].error?.code).toBe('capability_blocked')
     expect(mocks.hasCapability).toHaveBeenCalledWith(supabase, DEFAULT_COMPANY_ID, MCP_TOOL_CAPABILITY_MAP[gated.name])
+  })
+})
+
+// A gate on the caller's scopes holds the same through a cross-company tool
+// as on a direct call: the inner call gets the scopes the dispatcher handed
+// the cross-company tool.
+describe('gnubok_run_across_companies: an inner tool that reads the key scopes', () => {
+  const QUESTION_ID = 'e0000000-0000-4000-8000-000000000001'
+  const OPERATION_ID = '0b000000-0000-4000-8000-000000000001'
+  const actor = { type: 'api_key' as const, id: 'key-1' }
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('shows the operations an answer led to only to a key that may read pending operations', async () => {
+    vi.stubEnv('COMPANY_QUESTIONS_COMPANY_IDS', DEFAULT_COMPANY_ID)
+    mocks.resolveCompanyScope.mockResolvedValue(scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB')))
+    const companyBooks = () =>
+      createTableMockSupabase({
+        company_questions: {
+          data: [
+            {
+              id: QUESTION_ID,
+              status: 'answered',
+              close_reason: null,
+              question: 'Är nyemissionen registrerad?',
+              why: null,
+              options: [],
+              evidence: [],
+              actor_label: null,
+              client: null,
+              answer_option: null,
+              answer_text: 'Ja, den är registrerad.',
+              answered_at: '2026-11-20T09:00:00.000Z',
+              answered_via: 'app',
+              fact_id: null,
+              created_at: '2026-11-19T08:00:00.000Z',
+            },
+          ],
+        },
+        company_question_operations: {
+          data: [{ question_id: QUESTION_ID, operation_id: OPERATION_ID, created_at: '2026-11-20T10:00:00.000Z' }],
+        },
+        pending_operations: {
+          data: [
+            {
+              id: OPERATION_ID,
+              operation_number: 1,
+              operation_type: 'create_voucher',
+              title: 'Förslag',
+              status: 'pending',
+              result_data: null,
+              transaction_id: null,
+              document_name: null,
+              voucher_label: null,
+            },
+          ],
+        },
+      }).supabase
+    const listedWith = async (keyScopes: string[]) => {
+      const result = (await runTool.execute(
+        { tool: 'gnubok_list_questions', response_format: 'full', __keyScopes: keyScopes },
+        '',
+        'user-1',
+        companyBooks() as never,
+        actor,
+      )) as { results: Array<{ ok: boolean; data?: { questions: Array<Record<string, unknown>> } }> }
+      expect(result.results[0].ok).toBe(true)
+      return result.results[0].data!.questions[0]
+    }
+
+    const withoutScope = await listedWith(['companies:read', 'agent:read'])
+    expect(withoutScope).toMatchObject({ question_id: QUESTION_ID, status: 'answered' })
+    expect(withoutScope).not.toHaveProperty('operations')
+    expect(withoutScope).not.toHaveProperty('follow_up')
+
+    expect(await listedWith(['companies:read', 'agent:read', 'pending_operations:read'])).toMatchObject({
+      follow_up: 'awaiting_approval',
+      operations: [{ operation_id: OPERATION_ID, status: 'pending' }],
+    })
+  })
+
+  it('asks the accrual proposal for employee detail only for a key that reads payroll', async () => {
+    mocks.resolveCompanyScope.mockResolvedValue(scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB')))
+    const { supabase } = supabaseDouble()
+    const detailWith = async (keyScopes: string[]) => {
+      vi.mocked(buildAccrualsProposal).mockClear()
+      const result = (await runTool.execute(
+        { tool: 'gnubok_propose_accruals', arguments: { fiscal_period_id: 'p1' }, __keyScopes: keyScopes },
+        '',
+        'user-1',
+        supabase as never,
+        actor,
+      )) as { results: Array<{ ok: boolean }> }
+      expect(result.results[0].ok).toBe(true)
+      return vi.mocked(buildAccrualsProposal).mock.calls[0][3]
+    }
+
+    expect(await detailWith(['companies:read', 'reports:read'])).toEqual({ employeeDetail: false })
+    expect(await detailWith(['companies:read', 'reports:read', 'payroll:read'])).toEqual({ employeeDetail: true })
+  })
+
+  it('hands no scopes on to an inner tool that does not read them', async () => {
+    mocks.resolveCompanyScope.mockResolvedValue(scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB')))
+    const { supabase } = supabaseDouble()
+    await runTool.execute({ tool: 'gnubok_fake_read', arguments: { limit: 5 }, __keyScopes: ['companies:read'] }, '', 'user-1', supabase as never, actor)
+    expect(fakeRead.execute).toHaveBeenCalledWith({ limit: 5 }, DEFAULT_COMPANY_ID, 'user-1', supabase, actor)
   })
 })
 

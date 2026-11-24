@@ -7,7 +7,7 @@ import type { CommunityMeta } from '@/lib/agent-skills/community'
 import { isCheckable } from '@/lib/agent-skills/agents'
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
 import { AI_CLIENTS, aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
-import type { ItemKind, Presence } from './hues'
+import { catalogHref, type ItemKind, type Presence } from './hues'
 
 /** Reads shared by the Agenter list and an agent's page. */
 export type SkillSummary = Omit<CatalogSkill, 'body'>
@@ -84,6 +84,13 @@ export async function readOptions(url: string): Promise<KnowledgeOption[]> {
   return (await response.json()).data as KnowledgeOption[]
 }
 
+/** One item's own text, as the AI reads it (GET /api/skills?slug=). A failed read throws. */
+export async function readBody(url: string): Promise<string> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Item body request failed')
+  return ((await response.json()).data as { body: string }).body
+}
+
 export async function readCatalog(url: string): Promise<SkillSummary[]> {
   const response = await fetch(url)
   if (!response.ok) throw new Error('Skills request failed')
@@ -156,6 +163,31 @@ export function withKnowledgeFailed(url: string): string {
 /** Where a knowledge chip leads: an own knowledge item's page (egen.<id>), else the pack's. */
 export function knowledgeHref(base: string, id: string): string {
   return id.startsWith('own/') ? `${base}/egen.${id.slice(4)}` : `${base}/${rulesSegment(id)}`
+}
+
+/** An item of the catalogue the company holds itself: one it or its firm wrote, or one its AI saved (a draft). */
+export type OwnCatalogItem = SkillSummary & { installations: [{ installation_id: string; scope: 'company' | 'team' }] }
+
+/**
+ * Whether a catalogue item is one of the company's own. The catalogue page's
+ * Egna and the agent picture's Kunskap panel list the same items by it.
+ */
+export function isOwnItem(skill: SkillSummary): skill is OwnCatalogItem {
+  return skill.tier === 'own' && !!skill.installations[0]
+}
+
+/** Where an own item opens: a flow on the flow page (own-<id>), own knowledge and an own analysis on the item page (egen.<id>). */
+export function ownItemHref(base: string, slug: string, kind: ItemKind): string {
+  return kind === 'workflow' ? `${base}/${agentSegment(slug)}` : knowledgeHref(base, slug)
+}
+
+/**
+ * "Skriv själv": the new item's own page, empty, on the kind given. The kind
+ * goes in ?typ= as the catalogue's addresses spell it (catalogHref), which
+ * is what the page reads.
+ */
+export function createItemHref(base: string, kind: ItemKind): string {
+  return catalogHref(`${base}/ny`, kind)
 }
 export function communitySegment(slug: string): string {
   // community/<name> -> community.<name>: the address accounted.se links to for "Lägg till i Accounted".

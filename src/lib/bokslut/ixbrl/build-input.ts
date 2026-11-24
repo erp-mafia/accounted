@@ -370,7 +370,18 @@ export async function buildIxbrlInput(
       vasentligaHandelser: pdfData.forvaltningsberattelse.important_events,
       flerarsoversikt,
       flerarsPerioder,
+      // The year's choice to state the flerårsöversikt in tkr, as the PDF
+      // does; spread only when on, so every other input keeps its content hash.
+      ...(pdfData.forvaltningsberattelse.flerarsoversikt_tkr === true ? { flerarsoversiktTkr: true } : {}),
       egetKapital,
+      // K2: the specification itself, per post and kind, so the document's
+      // table is the PDF's and tags every movement (the K3 document carries
+      // its own in `k3.equity`). The adapter is K3's: the shape is the same.
+      // The K2 table shows the year only, so the jämförelseår is left out
+      // of what a version stores.
+      ...(framework === 'k3'
+        ? {}
+        : { egetKapitalSpecifikation: { ...k3EquityInput(pdfData, mapping.br, 'k2'), previous: null } }),
       resultatdisposition,
       kontrollbalansrakningUpprattad: pdfData.forvaltningsberattelse.kontrollbalans_required === true,
     },
@@ -381,6 +392,9 @@ export async function buildIxbrlInput(
       title: note.title,
       body: note.body,
       ...(note.fixedAssets && note.fixedAssets.length > 0 ? { fixedAssets: note.fixedAssets } : {}),
+      ...(note.depreciationPrinciples && note.depreciationPrinciples.length > 0
+        ? { depreciationPrinciples: note.depreciationPrinciples }
+        : {}),
     })),
     disclosures: {
       longTermDebtOverFiveYears:

@@ -3,7 +3,9 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { readOnlyResponse } from '@/lib/auth/require-write'
 import { validateBody, validateQuery } from '@/lib/api/validate'
+import { filterGivenFacts, filterNotReplacedFacts } from '@/lib/agent-context/remembered-facts'
 import { creatorOf, resolveCreators, type Creator } from '@/lib/attribution/person-names'
+import { answeredQuestionsOfFacts } from '@/lib/questions/fact-questions'
 import { createServiceClient } from '@/lib/supabase/server'
 
 // GET /api/agent/memory
@@ -11,8 +13,18 @@ import { createServiceClient } from '@/lib/supabase/server'
 // Lists memory entries for the active company, ordered by pin > relevance >
 // recency. Powers /settings/assistant?view=memory (transparency UI per plan §11).
 //
+// A row that answered a question carries `answered_question`: the question's
+// text and the answer as the person gave it ({ question, answer }), read with
+// the caller's own client; null on every other row.
+//
 // Query params:
 //   include_dismissed: 'true' includes is_active=false rows (audit view).
+//   given:             'true' leaves out every row a later fact replaced, by
+//                      the rule the agent briefing reads its facts with
+//                      (lib/agent-context/remembered-facts.ts): the list is
+//                      then the facts an agent is given, and with
+//                      include_dismissed also the rows a person hid. A
+//                      replaced row is in neither.
 //   kind:              filter by kind.
 //   limit:             1..200, default 200 (matches the storage cap).
 //
@@ -45,6 +57,7 @@ async function withCreators<T extends { created_by_user_id?: string | null }>(ro
 
 const ListQuerySchema = z.object({
   include_dismissed: z.enum(['true', 'false']).optional(),
+  given: z.enum(['true', 'false']).optional(),
   kind: z.enum(KIND).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(200),
 })
@@ -68,14 +81,15 @@ export const GET = withRouteContext('agent.memory.list', async (request, ctx) =>
     operation: 'agent.memory.list',
   })
   if (!validated.success) return validated.response
-  const { include_dismissed, kind, limit } = validated.data
+  const { include_dismissed, given, kind, limit } = validated.data
 
   let query = supabase
     .from('agent_memory')
     .select(MEMORY_COLUMNS)
     .eq('company_id', companyId)
 
-  if (include_dismissed !== 'true') query = query.eq('is_active', true)
+  if (given === 'true') query = include_dismissed === 'true' ? filterNotReplacedFacts(query) : filterGivenFacts(query)
+  else if (include_dismissed !== 'true') query = query.eq('is_active', true)
   if (kind) query = query.eq('kind', kind)
 
   query = query
@@ -88,7 +102,16 @@ export const GET = withRouteContext('agent.memory.list', async (request, ctx) =>
 
   const { data, error } = await query
   if (error) throw error
-  return NextResponse.json({ data: await withCreators(data ?? []) })
+  const rows = data ?? []
+  const [named, answered] = await Promise.all([
+    withCreators(rows),
+    answeredQuestionsOfFacts(
+      supabase,
+      companyId,
+      rows.map((row) => row.id),
+    ),
+  ])
+  return NextResponse.json({ data: named.map((row) => ({ ...row, answered_question: answered.get(row.id) ?? null })) })
 })
 
 export const POST = withRouteContext(

@@ -34,6 +34,7 @@ import { isCompanyQuestionsEnabled } from '@/lib/env/company-questions-switch'
 import { isUuid } from '@/lib/invariants/uuid'
 import { createLogger } from '@/lib/logger'
 import { answerQuestion, closeQuestion } from './answer'
+import { answerAsGiven, answerFactContent, type AnswerLocale } from './answer-fact'
 import { emitQuestionEvent } from './events'
 import { evidenceLines, type EvidenceLine } from './evidence-lines'
 import { listQuestions, listSettledQuestions } from './list'
@@ -63,7 +64,8 @@ export const APP_ANSWER_MAX = 1000
 export const APP_CLOSE_REASONS = ['dont_know', 'not_relevant'] as const
 export type AppCloseReason = (typeof APP_CLOSE_REASONS)[number]
 
-export type AnswerLocale = 'sv' | 'en'
+// The sentence an answer saves, and the languages it is saved in, are defined in answer-fact.ts.
+export { answerFactContent, type AnswerLocale }
 
 /** Questions closed as settled that the app's page lists at most. */
 export const SETTLED_SHOWN_MAX = 20
@@ -119,11 +121,6 @@ export function questionFactRef(questionId: string): string {
   return `question:${questionId}`
 }
 
-/** The fact an answer becomes: the question and the answer in one sentence. */
-export function answerFactContent(question: string, answer: string, locale: AnswerLocale): string {
-  return `${question.trim()} ${locale === 'en' ? 'Answer' : 'Svar'}: ${answer.trim()}`
-}
-
 /** The company's open questions with their evidence lines, the oldest first. */
 export async function listAppQuestions(supabase: SupabaseClient, companyId: string): Promise<AppQuestion[]> {
   const open = await listQuestions(supabase, companyId, { status: 'open', limit: QUESTION_LIMITS.maxOpen })
@@ -167,14 +164,6 @@ export async function listAppSettledQuestions(supabase: SupabaseClient, companyI
       closed_at: question.answered_at,
     },
   }))
-}
-
-/** The answer as the person gave it: the chosen option's label, else the written text. */
-function answerAsGiven(question: CompanyQuestion): string | null {
-  const option = question.answer_option ? question.options.find((entry) => entry.id === question.answer_option) : undefined
-  if (option) return option.label
-  const text = typeof question.answer_text === 'string' ? question.answer_text.trim() : ''
-  return text || null
 }
 
 /**

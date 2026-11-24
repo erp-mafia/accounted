@@ -111,6 +111,7 @@ import {
   DEFAULT_REVERSE_CHARGE_KIND,
   REVERSE_CHARGE_TREATMENT_KINDS,
   isReverseChargeBasisAccount,
+  isReverseChargeBasisLeg,
   reverseChargeKindOnOwnAccount,
   reverseChargeKindRuta,
   supplierInvoiceReverseChargeKind,
@@ -682,6 +683,7 @@ import { batchAllocationsFromParts } from '@/lib/transactions/parts-read'
 import { giroCounterpartyForWire, mayReadGiro, readGiroCounterparty, type GiroRow } from '@/lib/transactions/giro-counterparty'
 import { loadGiroRegister } from '@/lib/transactions/giro-register'
 import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
+import { TRANSACTION_SEARCH_MIN_CHARS, transactionTextSearchFilter } from '@/lib/transactions/text-search'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
@@ -692,12 +694,14 @@ import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
+import { mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
 import {
   findSalaryRunPayouts,
   salaryPayoutLinkProposal,
   SALARY_RUN_MISSING_HINT,
   type SalaryRunPayout,
 } from '@/lib/transactions/salary-run-payouts'
+import { isStripeSaleRow, latestStripeSalesVoucher, stripeDailySalesProposal } from './stripe-sales'
 import { businessAccount, categorizeArgsFor, reverseChargeBoxDispute, reverseChargeBoxNumber, whyTextSv } from '@/lib/bookkeeping/proposal'
 import { reviewRequired } from '@/lib/transactions/direct-booking'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
@@ -859,7 +863,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 import { CURRENCIES, INVOICE_QR_MODES, SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
 import { InvoiceDeliveryAddressSchema, type InvoiceDeliveryAddress } from '@/lib/invoices/delivery-address'
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, Customer, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, MappingRule, Invoice, InvoiceQrMode, Currency, Customer, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 import type { InvoiceExtractionResult, SupplierInvoiceReverseChargeKind } from '@/types'
 import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
@@ -2320,6 +2324,25 @@ const AUTO_PERIOD_DATE_KEYS = [
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 /**
+ * The since..until window (both inclusive) of gnubok_list_verifikat_without_documents
+ * and gnubok_receipt_hunt_worklist. Both bounds are checked: a date the RPC
+ * cannot read failed as a database error, and a since that was not a string
+ * was dropped unread.
+ */
+function sinceUntilArgs(args: Record<string, unknown>): { since: string | null; until: string | null } {
+  const [since, until] = (['since', 'until'] as const).map((key) => {
+    const value = args[key]
+    if (value === undefined || value === null) return null
+    if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
+      throw badArgument(key, `${key} must be an ISO date (YYYY-MM-DD).`)
+    }
+    return value
+  })
+  if (since && until && since > until) throw badArgument('since', 'since must not be after until.')
+  return { since, until }
+}
+
+/**
  * A tool's qr_mode argument: one of INVOICE_QR_MODES, or null/omitted for
  * the company default (invoice_qr_mode). Anything else is refused the way
  * InvoiceQrModeSchema refuses it on the web API.
@@ -2424,6 +2447,7 @@ function normalizeVoucherNumber(value: unknown, field: string): number | undefin
  * answered UNKNOWN_ERROR "try again" for a call no retry fixes. The forms
  * the cast took keep working (an unpadded month or day, a trailing time,
  * YYYYMMDD) and are passed on as YYYY-MM-DD. Empty or null is no bound.
+ * gnubok_list_uncategorized_transactions reads its date_from / date_to here too.
  */
 const JOURNAL_DATE_RE = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/
 const COMPACT_DATE_RE = /^(\d{4})(\d{2})(\d{2})$/
@@ -4767,12 +4791,20 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 const REMEMBER_ORIGINS = ['conversation', 'session_sync', 'onboarding_import'] as const
 
 /**
+ * Where a note about one purchase belongs: on its verifikat, not in memory.
+ * One sentence, said in gnubok_remember_fact's description and in the
+ * briefing's memory line.
+ */
+const PURCHASE_NOTE_PLACE =
+  "A note about one purchase or verifikat (who took part, what a receipt was for) goes on that verifikat with gnubok_set_voucher_note or in the booking's description, not here."
+
+/**
  * The briefing's directions to everything an agent may need about the
  * company, so it reads the right place instead of guessing. Plain lines:
  * undeclared in outputSchema like the other briefing guidance (tools/list budget).
  */
 const WHERE_TO_FIND = [
-  'memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one.',
+  `memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one. ${PURCHASE_NOTE_PLACE}`,
   'ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier.',
   'Documents: gnubok_search_records and gnubok_read_document (arkiv explains, when present).',
   'Workflows: gnubok_list_skills, then gnubok_load_skill; a curated workflow arrives with the company facts inline.',
@@ -5410,10 +5442,45 @@ function readInnerArguments(inner: McpTool, raw: unknown): Record<string, unknow
 }
 
 /**
+ * The tools that read the caller's key scopes, which the dispatcher hands
+ * them privately as __keyScopes, beside the cross-company tools, which check
+ * the INNER tool's scope per call. A cross-company tool hands the scopes on
+ * to an inner call of one of these (runInnerTool), so a gate on a scope
+ * holds the same through it as on a direct call.
+ */
+const KEY_SCOPE_TOOLS: ReadonlySet<string> = new Set([
+  // Search filters to what the API key can actually invoke; the briefing
+  // flags each recommended tool as callable or not.
+  'gnubok_search_tools',
+  'gnubok_get_agent_briefing',
+  'gnubok_list_skills',
+  // Re-checks agent:read for an own/ slug as it is loaded.
+  'gnubok_load_skill',
+  // Its already-explained refusal names the link tool this key can call.
+  'gnubok_match_batch_allocate',
+  // Says whether this key can approve, so the widget can hide its buttons.
+  'gnubok_list_pending_operations',
+  // Names employees and their pay only for a key with payroll:read.
+  'gnubok_propose_accruals',
+  // Shows the operations an answer led to only to a key with pending_operations:read.
+  'gnubok_list_questions',
+  // A verifikat's lines and correction history only for a key with
+  // reports:read (RECORD_KIND_DETAIL_SCOPES).
+  'gnubok_get_record',
+])
+
+/** Whether the dispatcher hands the tool the caller's key scopes (__keyScopes). */
+function receivesKeyScopes(toolName: string): boolean {
+  return KEY_SCOPE_TOOLS.has(toolName) || isScopedTool(toolName)
+}
+
+/**
  * One inner call of a cross-company tool: the same capability gate and
  * telemetry a direct call gets, attributed to the company it ran for and
  * marked companySelection=scope. Membership was checked by the scope
- * resolver (and, for writes, again per company by the staging tool).
+ * resolver (and, for writes, again per company by the staging tool). An
+ * inner tool that reads the caller's key scopes gets them as on a direct
+ * call; a caller without them (the in-app chat) hands on none.
  */
 async function runInnerTool(params: {
   supabase: SupabaseClient
@@ -5423,8 +5490,10 @@ async function runInnerTool(params: {
   userId: string
   actor: ActorContext
   requestId: string | number | null
+  /** The caller's key scopes, as the dispatcher handed them to the cross-company tool. */
+  keyScopes: ApiKeyScope[] | undefined
 }): Promise<unknown> {
-  const { supabase, inner, innerArgs, companyId, userId, actor, requestId } = params
+  const { supabase, inner, innerArgs, companyId, userId, actor, requestId, keyScopes } = params
   const startedAt = Date.now()
   const requiredScope = TOOL_SCOPE_MAP[inner.name] ?? null
   try {
@@ -5445,6 +5514,7 @@ async function runInnerTool(params: {
     }
     // The agent's reason, split off as the dispatcher splits a direct call's.
     const { args, reason } = splitAgentReason(inner, { ...innerArgs })
+    if (keyScopes && receivesKeyScopes(inner.name)) args.__keyScopes = keyScopes
     const result = await withSIEExternalReport(supabase, companyId, inner.name, () =>
       runWithAgentReason(reason, () => inner.execute(args, companyId, userId, supabase, actor))
     )
@@ -6570,6 +6640,7 @@ export const tools: McpTool[] = [
             userId,
             actor: runnerActor,
             requestId: null,
+            keyScopes,
           })
         }
       )
@@ -6684,6 +6755,7 @@ export const tools: McpTool[] = [
             userId,
             actor: runnerActor,
             requestId: null,
+            keyScopes,
           }),
         { concurrency: typeof args.concurrency === 'number' ? args.concurrency : undefined }
       )
@@ -6850,6 +6922,7 @@ export const tools: McpTool[] = [
             userId,
             actor: runnerActor,
             requestId: null,
+            keyScopes,
           })
           shadow?.settled(dryRun)
           return staged
@@ -8037,14 +8110,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_remember_fact',
     title: 'Remember Company Fact',
-    description: 'Save a durable fact about the company that affects money, bookings or tax: a new employee, customer abroad, lease, loan, car, how the owner is paid, the accountant\'s advice. Works from any chat. Pass replaces when it updates an older fact. Saves at once, no approval.',
+    description: `Save what holds for the company over time: an employee, lease, loan, how the owner is paid. ${PURCHASE_NOTE_PLACE} Saves at once.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         content: {
           type: 'string',
-          description: 'The full fact text in the user\'s language. Self-contained: readable without prior context. Example: "Företaget hyr lagerplats av AB Foo, hyresfaktura kommer 25:e varje månad."',
+          description: 'The full fact text in the user\'s language, readable without prior context. Example: "Företaget hyr lagerplats av AB Foo, hyresfaktura kommer 25:e varje månad."',
         },
         kind: {
           type: 'string',
@@ -9248,17 +9321,22 @@ export const tools: McpTool[] = [
     keywords: ['okategoriserade', 'banktransaktioner', 'kontohändelser', 'att bokföra'],
     title: 'List Uncategorized Transactions',
     // suggested_match (crm#1510): paid for by the limit/offset notes, which
-    // restated what every paginated tool's limit and offset are.
-    description: 'List bank transactions with no journal entry yet, newest first. Paginated. cash_account_id narrows to one bank account. batch_suggestion (a Bankgirot split) feeds gnubok_match_batch_allocate. suggested_match is Accounted\'s own match: the user approves it in Att göra.',
+    // restated what every paginated tool's limit and offset are. The
+    // date_from/date_to/text filters (bare, named here): paid for by the
+    // limit note and the paging example (has_more and next_offset say it pages).
+    description: 'Unbooked bank rows, newest first. Filters: cash_account_id, date_from/date_to, text (description, merchant, reference). batch_suggestion feeds gnubok_match_batch_allocate. suggested_match is Accounted\'s own: the user approves it in Att göra.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        limit: { type: 'number', description: '1-100, default 20' },
+        limit: { type: 'number' },
         offset: { type: 'number' },
         cash_account_id: { type: 'string' },
+        date_from: { type: 'string' },
+        date_to: { type: 'string' },
+        text: { type: 'string' },
       },
-      examples: [{}, { limit: 100, offset: 100 }],
+      examples: [{}, { date_from: '2026-11-16', date_to: '2026-11-22' }],
     },
     outputSchema: paginatedSchema('transactions', {
       type: 'object',
@@ -9291,6 +9369,26 @@ export const tools: McpTool[] = [
       if (cashAccountId && !UUID_RE.test(cashAccountId)) {
         throw badArgument('cash_account_id', 'cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
       }
+      // "Last week's rows" and "did X pay?" are filters on the query itself,
+      // so the page, has_more and total_count all describe the filtered set.
+      const dateFrom = normalizeJournalDate(args.date_from, 'date_from')
+      const dateTo = normalizeJournalDate(args.date_to, 'date_to')
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        throw badArgument('date_from', 'date_from must not be after date_to.')
+      }
+      let textFilter: string | null = null
+      if (args.text !== undefined && args.text !== null) {
+        if (typeof args.text !== 'string' || args.text.length > 200) {
+          throw badArgument('text', 'text must be a string of at most 200 characters.')
+        }
+        textFilter = transactionTextSearchFilter(args.text, ['description', 'merchant_name', 'reference'])
+        if (!textFilter) {
+          throw badArgument(
+            'text',
+            `text needs at least ${TRANSACTION_SEARCH_MIN_CHARS} characters besides , ( ) % * and \\ (got ${JSON.stringify(args.text)}).`,
+          )
+        }
+      }
 
       // The rows countUnbookedBankTransactions counts (lib/transactions/
       // unbooked.ts), so total_count is the number Accounted://attention, the
@@ -9319,6 +9417,9 @@ export const tools: McpTool[] = [
         )
         .eq('company_id', companyId)
       if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
+      if (dateFrom) listQuery = listQuery.gte('date', dateFrom)
+      if (dateTo) listQuery = listQuery.lte('date', dateTo)
+      if (textFilter) listQuery = listQuery.or(textFilter)
       const { data, error, count } = await listQuery
         .order('date', { ascending: false })
         .order('id', { ascending: true })
@@ -9591,17 +9692,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
-      // Both bounds are checked: a date the RPC cannot read failed as a
-      // database error, and a since that was not a string was dropped unread.
-      const [since, until] = (['since', 'until'] as const).map((key) => {
-        const value = args[key]
-        if (value === undefined || value === null) return null
-        if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
-          throw badArgument(key, `${key} must be an ISO date (YYYY-MM-DD).`)
-        }
-        return value
-      })
-      if (since && until && since > until) throw badArgument('since', 'since must not be after until.')
+      const { since, until } = sinceUntilArgs(args)
       const minAmount = typeof args.min_amount === 'number' && Number.isFinite(args.min_amount)
         ? Math.max(0, args.min_amount)
         : 0
@@ -9659,6 +9750,7 @@ export const tools: McpTool[] = [
         limit: { type: 'number', description: 'Max items to return, 1-100 (default 25)' },
         offset: { type: 'integer', minimum: 0, description: 'Items to skip: pass next_offset from the previous page (default 0)' },
         since: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return items on or after this date.' },
+        until: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return items on or before this date.' },
       },
     },
     outputSchema: {
@@ -9715,8 +9807,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const limit = Number(args.limit) || undefined
       const offset = Number(args.offset) || undefined
-      const since = typeof args.since === 'string' ? args.since : null
-      return resolveAgentWorklist(supabase, companyId, { limit, offset, since })
+      const { since, until } = sinceUntilArgs(args)
+      return resolveAgentWorklist(supabase, companyId, { limit, offset, since, until })
     },
   },
 
@@ -13859,6 +13951,9 @@ export const tools: McpTool[] = [
         .eq('is_active', true)
         .order('priority', { ascending: false })
 
+      // Without the company's auto-learned rows where they are not read.
+      const readMappingRules = mappingRulesRead(companyId, (mappingRules ?? []) as MappingRule[])
+
       // Build category history from past categorizations
       // Counterparty-keyed history: the engine only surfaces history tied to
       // the SAME merchant: global frequency padding produced the identical
@@ -13896,7 +13991,7 @@ export const tools: McpTool[] = [
         // tagged expense_other and read back as 6991), so it is never
         // printed beside the match (crm#1920).
         suggestions[tx.id] = getSuggestedCategories(
-          tx as Transaction, mappingRules ?? [],
+          tx as Transaction, readMappingRules,
           cpMatch
             ? {}
             : merchantHistoryFor(
@@ -13999,6 +14094,22 @@ export const tools: McpTool[] = [
             (p as { id?: string }).id === 'personnel_salary' ? { ...(p as object), hint: SALARY_RUN_MISSING_HINT } : p,
           )
         }
+      }
+
+      // A Stripe sale carries neither moms nor the buyer's country: it leads
+      // with how Stripe sales are booked, the verifikat that booked the
+      // latest one, and where the moms comes from (./stripe-sales.ts). A
+      // failed read of that verifikat is logged and only leaves it out.
+      const stripeSales = (transactions as Transaction[]).filter(isStripeSaleRow)
+      if (stripeSales.length > 0) {
+        const example = await latestStripeSalesVoucher(supabase, companyId).catch((error: unknown) => {
+          log.warn('gnubok_suggest_categories latest Stripe sale verifikat read failed', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+          return null
+        })
+        const stripeProposal = stripeDailySalesProposal(example)
+        for (const tx of stripeSales) proposals[tx.id] = [stripeProposal, ...(proposals[tx.id] ?? [])]
       }
 
       // Honest absence beats fabricated confidence: mark transactions where
@@ -15115,7 +15226,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        account_from: { type: 'string', description: 'Lowest account number (inclusive). E.g. "4000" with account_to "4999" → all class-4 expenses.' },
+        account_from: { type: 'string', description: 'Lowest account number (inclusive). E.g. "4000" with account_to "4999" → class 4.' },
         account_to: { type: 'string', description: 'Highest account number (inclusive)' },
         accounts: { type: 'array', items: { type: 'string' }, description: 'Specific account numbers (overrides account_from/account_to). Up to 50.' },
         date_from: { type: 'string', description: 'Earliest entry date (YYYY-MM-DD, inclusive)' },
@@ -15602,6 +15713,19 @@ export const tools: McpTool[] = [
       }
       const totalsNote = noteParts.length > 0 ? noteParts.join(' ') : undefined
 
+      // A reverse-charge purchase books its VAT basis (44xx/45xx, ruta 20-24)
+      // and the 4598 offset beside the cost line. An account range over the
+      // cost classes lists that pair as if it were spend, so a summed account
+      // list counts every such purchase twice. The lines and account groups
+      // on either leg are marked, and the note says what the mark means; no
+      // amount changes.
+      const rcBasisNote = fullFiltered.some((r) => isReverseChargeBasisLeg(r.account_number))
+        ? 'Marked reverse_charge_basis: a reverse-charge VAT basis account (44xx/45xx, momsdeklaration ruta 20-24) ' +
+          "or its 4598 offset. Beside a purchase's cost line, the basis line and the 4598 line carry the same amount " +
+          "and net to zero; they are not a cost, which is on the purchase's own account. A 44xx/45xx amount that " +
+          '4598 does not offset is a cost booked directly there.'
+        : undefined
+
       const lines = filtered.map((r) => {
         return {
           line_id: r.id,
@@ -15621,13 +15745,21 @@ export const tools: McpTool[] = [
           cost_center: r.cost_center,
           ...(includeDimensions ? { dimensions: r.dimensions ?? {} } : {}),
           currency: r.currency,
+          ...(isReverseChargeBasisLeg(r.account_number) ? { reverse_charge_basis: true } : {}),
         }
       })
 
       // Optional group_by aggregation: over the same set totals used, so
       // group sums always reconcile with `totals`.
       let groups:
-        | Array<{ key: string; debit: number; credit: number; net: number; line_count: number }>
+        | Array<{
+            key: string
+            debit: number
+            credit: number
+            net: number
+            line_count: number
+            reverse_charge_basis?: true
+          }>
         | undefined
       if (wantsGroups) {
         const keyOf = (r: LineRow): string => {
@@ -15656,6 +15788,9 @@ export const tools: McpTool[] = [
             credit: roundOre(bucket.credit),
             net: roundOre(bucket.debit - bucket.credit),
             line_count: bucket.count,
+            ...(groupBy === 'account_number' && isReverseChargeBasisLeg(key)
+              ? { reverse_charge_basis: true as const }
+              : {}),
           }))
           .sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
       }
@@ -15704,6 +15839,7 @@ export const tools: McpTool[] = [
         },
         totals_scope: 'full_match',
         ...(totalsNote ? { totals_note: totalsNote } : {}),
+        ...(rcBasisNote ? { reverse_charge_basis_note: rcBasisNote } : {}),
         ...(statusFilterWarning ? { status_filter_warning: statusFilterWarning } : {}),
         ...(groups ? { groups } : {}),
         applied_filters: {
@@ -24805,10 +24941,15 @@ export const tools: McpTool[] = [
         // stands without it; the Dispositioner step shows the same verdict.
       }
 
+      // Readiness lists only what blocks the close; the bokslut's own work
+      // (sign-offs, periodiseringar, skatt) is the checklist in
+      // bokslutsbilagor, so a clear readiness never reads as "done".
+      const noBlockers =
+        'Inga blockerare kvar. Vad bokslutet kräver i övrigt (avstämningar, periodiseringar, skatt) står i checklistan i gnubok_get_bokslutsbilagor.'
       const summary = validation.ready
         ? warnings.length > 0
-          ? `Klart för bokslut. ${warnings.length} varning(ar) att granska.`
-          : 'Klart för bokslut.'
+          ? `${noBlockers} ${warnings.length} varning(ar) att granska.`
+          : noBlockers
         : `Inte klart: ${blockers.length} blockerare måste åtgärdas.`
 
       return {
@@ -25433,7 +25574,7 @@ export const tools: McpTool[] = [
 
       // The listing every door shares: throws on a failed read (it used to
       // answer 0 gaps), and checks series A when the year has no sequence row.
-      const listing = await listVoucherGaps(supabase, companyId, period.id, { series: voucherSeries })
+      const listing = await listVoucherGaps(supabase, companyId, period.id, { series: voucherSeries, withCancelled: true })
       const allGaps = listing.gaps.map((g) => ({
         series: g.series,
         gap_start: g.gap_start,
@@ -25450,11 +25591,31 @@ export const tools: McpTool[] = [
           : null,
       }))
 
+      // A number held by a cancelled verifikat is used, so it is no gap, but
+      // no journal list shows the verifikat: listed apart so a reader can
+      // account for every number in the series.
+      const cancelledVouchers = (listing.cancelled ?? []).map((c) => ({
+        kind: 'makulerad' as const,
+        series: c.series,
+        voucher_number: c.voucher_number,
+        entry_date: c.entry_date,
+        description: c.description,
+        journal_entry_id: c.id,
+        explanation: c.explanation?.explanation ?? null,
+      }))
+
       return {
         fiscal_period: { id: period.id, name: period.name },
         gaps: allGaps,
         total_gaps: allGaps.length,
         unexplained_gaps: allGaps.filter((g) => !g.explanation).length,
+        cancelled_vouchers: cancelledVouchers,
+        ...(cancelledVouchers.length > 0
+          ? {
+              cancelled_note:
+                'makulerad: a verifikat posted and then cancelled. Its number is used, so it is not a gap; the verifikat and its lines are kept but left out of journal lists and reports.',
+            }
+          : {}),
       }
     },
   },
@@ -28184,7 +28345,12 @@ export const tools: McpTool[] = [
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { buildAccrualsProposal } = await import('@/lib/bokslut/accruals/accrual-detector')
-      return buildAccrualsProposal(supabase, companyId, fiscalPeriodId)
+      // Per-employee figures (names, day value, pay) are payroll data: only
+      // for a key that holds payroll:read. Unknown scopes (no __keyScopes, as
+      // in a gnubok_run_across_companies inner call) get counts only.
+      const keyScopes = Array.isArray(args.__keyScopes) ? (args.__keyScopes as ApiKeyScope[]) : null
+      const employeeDetail = keyScopes !== null && hasScope(keyScopes, 'payroll:read')
+      return buildAccrualsProposal(supabase, companyId, fiscalPeriodId, { employeeDetail })
     },
   },
 
@@ -32511,23 +32677,9 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
 
       const callStartedAt = Date.now()
       try {
-        // gnubok_search_tools and gnubok_get_agent_briefing need the caller's
-        // scopes: search filters to what the API key can actually invoke, the
-        // briefing flags each recommended tool as callable or not. Inject
-        // privately via __keyScopes.
-        if (
-          toolName === 'gnubok_search_tools' ||
-          toolName === 'gnubok_get_agent_briefing' ||
-          toolName === 'gnubok_list_skills' ||
-          // Re-checks agent:read for an own/ slug as it is loaded.
-          toolName === 'gnubok_load_skill' ||
-          // Its already-explained refusal names the link tool this key can call.
-          toolName === 'gnubok_match_batch_allocate' ||
-          // Says whether this key can approve, so the widget can hide its buttons.
-          toolName === 'gnubok_list_pending_operations' ||
-          // The cross-company tools check the INNER tool's scope per call.
-          isScopedTool(toolName)
-        ) {
+        // The tools that read the caller's scopes get them privately via
+        // __keyScopes (receivesKeyScopes).
+        if (receivesKeyScopes(toolName)) {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
         }
         if (toolName === 'gnubok_search_tools') {

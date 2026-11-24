@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { agentDefaults, applyKnowledgeChoice, loadKnowledgeOptions, ownKnowledgeId, packFitsForm } from '../knowledge-choices'
+import fs from 'node:fs'
+import path from 'node:path'
+import { agentDefaults, applyKnowledgeChoice, loadKnowledgeOptions, ownKnowledgeId, packFitsForm, PACK_LEGAL_FORMS, PACK_WRITTEN_FOR } from '../knowledge-choices'
+import { groupKnowledge } from '../knowledge-list'
 import { AGENTS, OWN_AGENT_KNOWLEDGE } from '../agents'
 
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
@@ -94,5 +97,174 @@ describe('packs by legal form', () => {
     expect(packFitsForm('vertical/bygg-hantverk', 'enskild_firma')).toBe(true)
     expect(packFitsForm('modifier/holding-ab', 'enskild_firma')).toBe(false)
     expect(packFitsForm('modifier/holding-ab', 'aktiebolag')).toBe(true)
+  })
+})
+
+describe('the tax planning packs by legal form', () => {
+  const EF_PACK = 'horizontal/swedish-ef-skatteplanering'
+  const AB_PACK = 'horizontal/swedish-tax-planning'
+  const pack = (id: string) => ({ id, tier: id.split('/')[0], title: id, description: 'D.', version: 1, reviewed_at: null })
+  // The registry's order: by tier, then by id.
+  const PACKS = [
+    pack('horizontal/swedish-accounting-compliance'),
+    pack(EF_PACK),
+    pack(AB_PACK),
+    pack('horizontal/swedish-vat'),
+    pack('modifier/holding-ab'),
+    pack('modifier/mixed-verksamhet'),
+    pack('modifier/single-shareholder-ab-fmb'),
+    pack('vertical/konsult-it'),
+  ]
+  const ALL = PACKS.map((p) => p.id)
+  /** What the company was offered before the two packs were tied to a form: everything but the packs of PACK_LEGAL_FORMS written for another form. */
+  const before = (entityType: string) => ALL.filter((id) => !PACK_LEGAL_FORMS[id] || (PACK_LEGAL_FORMS[id] as readonly string[]).includes(entityType))
+  const optionsFor = async (entityType: string) => {
+    reset()
+    enqueue({ data: { entity_type: entityType } }); enqueue({ data: PACKS }); enqueue({ data: { team_id: null } }); enqueue({ data: [] })
+    return (await loadKnowledgeOptions(supabase as never, 'company-a')).map((o) => o.id)
+  }
+
+  it('offers an aktiebolag the pack written for aktiebolag and not the one for enskild firma', async () => {
+    expect(before('aktiebolag')).toEqual(ALL)
+    expect(await optionsFor('aktiebolag')).toEqual(ALL.filter((id) => id !== EF_PACK))
+  })
+
+  it('offers an enskild firma the pack written for enskild firma and not the one for aktiebolag', async () => {
+    const was = ['horizontal/swedish-accounting-compliance', EF_PACK, AB_PACK, 'horizontal/swedish-vat', 'modifier/mixed-verksamhet', 'vertical/konsult-it']
+    expect(before('enskild_firma')).toEqual(was)
+    expect(await optionsFor('enskild_firma')).toEqual(was.filter((id) => id !== AB_PACK))
+  })
+
+  it('offers a form neither text names what it was offered before: both packs', async () => {
+    for (const form of ['ideell_forening', 'ekonomisk_forening', 'bostadsrattsforening']) {
+      const was = before(form)
+      expect(was, form).toEqual(expect.arrayContaining([EF_PACK, AB_PACK]))
+      expect(await optionsFor(form), form).toEqual(was)
+    }
+  })
+
+  it('leaves every other pack as it was for every form', async () => {
+    for (const form of ['aktiebolag', 'enskild_firma', 'ideell_forening', 'ekonomisk_forening', 'bostadsrattsforening']) {
+      const others = (ids: string[]) => ids.filter((id) => id !== EF_PACK && id !== AB_PACK)
+      expect(others(await optionsFor(form)), form).toEqual(others(before(form)))
+    }
+  })
+
+  it('answers the same pack by pack', () => {
+    expect(packFitsForm(EF_PACK, 'enskild_firma')).toBe(true)
+    expect(packFitsForm(EF_PACK, 'aktiebolag')).toBe(false)
+    expect(packFitsForm(AB_PACK, 'aktiebolag')).toBe(true)
+    expect(packFitsForm(AB_PACK, 'enskild_firma')).toBe(false)
+    for (const form of ['ideell_forening', 'ekonomisk_forening', 'bostadsrattsforening'] as const) {
+      expect(packFitsForm(EF_PACK, form), form).toBe(true)
+      expect(packFitsForm(AB_PACK, form), form).toBe(true)
+    }
+  })
+
+  it('names the two packs by their ids in the registry, each for the form its own text names', () => {
+    expect(PACK_WRITTEN_FOR.get(EF_PACK)).toEqual(['enskild_firma'])
+    expect(PACK_WRITTEN_FOR.get(AB_PACK)).toEqual(['aktiebolag'])
+    const manifest = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'scripts/.skill-body-manifest.json'), 'utf8')) as Record<string, unknown>
+    for (const id of [EF_PACK, AB_PACK]) expect(manifest, id).toHaveProperty([id])
+    const text = (slug: string) => fs.readFileSync(path.resolve(process.cwd(), `.claude/skills/${slug}/SKILL.md`), 'utf8')
+    // The pack for enskild firma says so, and sends an aktiebolag to the other pack.
+    expect(text('swedish-ef-skatteplanering')).toContain('# Swedish Tax Planning for Enskild Firma')
+    expect(text('swedish-ef-skatteplanering')).toContain('for AB planning use `swedish-tax-planning`')
+    // The pack for aktiebolag says so, and sends an enskild firma to the other pack.
+    expect(text('swedish-tax-planning')).toContain('this skill is **AB-only**')
+    expect(text('swedish-tax-planning')).toContain('use the sister skill `swedish-ef-skatteplanering`')
+  })
+})
+
+describe('the general packs by legal form', () => {
+  const EF_PACK = 'horizontal/swedish-ef-skatteplanering'
+  const AB_PACK = 'horizontal/swedish-tax-planning'
+  const SRU_PACK = 'horizontal/swedish-sru-filing'
+  /** Every general pack the product ships, in the registry's order (by id). */
+  const GENERAL: string[] = [
+    'horizontal/swedish-accounting-compliance',
+    'horizontal/swedish-asset-accounting',
+    'horizontal/swedish-cash-register',
+    'horizontal/swedish-daily-bookkeeping',
+    'horizontal/swedish-e-invoicing',
+    EF_PACK,
+    'horizontal/swedish-financial-reporting',
+    'horizontal/swedish-inventory',
+    'horizontal/swedish-invoice-compliance',
+    'horizontal/swedish-k3-k4-judgment',
+    'horizontal/swedish-payroll',
+    'horizontal/swedish-project-accounting',
+    'horizontal/swedish-sie-import-export',
+    SRU_PACK,
+    AB_PACK,
+    'horizontal/swedish-travel-expenses',
+    'horizontal/swedish-vat',
+    'horizontal/swedish-year-end-closing',
+  ]
+  const MODIFIERS: string[] = ['modifier/holding-ab', 'modifier/mixed-verksamhet', 'modifier/single-shareholder-ab-fmb']
+  const ALL: string[] = [...GENERAL, ...MODIFIERS, 'vertical/konsult-it']
+  const pack = (id: string) => ({ id, tier: id.split('/')[0], title: id, description: 'D.', version: 1, reviewed_at: null })
+  const optionsFor = async (entityType: string) => {
+    reset()
+    enqueue({ data: { entity_type: entityType } }); enqueue({ data: ALL.map(pack) }); enqueue({ data: { team_id: null } }); enqueue({ data: [] })
+    return loadKnowledgeOptions(supabase as never, 'company-a')
+  }
+  const without = (ids: string[], ...left: string[]): string[] => ids.filter((id) => !left.includes(id))
+  /** The general folders a company is shown: the general packs it is offered, which its agent gets today. */
+  const generalFolders = async (entityType: string): Promise<string[]> => {
+    const options = await optionsFor(entityType)
+    const folders = groupKnowledge(options, new Set(GENERAL)).groups.find((group) => group.id === 'general')
+    return (folders?.items ?? []).map((item) => item.id)
+  }
+
+  it('lists the product\'s general packs: one folder each under .claude/skills', () => {
+    const shipped = fs.readdirSync(path.resolve(process.cwd(), '.claude/skills')).filter((name) => name.startsWith('swedish-')).sort()
+    expect(GENERAL.map((id) => id.slice('horizontal/'.length))).toEqual(shipped)
+  })
+
+  it('offers an aktiebolag what it was offered before: every general pack but the one for enskild firma', async () => {
+    const before = without(ALL, EF_PACK)
+    expect((await optionsFor('aktiebolag')).map((o) => o.id)).toEqual(before)
+    expect(await generalFolders('aktiebolag')).toEqual(without(GENERAL, EF_PACK))
+  })
+
+  it('no longer offers an enskild firma the SRU pack, which its own text says is for aktiebolag', async () => {
+    // Before: every general pack but the tax planning pack for aktiebolag, and no aktiebolag-only company-form pack.
+    const before = without(ALL, AB_PACK, 'modifier/holding-ab', 'modifier/single-shareholder-ab-fmb')
+    expect(before).toContain(SRU_PACK)
+    expect((await optionsFor('enskild_firma')).map((o) => o.id)).toEqual(without(before, SRU_PACK))
+    expect(await generalFolders('enskild_firma')).toEqual(without(GENERAL, AB_PACK, SRU_PACK))
+  })
+
+  it('offers a form no text names what it was offered before: every general pack, the three among them', async () => {
+    for (const form of ['ekonomisk_forening', 'ideell_forening', 'bostadsrattsforening']) {
+      const before = without(ALL, 'modifier/holding-ab', 'modifier/single-shareholder-ab-fmb')
+      expect((await optionsFor(form)).map((o) => o.id), form).toEqual(before)
+      expect(await generalFolders(form), form).toEqual(GENERAL)
+    }
+  })
+
+  it('answers the same pack by pack', () => {
+    expect(packFitsForm(SRU_PACK, 'aktiebolag')).toBe(true)
+    expect(packFitsForm(SRU_PACK, 'enskild_firma')).toBe(false)
+    for (const form of ['ideell_forening', 'ekonomisk_forening', 'bostadsrattsforening'] as const) expect(packFitsForm(SRU_PACK, form), form).toBe(true)
+    // A general pack whose text names no legal form, or more than one, fits every form.
+    for (const id of without(GENERAL, EF_PACK, AB_PACK, SRU_PACK)) {
+      for (const form of ['aktiebolag', 'enskild_firma', 'ideell_forening', 'ekonomisk_forening', 'bostadsrattsforening'] as const) expect(packFitsForm(id, form), `${id} ${form}`).toBe(true)
+    }
+    // The map is read by a pack id from the registry: a name every object carries is no pack in it.
+    expect(PACK_WRITTEN_FOR.get('constructor')).toBeUndefined()
+  })
+
+  it('ties a pack to a form only where the pack\'s own text names that form', () => {
+    expect([...PACK_WRITTEN_FOR.keys()].sort()).toEqual([EF_PACK, SRU_PACK, AB_PACK])
+    expect(PACK_WRITTEN_FOR.get(SRU_PACK)).toEqual(['aktiebolag'])
+    const manifest = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'scripts/.skill-body-manifest.json'), 'utf8')) as Record<string, unknown>
+    for (const id of PACK_WRITTEN_FOR.keys()) expect(manifest, id).toHaveProperty([id])
+    const text = (slug: string) => fs.readFileSync(path.resolve(process.cwd(), `.claude/skills/${slug}/SKILL.md`), 'utf8')
+    // The sentence each tie rests on. A pack whose text changes its scope fails here, so the tie is looked at again.
+    expect(text('swedish-sru-filing')).toContain('Swedish SRU file generation for Skatteverket digital tax filing (INK2, INK2R, INK2S declarations for aktiebolag).')
+    expect(text('swedish-ef-skatteplanering')).toContain('Swedish tax planning for enskild firma (sole proprietorship).')
+    expect(text('swedish-tax-planning')).toContain('Scope: AB only; for enskild firma tax planning use swedish-ef-skatteplanering.')
   })
 })

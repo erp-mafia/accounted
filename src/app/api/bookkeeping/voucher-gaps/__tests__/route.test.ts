@@ -26,7 +26,7 @@ import { GET, POST } from '../route'
 
 function mockChain(result: { data?: unknown; error?: unknown; count?: number | null }) {
   const chain: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'neq', 'in', 'insert', 'update', 'upsert', 'order', 'limit', 'single', 'maybeSingle']) {
+  for (const m of ['select', 'eq', 'neq', 'gt', 'in', 'insert', 'update', 'upsert', 'order', 'range', 'limit', 'single', 'maybeSingle']) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
   chain.single = vi.fn().mockResolvedValue(result)
@@ -177,6 +177,48 @@ describe('GET /api/bookkeeping/voucher-gaps', () => {
     expect(body.data.totalGaps).toBe(1)
     expect(body.data.unexplainedGaps).toBe(1)
     expect(body.data.gaps[0].explanation).toBeNull()
+  })
+
+  // A cancelled numbered verifikat is no gap (the RPC counts its number as
+  // used) and the journal list hides it, so the gap view lists it apart.
+  it('returns the numbers held by a cancelled verifikat, apart from the gaps', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+    const cancelledChain = mockChain({
+      data: [{ id: 'je-98', voucher_series: 'A', voucher_number: 98, entry_date: '2026-05-12', description: 'Betalning' }],
+      error: null,
+    })
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'voucher_sequences') return mockChain({ data: [{ voucher_series: 'A' }], error: null })
+      if (table === 'journal_entries') return cancelledChain
+      return mockChain({ data: [], error: null })
+    })
+    mockRpc.mockResolvedValue({ data: [], error: null })
+
+    const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=f47ac10b-58cc-4372-a567-0e02b2c3d479')
+    const response = await GET(request, { params: Promise.resolve({}) })
+    const body = await parseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(body.data.totalGaps).toBe(0)
+    expect(body.data.cancelled).toEqual([
+      { id: 'je-98', series: 'A', voucher_number: 98, entry_date: '2026-05-12', description: 'Betalning', explanation: null },
+    ])
+    expect(cancelledChain.eq).toHaveBeenCalledWith('status', 'cancelled')
+    expect(cancelledChain.gt).toHaveBeenCalledWith('voucher_number', 0)
+  })
+
+  it('returns 500 when the cancelled verifikat cannot be read', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'journal_entries') return mockChain({ data: null, error: { message: 'connection reset' } })
+      return mockChain({ data: [{ voucher_series: 'A' }], error: null })
+    })
+    mockRpc.mockResolvedValue({ data: [], error: null })
+
+    const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=f47ac10b-58cc-4372-a567-0e02b2c3d479')
+    const response = await GET(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(500)
   })
 })
 

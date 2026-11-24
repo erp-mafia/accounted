@@ -4,7 +4,8 @@
  * only; it now prints the roll-forward from last year's balance sheet that
  * ÅRL 6 kap. 2 § andra stycket asks for, from the same specification the K3
  * document and the K2 iXBRL read. A version saved before the specification
- * keeps rendering what it stored.
+ * keeps rendering what it stored, and one saved before the K2 taxonomy's row
+ * labels keeps the labels it was signed with.
  */
 import { describe, expect, it } from 'vitest'
 import { renderToBuffer } from '@react-pdf/renderer'
@@ -153,13 +154,35 @@ async function text(element: Parameters<typeof renderToBuffer>[0]): Promise<stri
   return pdfTextStrings(await renderToBuffer(element)).join('\n')
 }
 
+/** How many times the PDF prints a phrase (the resultatdisposition prints "Balanseras i ny räkning" too). */
+const count = (pdf: string, phrase: string): number => pdf.split(phrase).length - 1
+
 describe('equity specification in the PDFs', () => {
   it('K2: prints the roll-forward from the opening balance through the movements', async () => {
-    const pdf = await text(ArsredovisningPDF({ data: report('k2', true) }))
+    // A report built today says it prints the K2 taxonomy's row labels.
+    const data = report('k2', true)
+    data.equity_specification = { ...SPEC, row_labels: 'k2' }
+    const pdf = await text(ArsredovisningPDF({ data }))
     expect(pdf).toContain('Belopp vid årets ingång')
+    // The K2 taxonomy's own row labels, as the iXBRL document prints them:
+    // "Balanseras i ny räkning" once in the table, once in the resultatdisposition.
+    expect(count(pdf, 'Balanseras i ny räkning')).toBe(2)
+    expect(pdf).toContain('Vinstutdelning')
+    expect(pdf).not.toContain('Disposition enligt stämmans beslut')
+    expect(pdf).toContain('Belopp vid årets utgång')
+    expect(pdf).toContain('-20 000')
+    expect(pdf).toContain('87 345')
+  }, RENDER_TIMEOUT)
+
+  it('K2: a version saved before the K2 taxonomy\'s row labels prints the labels it was signed with', async () => {
+    const data = report('k2', true)
+    expect(data.equity_specification).not.toHaveProperty('row_labels')
+    const pdf = await text(ArsredovisningPDF({ data }))
     expect(pdf).toContain('Disposition enligt stämmans beslut')
     expect(pdf).toContain('Utdelning')
-    expect(pdf).toContain('Belopp vid årets utgång')
+    expect(count(pdf, 'Balanseras i ny räkning')).toBe(1)
+    expect(pdf).not.toContain('Vinstutdelning')
+    // The same figures either way.
     expect(pdf).toContain('-20 000')
     expect(pdf).toContain('87 345')
   }, RENDER_TIMEOUT)
@@ -174,6 +197,9 @@ describe('equity specification in the PDFs', () => {
     const pdf = await text(ArsredovisningK3PDF({ data: report('k3', true) }))
     expect(pdf).toContain('Belopp vid årets ingång')
     expect(pdf.match(/Förändring av eget kapital \(kr\)/g)).toHaveLength(1)
+    // K3 keeps its own row labels (K3 6.3), not the K2 taxonomy's.
+    expect(pdf).toContain('Disposition enligt stämmans beslut')
+    expect(pdf).not.toContain('Vinstutdelning')
   }, RENDER_TIMEOUT)
 
   it('K3: prints it as a statement of its own when chosen', async () => {

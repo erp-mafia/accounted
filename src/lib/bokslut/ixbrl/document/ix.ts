@@ -20,6 +20,7 @@ import {
   type TaxonomyRegistry,
   type TaxonomyConcept,
 } from '../taxonomy/registry'
+import { roundThousands } from '../thousand-kronor'
 import { el, escapeText, formatPercentAbs, formatSekAbs, selfClosing, type Attrs } from './xml'
 
 interface ContextDef {
@@ -34,6 +35,10 @@ const UNIT_MEASURES: Record<string, string> = {
   SEK: 'iso4217:SEK',
   procent: 'xbrli:pure',
 }
+
+/** How an amount is stated (TA §2.10.2, §2.10.3): whole kronor, or thousands. */
+const WHOLE_KRONOR = { decimals: '0', scale: '0' }
+const THOUSAND_KRONOR = { decimals: '-3', scale: '3' }
 
 export interface MoneyOptions {
   /** Render a presentational minus before the element (costs in RR). The
@@ -100,32 +105,60 @@ export class FactWriter {
    * concepts); negative values get the `sign="-"` attribute per TA §2.10.6.
    */
   money(name: string, contextRef: string, value: number, opts: MoneyOptions = {}): string {
+    return this.monetary(name, contextRef, Math.round(value), WHOLE_KRONOR, opts)
+  }
+
+  /**
+   * The same fact stated in thousands of kronor (TA §2.10.3: scale 3,
+   * decimals -3). `value` is the whole-krona amount, oriented as for
+   * money(); the text is the amount in tkr, a half away from zero, so the
+   * fact never lies more than 500 kr from a whole-krona fact of the same
+   * concept and context elsewhere in the document (TA §2.7.3).
+   *
+   * An amount of exactly 0 kr is a whole-krona zero, as in Bolagsverket's
+   * K2 example 1 (its flerårsöversikt in tkr tags a 0 unscaled). An amount
+   * under 500 kr prints "0" too but keeps the tkr precision: a whole-krona
+   * zero would contradict the kronor fact.
+   */
+  moneyThousands(name: string, contextRef: string, value: number, opts: MoneyOptions = {}): string {
+    const kronor = Math.round(value)
+    if (kronor === 0) return this.monetary(name, contextRef, 0, WHOLE_KRONOR, opts)
+    return this.monetary(name, contextRef, roundThousands(kronor), THOUSAND_KRONOR, opts)
+  }
+
+  /** `shown` is the figure as printed: whole kronor, or thousands at scale 3. */
+  private monetary(
+    name: string,
+    contextRef: string,
+    shown: number,
+    stated: { decimals: string; scale: string },
+    opts: MoneyOptions,
+  ): string {
     const concept = mustGetConcept(this.registry, name)
     if (concept.dataType !== 'xbrli:monetaryItemType') {
       throw new Error(`Fact ${name}: money() used on ${concept.dataType}`)
     }
     this.resolveContext(contextRef, concept, name)
     this.usedUnits.add('SEK')
-    const rounded = Math.round(value)
     const attrs: Attrs = {
       contextRef,
       name: this.qname(concept, name),
       unitRef: 'SEK',
-      decimals: '0',
-      scale: '0',
+      decimals: stated.decimals,
+      scale: stated.scale,
       format: 'ixt:numspacecomma',
-      sign: rounded < 0 ? '-' : null,
+      sign: shown < 0 ? '-' : null,
       id: opts.id ?? null,
       tupleRef: opts.tupleRef ?? null,
       order: opts.order ?? null,
     }
-    let markup = el('ix:nonFraction', attrs, formatSekAbs(rounded))
+    let markup = el('ix:nonFraction', attrs, formatSekAbs(shown))
     if (opts.spanClass) markup = el('span', { class: opts.spanClass }, markup)
     // Presentational minus is an XOR: a cost row (displayMinus) with its
     // natural sign shows "−X", but a DEVIATING cost (negative fact value,
     // sign="-", i.e. net income on a cost line) displays positive per the
     // RR convention; conversely a deviating income row displays "−X".
-    if ((opts.displayMinus ?? false) !== rounded < 0) markup = `−${markup}`
+    if ((opts.displayMinus ?? false) !== shown < 0) markup = `−${markup}`
     return markup
   }
 

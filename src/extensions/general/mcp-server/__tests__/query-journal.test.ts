@@ -1445,3 +1445,69 @@ describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat
     expect(result.totals_note).toBeUndefined()
   })
 })
+
+describe('gnubok_query_journal: reverse-charge basis pair', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+
+  /** One line of a verifikat; lines sharing entryId share one parent entry. */
+  function row(id: string, entryId: string, account: string, debit: number, credit: number) {
+    return {
+      id, account_number: account, debit_amount: debit, credit_amount: credit,
+      currency: 'SEK', line_description: null, project: null, cost_center: null, sort_order: 0,
+      journal_entries: {
+        id: entryId, voucher_number: 7, voucher_series: 'A', entry_date: '2026-03-10',
+        description: 'Software subscription', notes: null, source_type: 'bank_transaction', status: 'posted',
+      },
+    }
+  }
+
+  type Result = {
+    lines: Array<{ account_number: string; debit: number; credit: number; reverse_charge_basis?: boolean }>
+    groups: Array<{ key: string; debit: number; credit: number; net: number; line_count: number; reverse_charge_basis?: boolean }>
+    totals: { debit: number; credit: number; net: number }
+    reverse_charge_basis_note?: string
+  }
+
+  it('marks the 45xx and 4598 groups and lines and explains the pair, leaving every amount as booked', async () => {
+    // An EU service bought for 1000: the cost on 5420 and the basis pair beside it.
+    const rows = [
+      row('l1', 'e1', '5420', 1000, 0),
+      row('l2', 'e1', '4535', 1000, 0),
+      row('l3', 'e1', '4598', 0, 1000),
+    ]
+    const { supabase } = makeEntryLinesMock(rows)
+
+    const result = (await tool().execute(
+      { account_from: '4000', account_to: '7999', group_by: 'account_number' },
+      'company-1', 'user-1', supabase,
+    )) as Result
+
+    expect(result.groups).toEqual([
+      { key: '5420', debit: 1000, credit: 0, net: 1000, line_count: 1 },
+      { key: '4535', debit: 1000, credit: 0, net: 1000, line_count: 1, reverse_charge_basis: true },
+      { key: '4598', debit: 0, credit: 1000, net: -1000, line_count: 1, reverse_charge_basis: true },
+    ])
+    expect(result.totals).toEqual({ debit: 2000, credit: 1000, net: 1000 })
+    const flagged = Object.fromEntries(result.lines.map((l) => [l.account_number, l.reverse_charge_basis]))
+    expect(flagged).toEqual({ '5420': undefined, '4535': true, '4598': true })
+    expect(result.reverse_charge_basis_note).toMatch(/ruta 20-24/)
+    expect(result.reverse_charge_basis_note).toMatch(/net to zero/)
+  })
+
+  it('carries neither the mark nor the note when no basis account is in the match set', async () => {
+    const rows = [
+      row('l1', 'e1', '5420', 1000, 0),
+      row('l2', 'e2', '6540', 400, 0),
+    ]
+    const { supabase } = makeEntryLinesMock(rows)
+
+    const result = (await tool().execute(
+      { account_from: '4000', account_to: '7999', group_by: 'account_number' },
+      'company-1', 'user-1', supabase,
+    )) as Result
+
+    expect(result.groups.every((g) => !('reverse_charge_basis' in g))).toBe(true)
+    expect(result.lines.every((l) => !('reverse_charge_basis' in l))).toBe(true)
+    expect(result).not.toHaveProperty('reverse_charge_basis_note')
+  })
+})

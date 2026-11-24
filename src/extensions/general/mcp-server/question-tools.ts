@@ -10,17 +10,29 @@
  * and the same records are asked about once; a link needs a question that
  * is answered or closed as settled, and an operation the caller staged.
  *
+ * The list carries, on an answered question and one closed as settled, the
+ * operations its answer led to (questionOperations) and where its follow-up
+ * stands (questionFollowUp), to a key that may read pending operations.
+ *
  * gnubok_ask_question is a listed tool. The other three are search-only
  * (catalogVisibility 'search'): the read rides the gnubok_call_tool bridge;
  * the close and the link save at once and are reached by a client that can
  * name a tool outside tools/list.
  */
+import { hasScope, type ApiKeyScope } from '@/lib/auth/api-keys'
 import { badArgument } from '@/lib/errors/refusal'
 import { createLogger } from '@/lib/logger'
 import { answerQuestion, closeQuestion } from '@/lib/questions/answer'
 import { fileQuestion } from '@/lib/questions/file'
 import { listQuestions } from '@/lib/questions/list'
-import { linkQuestionOperation } from '@/lib/questions/operations'
+import {
+  QUESTION_FOLLOW_UPS,
+  linkQuestionOperation,
+  questionFollowUp,
+  questionOperations,
+  takesOperations,
+  type QuestionOperation,
+} from '@/lib/questions/operations'
 import {
   EVIDENCE_KINDS,
   QUESTION_CLOSE_REASONS,
@@ -41,8 +53,10 @@ export const OPEN_QUESTIONS_HOW =
  * A question as every door hands it out: qualified ids, evidence as
  * <kind>:<id> references. A closed question also carries close_note and
  * close_evidence: where the answer is, when it was closed as settled.
+ * Given the operations linked to it, an answered question and one closed as
+ * settled also carry them and follow_up; without them, neither key.
  */
-export function questionView(question: CompanyQuestion) {
+export function questionView(question: CompanyQuestion, operations?: readonly QuestionOperation[]) {
   return {
     question_id: question.question_id,
     status: question.status,
@@ -65,6 +79,7 @@ export function questionView(question: CompanyQuestion) {
     answered_at: question.answered_at,
     answered_via: question.answered_via,
     fact_id: question.fact_id,
+    ...(operations && takesOperations(question) ? { operations, follow_up: questionFollowUp(operations) } : {}),
   }
 }
 
@@ -160,6 +175,16 @@ const QUESTION_PROPERTIES = {
 
 const QUESTION_REQUIRED = ['question_id', 'status', 'question', 'options', 'evidence', 'asked_at'] as const
 
+/** What the list adds on an answered question and one closed as settled. */
+const FOLLOW_UP_PROPERTIES = {
+  operations: {
+    type: 'array',
+    items: { type: 'object', properties: { operation_id: { type: 'string' }, status: { type: 'string' } } },
+    description: 'The pending operations its answer led to.',
+  },
+  follow_up: { type: 'string', enum: [...QUESTION_FOLLOW_UPS] },
+} as const
+
 export function createQuestionTools(deps: {
   readOnly: McpToolAnnotations
   write: McpToolAnnotations
@@ -253,7 +278,10 @@ export function createQuestionTools(deps: {
       outputSchema: {
         type: 'object',
         properties: {
-          questions: { type: 'array', items: { type: 'object', properties: QUESTION_PROPERTIES, required: [...QUESTION_REQUIRED] } },
+          questions: {
+            type: 'array',
+            items: { type: 'object', properties: { ...QUESTION_PROPERTIES, ...FOLLOW_UP_PROPERTIES }, required: [...QUESTION_REQUIRED] },
+          },
           count: { type: 'integer' },
         },
         required: ['questions', 'count'],
@@ -265,7 +293,24 @@ export function createQuestionTools(deps: {
           status,
           limit: typeof args.limit === 'number' ? args.limit : undefined,
         })
-        return { questions: questions.map(questionView), count: questions.length }
+        // The operations an answer led to, only to a key that may read
+        // pending operations. The in-app chat names no scopes: it runs as the
+        // member, under their own access.
+        const keyScopes = Array.isArray(args.__keyScopes) ? (args.__keyScopes as ApiKeyScope[]) : null
+        const operations =
+          keyScopes === null || hasScope(keyScopes, 'pending_operations:read')
+            ? await questionOperations(
+                supabase,
+                companyId,
+                questions.filter(takesOperations).map((question) => question.question_id),
+              )
+            : null
+        return {
+          questions: questions.map((question) =>
+            questionView(question, operations ? (operations.get(question.question_id) ?? []) : undefined),
+          ),
+          count: questions.length,
+        }
       },
     },
     {

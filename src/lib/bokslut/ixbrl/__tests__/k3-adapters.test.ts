@@ -120,6 +120,29 @@ describe('equity specification', () => {
     }
   })
 
+  it('labels the rows as the year\'s regelverk prints them: the K2 taxonomy\'s own rubriker for a K2 year', () => {
+    const spec = {
+      kinds: ['resultatdisposition', 'utdelning', 'aktieagartillskott', 'aterbetalt_tillskott', 'fondemission', 'uppskrivning', 'omforing', 'insatser_inbetalda'],
+      current: { posts: [] },
+    }
+    const labels = (framework?: 'k2' | 'k3') => k3EquityFromSpecification(spec, br, framework).kinds.map((kind) => kind.label)
+    expect(labels('k2')).toEqual([
+      'Balanseras i ny räkning',
+      'Vinstutdelning',
+      'Erhållna aktieägartillskott',
+      'Återbetalning av aktieägartillskott',
+      'Fondemission',
+      'Uppskrivning av anläggningstillgång',
+      // No row of its own in the K2 taxonomy: the general label.
+      'Omföring mellan poster i eget kapital',
+      'Inbetalda insatser',
+    ])
+    expect(labels()).toEqual(labels('k3'))
+    expect(labels('k3').slice(0, 4)).toEqual(['Disposition enligt stämmans beslut', 'Utdelning', 'Erhållna tillskott', 'Återbetalda tillskott'])
+    // The same source as the PDF's table, so the two documents name a row alike.
+    expect(k3EquityInput({ equity_specification: spec }, br, 'k2').kinds[0].label).toBe('Balanseras i ny räkning')
+  })
+
   it('uses the report’s specification when it has one, else the fallback', () => {
     const spec = { kinds: ['arets_resultat'], current: { posts: [] } }
     expect(k3EquityInput({ equity_specification: spec }, br).source).toBe('ledger')
