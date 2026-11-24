@@ -95,6 +95,39 @@ describe('a Swedish VAT number beside an address abroad', () => {
     expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Kina 5 12345 Ankeby' })).toBeNull()
   })
 
+  // Countries the pickers do not list, their own names, and the short forms
+  // addresses print: each still read a Swedish seller and let its VAT be deducted.
+  it.each([
+    ['10 Example Street, London EC1A 1BB, UK', 'GB'],
+    ['Office 1, Example Tower, Dubai, UAE', 'AE'],
+    ['1 Example Road, Central, Hong Kong SAR', 'HK'],
+    ['Voorbeeldstraat 1, 1011 AB Amsterdam, Nederland', 'NL'],
+    ['Calle Ejemplo 1, 28001 Madrid, España', 'ES'],
+    ['ul. Przykładowa 1, 00-001 Warszawa, Polska', 'PL'],
+    ['1 Jalan Contoh, 50000 Kuala Lumpur, Malaysia', 'MY'],
+    ['1 Example Road, Taipei 110, Taiwan', 'TW'],
+    ['1 Example Street, Riyadh 12345, Saudi Arabia', 'SA'],
+    ['1 Example Street, Doha, Qatar', 'QA'],
+    ['1 Example Street, 10117 Berlin, DEUTSCHLAND', 'DE'],
+  ])('reads %s as abroad', (address, country) => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address })).toBe(country)
+    expect(sellerCountry({ vatNumber: 'SE502012345601', address })).toEqual({ country: null, region: null, source: null })
+  })
+
+  it('reads the country before a phone number, an e-mail or a web address that ends the address', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Road, Singapore 123456, Tel +65 6123 4567' })).toBe('SG')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\n+65 6123 4567' })).toBe('SG')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Road, Kuala Lumpur, Malaysia\nbilling@example.com\nwww.example.com' })).toBe('MY')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Street, Tel Aviv, Israel' })).toBe('IL')
+  })
+
+  it('still takes no country from a Swedish address that ends in contact details or a town', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm, Tel 08-123 45 67' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, Stockholm, 111 22' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm, info@example.se' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Box 1, 755 91 Uppsala, SE' })).toBeNull()
+  })
+
   it('is about a Swedish number only: another state\'s number keeps its country', () => {
     expect(swedishVatNumberAbroad({ vatNumber: 'IE3668997OH', address: 'San Francisco, CA 94107' })).toBeNull()
     expect(sellerCountry({ vatNumber: 'IE3668997OH', address: 'San Francisco, CA 94107' })).toMatchObject({ country: 'IE', source: 'vat_number' })

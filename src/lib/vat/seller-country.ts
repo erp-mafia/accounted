@@ -24,7 +24,7 @@
  * (lib/operations/inkorg-one-click.ts) and the supplier-invoice form's
  * "Ny leverantör" read the same answer.
  */
-import { COUNTRY_OPTIONS, isAssignedCountryCode, vatNumberCountryPrefix } from './country-codes'
+import { COUNTRY_OPTIONS, countryCodeOfPrintedName, vatNumberCountryPrefix } from './country-codes'
 import { isEuMemberCountry } from './eu-countries'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
@@ -208,17 +208,46 @@ export function swedishVatNumberAbroad(identity: SellerIdentity | null | undefin
  */
 const AFTER_COUNTRY = /^(?:[\s\d.,-]*|[\s.,-]*(?=[A-Za-z0-9 -]*\d)[A-Za-z0-9][A-Za-z0-9 -]{0,9}[\s.,]*)$/
 
+/** A phone number with its label, to the end of the text: "Tel +65 6123 4567", "Phone: (555) 123". */
+const LABELLED_PHONE = /\b(?:tel|tfn|telefon|phone|fax|mob|mobile)\b\.?\s*:?\s*[+(\d][\s\S]*$/i
+
+/** A part of an address that is contact details or a number alone: an e-mail, a web address, a phone number or a postcode. */
+const NOT_A_PLACE = /^(?:[^\p{L}]*|\S*@\S*|(?:www\.|https?:\/\/)\S*)$/iu
+
+/**
+ * The address without what may follow its country: a labelled phone number,
+ * and last parts (by comma or line) that are an e-mail, a web address, or
+ * digits alone.
+ */
+function withoutTrailingContact(text: string): string {
+  const parts = text.replace(LABELLED_PHONE, '').split(/[,\n]/)
+  while (parts.length > 0 && NOT_A_PLACE.test(parts[parts.length - 1]!.trim())) parts.pop()
+  return parts.join(',').trim()
+}
+
+/** The last part of an address (by comma or line) without a postcode before or after it: "Malaysia" of "50000 Kuala Lumpur, Malaysia". */
+function lastPartWithoutPostcode(text: string): string {
+  const words = (text.split(/[,\n]/).pop() ?? '').trim().split(/\s+/)
+  while (words.length > 0 && /\d/.test(words[0]!)) words.shift()
+  while (words.length > 0 && /\d/.test(words[words.length - 1]!)) words.pop()
+  return words.join(' ')
+}
+
 /**
  * The country other than Sweden that ends an address, or null. Stricter than
  * countryFromAddress, since it overrules a Swedish VAT number: the name must
- * close the address (a postcode may follow), so a person or a street called
- * after a country inside a Swedish address ("c/o Israel Andersson",
- * "Danmark 1, 755 91 Uppsala") is no country; an address that names Sweden
- * anywhere is Swedish; and a last part that is only a country's ISO code
- * counts, as a Peppol delivery writes it ("Hauptstr. 1, 10117 Berlin, DE").
+ * close the address (a postcode, a phone number, an e-mail or a web address
+ * may follow), so a person or a street called after a country inside a
+ * Swedish address ("c/o Israel Andersson", "Danmark 1, 755 91 Uppsala") is no
+ * country; an address that names Sweden anywhere is Swedish; and a last part
+ * that is a country's code or any name a document prints for it counts
+ * (country-codes.ts countryCodeOfPrintedName), as a Peppol delivery writes it
+ * ("Hauptstr. 1, 10117 Berlin, DE") or a seller its own ("..., UK",
+ * "..., Nederland", "..., Malaysia"). A wrong country here only makes the
+ * caller ask; a missed one lets Swedish VAT be deducted.
  */
 function countryEndingAddress(address: string | null | undefined): string | null {
-  const text = address?.trim()
+  const text = withoutTrailingContact(address?.trim() ?? '')
   if (!text) return null
   const named = namedCountries(text)
   if (named.some((one) => one.code === SWEDEN)) return null
@@ -226,8 +255,8 @@ function countryEndingAddress(address: string | null | undefined): string | null
     const last = named.reduce((latest, one) => (one.at > latest.at ? one : latest))
     if (AFTER_COUNTRY.test(text.slice(last.end))) return last.code
   }
-  const isoCode = text.split(/[,\n]/).pop()?.trim().toUpperCase() ?? ''
-  return /^[A-Z]{2}$/.test(isoCode) && isoCode !== SWEDEN && isAssignedCountryCode(isoCode) ? isoCode : null
+  const printed = countryCodeOfPrintedName(lastPartWithoutPostcode(text))
+  return printed && printed !== SWEDEN ? printed : null
 }
 
 const UNKNOWN: SellerCountry = { country: null, region: null, source: null }

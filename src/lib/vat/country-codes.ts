@@ -98,6 +98,7 @@ const NAME_ALIASES: Record<string, string> = {
   'south korea': 'KR',
   'republic of korea': 'KR',
   'hong kong': 'HK',
+  'hong kong sar': 'HK',
   uae: 'AE',
   turkiye: 'TR',
   'türkiye': 'TR',
@@ -177,6 +178,74 @@ export function normalizeCountryCode(input: string | null | undefined): string |
     return upper
   }
   return NAME_TO_CODE.get(foldName(trimmed)) ?? null
+}
+
+/** foldName without accents, so "ESPANA" finds España. */
+function foldPrintedName(value: string): string {
+  return foldName(value).normalize('NFD').replace(/\p{M}/gu, '')
+}
+
+let printedNames: Map<string, string> | null = null
+
+/**
+ * Every assigned code's name in English, in Swedish and in the country's own
+ * main language, long and short ("Saudi Arabia", "Saudiarabien", "Nederland",
+ * "España", "UK"), from the runtime's CLDR data. Built on first use; the
+ * first name taken for a spelling keeps it. A runtime without region names
+ * gives none, and only normalizeCountryCode's names are read then.
+ */
+function printedNameToCode(): Map<string, string> {
+  if (printedNames) return printedNames
+  const map = new Map<string, string>()
+  try {
+    const namers = new Map<string, Intl.DisplayNames>()
+    const namer = (locale: string, style: 'long' | 'short') => {
+      const key = `${locale}:${style}`
+      let found = namers.get(key)
+      if (!found) {
+        found = new Intl.DisplayNames([locale], { type: 'region', style, fallback: 'none' })
+        namers.set(key, found)
+      }
+      return found
+    }
+    const ownLanguage = (code: string) => {
+      try {
+        return new Intl.Locale('und', { region: code }).maximize().language
+      } catch {
+        // Safe to ignore: a code the runtime has no likely language for gets its English and Swedish names only.
+        return null
+      }
+    }
+    const codes = [...ASSIGNED_COUNTRY_CODES]
+    for (const locale of ['en', 'sv', null]) {
+      for (const code of codes) {
+        const language = locale ?? ownLanguage(code)
+        if (!language || language === 'und') continue
+        for (const style of ['long', 'short'] as const) {
+          const name = namer(language, style).of(code)
+          if (name && !map.has(foldPrintedName(name))) map.set(foldPrintedName(name), code)
+        }
+      }
+    }
+  } catch {
+    // No region names in this runtime.
+  }
+  printedNames = map
+  return map
+}
+
+/**
+ * The country a name printed on a document names, or null. Wider than
+ * normalizeCountryCode, which an API write refuses on: what that reads (a
+ * code, the pickers' names, the aliases), then any assigned country's name in
+ * English, Swedish or its own language (printedNameToCode). Only an assigned
+ * code is answered.
+ */
+export function countryCodeOfPrintedName(name: string | null | undefined): string | null {
+  if (!name?.trim()) return null
+  const known = normalizeCountryCode(name)
+  if (known && isAssignedCountryCode(known)) return known
+  return printedNameToCode().get(foldPrintedName(name)) ?? null
 }
 
 /**
