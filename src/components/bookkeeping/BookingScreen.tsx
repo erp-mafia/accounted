@@ -33,6 +33,7 @@ import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category
 import { fetchProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { proposalLinesToFormLines, type ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import { takePickedProposal } from '@/lib/bookkeeping/booking-screen-pick'
+import { suggestionToFill } from '@/lib/transactions/booking-screen-fill'
 import { useProposalWhy } from '@/components/transactions/proposal-why'
 import { useToBookRows } from './use-to-book-rows'
 import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
@@ -354,26 +355,42 @@ function TransactionBooking({
   }, [transaction, cashAccounts, cashAccountsLoading])
 
   // The row's suggestion, the one Bankrader shows, when the person has not
-  // picked an account already. Använd fills the grid with the lines the
+  // picked an account already. It fills the grid with the lines the
   // suggestion books (POST /api/bookkeeping/proposal-preview, as Bankrader's
-  // review does); nothing fills it by itself.
+  // review does): by itself when the screen opens (suggestionToFill), or on
+  // Använd when it was not filled. The person still checks it and books.
   const proposal = useRowProposal(transaction.id, account === null)
   const whyFor = useProposalWhy()
-  const [used, setUsed] = useState<{ proposal: BookingProposal; lines: ProposalLine[] } | null>(null)
+  const [used, setUsed] = useState<{ proposal: BookingProposal; lines: ProposalLine[]; filled: boolean } | null>(null)
   const [applying, setApplying] = useState(false)
+  const [filling, setFilling] = useState(false)
   const [applyError, setApplyError] = useState<string | null>(null)
-  const applyProposal = async (chosen: BookingProposal) => {
-    onTouched()
-    setApplying(true)
+  // The person has begun on the kontering (any press, key or focus in it):
+  // a suggestion is no longer filled in over it.
+  const personStarted = useRef(false)
+  const markStarted = () => {
+    personStarted.current = true
+  }
+  const fillTried = useRef(false)
+  const applyProposal = async (chosen: BookingProposal, filled = false) => {
+    if (!filled) {
+      markStarted()
+      onTouched()
+    }
+    const setBusy = filled ? setFilling : setApplying
+    setBusy(true)
     setApplyError(null)
     try {
       const lines = await fetchProposalPreview({ transaction_id: transaction.id, booking: categorizeBodyFor(chosen) })
-      if (lines.length > 0) setUsed({ proposal: chosen, lines })
-      else setApplyError(t('offer_failed'))
+      // Begun while the lines were read: what the person did stays.
+      if (filled && personStarted.current) return
+      if (lines.length > 0) setUsed({ proposal: chosen, lines, filled })
+      else if (!filled) setApplyError(t('offer_failed'))
     } catch {
-      setApplyError(t('offer_failed'))
+      // A fill nobody asked for fails quietly: the suggestion stays offered.
+      if (!filled) setApplyError(t('offer_failed'))
     } finally {
-      setApplying(false)
+      setBusy(false)
     }
   }
   const applySuggestion = () => (proposal ? applyProposal(proposal) : undefined)
@@ -396,6 +413,22 @@ function TransactionBooking({
     // Once, on opening: the pick is the row's when the screen opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // The row's own suggestion, filled in once when it arrives, into the
+  // kontering as it opened. After the pick above, which runs first.
+  useEffect(() => {
+    const chosen = suggestionToFill({
+      suggestion: proposal,
+      personStarted: personStarted.current,
+      filledOrTried: fillTried.current || used !== null || applying || filling || pickPending,
+    })
+    if (!chosen) return
+    fillTried.current = true
+    void applyProposal(chosen, true)
+    // Run when the suggestion arrives or a pick settles; the refs and
+    // suggestionToFill keep it to once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proposal, pickPending])
 
   const detachEarlierUnderlag = () =>
     attachments.detachEarlier({
@@ -505,15 +538,21 @@ function TransactionBooking({
         }
         kontering={
           bankAccount !== null ? (
-            <>
+            // A press, key or focus here is the person's: a suggestion still
+            // on its way is not filled in over it.
+            <div className="space-y-3" onPointerDownCapture={markStarted} onKeyDownCapture={markStarted} onFocusCapture={markStarted}>
               {used ? (
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <CheckIcon className="h-4 w-4 text-success" aria-hidden="true" />
                   <span className="text-foreground/80">{t('offer_used', { name: used.proposal.name_sv })}</span>
+                  {/* Filled without a press: the why the offer showed stays beside it. */}
+                  {used.filled && <span className="text-xs text-muted-foreground">{whyFor(used.proposal)}</span>}
                   <Button variant="ghost" onClick={() => setUsed(null)}>
                     {t('offer_undo')}
                   </Button>
                 </div>
+              ) : filling ? (
+                <p className="text-sm text-muted-foreground">{t('offer_applying')}</p>
               ) : proposal ? (
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-control px-3 py-2 text-sm shadow-raised">
@@ -575,7 +614,7 @@ function TransactionBooking({
                   })}
                 </p>
               )}
-            </>
+            </div>
           ) : null
         }
       />
