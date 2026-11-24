@@ -4943,6 +4943,7 @@ export default function TransactionsPage() {
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
+          onOpenBookingScreen={bookingScreen ? openRowOnBookingScreen : undefined}
           onOpenAttachDocument={openAttachDocumentDialog}
           onDetachDocument={handleDetachDocument}
           onOpenMatchVoucher={openMatchVoucherDialog}

@@ -77,6 +77,10 @@ import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttach
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
 import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
+import StrikeLinesDialog from '@/components/bookkeeping/StrikeLinesDialog'
+import CorrectMetadataDialog from '@/components/bookkeeping/CorrectMetadataDialog'
+import { useEntryPeriodStatus } from '@/components/bookkeeping/use-entry-period-status'
+import { correctionPaths, leadingCorrectionPath } from '@/lib/core/bookkeeping/correction-paths'
 import VoucherGapNotice from '@/components/bookkeeping/VoucherGapNotice'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { OwnedVoucherActionDialog } from '@/components/bookkeeping/OwnedVoucherActionDialog'
@@ -217,6 +221,7 @@ export default function JournalEntryList({
   const company = useCompanyOptional()?.company ?? null
   const t = useTranslations('journal_list')
   const tCommon = useTranslations('common')
+  const tDetail = useTranslations('journal_detail')
   // Loads the BAS chart chunk after mount and re-renders once names and
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
@@ -276,6 +281,16 @@ export default function JournalEntryList({
   const [bulkReason, setBulkReason] = useState('')
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [correctionEntry, setCorrectionEntry] = useState<JournalEntry | null>(null)
+  // Inline rättelse from the row (correctionPaths leads with it in an open
+  // period): the verifikat page's own dialogs.
+  const [strikeEntry, setStrikeEntry] = useState<JournalEntry | null>(null)
+  const [metadataEntry, setMetadataEntry] = useState<JournalEntry | null>(null)
+  // The period verdict for the open row's date: its correction links wait
+  // for it, so a row never offers a path its period refuses.
+  const expandedEntry = expandedId ? (entries.find((e) => e.id === expandedId) ?? null) : null
+  const expandedPeriod = useEntryPeriodStatus(
+    canWrite && expandedEntry?.status === 'posted' ? expandedEntry.entry_date?.slice(0, 10) : null,
+  )
   const [reverseEntryTarget, setReverseEntryTarget] = useState<JournalEntry | null>(null)
   // Vänd or Rätta on a verifikat an object owns: its own action first
   // (OwnedVoucherActionDialog), as on the verifikat page.
@@ -1941,16 +1956,43 @@ export default function JournalEntryList({
                                 >
                                   {t('show_details')}
                                 </IntentLink>
-                                {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'correct')}>
-                                    {t('create_correction')}
-                                  </button>
-                                )}
-                                {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'reverse')}>
-                                    {t('reverse_action')}
-                                  </button>
-                                )}
+                                {/* The correction that applies (correctionPaths): in an
+                                    open period the rättelse inside the verifikat, with
+                                    Återför beside it; past a lock the ändringsverifikat
+                                    only. The verifikat page lists every path. */}
+                                {canWrite && entry.status === 'posted' && expandedPeriod && (() => {
+                                  const paths = correctionPaths({
+                                    status: entry.status,
+                                    source_type: entry.source_type,
+                                    stornoed: false,
+                                    periodStatus: expandedPeriod.status,
+                                  })
+                                  const lead = leadingCorrectionPath(paths)
+                                  return (
+                                    <>
+                                      {lead === 'strike_lines' && (
+                                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => setStrikeEntry(entry)}>
+                                          {tDetail('strike_lines')}
+                                        </button>
+                                      )}
+                                      {lead === 'correct_metadata' && (
+                                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => setMetadataEntry(entry)}>
+                                          {tDetail('correct_metadata')}
+                                        </button>
+                                      )}
+                                      {lead === 'correct_lines' && (
+                                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'correct')}>
+                                          {t('create_correction')}
+                                        </button>
+                                      )}
+                                      {paths.storno.includes('reverse') && (
+                                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'reverse')}>
+                                          {t('reverse_action')}
+                                        </button>
+                                      )}
+                                    </>
+                                  )
+                                })()}
                                 {canWrite && (
                                   <button type="button" className={QUIET_LINK_CLASS} onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}>
                                     {t('copy')}
@@ -2031,6 +2073,26 @@ export default function JournalEntryList({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Inline rättelse from a row, as on the verifikat page */}
+      {strikeEntry && (
+        <StrikeLinesDialog
+          entry={strikeEntry}
+          open
+          onOpenChange={(open) => { if (!open) setStrikeEntry(null) }}
+          filedVat={expandedPeriod?.filedVat ?? null}
+          onCorrected={() => { setStrikeEntry(null); fetchEntries() }}
+        />
+      )}
+      {metadataEntry && (
+        <CorrectMetadataDialog
+          entry={metadataEntry}
+          open
+          onOpenChange={(open) => { if (!open) setMetadataEntry(null) }}
+          filedVat={expandedPeriod?.filedVat ?? null}
+          onCorrected={() => { setMetadataEntry(null); fetchEntries() }}
+        />
+      )}
 
       {/* Correction dialog */}
       {correctionEntry && (

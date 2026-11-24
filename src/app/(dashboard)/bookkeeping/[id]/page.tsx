@@ -77,7 +77,7 @@ import type { VoucherOwner } from '@/lib/core/bookkeeping/voucher-owner'
 import { OwnedVoucherActionDialog } from '@/components/bookkeeping/OwnedVoucherActionDialog'
 import { useReverseJournalEntry } from '@/components/bookkeeping/use-reverse-journal-entry'
 import type { SieDeleteBlock } from '@/lib/core/bookkeeping/voucher-delete-guard'
-import { DATE_FIXED_SOURCE_TYPES } from '@/lib/core/bookkeeping/date-fixed-source-types'
+import { correctionPaths } from '@/lib/core/bookkeeping/correction-paths'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
@@ -146,9 +146,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [showCorrectMetadata, setShowCorrectMetadata] = useState(false)
   const [rattelseLog, setRattelseLog] = useState<RattelseLogRow[]>([])
   // Lock state of the period covering entry_date, from the period-status
-  // preview endpoint. Gates the visible "Stryk rader" button: inline rättelse
-  // only applies while the period is open, so the promoted button hides
-  // (and the ⋯ item stays) whenever the status is anything else or unknown.
+  // preview endpoint. Decides which correction paths the Rätta menu offers
+  // (correctionPaths): inline rättelse, and the promoted "Stryk rader"
+  // button, only while the period is open; anything else or unknown offers
+  // only the paths that book past a lock.
   const [periodStatus, setPeriodStatus] = useState<PeriodStatus | null>(null)
   // The entry's own fiscal period closed or locked: the period lock trigger
   // refuses every write to the row, the note included (crm#1234). Not the
@@ -251,8 +252,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setDeleteBlock(data.delete_block ?? null)
       // Period lock state for the entry's date, best-effort and not awaited
       // (the page paints without it): the endpoint fails closed (a lookup
-      // failure reads as 'locked'), and a missing answer just keeps the
-      // strike button in the ⋯ menu only.
+      // failure reads as 'locked'), and a missing answer offers only the
+      // correction that books past a lock.
       setPeriodStatus(null)
       setNoteLock(null)
       setFiledVat(null)
@@ -478,13 +479,17 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const stornoedInLaterPeriod = chain.some((linked) => linked.reverses_id === entry.id && linked.status === 'posted')
   const canCorrect = entry.status === 'posted' && entry.source_type !== 'storno' && !stornoedInLaterPeriod
 
-  // Inline rättelse (strike lines in the same verifikat) keeps structural
-  // entry types on their dedicated flows: storno mirrors its original, IB
-  // feeds opening_balance_entry_id, year-end feeds dispositions. The RPC
-  // enforces the same rule server-side; this just hides the dead menu item.
-  const canInlineRattelse =
-    entry.status === 'posted' &&
-    !['storno', 'opening_balance', 'year_end', 'vat_settlement'].includes(entry.source_type)
+  // The correction paths that apply to this verifikat now (one definition,
+  // lib/core/bookkeeping/correction-paths.ts): inline rättelse first in an
+  // open, unlocked period with the storno paths still there; past a lock, a
+  // close or the lock date only Rätta rader, moved to the first open period.
+  // A path the server would refuse is not offered.
+  const paths = correctionPaths({
+    status: entry.status,
+    source_type: entry.source_type,
+    stornoed: stornoedInLaterPeriod,
+    periodStatus,
+  })
 
   // Struck lines (from the immutable rättelse log) render inline in the
   // lines table with strikethrough, Fortnox-style: the original stays
@@ -621,20 +626,16 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const showActions = entry.status === 'posted' || entry.status === 'draft'
   const deleteOffered = entry.status === 'draft' || isLastInSeries
   const showDelete = deleteOffered && !deleteBlock
-  const showRattelseGroup = canCorrect && !isOpeningBalance
+  // A year closed with a year-end closing takes no write (crm#1290): the
+  // group says so and how to reopen it, beside the one path that still books.
+  const yearClosed = periodStatus === 'closed'
+  const showRattelseGroup =
+    canCorrect && !isOpeningBalance && (paths.inline.length > 0 || paths.storno.length > 0 || yearClosed)
   // Inline rättelse is the normal correction path while the period is open,
   // so "Stryk rader" is promoted to a visible secondary button there (#1554:
   // a user who never opens the ⋯ menu concluded the feature did not exist).
   // The ⋯ item stays, so the menu remains the complete action list.
-  const showStrikeButton = showRattelseGroup && canInlineRattelse && periodStatus === 'open'
-  // A year closed with a year-end closing takes no write (crm#1290): the
-  // actions that write in it stay listed but disabled, with the way on in
-  // their place. "Rätta rader" stays open: it books the storno and the
-  // corrected verifikat in the first open period, except for an entry type
-  // whose date is fixed. Unknown status keeps them enabled; the server still
-  // decides.
-  const yearClosed = periodStatus === 'closed'
-  const correctLinesBlocked = yearClosed && DATE_FIXED_SOURCE_TYPES.includes(entry.source_type)
+  const showStrikeButton = showRattelseGroup && paths.inline.includes('strike_lines')
 
   const underlagAside = (() => {
     if (attachmentCount === 0 && references.length === 0) {
@@ -781,29 +782,39 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                           {t('correct_menu_period_filed', { period: filedVat.tax_period, date: formatDate(filedVat.filed_on) })}
                         </p>
                       )}
-                      {canInlineRattelse && (
-                        <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite || yearClosed}>
+                      {/* Inside the same verifikat first; the storno paths
+                          after the line, past a lock only Rätta rader. */}
+                      {paths.inline.includes('strike_lines') && (
+                        <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite}>
                           <ScissorsIcon className="h-4 w-4" />
                           {t('strike_lines')}
                         </DropdownMenuItem>
                       )}
-                      <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite || yearClosed}>
-                        <PencilSquareIcon className="h-4 w-4" />
-                        {t('correct_metadata')}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_lines') : setShowCorrection(true))} disabled={!canWrite || correctLinesBlocked}>
-                        <PencilIcon className="h-4 w-4" />
-                        {t('correct_lines')}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_date') : setShowRecordate(true))} disabled={!canWrite || yearClosed}>
-                        <CalendarDaysIcon className="h-4 w-4" />
-                        {t('correct_date')}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('reverse') : setShowReverseConfirm(true))} disabled={!canWrite || yearClosed}>
-                        <ArrowUturnLeftIcon className="h-4 w-4" />
-                        {t('reverse_action')}
-                      </DropdownMenuItem>
+                      {paths.inline.includes('correct_metadata') && (
+                        <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite}>
+                          <PencilSquareIcon className="h-4 w-4" />
+                          {t('correct_metadata')}
+                        </DropdownMenuItem>
+                      )}
+                      {paths.inline.length > 0 && paths.storno.length > 0 && <DropdownMenuSeparator />}
+                      {paths.storno.includes('correct_lines') && (
+                        <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_lines') : setShowCorrection(true))} disabled={!canWrite}>
+                          <PencilIcon className="h-4 w-4" />
+                          {t('correct_lines')}
+                        </DropdownMenuItem>
+                      )}
+                      {paths.storno.includes('correct_date') && (
+                        <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_date') : setShowRecordate(true))} disabled={!canWrite}>
+                          <CalendarDaysIcon className="h-4 w-4" />
+                          {t('correct_date')}
+                        </DropdownMenuItem>
+                      )}
+                      {paths.storno.includes('reverse') && (
+                        <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('reverse') : setShowReverseConfirm(true))} disabled={!canWrite}>
+                          <ArrowUturnLeftIcon className="h-4 w-4" />
+                          {t('reverse_action')}
+                        </DropdownMenuItem>
+                      )}
                     </>
                   )}
                   {deleteOffered && deleteBlock && (
