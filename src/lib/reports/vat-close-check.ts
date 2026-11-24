@@ -17,11 +17,12 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { type EntryLinesQuery, fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
-import { nextDay } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { DEFAULT_SETTLEMENT_ACCOUNT, resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
+import { MISSING_UNDERLAG_ERRANDS } from '@/lib/composition/missing-underlag-errands'
+import type { VerifikatErrandRow } from '@/lib/reports/missing-underlag-errands'
 import { findRcBasisGaps, type RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import { computeVatDeclaration, type MomsredovisningDetection, rcInputTotalsFromDeclaration, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
 import { revenueAccountWithoutRutaFinding, vatAccountWithoutRutaFinding, runVatDeclarationChecks, selfAssessedVatWithoutAnyInputVat, type VatCheckReviewMark, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
@@ -955,32 +956,39 @@ function monthName(m: number): string {
  */
 const MISSING_UNDERLAG_MIN_GROSS_SEK = 4000
 
-/** One `verifikat_without_documents` page-of-one, used only for its total. */
-async function totalMissingUnderlagSince(
-  supabase: SupabaseClient,
-  companyId: string,
-  since: string
-): Promise<number> {
-  const { data, error } = await supabase.rpc('verifikat_without_documents', {
-    p_company_id: companyId,
-    p_since: since,
-    p_min_amount: MISSING_UNDERLAG_MIN_GROSS_SEK,
-    // p_limit only sizes the page; total_count is computed over the FULL
-    // filtered set in an independent CTE, so 1 is the cheapest valid size.
-    p_limit: 1,
-    p_offset: 0,
-  })
-  if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
-  const result = data as { ok?: boolean; code?: string; total_count?: number } | null
-  if (!result?.ok) {
-    throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
-  }
-  return result.total_count ?? 0
+/** verifikat_without_documents returns at most this many rows per call. */
+const MISSING_UNDERLAG_PAGE = 100
+
+interface MissingUnderlagInPeriod {
+  /**
+   * Verifikat that lack their underlag: the blocker's count. The RPC's
+   * total, less the transfers between own accounts among the rows read.
+   */
+  count: number
+  /**
+   * How many rows were read and split by errand: the most recent
+   * MISSING_UNDERLAG_ERRANDS.maxRows. Below `count` plus `ownTransfer` when
+   * the period holds more; the split then covers only these.
+   */
+  classified: number
+  /**
+   * Of `count`, those booked from the Stripe feed (errand stripe): their
+   * underlag is Stripe's report or fee invoice, downloaded from Stripe, not a
+   * receipt in a mailbox. Counted, and said so.
+   */
+  stripe: number
+  /**
+   * Transfers between the company's own accounts (errand own_transfer): the
+   * bank statement is their underlag, so none is missing. Left out of
+   * `count`, and said so.
+   */
+  ownTransfer: number
 }
 
 /**
  * Posted verifikat dated within [start, end] that genuinely lack an underlag
- * and whose gross reaches MISSING_UNDERLAG_MIN_GROSS_SEK.
+ * and whose gross reaches MISSING_UNDERLAG_MIN_GROSS_SEK, split by the
+ * underlag they need.
  *
  * BFL 5 kap 6-7 §: every affärshändelse needs a verifikation, and the
  * verifikation must reference its underlag. This delegates to the
@@ -1006,21 +1014,75 @@ async function totalMissingUnderlagSince(
  *      Without this, adding supplier_invoice_paid to the list would flag every
  *      paid supplier invoice in the period (the 2026-07-24 support case).
  *
- * The RPC takes `since` and no upper bound, so the in-period count is the
- * difference between two filter-respecting totals. Both calls run the same
- * predicate, so the subtraction is exact rather than an estimate.
+ * Which underlag each needs is the receipt hunt's errand
+ * (MISSING_UNDERLAG_ERRANDS), the same one its worklist and
+ * gnubok_list_verifikat_without_documents (next_step_kind) give each row. A
+ * transfer between the company's own accounts (own_transfer) has the bank
+ * statement as its underlag, so it is left out. A verifikat booked from the
+ * Stripe feed, such as the day's sales samlingsverifikat (stripe), still
+ * needs Stripe's report: counted, and named apart so the agent fetches it
+ * from Stripe rather than searching mail. What lacks an attached document
+ * stays the RPC's decision. When the errands cannot be read, every row is
+ * counted, as before the split.
+ *
+ * Bounded: every read of the RPC computes the whole set, so the count is the
+ * RPC's own total, read once, and only the most recent maxRows rows (the
+ * receipt hunt's window) are read and split. Past that the message says the
+ * split covers those rows.
  */
-async function countMissingUnderlagInPeriod(
+async function missingUnderlagInPeriod(
   supabase: SupabaseClient,
   companyId: string,
   start: string,
   end: string
-): Promise<number> {
-  const [fromStart, afterEnd] = await Promise.all([
-    totalMissingUnderlagSince(supabase, companyId, start),
-    totalMissingUnderlagSince(supabase, companyId, nextDay(end)),
-  ])
-  return Math.max(0, fromStart - afterEnd)
+): Promise<MissingUnderlagInPeriod> {
+  const rows: VerifikatErrandRow[] = []
+  let total = 0
+  for (let offset = 0; offset < MISSING_UNDERLAG_ERRANDS.maxRows; offset += MISSING_UNDERLAG_PAGE) {
+    const { data, error } = await supabase.rpc('verifikat_without_documents', {
+      p_company_id: companyId,
+      p_since: start,
+      p_min_amount: MISSING_UNDERLAG_MIN_GROSS_SEK,
+      p_limit: MISSING_UNDERLAG_PAGE,
+      p_offset: offset,
+      p_until: end,
+    })
+    if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
+    const result = data as {
+      ok?: boolean
+      code?: string
+      total_count?: number
+      verifikat?: VerifikatErrandRow[]
+    } | null
+    if (!result?.ok) {
+      throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
+    }
+    if (offset === 0) total = result.total_count ?? 0
+    const page = result.verifikat ?? []
+    rows.push(...page)
+    if (page.length < MISSING_UNDERLAG_PAGE || rows.length >= total) break
+  }
+  const classified = Math.min(rows.length, MISSING_UNDERLAG_ERRANDS.maxRows)
+  rows.length = classified
+  total = Math.max(total, classified)
+  if (classified === 0) return { count: 0, classified: 0, stripe: 0, ownTransfer: 0 }
+
+  let stripe = 0
+  let ownTransfer = 0
+  try {
+    const kinds = await MISSING_UNDERLAG_ERRANDS.kinds(supabase, companyId, rows)
+    for (const row of rows) {
+      const kind = kinds.get(row.journal_entry_id)
+      if (kind === 'stripe') stripe++
+      else if (kind === 'own_transfer') ownTransfer++
+    }
+  } catch (err) {
+    log.warn('missing underlag errands unavailable: every row counted', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+  return { count: total - ownTransfer, classified, stripe, ownTransfer }
 }
 
 /**
@@ -1198,9 +1260,9 @@ export async function computeVatCloseCheck(
     getScopedReconciliationStatus(supabase, companyId, start, end),
     // Verifikat in the period that genuinely lack an underlag (BFL 5 kap
     // 6-7 §), counted over the SHARED SQL predicate. Never re-derive this
-    // locally: countMissingUnderlagInPeriod documents what the hand-rolled
+    // locally: missingUnderlagInPeriod documents what the hand-rolled
     // scan that used to sit here got wrong.
-    countMissingUnderlagInPeriod(supabase, companyId, start, end),
+    missingUnderlagInPeriod(supabase, companyId, start, end),
     // EU sales in rutor 35/38/39 that the periodisk sammanställning has no
     // buyer for (crm#1362), found by the PS itself over this momsperiod. Asked
     // only when the declaration holds EU sales at all.
@@ -1327,6 +1389,16 @@ export async function computeVatCloseCheck(
       (reconRes.settled_gl_entry_count ?? 0) > 0 &&
       typeof reconRes.unexplained_difference === 'number' &&
       Math.abs(reconRes.unexplained_difference) < 0.005
+    // The figure compares movements only. When the bank's history starts in
+    // the period, the bank's saldo that day can differ from the books
+    // (opening_difference, lib/reconciliation/bank-reconciliation.ts), and
+    // the bank's saldo against the books is then a third figure. Named from
+    // the reconciliation's own fields, so the close check, the reconciliation
+    // status and the page read as one account.
+    const openingDifference =
+      typeof reconRes.opening_difference === 'number' && reconRes.opening_difference !== 0 && reconRes.history_start
+        ? { amount: reconRes.opening_difference, from: reconRes.history_start }
+        : null
     blockers.push({
       kind: 'bank_unreconciled',
       severity: Math.abs(periodDifference) > 100 ? 'high' : 'medium',
@@ -1342,7 +1414,13 @@ export async function computeVatCloseCheck(
         ? `${reconRes.settled_gl_entry_count} verifikat på ${recon.scope.accountNumber} är kopplade mot verifikat daterade utanför perioden: periodens differens ${AGENT_AMOUNT_FORMAT.format(periodDifference)} kr är rättad i en annan period`
         : bankRowsMissing
         ? `${ledgerWithoutBankRow} verifikat på ${recon.scope.accountNumber} saknar banktransaktion: banken har inga rader för de datumen`
-        : `Bankavstämning visar differens ${periodDifference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${ledgerWithoutBankRow} omatchade huvudbokslinjer på ${recon.scope.accountNumber})`,
+        : `Bankavstämning visar differens ${AGENT_AMOUNT_FORMAT.format(periodDifference)} kr i rörelsen på ${recon.scope.accountNumber}: ` +
+          `bankens transaktioner${openingDifference ? ` från ${openingDifference.from}, då bankens historik börjar,` : ''} mot periodens verifikat ` +
+          `(${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${ledgerWithoutBankRow} omatchade huvudbokslinjer på ${recon.scope.accountNumber})` +
+          (openingDifference
+            ? `. Bankens saldo när historiken börjar skiljer sig dessutom från bokfört saldo med ${AGENT_AMOUNT_FORMAT.format(openingDifference.amount)} kr (opening_difference): ` +
+              'den ingående skillnaden ingår inte i differensen ovan, som bara jämför rörelser'
+            : ''),
       hint: settledElsewhere
         ? SETTLED_ELSEWHERE_HINT
         : bankRowsMissing
@@ -1350,13 +1428,26 @@ export async function computeVatCloseCheck(
         : 'Granska via gnubok_get_reconciliation_status och matcha: moms beräknas från huvudboken så differenser döljer fel.',
     })
   }
-  if (missingUnderlag > 0) {
+  if (missingUnderlag.count > 0) {
+    const { count, classified, stripe, ownTransfer } = missingUnderlag
+    const total = count + ownTransfer
     blockers.push({
       kind: 'missing_high_value_receipts',
       severity: 'medium',
-      count: missingUnderlag,
-      message: `${missingUnderlag} verifikat över ${MISSING_UNDERLAG_MIN_GROSS_SEK} kr saknar underlag`,
-      hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}) och para ihop via gnubok_list_unmatched_documents.`,
+      count,
+      message:
+        `${count} verifikat över ${MISSING_UNDERLAG_MIN_GROSS_SEK} kr saknar underlag` +
+        (stripe > 0
+          ? `, varav ${stripe} från Stripe: ladda ner underlaget i Stripe ` +
+            '(månadsfakturan för avgifterna, saldorapporten för övriga rader), det finns inte i mejlen'
+          : '') +
+        (ownTransfer > 0
+          ? `. ${ownTransfer} verifikat till räknas inte, överföringar mellan egna konton: kontoutdraget är underlaget`
+          : '') +
+        (classified < total
+          ? `. Uppdelningen gäller de ${classified} senaste av ${total}: bland resten kan fler vara överföringar mellan egna konton eller från Stripe`
+          : ''),
+      hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, until=${end}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}): next_step_kind säger vad varje verifikat behöver (stripe hämtas i Stripe, own_transfer räknas inte här). Para ihop via gnubok_list_unmatched_documents.`,
     })
   }
   // The periodisk sammanställning is the per-buyer breakdown of rutor 35, 38
