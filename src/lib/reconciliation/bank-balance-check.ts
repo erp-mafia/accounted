@@ -192,6 +192,9 @@ export function dayEndBalance(rows: ReadonlyArray<DayRow>): number | null {
 /** At most this many days in a row that net to zero are passed over to the day before (rowBalanceOn). */
 const CLOSED_DAYS_MAX = 5
 
+/** A read's result, as rowBalanceOn casts it. */
+type RowRead<T> = { data: T | null; error: { message: string } | null }
+
 /**
  * The bank's balance at the end of `date` from its rows: the day-end balance
  * (dayEndBalance) of the last day through `date` that has a row. A day that
@@ -210,38 +213,42 @@ async function rowBalanceOn(
   reportedDay: string | null,
 ): Promise<BankBalanceClaim | null> {
   const currency = account.currency ?? 'SEK'
-  // The account's rows as get_bank_balance_facts scopes them.
-  const scope = <Q extends { or(filters: string): Q; eq(column: string, value: string): Q }>(query: Q): Q =>
-    scopeTransactionsToAccount(query, account.id, currency, Boolean(account.is_primary))
-  const [lastRead, laterRead] = await Promise.all([
-    scope(supabase.from('transactions').select('date').eq('company_id', companyId))
-      .lte('date', date)
+  const includeUnassigned = Boolean(account.is_primary)
+  // The account's rows as get_bank_balance_facts scopes them. The query is
+  // built before it is scoped and each result is cast to its row type: the
+  // builder's own type is too deep to infer through a generic.
+  const rowsOf = (columns: string) => {
+    const query = supabase.from('transactions').select(columns).eq('company_id', companyId)
+    return scopeTransactionsToAccount(query, account.id, currency, includeUnassigned)
+  }
+  const readFailed = (message: string) => new Error(`Kunde inte läsa bankens transaktioner: ${message}`)
+  /** The latest day with a row through `day` (lte) or before it (lt). */
+  const lastDayWithRow = async (op: 'lte' | 'lt', day: string): Promise<string | null> => {
+    const scoped = rowsOf('date')
+    const read = (await (op === 'lte' ? scoped.lte('date', day) : scoped.lt('date', day))
       .order('date', { ascending: false })
       .limit(1)
-      .maybeSingle(),
-    reportedDay !== null && reportedDay >= date
-      ? Promise.resolve({ data: { date: reportedDay }, error: null })
-      : scope(supabase.from('transactions').select('date').eq('company_id', companyId))
-          .gt('date', date)
-          .limit(1)
-          .maybeSingle(),
-  ])
-  if (lastRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${lastRead.error.message}`)
-  if (laterRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${laterRead.error.message}`)
-  const lastDay = (lastRead.data as unknown as { date?: string } | null)?.date ?? null
+      .maybeSingle()) as unknown as RowRead<{ date: string }>
+    if (read.error) throw readFailed(read.error.message)
+    return read.data?.date ?? null
+  }
+
+  const lastDay = await lastDayWithRow('lte', date)
   if (lastDay === null) return null
-  if (lastDay < date && laterRead.data == null) return null
+  if (lastDay < date && !(reportedDay !== null && reportedDay >= date)) {
+    const later = (await rowsOf('date').gt('date', date).limit(1).maybeSingle()) as unknown as RowRead<{ date: string }>
+    if (later.error) throw readFailed(later.error.message)
+    if (later.data == null) return null
+  }
 
   // Days passed over because they net to zero: the end found before them
   // must be one of the balances each of them may have begun from.
   const closedStarts: number[][] = []
   let day = lastDay
   for (let step = 0; step <= CLOSED_DAYS_MAX; step++) {
-    const dayRead = await scope(
-      supabase.from('transactions').select('amount, balance_after').eq('company_id', companyId),
-    ).eq('date', day)
-    if (dayRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${dayRead.error.message}`)
-    const chain = dayChain((dayRead.data ?? []) as unknown as DayRow[])
+    const dayRead = (await rowsOf('amount, balance_after').eq('date', day)) as unknown as RowRead<DayRow[]>
+    if (dayRead.error) throw readFailed(dayRead.error.message)
+    const chain = dayChain(dayRead.data ?? [])
     if (chain.end !== null) {
       const end = chain.end
       const fits = closedStarts.every((starts) => starts.some((start) => equalOre(start, end)))
@@ -249,13 +256,7 @@ async function rowBalanceOn(
     }
     if (!chain.closed) return null
     closedStarts.push(chain.starts)
-    const beforeRead = await scope(supabase.from('transactions').select('date').eq('company_id', companyId))
-      .lt('date', day)
-      .order('date', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (beforeRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${beforeRead.error.message}`)
-    const before = (beforeRead.data as unknown as { date?: string } | null)?.date ?? null
+    const before = await lastDayWithRow('lt', day)
     if (before === null) return null
     day = before
   }
