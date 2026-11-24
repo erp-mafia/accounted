@@ -3673,6 +3673,7 @@ Computes momsdeklaration rutor for the given period_type / year / period. The re
 **Pitfalls:**
 - `period_type` (monthly|quarterly|yearly), `year`, and `period` are all required.
 - For monthly: period is 1-12. For quarterly: period is 1-4. For yearly: period is 1.
+- Yearly (helårsmoms) covers the räkenskapsår that ends in `year`, an extended or shortened one in full; a year no recorded räkenskapsår ends in answers 404 VAT_REPORT_FISCAL_YEAR_NOT_FOUND, naming the räkenskapsår that exist.
 - `accounting_method` is accepted for backward compatibility but has no effect on the figures: the declaration is a pure ledger projection, and the method (faktureringsmetoden vs kontantmetoden per ML 15 kap 8-11 §§, ML 2023:200) is already reflected in when VAT-bearing journal entries are posted.
 - Output ruta 49 = (10+11+12+30+31+32+60+61+62) − 48. Positive = pay; negative = refund.
 
@@ -3680,7 +3681,7 @@ Computes momsdeklaration rutor for the given period_type / year / period. The re
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | yes | Declaration period length. Required. |
-| `year` | query | `number` | yes | Calendar year of the period, 2000-2100. Required. |
+| `year` | query | `number` | yes | Calendar year of the period, 2000-2100; for yearly, the year the räkenskapsår ends. Required. |
 | `period` | query | `number` | yes | Period number within the year: 1-12 for monthly, 1-4 for quarterly, 1 for yearly. Required. |
 | `accounting_method` | query | `"accrual" \| "cash"` | no | Accepted for backward compatibility; has no effect on the figures. |
 
@@ -3752,6 +3753,7 @@ The momsdeklaration for a period as the eSKDUpload v6.0 XML (ISO 8859-1) that Sk
 **Pitfalls:**
 - A missing or invalid org number on the company settings answers 400 VAT_ESKD_ORG_NUMBER_INVALID: the file would be rejected at upload.
 - fiscal_period_id is for yearly (helårsmoms) with a broken räkenskapsår; it is ignored for monthly and quarterly.
+- For yearly, year is the year the räkenskapsår ends; a year no recorded räkenskapsår ends in answers 404 VAT_REPORT_FISCAL_YEAR_NOT_FOUND, naming the räkenskapsår that exist.
 - Refused while an SIE import is unfinished.
 
 | Parameter | In | Type | Required | Notes |

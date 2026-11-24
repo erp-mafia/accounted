@@ -37,7 +37,6 @@ import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import type { StructuredErrorRemediation } from '@/lib/errors/structured-errors'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { mappingVersion } from '@/lib/posting/mapping-version'
@@ -51,7 +50,7 @@ import {
   vatSettlementBookingStatus,
   type VatSettlementProposal,
 } from '@/lib/reports/vat-settlement'
-import { loadReportPeriod, type VatPeriodInput } from '@/lib/reports/filing-report-service'
+import { loadReportPeriod, noHelarsmomsPeriodFailure, type VatPeriodInput } from '@/lib/reports/filing-report-service'
 import type { CreateJournalEntryInput } from '@/types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -118,19 +117,9 @@ async function loadProposal(
     )
     return { ok: true, proposal }
   } catch (err) {
-    // A yearly `year` no räkenskapsår ends in has no helårsmoms period to
-    // settle (resolvePeriodDates): the caller's to change, under its own code,
-    // with the sentence naming the räkenskapsår that exist.
-    const refusal = err as { code?: unknown; remediation?: StructuredErrorRemediation }
-    if (err instanceof Error && refusal.code === 'VAT_REPORT_FISCAL_YEAR_NOT_FOUND') {
-      return {
-        ok: false,
-        code: refusal.code,
-        messageSv: getUserErrorMessage(err),
-        messageEn: err.message,
-        ...(refusal.remediation ? { remediation: refusal.remediation } : {}),
-      }
-    }
+    // A yearly `year` no räkenskapsår ends in has no helårsmoms period to settle.
+    const noPeriod = noHelarsmomsPeriodFailure(err)
+    if (noPeriod) return noPeriod
     ctx.log.error('vat settlement proposal failed', err as Error, { ...input })
     return {
       ok: false,
