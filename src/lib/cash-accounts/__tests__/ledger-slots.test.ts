@@ -119,7 +119,9 @@ describe('seededRowBelongsToAnother', () => {
   })
 
   it('keeps the first-come rule when the printed IBAN and the account number name different accounts', () => {
-    expect(seededRowBelongsToAnother({ ...seeded, payee_iban: SECOND.iban }, SECOND, [SECOND, OWN])).toBe(false)
+    const contradicting = { ...seeded, payee_iban: SECOND.iban }
+    expect(seededRowBelongsToAnother(contradicting, SECOND, [SECOND, OWN])).toBe(false)
+    expect(seededRowBelongsToAnother(contradicting, OWN, [SECOND, OWN])).toBe(false)
   })
 
   it('never applies to a row with an IBAN of its own (the IBAN rule decides)', () => {
