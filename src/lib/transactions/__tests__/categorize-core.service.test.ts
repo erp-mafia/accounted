@@ -8,7 +8,7 @@
  * an invoice where the seller charged moms.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createTableMockSupabase, makeCategorizationTemplate } from '@/tests/helpers'
+import { createTableMockSupabase, makeCategorizationTemplate, type TableMockResolver } from '@/tests/helpers'
 
 const { createTxJE, propagate, saveRule, intercept, lock, covered } = vi.hoisted(() => ({
   createTxJE: vi.fn(),
@@ -1090,11 +1090,18 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
     }
   })
 
+  // The underlag check reads the inbox item first and refuses on its own when that read fails; here only the box's
+  // own read of the item (its reading and supplier card) fails.
+  const itemUnreadForTheBox: TableMockResolver = (chain) =>
+    chain.some((call) => call.method === 'select' && call.args[0] === 'extracted_data, matched_supplier_id')
+      ? { data: null, error: { message: 'connection reset' } }
+      : { data: null, error: null }
+
   it('takes no box for goods when the inbox item could not be read, whatever the row\'s document says', async () => {
     const { supabase } = ledger({
       transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
       document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: { vatNumber: 'DE123456789' }, totals: { total: 1250, vatAmount: 0 } } }, error: null },
-      invoice_inbox_items: { data: null, error: { message: 'connection reset' } },
+      invoice_inbox_items: itemUnreadForTheBox,
     })
     const outcome = await categorizeTransaction(
       supabase as never,
@@ -1112,7 +1119,7 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
     const { supabase } = ledger({
       transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
       document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: { vatNumber: 'DE123456789' }, totals: { total: 1250, vatAmount: 0 } } }, error: null },
-      invoice_inbox_items: { data: null, error: { message: 'connection reset' } },
+      invoice_inbox_items: itemUnreadForTheBox,
     })
     const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
     expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
