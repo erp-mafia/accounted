@@ -30,6 +30,7 @@ import {
 import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
+import { isBankIdReturn } from '@/components/bankid/autostart'
 import { useBranding } from '@/lib/branding/brand-context'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
@@ -163,6 +164,16 @@ export function LoginClient({
     }),
   )
   const prevMethodRef = useRef(method)
+
+  // The BankID app came back to a fresh load of this page (Safari reloaded
+  // the tab or opened a new one): open the BankID panel, whose mount check
+  // offers to continue the identification this browser holds. A panel that
+  // opened on e-mail (the last sign-in was a password, or a session timed
+  // out) never made that check, and the identification was lost. Read after
+  // mount because the fragment never reaches the server render.
+  useEffect(() => {
+    if (bankIdEnabled && isBankIdReturn(window.location.hash)) setMethod('bankid')
+  }, [bankIdEnabled])
 
   // An address the signup page left for this form (it already has an
   // account): filled in, with the caret in the password field. A prefill

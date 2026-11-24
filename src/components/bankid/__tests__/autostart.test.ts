@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankIdAutostartHref, detectBankIdDevice } from '../autostart'
+import { bankIdAutostartHref, bankIdReturnUrl, detectBankIdDevice, isBankIdReturn } from '../autostart'
 
 const PAGE = 'https://app.accounted.se/settings/connections?tab=bank'
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
@@ -26,9 +26,20 @@ describe('bankIdAutostartHref', () => {
   })
 
   it('uses the universal link with the current page as the redirect on an iPhone, so the app comes back to the polling page', () => {
-    expect(bankIdAutostartHref('tok', detectBankIdDevice(IPHONE, PAGE))).toBe(`https://app.bankid.com/?autostarttoken=tok&redirect=${encodeURIComponent(PAGE)}`)
+    expect(bankIdAutostartHref('tok', detectBankIdDevice(IPHONE, PAGE))).toBe(`https://app.bankid.com/?autostarttoken=tok&redirect=${encodeURIComponent(bankIdReturnUrl(PAGE, 'tok'))}`)
     // No page known: nothing to come back to, the app returns on its own.
     expect(bankIdAutostartHref('tok', { mobile: true, ios: true, appLink: true, pageUrl: null })).toBe('https://app.bankid.com/?autostarttoken=tok&redirect=null')
+  })
+
+  it('returns an iPhone to the page with a fragment of its own, so Safari jumps within the tab instead of reloading it', () => {
+    const href = new URL(bankIdAutostartHref('0a5f9137-7cb2-4d2f-b762-bfab4ad9d35f', detectBankIdDevice(IPHONE, PAGE)))
+    const back = new URL(href.searchParams.get('redirect') as string)
+    // The exact page (path and query) the tab is on, only the fragment added.
+    expect(`${back.origin}${back.pathname}${back.search}`).toBe(PAGE)
+    expect(back.hash).toMatch(/^#bankid-[0-9a-z]+$/)
+    expect(isBankIdReturn(back.hash)).toBe(true)
+    // The fragment never carries the token that starts the order.
+    expect(back.hash).not.toContain('0a5f9137')
   })
 
   it('uses the universal link with redirect=null on Android, where the app returns through the task stack', () => {
@@ -45,5 +56,29 @@ describe('bankIdAutostartHref', () => {
 
   it('reads the device itself when none is given (a desktop in this test runtime)', () => {
     expect(bankIdAutostartHref('tok')).toBe('bankid:///?autostarttoken=tok&redirect=null')
+  })
+})
+
+describe('bankIdReturnUrl', () => {
+  it('gives the same link for the same order and a different one for the next order', () => {
+    expect(bankIdReturnUrl(PAGE, 'first')).toBe(bankIdReturnUrl(PAGE, 'first'))
+    expect(bankIdReturnUrl(PAGE, 'first')).not.toBe(bankIdReturnUrl(PAGE, 'second'))
+  })
+
+  it('replaces the fragment the page has, so a second attempt from a returned tab is not the same URL again', () => {
+    const firstReturn = bankIdReturnUrl('https://app.accounted.se/login', 'first')
+    const secondReturn = bankIdReturnUrl(firstReturn, 'second')
+    expect(secondReturn).toBe(bankIdReturnUrl('https://app.accounted.se/login', 'second'))
+    expect(secondReturn).not.toBe(firstReturn)
+    expect(secondReturn.split('#')).toHaveLength(2)
+  })
+})
+
+describe('isBankIdReturn', () => {
+  it('tells a BankID return from any other fragment', () => {
+    expect(isBankIdReturn(new URL(bankIdReturnUrl(PAGE, 'tok')).hash)).toBe(true)
+    expect(isBankIdReturn('')).toBe(false)
+    expect(isBankIdReturn('#members')).toBe(false)
+    expect(isBankIdReturn('#ar-step-agm')).toBe(false)
   })
 })
