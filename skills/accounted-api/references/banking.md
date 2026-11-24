@@ -204,7 +204,7 @@ Lists the banks the account information provider reaches (BIC, name, logo, wheth
 
 **Pitfalls:**
 - A sparbank is reached through SWEDSESS with its affiliate id; ask bank for the list.
-- reached false: the bank is listed but not read through Open Payments for this company yet (Svea); keep its earlier connection or import statements as a file.
+- reached false: the bank is listed but not read through Open Payments for this company yet; import its bank statements as a file.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
