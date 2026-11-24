@@ -21,6 +21,7 @@ import { useSettings } from '@/components/settings/useSettings'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
 import { plannedLegalFormOfSnapshot } from '@/lib/company-lookup/entity-type-map'
+import { registryRegistrationsOf, type RegistryRegistrations } from '@/lib/company/registry-registrations'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
 import type { KuSignalTrigger } from '@/lib/tax/ku-signal'
@@ -91,18 +92,23 @@ export function TaxSettingsContent() {
   // handelsbolag or kommanditbolag is set up as another form until Accounted
   // supports it, so this page names the registry's form beside the one the
   // books follow instead of contradicting the Företag page silently (PH 237).
+  // The same snapshot names the F-skatt and moms registrations: a yes the
+  // saved setting shares shows as a fact with its date, not as a switch.
   const [registryFormLabel, setRegistryFormLabel] = useState<string | null>(null)
+  const [registryRegistrations, setRegistryRegistrations] = useState<RegistryRegistrations | null>(null)
   useEffect(() => {
     if (!company?.id) return
     const supabase = createClient()
     let cancelled = false
     supabase
       .from('companies')
-      .select('tic_snapshot')
+      .select('tic_snapshot, tic_snapshot_fetched_at')
       .eq('id', company.id)
       .maybeSingle()
       .then(({ data }) => {
-        if (!cancelled) setRegistryFormLabel(plannedLegalFormOfSnapshot(data?.tic_snapshot)?.label ?? null)
+        if (cancelled) return
+        setRegistryFormLabel(plannedLegalFormOfSnapshot(data?.tic_snapshot)?.label ?? null)
+        setRegistryRegistrations(registryRegistrationsOf(data?.tic_snapshot, data?.tic_snapshot_fetched_at as string | null))
       })
     return () => {
       cancelled = true
@@ -202,6 +208,7 @@ export function TaxSettingsContent() {
           kuTriggers={kuTriggers}
           rotRutSignalDetected={rotRutSignalDetected}
           registryFormLabel={registryFormLabel}
+          registryRegistrations={registryRegistrations}
         />
       </SettingsFormWrapper>
 
