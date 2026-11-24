@@ -150,19 +150,25 @@ export function ToBookList({ inkorgV2Enabled }: { inkorgV2Enabled: boolean }) {
     <div className="space-y-4">
       <PageHeader title={t('title')} />
 
-      <SegmentedControl
-        aria-label={t('filter_label')}
-        value={filter}
-        onChange={setFilter}
-        // Skattekonto and Att matcha are filters only where there are such rows.
-        options={TO_BOOK_FILTERS.filter(
-          (f) => (f !== 'skattekonto' && f !== 'suggested') || counts[f] > 0 || filter === f,
-        ).map((f) => ({
-          value: f,
-          label: filterLabel[f],
-          count: counts[f],
-        }))}
-      />
+      {/* Each chip keeps its label on one line, and the row scrolls on its
+          own when it is wider than a phone: the page never grows wider than
+          the screen. */}
+      <div className="overflow-x-auto">
+        <SegmentedControl
+          aria-label={t('filter_label')}
+          value={filter}
+          onChange={setFilter}
+          className="whitespace-nowrap"
+          // Skattekonto and Att matcha are filters only where there are such rows.
+          options={TO_BOOK_FILTERS.filter(
+            (f) => (f !== 'skattekonto' && f !== 'suggested') || counts[f] > 0 || filter === f,
+          ).map((f) => ({
+            value: f,
+            label: filterLabel[f],
+            count: counts[f],
+          }))}
+        />
+      </div>
 
       {failed ? (
         <LoadError title={t('load_error')} onRetry={() => void retry()} />

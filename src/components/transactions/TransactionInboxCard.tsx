@@ -436,8 +436,11 @@ export default function TransactionInboxCard({
             />
           )}
         </td>
+        {/* Datum, Kategori and Konto hide on a phone (below sm), where the
+            row is the description, the amount and Bokför; the drawer shows
+            all three. */}
         {show('date') && (
-          <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap date-figures text-muted-foreground')}>
+          <td className={cn(TD_CLASS, 'hidden !pl-0 whitespace-nowrap date-figures text-muted-foreground sm:table-cell')}>
             {formatDate(transaction.date)}
           </td>
         )}
@@ -490,7 +493,7 @@ export default function TransactionInboxCard({
           </span>
         </td>
         {columns.has('category') && (
-          <td className={cn(TD_CLASS, 'whitespace-nowrap')} onClick={(e) => e.stopPropagation()}>
+          <td className={cn(TD_CLASS, 'hidden whitespace-nowrap sm:table-cell')} onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
               className={cn(
@@ -515,7 +518,7 @@ export default function TransactionInboxCard({
           </td>
         )}
         {columns.has('account') && (
-          <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+          <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground sm:table-cell')}>
             <span className="inline-flex items-center gap-2">
               {accountLogo && (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -554,13 +557,15 @@ export default function TransactionInboxCard({
             >
               {primaryLabel}
             </Button>
+            {/* The ⋯ menu hides on a phone (below sm): a tap on the row
+                opens the drawer, which lists the same actions. */}
             {showOverflowMenu && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
+                    className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS, 'hidden sm:inline-flex')}
                     onClick={(e) => e.stopPropagation()}
                     aria-label={t('more_actions_aria')}
                     title={t('more_actions_aria')}

@@ -45,6 +45,7 @@ describe('JournalEntryList attn slot', () => {
   })
 
   it('keeps the per-row chip for every needs-doc source type except import', () => {
-    expect(LIST).toMatch(/entry\.source_type !== 'import' && \(\s+<Badge variant="warning"/)
+    // The fragment holds the chip and its phone-width glyph (phone-width-lists.test.ts).
+    expect(LIST).toMatch(/entry\.source_type !== 'import' && \(\s+<>\s+<Badge variant="warning"/)
   })
 })
