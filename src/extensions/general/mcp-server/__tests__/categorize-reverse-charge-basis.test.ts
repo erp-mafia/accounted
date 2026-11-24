@@ -81,6 +81,8 @@ async function stage(
   enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
   enqueue({ data: settingsRow }) // core: company_settings
   if (document) enqueue({ data: { id: 'doc-1', extracted_data: document } }) // core: the pinned underlag
+  // core: the seller-VAT check reads the inbox items matched to the row on a reverse charge
+  if (String(args.vat_treatment ?? '').startsWith('reverse_charge')) enqueue({ data: [] })
   enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
   if (overrideRow) enqueue({ data: overrideRow }) // applyAccountOverride: chart row
   // reconcileRcBasisWithChart reads the momskoder once the mapping carries a basis pair.
@@ -233,6 +235,7 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount
+    enqueue({ data: [] }) // the seller-VAT check: no inbox item matched to the row
     enqueue({ data: { account_number: account, account_class: 4, is_active: true } }) // override chart row
     enqueue({ data: [] }) // momskoder
     const staging = categorize.execute(

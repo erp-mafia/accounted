@@ -1031,7 +1031,10 @@ export async function categorizeTransaction(
     }
   }
   if (underlag && input.vat_treatment === 'reverse_charge') {
-    let confirmed: { could_be_swedish_vat: boolean; address_country?: string } | null = null
+    // Stated foreign on at least one document: what the approver reads (a 25 % charge, a Swedish number abroad).
+    let confirmed = false
+    let couldBeSwedishVat = false
+    let addressCountry: string | null = null
     for (const one of underlagDocuments) {
       // The charge as the bulk door and the one click read it: the breakdown's groups, else the total's VAT.
       const charged = sellerChargedVat(one.reading)
@@ -1063,16 +1066,14 @@ export async function categorizeTransaction(
         )
       }
       if (sellerVat.verdict === 'confirmed') {
+        confirmed = true
+        couldBeSwedishVat ||= sellerVat.couldBeSwedishVat
         // A Swedish VAT number beside an address abroad: the approver reads what was stated.
-        const addressCountry = confirmed?.address_country ?? swedishVatNumberAbroad(one.reading?.supplier)
-        confirmed = {
-          could_be_swedish_vat: (confirmed?.could_be_swedish_vat ?? false) || sellerVat.couldBeSwedishVat,
-          ...(addressCountry ? { address_country: addressCountry } : {}),
-        }
+        addressCountry ??= swedishVatNumberAbroad(one.reading?.supplier)
       }
     }
     if (confirmed) {
-      underlag.foreign_seller_vat = confirmed
+      underlag.foreign_seller_vat = { could_be_swedish_vat: couldBeSwedishVat, ...(addressCountry ? { address_country: addressCountry } : {}) }
       checks.push(warned('reverse_charge_seller_vat', FOREIGN_SELLER_VAT_FLAG))
     } else {
       checks.push(passed('reverse_charge_seller_vat'))
