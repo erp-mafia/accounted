@@ -21,6 +21,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { invoicePartiesVerdict, type InvoicePartiesCustomer, type InvoicePartiesInvoice } from '@/lib/invoices/invoice-parties'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -59,9 +60,17 @@ export interface IssueRefusal {
  * frozen payee. A linked credit note has its own issue step, so a door routes
  * it there first (a door without one refuses it); what reaches this question
  * with a total below zero has no original to name (ML 17 kap 22 §).
+ *
+ * The seller's and the buyer's name and address (ML 17 kap 24 § p.5-6) are
+ * read off the joined customer and the lines' deductions
+ * (invoicePartiesVerdict): every door selects the customer with its address
+ * columns and the items with deduction_type.
  */
 export function issuable(
-  invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type' | 'total'> & Partial<Pick<Invoice, 'payment_details'>>,
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type' | 'total' | 'vat_treatment'>
+    & Partial<Pick<Invoice, 'payment_details' | 'total_sek' | 'exchange_rate'>>
+    & Pick<InvoicePartiesInvoice, 'items'>
+    & { customer?: InvoicePartiesCustomer | null },
   settings: CompanySettings,
 ): IssueRefusal | null {
   if (isCreditNoteDocument(invoice)) return { code: 'INVOICE_CREDIT_NOTE_NOT_ISSUABLE' }
@@ -69,6 +78,9 @@ export function issuable(
     return { code: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', details: { currency: invoice.currency } }
   }
   if (!hasRequiredSellerVatNumber(settings, invoice)) return { code: 'INVOICE_SEND_VAT_NUMBER_MISSING' }
+  const parties = invoicePartiesVerdict(invoice, invoice.customer, settings)
+  if (parties === 'seller_missing') return { code: 'INVOICE_SEND_SELLER_ADDRESS_MISSING' }
+  if (parties === 'buyer_missing') return { code: 'INVOICE_SEND_BUYER_ADDRESS_MISSING' }
   return null
 }
 

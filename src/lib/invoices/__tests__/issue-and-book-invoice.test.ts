@@ -140,6 +140,101 @@ describe('issuable', () => {
   })
 })
 
+// crm#2080: a faktura to a business names its seller and buyer with name and
+// address (ML 17 kap 24 § p.5-6). A förenklad faktura may leave them out (ML
+// 17 kap 26-28 §§): at most 4 000 kr including moms, or a seller outside the
+// VAT register at any amount, never where the buyer in another EU country
+// pays the VAT. A sale to a private person needs neither unless it is
+// construction work (10-11 §§).
+describe('issuable: seller and buyer name and address', () => {
+  const settings = makeCompanySettings({ bankgiro: '123-4567', vat_registered: true, vat_number: 'SE556677889901' })
+  const noAddress = { address_line1: null, address_line2: null, postal_code: null, city: null }
+  const draft = (overrides: Record<string, unknown> = {}) =>
+    makeInvoice({ status: 'draft', total: 12500, customer: makeCustomer(), ...overrides })
+
+  it('refuses a seller without an address on a full faktura', () => {
+    expect(issuable(draft(), makeCompanySettings({ ...settings, ...noAddress }))).toEqual({
+      code: 'INVOICE_SEND_SELLER_ADDRESS_MISSING',
+    })
+  })
+
+  it('refuses a seller without a name on a full faktura', () => {
+    expect(issuable(draft(), makeCompanySettings({ ...settings, company_name: '  ' }))).toEqual({
+      code: 'INVOICE_SEND_SELLER_ADDRESS_MISSING',
+    })
+  })
+
+  it('passes a förenklad faktura without the seller address: its organisationsnummer identifies it', () => {
+    expect(issuable(draft({ total: 1000 }), makeCompanySettings({ ...settings, ...noAddress }))).toBeNull()
+  })
+
+  it('refuses a buyer without an address over 4 000 kr including moms', () => {
+    expect(issuable(draft({ customer: makeCustomer(noAddress) }), settings)).toEqual({
+      code: 'INVOICE_SEND_BUYER_ADDRESS_MISSING',
+    })
+  })
+
+  it('refuses a buyer with a street but no postal code or town', () => {
+    const streetOnly = makeCustomer({ ...noAddress, address_line1: 'Storgatan 1' })
+    expect(issuable(draft({ customer: streetOnly }), settings)?.code).toBe('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+  })
+
+  it('passes a buyer and a seller with a postal code and a town but no street', () => {
+    const placeOnly = { ...noAddress, postal_code: '111 22', city: 'Stockholm' }
+    expect(issuable(draft({ customer: makeCustomer(placeOnly) }), makeCompanySettings({ ...settings, ...placeOnly }))).toBeNull()
+  })
+
+  it('passes a buyer without an address at 4 000 kr: a förenklad faktura', () => {
+    expect(issuable(draft({ total: 4000, customer: makeCustomer(noAddress) }), settings)).toBeNull()
+  })
+
+  it('refuses a buyer without an address on an EU sale under 4 000 kr', () => {
+    const euBuyer = makeCustomer({ ...noAddress, customer_type: 'eu_business', country: 'DE' })
+    expect(issuable(draft({ total: 1000, vat_treatment: 'reverse_charge', customer: euBuyer }), settings)?.code).toBe(
+      'INVOICE_SEND_BUYER_ADDRESS_MISSING',
+    )
+  })
+
+  it('passes a domestic reverse-charge sale under 4 000 kr without the buyer address: 27 § excludes only an EU buyer', () => {
+    const invoice = draft({ total: 1000, vat_treatment: 'reverse_charge_domestic', customer: makeCustomer(noAddress) })
+    expect(issuable(invoice, settings)).toBeNull()
+  })
+
+  it('passes a sale to a private person without either address', () => {
+    const privatePerson = makeCustomer({ ...noAddress, customer_type: 'individual' })
+    expect(issuable(draft({ customer: privatePerson, items: [] }), makeCompanySettings({ ...settings, ...noAddress }))).toBeNull()
+  })
+
+  it('passes an exempt supply without VAT: 17 kap. 12 § frees it from the invoice', () => {
+    const rent = draft({ total: 15000, vat_amount: 0, customer: makeCustomer(noAddress), items: [{ vat_rate: 0, line_type: 'product' }] })
+    expect(issuable(rent, settings)).toBeNull()
+  })
+
+  it('refuses construction work for a private person over 4 000 kr without the buyer address', () => {
+    const privatePerson = makeCustomer({ ...noAddress, customer_type: 'individual' })
+    const rot = draft({ customer: privatePerson, items: [{ deduction_type: 'rot' }] })
+    expect(issuable(rot, settings)?.code).toBe('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+  })
+
+  it('measures a foreign invoice in kronor', () => {
+    const eur = { currency: 'EUR', exchange_rate: 11.5, payment_details: { iban: 'DE89370400440532013000' }, customer: makeCustomer(noAddress) }
+    expect(issuable(draft({ ...eur, total: 500 }), settings)?.code).toBe('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+    expect(issuable(draft({ ...eur, total: 300 }), settings)).toBeNull()
+  })
+
+  it('passes a buyer without an address at a seller outside the VAT register, at any amount', () => {
+    const momsfri = makeCompanySettings({ ...settings, vat_registered: false, vat_number: null })
+    expect(issuable(draft({ total: 50000, vat_treatment: 'exempt', customer: makeCustomer(noAddress) }), momsfri)).toBeNull()
+  })
+
+  it('asks nothing of a quote, a proforma or a följesedel', () => {
+    const bare = makeCompanySettings({ ...settings, ...noAddress })
+    for (const document_type of ['quote', 'proforma', 'delivery_note'] as const) {
+      expect(issuable(draft({ document_type, customer: makeCustomer(noAddress) }), bare)).toBeNull()
+    }
+  })
+})
+
 describe('emailRefusal', () => {
   it('refuses a följesedel, only that', () => {
     expect(emailRefusal({ document_type: 'delivery_note' })).toEqual({ code: 'INVOICE_SEND_DELIVERY_NOTE' })
@@ -243,6 +338,28 @@ describe('issueAndBookInvoice', () => {
     const result = await issue(makeDraft({ invoice_number: null }), broken)
 
     expect(result).toEqual({ ok: false, errorCode: 'INVOICE_SEND_VAT_NUMBER_MISSING' })
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  // crm#2080: the reporter's flow, a buyer with only a name on a 12 500 kr
+  // faktura, then a company that skipped its address at onboarding.
+  it('rejects a buyer without an address, before number allocation', async () => {
+    const nameOnly = makeCustomer({ address_line1: null, address_line2: null, postal_code: null, city: null })
+
+    const result = await issue(makeDraft({ invoice_number: null, customer: nameOnly }))
+
+    expect(result).toEqual({ ok: false, errorCode: 'INVOICE_SEND_BUYER_ADDRESS_MISSING' })
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects a company without an address, before number allocation', async () => {
+    const noAddress = { ...settings, address_line1: null, postal_code: null, city: null } as CompanySettings
+
+    const result = await issue(makeDraft({ invoice_number: null }), noAddress)
+
+    expect(result).toEqual({ ok: false, errorCode: 'INVOICE_SEND_SELLER_ADDRESS_MISSING' })
     expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })

@@ -186,7 +186,7 @@ import {
 } from '@/lib/invoices/editor/primary-action'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { resolveTopBarMeta } from '@/lib/invoices/editor/top-bar-meta'
-import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
+import { buildEditorPreviewRequest, previewRateKey, previewRateKeyOfBody, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
 import {
   draftAccrualEntryDates,
   proposeDraftCashLines,
@@ -201,6 +201,8 @@ import {
   type SeriesContinuation,
 } from '@/lib/invoices/next-number-preview'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { invoicePartiesVerdict } from '@/lib/invoices/invoice-parties'
+import { InvoicePartiesNotice } from '@/components/invoices/InvoicePartiesNotice'
 import {
   customerCardReference,
   customerChangedForReference,
@@ -2055,15 +2057,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
   const total = selfBilledFigures?.ok ? selfBilledFigures.total : subtotal + vatAmount
+  // The treatment the write path derives for the header.
+  const headerVatTreatment = deriveInvoiceVatHeader(vatRules ?? getVatRules('swedish_business'), effectiveLineVatRates, {
+    vatRegistered,
+  }).vat_treatment
   // Summering's VAT lines: a 0 % rate says why (omvänd skattskyldighet,
   // export, momsfri) with the treatment the write path derives; a seller
   // that is not VAT registered shows none (lib/invoices/editor/summary-vat).
   const summaryVatLines = buildSummaryVatLines({
     vatRegistered,
     groups: Array.from(vatByRate.entries()).map(([rate, group]) => ({ rate, ...group })),
-    treatment: deriveInvoiceVatHeader(vatRules ?? getVatRules('swedish_business'), effectiveLineVatRates, {
-      vatRegistered,
-    }).vat_treatment,
+    treatment: headerVatTreatment,
   })
 
   // ROT/RUT-avdrag live preview. Computed client-side for instant feedback;
@@ -2444,6 +2448,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       focusSettingsField('invoice_date')
       return
     }
+    // The company's settings decide the checks below: until they have
+    // loaded, nothing is issued (the create would number it first).
+    if (issues && partiesUnknown) {
+      toast({
+        title: t('review_company_missing_title'),
+        description: t('review_company_missing_description'),
+        variant: 'destructive',
+      })
+      return
+    }
     // The send refuses a faktura without the seller's VAT number, and the
     // create before it would already have numbered it: stop here and say why
     // (the status line carries the fix).
@@ -2451,6 +2465,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       toast({
         title: tShell('toast_cannot_send_title'),
         description: getErrorMessage({ error: { code: 'INVOICE_SEND_VAT_NUMBER_MISSING' } }, { locale, context: 'invoice' }),
+        variant: 'destructive',
+      })
+      return
+    }
+    // The same for a missing name or address (crm#2080).
+    if (issues && (partiesVerdict === 'seller_missing' || partiesVerdict === 'buyer_missing')) {
+      const code = partiesVerdict === 'seller_missing' ? 'INVOICE_SEND_SELLER_ADDRESS_MISSING' : 'INVOICE_SEND_BUYER_ADDRESS_MISSING'
+      toast({
+        title: tShell('toast_cannot_send_title'),
+        description: getErrorMessage({ error: { code } }, { locale, context: 'invoice' }),
         variant: 'destructive',
       })
       return
@@ -3165,6 +3189,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       })
     : null
   const pdf = useInvoicePdfPreview(previewBody, previewRefreshKey)
+  // What the last good render's exchange rate is for.
+  const renderedRateKey = useMemo(() => previewRateKeyOfBody(pdf.renderedBody), [pdf.renderedBody])
   const preliminaryNumber =
     !isSelfBilled && watchDocumentType !== 'delivery_note' && !(isEditMode && initial?.invoice_number)
       ? numberPreview
@@ -3197,6 +3223,33 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     !isSelfBilled &&
     companySettings !== null &&
     !hasRequiredSellerVatNumber(companySettings, { document_type: watchDocumentType, credited_invoice_id: null })
+  // The seller's and the buyer's name and address (crm#2080): the answer the
+  // send's issuable will give, said before the confirm. A foreign total is
+  // measured at the preview's rate only while that render was for this
+  // currency and date (a stale rate leaves the total unknown); the lines say
+  // whether a sale to a private person is construction work and whether a
+  // domestic sale is exempt.
+  const partiesVerdict =
+    !isSelfBilled && companySettings !== null
+      ? invoicePartiesVerdict(
+          {
+            credited_invoice_id: null,
+            document_type: watchDocumentType,
+            total,
+            currency: watchCurrency,
+            vat_treatment: headerVatTreatment,
+            exchange_rate:
+              renderedRateKey !== null && renderedRateKey === previewRateKey(previewRequest) ? pdf.exchangeRate : null,
+            items: watchItems,
+          },
+          selectedCustomer,
+          companySettings,
+        )
+      : 'ok'
+  // Until the company's settings have loaded the rule cannot be read, so a
+  // send or a kontantfaktura waits for them: the create before the send would
+  // otherwise number an invoice the send then refuses.
+  const partiesUnknown = !isSelfBilled && companySettings === null
   const detailsReasons = resolveDetailsExpansion({
     documentType: watchDocumentType,
     isSelfBilled,
@@ -3458,6 +3511,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     hasDeduction: hasAnyDeduction,
     dateLock,
     sellerVatMissing,
+    partiesMissing:
+      partiesVerdict === 'seller_missing' || partiesVerdict === 'buyer_missing'
+        ? { verdict: partiesVerdict, customerId: selectedCustomer?.id ?? null }
+        : null,
   })
   const [pane, setPane] = useState<EditorPane>('form')
   const describeStep = (step: NextStep) => ({
@@ -3710,10 +3767,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         ? { kind: 'invoice', invoiceId: initial.id }
         : { kind: 'staged', files: stagedAttachments, onChange: setStagedAttachments }
       : null
+  // A send or a kontantfaktura issues the invoice: a refused name or address
+  // (one that turned so while the dialog was open, as when the buyer's VAT
+  // number validates into a reverse charge) blocks the confirm, so nothing
+  // is saved and numbered for the send to refuse.
+  const partiesRefuseConfirm =
+    confirmIntent?.kind !== 'create' &&
+    (partiesUnknown || partiesVerdict === 'seller_missing' || partiesVerdict === 'buyer_missing')
   const confirmDisabled =
     !canWrite ||
     (isPaidConfirm && !isPaidAtIssueAccount(paidAccount)) ||
     (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) ||
+    partiesRefuseConfirm ||
     (confirmChannel === 'email' && isCompanyAdmin && extraCcError !== null)
 
   // ===== Top bar ===========================================================
@@ -5541,6 +5606,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   </div>
                 )}
               </div>
+            )}
+            {/* A name or address the send refuses, or a förenklad faktura
+                that goes out without one (crm#2080): said before it is
+                issued. */}
+            {confirmIntent?.kind !== 'create' && partiesVerdict !== 'ok' && (
+              <InvoicePartiesNotice
+                verdict={partiesVerdict}
+                customerId={selectedCustomer?.id}
+                canEditCompany={isCompanyAdmin && canWrite}
+              />
             )}
             {/* Swedish VAT to an EU customer whose reverse charge is blocked
                 needs the explicit tick before the invoice exists (#2749). */}

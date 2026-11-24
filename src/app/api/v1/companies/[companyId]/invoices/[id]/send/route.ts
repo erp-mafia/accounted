@@ -58,6 +58,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
+import { invoicePartiesVerdict, simplifiedInvoiceWarning } from '@/lib/invoices/invoice-parties'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
@@ -164,6 +165,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL (or an SMTP relay via EMAIL_PROVIDER=smtp) the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
     'Customer must have an email address. 400 INVOICE_SEND_NO_CUSTOMER_EMAIL otherwise.',
+    'A faktura states the seller\'s and the buyer\'s name and address (ML 17 kap 24 §): 400 INVOICE_SEND_SELLER_ADDRESS_MISSING or INVOICE_SEND_BUYER_ADDRESS_MISSING before a number is allocated, on the same rule as :mark-sent. A förenklad faktura (at most 4 000 kr including VAT, or any amount from a seller outside the VAT register; never where the buyer in another EU country pays the VAT) may leave them out and is sent with warning SELLER_ADDRESS_MISSING or BUYER_ADDRESS_MISSING, but it must still identify the seller (name, organisationsnummer or VAT number), or it is refused with INVOICE_SEND_SELLER_ADDRESS_MISSING. An invoice to a private person needs neither unless it is construction work (a ROT or grön teknik line), and neither does a domestic sale without VAT from a VAT-registered company (an exempt supply, ML 17 kap 12 §).',
     'An invoice without a customer (customer_id null, e.g. its customer was deleted) is refused with 409 INVOICE_CUSTOMER_MISSING before anything changes. Set customer_id on the draft or delete it.',
     'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.',
     'The journal entry is posted before the email leaves: a refusal (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) returns the engine\'s error, the invoice stays in `draft` and no email is sent. Fix the tag or the period and send again.',
@@ -669,6 +671,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             : failure.step.toUpperCase(),
       message: failure.reason,
     }))
+    // A förenklad faktura issued without the seller's or the buyer's name or
+    // address (crm#2080).
+    const partiesWarning = simplifiedInvoiceWarning(invoicePartiesVerdict(typed, typed.customer, settings))
+    if (partiesWarning) warnings.push({ code: partiesWarning.code, message: partiesWarning.message_sv })
 
     // The email did not go out after the invoice was issued. With nothing
     // booked, nothing irreversible happened: the draft is restored and the

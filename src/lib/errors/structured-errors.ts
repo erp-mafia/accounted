@@ -2984,6 +2984,24 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description: 'Lägg till företagets momsregistreringsnummer under Inställningar → Skatt.',
     },
   },
+  // crm#2080: ML 17 kap. 24 § p.5-6 and 26-28 §§, the rule in lib/invoices/invoice-parties.ts.
+  INVOICE_SEND_SELLER_ADDRESS_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Företagets namn eller adress saknas. De måste stå på fakturan när den är över 4 000 kr inklusive moms eller när köparen i ett annat EU-land redovisar momsen, och varje faktura måste visa vem säljaren är (ML 17 kap. 24, 26-28 §§). Fyll i dem under Inställningar → Företagsuppgifter innan du skickar fakturan.',
+    message_en: 'The company name or address is missing. They must be on the invoice when it is over 4,000 kr including VAT or when the buyer in another EU country accounts for the VAT, and every invoice must show who the seller is (ML 17 kap. 24 and 26-28 §§). Fill them in under Inställningar → Företagsuppgifter (Settings → Company details) before issuing the invoice.',
+    remediation: {
+      description: 'Fyll i företagets namn och adress (gatuadress, postnummer och ort) under Inställningar → Företagsuppgifter.',
+    },
+  },
+  INVOICE_SEND_BUYER_ADDRESS_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Kundens namn eller adress saknas. De måste stå på fakturan när den är över 4 000 kr inklusive moms eller när köparen i ett annat EU-land redovisar momsen (ML 17 kap. 24, 26 och 27 §§). Lägg till det som saknas på kunden innan du skickar fakturan.',
+    message_en: "The customer's name or address is missing. They must be on the invoice when it is over 4,000 kr including VAT or when the buyer in another EU country accounts for the VAT (ML 17 kap. 24, 26 and 27 §§). Add what is missing to the customer before issuing the invoice.",
+    remediation: {
+      description: "Add the customer's missing name or address (a street with its postal code and town) with gnubok_update_customer, or PATCH the customer, then issue the invoice again.",
+      tool: 'gnubok_update_customer',
+    },
+  },
   INVOICE_SEND_NUMBER_ASSIGN_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunde inte tilldela fakturanummer.',

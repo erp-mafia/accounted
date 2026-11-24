@@ -53,6 +53,17 @@ describe('resolveEditorStatusLine', () => {
     expect(resolveEditorStatusLine(input({ sellerVatMissing: false }))).toEqual({ kind: 'none' })
   })
 
+  it('then a missing name or address the send refuses', () => {
+    const partiesMissing = { verdict: 'buyer_missing' as const, customerId: 'cust-1' }
+    expect(resolveEditorStatusLine(input({ partiesMissing, missing: ['payee'], pageCount: 2 }))).toEqual({
+      kind: 'parties_missing',
+      verdict: 'buyer_missing',
+      customerId: 'cust-1',
+    })
+    expect(resolveEditorStatusLine(input({ partiesMissing, sellerVatMissing: true }))).toEqual({ kind: 'seller_vat_missing' })
+    expect(resolveEditorStatusLine(input({ partiesMissing: null }))).toEqual({ kind: 'none' })
+  })
+
   it('then a faktura without payment details', () => {
     expect(resolveEditorStatusLine(input({ missing: ['payee'] }))).toEqual({ kind: 'payee_missing' })
   })

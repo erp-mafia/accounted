@@ -7156,6 +7156,8 @@
     "total_incl_vat_label": "Totalt inkl. moms",
     "review_customer_missing_title": "Kunduppgifterna kunde inte laddas",
     "review_customer_missing_description": "Ladda om sidan och försök igen. Kontakta support om det inte hjälper.",
+    "review_company_missing_title": "Företagets uppgifter kunde inte laddas",
+    "review_company_missing_description": "Ladda om sidan och försök igen. Kontakta support om det inte hjälper.",
     "payee_account_label": "Betalas till",
     "payee_account_default": "Standard: {account}",
     "payee_account_default_none": "Företagets standardkonto"
@@ -8368,6 +8370,15 @@
     "unsupported_type": "{name} har en filtyp som inte kan laddas upp. Tillåtna: PDF, bilder, Word, Excel, PowerPoint, OpenDocument, RTF och CSV.",
     "file_too_large": "{name} är för stor. Högst {limit} per fil: komprimera eller dela upp filen och försök igen.",
     "open_blocked": "Dokumentet kunde inte öppnas. Tillåt popupfönster för sidan och försök igen."
+  },
+  "invoice_parties": {
+    "seller_missing": "Företagets namn eller adress saknas och måste stå på fakturan.",
+    "seller_simplified": "Företagets namn eller adress saknas, så fakturan blir en förenklad faktura utan säljarens adress. Fyll i företagsuppgifterna om du vill skicka en fullständig faktura.",
+    "seller_fix": "Fyll i företagsuppgifter",
+    "seller_ask_admin": "Be en administratör fylla i dem under Företagsuppgifter.",
+    "buyer_missing": "Kundens namn eller adress saknas. De måste stå på fakturan när den är över 4 000 kr inklusive moms eller när köparen i ett annat EU-land redovisar momsen.",
+    "buyer_simplified": "Kundens namn eller adress saknas, så fakturan blir en förenklad faktura utan köparens uppgifter. Lägg till dem på kunden om du vill skicka en fullständig faktura.",
+    "open_customer": "Öppna kunden"
   },
   "invoice_send_dialog": {
     "description_due": "förfaller {date}",

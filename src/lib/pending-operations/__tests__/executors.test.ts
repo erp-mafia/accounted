@@ -207,6 +207,10 @@ beforeEach(() => {
 // fiscal-periods.unlock (unlockFiscalPeriod over period-service unlockPeriod),
 // the same run() the v1 endpoint and the dashboard use.
 
+
+// A faktura names its seller (ML 17 kap 24 § p.5, crm#2080).
+const SELLER = { company_name: 'Test AB', address_line1: 'Testgatan 1', postal_code: '111 22', city: 'Stockholm' }
+
 describe('commitPendingOperation: unlock_period', () => {
   const FP_ID = 'a8f1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 
@@ -603,7 +607,7 @@ describe('commitPendingOperation: credit-note issuance guard', () => {
       error: null,
     })
     enqueue({
-      data: { accounting_method: 'cash', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+      data: { accounting_method: 'cash', entity_type: 'enskild_firma', bankgiro: '123-4567', ...SELLER },
       error: null,
     })
     enqueue({ data: [{ id: 'invoice-1' }], error: null }) // status flip draft -> sent (compare-and-set)
@@ -2664,6 +2668,7 @@ describe('commitPendingOperation: mark_invoice_sent honours defer_invoice_bookin
         defer_invoice_booking: true,
         entity_type: 'enskild_firma',
         bankgiro: '123-4567',
+        ...SELLER,
       },
       error: null,
     })

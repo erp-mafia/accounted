@@ -853,9 +853,9 @@ async function seedAll(): Promise<Seed> {
   await getPool().query(
     `INSERT INTO public.company_settings
        (user_id, company_id, entity_type, accounting_method, vat_registered, vat_number, company_name, org_number,
-        bankgiro, invoice_payment_accounts)
+        bankgiro, invoice_payment_accounts, address_line1, postal_code, city)
      VALUES ($1, $2, 'aktiebolag', 'accrual', true, 'SE556677889901', 'Konsultbolaget AB', '556677-8899',
-             '5050-1055', $3)`,
+             '5050-1055', $3, 'Testgatan 1', '111 22', 'Stockholm')`,
     [userId, companyId, JSON.stringify({ EUR: { iban: 'SE4550000000058398257466', bic: 'ESSESESS' } })],
   )
   // The day's Riksbanken rate, as the bank sync caches it, so the EUR drafts never call out.
@@ -866,8 +866,8 @@ async function seedAll(): Promise<Seed> {
   )
   const customer = async (name: string, type: string, extra: Record<string, unknown>) => {
     const { rows } = await getPool().query<{ id: string }>(
-      `INSERT INTO public.customers (user_id, company_id, name, customer_type, country, vat_number, vat_number_validated, org_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id::text AS id`,
+      `INSERT INTO public.customers (user_id, company_id, name, customer_type, country, vat_number, vat_number_validated, org_number, address_line1, postal_code, city)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Storgatan 1', '111 22', 'Stockholm') RETURNING id::text AS id`,
       [userId, companyId, name, type, extra.country ?? 'SE', extra.vat_number ?? null, extra.vat_number_validated ?? false, extra.org_number ?? null],
     )
     return rows[0]!.id

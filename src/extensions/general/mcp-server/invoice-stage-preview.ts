@@ -20,6 +20,10 @@
  *     rule issueAndBookInvoice applies (paidAtIssueBlockReason), else one cash
  *     verifikat on the invoice date, the buildInvoiceCashLines lines the
  *     payment at issue books, in either accounting method.
+ *   - mark sent / send, the parties (crm#2080): a missing seller or buyer
+ *     name or address is refused by the verdict issuable gives the approval
+ *     (invoicePartiesVerdict); a förenklad faktura without one is staged
+ *     with a note.
  */
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -30,11 +34,18 @@ import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payme
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { dbError } from '@/lib/errors/db-error'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
+import {
+  invoicePartiesVerdict,
+  simplifiedInvoiceWarning,
+  type InvoicePartiesCustomer,
+  type InvoicePartiesSeller,
+  type InvoicePartiesVerdict,
+} from '@/lib/invoices/invoice-parties'
 import { paidAtIssueBlockReason, type PaidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { formatAmount } from '@/lib/utils'
-import type { CreateJournalEntryLineInput, Invoice, InvoiceItem, VatTreatment } from '@/types'
+import type { CreateJournalEntryLineInput, DeductionType, Invoice, InvoiceItem, VatTreatment } from '@/types'
 
 const log = createLogger('mcp-invoice-stage-preview')
 
@@ -350,6 +361,61 @@ export async function buildIssuePreview(
     expected_invoice_number_note:
       'Expected, not reserved: the number is assigned at approval and moves on if another invoice is issued first.',
   }
+}
+
+/**
+ * The seller's and the buyer's name and address as the approval's issuable
+ * will read them (crm#2080), with the lines: their deductions say whether a
+ * sale to a private person is construction work, their rates whether a
+ * domestic sale is exempt. A failed read claims nothing: the approval
+ * decides.
+ */
+export async function stagedInvoiceParties(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: StagedInvoiceRow,
+): Promise<InvoicePartiesVerdict> {
+  if ((invoice.status ?? 'draft') !== 'draft') return 'ok'
+  const { data: seller, error } = await supabase
+    .from('company_settings')
+    .select('company_name, org_number, address_line1, address_line2, postal_code, city, country, vat_registered, vat_number')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error || !seller) return 'ok'
+  const customer = invoice.customer as InvoicePartiesCustomer | null | undefined
+  const { data: rows, error: itemsError } = await supabase
+    .from('invoice_items')
+    .select('deduction_type, vat_rate, line_type')
+    .eq('invoice_id', invoice.id)
+  if (itemsError) return 'ok'
+  const items = (rows ?? []) as Array<{ deduction_type: DeductionType | null; vat_rate: number | null; line_type: string | null }>
+  return invoicePartiesVerdict(
+    {
+      credited_invoice_id: invoice.credited_invoice_id ?? null,
+      document_type: (invoice.document_type ?? 'invoice') as Invoice['document_type'],
+      total: invoice.total,
+      total_sek: invoice.total_sek ?? null,
+      currency: (invoice.currency ?? 'SEK') as Invoice['currency'],
+      exchange_rate: invoice.exchange_rate ?? null,
+      vat_treatment: invoice.vat_treatment,
+      items,
+    },
+    customer,
+    seller as InvoicePartiesSeller,
+  )
+}
+
+/**
+ * The staged note for a förenklad faktura without the seller's or the
+ * buyer's name or address, in the agent's language, or null.
+ */
+export function simplifiedInvoiceNote(verdict: InvoicePartiesVerdict): string | null {
+  const warning = simplifiedInvoiceWarning(verdict)
+  if (!warning) return null
+  const fix = verdict === 'buyer_missing_simplified'
+    ? 'Before approval, gnubok_update_customer adds it.'
+    : 'The user fills them in under Inställningar > Företagsuppgifter; you cannot.'
+  return `${warning.code}: ${warning.message_en} ${fix}`
 }
 
 /** " (förväntat nr F-103)" for a title, or "" when the number is unknown or already set. */

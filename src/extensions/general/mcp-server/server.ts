@@ -169,6 +169,8 @@ import {
 import { isUuid } from '@/lib/invariants/uuid'
 import {
   buildIssuePreview,
+  simplifiedInvoiceNote,
+  stagedInvoiceParties,
   buildMarkPaidPreview,
   buildPaidAtIssuePreview,
   describeUnnumberedInvoice,
@@ -12663,6 +12665,13 @@ export const tools: McpTool[] = [
       const customer = invoice.customer as Customer
       if (!customer.email) throw new Error('Customer has no email address. Update customer details first.')
 
+      // A missing seller or buyer name or address (crm#2080): refused now by
+      // the verdict the approval's issuable gives.
+      const parties = await stagedInvoiceParties(supabase, companyId, invoice)
+      if (parties === 'seller_missing') throw registryError('INVOICE_SEND_SELLER_ADDRESS_MISSING')
+      if (parties === 'buyer_missing') throw registryError('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+      const partiesNote = simplifiedInvoiceNote(parties)
+
       // A draft has no number until approval: name it by customer and amount
       // instead of printing "null", and say what approval will number and post.
       const issue = await buildIssuePreview(supabase, companyId, invoice)
@@ -12707,6 +12716,7 @@ export const tools: McpTool[] = [
           ...issue,
         },
         actor,
+        ...(partiesNote ? { complianceNote: partiesNote } : {}),
         // crm#1202: a quote is an offer, not a claim. Its next step is the
         // customer's answer, never a payment.
         next: invoice.document_type === 'quote'
@@ -13074,6 +13084,14 @@ export const tools: McpTool[] = [
         )
       }
 
+      const parties = await stagedInvoiceParties(supabase, companyId, invoice)
+      if (parties === 'seller_missing') throw registryError('INVOICE_SEND_SELLER_ADDRESS_MISSING')
+      if (parties === 'buyer_missing') throw registryError('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+      // A förenklad faktura without the seller's or the buyer's name or
+      // address (crm#2080).
+      const simplifiedNote = simplifiedInvoiceNote(parties)
+      const partiesNote = simplifiedNote ? { complianceNote: simplifiedNote } : {}
+
       // A draft has no number until approval: name it by customer and amount
       // instead of printing "null", and say what approval will number and post.
       const issue = await buildIssuePreview(supabase, companyId, invoice)
@@ -13105,6 +13123,7 @@ export const tools: McpTool[] = [
           actor,
           next: { description: paid.next_description, tool: 'gnubok_get_ar_ledger' },
           ...(invoice.invoice_date ? { dateForPeriodCheck: invoice.invoice_date as string } : {}),
+          ...partiesNote,
         })
       }
 
@@ -13128,6 +13147,7 @@ export const tools: McpTool[] = [
           tool: 'gnubok_mark_invoice_as_paid',
           args: { invoice_id: invoiceId },
         },
+        ...partiesNote,
       })
     },
   },

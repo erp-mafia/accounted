@@ -7156,6 +7156,8 @@
     "total_incl_vat_label": "Total incl. VAT",
     "review_customer_missing_title": "Customer details could not be loaded",
     "review_customer_missing_description": "Reload the page and try again. Contact support if the problem persists.",
+    "review_company_missing_title": "Company details could not be loaded",
+    "review_company_missing_description": "Reload the page and try again. Contact support if the problem persists.",
     "payee_account_label": "Pay to",
     "payee_account_default": "Default: {account}",
     "payee_account_default_none": "Company default account"
@@ -8368,6 +8370,15 @@
     "unsupported_type": "{name} is a file type that cannot be uploaded. Allowed: PDF, images, Word, Excel, PowerPoint, OpenDocument, RTF and CSV.",
     "file_too_large": "{name} is too large. At most {limit} per file: compress or split the file and try again.",
     "open_blocked": "The document could not be opened. Allow pop-ups for this site and try again."
+  },
+  "invoice_parties": {
+    "seller_missing": "The company name or address is missing and must be on the invoice.",
+    "seller_simplified": "The company name or address is missing, so the invoice becomes a simplified invoice without the seller's address. Fill in the company details to send a full invoice.",
+    "seller_fix": "Fill in company details",
+    "seller_ask_admin": "Ask an administrator to fill them in under Company details.",
+    "buyer_missing": "The customer's name or address is missing. They must be on the invoice when it is over 4,000 kr including VAT or when the buyer in another EU country accounts for the VAT.",
+    "buyer_simplified": "The customer's name or address is missing, so the invoice becomes a simplified invoice without the buyer's details. Add them to the customer to send a full invoice.",
+    "open_customer": "Open the customer"
   },
   "invoice_send_dialog": {
     "description_due": "due {date}",

@@ -21,6 +21,12 @@ export type EditorStatusLine<TStep> =
    * be on the faktura (ML 17 kap. 24 §), so the send refuses it.
    */
   | { kind: 'seller_vat_missing' }
+  /**
+   * The seller's or the buyer's name or address is missing where the faktura
+   * must state it (ML 17 kap. 24 §, lib/invoices/invoice-parties.ts), so the
+   * send refuses it.
+   */
+  | { kind: 'parties_missing'; verdict: 'seller_missing' | 'buyer_missing'; customerId: string | null }
   /** A faktura whose payment details print nothing the customer can pay to. */
   | { kind: 'payee_missing' }
   /** The last preview request failed; the previous render stays on screen. */
@@ -49,6 +55,8 @@ export interface StatusLineInput<TStep extends { kind: string }> {
    * notes, quotes, proformas and följesedlar never need it.
    */
   sellerVatMissing?: boolean
+  /** invoicePartiesVerdict refuses the send: who is missing, and the customer to add an address to. */
+  partiesMissing?: { verdict: 'seller_missing' | 'buyer_missing'; customerId: string | null } | null
 }
 
 // A note this long fills a third of a page or more on its own: the likeliest
@@ -82,6 +90,7 @@ export function resolveEditorStatusLine<TStep extends { kind: string }>(
   if (input.nextStep.kind !== 'ready') return { kind: 'step', step: input.nextStep }
   if (input.dateLock) return { kind: 'date_locked', lock: input.dateLock }
   if (input.sellerVatMissing) return { kind: 'seller_vat_missing' }
+  if (input.partiesMissing) return { kind: 'parties_missing', ...input.partiesMissing }
   // Only a faktura carries a payment area; a quote, proforma or följesedel
   // without bank details is complete.
   if (input.documentType === 'invoice' && input.missing.includes('payee')) return { kind: 'payee_missing' }

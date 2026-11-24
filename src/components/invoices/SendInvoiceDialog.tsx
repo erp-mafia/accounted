@@ -43,6 +43,8 @@ import { getDeductionShareBookedByPayout } from '@/lib/invoices/rot-rut-payout-r
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
+import { InvoicePartiesNotice } from '@/components/invoices/InvoicePartiesNotice'
+import { invoicePartiesVerdict } from '@/lib/invoices/invoice-parties'
 import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { ChevronDownIcon } from '@/components/icons'
@@ -225,6 +227,14 @@ export default function SendInvoiceDialog({
   )
   const needsSwedishVatAcknowledgement = requiresSwedishVatAcknowledgement(vatWarnings, invoiceLineVatRates)
   const [swedishVatAcknowledged, setSwedishVatAcknowledged] = useState(false)
+  // The seller's and the buyer's name and address (crm#2080): the answer the
+  // send's issuable gives, so a refusal is said before the click and a
+  // förenklad faktura without one goes out with a note.
+  const partiesVerdict =
+    invoice.status === 'draft' && companySettings
+      ? invoicePartiesVerdict(invoice, invoice.customer, companySettings)
+      : 'ok'
+  const partiesRefused = partiesVerdict === 'seller_missing' || partiesVerdict === 'buyer_missing'
 
   useEffect(() => {
     if (!open) {
@@ -855,6 +865,12 @@ export default function SendInvoiceDialog({
               <p className="text-[13px] text-muted-foreground">{explainText}</p>
             )}
 
+            <InvoicePartiesNotice
+              verdict={partiesVerdict}
+              customerId={invoice.customer?.id}
+              canEditCompany={isCompanyAdmin}
+            />
+
             {vatCustomer && vatWarnings.length > 0 && (
               <div className="space-y-3">
                 <VatTreatmentNotice
@@ -970,6 +986,7 @@ export default function SendInvoiceDialog({
               (editable && (!isBalanced || hasOrphanAmounts)) ||
               (mode === 'email' && (isSandbox || !canEmail || !!recipientError || attachmentsBusy)) ||
               !!foreignPayee ||
+              partiesRefused ||
               (needsSwedishVatAcknowledgement && !swedishVatAcknowledged)
             }
             title={

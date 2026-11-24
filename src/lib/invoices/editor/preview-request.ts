@@ -61,6 +61,30 @@ export function buildEditorPreviewRequest<
   }
 }
 
+/**
+ * What a preview's exchange rate is for: the currency and the rate date (the
+ * delivery date, else the invoice date, as the write path picks the rate).
+ * Null for a request without a currency.
+ */
+export function previewRateKey(
+  request: { currency?: string | null; invoice_date?: string | null; delivery_date?: string | null } | null,
+): string | null {
+  if (!request?.currency) return null
+  return `${request.currency}|${request.delivery_date || request.invoice_date || ''}`
+}
+
+/** The same key read back from a request body as it was sent (JSON); null when unreadable. */
+export function previewRateKeyOfBody(body: string | null): string | null {
+  if (!body) return null
+  try {
+    return previewRateKey(JSON.parse(body))
+  } catch {
+    // Safe to ignore: the body is the editor's own JSON, and an unreadable
+    // one only means its rate is not used (the total counts as unknown).
+    return null
+  }
+}
+
 /** What the preview-pdf response headers say about the render. */
 export interface PdfPreviewMeta {
   pageCount: number | null

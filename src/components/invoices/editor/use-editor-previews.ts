@@ -27,6 +27,11 @@ export interface PdfPreviewState extends PdfPreviewMeta {
   loading: boolean
   /** Why the latest request failed; the previous render stays. */
   error: string | null
+  /**
+   * The request body the latest good render came from: its exchange rate
+   * belongs to that body's currency and dates, not to edits made since.
+   */
+  renderedBody: string | null
 }
 
 const EMPTY_META: PdfPreviewMeta = { pageCount: null, qr: null, missing: [], exchangeRate: null, exchangeRateDate: null }
@@ -38,9 +43,10 @@ const EMPTY_META: PdfPreviewMeta = { pageCount: null, qr: null, missing: [], exc
  */
 export function useInvoicePdfPreview(body: string | null, refreshKey = 0): PdfPreviewState {
   const locale = useLocale() as ErrorLocale
-  const [result, setResult] = useState<{ url: string | null; blob: Blob | null } & PdfPreviewMeta>({
+  const [result, setResult] = useState<{ url: string | null; blob: Blob | null; renderedBody: string | null } & PdfPreviewMeta>({
     url: null,
     blob: null,
+    renderedBody: null,
     ...EMPTY_META,
   })
   const [loading, setLoading] = useState(false)
@@ -79,7 +85,7 @@ export function useInvoicePdfPreview(body: string | null, refreshKey = 0): PdfPr
         const url = URL.createObjectURL(blob)
         const previous = currentUrlRef.current
         currentUrlRef.current = url
-        setResult({ url, blob, ...meta })
+        setResult({ url, blob, renderedBody: body, ...meta })
         setError(null)
         setLoading(false)
         // The <object> swaps to the new URL on this render; the old one may

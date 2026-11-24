@@ -32,7 +32,7 @@ const DRAFT = {
   vat_amount: 2500,
   currency: 'SEK',
   vat_treatment: 'standard_25',
-  customer: { name: 'Testkund AB', email: 'ekonomi@example.com' },
+  customer: { name: 'Testkund AB', email: 'ekonomi@example.com', address_line1: 'Storgatan 1', postal_code: '111 22', city: 'Stockholm', country: 'SE' },
 }
 
 function setup(documents: unknown[]) {
@@ -42,7 +42,16 @@ function setup(documents: unknown[]) {
     invoice_attachments: { data: [] },
     document_attachments: { data: documents },
     company_settings: {
-      data: { entity_type: 'enskild_firma', accounting_method: 'accrual', bookkeeping_locked_through: null },
+      data: {
+        entity_type: 'enskild_firma',
+        accounting_method: 'accrual',
+        bookkeeping_locked_through: null,
+        // A faktura names its seller (ML 17 kap 24 § p.5, crm#2080).
+        company_name: 'Test AB',
+        address_line1: 'Testgatan 1',
+        postal_code: '111 22',
+        city: 'Stockholm',
+      },
     },
     fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null } },
     pending_operations: { data: { id: 'op-1' } },

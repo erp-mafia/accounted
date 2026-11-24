@@ -201,6 +201,9 @@ const DRAFT_INVOICE = {
     id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
     name: 'Acme AB',
     email: 'billing@acme.test',
+    address_line1: 'Storgatan 1',
+    postal_code: '111 22',
+    city: 'Stockholm',
     country: 'Sweden',
   },
   items: [{ id: 'iiiiiiii-iiii-4iii-8iii-iiiiiiiiiiii', sort_order: 0, description: 'x', quantity: 1, unit: 'st', unit_price: 10000, line_total: 10000, vat_rate: 25, vat_amount: 2500 }],
@@ -209,6 +212,9 @@ const DRAFT_INVOICE = {
 const COMPANY_SETTINGS = {
   company_id: COMPANY_ID,
   company_name: 'Test AB',
+  address_line1: 'Testgatan 1',
+  postal_code: '111 22',
+  city: 'Stockholm',
   email: 'support@test-ab.example',
   invoice_email_cc_addresses: ['fixed-copy@test-ab.example'],
   invoice_email_bcc_addresses: ['fixed-archive@test-ab.example'],
@@ -352,6 +358,55 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.error.code).toBe('INVOICE_SEND_VAT_NUMBER_MISSING')
     expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  // crm#2080: ML 17 kap 24 § p.6, the buyer's name and address.
+  it('rejects a buyer without an address over 4 000 kr before a number is allocated', async () => {
+    const nameOnly = { ...DRAFT_INVOICE.customer, address_line1: null, postal_code: null, city: null }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, customer: nameOnly }, error: null },
+        company_settings: { data: COMPANY_SETTINGS, error: null },
+      }).supabase,
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('sends a förenklad faktura without the buyer address, with a warning', async () => {
+    const nameOnly = { ...DRAFT_INVOICE.customer, address_line1: null, postal_code: null, city: null }
+    const small = { ...DRAFT_INVOICE, subtotal: 1000, vat_amount: 250, total: 1250, customer: nameOnly }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: small, error: null },
+          { data: { invoice_number: '2026-0042' }, error: null },
+        ],
+        company_settings: { data: COMPANY_SETTINGS, error: null },
+      }).supabase,
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('sent')
+    expect(body.data.warnings).toEqual([expect.objectContaining({ code: 'BUYER_ADDRESS_MISSING' })])
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
   })
 
   it('returns VALIDATION_ERROR for malformed JSON', async () => {
