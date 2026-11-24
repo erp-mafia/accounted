@@ -24,11 +24,12 @@
  *   procentregeln            : the earning year's day value (rate x the
  *                              intjänandeår's semesterlönegrundande lön /
  *                              earned days, 16 b §, procentregeln-liability.ts;
- *                              on the calendar basis, where the employee was
- *                              not employed the whole previous year, the
- *                              running year's semesterlön so far over the days
- *                              it earned), and only where Accounted lacks the
- *                              pay the estimate below
+ *                              on the calendar basis, where the payout has no
+ *                              day value from the previous year (not employed
+ *                              all of it, or its payslips are not in
+ *                              Accounted), the running year's semesterlön so
+ *                              far over the days it earned), and only where
+ *                              Accounted lacks the pay the estimate below
  *   procentregeln estimate   : monthly x 12 x rate / days per year, or
  *                              hourly x hours_per_week x 52 x rate / days per
  *                              year (a full year's day; a mid-year hire's days

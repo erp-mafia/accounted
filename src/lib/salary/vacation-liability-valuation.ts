@@ -27,8 +27,9 @@
  * running year began). Under procentregeln: the days owed at the earning
  * year's day value and, on the statutory basis, the running intjänandeår's
  * semesterlön so far; on the calendar basis an employee the payout has no
- * day value for (not employed the whole previous year) has the running
- * year's days valued from its semesterlön so far (procentregeln-liability.ts,
+ * day value for (not employed the whole previous year, or its payslips are
+ * not in Accounted) has the running year's days valued from its semesterlön
+ * so far (procentregeln-liability.ts,
  * 16 b §); dayValueSek's estimate from today's pay only where Accounted lacks
  * the pay.
  * Avgifter: each employee's age-tier rate of the year after the date.

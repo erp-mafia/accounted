@@ -185,9 +185,10 @@ export interface ProcentregelnLiabilitySek {
  * semesterlön. Under sammanfallande semesterår (calendar) the payout prices
  * the running year's days at the previous year's day value, so the liability
  * does too; where the payout has none (the employee was not employed the
- * whole previous year) the running year's own days are worth its semesterlön
- * so far over the days it has earned (16 b §, 7 §). Where Accounted lacks
- * the pay, the estimate from today's pay (dayValueSek) stands in. Pure.
+ * whole previous year, or Accounted lacks its payslips) the running year's
+ * own days are worth its semesterlön so far over the days it has earned
+ * (16 b §, 7 §). Where Accounted lacks the running year's pay too, the
+ * estimate from today's pay (dayValueSek) stands in. Pure.
  */
 export function procentregelnLiabilitySek(
   days: VacationLiabilityDays,
