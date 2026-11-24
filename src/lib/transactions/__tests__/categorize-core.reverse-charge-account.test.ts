@@ -313,3 +313,210 @@ describe('categorize: reverse charge on a cost account that reports a box itself
     expect((await approve('7610', 'eu_services')).posted).toEqual(['7610', '2645', '2614', '4535', '4598'])
   })
 })
+
+/**
+ * A template books its own reverse-charge box: the basis pair it was built
+ * with, or the box its cost account reports itself. A caller that names
+ * another box beside it (reverse_charge_kind at the v1 doors) would get the
+ * template's box declared while the preview echoes the named one.
+ */
+describe('categorize: a box named beside a template', () => {
+  type Booked = { debit: string; vat: string[]; echo: ReverseChargeKind | undefined }
+
+  /** A dry run at the v1 door: the template, reverse charge, and the box named. */
+  async function viaTemplate(
+    by: { template_id: string } | { counterparty_template_id: string },
+    kind: ReverseChargeKind | undefined,
+    {
+      dryRun = true,
+      momskoder = {},
+      learned = {},
+      amount = -1000,
+    }: {
+      dryRun?: boolean
+      momskoder?: Record<string, ChartVatCode>
+      /** Fields of the learned template over the single pair on 6540. */
+      learned?: Partial<Parameters<typeof makeCategorizationTemplate>[0]>
+      /** The row's amount: money in books a learned purchase as its refund. */
+      amount?: number
+    } = {},
+  ) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...txRow, amount, amount_sek: amount } })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } })
+    enqueue({ data: [] }) // the seller-VAT check: no inbox item matched to the row
+    if ('counterparty_template_id' in by) {
+      // A learned single pair with reverse charge on an ordinary cost account.
+      enqueue({
+        data: makeCategorizationTemplate({
+          id: by.counterparty_template_id,
+          counterparty_name: 'Foreign consultant',
+          debit_account: '6540',
+          credit_account: '1930',
+          vat_treatment: 'reverse_charge',
+          vat_account: '2645',
+          category: 'expense_other',
+          ...learned,
+        }),
+      })
+    }
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    mockCreateJE.mockClear()
+    return categorizeTransaction(supabase as never, 'user-1', 'company-1', TX_ID, {
+      is_business: true,
+      ...by,
+      vat_treatment: 'reverse_charge',
+      ...(kind ? { reverse_charge_kind: kind } : {}),
+    }, {
+      dryRun,
+      onBooked: 'refuse',
+      invoiceMatchIntercept: false,
+      reverseChargeBoxParam: 'reverse_charge_kind',
+      loadChart: async () => new Map(Object.entries(momskoder)),
+    })
+  }
+
+  function booked(outcome: Awaited<ReturnType<typeof viaTemplate>>): Booked | null {
+    if (!outcome.ok || !outcome.dryRun) return null
+    const { mappingResult, reverse_charge_kind } = outcome.preview
+    return { debit: mappingResult.debit_account, vat: mappingResult.vat_lines.map((l) => l.account_number), echo: reverse_charge_kind }
+  }
+
+  const learnedId = { counterparty_template_id: '00000000-0000-4000-8000-0000000000aa' }
+
+  /** A learned line pattern: a cost line on each account, then its own basis pair. */
+  function pattern(costAccounts: string[], basis: string) {
+    return {
+      vat_treatment: null,
+      vat_account: null,
+      line_pattern: [
+        ...costAccounts.map((account) => ({ account, type: 'business' as const, side: 'debit' as const, ratio: 1 / costAccounts.length })),
+        { account: basis, type: 'business' as const, side: 'debit' as const, ratio: 1 },
+        { account: '4598', type: 'business' as const, side: 'credit' as const, ratio: 1 },
+      ],
+    }
+  }
+
+  it('refuses a box the catalog template does not book, whether its account or its basis pair declares the box', async () => {
+    // goods_purchase_eu books on 4515, which reports ruta 20 itself.
+    expect(await viaTemplate({ template_id: 'goods_purchase_eu' }, 'non_eu_services')).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'reverse_charge_kind', template_id: 'goods_purchase_eu', template_boxes: ['ruta20'], requested_box: 'ruta22' },
+    })
+    // it_saas_non_eu books its basis pair in ruta 22, it_saas_eu in ruta 21.
+    expect(await viaTemplate({ template_id: 'it_saas_non_eu' }, 'eu_services')).toMatchObject({
+      ok: false,
+      details: { template_boxes: ['ruta22'], requested_box: 'ruta21' },
+    })
+    expect(await viaTemplate({ template_id: 'it_saas_eu' }, 'non_eu_services')).toMatchObject({
+      ok: false,
+      details: { template_boxes: ['ruta21'], requested_box: 'ruta22' },
+    })
+  })
+
+  it('says which box the template books and what to send instead', async () => {
+    const refused = await viaTemplate({ template_id: 'goods_purchase_eu' }, 'non_eu_services')
+    const message = (refused as { message?: { sv: string; en?: string } }).message
+    expect(message?.sv).toBe(
+      'Mallen bokför köpet i ruta 20, men reverse_charge_kind anger ruta 22. Stämmer mallen, ange ruta 20 eller ingen ruta. ' +
+        'Annars bokför transaktionen med en kategori och den angivna rutan.',
+    )
+    expect(message?.en).toBe(
+      'The template books the purchase in box 20, but reverse_charge_kind names box 22. If the template is right, name box 20 or no box. ' +
+        'Otherwise book the transaction by category with the box named.',
+    )
+  })
+
+  it('refuses a box a learned template does not book, and the booking posts nothing', async () => {
+    const tmpl = learnedId
+    expect(await viaTemplate(tmpl, 'non_eu_services')).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'reverse_charge_kind', ...tmpl, template_boxes: ['ruta21'], requested_box: 'ruta22' },
+    })
+    expect(await viaTemplate(tmpl, 'non_eu_services', { dryRun: false })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+    expect(mockCreateJE).not.toHaveBeenCalled()
+    // A learned line pattern replays its own basis pair: ruta 22 on 4531.
+    const onRuta22 = pattern(['6540'], '4531')
+    expect(await viaTemplate(tmpl, 'eu_services', { learned: onRuta22 })).toMatchObject({
+      ok: false,
+      details: { template_boxes: ['ruta22'], requested_box: 'ruta21' },
+    })
+    expect(booked(await viaTemplate(tmpl, 'non_eu_services', { learned: onRuta22 }))).toMatchObject({ echo: 'non_eu_services' })
+  })
+
+  it('reads the box of a learned purchase booked as its refund, on the credit side', async () => {
+    expect(await viaTemplate(learnedId, 'non_eu_services', { amount: 1000 })).toMatchObject({
+      ok: false,
+      details: { template_boxes: ['ruta21'], requested_box: 'ruta22' },
+    })
+    expect(booked(await viaTemplate(learnedId, 'eu_services', { amount: 1000 }))).toMatchObject({ echo: 'eu_services' })
+  })
+
+  it('offers no box for a template in ruta 24, which no door can name', async () => {
+    const refused = await viaTemplate(learnedId, 'eu_services', { learned: pattern(['6540'], '4425') })
+    expect(refused).toMatchObject({ ok: false, details: { template_boxes: ['ruta24'], requested_box: 'ruta21' } })
+    expect((refused as { message?: { sv: string } }).message?.sv).toMatch(/Stämmer mallen, ange ingen ruta\./)
+  })
+
+  it('refuses a box for part of a purchase the template splits over two boxes', async () => {
+    // 5420 reports ruta 22 itself; 6540 takes the pattern's ruta 21 pair.
+    const momskoder = { '5420': { default_vat_treatment: 'reverse_charge_non_eu_services', default_vat_rate: 0.25 } }
+    const refused = await viaTemplate(learnedId, 'eu_services', { learned: pattern(['6540', '5420'], '4535'), momskoder })
+    expect(refused).toMatchObject({ ok: false, details: { template_boxes: ['ruta21', 'ruta22'], requested_box: 'ruta21' } })
+    expect((refused as { message?: { sv: string } }).message?.sv).toMatch(/^Mallen bokför köpet i rutorna 21 och 22, .* ange ingen ruta\./)
+  })
+
+  it('reads a momskod on the basis account itself, as the momsdeklaration does', async () => {
+    // The company reports 4535 in ruta 22: it_saas_eu's pair then lands there.
+    const momskoder = { '4535': { default_vat_treatment: 'reverse_charge_non_eu_services', default_vat_rate: 0.25 } }
+    expect(await viaTemplate({ template_id: 'it_saas_eu' }, 'eu_services', { momskoder })).toMatchObject({
+      ok: false,
+      details: { template_boxes: ['ruta22'], requested_box: 'ruta21' },
+    })
+  })
+
+  it('refuses a box beside a template that books no reverse-charge purchase', async () => {
+    // A reverse-charge sale declares no purchase box.
+    const refused = await viaTemplate({ template_id: 'revenue_eu_services' }, 'eu_services', { amount: 1000 })
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'reverse_charge_kind', template_id: 'revenue_eu_services', template_boxes: [], requested_box: 'ruta21' },
+    })
+    expect((refused as { message?: { sv: string } }).message?.sv).toMatch(/^Mallen bokför inget köp med omvänd betalningsskyldighet/)
+    expect(await viaTemplate({ template_id: 'revenue_eu_services' }, undefined, { amount: 1000 })).toMatchObject({ ok: true })
+  })
+
+  it('books the template\'s own box when none is named, without reading one off the underlag', async () => {
+    expect(booked(await viaTemplate({ template_id: 'it_saas_non_eu' }, undefined))).toEqual({
+      debit: '5420', vat: ['2645', '2614', '4531', '4598'], echo: undefined,
+    })
+  })
+
+  it('reads the box an account reports through its momskod, as the booking settles it', async () => {
+    // The company reports 5420 in ruta 22 itself: it_saas_eu then books ruta 22, not its pair's ruta 21.
+    const momskoder = { '5420': { default_vat_treatment: 'reverse_charge_non_eu_services', default_vat_rate: 0.25 } }
+    expect(await viaTemplate({ template_id: 'it_saas_eu' }, 'eu_services', { momskoder })).toMatchObject({
+      ok: false,
+      details: { template_boxes: ['ruta22'], requested_box: 'ruta21' },
+    })
+    expect(booked(await viaTemplate({ template_id: 'it_saas_eu' }, 'non_eu_services', { momskoder }))).toEqual({
+      debit: '5420', vat: ['2645', '2614'], echo: 'non_eu_services',
+    })
+  })
+
+  it('books the box it names when the template books it, and the preview echoes the box booked', async () => {
+    expect(booked(await viaTemplate({ template_id: 'goods_purchase_eu' }, 'eu_goods'))).toEqual({
+      debit: '4515', vat: ['2645', '2614'], echo: 'eu_goods',
+    })
+    expect(booked(await viaTemplate({ template_id: 'it_saas_non_eu' }, 'non_eu_services'))).toEqual({
+      debit: '5420', vat: ['2645', '2614', '4531', '4598'], echo: 'non_eu_services',
+    })
+    expect(booked(await viaTemplate(learnedId, 'eu_services'))).toEqual({
+      debit: '6540', vat: ['2645', '2614', '4535', '4598'], echo: 'eu_services',
+    })
+  })
+})

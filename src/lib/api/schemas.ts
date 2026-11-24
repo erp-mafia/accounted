@@ -2778,7 +2778,8 @@ export const CategorizeTransactionSchema = z
     // eu_goods ruta 20, eu_services ruta 21, non_eu_services ruta 22. Only
     // with vat_treatment 'reverse_charge'. Omitted, the v1 door reads the box
     // off the row's underlag (or refuses, #94); the dashboard books an EU
-    // service, the box its review shows.
+    // service, the box its review shows. Beside a template, a v1 door refuses
+    // a box the template does not book (templateBoxRefusal).
     reverse_charge_kind: z.enum(['eu_goods', 'eu_services', 'non_eu_services']).optional(),
     // The underlag's actual moms, in the transaction's currency. Replaces the
     // rate-based VAT line of a category or template booking (see
