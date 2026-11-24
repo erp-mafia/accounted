@@ -48,9 +48,9 @@ const h = vi.hoisted(() => {
       return []
     }),
     assertStornoTarget: vi.fn(
-      async (_supabase: unknown, _companyId: unknown, original: { entry_date: string }, date?: string) => {
+      async (_supabase: unknown, _companyId: unknown, original: { entry_date: string; fiscal_period_id: string }, date?: string) => {
         trace.push('assertStornoTarget')
-        return date ?? original.entry_date
+        return { date: date ?? original.entry_date, fiscal_period_id: original.fiscal_period_id, moved: false }
       },
     ),
   }

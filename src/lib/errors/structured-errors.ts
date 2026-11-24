@@ -512,8 +512,9 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   ENTRY_ALREADY_REVERSED: {
     httpStatus: 409,
     message_sv:
-      'Verifikationen har redan stornats av en annan användare. Ladda om sidan och försök igen.',
-    message_en: 'Entry was already reversed by a concurrent operation.',
+      'Verifikationen har redan stornats. Ladda om sidan och försök igen.',
+    message_en:
+      'Entry was already reversed: by a concurrent operation, or by a storno posted in a later open period (a posted storno links to it through reverses_id).',
   },
   MIGRATED_DEDUCTION_HELD_BY_REQUEST: {
     httpStatus: 409,
@@ -835,12 +836,13 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   },
   JOURNAL_RATTELSE_PERIOD_LOCKED: {
     httpStatus: 409,
-    message_sv: 'Perioden är stängd eller låst: använd rättelseverifikat (storno).',
+    message_sv:
+      'Perioden är stängd eller låst: använd rättelseverifikat (storno). Stornot och det rättade verifikatet bokförs i första öppna period.',
     message_en:
-      'Inline rättelse is only allowed in an open, unlocked period after the company lock date. Past a lock or close, storno is the only lawful correction (BFL 5 kap 5 §).',
+      'Inline rättelse is only allowed in an open, unlocked period after the company lock date. Past a lock or close, storno is the only lawful correction (BFL 5 kap 5 §): the storno and the corrected verifikat are dated in the first open, unlocked period and name the original.',
     remediation: {
       description:
-        'Correct the verifikat with storno (gnubok_correct_entry, POST /journal-entries/{id}/correct). Unlock the period only if the user explicitly asks for it.',
+        'Correct the verifikat with storno (gnubok_correct_entry, POST /journal-entries/{id}/correct): it books the storno and the corrected verifikat in the first open, unlocked period, naming the original, and leaves the original as booked. Unlock the period only if the user explicitly asks for it.',
       tool: 'gnubok_correct_entry',
     },
     thrown_message_sv: true,
@@ -908,13 +910,13 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   TARGET_PERIOD_CLOSED: {
     httpStatus: 409,
     message_sv:
-      'Räkenskapsåret som täcker datumet är stängt med bokslut, så inget kan bokföras eller stornas där. Är årsredovisningen för året inte undertecknad, fastställd eller inskickad kan företagets ägare öppna året igen under Inställningar → Bokföring → Räkenskapsår. Annars bokför du rättelsen som ett nytt verifikat i det öppna räkenskapsåret, med hänvisning till originalverifikatet.',
+      'Räkenskapsåret som täcker datumet är stängt med bokslut, så inget kan bokföras eller stornas där. Är årsredovisningen för året inte undertecknad, fastställd eller inskickad kan företagets ägare öppna året igen under Inställningar → Bokföring → Räkenskapsår. Annars rättar du verifikatet med Rätta rader: stornot och det rättade verifikatet bokförs då i första öppna period, med hänvisning till originalet.',
     message_en:
-      'The fiscal year covering the date is closed with a year-end closing, so nothing can be posted or reversed in it. If the annual report for that year has not been signed, adopted or filed, the company owner can reopen the year under Settings → Bookkeeping → Fiscal years. Otherwise, post the correction as a new voucher in the open fiscal year, referring to the original voucher.',
+      'The fiscal year covering the date is closed with a year-end closing, so nothing can be posted or reversed in it. If the annual report for that year has not been signed, adopted or filed, the company owner can reopen the year under Settings → Bookkeeping → Fiscal years. Otherwise, correct the voucher with Correct lines: the storno and the corrected voucher are then posted in the first open period, referring to the original.',
     remediation: {
       description:
-        'Do not retry and do not unlock: a closed year cannot be unlocked. Ask the user whether the årsredovisning for that year has been signed, adopted or filed. Not signed, adopted or filed: the company owner reopens the year in the app under Inställningar → Bokföring → Räkenskapsår (owner only, typed confirmation; there is no API or MCP door), which reverses the year-end closing by storno; the user then books the correction in that year and runs the year-end again. Signed, adopted or filed: book the correction as a new verifikation dated in the open fiscal year (rättelse av fel, K2 punkt 2.12), naming the original voucher in the description.',
-      tool: 'gnubok_create_voucher',
+        'Do not retry and do not unlock: a closed year cannot be unlocked. Ask the user whether the årsredovisning for that year has been signed, adopted or filed. Not signed, adopted or filed: the company owner reopens the year in the app under Inställningar → Bokföring → Räkenskapsår (owner only, typed confirmation; there is no API or MCP door), which reverses the year-end closing by storno; the user then books the correction in that year and runs the year-end again. Signed, adopted or filed: correct it with gnubok_correct_entry, which books the storno and the corrected verifikat dated in the first open, unlocked period, naming the original (rättelse av fel through the open year, K2 punkt 2.12). A reversal or a date move cannot leave the closed year; an opening balance, year-end or VAT settlement verifikat keeps its date, so book a new verifikation in the open year for it instead.',
+      tool: 'gnubok_correct_entry',
     },
   },
   TARGET_PERIOD_LOCKED: {
@@ -923,7 +925,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en: 'The fiscal period covering the date is locked.',
     remediation: {
       description:
-        'Unlock the period (if status is "locked", not "closed") or use a date inside an open period.',
+        'Unlock the period (if status is "locked", not "closed") or use a date inside an open period. To correct a posted verifikat in it without unlocking, use gnubok_correct_entry: the storno and the corrected verifikat are booked in the first open period.',
       tool: 'gnubok_unlock_period',
     },
   },

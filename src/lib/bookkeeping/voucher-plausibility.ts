@@ -50,6 +50,9 @@ export const VOUCHER_WARNING_CODES = [
   'POSSIBLE_DUPLICATE_VOUCHER',
   'BANK_MOVEMENT_ALREADY_BOOKED',
   'VAT_PERIOD_ALREADY_FILED',
+  // A rättelse moved out of a locked period that changes VAT
+  // (lib/vat/moved-correction-vat.ts).
+  'VAT_OF_MOVED_CORRECTION',
 ] as const
 
 export type VoucherWarningCode = (typeof VOUCHER_WARNING_CODES)[number]

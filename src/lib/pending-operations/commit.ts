@@ -5288,18 +5288,14 @@ async function commitCorrectEntry(
     return { error: 'entry_id and at least two lines are required', status: 400 }
   }
 
-  // Pre-flight: verify the original is posted and its period is not locked.
-  // Falling into correctEntry without this returns a less helpful DB error and
-  // half-creates the storno before rolling back; surfacing the Swedish message
-  // here matches the period_locked UX everywhere else in the app.
-  //
-  // Period lock check is two-layer (matches the DB triggers): per-period
-  // (is_closed / locked_at) AND company-wide (bookkeeping_locked_through).
-  // The staging tool uses resolvePeriodStatusForDate; we reuse it here so the
-  // commit-time gate matches the staging-time signal.
+  // Pre-flight: verify the original is posted. Where the storno and the
+  // corrected verifikat land is correctEntry's own check (assertStornoTarget,
+  // the one the staging tool ran): on the original's date in an open year,
+  // else in the first open, unlocked period after it, refused with a typed
+  // error before anything is written when neither works.
   const { data: original, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(is_closed, locked_at)')
+    .select('id, status, entry_date')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -5313,40 +5309,8 @@ async function commitCorrectEntry(
       status: 409,
     }
   }
-  const period = original.fiscal_periods as { is_closed?: boolean; locked_at?: string | null } | { is_closed?: boolean; locked_at?: string | null }[] | null
-  const periodRow = Array.isArray(period) ? period[0] : period
-  if (periodRow?.is_closed || periodRow?.locked_at) {
-    return {
-      error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
-      status: 409,
-    }
-  }
-  // resolvePeriodStatusForDate also covers the company-wide bookkeeping_locked_through
-  // gate. A DB blip here would otherwise propagate as a 500 with a raw Postgres
-  // message; wrap so the caller sees a clean Swedish 500 instead, consistent with
-  // the staging-side log-and-degrade behaviour in stagePendingOperation.
-  try {
-    const periodStatus = await resolvePeriodStatusForDate(supabase, companyId, original.entry_date)
-    if (periodStatus.status === 'locked' || periodStatus.status === 'closed') {
-      return {
-        error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
-        status: 409,
-      }
-    }
-  } catch (err) {
-    return {
-      error: `Kunde inte verifiera periodstatus: ${err instanceof Error ? err.message : 'okänt fel'}`,
-      status: 500,
-    }
-  }
 
   try {
-    // correctEntry() posts both the storno and the corrected entry into the
-    // SAME fiscal_period_id and entry_date as the original (see
-    // lib/core/bookkeeping/storno-service.ts:99,102,195,198). So a rättelse
-    // made in May 2026 for a December 2025 voucher correctly lands in 2025,
-    // keeping that period's balances consistent. The is_closed pre-flight
-    // above is what blocks corrections to already-locked periods.
     // Posting port (step 2i): ledger.storno and ledger.correction of the
     // verifikat while POSTING_EVENTS is on, this approval as evidence.
     const result = await postingPort.correctJournalEntry({
@@ -5369,9 +5333,17 @@ async function commitCorrectEntry(
           // credit swapped; without it a correction that negates the
           // original is refused here too (crm#1397).
           ...(params.sides_swapped === true ? { sidesSwapped: true } : {}),
+          // A locked or closed original is corrected in the first open
+          // period, as the staging preview said.
+          inFirstOpenPeriodWhenLocked: true,
         },
       },
     })
+    // The original's date took no write (its period was locked, perhaps
+    // after the proposal was staged): the pair landed in the first open
+    // period, and the answer says so instead of implying the original's date.
+    const moved =
+      !!original.entry_date && !!result.reversal.entry_date && result.reversal.entry_date !== original.entry_date
     return {
       data: {
         original_entry_id: entryId,
@@ -5379,6 +5351,13 @@ async function commitCorrectEntry(
         corrected_entry_id: result.corrected.id,
         storno_voucher_number: result.reversal.voucher_number,
         corrected_voucher_number: result.corrected.voucher_number,
+        ...(moved
+          ? {
+              moved_to_first_open_period: true,
+              entry_date: result.reversal.entry_date,
+              note_sv: `Originalets period var låst: stornot och rättelsen bokfördes ${result.reversal.entry_date} i första öppna period, med hänvisning till originalet.`,
+            }
+          : {}),
       },
     }
   } catch (err) {
