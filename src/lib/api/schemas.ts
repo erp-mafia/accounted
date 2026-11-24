@@ -4342,9 +4342,10 @@ export const UpdateSettingsSchema = z.object({
   // Avvikelseperiod (migration 20260918120000): which month's absence and
   // worked days a new run reads. Snapshotted onto each run at creation.
   salary_deviation_period: z.enum(['same_month', 'previous_month']).optional(),
-  // Vacation year basis (payroll gap-closure 3.1): sammanfallande calendar
-  // year (default) or the statutory Apr 1 - Mar 31 split. The settings route
-  // blocks changing this while open vacation-ledger rows exist.
+  // Vacation year basis (payroll gap-closure 3.1): the statutory Apr 1 - Mar
+  // 31 split (a new company's default) or the sammanfallande calendar year.
+  // The settings route blocks changing this while open vacation-ledger rows
+  // exist.
   salary_vacation_year_basis: z.enum(['calendar', 'statutory_apr_mar']).optional(),
 }).refine(
   (data) => (
