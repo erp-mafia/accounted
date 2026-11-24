@@ -897,13 +897,16 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     mcc_codes: [],
     keywords: ['stripe'],
     // Stripe's software, as its own balance rows name it ("Stripe: Billing -
-    // Usage Fee", "Stripe: Automatic Taxes", "Stripe: Tax Api Calculation"):
-    // taxable, so never proposed as this exempt fee. Anchored on "stripe: ",
-    // because a processing fee row carries the payer's name, which may
-    // read "Tax" or "Billing" (extensions/general/stripe/lib/transaction-sync.ts).
+    // Usage Fee", "Stripe: Automatic Taxes", "Stripe: Tax Api Calculation")
+    // or a bank row does ("Stripe Tax calculation fee"): taxable, so never
+    // proposed as this exempt fee. Whole words with the product right after
+    // "Stripe", because a processing fee row carries the payer's name after
+    // "Stripe-betalning", which may read "Tax" or "Billing"
+    // (extensions/general/stripe/lib/transaction-sync.ts).
     excluded_keywords: [
-      'stripe: billing', 'stripe: automatic tax', 'stripe: tax', 'stripe: radar',
-      'stripe: invoicing', 'stripe: sigma', 'stripe: revenue recognition', 'stripe: identity',
+      '=stripe billing', '=stripe automatic tax', '=stripe automatic taxes', '=stripe tax',
+      '=stripe radar', '=stripe invoicing', '=stripe sigma', '=stripe revenue recognition',
+      '=stripe identity',
     ],
     risk_level: 'LOW',
     requires_review: false,
@@ -1175,7 +1178,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     keywords: ['preliminärskatt', 'skatt', 'tax', 'skatteverket', 'skattekonto'],
     // A provider's fee that names a tax (Stripe Tax, a tax API, a transfer
     // service's fee on a tax payment) is a cost, not tax paid.
-    excluded_keywords: ['stripe', '=api', '=calculation', '=fee', '=fees'],
+    excluded_keywords: ['stripe', '=api', '=calculation', '=fee', '=fees', '=charge', '=charges'],
     risk_level: 'NONE',
     requires_review: true,
     impact_score: 7,

@@ -99,6 +99,8 @@ describe('a provider name proposes only the thing the template books', () => {
     'Stripe: Invoicing (2026-10-01 - 2026-10-31): Invoicing Starter',
     'Stripe: Tax Api Calculation (2026-10-01 - 2026-10-31)',
     'Stripe: Identity (2026-10-01 - 2026-10-31): Identity verification',
+    'Stripe Tax calculation fee',
+    'STRIPE BILLING',
   ])('keeps the exempt Stripe fee off its taxable software: "%s"', (description) => {
     expect(ids(description)).not.toContain('payment_fees_eu')
   })
@@ -116,6 +118,7 @@ describe('a provider name proposes only the thing the template books', () => {
     'Stripe Tax calculation fee',
     'Fee-transfer-1234 for Skatteverket tax payment',
     'Avalara Tax Calculation',
+    'Avalara Tax service charge',
   ])('does not propose Betald F-skatt for a provider fee: "%s"', (description) => {
     expect(ids(description)).not.toContain('personnel_preliminary_tax')
   })
