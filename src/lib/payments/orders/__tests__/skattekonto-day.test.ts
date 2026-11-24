@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isSkattekontoDayInPayment, readSkattekontoPaymentTowards, skattekontoPaymentDayFor } from '../skattekonto-day'
+import {
+  isSkattekontoDayInPayment,
+  readSkattekontoPaymentTowards,
+  skattekontoPaymentDayFor,
+  skattekontoPaymentPaysDeclaration,
+} from '../skattekonto-day'
 
 describe('skattekontoPaymentDayFor', () => {
   it('is the banking day before the due date', () => {
@@ -52,5 +57,21 @@ describe('readSkattekontoPaymentTowards', () => {
     enqueue({ data: [order('draft', '2026-12-11', null), order('approved', '2026-12-11', null)] })
 
     expect(await readSkattekontoPaymentTowards(supabase as unknown as SupabaseClient, 'company-1', '2026-12-14', '2026-11-24')).toBeNull()
+  })
+})
+
+describe('skattekontoPaymentPaysDeclaration', () => {
+  it('is true for exactly the declared amount, to the öre', () => {
+    expect(skattekontoPaymentPaysDeclaration(24568, 12000 + 12568)).toBe(true)
+    expect(skattekontoPaymentPaysDeclaration(1234.56, 1234.56)).toBe(true)
+  })
+
+  it('is false for a larger payment: it may be another declaration due the same day', () => {
+    expect(skattekontoPaymentPaysDeclaration(60000, 24568)).toBe(false)
+  })
+
+  it('is false for a smaller payment and for a declaration asking for nothing', () => {
+    expect(skattekontoPaymentPaysDeclaration(24567.99, 24568)).toBe(false)
+    expect(skattekontoPaymentPaysDeclaration(0, 0)).toBe(false)
   })
 })

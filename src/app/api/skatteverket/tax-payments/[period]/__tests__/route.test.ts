@@ -16,6 +16,11 @@ vi.mock('@/lib/auth/require-auth', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
+const resolveDueDateMock = vi.fn()
+vi.mock('@/lib/payments/orders/skattekonto-sources', () => ({
+  resolveSkattekontoDueDate: (...args: unknown[]) => resolveDueDateMock(...args),
+}))
+
 vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
@@ -132,12 +137,107 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
 
       expect(status).toBe(200)
       expect(body.data.payment_due_date).toBe('2026-12-14')
-      expect(body.data.bank_payment).toEqual({ status: 'accepted', amount: 24568, requested_execution_date: '2026-12-11' })
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: true,
+      })
       expect(findCalls('payment_orders', 'eq')).toEqual([
         ['company_id', 'company-1'],
         ['purpose', 'skattekonto'],
       ])
       expect(findCalls('payment_orders', 'in')[0]).toEqual(['requested_execution_date', ['2026-12-11']])
+      // Cancelled, failed and rejected orders pay nothing: never read.
+      expect(findCalls('payment_orders', 'in')[1]).toEqual([
+        'status',
+        ['draft', 'approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'],
+      ])
+    })
+
+    // Everything declared due on Monday 14 December: the quarter's moms and the November AGI.
+    const DUE_DAY = {
+      ok: true,
+      combined: {
+        due_date: '2026-12-14',
+        total: 84568,
+        components: [
+          { source: 'vat_declaration', period: '2026-Q3', amount: 60000 },
+          { source: 'agi', period: '2026-11', amount: 24568 },
+        ],
+        excluded: [],
+      },
+      parts: [],
+    }
+    const accepted = (amount: string) => ({
+      data: [{ id: 'order-1', status: 'accepted', amount, batch_id: 'batch-1', requested_execution_date: '2026-12-11' }],
+    })
+
+    it('asks nothing more of a payment of exactly the declaration', async () => {
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('24568.00'))
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toMatchObject({ pays_declaration: true })
+      expect(resolveDueDateMock).not.toHaveBeenCalled()
+    })
+
+    it('shows a larger payment of the same day without reading it as this declaration\'s', async () => {
+      // The momsdeklaration due the same day, paid on its own: 60 000 kr.
+      resolveDueDateMock.mockResolvedValue(DUE_DAY)
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('60000.00'))
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 60000,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: false,
+      })
+      expect(resolveDueDateMock).toHaveBeenCalledWith(mockSupabase, 'company-1', '2026-12-14', '2026-11-24')
+    })
+
+    it('reads a payment of everything due that day as paying it', async () => {
+      // Betala allt som förfaller: the moms and the AGI as one payment.
+      resolveDueDateMock.mockResolvedValue(DUE_DAY)
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('84568.00'))
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toMatchObject({ amount: 84568, pays_declaration: true })
+    })
+
+    it('does not read the day\'s sum as paying an AGI that is not part of it', async () => {
+      resolveDueDateMock.mockResolvedValue({
+        ...DUE_DAY,
+        combined: { ...DUE_DAY.combined, components: [{ source: 'vat_declaration', period: '2026-Q3', amount: 84568 }] },
+      })
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('84568.00'))
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toMatchObject({ pays_declaration: false })
+    })
+
+    it('still shows the payment when the day cannot be read, and offers the button', async () => {
+      resolveDueDateMock.mockRejectedValue(new Error('vat report failed'))
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('84568.00'))
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data.bank_payment).toMatchObject({ amount: 84568, pays_declaration: false })
     })
 
     it('still finds it on its own day and once the bank has executed it', async () => {
@@ -151,7 +251,12 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
 
       const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
 
-      expect(body.data.bank_payment).toEqual({ status: 'executed', amount: 24568, requested_execution_date: '2026-12-11' })
+      expect(body.data.bank_payment).toEqual({
+        status: 'executed',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: true,
+      })
       expect(findCalls('payment_orders', 'in')[0]).toEqual(['requested_execution_date', ['2026-12-11', '2026-12-14']])
     })
 

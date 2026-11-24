@@ -4,7 +4,8 @@ import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
 import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declaration'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
-import { readSkattekontoPaymentTowards } from '@/lib/payments/orders/skattekonto-day'
+import { readSkattekontoPaymentTowards, skattekontoPaymentPaysDeclaration } from '@/lib/payments/orders/skattekonto-day'
+import { resolveSkattekontoDueDate } from '@/lib/payments/orders/skattekonto-sources'
 
 /**
  * Get tax payment status for an AGI period.
@@ -26,7 +27,10 @@ import { readSkattekontoPaymentTowards } from '@/lib/payments/orders/skattekonto
  * `bank_payment` is the payment to the skattekonto through the bank made
  * towards the period's due date: signed, at the bank or executed on the day
  * it is paid on (readSkattekontoPaymentTowards). The panel shows it, and
- * offers no second payment when it covers the declaration. null when there
+ * offers no second payment when `pays_declaration`: its amount is the
+ * declaration's to the öre, or the sum of everything declared due that day
+ * with it (resolveSkattekontoDueDate). Any other larger amount may be the
+ * momsdeklaration due the same day alone. null when there
  * is none, when the period is marked paid or may not be paid, and when the
  * payments cannot be read: it only informs, so a failed read never takes the
  * panel down.
@@ -84,15 +88,40 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       }
     : null
 
-  let bankPayment: { status: string; amount: number; requested_execution_date: string } | null = null
+  let bankPayment: {
+    status: string
+    amount: number
+    requested_execution_date: string
+    pays_declaration: boolean
+  } | null = null
   if (!payment.tax_paid_at && !periodConflict && paymentDueDate) {
     try {
-      const order = await readSkattekontoPaymentTowards(supabase, companyId, paymentDueDate, todayIsoStockholm())
+      const today = todayIsoStockholm()
+      const order = await readSkattekontoPaymentTowards(supabase, companyId, paymentDueDate, today)
       if (order) {
+        const amount = roundOre(Number(order.amount))
+        const declared = roundOre(Number(payment.total_tax) + Number(payment.total_avgifter))
+        let paysDeclaration = skattekontoPaymentPaysDeclaration(amount, declared)
+        // A larger payment pays it only as the sum of everything declared due
+        // that day with this AGI in it (Betala allt som förfaller, or the AGI
+        // added to the day's open moms payment); any other amount may be
+        // another declaration's alone.
+        if (!paysDeclaration && amount > declared) {
+          try {
+            const day = await resolveSkattekontoDueDate(supabase, companyId, paymentDueDate, today)
+            paysDeclaration =
+              day.ok &&
+              day.combined.components.some((part) => part.source === 'agi' && part.period === period) &&
+              skattekontoPaymentPaysDeclaration(amount, day.combined.total)
+          } catch (error) {
+            log.warn('skattekonto due day read failed', { error })
+          }
+        }
         bankPayment = {
           status: order.status,
-          amount: roundOre(Number(order.amount)),
+          amount,
           requested_execution_date: order.requested_execution_date,
+          pays_declaration: paysDeclaration,
         }
       }
     } catch (error) {

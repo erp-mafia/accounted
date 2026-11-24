@@ -73,9 +73,9 @@ interface TaxPaymentPanelProps {
    * The payment to the skattekonto through the bank made towards this
    * period's due date: signed, at the bank or executed (GET
    * /api/skatteverket/tax-payments/{period}: bank_payment). Set, the panel
-   * shows it, and leaves Betala via banken out when it covers the amount.
+   * shows it, and leaves Betala via banken out when it pays the declaration.
    */
-  bankPayment?: { status: string; amount: number; requested_execution_date: string } | null
+  bankPayment?: { status: string; amount: number; requested_execution_date: string; pays_declaration: boolean } | null
   onChange?: () => void
 }
 
@@ -197,9 +197,10 @@ export function TaxPaymentPanel({
   const senderMissing = (format === 'bg_lb' && senderBankgiro === null) || accountMissing !== null
   // A declaration that may not be paid shows no amount to pay and no way to pay it.
   const payable = !periodConflict
-  // A bank payment towards the due date that covers the amount pays it: no
-  // second one is offered. A smaller one may be another declaration's.
-  const paidByBank = !!bankPayment && bankPayment.amount >= totalAmount
+  // A bank payment towards the due date of exactly the declaration's amount
+  // pays it: no second one is offered. Another amount may be another
+  // declaration's due the same day, so the button stays.
+  const paidByBank = bankPayment?.pays_declaration === true
 
   return (
     <DetailSection

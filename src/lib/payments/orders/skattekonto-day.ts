@@ -9,6 +9,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OperationOutcome } from '@/lib/operations/types'
+import { roundOre } from '@/lib/money'
 import { executionDateFor, previousBankDayIso } from '@/lib/payments/bank-days'
 import type { PaymentOrderRow } from './types'
 
@@ -104,6 +105,19 @@ export async function readSkattekontoPaymentTowards(
   )
   // The planned day first: the payment made before that day passed.
   return paying.find((order) => order.requested_execution_date === planned) ?? paying[0] ?? null
+}
+
+/**
+ * Whether a bank payment to the skattekonto pays a declaration: its amount is
+ * the declaration's, to the öre, as the dialog's possible_duplicate reads a
+ * payment of the same amount (prepare-skattekonto.ts). The orders do not
+ * record which declaration they pay, and a larger one on the same day may be
+ * another declaration's (the momsdeklaration is often due the same 12th as
+ * the AGI), so a larger amount is never read as paying this one.
+ */
+export function skattekontoPaymentPaysDeclaration(paymentAmount: number, declared: number): boolean {
+  const owed = roundOre(declared)
+  return owed > 0 && roundOre(paymentAmount) === owed
 }
 
 export const SKATTEKONTO_DAY_TAKEN = 'SKATTEKONTO_PAYMENT_DAY_TAKEN'
