@@ -316,10 +316,15 @@ describe('/api/settings/peppol', () => {
     expect(ok.status).toBe(200)
     expect((await ok.json()).data.registration.status).toBe('deregistered')
     expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5595386219' })
+    // The company switched receiving off: the choice is kept, so a plan that comes back does not republish.
+    const choice = service.calls.find((c) => c.table === 'peppol_access' && c.method === 'update')
+    expect(choice?.args[0]).toEqual({ receive_enabled: false })
 
+    service.reset()
     service.enqueue({ data: [], error: null })
     const missing = await del()
     expect(missing.status).toBe(404)
+    expect(service.calls.some((c) => c.table === 'peppol_access' && c.method === 'update')).toBe(false)
   })
 
   it('DELETE closes the row when the hosted side does not hold the identifier, and maps other failures by retryability', async () => {

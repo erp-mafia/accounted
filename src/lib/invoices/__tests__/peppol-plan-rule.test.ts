@@ -181,6 +181,18 @@ describe('applyPeppolPlanRule', () => {
     expect(update).not.toHaveProperty('max_sends')
   })
 
+  it('keeps a returning send-only row send-only, whatever the old note says', async () => {
+    paidMock.mockResolvedValue(new Set(['send-only']))
+    const { supabase, calls } = mock(
+      [request('send-only', { receive_enabled: false, request_note: '[vill ta emot e-fakturor]', enabled_at: '2026-09-07T10:00:00.000Z' })],
+      [ab('send-only')],
+    )
+
+    await applyPeppolPlanRule({ service: supabase as unknown as SupabaseClient, now: NOW })
+
+    expect(updates(calls)[0]).toMatchObject({ status: 'enabled', receive_enabled: false })
+  })
+
   it('reports a failed write and goes on with the rest', async () => {
     paidMock.mockResolvedValue(new Set(['a', 'b']))
     const { supabase } = mock([request('a'), request('b')], [ab('a'), ab('b')], (calls) => {

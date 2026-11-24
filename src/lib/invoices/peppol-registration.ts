@@ -611,6 +611,27 @@ export function isPublishedElsewhereRetryDue(rows: RegistrationAttempt[], now: n
   return Number.isFinite(updatedAt) && now - updatedAt >= PEPPOL_PUBLISHED_ELSEWHERE_RETRY_MS
 }
 
+/**
+ * The identifier was withdrawn because access ended (a plan that lapsed,
+ * lib/invoices/peppol-plan-rule.ts), and access has been switched on again
+ * since: the latest attempt is a withdrawal older than the access. A
+ * withdrawal the company made itself while it had access is newer than the
+ * access and also records its choice (receive_enabled false), so it is never
+ * undone here.
+ */
+export function isWithdrawnBeforeAccessReturned(
+  rows: RegistrationAttempt[],
+  accessEnabledAt: string | null,
+  now: number = Date.now(),
+): boolean {
+  const enabledAt = accessEnabledAt ? Date.parse(accessEnabledAt) : Number.NaN
+  if (!Number.isFinite(enabledAt)) return false
+  const attempts = rows.filter((row) => !isStalePeppolPending(row, now))
+  if (attempts.length === 0 || attempts.some((row) => LIVE_STATUSES.includes(row.status))) return false
+  const latest = attempts.reduce((a, b) => (Date.parse(b.updated_at) > Date.parse(a.updated_at) ? b : a))
+  return latest.status === 'deregistered' && Date.parse(latest.updated_at) < enabledAt
+}
+
 export interface RegisterGrantedPeppolSummary {
   registered: string[]
   failed: Array<{ companyId: string; reason: string }>
@@ -650,10 +671,10 @@ export async function registerGrantedPeppolReceivers(args: {
   const summary: RegisterGrantedPeppolSummary = { registered: [], failed: [], skipped: [] }
   if (!transport.registerRecipient) return summary
 
-  const granted = await fetchAllRows<{ company_id: string; requested_by: string | null }>(({ from, to }) =>
+  const granted = await fetchAllRows<{ company_id: string; requested_by: string | null; enabled_at: string | null }>(({ from, to }) =>
     service
       .from('peppol_access')
-      .select('company_id, requested_by')
+      .select('company_id, requested_by, enabled_at')
       .eq('status', 'enabled')
       .eq('receive_enabled', true)
       .order('requested_at', { ascending: true, nullsFirst: false })
@@ -681,7 +702,7 @@ export async function registerGrantedPeppolReceivers(args: {
   const retries: Array<{ access: (typeof granted)[number]; lastAttemptAt: number }> = []
   for (const access of granted) {
     const rows = rowsByCompany.get(access.company_id) ?? []
-    if (rows.every((row) => isStalePeppolPending(row, now))) {
+    if (rows.every((row) => isStalePeppolPending(row, now)) || isWithdrawnBeforeAccessReturned(rows, access.enabled_at, now)) {
       fresh.push(access)
     } else if (isPublishedElsewhereRetryDue(rows, now)) {
       const lastAttemptAt = Math.max(...rows.map((row) => Date.parse(row.updated_at)).filter(Number.isFinite))

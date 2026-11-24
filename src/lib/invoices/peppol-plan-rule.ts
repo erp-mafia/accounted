@@ -114,7 +114,13 @@ async function participantCompanyIds(service: SupabaseClient, companyIds: readon
   return ok
 }
 
+/**
+ * A row that was on before (paused, now paying again) keeps the receiving
+ * choice it had, an operator's send-only grant included; only a first
+ * switch-on reads the legacy marker.
+ */
 function wantsReceiving(row: RuleRow): boolean {
+  if (row.enabled_at !== null) return row.receive_enabled
   return row.receive_enabled || (row.request_note ?? '').includes(LEGACY_RECEIVING_MARKER)
 }
 

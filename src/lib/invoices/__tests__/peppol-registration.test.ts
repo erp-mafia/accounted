@@ -15,6 +15,7 @@ import {
   preparePeppolParticipant,
   registerCompanyForPeppolReceiving,
   registerGrantedPeppolReceivers,
+  isWithdrawnBeforeAccessReturned,
   withdrawRevokedPeppolRegistrations,
 } from '@/lib/invoices/peppol-registration'
 import { PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID } from '@/lib/invoices/peppol-bis-billing'
@@ -610,6 +611,26 @@ describe('isPublishedElsewhereRetryDue', () => {
     expect(isPublishedElsewhereRetryDue([elsewhere(dayAgo), { status: 'pending', updated_at: new Date(now - 1000).toISOString(), last_error_code: null }], now)).toBe(false)
     expect(isPublishedElsewhereRetryDue([{ status: 'deregistered', updated_at: dayAgo, last_error_code: null }], now)).toBe(false)
     expect(isPublishedElsewhereRetryDue([], now)).toBe(false)
+  })
+})
+
+describe('isWithdrawnBeforeAccessReturned', () => {
+  const withdrawn = { status: 'deregistered' as const, updated_at: '2026-11-01T00:00:00.000Z', last_error_code: null }
+
+  it('republishes an id withdrawn when the plan ended, once access is back', () => {
+    expect(isWithdrawnBeforeAccessReturned([withdrawn], '2026-11-20T00:00:00.000Z')).toBe(true)
+  })
+
+  it('never undoes a withdrawal made while access was on, or with no access time', () => {
+    expect(isWithdrawnBeforeAccessReturned([withdrawn], '2026-10-01T00:00:00.000Z')).toBe(false)
+    expect(isWithdrawnBeforeAccessReturned([withdrawn], null)).toBe(false)
+  })
+
+  it('leaves a live or failed latest attempt to the other rules', () => {
+    const live = { status: 'registered' as const, updated_at: '2026-10-01T00:00:00.000Z', last_error_code: null }
+    const failed = { status: 'failed' as const, updated_at: '2026-11-02T00:00:00.000Z', last_error_code: 'X' }
+    expect(isWithdrawnBeforeAccessReturned([withdrawn, live], '2026-11-20T00:00:00.000Z')).toBe(false)
+    expect(isWithdrawnBeforeAccessReturned([withdrawn, failed], '2026-11-20T00:00:00.000Z')).toBe(false)
   })
 })
 
