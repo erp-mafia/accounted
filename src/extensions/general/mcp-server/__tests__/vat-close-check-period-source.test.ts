@@ -205,4 +205,82 @@ describe('gnubok_vat_close_check: yearly period follows the räkenskapsår', () 
     expect(result.period).toMatchObject({ start: '2026-03-01', end: '2026-03-31', source: 'calendar' })
     expect(findCalls('fiscal_periods', 'select')).toEqual([])
   })
+
+  describe('an extended first räkenskapsår starting mid-year, with a January-start setting', () => {
+    const extended = {
+      fiscalPeriods: [{ period_start: '2025-07-17', period_end: '2026-12-31' }],
+      settings: { ...BROKEN_FY_SETTINGS, fiscal_year_start_month: 1 },
+    }
+
+    it('refuses the year it started in instead of closing January to December', async () => {
+      const { supabase } = mockSupabase(extended)
+
+      await expect(
+        computeVatCloseCheck({ period_type: 'yearly', year: 2025, period: 1 }, 'company-1', supabase),
+      ).rejects.toMatchObject({
+        code: 'VAT_REPORT_FISCAL_YEAR_NOT_FOUND',
+        message: expect.stringContaining('2025-07-17..2026-12-31 (year 2026)'),
+      })
+    })
+
+    it('closes the year it ends in over the whole räkenskapsår', async () => {
+      const { supabase } = mockSupabase(extended)
+
+      const result = await computeVatCloseCheck(
+        { period_type: 'yearly', year: 2026, period: 1 },
+        'company-1',
+        supabase,
+      )
+
+      expect(result.period).toMatchObject({ start: '2025-07-17', end: '2026-12-31', source: 'fiscal_period' })
+      expect(result.payment.deadline).not.toBeNull()
+      expect(result.blockers).not.toContainEqual(expect.objectContaining({ kind: 'fiscal_year_not_found' }))
+      expect(result.blockers).not.toContainEqual(expect.objectContaining({ kind: 'not_declaration_period' }))
+    })
+  })
+})
+
+describe('gnubok_vat_close_check: a period of another cadence than moms_period', () => {
+  it('gives a quarter of a yearly filer no deadline and a medium finding that does not stop the close', async () => {
+    const { supabase } = mockSupabase({
+      fiscalPeriods: [{ period_start: '2025-04-01', period_end: '2026-03-31' }],
+      settings: BROKEN_FY_SETTINGS,
+    })
+
+    const result = await computeVatCloseCheck(
+      { period_type: 'quarterly', year: 2026, period: 1 },
+      'company-1',
+      supabase,
+    )
+
+    expect(result.payment).toMatchObject({ deadline: null, deadline_label: null, moms_period: 'yearly' })
+    expect(result.blockers).toContainEqual(expect.objectContaining({
+      kind: 'not_declaration_period',
+      severity: 'medium',
+      message: expect.stringContaining('Q1 2026 (2026-01-01..2026-03-31) är ingen deklarationsperiod'),
+      hint: expect.stringContaining('period_type=yearly'),
+    }))
+    // The specific finding says why there is no date; the generic one would not.
+    expect(result.blockers).not.toContainEqual(expect.objectContaining({ kind: 'deadline_unavailable' }))
+    // moms_period has no history: the last period of a cadence the company
+    // switched from is still declared, so the finding never stops the close.
+    expect(result.blockers.filter((b) => b.severity === 'high')).toEqual([])
+    expect(result.ready_to_close).toBe(true)
+    expect(result.summary).toContain('not_declaration_period')
+  })
+
+  it('keeps the deadline of a period of the company\'s own cadence', async () => {
+    const { supabase } = mockSupabase({
+      settings: { ...BROKEN_FY_SETTINGS, moms_period: 'quarterly' },
+    })
+
+    const result = await computeVatCloseCheck(
+      { period_type: 'quarterly', year: 2026, period: 1 },
+      'company-1',
+      supabase,
+    )
+
+    expect(result.payment.deadline).not.toBeNull()
+    expect(result.blockers).not.toContainEqual(expect.objectContaining({ kind: 'not_declaration_period' }))
+  })
 })

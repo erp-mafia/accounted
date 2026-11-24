@@ -1,6 +1,7 @@
 import type { ArsredovisningData } from './types'
 import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 import type { AccountingFramework } from '@/types'
+import type { AccountingFrameworkSource } from '@/lib/company/accounting-framework'
 import type { AuditorOpinion } from './workflow-schemas'
 
 export const ANNUAL_REPORT_SCHEMA_VERSION = '1.0' as const
@@ -119,6 +120,14 @@ export interface CanonicalAnnualReport {
   fiscal_period_id: string
   entity_type: string
   report: ArsredovisningData
+  /** Where report.accounting_framework comes from (accounting-framework.ts),
+   *  null when unknown. Outside the content hash. */
+  framework_source: AccountingFrameworkSource | null
+  /** Whether that source is a choice made for the year (an election, the
+   *  year's locked årsredovisning, or a previous year that was one): a
+   *  company default is not, and which framework applies is then still the
+   *  owner's to decide. */
+  framework_confirmed: boolean
   profile: AnnualReportProfile
   disclosures: AnnualReportDisclosureState
   eligibility: AnnualReportEligibilityResult

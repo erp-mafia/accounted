@@ -605,6 +605,27 @@ describe('createCompanyFromOnboarding: säte from the register', () => {
   })
 })
 
+describe('createCompanyFromOnboarding: vacation year', () => {
+  it('leaves the vacation year to the column default, the statutory 1 April to 31 March', async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: { entity_type: 'aktiebolag', company_name: 'Ny AB' },
+      fiscalPeriod: { startDate: '2026-01-01', endDate: '2026-12-31', name: 'Räkenskapsår 2026' },
+    })
+
+    expect(result).toEqual({ companyId: 'new-company-id', registeredOffice: null })
+    const upsert = calls.find((c) => c.table === 'company_settings' && c.method === 'upsert')
+    expect(upsert).toBeDefined()
+    expect(upsert!.args[0]).not.toHaveProperty('salary_vacation_year_basis')
+  })
+})
+
 describe('createCompanyFromOnboarding: first-session books gate', () => {
   const params = {
     teamId: 'personal-team',

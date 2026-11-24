@@ -458,9 +458,77 @@ describe('buildBatchAllocationPreview', () => {
       ).toThrow(/supplier invoices only/)
     })
   })
+
+  // Migration 20261124100000: a deposit's rest pays invoices issued in the
+  // bookkeeping kept before, a credit on 1510 after the fee rows, before the
+  // bank leg.
+  describe('customer receivable rows', () => {
+    const invoices = {
+      [INV_A]: { currency: 'SEK', remaining_amount: 3000, total: 3000 },
+      [INV_B]: { currency: 'SEK', remaining_amount: 1000, total: 1000 },
+    }
+
+    it('Cr 1510 for the invoice, then the old receivable; Dr the bank for the whole deposit', () => {
+      const preview = buildBatchAllocationPreview({
+        transaction: { amount: 4250, date: '2026-11-24' },
+        bankAccount: '1930',
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount: 3000 }],
+        invoices,
+        customerReceivables: [{ account: '1510', amount: 1250, description: ' Faktura 9001 ' }],
+      })
+      expect(preview.lines).toEqual([
+        { account_number: '1510', description: 'Kundfaktura 1 av 1', debit: 0, credit: 3000 },
+        { account_number: '1510', description: 'Faktura 9001', debit: 0, credit: 1250 },
+        { account_number: '1930', description: 'Inbetalning 2026-11-24', debit: 4250, credit: 0 },
+      ])
+      expect(preview.description).toBe('Samlingsinbetalning 2026-11-24')
+      expect(preview.balanced).toBe(true)
+    })
+
+    it('with a payout fee: the invoices less the fee plus the receivable, the default text', () => {
+      const preview = buildBatchAllocationPreview({
+        transaction: { amount: 8975, date: '2026-11-24' },
+        bankAccount: '1930',
+        allocations: [
+          { kind: 'customer_invoice', invoice_id: INV_A, amount: 3000 },
+          { kind: 'customer_invoice', invoice_id: INV_B, amount: 1000 },
+        ],
+        invoices,
+        fees: [{ account: '6570', amount: 25 }],
+        customerReceivables: [{ account: '1510', amount: 5000 }],
+      })
+      expect(preview.lines.slice(2)).toEqual([
+        { account_number: '6570', description: 'Avgift betaltjänst', debit: 25, credit: 0 },
+        { account_number: '1510', description: 'Kundfordran från tidigare bokföring', debit: 0, credit: 5000 },
+        { account_number: '1930', description: 'Inbetalning 2026-11-24', debit: 8975, credit: 0 },
+      ])
+      expect(preview.balanced).toBe(true)
+    })
+
+    it('refuses a deposit the receivable rows do not meet, and receivable rows on a supplier batch', () => {
+      expect(() =>
+        buildBatchAllocationPreview({
+          transaction: { amount: 4250, date: '2026-11-24' },
+          bankAccount: '1930',
+          allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount: 3000 }],
+          invoices,
+          customerReceivables: [{ account: '1510', amount: 1 }],
+        }),
+      ).toThrow(/must equal the transaction amount/)
+      expect(() =>
+        buildBatchAllocationPreview({
+          transaction: { amount: -4250, date: '2026-11-24' },
+          bankAccount: '1930',
+          allocations: [{ kind: 'supplier_invoice', supplier_invoice_id: INV_A, amount: 3000 }],
+          invoices,
+          customerReceivables: [{ account: '1510', amount: 1250 }],
+        }),
+      ).toThrow(/customer invoices only/)
+    })
+  })
 })
 
-describe('buildBatchAllocationPreview: kontantmetoden cash lines (crm#1539, migration 20261031100700)', () => {
+describe('buildBatchAllocationPreview: kontantmetoden cash lines (crm#1539, migration 20261031125000)', () => {
   it('books each unbooked invoice\'s revenue, moms and öresavrundning in place of 1510, and the one bank leg', () => {
     const preview = buildBatchAllocationPreview({
       transaction: { amount: 1063, date: '2026-10-28' },

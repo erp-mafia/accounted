@@ -13,6 +13,7 @@ import type { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
+import type { StructuredErrorRemediation } from '@/lib/errors/structured-errors'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
 import type { EndpointDefinition } from './registry'
 import { UUID_RE } from '@/lib/invariants/uuid'
@@ -338,15 +339,32 @@ export async function loadRangeFromQuery(
  * REPORT_GENERATION_FAILED error if the generator throws. Mirrors the
  * dashboard's pattern so any lib-layer exception becomes a clean v1
  * envelope rather than leaking the underlying error.
+ *
+ * `refusals` names the coded refusals the generator throws for a request the
+ * caller must change (a period that does not exist): those answer with their
+ * own code, status and message, as a thrown refusal does at any v1 door.
  */
 export async function safeGenerate<T>(
   generate: () => Promise<T>,
-  ctx: { log: Logger; requestId: string; reportName: string },
+  ctx: { log: Logger; requestId: string; reportName: string; refusals?: readonly string[] },
 ): Promise<{ ok: true; result: T } | { ok: false; response: NextResponse }> {
   try {
     const result = await generate()
     return { ok: true, result }
   } catch (err) {
+    const refusal = err as { code?: unknown; remediation?: StructuredErrorRemediation } | null
+    if (err instanceof Error && typeof refusal?.code === 'string' && ctx.refusals?.includes(refusal.code)) {
+      // The registry's Swedish, the refusal's own English (it names what the
+      // registry cannot) and its hint.
+      return {
+        ok: false,
+        response: await v1ErrorResponseFromCode(refusal.code, ctx.log, {
+          requestId: ctx.requestId,
+          messageEn: err.message,
+          ...(refusal.remediation ? { remediation: refusal.remediation } : {}),
+        }),
+      }
+    }
     ctx.log.error(`${ctx.reportName} report generation failed`, err as Error)
     return {
       ok: false,

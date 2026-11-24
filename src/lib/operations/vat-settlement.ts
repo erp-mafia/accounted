@@ -149,7 +149,7 @@ export const reportsVatSettlementProposal = defineOperation({
     booking_status: z.enum(['booked', 'draft', 'none']),
     fingerprint: z.string(),
   }),
-  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'VAT_REPORT_GENERATION_FAILED'],
+  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'VAT_REPORT_FISCAL_YEAR_NOT_FOUND', 'VAT_REPORT_GENERATION_FAILED'],
   http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/vat-declaration/settlement-proposal' },
   mcp: {
     name: 'gnubok_get_vat_settlement_proposal',
@@ -235,6 +235,7 @@ export const vatBookSettlement = defineOperation({
     'PERIOD_LOCKED',
     'VAT_SETTLEMENT_NO_FISCAL_PERIOD',
     'VAT_SETTLEMENT_FAILED',
+    'VAT_REPORT_FISCAL_YEAR_NOT_FOUND',
     'VAT_REPORT_GENERATION_FAILED',
   ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/vat/settlement' },

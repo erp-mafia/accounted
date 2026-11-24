@@ -610,3 +610,61 @@ describe('previewVacationYearClose: the statutory basis owes next year\'s days t
     expect(row.computed_liability_sek).toBe(roundOre(30 * dayValue))
   })
 })
+
+describe('previewVacationYearClose: next year\'s paid days follow Semesterlagen 7 § (computeEntitledDays)', () => {
+  it('statutory basis: a hire during the closing intjänandeår gets the days it earned, the figure the ledger then holds', async () => {
+    const { getVacationYearBasis } = await import('@/lib/salary/vacation-ledger')
+    vi.mocked(getVacationYearBasis).mockResolvedValueOnce('statutory_apr_mar')
+    queuePreview({
+      roster: [{ ...ROSTER_ROW, employment_start: '2025-10-01' }],
+      ledger: [
+        {
+          id: 'vb-1',
+          employee_id: EMPLOYEE_ID,
+          vacation_year_start: '2025-04-01',
+          entitled_days: 0,
+          accrued_days: 0,
+          taken_days: 0,
+          saved_days: {},
+          forced_payout_days: 0,
+          status: 'open',
+        },
+      ],
+    })
+
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-04-01')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = result.data.rows[0]
+    // 182 of the intjänandeår's 365 days employed: 12.47, rounded up. The
+    // close used to count the new semesterår's days instead and wrote 25,
+    // beside the 13 earning days it valued.
+    expect(row.earning_days).toBe(13)
+    expect(row.next_year_entitled).toBe(13)
+  })
+
+  it('calendar basis: the new year is its own intjänandeår; an employment ending in it pro-rates as before', async () => {
+    queuePreview({
+      roster: [{ ...ROSTER_ROW, employment_end: '2026-06-30' }],
+      ledger: [
+        {
+          id: 'vb-1',
+          employee_id: EMPLOYEE_ID,
+          vacation_year_start: '2025-01-01',
+          entitled_days: 25,
+          accrued_days: 0,
+          taken_days: 25,
+          saved_days: {},
+          forced_payout_days: 0,
+          status: 'open',
+        },
+      ],
+    })
+
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Employed 181 of 2026's 365 days: 12.40, rounded up.
+    expect(result.data.rows[0].next_year_entitled).toBe(13)
+  })
+})

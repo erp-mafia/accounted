@@ -17,11 +17,12 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { type EntryLinesQuery, fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
-import { nextDay } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { DEFAULT_SETTLEMENT_ACCOUNT, resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
+import { MISSING_UNDERLAG_ERRANDS } from '@/lib/composition/missing-underlag-errands'
+import type { VerifikatErrandRow } from '@/lib/reports/missing-underlag-errands'
 import { findRcBasisGaps, type RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import { computeVatDeclaration, type MomsredovisningDetection, rcInputTotalsFromDeclaration, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
 import { revenueAccountWithoutRutaFinding, vatAccountWithoutRutaFinding, runVatDeclarationChecks, selfAssessedVatWithoutAnyInputVat, type VatCheckReviewMark, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
@@ -35,12 +36,13 @@ import { euTradeInRutor, formatEuTradeBoxes, helarsmomsHasEuTrade } from '@/lib/
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 import { computeSettlementAccountDrift, type SettlementAccountAging, type SettlementAccountDrift } from '@/lib/reports/vat-settlement-account-drift'
+import { buildRangeDataStatus, type ReportDataStatusResult } from '@/lib/reports/data-status'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
-import type { KontantmetodCutoffVatFacts, VatDeclaration, VatDeclarationRutor } from '@/types'
+import type { KontantmetodCutoffVatFacts, MomsPeriod, VatDeclaration, VatDeclarationRutor } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { parseVatPeriodArgs } from './vat-period-args'
 import { compareVatPeriods, type VatCloseSanity, type VatSanityRutor } from './vat-period-comparison'
@@ -231,19 +233,35 @@ interface VatReportWithRutor {
    * The close check names the shape-detected ones from this list.
    */
   excludedSettlementEntries: VatExcludedSettlementEntry[]
+  /** The company's moms_period, null when not set. */
+  momsPeriod: MomsPeriod | null
+  /**
+   * The warning, also in `report.warnings`, when the period asked for is of
+   * another cadence than moms_period: no declaration is filed for it, so the
+   * close check gives it no deadline. Null for a declaration period.
+   */
+  notDeclarationPeriod: string | null
 }
 
 /**
- * Agent-facing VAT report. Thin wrapper over {@link computeVatReportWithRutor}
- * so callers that only need the report keep the old signature.
+ * Agent-facing VAT report: {@link computeVatReportWithRutor}'s report with
+ * data_status, whether the figures can still change (an open period, unbooked
+ * bank rows, drafts), as every report tool answers it, over the momsperiod's
+ * own dates (buildRangeDataStatus). Null when no one fiscal period holds the
+ * momsperiod. Not declared in VAT_REPORT_OUTPUT_SCHEMA, like the other
+ * report tools' data_status (tools/list budget).
  */
 export async function computeVatReport(
   args: Record<string, unknown>,
   companyId: string,
   supabase: SupabaseClient
-): Promise<VatReportResult> {
+): Promise<VatReportResult & { data_status: ReportDataStatusResult | null }> {
   const { report } = await computeVatReportWithRutor(args, companyId, supabase)
-  return report
+  const dataStatus = await buildRangeDataStatus(supabase, companyId, {
+    from: report.period.start,
+    to: report.period.end,
+  })
+  return { ...report, data_status: dataStatus }
 }
 
 async function computeVatReportWithRutor(
@@ -267,13 +285,16 @@ async function computeVatReportWithRutor(
     period,
   )
   const { start: startDate, end: endDate } = declaration.period
-  const excludedEntries = await listExcludedSettlementEntries(
-    supabase,
-    companyId,
-    startDate,
-    endDate,
-    settlementShapedEntries,
-  )
+  const [excludedEntries, momsPeriod] = await Promise.all([
+    listExcludedSettlementEntries(
+      supabase,
+      companyId,
+      startDate,
+      endDate,
+      settlementShapedEntries,
+    ),
+    readMomsPeriod(supabase, companyId),
+  ])
 
   const rutor: VatDeclarationRutor = { ...declaration.rutor }
   const { ruta30, ruta31, ruta32 } = rutor
@@ -323,6 +344,15 @@ async function computeVatReportWithRutor(
   if (vatWithoutRuta.length > 0) {
     warnings.push(vatAccountWithoutRutaFinding(vatWithoutRuta).message)
   }
+  // A period of another cadence than the company's moms_period is no
+  // declaration period: nothing is filed for it, so it has no deadline (the
+  // close check names none) and its figures only describe its dates.
+  const notDeclarationPeriod = momsPeriod !== null && momsPeriod !== periodType
+    ? `Företaget redovisar moms ${MOMS_PERIOD_SV[momsPeriod]} (moms_period ${momsPeriod}): ${periodLabel} ` +
+      `(${startDate}..${endDate}) är ingen deklarationsperiod för företaget och har inget inlämningsdatum. ` +
+      'Siffrorna gäller bara de datumen.'
+    : null
+  if (notDeclarationPeriod) warnings.push(notDeclarationPeriod)
 
   const report: VatReportResult = {
     period: { type: periodType, year, period, start: startDate, end: endDate },
@@ -350,7 +380,35 @@ async function computeVatReportWithRutor(
     declaration,
     periodSource,
     excludedSettlementEntries: excludedEntries,
+    momsPeriod,
+    notDeclarationPeriod,
   }
+}
+
+/** The company's moms_period, as a sentence reads it. */
+const MOMS_PERIOD_SV: Record<MomsPeriod, string> = {
+  monthly: 'per månad',
+  quarterly: 'per kvartal',
+  yearly: 'per helår (räkenskapsår)',
+}
+
+/**
+ * The company's moms_period: the cadence it declares VAT in. Null when it is
+ * not set or cannot be read; a period is then not called a non-declaration
+ * period.
+ */
+async function readMomsPeriod(supabase: SupabaseClient, companyId: string): Promise<MomsPeriod | null> {
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('moms_period')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) {
+    log.warn('moms_period unavailable', { companyId, error: error.message })
+    return null
+  }
+  const value = (data as { moms_period?: unknown } | null)?.moms_period
+  return value === 'monthly' || value === 'quarterly' || value === 'yearly' ? value : null
 }
 
 /**
@@ -566,6 +624,7 @@ interface VatCloseBlocker {
     | 'reverse_charge_input_missing'
     | 'declaration_incomplete'
     | 'deadline_unavailable'
+    | 'not_declaration_period'
     | 'fiscal_year_not_found'
     | 'momsredovisning_entries_excluded'
     | 'eu_trade_setting_off'
@@ -897,32 +956,39 @@ function monthName(m: number): string {
  */
 const MISSING_UNDERLAG_MIN_GROSS_SEK = 4000
 
-/** One `verifikat_without_documents` page-of-one, used only for its total. */
-async function totalMissingUnderlagSince(
-  supabase: SupabaseClient,
-  companyId: string,
-  since: string
-): Promise<number> {
-  const { data, error } = await supabase.rpc('verifikat_without_documents', {
-    p_company_id: companyId,
-    p_since: since,
-    p_min_amount: MISSING_UNDERLAG_MIN_GROSS_SEK,
-    // p_limit only sizes the page; total_count is computed over the FULL
-    // filtered set in an independent CTE, so 1 is the cheapest valid size.
-    p_limit: 1,
-    p_offset: 0,
-  })
-  if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
-  const result = data as { ok?: boolean; code?: string; total_count?: number } | null
-  if (!result?.ok) {
-    throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
-  }
-  return result.total_count ?? 0
+/** verifikat_without_documents returns at most this many rows per call. */
+const MISSING_UNDERLAG_PAGE = 100
+
+interface MissingUnderlagInPeriod {
+  /**
+   * Verifikat that lack their underlag: the blocker's count. The RPC's
+   * total, less the transfers between own accounts among the rows read.
+   */
+  count: number
+  /**
+   * How many rows were read and split by errand: the most recent
+   * MISSING_UNDERLAG_ERRANDS.maxRows. Below `count` plus `ownTransfer` when
+   * the period holds more; the split then covers only these.
+   */
+  classified: number
+  /**
+   * Of `count`, those booked from the Stripe feed (errand stripe): their
+   * underlag is Stripe's report or fee invoice, downloaded from Stripe, not a
+   * receipt in a mailbox. Counted, and said so.
+   */
+  stripe: number
+  /**
+   * Transfers between the company's own accounts (errand own_transfer): the
+   * bank statement is their underlag, so none is missing. Left out of
+   * `count`, and said so.
+   */
+  ownTransfer: number
 }
 
 /**
  * Posted verifikat dated within [start, end] that genuinely lack an underlag
- * and whose gross reaches MISSING_UNDERLAG_MIN_GROSS_SEK.
+ * and whose gross reaches MISSING_UNDERLAG_MIN_GROSS_SEK, split by the
+ * underlag they need.
  *
  * BFL 5 kap 6-7 §: every affärshändelse needs a verifikation, and the
  * verifikation must reference its underlag. This delegates to the
@@ -948,21 +1014,75 @@ async function totalMissingUnderlagSince(
  *      Without this, adding supplier_invoice_paid to the list would flag every
  *      paid supplier invoice in the period (the 2026-07-24 support case).
  *
- * The RPC takes `since` and no upper bound, so the in-period count is the
- * difference between two filter-respecting totals. Both calls run the same
- * predicate, so the subtraction is exact rather than an estimate.
+ * Which underlag each needs is the receipt hunt's errand
+ * (MISSING_UNDERLAG_ERRANDS), the same one its worklist and
+ * gnubok_list_verifikat_without_documents (next_step_kind) give each row. A
+ * transfer between the company's own accounts (own_transfer) has the bank
+ * statement as its underlag, so it is left out. A verifikat booked from the
+ * Stripe feed, such as the day's sales samlingsverifikat (stripe), still
+ * needs Stripe's report: counted, and named apart so the agent fetches it
+ * from Stripe rather than searching mail. What lacks an attached document
+ * stays the RPC's decision. When the errands cannot be read, every row is
+ * counted, as before the split.
+ *
+ * Bounded: every read of the RPC computes the whole set, so the count is the
+ * RPC's own total, read once, and only the most recent maxRows rows (the
+ * receipt hunt's window) are read and split. Past that the message says the
+ * split covers those rows.
  */
-async function countMissingUnderlagInPeriod(
+async function missingUnderlagInPeriod(
   supabase: SupabaseClient,
   companyId: string,
   start: string,
   end: string
-): Promise<number> {
-  const [fromStart, afterEnd] = await Promise.all([
-    totalMissingUnderlagSince(supabase, companyId, start),
-    totalMissingUnderlagSince(supabase, companyId, nextDay(end)),
-  ])
-  return Math.max(0, fromStart - afterEnd)
+): Promise<MissingUnderlagInPeriod> {
+  const rows: VerifikatErrandRow[] = []
+  let total = 0
+  for (let offset = 0; offset < MISSING_UNDERLAG_ERRANDS.maxRows; offset += MISSING_UNDERLAG_PAGE) {
+    const { data, error } = await supabase.rpc('verifikat_without_documents', {
+      p_company_id: companyId,
+      p_since: start,
+      p_min_amount: MISSING_UNDERLAG_MIN_GROSS_SEK,
+      p_limit: MISSING_UNDERLAG_PAGE,
+      p_offset: offset,
+      p_until: end,
+    })
+    if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
+    const result = data as {
+      ok?: boolean
+      code?: string
+      total_count?: number
+      verifikat?: VerifikatErrandRow[]
+    } | null
+    if (!result?.ok) {
+      throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
+    }
+    if (offset === 0) total = result.total_count ?? 0
+    const page = result.verifikat ?? []
+    rows.push(...page)
+    if (page.length < MISSING_UNDERLAG_PAGE || rows.length >= total) break
+  }
+  const classified = Math.min(rows.length, MISSING_UNDERLAG_ERRANDS.maxRows)
+  rows.length = classified
+  total = Math.max(total, classified)
+  if (classified === 0) return { count: 0, classified: 0, stripe: 0, ownTransfer: 0 }
+
+  let stripe = 0
+  let ownTransfer = 0
+  try {
+    const kinds = await MISSING_UNDERLAG_ERRANDS.kinds(supabase, companyId, rows)
+    for (const row of rows) {
+      const kind = kinds.get(row.journal_entry_id)
+      if (kind === 'stripe') stripe++
+      else if (kind === 'own_transfer') ownTransfer++
+    }
+  } catch (err) {
+    log.warn('missing underlag errands unavailable: every row counted', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+  return { count: total - ownTransfer, classified, stripe, ownTransfer }
 }
 
 /**
@@ -1026,6 +1146,8 @@ export async function computeVatCloseCheck(
     declaration,
     periodSource,
     excludedSettlementEntries,
+    momsPeriod: declaredCadence,
+    notDeclarationPeriod,
   } = await computeVatReportWithRutor(args, companyId, supabase)
   const declarationRutor = declaration.rutor
   const { start, end, type: periodType, year, period } = vatReport.period
@@ -1040,8 +1162,9 @@ export async function computeVatCloseCheck(
     .single()
   const momsPeriod = (settings?.moms_period as 'monthly' | 'quarterly' | 'yearly' | null) ?? null
   const entityType = isEntityType(settings?.entity_type) ? settings.entity_type : null
-  // 3) Deadline: based on the *requested* period type, not company setting,
-  //    so the model gets the right deadline even when querying ad-hoc periods.
+  // 3) Deadline: of the requested period, when it is a declaration period: a
+  //    period of another cadence than moms_period has none (nothing is filed
+  //    for it), and says so in the not_declaration_period finding below.
   //    Never turn missing settings into a plausible statutory date. Monthly
   //    deadlines need the turnover threshold; annual deadlines additionally
   //    need the filing profile and a configured fiscal year matching the
@@ -1057,7 +1180,9 @@ export async function computeVatCloseCheck(
   const ledgerEuTrade = euTradeInRutor(declarationRutor)
   const periodHasEuTrade = ledgerEuTrade.purchases.length > 0 || ledgerEuTrade.sales.length > 0
   let deadline: { date: string; label: string } | null = null
-  if (periodType === 'quarterly') {
+  if (notDeclarationPeriod) {
+    // No declaration period, no deadline.
+  } else if (periodType === 'quarterly') {
     deadline = computeMomsDeadline('quarterly', Number(year), Number(period), {
       vat_taxable_base_over_40m: false,
     })
@@ -1093,7 +1218,7 @@ export async function computeVatCloseCheck(
       deadline = computeMomsDeadline('yearly', Number(year), Number(period), deadlineSettings)
     }
   }
-  if (!deadline) {
+  if (!deadline && !notDeclarationPeriod) {
     log.warn('VAT deadline unavailable', {
       companyId,
       periodType,
@@ -1135,9 +1260,9 @@ export async function computeVatCloseCheck(
     getScopedReconciliationStatus(supabase, companyId, start, end),
     // Verifikat in the period that genuinely lack an underlag (BFL 5 kap
     // 6-7 §), counted over the SHARED SQL predicate. Never re-derive this
-    // locally: countMissingUnderlagInPeriod documents what the hand-rolled
+    // locally: missingUnderlagInPeriod documents what the hand-rolled
     // scan that used to sit here got wrong.
-    countMissingUnderlagInPeriod(supabase, companyId, start, end),
+    missingUnderlagInPeriod(supabase, companyId, start, end),
     // EU sales in rutor 35/38/39 that the periodisk sammanställning has no
     // buyer for (crm#1362), found by the PS itself over this momsperiod. Asked
     // only when the declaration holds EU sales at all.
@@ -1153,7 +1278,22 @@ export async function computeVatCloseCheck(
   ])
 
   const blockers: VatCloseBlocker[] = []
-  if (!deadline) {
+  // Medium: it never stops the close. moms_period is the company's cadence
+  // now, with no history, so the last period of a cadence it switched from
+  // is still declared and must not be held back by this finding.
+  if (notDeclarationPeriod && declaredCadence) {
+    blockers.push({
+      kind: 'not_declaration_period',
+      severity: 'medium',
+      count: 1,
+      message: notDeclarationPeriod,
+      hint:
+        `Kör om med företagets egen period, period_type=${declaredCadence}` +
+        `${declaredCadence === 'yearly' ? ' och year = året räkenskapsåret slutar' : ''}. Bytte företaget ` +
+        'redovisningsperiod efter den här perioden deklareras den ändå enligt den tidigare perioden. Redovisar företaget ' +
+        'en annan period hos Skatteverket, rätta inställningen med gnubok_update_company_tax_profile (eller Inställningar, Moms).',
+    })
+  } else if (!deadline) {
     blockers.push({
       kind: 'deadline_unavailable',
       severity: 'high',
@@ -1177,12 +1317,13 @@ export async function computeVatCloseCheck(
       hint: 'Slå på vat_has_eu_trade med gnubok_update_company_tax_profile (eller Inställningar, Moms) så stämmer inställningen med bokföringen.',
     })
   }
-  // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). When no fiscal
-  // year ends in `year` the report silently fell back to Jan-Dec, which for a
-  // company whose fiscal year does not start in January means every figure
-  // above describes the wrong period (feedback seq 330091: FY Apr-Mar, yearly
-  // 2026 came back as 2026-01-01..2026-12-31). Say so instead of leaving the
-  // agent to infer it from an unavailable deadline.
+  // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). A company with
+  // räkenskapsår recorded and none ending in `year` is refused before this
+  // (resolvePeriodDates); one with none recorded at all falls back to Jan-Dec,
+  // which for a company whose fiscal year does not start in January is the
+  // wrong period (feedback seq 330091: FY Apr-Mar, yearly 2026 came back as
+  // 2026-01-01..2026-12-31). Say so instead of leaving the agent to infer it
+  // from an unavailable deadline.
   if (
     periodType === 'yearly'
     && periodSource === 'calendar_fallback'
@@ -1248,6 +1389,16 @@ export async function computeVatCloseCheck(
       (reconRes.settled_gl_entry_count ?? 0) > 0 &&
       typeof reconRes.unexplained_difference === 'number' &&
       Math.abs(reconRes.unexplained_difference) < 0.005
+    // The figure compares movements only. When the bank's history starts in
+    // the period, the bank's saldo that day can differ from the books
+    // (opening_difference, lib/reconciliation/bank-reconciliation.ts), and
+    // the bank's saldo against the books is then a third figure. Named from
+    // the reconciliation's own fields, so the close check, the reconciliation
+    // status and the page read as one account.
+    const openingDifference =
+      typeof reconRes.opening_difference === 'number' && reconRes.opening_difference !== 0 && reconRes.history_start
+        ? { amount: reconRes.opening_difference, from: reconRes.history_start }
+        : null
     blockers.push({
       kind: 'bank_unreconciled',
       severity: Math.abs(periodDifference) > 100 ? 'high' : 'medium',
@@ -1263,7 +1414,13 @@ export async function computeVatCloseCheck(
         ? `${reconRes.settled_gl_entry_count} verifikat på ${recon.scope.accountNumber} är kopplade mot verifikat daterade utanför perioden: periodens differens ${AGENT_AMOUNT_FORMAT.format(periodDifference)} kr är rättad i en annan period`
         : bankRowsMissing
         ? `${ledgerWithoutBankRow} verifikat på ${recon.scope.accountNumber} saknar banktransaktion: banken har inga rader för de datumen`
-        : `Bankavstämning visar differens ${periodDifference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${ledgerWithoutBankRow} omatchade huvudbokslinjer på ${recon.scope.accountNumber})`,
+        : `Bankavstämning visar differens ${AGENT_AMOUNT_FORMAT.format(periodDifference)} kr i rörelsen på ${recon.scope.accountNumber}: ` +
+          `bankens transaktioner${openingDifference ? ` från ${openingDifference.from}, då bankens historik börjar,` : ''} mot periodens verifikat ` +
+          `(${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${ledgerWithoutBankRow} omatchade huvudbokslinjer på ${recon.scope.accountNumber})` +
+          (openingDifference
+            ? `. Bankens saldo när historiken börjar skiljer sig dessutom från bokfört saldo med ${AGENT_AMOUNT_FORMAT.format(openingDifference.amount)} kr (opening_difference): ` +
+              'den ingående skillnaden ingår inte i differensen ovan, som bara jämför rörelser'
+            : ''),
       hint: settledElsewhere
         ? SETTLED_ELSEWHERE_HINT
         : bankRowsMissing
@@ -1271,13 +1428,26 @@ export async function computeVatCloseCheck(
         : 'Granska via gnubok_get_reconciliation_status och matcha: moms beräknas från huvudboken så differenser döljer fel.',
     })
   }
-  if (missingUnderlag > 0) {
+  if (missingUnderlag.count > 0) {
+    const { count, classified, stripe, ownTransfer } = missingUnderlag
+    const total = count + ownTransfer
     blockers.push({
       kind: 'missing_high_value_receipts',
       severity: 'medium',
-      count: missingUnderlag,
-      message: `${missingUnderlag} verifikat över ${MISSING_UNDERLAG_MIN_GROSS_SEK} kr saknar underlag`,
-      hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}) och para ihop via gnubok_list_unmatched_documents.`,
+      count,
+      message:
+        `${count} verifikat över ${MISSING_UNDERLAG_MIN_GROSS_SEK} kr saknar underlag` +
+        (stripe > 0
+          ? `, varav ${stripe} från Stripe: ladda ner underlaget i Stripe ` +
+            '(månadsfakturan för avgifterna, saldorapporten för övriga rader), det finns inte i mejlen'
+          : '') +
+        (ownTransfer > 0
+          ? `. ${ownTransfer} verifikat till räknas inte, överföringar mellan egna konton: kontoutdraget är underlaget`
+          : '') +
+        (classified < total
+          ? `. Uppdelningen gäller de ${classified} senaste av ${total}: bland resten kan fler vara överföringar mellan egna konton eller från Stripe`
+          : ''),
+      hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, until=${end}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}): next_step_kind säger vad varje verifikat behöver (stripe hämtas i Stripe, own_transfer räknas inte här). Para ihop via gnubok_list_unmatched_documents.`,
     })
   }
   // The periodisk sammanställning is the per-buyer breakdown of rutor 35, 38
@@ -1428,7 +1598,7 @@ export async function computeVatCloseCheck(
   const prevArgs = previousPeriodArgs(periodType as 'monthly' | 'quarterly' | 'yearly', Number(year), Number(period))
   if (prevArgs) {
     try {
-      previousRutor = (await computeVatReport(prevArgs, companyId, supabase)).rutor
+      previousRutor = (await computeVatReportWithRutor(prevArgs, companyId, supabase)).report.rutor
     } catch (err) {
       log.warn('previous VAT period unavailable, sanity comparison skipped', {
         companyId,
@@ -1478,11 +1648,15 @@ export async function computeVatCloseCheck(
     : psWarning.count > 0
       ? ` Periodisk sammanställning: ${psWarning.count} EU-försäljning${psWarning.count === 1 ? '' : 'ar'} i ruta 39 saknar köpare.`
       : ' Periodisk sammanställning kunde inte stämmas av.'
+  // The cadence finding does not stop the close either, so "klart" names it.
+  const cadenceNote = notDeclarationPeriod
+    ? ' Perioden är ingen deklarationsperiod enligt moms_period och har inget inlämningsdatum (not_declaration_period).'
+    : ''
   let summary: string
   if (readyToClose && sanity.anomalies.length === 0) {
-    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}${psNote}`
+    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}${psNote}${cadenceNote}`
   } else if (readyToClose) {
-    summary = `Klart för stängning men ${sanity.anomalies.length} avvikelse(r) att granska.${psNote}`
+    summary = `Klart för stängning men ${sanity.anomalies.length} avvikelse(r) att granska.${psNote}${cadenceNote}`
   } else if (declarationBlocked) {
     summary = `Inte klart: deklarationsunderlaget är ofullständigt (${declarationErrors} fel), ${highBlockers} kritiska blockerare totalt.`
   } else {

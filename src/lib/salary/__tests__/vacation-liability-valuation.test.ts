@@ -194,6 +194,149 @@ describe('computeVacationLiability', () => {
   })
 })
 
+/** A procentregeln payslip of `basis` (the run engine's breakdown step), paid the 25th. */
+function procentSlip(employeeId: string, year: number, month: number, basis: number) {
+  const mm = String(month).padStart(2, '0')
+  return {
+    employee_id: employeeId,
+    calculation_breakdown: { steps: [{ label: 'Semesteravsättning (procentregeln 12 %)', input: { vacation_basis: basis } }] },
+    salary_type: 'monthly',
+    line_items: [],
+    salary_run: { id: `r-${year}-${mm}`, payment_date: `${year}-${mm}-25`, status: 'booked' },
+  }
+}
+
+const slips = (employeeId: string, year: number, months: number[], basis = 35000) => months.map((m) => procentSlip(employeeId, year, m, basis))
+const JUNE_TO_DECEMBER = [6, 7, 8, 9, 10, 11, 12]
+
+describe('a hire during the intjänandeår (Semesterlagen 7 §, 16 b §)', () => {
+  const procentHire = (id: string) =>
+    employee({ id, first_name: id, vacation_rule: 'procentregeln', monthly_salary: 35000, employment_start: '2026-06-01' })
+
+  it('procentregeln, calendar basis: two hires on 1 June, seven payslips each, owe 15 days at 1 960 each, 58 800 kr', async () => {
+    const valuation = await computeVacationLiability(
+      mockCompany({
+        employees: [procentHire('emp-1'), procentHire('emp-2')],
+        payslips: [...slips('emp-1', 2026, JUNE_TO_DECEMBER), ...slips('emp-2', 2026, JUNE_TO_DECEMBER)],
+      }),
+      COMPANY,
+      '2026-12-31',
+    )
+    for (const row of valuation.rows) {
+      expect(row.days.current_year_days).toBe(15)
+      expect(row.day_value_sek).toBe(1960)
+      expect(row.valued_days).toBe(15)
+      expect(row.earning_sek).toBe(0)
+      // 12 % of 7 x 35 000: from the payslips, not today's pay.
+      expect(row.computed_liability_sek).toBe(29400)
+      expect(row.day_value_basis).toBe('earning_year')
+    }
+    expect(valuation.totals.computed_liability).toBe(58800)
+    expect(valuation.totals.computed_avgifter).toBe(roundOre(2 * roundOre(29400 * 0.3142)))
+  })
+
+  it('procentregeln, calendar basis: a month without a payslip falls back to today\'s pay, over the 15 days, flagged', async () => {
+    const valuation = await computeVacationLiability(
+      mockCompany({ employees: [procentHire('emp-1')], payslips: slips('emp-1', 2026, [6, 7, 9, 10, 11, 12]) }),
+      COMPANY,
+      '2026-12-31',
+    )
+    const row = valuation.rows[0]
+    expect(row.day_value_basis).toBe('current_pay')
+    expect(row.day_value_sek).toBe(2016)
+    expect(row.computed_liability_sek).toBe(15 * 2016)
+  })
+
+  it('sammalöneregeln, calendar basis: a hire on 1 June owes 15 days at the sammalöneregeln day value', async () => {
+    const valuation = await computeVacationLiability(
+      mockCompany({ employees: [employee({ monthly_salary: 35000, employment_start: '2026-06-01' })] }),
+      COMPANY,
+      '2026-12-31',
+    )
+    const dayValue = roundOre(35000 / 21 + 35000 * 0.0043)
+    expect(valuation.rows[0].days.total_days).toBe(15)
+    expect(valuation.rows[0].day_value_sek).toBe(dayValue)
+    expect(valuation.rows[0].computed_liability_sek).toBe(roundOre(15 * dayValue))
+  })
+
+  it('procentregeln, calendar basis: an employee of the whole year is unchanged, 25 days at 2 016', async () => {
+    const valuation = await computeVacationLiability(
+      mockCompany({
+        employees: [employee({ vacation_rule: 'procentregeln', monthly_salary: 35000 })],
+        payslips: slips('emp-1', 2026, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+      }),
+      COMPANY,
+      '2026-12-31',
+    )
+    const row = valuation.rows[0]
+    expect(row.day_value_sek).toBe(2016)
+    expect(row.valued_days).toBe(25)
+    expect(row.computed_liability_sek).toBe(50400)
+    expect(row.day_value_basis).toBe('earning_year')
+  })
+
+  it('procentregeln, statutory basis: an employee of the whole year is unchanged, owed days plus the running year\'s 12 %', async () => {
+    const valuation = await computeVacationLiability(
+      mockCompany({
+        basis: 'statutory_apr_mar',
+        employees: [employee({ vacation_rule: 'procentregeln', monthly_salary: 35000 })],
+        payslips: [...slips('emp-1', 2025, [4, 5, 6, 7, 8, 9, 10, 11, 12]), ...slips('emp-1', 2026, [1, 2, 3]), ...slips('emp-1', 2026, [4, 5, 6, 7, 8, 9, 10, 11, 12])],
+      }),
+      COMPANY,
+      '2026-12-31',
+    )
+    const row = valuation.rows[0]
+    expect(row.day_value_sek).toBe(2016)
+    expect(row.valued_days).toBe(25)
+    expect(row.earning_sek).toBe(37800)
+    expect(row.computed_liability_sek).toBe(25 * 2016 + 37800)
+  })
+
+  it('the year close values a calendar-year procentregeln hire the same: 15 days at 1 960, next year 25 days', async () => {
+    const hire = employee({ vacation_rule: 'procentregeln', monthly_salary: 35000, employment_start: '2025-06-01' })
+    const ledger2025 = {
+      id: 'vb-2025',
+      employee_id: 'emp-1',
+      vacation_year_start: '2025-01-01',
+      // What the ledger sync now writes: 214/365 x 25, rounded up.
+      entitled_days: 15,
+      accrued_days: 0,
+      taken_days: 0,
+      saved_days: {},
+      forced_payout_days: 0,
+      status: 'open',
+      unpaid_days: 0,
+      advance_days: 0,
+      saved_days_taken: {},
+    }
+    const { supabase } = createTableMockSupabase({
+      company_settings: { data: { salary_vacation_year_basis: 'calendar', salary_calculation_policy: {} } },
+      employees: { data: [hire] },
+      employee_vacation_balances: { data: [ledger2025] },
+      employee_opening_balances: { data: [] },
+      vacation_year_closures: { data: null },
+      fiscal_periods: { data: { id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' } },
+      salary_run_employees: (chain: Chain) => ({ data: selected(chain).includes('vacation_days_taken') ? [] : slips('emp-1', 2025, JUNE_TO_DECEMBER) }),
+    })
+    trialBalance.mockResolvedValue({
+      rows: [
+        { account_number: '2920', closing_credit: 29400, closing_debit: 0 },
+        { account_number: '2940', closing_credit: roundOre(29400 * 0.3142), closing_debit: 0 },
+      ],
+    })
+    const close = await previewVacationYearClose(supabase as unknown as SupabaseClient, COMPANY, '2025-01-01')
+    expect(close.ok).toBe(true)
+    if (!close.ok) return
+    const row = close.data.rows[0]
+    expect(row.remaining_days).toBe(15)
+    expect(row.day_value_sek).toBe(1960)
+    expect(row.computed_liability_sek).toBe(29400)
+    expect(row.next_year_entitled).toBe(25)
+    // The per-run accruals (12 % of each payslip) already hold it: nothing to adjust.
+    expect(close.data.sek.drift_2920).toBe(0)
+  })
+})
+
 describe('the remeasurement\'s starting point', () => {
   let queued: ReturnType<typeof createQueuedMockSupabase>
   beforeEach(() => {

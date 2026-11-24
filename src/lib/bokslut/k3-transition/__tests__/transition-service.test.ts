@@ -32,7 +32,7 @@ import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { loadBuildingTemporaryDifferences } from '@/lib/bokslut/assets/building-tax-service'
 import { listTransitionSplitCandidates } from '@/lib/bokslut/assets/transition-split-service'
 import { deferredTaxBalances } from '@/lib/bokslut/tax-provision/deferred-tax-service'
-import { previewK3Transition } from '../transition-service'
+import { k3TransitionYear, previewK3Transition } from '../transition-service'
 import type { Asset } from '@/types'
 
 /**
@@ -145,5 +145,30 @@ describe('previewK3Transition: the year\'s own framework', () => {
     frameworkForYearMock.mockResolvedValueOnce('k2')
     await expect(previewK3Transition(supabase as never, 'company-1', EMPTY)).rejects.toMatchObject({ reason: 'not_k3' })
     expect(frameworkForYearMock).toHaveBeenCalledWith(supabase, 'company-1', PERIOD.id)
+  })
+})
+
+describe('k3TransitionYear: where the year\'s framework comes from', () => {
+  beforeEach(() => reset())
+
+  it('a year with no framework record reads the company default, not a confirmed choice', async () => {
+    // fiscal_periods, fiscal_period_frameworks (no row), companies.
+    enqueueMany([{ data: PERIOD }, { data: null }, { data: { accounting_framework: 'k2' } }])
+    expect(await k3TransitionYear(supabase as never, 'company-1', PERIOD.id)).toEqual({
+      fiscal_period_id: PERIOD.id,
+      framework: 'k2',
+      framework_source: 'company_fallback',
+      framework_confirmed: false,
+      open: true,
+    })
+  })
+
+  it('a year elected K3 is a confirmed choice', async () => {
+    enqueueMany([{ data: PERIOD }, { data: { framework: 'k3', source: 'election' } }])
+    expect(await k3TransitionYear(supabase as never, 'company-1', PERIOD.id)).toMatchObject({
+      framework: 'k3',
+      framework_source: 'election',
+      framework_confirmed: true,
+    })
   })
 })

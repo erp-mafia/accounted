@@ -75,7 +75,9 @@ describe('supplierDebtTotal and the bank row', () => {
     expect(payoutBankAmount('supplier_invoice', 1000, 0, 27546.5)).toBe(28546.5)
   })
 
-  it('a customer payout never counts a debt', () => {
-    expect(payoutBankAmount('customer_invoice', 10000, 1500, 500)).toBe(8500)
+  // A customer batch's rows from before are customer receivable rows
+  // (customer-receivable-lines.test.ts): they add to the payout as well.
+  it('a customer payout counts the rows from before as receivables it also pays', () => {
+    expect(payoutBankAmount('customer_invoice', 10000, 1500, 500)).toBe(9000)
   })
 })

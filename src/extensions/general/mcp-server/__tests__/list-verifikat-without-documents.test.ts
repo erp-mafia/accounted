@@ -75,3 +75,68 @@ describe('gnubok_list_verifikat_without_documents: since and until', () => {
     }
   })
 })
+
+/**
+ * Each row carries Kvittojakten's errand for it (nextStepKind, through
+ * verifikatNextStepKinds), so an agent does not go looking for a receipt for
+ * a transfer between own accounts, whose underlag is the bank statement.
+ * gnubok_vat_close_check leaves the same own_transfer rows out of its count.
+ */
+describe('gnubok_list_verifikat_without_documents: next_step_kind', () => {
+  const ROWS = [
+    { ...PAGE.verifikat[0], journal_entry_id: 'je-transfer', description: 'Överföring till sparkonto', gross_amount: 100000 },
+    { ...PAGE.verifikat[0], journal_entry_id: 'je-purchase', description: 'Kortköp', gross_amount: 5000 },
+  ]
+  const line = (entry: string, n: number, account_number: string, debit: number, credit = 0) => ({
+    id: `${entry}-${n}`,
+    journal_entry_id: entry,
+    account_number,
+    debit_amount: debit,
+    credit_amount: credit,
+  })
+
+  function routedSupabase(tables: Record<string, unknown[]>, failing?: string) {
+    return {
+      rpc: () => Promise.resolve({ data: { ok: true, total_count: ROWS.length, verifikat: ROWS }, error: null }),
+      from(table: string) {
+        const chain: Record<string, unknown> = {}
+        for (const m of ['select', 'eq', 'in', 'order']) chain[m] = () => chain
+        const settled = table === failing
+          ? { data: null, error: { message: 'timeout' } }
+          : { data: tables[table] ?? [], error: null }
+        chain.range = () => Promise.resolve(settled)
+        chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(settled).then(resolve)
+        return chain
+      },
+    }
+  }
+
+  const TABLES = {
+    transactions: [{ journal_entry_id: 'je-purchase', merchant_name: 'Kontorsgiganten', amount: -5000, currency: 'SEK' }],
+    journal_entry_lines: [
+      line('je-transfer', 1, '1940', 100000), line('je-transfer', 2, '1930', 0, 100000),
+      line('je-purchase', 1, '5410', 4000), line('je-purchase', 2, '2640', 1000), line('je-purchase', 3, '1930', 0, 5000),
+    ],
+  }
+
+  it('gives a transfer between own accounts own_transfer, and a purchase the errand of its name', async () => {
+    const result = (await list.execute({}, 'company-1', 'user-1', routedSupabase(TABLES) as never)) as {
+      verifikat: { journal_entry_id: string; next_step_kind: string | null }[]
+    }
+    expect(result.verifikat.map((r) => [r.journal_entry_id, r.next_step_kind])).toEqual([
+      ['je-transfer', 'own_transfer'],
+      ['je-purchase', 'mail'],
+    ])
+    expect(result).toMatchObject({ total_count: 2, count: 2 })
+  })
+
+  it('still lists the rows, with next_step_kind null, when the errand cannot be read', async () => {
+    const result = (await list.execute({}, 'company-1', 'user-1', routedSupabase(TABLES, 'journal_entry_lines') as never)) as {
+      verifikat: { journal_entry_id: string; next_step_kind: string | null }[]
+    }
+    expect(result.verifikat.map((r) => [r.journal_entry_id, r.next_step_kind])).toEqual([
+      ['je-transfer', null],
+      ['je-purchase', null],
+    ])
+  })
+})

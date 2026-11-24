@@ -50,7 +50,7 @@ import {
   vatSettlementBookingStatus,
   type VatSettlementProposal,
 } from '@/lib/reports/vat-settlement'
-import { loadReportPeriod, type VatPeriodInput } from '@/lib/reports/filing-report-service'
+import { loadReportPeriod, noHelarsmomsPeriodFailure, type VatPeriodInput } from '@/lib/reports/filing-report-service'
 import type { CreateJournalEntryInput } from '@/types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -117,6 +117,9 @@ async function loadProposal(
     )
     return { ok: true, proposal }
   } catch (err) {
+    // A yearly `year` no räkenskapsår ends in has no helårsmoms period to settle.
+    const noPeriod = noHelarsmomsPeriodFailure(err)
+    if (noPeriod) return noPeriod
     ctx.log.error('vat settlement proposal failed', err as Error, { ...input })
     return {
       ok: false,

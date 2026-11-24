@@ -437,9 +437,53 @@ describe('gnubok_vat_close_check: verifikat without bank rows', () => {
 
     expect(blocker.severity).toBe('high')
     expect(blocker.message).toBe(
-      `Bankavstämning visar differens -300.00 kr (${status.unmatched_transaction_count} omatchade banktransaktioner, ${status.unmatched_gl_line_count} omatchade huvudbokslinjer på 1930)`,
+      `Bankavstämning visar differens -300.00 kr i rörelsen på 1930: bankens transaktioner mot periodens verifikat (${status.unmatched_transaction_count} omatchade banktransaktioner, ${status.unmatched_gl_line_count} omatchade huvudbokslinjer på 1930)`,
     )
     expect(blocker.hint).toBe(GENERIC_HINT)
+  })
+
+  it('names the opening difference when the bank history starts in the period, beside the movement it leaves out', async () => {
+    // The bank feed started inside the period at a saldo the books did not
+    // hold: the movements differ by one figure, the saldo by another, and
+    // Stäm av reports the opening difference apart (opening_difference). The
+    // close check names both, with the reconciliation's own figures, so the
+    // three read as one account.
+    const blocker = await bankBlockerFor({
+      difference: 167739.68,
+      unmatched_transaction_count: 39,
+      unmatched_gl_line_count: 2,
+      unexplained_difference: 0,
+      history_start: '2026-01-10',
+      before_history_count: 0,
+      before_history_total: 0,
+      saldo_at_start: -249441.81,
+      ledger_balance_before_start: 0,
+      opening_difference: -249441.81,
+    })
+
+    expect(blocker.message).toBe(
+      'Bankavstämning visar differens 167739.68 kr i rörelsen på 1930: bankens transaktioner från 2026-01-10, då bankens historik börjar, ' +
+        'mot periodens verifikat (39 omatchade banktransaktioner, 2 omatchade huvudbokslinjer på 1930). ' +
+        'Bankens saldo när historiken börjar skiljer sig dessutom från bokfört saldo med -249441.81 kr (opening_difference): ' +
+        'den ingående skillnaden ingår inte i differensen ovan, som bara jämför rörelser',
+    )
+    // Wording only: the gate, its count and its severity are the movement's.
+    expect(blocker).toMatchObject({ kind: 'bank_unreconciled', severity: 'high', count: 41, hint: GENERIC_HINT })
+  })
+
+  it('says nothing of an opening difference that is zero or unknown', async () => {
+    for (const opening_difference of [0, null]) {
+      const blocker = await bankBlockerFor({
+        difference: -300,
+        unmatched_transaction_count: 1,
+        unmatched_gl_line_count: 0,
+        unexplained_difference: 0,
+        history_start: '2026-01-10',
+        opening_difference,
+      })
+      expect(blocker.message).not.toContain('opening_difference')
+      expect(blocker.message).toContain('bankens transaktioner mot periodens verifikat')
+    }
   })
 
   it('hint names the bank file import, reachable tools, and what does not clear the gate', () => {

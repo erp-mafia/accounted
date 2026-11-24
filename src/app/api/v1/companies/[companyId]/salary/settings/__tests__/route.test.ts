@@ -745,6 +745,9 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
     expect(JSON.parse(JSON.stringify(payload))).toEqual({
       company_id: COMPANY_ID,
       user_id: USER_ID,
+      // A company without a settings row has been paid on the calendar
+      // vacation year; its new row keeps it instead of the column default.
+      salary_vacation_year_basis: 'calendar',
       salary_pay_day: 27,
       salary_deviation_period: 'previous_month',
     })

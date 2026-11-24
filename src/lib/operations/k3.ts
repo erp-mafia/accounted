@@ -404,7 +404,15 @@ const TransitionView = z.object({
     .nullable(),
   committed: z.boolean(),
   transition_date: z.string().nullable(),
-  year: z.object({ fiscal_period_id: z.string(), framework: z.enum(['k2', 'k3']), open: z.boolean() }).nullable(),
+  year: z
+    .object({
+      fiscal_period_id: z.string(),
+      framework: z.enum(['k2', 'k3']),
+      framework_source: z.string(),
+      framework_confirmed: z.boolean(),
+      open: z.boolean(),
+    })
+    .nullable(),
   assets: z.array(
     z.object({
       asset_id: z.string(),
