@@ -49,6 +49,14 @@ vi.mock('@/lib/core/bookkeeping/period-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/core/bookkeeping/period-service')>()),
   resolvePeriodStatusForDate: vi.fn().mockResolvedValue({ status: 'open', period_id: '00000000-0000-4000-8000-00000000f001', lock_date: null }),
 }))
+// The landing check correct_entry runs before the storno service
+// (lib/vat/moved-correction-vat.ts, tested there): on the original's date here.
+vi.mock('@/lib/vat/moved-correction-vat', () => ({
+  correctionLanding: vi.fn().mockResolvedValue({
+    target: { date: '2026-03-10', fiscal_period_id: '00000000-0000-4000-8000-00000000f001', moved: false },
+    vatWarning: null,
+  }),
+}))
 vi.mock('@/lib/core/documents/document-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/core/documents/document-service')>()),
   linkToJournalEntry: vi.fn(),
