@@ -13,9 +13,11 @@ import {
   pictureRowHref,
   pictureRowOf,
   readsBriefingAtLoad,
+  wikiDestination,
   wikiPlace,
   wikiViewHref,
   withoutPictureRow,
+  type WikiCompany,
 } from '../wiki-views'
 
 describe('wiki views', () => {
@@ -278,5 +280,61 @@ describe('when the page reads the briefing', () => {
 
   it('reads it at load when the address names the Kontext row', () => {
     expect(readsBriefingAtLoad(true, 'context')).toBe(true)
+  })
+})
+
+describe('where an address into the wiki ends', () => {
+  const withPicture: WikiCompany = { picture: true, facts: false, agentConnection: true }
+  const noConnection: WikiCompany = { picture: true, facts: false, agentConnection: false }
+  const noPicture: WikiCompany = { picture: false, facts: false, agentConnection: true }
+  /** Every address a page forwards into the wiki with, and a few it never would. */
+  const ADDRESSES: string[] = [
+    '/wiki',
+    '/wiki?view=context',
+    '/wiki?view=checks',
+    '/wiki?view=memory',
+    '/wiki?view=knowledge',
+    '/wiki?view=knowledge&item=horizontal.swedish-vat',
+    '/wiki?view=skills',
+    '/wiki?view=facts',
+    '/wiki?view=map',
+    '/wiki?view=nonsense',
+    '/wiki?agent=claude',
+  ]
+
+  it('is the address itself where /wiki shows a page for it', () => {
+    for (const address of ADDRESSES.filter((a) => a !== '/wiki?view=map')) expect(wikiDestination(address, withPicture), address).toBe(address)
+    for (const address of ADDRESSES) expect(wikiDestination(address, noPicture), address).toBe(address)
+  })
+
+  it('is the place /wiki leads on to where it shows none: the map with the picture, everything of the picture without the agent connection', () => {
+    expect(wikiDestination('/wiki?view=map', withPicture)).toBe('/rules')
+    for (const address of ADDRESSES) expect(wikiDestination(address, noConnection), address).toBe('/rules')
+  })
+
+  it('keeps Fakta where the company has it, with or without the agent connection', () => {
+    expect(wikiDestination('/wiki?view=facts', { picture: true, facts: true, agentConnection: false })).toBe('/wiki?view=facts')
+    expect(wikiDestination('/wiki?view=facts', { picture: true, facts: true, agentConnection: true })).toBe('/wiki?view=facts')
+  })
+
+  it('leaves an address that is not the wiki\'s as it is', () => {
+    for (const address of ['/rules', '/skills', '/skills/ny', '/wiki/customer/11111111-1111-4111-8111-111111111111', '/wikipedia?view=map']) {
+      expect(wikiDestination(address, noConnection), address).toBe(address)
+    }
+  })
+
+  it('says for every address what /wiki itself answers: the two cannot disagree', () => {
+    const companies: WikiCompany[] = []
+    for (const picture of [true, false]) for (const facts of [true, false]) for (const agentConnection of [true, false]) companies.push({ picture, facts, agentConnection })
+    for (const company of companies) {
+      for (const address of ADDRESSES) {
+        const query = new URLSearchParams(address.split('?')[1] ?? '')
+        const place = wikiPlace({ view: query.get('view'), item: query.get('item') }, company)
+        expect(wikiDestination(address, company), `${address} ${JSON.stringify(company)}`).toBe(place.show === 'redirect' ? place.href : address)
+        // Where it ends, /wiki shows a page: nothing is left to forward.
+        const end = wikiDestination(address, company)
+        expect(wikiDestination(end, company)).toBe(end)
+      }
+    }
   })
 })

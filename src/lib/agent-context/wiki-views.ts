@@ -124,6 +124,19 @@ export function pictureHrefOfView(view: WikiView): string {
   return wikiViewHref(view)
 }
 
+/**
+ * What decides where an address of the wiki ends, for one company: whether
+ * it has the agent picture, whether it has Fakta, and whether the
+ * installation has the agent connection (the MCP server extension; taken as
+ * there when not given). lib/agent-context/wiki-company.ts reads it on the
+ * server.
+ */
+export interface WikiCompany {
+  picture: boolean
+  facts: boolean
+  agentConnection?: boolean
+}
+
 /** What /wiki shows for an address: one of its views, the picture with the row and the item the address names, or another page. */
 export type WikiPlace =
   | { show: 'view'; view: WikiView }
@@ -151,16 +164,32 @@ export type WikiPlace =
  * Agenter menu there, so neither the address nor a redirect into it ends on
  * a page that only says the connection does not exist.
  */
-export function wikiPlace(
-  address: { view?: string | null; item?: string | null },
-  company: { picture: boolean; facts: boolean; agentConnection?: boolean },
-): WikiPlace {
+export function wikiPlace(address: { view?: string | null; item?: string | null }, company: WikiCompany): WikiPlace {
   const parsed = parseWikiView(address.view)
   const view = parsed === 'facts' && !company.facts ? 'context' : parsed
   if (!company.picture || view === 'facts') return { show: 'view', view }
   if (view === 'map' || company.agentConnection === false) return { show: 'redirect', href: PICTURE_PROFILE_HREF }
   const row = pictureRowOf(address.view)
   return { show: 'picture', row, item: row === 'knowledge' && address.item ? address.item : null }
+}
+
+/** The wiki's own path. */
+const WIKI_PATH = '/wiki'
+
+/**
+ * Where an address ends for a company: the address itself when it is not
+ * /wiki's, or when /wiki shows a page for it; the place /wiki leads on to
+ * otherwise. It asks wikiPlace, the function /wiki itself asks, so a page
+ * that forwards into the wiki and names this place forwards once: /wiki has
+ * nothing left to forward, and the two cannot disagree.
+ */
+export function wikiDestination(href: string, company: WikiCompany): string {
+  const hashAt = href.indexOf('#')
+  const [path, search = ''] = (hashAt < 0 ? href : href.slice(0, hashAt)).split('?')
+  if (path !== WIKI_PATH) return href
+  const query = new URLSearchParams(search)
+  const place = wikiPlace({ view: query.get('view'), item: query.get(PICTURE_ITEM_PARAM) }, company)
+  return place.show === 'redirect' ? place.href : href
 }
 
 /**

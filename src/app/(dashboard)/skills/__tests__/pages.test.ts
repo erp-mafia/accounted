@@ -10,6 +10,11 @@ import type { ItemKind } from '@/components/skills/hues'
 // own flow, own knowledge or an own analysis) answer whatever the Agenter
 // page's own switch (AGENTS_PAGE_COMPANY_IDS) says. Without the picture, and
 // for every other id, both pages answer by the Agenter page's switch alone.
+//
+// The test states the installation itself: with the agent connection (the
+// MCP server extension) unless a case takes it away. Without it there is no
+// picture, and the two addresses that lead to it lead to where /wiki would
+// send them on, in the same one step.
 
 const redirect = vi.fn((url: string) => {
   throw new Error(`NEXT_REDIRECT:${url}`)
@@ -26,6 +31,10 @@ vi.mock('@/components/skills/InstructionDetail', () => ({ InstructionDetail: () 
 
 const COMPANY = 'aaaaaaaa-0000-4000-8000-000000000001'
 vi.mock('../../request-context', () => ({ getDashboardCompanyId: async () => COMPANY }))
+
+// The extensions the installation is built with, as the pages read them.
+const { extensions } = vi.hoisted(() => ({ extensions: new Set<string>() }))
+vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({ ENABLED_EXTENSION_IDS: extensions }))
 
 const { default: SkillsIndexPage } = await import('../page')
 const { default: SkillsItemPage } = await import('../[id]/page')
@@ -47,6 +56,8 @@ function agentsPage(on: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  extensions.clear()
+  extensions.add('mcp-server')
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -115,6 +126,33 @@ describe.each([
       } else {
         await expect(itemPage(id), id).rejects.toThrow('NEXT_NOT_FOUND')
       }
+    }
+    expect(redirect).not.toHaveBeenCalled()
+  })
+})
+
+describe.each([
+  ['the Agenter page open', true],
+  ['the Agenter page closed', false],
+])('with the agent picture on, without the agent connection, and %s', (_name, agents) => {
+  beforeEach(() => {
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
+    agentsPage(agents)
+    extensions.delete('mcp-server')
+  })
+
+  it('/skills and a knowledge item lead to Bokföringsregler, where /wiki would send them on, in one step', async () => {
+    await expect(SkillsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/rules')
+    await expect(itemPage('kunskap.horizontal.swedish-vat')).rejects.toThrow('NEXT_REDIRECT:/rules')
+    expect(redirect).toHaveBeenCalledTimes(2)
+    expect(notFound).not.toHaveBeenCalled()
+  })
+
+  it('an own item\'s pages still open, and every other id answers by the Agenter page switch alone', async () => {
+    for (const id of OWN_ITEM_PAGES) expect((await itemPage(id)).type, id).toBe(InstructionDetail)
+    for (const id of OTHER_PAGES) {
+      if (agents) expect((await itemPage(id)).type, id).toBe(InstructionDetail)
+      else await expect(itemPage(id), id).rejects.toThrow('NEXT_NOT_FOUND')
     }
     expect(redirect).not.toHaveBeenCalled()
   })

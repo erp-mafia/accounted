@@ -1,8 +1,8 @@
 import { notFound, redirect } from 'next/navigation'
 import { getDashboardCompanyId } from '../../request-context'
 import { isAgentItemPageEnabled } from '@/lib/agent-skills/flag'
-import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
-import { pictureRowHref } from '@/lib/agent-context/wiki-views'
+import { wikiCompany } from '@/lib/agent-context/wiki-company'
+import { pictureRowHref, wikiDestination } from '@/lib/agent-context/wiki-views'
 import { COMMUNITY_OPEN } from '@/lib/agent-skills/agents'
 import { InstructionDetail } from '@/components/skills/InstructionDetail'
 
@@ -14,12 +14,14 @@ const KNOWLEDGE_SEGMENT = 'kunskap.'
  * For a company with the agent picture on, a knowledge item's address (kunskap.<pack>) leads to the picture with its Kunskap row open on
  * that item's folder, and an own item's pages (ny, own-<uuid>, egen.<uuid>) answer, whatever the Agenter page's own switch says: the
  * picture's Kunskap panel links to them. Every other id answers as it does without the picture (isAgentItemPageEnabled).
+ * The forward names where the picture's address ends (wikiDestination), so it is one step also where /wiki itself would lead on.
  */
 export default async function AgentPage({ params }: { params: Promise<{ id: string }> }) {
   const companyId = await getDashboardCompanyId()
   const { id } = await params
   const segment = decodeURIComponent(id)
-  if (isAgentPictureEnabled(companyId) && segment.startsWith(KNOWLEDGE_SEGMENT)) redirect(pictureRowHref('knowledge', segment.slice(KNOWLEDGE_SEGMENT.length)))
+  const company = wikiCompany(companyId)
+  if (company.picture && segment.startsWith(KNOWLEDGE_SEGMENT)) redirect(wikiDestination(pictureRowHref('knowledge', segment.slice(KNOWLEDGE_SEGMENT.length)), company))
   if (!isAgentItemPageEnabled(companyId, segment)) notFound()
   // Community items and author pages wait for the community launch.
   if (!COMMUNITY_OPEN && (segment.startsWith('community.') || segment.startsWith('av.'))) notFound()
