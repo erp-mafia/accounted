@@ -136,24 +136,69 @@ describe('evaluateGronTeknikClaim', () => {
     expect(result.value.begart_belopp).toBe(17500)
   })
 
-  it('truncates begärt to whole kronor and rounds kostnad to the nearest krona', () => {
+  it('drops the öre from kostnad, begärt and betalt (SFS 2020:1066 5 §)', () => {
+    // 10 004.16 kr incl. moms, 1 500.62 credited: the buyer paid 8 503.54.
     const items = [line({ unit_price: 8003.33, line_total: 8003.33, vat_amount: 2000.83, deduction_amount: 1500.62 })]
     const result = evaluateGronTeknikClaim(gronInvoice({ deduction_total: 1500.62 }, items), { today: TODAY })
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.value.installations[0]).toMatchObject({ kostnad: 10004, begart_belopp: 1500, betalt_belopp: 8504 })
+    expect(result.value.installations[0]).toMatchObject({ kostnad: 10004, begart_belopp: 1500, betalt_belopp: 8503 })
+  })
+
+  it('drops 50 öre or more too, never rounding kostnad up to a krona the buyer was not charged', () => {
+    // 26 667 kr + 6 666.75 kr moms = 33 333.75 kr, and the invoice credits
+    // 4 999 (15 % of 33 333 with the öre dropped). The ärende states kostnad
+    // 33 333, not 33 334, and the buyer paid 28 334.75, so betalt is 28 334.
+    const items = [line({ unit_price: 26667, line_total: 26667, vat_amount: 6666.75, deduction_amount: 4999 })]
+    const result = evaluateGronTeknikClaim(gronInvoice({ deduction_total: 4999 }, items), { today: TODAY })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.installations[0]).toMatchObject({ kostnad: 33333, begart_belopp: 4999, betalt_belopp: 28334 })
+    const [installation] = result.value.installations
+    expect(installation.begart_belopp + installation.betalt_belopp).toBeLessThanOrEqual(installation.kostnad)
+  })
+
+  it('never asks more than the rate allows on what the buyer paid (SFS 2020:1066 7 §)', () => {
+    // An older invoice that credited öre. Solar: 1 254 kr incl. moms with
+    // 188.10 credited, so the buyer paid 1 065.90. 15 % of the kostnad is
+    // 188, but three seventeenths of the 1 065 paid is 187.94: it asks 187.
+    const solarLine = line({ unit_price: 1003.2, line_total: 1003.2, vat_amount: 250.8, deduction_amount: 188.1 })
+    const solarResult = evaluateGronTeknikClaim(gronInvoice({ deduction_total: 188.1 }, [solarLine]), { today: TODAY })
+    expect(solarResult.ok).toBe(true)
+    if (!solarResult.ok) return
+    expect(solarResult.value.installations[0]).toMatchObject({ kostnad: 1254, begart_belopp: 187, betalt_belopp: 1065 })
+
+    // Battery: 100 000 kr incl. moms with 50 000.50 credited, so the buyer
+    // paid 49 999.50. At 50 % the payout is at most what the buyer paid.
+    const battery = line({ work_type: 'INSTALLATION_LAGRING', unit_price: 80000, line_total: 80000, vat_amount: 20000, deduction_amount: 50000.5 })
+    const batteryResult = evaluateGronTeknikClaim(gronInvoice({ deduction_total: 50000.5 }, [battery]), { today: TODAY })
+    expect(batteryResult.ok).toBe(true)
+    if (!batteryResult.ok) return
+    expect(batteryResult.value.installations[0]).toMatchObject({ kostnad: 100000, begart_belopp: 49999, betalt_belopp: 49999 })
+  })
+
+  it('drops the öre from övrig kostnad', () => {
+    const items = solarItems()
+    items[2] = { ...items[2], unit_price: 800.6, line_total: 800.6, vat_amount: 200.15 }
+    const result = evaluateGronTeknikClaim(gronInvoice({}, items), { today: TODAY })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.ovrig_kostnad).toBe(1000)
   })
 
   it('never requests more than the rate of the whole-krona kostnad', () => {
     // 33 333.49 kr incl. moms at 15 % books 5 000.02 on 1513, but the ärende
-    // states kostnad 33 333, and 15 % of that is 4 999.95.
+    // states kostnad 33 333, and 15 % of that is 4 999.95. The buyer paid
+    // 28 333.47.
     const items = [line({ unit_price: 26666.79, line_total: 26666.79, vat_amount: 6666.7, deduction_amount: 5000.02 })]
     const result = evaluateGronTeknikClaim(gronInvoice({ deduction_total: 5000.02 }, items), { today: TODAY })
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.value.installations[0]).toMatchObject({ kostnad: 33333, begart_belopp: 4999, betalt_belopp: 28334 })
+    expect(result.value.installations[0]).toMatchObject({ kostnad: 33333, begart_belopp: 4999, betalt_belopp: 28333 })
     expect(result.value.begart_belopp).toBe(4999)
   })
 
@@ -181,9 +226,9 @@ describe('evaluateGronTeknikClaim', () => {
   })
 
   it('warns above the 50 000 kr ceiling and after the 31 January deadline', () => {
-    const items = [line({ work_type: 'INSTALLATION_LAGRING', unit_price: 80000, line_total: 80000, vat_amount: 20000, deduction_amount: 50000.5 })]
+    const items = [line({ work_type: 'INSTALLATION_LAGRING', unit_price: 80000, line_total: 80000, vat_amount: 20000, deduction_amount: 50000 })]
     const result = evaluateGronTeknikClaim(
-      gronInvoice({ deduction_total: 50000.5, paid_at: '2025-06-01T10:00:00Z' }, items),
+      gronInvoice({ deduction_total: 50000, paid_at: '2025-06-01T10:00:00Z' }, items),
       { today: TODAY },
     )
     expect(result.ok).toBe(true)

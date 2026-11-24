@@ -23905,7 +23905,7 @@ export const tools: McpTool[] = [
     keywords: ['rotavdrag', 'rutavdrag', 'husarbete', 'utbetalningsfil'],
     title: 'Generate Rot/Rut Payout File',
     description:
-      'Begäran om utbetalning for rot/rut (husavdrag) or grön teknik from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns app_url for the user.',
+      'Begäran om utbetalning for rot, rut or grön teknik from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns app_url for the user.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -23944,7 +23944,7 @@ export const tools: McpTool[] = [
         file_document_id: { type: ['string', 'null'] },
         download_url: { type: ['string', 'null'] },
         requested_total: { type: 'number' },
-        other_type_counts: { type: 'object', description: 'Invoices of the other file kind, counted not listed' },
+        other_type_counts: { type: 'object', description: 'Invoices of the other kind, counted not listed' },
         arenden: { type: 'array', items: { type: 'object' } },
         warnings: { type: 'array', items: { type: 'string' } },
         upload_url: { type: 'string' },

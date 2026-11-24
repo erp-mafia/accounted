@@ -1014,6 +1014,11 @@ describe('tools/list payload size guard', () => {
     // examples and leaves replaces to the parameter's own note, and the
     // content note is one clause shorter. Measured 63 097 (full catalog
     // 67 526; main 63 097 and 67 526). Ceiling unchanged.
+    // 2026-11-24: gron_teknik on gnubok_generate_rot_rut_file's
+    // deduction_type, named in its description. Wire data on an existing
+    // tool, paid for on the same tool (a shorter description and
+    // other_type_counts note). Measured 63 096 (full catalog 67 526; main
+    // 63 097 and 67 526). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

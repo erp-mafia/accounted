@@ -1,7 +1,7 @@
 import { escapeXml } from '@/lib/xml/escape'
 import type { Invoice } from '@/types'
 import { evaluateGronTeknikClaim } from './gron-teknik-claim'
-import { readClaimBuyer, type RotRutBlocker } from './rot-rut-file'
+import { fileFakturaNr, readClaimBuyer, type RotRutBlocker } from './rot-rut-file'
 
 /**
  * Begäran om utbetalning: grön teknik (Skatteverkets e-tjänst "Grön teknik:
@@ -136,7 +136,7 @@ export function buildGronTeknikFile(params: {
     const label = claim.invoice_number ?? claim.invoice_id
     for (const warning of claim.warnings) warnings.push(`Faktura ${label}: ${warning}`)
 
-    const fakturaNr = invoice.invoice_number ? String(invoice.invoice_number).slice(0, 20) : null
+    const fakturaNr = fileFakturaNr(invoice.invoice_number)
     const xml: string[] = []
     const arenden: GronTeknikFileArende[] = []
     claim.installations.forEach((installation, index) => {

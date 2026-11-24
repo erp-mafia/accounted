@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { beslutFileIsForCompany, type RotRutBeslutFile } from './rot-rut-beslut-file'
+import { fileFakturaNr } from './rot-rut-file'
 
 /**
  * Import of Skatteverkets beslutsfil for rot/rut (the decision JSON the user
@@ -184,7 +185,8 @@ async function applyBeslut(
     }
     return {
       ...item,
-      invoiceNumber: item.invoice?.invoice_number != null ? String(item.invoice.invoice_number) : null,
+      // What the file sent as FakturaNr, which Skatteverket's beslut repeats.
+      invoiceNumber: fileFakturaNr(item.invoice?.invoice_number),
       personnummer,
     }
   })

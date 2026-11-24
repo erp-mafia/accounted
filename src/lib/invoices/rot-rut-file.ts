@@ -261,6 +261,15 @@ export function readClaimPayment(invoice: Invoice, today?: string): ClaimStep<st
   return { ok: true, value: paidDate }
 }
 
+/**
+ * The FakturaNr a begäran file states for an invoice: both schemas take at
+ * most 20 characters. The beslut import matches Skatteverket's fakturanummer
+ * against this, not the full invoice number.
+ */
+export function fileFakturaNr(invoiceNumber: string | number | null | undefined): string | null {
+  return invoiceNumber ? String(invoiceNumber).slice(0, 20) : null
+}
+
 /** The buyer (Kopare) as the 12-digit personnummer a claim reports. */
 export function readClaimBuyer(invoice: Invoice): ClaimStep<string> {
   if (!invoice.deduction_personnummer_encrypted) {
@@ -535,7 +544,7 @@ export function evaluateInvoiceForFile(
         begart_belopp: begartBelopp,
       },
       kopare,
-      fakturaNr: invoice.invoice_number ? String(invoice.invoice_number).slice(0, 20) : null,
+      fakturaNr: fileFakturaNr(invoice.invoice_number),
       property,
       work,
     },

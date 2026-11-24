@@ -129,6 +129,41 @@ describe('importRotRutBeslutFile', () => {
     }))
   })
 
+  it('matches the 20-character FakturaNr the file sent for a longer invoice number', async () => {
+    const longNumber = 'PROJ-2026-SOLAR-000123'
+    enqueue(ORG_SETTINGS)
+    enqueue({ data: [makeRequestRow({ name: 'GT 2026-11-23', requested_total: 17500 })] })
+    enqueue({
+      data: [
+        makeItemRow({
+          requested_amount: 17500,
+          invoice: { invoice_number: longNumber, deduction_personnummer_encrypted: encryptPersonnummer(PNR) },
+        }),
+      ],
+    })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc
+
+    const sent = longNumber.slice(0, 20)
+    const result = await importRotRutBeslutFile(
+      db,
+      'company-1',
+      makeFile({
+        beslut: [
+          {
+            namn: 'GT 2026-11-23',
+            referensnummer: '20260000301-01',
+            arenden: [
+              { personnummer: PNR, fakturanummer: sent, godkantBelopp: 7500 },
+              { personnummer: PNR, fakturanummer: sent, godkantBelopp: 10000 },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(result.ok && result.results[0]).toMatchObject({ status: 'imported', decided_total: 17500, items_updated: 1 })
+  })
+
   it('never lets two ärenden without fakturanummer take the same item by personnummer', async () => {
     enqueue(ORG_SETTINGS)
     enqueue({ data: [makeRequestRow()] })
