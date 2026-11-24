@@ -12,7 +12,7 @@ import {
   DOMESTIC_REVERSE_CHARGE_NOTICE,
   EU_GOODS_SUPPLY_NOTICE,
   EU_REVERSE_CHARGE_NOTICE,
-  EXPORT_NOTICE_SV,
+  EXPORT_GOODS_NOTICE_SV,
   deriveInvoiceVatHeader,
   getPermittedVatRates,
   getVatRules,
@@ -77,7 +77,7 @@ describe('export of goods', () => {
     const resolved = resolveInvoiceVatRules(swedishBusiness, { vat_treatment: 'export', delivery_country: 'NO' })
     expect(resolved).toMatchObject({
       ok: true,
-      rules: { treatment: 'export', rate: 0, momsRuta: '36', reverseChargeText: EXPORT_NOTICE_SV },
+      rules: { treatment: 'export', rate: 0, momsRuta: '36', reverseChargeText: EXPORT_GOODS_NOTICE_SV },
       explainFromCustomer: false,
     })
     // Only 0 % on the priced lines: a Swedish-VAT supply is a separate invoice.

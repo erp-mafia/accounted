@@ -7,7 +7,8 @@ import {
   getVatRules,
   EU_GOODS_SUPPLY_NOTICE,
   EU_REVERSE_CHARGE_NOTICE,
-  EXPORT_NOTICE_SV,
+  EXPORT_GOODS_NOTICE_SV,
+  EXPORT_SERVICES_NOTICE_SV,
 } from '../vat-rules'
 
 const deriveInvoiceVatHeader = (
@@ -48,7 +49,7 @@ describe('deriveInvoiceVatHeader', () => {
   it('export for a non-EU business', () => {
     expect(
       deriveInvoiceVatHeader({ customer_type: 'non_eu_business', country: 'US' }, [0], { vatRegistered: true }),
-    ).toEqual({ vat_treatment: 'export', moms_ruta: '40', reverse_charge_text: EXPORT_NOTICE_SV })
+    ).toEqual({ vat_treatment: 'export', moms_ruta: '40', reverse_charge_text: EXPORT_SERVICES_NOTICE_SV })
   })
 
   it('momsfri for a seller that is not VAT registered', () => {
@@ -158,7 +159,7 @@ describe('syncDraftVatHeadersForCustomer', () => {
               id: 'draft-1',
               vat_treatment: 'export',
               moms_ruta: '36',
-              reverse_charge_text: EXPORT_NOTICE_SV,
+              reverse_charge_text: EXPORT_GOODS_NOTICE_SV,
               vat_treatment_override: 'export',
               delivery_country: 'NO',
               items: [{ vat_rate: 0, line_type: 'product' }],

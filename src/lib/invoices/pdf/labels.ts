@@ -1,7 +1,12 @@
-import { DOMESTIC_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import {
+  DOMESTIC_REVERSE_CHARGE_NOTICE,
+  EXPORT_GOODS_NOTICE_SV,
+  EXPORT_SERVICES_NOTICE_SV,
+  LEGACY_EXPORT_NOTICE_SV,
+} from '@/lib/invoices/vat-rules'
 import type { PdfLang } from '@/lib/invoices/pdf/format'
 
-// Customer-facing labels. Statutory chapter references (ML 17 kap 24§, ML 3 kap.)
+// Customer-facing labels. Statutory chapter references (ML 17 kap 24§, ML 10 kap.)
 // stay intact in both locales: they identify the law, not the language.
 // Labels keep their colon where the template prints "label value" on one
 // line; stacked labels and column headings print them without (bareLabel).
@@ -91,8 +96,10 @@ export const PDF_LABELS = {
     // Proforma / quote / exempt
     proformaNotice: 'Detta är en proformafaktura och utgör ingen betalningsanmodan.',
     quoteNotice: 'Detta är en offert och utgör ingen faktura eller betalningsanmodan.',
-    exemptNotice: 'Undantag från skatteplikt, ML 3 kap.',
-    exportNotice: EXPORT_NOTICE_SV,
+    exemptNotice: 'Undantag från skatteplikt, ML 10 kap.',
+    exportServicesNotice: EXPORT_SERVICES_NOTICE_SV,
+    exportGoodsNotice: EXPORT_GOODS_NOTICE_SV,
+    legacyExportNotice: LEGACY_EXPORT_NOTICE_SV,
     domesticReverseChargeNotice: DOMESTIC_REVERSE_CHARGE_NOTICE,
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Footer
@@ -169,8 +176,10 @@ export const PDF_LABELS = {
     totalInSek: 'Total in SEK:',
     proformaNotice: 'This is a proforma invoice and is not a request for payment.',
     quoteNotice: 'This is a quote and is not an invoice or a request for payment.',
-    exemptNotice: 'Exempt from VAT (ML 3 kap., Swedish VAT Act).',
-    exportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
+    exemptNotice: 'Exempt from VAT (ML 10 kap., Swedish VAT Act).',
+    exportServicesNotice: 'Service supplied outside Sweden, not subject to Swedish VAT (ML 6 kap. 33 §, Swedish VAT Act).',
+    exportGoodsNotice: 'Export outside the EU, exempt from Swedish VAT (ML 10 kap. 64 §, Swedish VAT Act).',
+    legacyExportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
     // Skatteverket accepts "Reverse charge" as the English notation (dnr 8-724682).
     domesticReverseChargeNotice: 'Reverse charge, construction services: the buyer accounts for the VAT (ML 16 kap. 13 §, Swedish VAT Act).',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
@@ -193,13 +202,15 @@ export const PDF_LABELS = {
  *
  * reverse_charge_text is stamped in Swedish at create time and stored on the
  * invoice, so an English PDF of an existing export invoice would otherwise
- * print "Omsättning utanför EU, ML 10 kap." verbatim. Known statutory defaults
- * (byte-identical to the constants getVatRules() writes) are rendered from
- * LABELS in the document language; any other text (custom or unknown) is
- * printed exactly as stored.
+ * print the Swedish notice verbatim. Known statutory defaults (byte-identical
+ * to the constants getVatRules() writes, and the export notice older invoices
+ * were stamped with) are rendered from LABELS in the document language; any
+ * other text (custom or unknown) is printed exactly as stored.
  */
 export function localizeVatNotice(text: string, lang: PdfLang): string {
-  if (text === EXPORT_NOTICE_SV) return PDF_LABELS[lang].exportNotice
+  if (text === EXPORT_SERVICES_NOTICE_SV) return PDF_LABELS[lang].exportServicesNotice
+  if (text === EXPORT_GOODS_NOTICE_SV) return PDF_LABELS[lang].exportGoodsNotice
+  if (text === LEGACY_EXPORT_NOTICE_SV) return PDF_LABELS[lang].legacyExportNotice
   if (text === DOMESTIC_REVERSE_CHARGE_NOTICE) return PDF_LABELS[lang].domesticReverseChargeNotice
   return text
 }
