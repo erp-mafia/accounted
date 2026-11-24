@@ -76,3 +76,14 @@ describe('the count of the cards past the listed ones', () => {
     expect(tEn('picture.agents_more', { count: 2 })).toBe('+2 more')
   })
 })
+
+describe('the card of the connections the person may not list', () => {
+  const sentence = (t: PictureMessages, count: number): string => `${t('picture.agents_others', { count })} ${t('picture.agents_others_by', { count })}`
+
+  it('says how many connections other people have made, in the singular and the plural', () => {
+    expect(sentence(tSv, 3)).toBe('3 anslutningar som andra har kopplat')
+    expect(sentence(tSv, 1)).toBe('1 anslutning som någon annan har kopplat')
+    expect(sentence(tEn, 3)).toBe('3 connections made by others')
+    expect(sentence(tEn, 1)).toBe('1 connection made by someone else')
+  })
+})

@@ -8,10 +8,13 @@ import {
   isFresh,
   latestDelivery,
   memoryDots,
+  offersClients,
+  otherConnections,
   startsWithBrand,
   summarizeChecks,
+  type OtherConnections,
 } from '../agent-picture-view'
-import type { PictureCheckLine, PictureChecks, PictureSource, PictureSourceGroup } from '../agent-picture'
+import type { PictureAgents, PictureCheckLine, PictureChecks, PictureSource, PictureSourceGroup } from '../agent-picture'
 
 const source = (over: Partial<PictureSource>): PictureSource => ({
   id: 'x',
@@ -309,5 +312,30 @@ describe('the agent groups', () => {
     ])
     expect(groupAgents([claude], 'Accounted').map((g) => g.id)).toEqual(['clients'])
     expect(groupAgents([], 'Accounted')).toEqual([])
+  })
+})
+
+describe('the connections the person may not list', () => {
+  const agents = (others: number | null): Pick<PictureAgents, 'others'> => ({ others })
+
+  it('says how many there are, nothing when there are none, and that it is not known when they were not counted', () => {
+    const cases: Array<[Pick<PictureAgents, 'others'> | null, OtherConnections]> = [
+      [agents(3), { kind: 'count', count: 3 }],
+      [agents(1), { kind: 'count', count: 1 }],
+      [agents(0), { kind: 'none' }],
+      [agents(null), { kind: 'unknown' }],
+      // The connections could not be read at all: the column says so in its own card.
+      [null, { kind: 'none' }],
+    ]
+    for (const [given, expected] of cases) expect(otherConnections(given)).toEqual(expected)
+  })
+
+  it('offers a client as not connected only when it is known that nobody else has connected anything', () => {
+    expect(offersClients(agents(0))).toBe(true)
+    // A member whose colleagues' agents work the company is not told that Claude is not connected.
+    expect(offersClients(agents(1))).toBe(false)
+    expect(offersClients(agents(4))).toBe(false)
+    expect(offersClients(agents(null))).toBe(false)
+    expect(offersClients(null)).toBe(false)
   })
 })

@@ -661,6 +661,8 @@
       "agent_manage": "Hantera anslutningar",
       "agents_unknown": "Anslutningar",
       "agents_more": "+{count, number} till",
+      "agents_others": "{count, plural, =1 {# anslutning} other {# anslutningar}}",
+      "agents_others_by": "{count, plural, =1 {som någon annan har kopplat} other {som andra har kopplat}}",
       "checks_intro": "Bokföringen stäms av mot det som kommer utifrån. Agenten gör inte kontrollerna och kan inte ändra dem.",
       "checks_queue_unavailable": "Avstämningarna kunde inte läsas nu.",
       "checks_truncated": "{count, plural, =1 {# resultat till visas inte här} other {# resultat till visas inte här}}",

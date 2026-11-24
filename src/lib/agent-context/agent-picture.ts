@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { credentialActor } from '@/lib/auth/api-keys'
+import { allowlistReachesCompany, credentialActor } from '@/lib/auth/api-keys'
 import { partnerClientNames, partnerSlugOf } from '@/lib/auth/oauth-partner-clients'
 import { cashAccountBankName, cashAccountLogoUrl, type CashAccountWithBank } from '@/lib/cash-accounts/labels'
 import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
@@ -14,6 +14,7 @@ import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { connectionKind, type ConnectionKind } from '@/lib/settings/mcp-connections'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createServiceClient } from '@/lib/supabase/server'
+import { chunk } from '@/lib/utils'
 import { loadCompanySkillRows } from '@/lib/agent-skills/company-skills'
 import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
 import { catalogueKnowledge, chosenKnowledge, isActiveKnowledge } from '@/lib/agent-skills/knowledge-list'
@@ -40,8 +41,9 @@ const log = createLogger('agent-picture')
  * Every read filters on the company. The exceptions are named where they
  * are made: the company's own row (by id), the signed-in person's WhatsApp
  * link and own connections (by user), the names of the people whose
- * connections the person may list (by their ids), and the knowledge
- * catalogue, whose registry is the same for every company.
+ * connections the person may list (by their ids), the count of the
+ * connections the person may not list (by the company's members), and the
+ * knowledge catalogue, whose registry is the same for every company.
  */
 
 /** A source or connection as the picture draws it. */
@@ -248,6 +250,12 @@ export interface PictureAgents {
   list: PictureAgentCard[]
   /** Cards past the listed ones. */
   more: number
+  /**
+   * Live connections that reach the company and that the person may not
+   * list: other people's, and service accounts' the person cannot read. A
+   * number and nothing else about them. null when they could not be counted.
+   */
+  others: number | null
   /** null when the tool call log could not be read: the counts above are then 0 and mean nothing. */
   activity: PictureActivity | null
 }
@@ -278,6 +286,8 @@ export interface AgentPicturePorts {
 const PART_DEADLINE_MS = 2500
 /** The checks read the reports, so they get longer. */
 const CHECKS_DEADLINE_MS = 6000
+/** The count of the connections the person may not list: shorter than a part's, so a slow count never costs the listed connections. */
+const OTHERS_DEADLINE_MS = 2000
 
 /** Cards listed in the agents column; the rest are a number. */
 const MAX_AGENTS = 6
@@ -943,8 +953,63 @@ async function loadConnectionKeys(supabase: SupabaseClient, companyId: string, u
   for (const row of (data ?? []) as Array<{ api_key_id: string; company_id: string }>) {
     lists.set(row.api_key_id, [...(lists.get(row.api_key_id) ?? []), row.company_id])
   }
-  return [...here, ...elsewhere.filter((key) => !lists.has(key.id) || lists.get(key.id)!.includes(companyId))]
+  return [...here, ...elsewhere.filter((key) => allowlistReachesCompany(lists.get(key.id), companyId))]
 }
+
+/** Ids per read of a list keyed by ids. */
+const ID_CHUNK = 150
+
+/**
+ * How many live connections reach the company beyond the ones the person
+ * may list (`listed`, by key id): other people's sign-ins and keys, and the
+ * service-account keys the person cannot read. The answer is a number and
+ * nothing else: no name, no owner, no key leaves this function.
+ *
+ * Read with the service role, since the person's own access shows only
+ * their own connections, or for an owner or admin the ones homed in the
+ * company. Each read is keyed by the company: its members, the live keys of
+ * those members, its service accounts' live keys, and the company lists of
+ * the members' keys. Only key ids are read.
+ *
+ * A person's key reaches the company when its user is a member of it and the
+ * key's company list lets it in (lib/auth/api-keys.ts
+ * allowlistReachesCompany, the rule the listed connections are read by). A
+ * service account's key reaches its own company alone. Live is not revoked,
+ * as for the listed connections.
+ *
+ * Throws when a read fails.
+ */
+async function countOtherConnections(companyId: string, listed: ReadonlySet<string>): Promise<number> {
+  const service = createServiceClient()
+  const [members, accountKeys] = await Promise.all([
+    service.from('company_members').select('user_id').eq('company_id', companyId),
+    service.from('api_keys').select('id').eq('company_id', companyId).not('service_account_id', 'is', null).is('revoked_at', null),
+  ])
+  if (members.error) failed('company members', members.error)
+  if (accountKeys.error) failed('service account connections', accountKeys.error)
+  const ofAccounts = ((accountKeys.data ?? []) as Array<{ id: string }>).filter((key) => !listed.has(key.id)).length
+  const memberIds = [...new Set(((members.data ?? []) as Array<{ user_id: string }>).map((row) => row.user_id))]
+
+  // The members' own keys, wherever they were made: the filter is the company's members.
+  const candidates: string[] = []
+  for (const ids of chunk(memberIds, ID_CHUNK)) {
+    const rows = await fetchAllRows<{ id: string }>(({ from, to }) =>
+      service.from('api_keys').select('id').in('user_id', ids).is('service_account_id', null).is('revoked_at', null).order('id', { ascending: true }).range(from, to),
+    )
+    for (const row of rows) if (!listed.has(row.id)) candidates.push(row.id)
+  }
+  if (candidates.length === 0) return ofAccounts
+
+  const lists = new Map<string, string[]>()
+  for (const ids of chunk(candidates, ID_CHUNK)) {
+    const rows = await fetchAllRows<{ api_key_id: string; company_id: string }>(({ from, to }) =>
+      service.from('api_key_companies').select('api_key_id, company_id').in('api_key_id', ids).order('api_key_id', { ascending: true }).order('company_id', { ascending: true }).range(from, to),
+    )
+    for (const row of rows) lists.set(row.api_key_id, [...(lists.get(row.api_key_id) ?? []), row.company_id])
+  }
+  return ofAccounts + candidates.filter((id) => allowlistReachesCompany(lists.get(id), companyId)).length
+}
+
 
 /**
  * The names of the company's service accounts that hold a listed key, read
@@ -989,18 +1054,18 @@ async function ownerNames(companyId: string, userIds: readonly string[]): Promis
 type ReadConnection = PictureAgent & CardConnection
 
 /**
- * The company's connections as the person may list them, the ones that
- * worked last first, each with the calls `toolCalls` holds for it (the log
- * is read beside the reads here). Throws when the connections cannot be
- * read.
+ * The company's connections as the person may list them (`keyRows`,
+ * loadConnectionKeys), the ones that worked last first, each with the calls
+ * `toolCalls` holds for it (the log is read beside the reads here). Throws
+ * when the connections cannot be read.
  */
 async function readConnections(
-  supabase: SupabaseClient,
   companyId: string,
   userId: string,
+  keyRows: Promise<KeyRow[]>,
   toolCalls: Promise<Omit<PictureActivity, 'memory_facts' | 'work'> | null>,
 ): Promise<ReadConnection[]> {
-  const keys = await loadConnectionKeys(supabase, companyId, userId)
+  const keys = await keyRows
 
   const partnerSlugs = keys.map((key) => partnerSlugOf(key.client)).filter((slug): slug is string => slug !== null)
   const accountIds = [...new Set(keys.map((key) => key.service_account_id).filter((id): id is string => id !== null))]
@@ -1064,7 +1129,7 @@ function shownConnection({ service_account_id: _accountId, label: _label, ...con
  * cannot be read.
  */
 export async function loadAgentCards(supabase: SupabaseClient, companyId: string, userId: string): Promise<PictureAgentCard[]> {
-  const connections = await readConnections(supabase, companyId, userId, Promise.resolve(null))
+  const connections = await readConnections(companyId, userId, loadConnectionKeys(supabase, companyId, userId), Promise.resolve(null))
   return agentCards(connections).map((card): PictureAgentCard => ({ ...card, connections: card.connections.map(shownConnection) }))
 }
 
@@ -1076,14 +1141,18 @@ async function loadAgents(supabase: SupabaseClient, companyId: string, userId: s
     log.warn('tool call log unavailable', { companyId, reason: err instanceof Error ? err.message : String(err) })
     return null
   })
-  const [connections, calls, work] = await Promise.all([
-    readConnections(supabase, companyId, userId, toolCalls),
+  // The connections the person may list, read once: the cards are made of them, and the count of the others leaves them out.
+  const keys = loadConnectionKeys(supabase, companyId, userId)
+  const [connections, calls, work, others] = await Promise.all([
+    readConnections(companyId, userId, keys, toolCalls),
     toolCalls,
     workTodayOrUnknown(supabase, companyId, now),
+    // Unknown (null) when it fails or runs out of time: the listed connections are still answered.
+    within('other connections', companyId, OTHERS_DEADLINE_MS, async () => countOtherConnections(companyId, new Set((await keys).map((key) => key.id)))),
   ])
   // One card per product (agent-cards.ts), in the order of each card's newest connection.
   const cards = agentCards(connections).map((card): PictureAgentCard => ({ ...card, connections: card.connections.map(shownConnection) }))
-  return { list: cards.slice(0, MAX_AGENTS), more: Math.max(0, cards.length - MAX_AGENTS), activity: calls && { ...calls, work } }
+  return { list: cards.slice(0, MAX_AGENTS), more: Math.max(0, cards.length - MAX_AGENTS), others, activity: calls && { ...calls, work } }
 }
 
 // ---------------------------------------------------------------- the picture

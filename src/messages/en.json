@@ -661,6 +661,8 @@
       "agent_manage": "Manage connections",
       "agents_unknown": "Connections",
       "agents_more": "+{count, number} more",
+      "agents_others": "{count, plural, =1 {# connection} other {# connections}}",
+      "agents_others_by": "{count, plural, =1 {made by someone else} other {made by others}}",
       "checks_intro": "The books are checked against what comes from outside. The agent does not run the checks and cannot change them.",
       "checks_queue_unavailable": "The reconciliation checks could not be read now.",
       "checks_truncated": "{count, plural, =1 {# more result is not shown here} other {# more results are not shown here}}",

@@ -22,6 +22,7 @@ import {
   hasScope,
   validateApiKey,
   credentialActor,
+  allowlistReachesCompany,
   OAUTH_MCP_KEY_NAME,
   findStageApproveConflict,
   DEFAULT_SCOPES,
@@ -287,6 +288,30 @@ describe('agent:write scope', () => {
 // ============================================================
 // validateApiKey
 // ============================================================
+
+describe('allowlistReachesCompany', () => {
+  const COMPANY = 'aaaaaaaa-0000-4000-8000-000000000001'
+  const OTHER = 'bbbbbbbb-0000-4000-8000-000000000002'
+
+  it('lets a key without a company list into every company', () => {
+    expect(allowlistReachesCompany(null, COMPANY)).toBe(true)
+    expect(allowlistReachesCompany(undefined, COMPANY)).toBe(true)
+  })
+
+  it('lets a key with a list into the companies on it and no other', () => {
+    expect(allowlistReachesCompany([OTHER, COMPANY], COMPANY)).toBe(true)
+    expect(allowlistReachesCompany([OTHER], COMPANY)).toBe(false)
+  })
+
+  it('compares ids without case', () => {
+    expect(allowlistReachesCompany([COMPANY.toUpperCase()], COMPANY)).toBe(true)
+    expect(allowlistReachesCompany([COMPANY], COMPANY.toUpperCase())).toBe(true)
+  })
+
+  it('lets a list that is present and empty into nothing, as such a key is refused', () => {
+    expect(allowlistReachesCompany([], COMPANY)).toBe(false)
+  })
+})
 
 describe('validateApiKey', () => {
   function setupMockRpc(response: { data: unknown; error: unknown }) {

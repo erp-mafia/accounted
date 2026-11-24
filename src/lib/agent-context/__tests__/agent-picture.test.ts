@@ -868,6 +868,180 @@ describe('loadAgentPicture: agents', () => {
   })
 })
 
+/** A key as the key table holds it, for the tests that answer a read by its filters. */
+interface StoredKey {
+  id: string
+  name: string
+  client: string | null
+  last_used_at: string | null
+  created_at: string
+  user_id: string
+  service_account_id: string | null
+  company_id: string | null
+  revoked_at: string | null
+}
+const stored = (id: string, over: Partial<StoredKey> = {}): StoredKey => ({
+  id,
+  name: OAUTH_KEY_NAME,
+  client: 'claude',
+  last_used_at: null,
+  created_at: '2026-01-01T00:00:00.000Z',
+  user_id: USER,
+  service_account_id: null,
+  company_id: COMPANY,
+  revoked_at: null,
+  ...over,
+})
+/** Whether a stored key passes the filters of one read: eq, in, is and not-is, as the loader writes them. */
+function passes(row: StoredKey, ops: Call['ops']): boolean {
+  const value = (column: unknown): unknown => (typeof column === 'string' && Object.hasOwn(row, column) ? row[column as keyof StoredKey] : undefined)
+  return ops.every((op) => {
+    const [column, first, second] = op.args
+    if (op.method === 'eq' || op.method === 'is') return value(column) === first
+    if (op.method === 'in') return Array.isArray(first) && first.includes(value(column))
+    if (op.method === 'not') return first === 'is' ? value(column) !== second : true
+    return true
+  })
+}
+type Role = 'owner' | 'member' | 'viewer'
+/** The key table through the person's own access: an owner reads the company's keys and their own, anyone else only their own. */
+const keysAs = (db: readonly StoredKey[], role: Role): Handler => (call) => ({
+  data: db.filter((row) => (role === 'owner' ? row.company_id === COMPANY || row.user_id === USER : row.user_id === USER)).filter((row) => passes(row, call.ops)),
+})
+/** The key table through the service role: every key that passes the read's filters. */
+const everyKey = (db: readonly StoredKey[]): Handler => (call) => ({ data: db.filter((row) => passes(row, call.ops)) })
+interface Membership {
+  user_id: string
+  company_id: string
+}
+const membersOf = (rows: readonly Membership[]): Handler => (call) => {
+  const company = call.ops.find((op) => op.method === 'eq' && op.args[0] === 'company_id')?.args[1]
+  return { data: rows.filter((row) => row.company_id === company) }
+}
+interface KeyCompany {
+  api_key_id: string
+  company_id: string
+}
+const companyLists = (rows: readonly KeyCompany[]): Handler => (call) => {
+  const wanted = call.ops.find((op) => op.method === 'in' && op.args[0] === 'api_key_id')?.args[1]
+  return { data: rows.filter((row) => Array.isArray(wanted) && wanted.includes(row.api_key_id)) }
+}
+
+describe('loadAgentPicture: the connections the person may not list', () => {
+  // A colleague and a firm's consultant are members here; the stranger is not.
+  const MEMBERS: Membership[] = [
+    { user_id: USER, company_id: COMPANY },
+    { user_id: 'colleague', company_id: COMPANY },
+    { user_id: 'consultant', company_id: COMPANY },
+    { user_id: 'consultant', company_id: 'firm' },
+    { user_id: 'stranger', company_id: 'elsewhere' },
+  ]
+  const OTHERS: StoredKey[] = [
+    stored('colleague-here', { user_id: 'colleague' }),
+    stored('colleague-revoked', { user_id: 'colleague', revoked_at: '2026-02-01T00:00:00.000Z' }),
+    // Made in the firm's own company: no company list reaches every company the consultant is a member of.
+    stored('consultant-open', { user_id: 'consultant', company_id: 'firm' }),
+    stored('consultant-listed-here', { user_id: 'consultant', company_id: 'firm' }),
+    stored('consultant-listed-away', { user_id: 'consultant', company_id: 'firm' }),
+    // A service account's key reaches its own company alone.
+    stored('account-here', { name: 'nyckel', client: null, user_id: 'colleague', service_account_id: 'sa-1' }),
+    stored('account-of-the-firm', { name: 'nyckel', client: null, user_id: 'consultant', service_account_id: 'sa-9', company_id: 'firm' }),
+    // Another company's keys, of someone who is no member here.
+    stored('stranger-open', { user_id: 'stranger', company_id: 'elsewhere' }),
+    stored('stranger-listed-here', { user_id: 'stranger', company_id: 'elsewhere' }),
+  ]
+  const LISTS: KeyCompany[] = [
+    { api_key_id: 'consultant-listed-here', company_id: COMPANY },
+    { api_key_id: 'consultant-listed-here', company_id: 'firm' },
+    { api_key_id: 'consultant-listed-away', company_id: 'firm' },
+    { api_key_id: 'stranger-listed-here', company_id: COMPANY },
+  ]
+
+  async function pictureAs(role: Role, own: readonly StoredKey[]) {
+    const db: StoredKey[] = [...own, ...OTHERS]
+    service = fakeSupabase({
+      company_members: membersOf(MEMBERS),
+      api_keys: everyKey(db),
+      api_key_companies: companyLists(LISTS),
+      service_accounts: { data: [{ id: 'sa-1', name: 'Lönesystemet' }] },
+      profiles: { data: [{ id: 'colleague', full_name: 'Anna Ek', email: 'anna@example.com' }] },
+    })
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys: keysAs(db, role), event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    return picture
+  }
+  const listedIds = (picture: Awaited<ReturnType<typeof pictureAs>>): string[] =>
+    picture.agents!.list.flatMap((card) => card.connections.map((connection) => connection.id)).sort()
+
+  it('counts for an owner the connections made in another company that reach this one', async () => {
+    const picture = await pictureAs('owner', [stored('mine')])
+    // The owner lists every key homed in the company.
+    expect(listedIds(picture)).toEqual(['account-here', 'colleague-here', 'mine'])
+    // The consultant's sign-in without a company list, and the one whose list names this company.
+    expect(picture.agents!.others).toBe(2)
+  })
+
+  it('counts for a member with keys of their own every other connection that reaches the company', async () => {
+    const picture = await pictureAs('member', [stored('mine'), stored('mine-elsewhere', { company_id: 'firm' })])
+    expect(listedIds(picture)).toEqual(['mine', 'mine-elsewhere'])
+    // The colleague's, the service account's and the consultant's two: not the member's own, listed or not.
+    expect(picture.agents!.others).toBe(4)
+  })
+
+  it('counts them for a read-only member who has no connection, instead of answering nothing', async () => {
+    const picture = await pictureAs('viewer', [])
+    expect(picture.agents!.list).toEqual([])
+    expect(picture.agents!.others).toBe(4)
+  })
+
+  it('never counts a revoked key, a key whose list names other companies, another company\'s service account or a stranger\'s key', async () => {
+    const picture = await pictureAs('viewer', [])
+    const reads = service.calls.filter((c) => c.table === 'api_keys')
+    // Two reads of key ids: the company's service-account keys, and the keys of the company's members.
+    expect(reads).toHaveLength(2)
+    for (const read of reads) {
+      expect(read.ops.find((op) => op.method === 'select')!.args[0]).toBe('id')
+      expect(read.ops.find((op) => op.method === 'is' && op.args[0] === 'revoked_at')!.args).toEqual(['revoked_at', null])
+    }
+    const ofAccounts = reads.find((c) => c.ops.some((op) => op.method === 'not'))!
+    expect(filtered(ofAccounts, 'eq', 'company_id', COMPANY)).toBe(true)
+    const ofMembers = reads.find((c) => c.ops.some((op) => op.method === 'in'))!
+    expect(ofMembers.ops.find((op) => op.method === 'in')!.args).toEqual(['user_id', [USER, 'colleague', 'consultant']])
+    expect(ofMembers.ops.find((op) => op.method === 'is' && op.args[0] === 'service_account_id')!.args).toEqual(['service_account_id', null])
+    expect(filtered(service.calls.find((c) => c.table === 'company_members')!, 'eq', 'company_id', COMPANY)).toBe(true)
+    // The company lists are asked for the members' keys alone: the stranger's is not among them.
+    const lists = service.calls.find((c) => c.table === 'api_key_companies')!
+    expect(lists.ops.find((op) => op.method === 'in')!.args).toEqual(['api_key_id', ['colleague-here', 'consultant-open', 'consultant-listed-here', 'consultant-listed-away']])
+    expect(picture.agents!.others).toBe(4)
+  })
+
+  it('hands out the number and nothing else about another person\'s connection', async () => {
+    const picture = await pictureAs('member', [stored('mine')])
+    const answer = JSON.stringify(picture)
+    for (const key of OTHERS) expect(answer).not.toContain(key.id)
+    for (const word of ['colleague', 'consultant', 'stranger', 'Anna Ek', 'Lönesystemet', 'sa-1']) expect(answer).not.toContain(word)
+    expect(Object.keys(picture.agents!).sort()).toEqual(['activity', 'list', 'more', 'others'])
+  })
+
+  it('answers zero when nobody else has a connection, and unknown when the count cannot be read', async () => {
+    service = fakeSupabase({ company_members: membersOf(MEMBERS), api_keys: everyKey([stored('mine')]), api_key_companies: companyLists([]) })
+    const alone = await loadAgentPicture(fakeSupabase(tables({ api_keys: keysAs([stored('mine')], 'owner') })).client, COMPANY, USER, ports(), NOW)
+    expect(alone.agents!.others).toBe(0)
+
+    const brokenReads: Array<Record<string, Handler>> = [
+      { company_members: { error: { message: 'boom' } }, api_keys: everyKey(OTHERS), api_key_companies: companyLists(LISTS) },
+      { company_members: membersOf(MEMBERS), api_keys: { error: { message: 'boom' } }, api_key_companies: companyLists(LISTS) },
+      { company_members: membersOf(MEMBERS), api_keys: everyKey(OTHERS), api_key_companies: { error: { message: 'boom' } } },
+    ]
+    for (const broken of brokenReads) {
+      service = fakeSupabase(broken)
+      const picture = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+      expect(picture.agents!.others).toBeNull()
+      // The connections the person may list are still answered.
+      expect(picture.agents!.list.map((card) => card.id)).toEqual(['claude', 'key:key-manual'])
+    }
+  })
+})
+
 describe('loadAgentCards', () => {
   it('answers every card the person may list, the ones past the listed six too, without reading the log', async () => {
     const key = (n: number) => keyRow(`k${n}`, { name: `Nyckel ${n}`, client: null, last_used_at: `2026-02-0${n}T00:00:00.000Z` })

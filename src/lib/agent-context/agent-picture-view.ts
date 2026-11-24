@@ -13,7 +13,7 @@
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
-import type { PictureAgent, PictureChecks, PictureCounts, PictureSourceGroup, PictureWaiting } from './agent-picture'
+import type { PictureAgent, PictureAgents, PictureChecks, PictureCounts, PictureSourceGroup, PictureWaiting } from './agent-picture'
 
 // ---------------------------------------------------------------- times
 
@@ -231,6 +231,30 @@ const GROUP_ORDER: readonly AgentGroupId[] = ['clients', 'brand', 'service_accou
 export function agentGroupOf(agent: Pick<PictureAgent, 'kind' | 'service_account'>, brandName: string): AgentGroupId {
   if (agent.service_account) return startsWithBrand(agent.service_account, brandName) ? 'brand' : 'service_accounts'
   return agent.kind === 'key' ? 'keys' : 'clients'
+}
+
+/**
+ * What the agents column says about the connections the person may not
+ * list: nothing when there are none, how many when there are some, and that
+ * it is not known when they could not be counted.
+ */
+export type OtherConnections = { kind: 'none' } | { kind: 'count'; count: number } | { kind: 'unknown' }
+
+export function otherConnections(agents: Pick<PictureAgents, 'others'> | null | undefined): OtherConnections {
+  // Without the connections at all, the column says so in its own card.
+  if (!agents) return { kind: 'none' }
+  if (agents.others === null) return { kind: 'unknown' }
+  return agents.others > 0 ? { kind: 'count', count: agents.others } : { kind: 'none' }
+}
+
+/**
+ * Whether the clients the person has not connected are offered as "not
+ * connected": only when it is known that nobody else's connection reaches
+ * the company. With other people's connections, or without knowing, nothing
+ * is called not connected.
+ */
+export function offersClients(agents: Pick<PictureAgents, 'others'> | null | undefined): boolean {
+  return !!agents && agents.others === 0
 }
 
 /** The agents by group, in the column's order; a group with nobody in it is left out. */
