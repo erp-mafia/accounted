@@ -255,6 +255,14 @@ function SectionLabel({ id, children }: { id?: string; children: React.ReactNode
   )
 }
 
+/**
+ * The underlag viewer. From lg it fills its sticky column. Below lg it stacks
+ * above the kontering at 35vh: a multi-page PDF scrolls inside it, and a
+ * taller box took most vertical swipes on a phone, so the form under it was
+ * hard to reach.
+ */
+const VIEWER_CLASS = 'h-[35vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1'
+
 /** The two-column body: the underlag on the left, sticky on a wide screen while the kontering scrolls. */
 function BookingColumns({
   underlag,
@@ -492,7 +500,7 @@ function TransactionBooking({
                 documentId={shownDocumentId}
                 mime={viewer.mime}
                 fileName={viewer.fileName}
-                className="h-[60vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1"
+                className={VIEWER_CLASS}
               />
               <HeldUnderlagRows
                 attachments={attachments}
@@ -615,7 +623,7 @@ function VoucherBooking({ onDone }: { onDone: () => void }) {
               documentId={shown.id}
               mime={shown.file.type || null}
               fileName={shown.fileName}
-              className="h-[60vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1"
+              className={VIEWER_CLASS}
             />
           ) : null
         }
