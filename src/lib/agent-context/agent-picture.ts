@@ -15,9 +15,9 @@ import { connectionKind, type ConnectionKind } from '@/lib/settings/mcp-connecti
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createServiceClient } from '@/lib/supabase/server'
 import { chunk } from '@/lib/utils'
-import { loadCompanySkillRows } from '@/lib/agent-skills/company-skills'
-import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
+import { packFitsForm, type KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { catalogueKnowledge, chosenKnowledge, isActiveKnowledge } from '@/lib/agent-skills/knowledge-list'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { agentCards, tallyWork, type CardConnection, type StagerRef } from './agent-cards'
 
 const log = createLogger('agent-picture')
@@ -42,8 +42,9 @@ const log = createLogger('agent-picture')
  * are made: the company's own row (by id), the signed-in person's WhatsApp
  * link and own connections (by user), the names of the people whose
  * connections the person may list (by their ids), the count of the
- * connections the person may not list (by the company's members), and the
- * knowledge catalogue, whose registry is the same for every company.
+ * connections the person may not list (by the company's members), the
+ * knowledge registry, which is the same for every company, and the items
+ * the company's team installed (by the team the company's own row names).
  */
 
 /** A source or connection as the picture draws it. */
@@ -622,27 +623,62 @@ async function loadMemoryFacts(supabase: SupabaseClient, companyId: string): Pro
 }
 
 /**
+ * The items the company installed, its own rows and its team's: only which
+ * item each row points at, which is all the count reads of them. The
+ * company's rows are read by the company; the team's by the team its own row
+ * names. Throws when a read fails.
+ */
+async function installedItems(supabase: SupabaseClient, companyId: string, teamId: string | null): Promise<Array<{ atom_id: string | null }>> {
+  const [own, team] = await Promise.all([
+    fetchAllRows<{ atom_id: string | null }>(({ from, to }) =>
+      supabase.from('company_skills').select('atom_id').eq('company_id', companyId).not('atom_id', 'is', null).order('id').range(from, to),
+    ),
+    teamId
+      ? fetchAllRows<{ atom_id: string | null }>(({ from, to }) =>
+          supabase.from('company_skills').select('atom_id').eq('team_id', teamId).not('atom_id', 'is', null).order('id').range(from, to),
+        )
+      : Promise.resolve([]),
+  ])
+  return [...team, ...own]
+}
+
+/**
  * The knowledge items the company's agent gets today: the items of the
  * catalogue's knowledge list that are active for the company, by the
  * catalogue's own rule (lib/agent-skills/knowledge-list.ts: a general item
  * always, an industry or company-form item when the profile names it or the
- * company installed it). The registry behind the list is the same for every
- * company, so that read has no company filter.
+ * company installed it).
  *
- * Throws when the profile cannot be read: which items are active is then not
- * known, and nothing is guessed.
+ * Read once, and only what the count needs: which items the registry holds
+ * and of which kind (the catalogue's own list: live, exposed, top level and
+ * written for the company's legal form, as loadKnowledgeOptions reads it),
+ * which items the profile names, and which the company installed. No item's
+ * text is read. The registry is the same for every company, so that read
+ * has no company filter; the company's own row is read by its id.
+ *
+ * Throws when a read fails: which items are active is then not known, and
+ * nothing is guessed.
  */
 async function loadKnowledge(supabase: SupabaseClient, companyId: string): Promise<{ items: number; active: string[] }> {
-  const [options, profile, installed] = await Promise.all([
-    loadKnowledgeOptions(supabase, companyId),
+  const [company, registry, profile] = await Promise.all([
+    supabase.from('companies').select('entity_type, team_id').eq('id', companyId).maybeSingle(),
+    supabase.from('agent_atom_registry').select('id, tier').eq('is_active', true).eq('mcp_exposed', true).is('parent_atom_id', null).order('tier').order('id'),
     supabase.from('agent_profiles').select('vertical_atoms, modifier_atoms').eq('company_id', companyId).maybeSingle(),
-    loadCompanySkillRows(supabase, companyId),
   ])
+  if (company.error) failed('company', company.error)
+  if (registry.error) failed('knowledge registry', registry.error)
   if (profile.error) failed('agent profile', profile.error)
+  const own = company.data as { entity_type: string | null; team_id: string | null } | null
+  const [entityType, installed] = await Promise.all([
+    // The form the row carries, read by the form's own rule; it reads the row itself only when the row here names none.
+    resolveCompanyEntityType(supabase, companyId, own?.entity_type),
+    installedItems(supabase, companyId, own?.team_id ?? null),
+  ])
+  const list = ((registry.data ?? []) as Array<{ id: string; tier: KnowledgeOption['tier'] }>).filter((item) => packFitsForm(item.id, entityType))
   const chosen = chosenKnowledge(profile.data as { vertical_atoms: string[] | null; modifier_atoms: string[] | null } | null, installed)
-  const active = catalogueKnowledge(options)
-    .filter((option) => isActiveKnowledge(option.tier, option.id, chosen))
-    .map((option) => option.id)
+  const active = catalogueKnowledge(list)
+    .filter((item) => isActiveKnowledge(item.tier, item.id, chosen))
+    .map((item) => item.id)
   return { items: active.length, active }
 }
 

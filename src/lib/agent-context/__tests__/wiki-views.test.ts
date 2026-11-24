@@ -12,6 +12,7 @@ import {
   pictureHrefOfView,
   pictureRowHref,
   pictureRowOf,
+  readsBriefingAtLoad,
   wikiPlace,
   wikiViewHref,
   withoutPictureRow,
@@ -237,5 +238,22 @@ describe('closing a row takes it out of the address', () => {
 
   it('leaves an address that names no row as it is, so nothing is written for a row opened from the card', () => {
     for (const address of ['/wiki', '/wiki#x', '/wiki?ctx=byra']) expect(withoutPictureRow(address)).toBe(address)
+  })
+})
+
+describe('when the page reads the briefing', () => {
+  it('reads it as the page loads without the picture: the context view is the briefing', () => {
+    expect(readsBriefingAtLoad(false, null)).toBe(true)
+    expect(readsBriefingAtLoad(false, 'memory')).toBe(true)
+  })
+
+  it('does not read it as the picture loads: only the Kontext row\'s view shows it', () => {
+    expect(readsBriefingAtLoad(true, null)).toBe(false)
+    expect(readsBriefingAtLoad(true, undefined)).toBe(false)
+    for (const row of PICTURE_ROWS.filter((name) => name !== 'context')) expect(readsBriefingAtLoad(true, row)).toBe(false)
+  })
+
+  it('reads it at load when the address names the Kontext row', () => {
+    expect(readsBriefingAtLoad(true, 'context')).toBe(true)
   })
 })

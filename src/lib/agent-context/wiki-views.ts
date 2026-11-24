@@ -54,6 +54,17 @@ export function pictureRowOf(view: string | null | undefined): PictureRow | null
   return view && Object.hasOwn(ROW_OF_VIEW, view) ? ROW_OF_VIEW[view] : null
 }
 
+/**
+ * Whether the page reads the briefing (GET /api/wiki/context) as it loads.
+ * Without the picture the context view is the briefing, so it does. With
+ * the picture only the Kontext row's view shows the briefing: it is read at
+ * load when the address names that row, and otherwise when the row is first
+ * opened.
+ */
+export function readsBriefingAtLoad(picture: boolean, row: PictureRow | null | undefined): boolean {
+  return !picture || row === 'context'
+}
+
 /** The query parameter that names one knowledge item of the Kunskap row. */
 export const PICTURE_ITEM_PARAM = 'item'
 

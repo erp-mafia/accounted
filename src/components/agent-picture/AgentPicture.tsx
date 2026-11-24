@@ -128,7 +128,9 @@ function forgetInAddress(options?: { keepRow?: boolean }): void {
  * thing gets its dot.
  *
  * `context` is the briefing as the page that hosts the picture loads it: the
- * Kontext row draws the context graph from it.
+ * Kontext row draws the context graph from it. The page reads it when it is
+ * first wanted: `onContextWanted` is told when the Kontext row's view is
+ * open.
  *
  * `row` is the row the address names (lib/agent-context/wiki-views.ts): the
  * picture opens with that row's view open, and opens it when the address
@@ -143,11 +145,13 @@ export function AgentPicture({
   row = null,
   item = null,
   agent = null,
+  onContextWanted,
 }: {
   context: PictureContext
   row?: PictureView | null
   item?: string | null
   agent?: string | null
+  onContextWanted?: () => void
 }) {
   const t = useTranslations('wiki')
   const locale = useLocale() as ErrorLocale
@@ -160,6 +164,10 @@ export function AgentPicture({
     setNamedRow(row)
     if (row) setView(row)
   }
+  // The Kontext row's view shows the briefing: the page is told when that view is open, however it was opened.
+  useEffect(() => {
+    if (view === 'context') onContextWanted?.()
+  }, [view, onContextWanted])
   // The agent card whose panel is open, by its id: the one the address names, and one it comes to name.
   const [agentCard, setAgentCard] = useState<string | null>(agent)
   const [namedAgent, setNamedAgent] = useState(agent)

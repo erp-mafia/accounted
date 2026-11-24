@@ -45,12 +45,10 @@ function fakeSupabase(tables: Record<string, Handler>) {
 const filtered = (call: Call, method: string, column: string, value?: unknown) =>
   call.ops.some((op) => op.method === method && op.args[0] === column && (value === undefined || op.args[1] === value))
 
-const { listUnexplainedMock, dataStatusMock, inboxAddressMock, knowledgeOptionsMock, skillRowsMock, enabled } = vi.hoisted(() => ({
+const { listUnexplainedMock, dataStatusMock, inboxAddressMock, enabled } = vi.hoisted(() => ({
   listUnexplainedMock: vi.fn(),
   dataStatusMock: vi.fn(),
   inboxAddressMock: vi.fn(),
-  knowledgeOptionsMock: vi.fn(),
-  skillRowsMock: vi.fn(),
   enabled: new Set<string>(),
 }))
 
@@ -69,13 +67,8 @@ vi.mock('@/lib/reports/data-status', () => ({
 vi.mock('@/lib/documents/inbox-address', () => ({
   resolveInboxAddress: (...args: unknown[]) => inboxAddressMock(...args),
 }))
-vi.mock('@/lib/agent-skills/knowledge-choices', () => ({
-  loadKnowledgeOptions: (...args: unknown[]) => knowledgeOptionsMock(...args),
-}))
-vi.mock('@/lib/agent-skills/company-skills', () => ({
-  loadCompanySkillRows: (...args: unknown[]) => skillRowsMock(...args),
-}))
 
+import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
 import { limitNotConnected, loadAgentActivity, loadAgentCards, loadAgentPicture, type PictureSource, type PictureSourceGroup } from '../agent-picture'
 
 const ALL_EXTENSIONS = ['enable-banking', 'skatteverket', 'tic', 'invoice-inbox', 'whatsapp-inbox', 'mail', 'stripe', 'shopify', 'woocommerce', 'zettle']
@@ -98,10 +91,13 @@ function tables(over: Record<string, Handler> = {}): Record<string, Handler> {
         },
       ],
     },
-    companies: (call) =>
-      call.ops.some((op) => op.method === 'select' && op.args[0] === 'name')
-        ? { data: { name: 'Exempelbolaget AB' } }
-        : { data: { tic_snapshot_fetched_at: '2026-02-14T10:00:00.000Z' } },
+    companies: (call) => {
+      const columns = call.ops.find((op) => op.method === 'select')?.args[0]
+      if (columns === 'name') return { data: { name: 'Exempelbolaget AB' } }
+      // The company's legal form, and the team it belongs to (none here).
+      if (typeof columns === 'string' && (columns.includes('entity_type') || columns.includes('team_id'))) return { data: { entity_type: 'aktiebolag', team_id: null } }
+      return { data: { tic_snapshot_fetched_at: '2026-02-14T10:00:00.000Z' } }
+    },
     invoice_inbox_items: (call) =>
       call.ops.some((op) => op.method === 'select' && (op.args[1] as { head?: boolean } | undefined)?.head)
         ? { count: 86 }
@@ -121,6 +117,8 @@ function tables(over: Record<string, Handler> = {}): Record<string, Handler> {
     suppliers: { count: 64 },
     agent_memory: { count: 23 },
     agent_profiles: { data: { vertical_atoms: ['vertical/retired', 'vertical/konsult-it'], modifier_atoms: null } },
+    agent_atom_registry: { data: REGISTRY },
+    company_skills: { data: [] },
     fiscal_periods: { data: [{ id: 'period-1' }] },
     api_keys: (call) =>
       filtered(call, 'eq', 'company_id')
@@ -191,16 +189,23 @@ const OK_QUEUE = {
   ],
 }
 
-const option = (id: string, tier: string) => ({ id, tier, title: id, summary: '', version: 1, reviewed_at: null })
-/** Five of the product's own items, one the community shared and one the company wrote. */
-const KNOWLEDGE = [
-  option('horizontal/swedish-vat', 'horizontal'),
-  option('horizontal/swedish-payroll', 'horizontal'),
-  option('modifier/holding-ab', 'modifier'),
-  option('vertical/konsult-it', 'vertical'),
-  option('vertical/e-handel', 'vertical'),
-  option('community/shared', 'community'),
-  option('own/0d6f6f0e-0000-4000-8000-000000000001', 'own'),
+interface RegistryRow {
+  id: string
+  tier: string
+  title: string
+  description: string
+  version: number
+  reviewed_at: string | null
+}
+const registryRow = (id: string, tier: string): RegistryRow => ({ id, tier, title: id, description: '', version: 1, reviewed_at: null })
+/** The registry: five of the product's own items and one the community shared. */
+const REGISTRY: RegistryRow[] = [
+  registryRow('horizontal/swedish-vat', 'horizontal'),
+  registryRow('horizontal/swedish-payroll', 'horizontal'),
+  registryRow('modifier/holding-ab', 'modifier'),
+  registryRow('vertical/konsult-it', 'vertical'),
+  registryRow('vertical/e-handel', 'vertical'),
+  registryRow('community/shared', 'community'),
 ]
 
 const FEED_OK = { bank: { feed_status: 'active', last_sync_at: '2026-03-02T05:12:00.000Z', stale: false, reconciled_through: null } }
@@ -223,8 +228,6 @@ beforeEach(() => {
   listUnexplainedMock.mockResolvedValue(OK_QUEUE)
   dataStatusMock.mockResolvedValue(FEED_OK)
   inboxAddressMock.mockResolvedValue('exempel-ab12@inbox.example')
-  knowledgeOptionsMock.mockResolvedValue(KNOWLEDGE)
-  skillRowsMock.mockResolvedValue([])
   skatteverket.mockResolvedValue({ state: 'connected', last_sync_at: '2026-03-01T21:14:00.000Z' })
 })
 
@@ -459,10 +462,8 @@ describe('loadAgentPicture: the company', () => {
   it('counts the knowledge items the agent gets today: the general ones and the ones the profile names', async () => {
     const { client, calls } = fakeSupabase(tables())
     const picture = await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
-    expect(knowledgeOptionsMock).toHaveBeenCalledWith(client, COMPANY)
-    expect(skillRowsMock).toHaveBeenCalledWith(client, COMPANY)
     // Both general items, and the one industry item of the profile that is in the list (a retired one is not).
-    // The company form item, the other industry and what the community or the company wrote are not active.
+    // The company form item, the other industry and what the community shared are not active.
     expect(picture.company.knowledge).toEqual({
       items: 3,
       active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'vertical/konsult-it'],
@@ -471,9 +472,9 @@ describe('loadAgentPicture: the company', () => {
   })
 
   it('counts a company-form item the profile names and an item the company installed', async () => {
-    skillRowsMock.mockResolvedValue([{ id: 'install-1', atom_id: 'vertical/e-handel' }, { id: 'own-1', atom_id: null }])
+    const company_skills = { data: [{ atom_id: 'vertical/e-handel' }] }
     const agent_profiles = { data: { vertical_atoms: null, modifier_atoms: ['modifier/holding-ab'] } }
-    const picture = await loadAgentPicture(fakeSupabase(tables({ agent_profiles })).client, COMPANY, USER, ports(), NOW)
+    const picture = await loadAgentPicture(fakeSupabase(tables({ agent_profiles, company_skills })).client, COMPANY, USER, ports(), NOW)
     expect(picture.company.knowledge).toEqual({
       items: 4,
       active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'modifier/holding-ab', 'vertical/e-handel'],
@@ -485,14 +486,74 @@ describe('loadAgentPicture: the company', () => {
     expect(picture.company.knowledge).toEqual({ items: 2, active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll'] })
   })
 
-  it('says unknown, and guesses nothing, when the profile or the list cannot be read', async () => {
-    const noProfile = await loadAgentPicture(fakeSupabase(tables({ agent_profiles: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
-    expect(noProfile.company.knowledge).toEqual({ items: null, active: null })
+  it('leaves out an item written for another legal form, as the catalogue does', async () => {
+    // The holding item is aktiebolag law: an enskild firma whose profile names it does not get it.
+    const companies: Handler = (call) => {
+      const columns = call.ops.find((op) => op.method === 'select')?.args[0]
+      return columns === 'name' ? { data: { name: 'X' } } : { data: { entity_type: 'enskild_firma', team_id: null, tic_snapshot_fetched_at: null } }
+    }
+    const agent_profiles = { data: { vertical_atoms: null, modifier_atoms: ['modifier/holding-ab'] } }
+    const picture = await loadAgentPicture(fakeSupabase(tables({ companies, agent_profiles })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.company.knowledge).toEqual({ items: 2, active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll'] })
+  })
 
-    knowledgeOptionsMock.mockRejectedValue(new Error('boom'))
-    const noList = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
-    expect(noList.company.knowledge).toEqual({ items: null, active: null })
-    expect(noList.company.counts.vouchers).toBe(4912)
+  it('reads the company\'s own items once, and of each only which item it points at', async () => {
+    const { client, calls } = fakeSupabase(tables())
+    await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
+    const own = calls.filter((c) => c.table === 'company_skills')
+    expect(own).toHaveLength(1)
+    // No item's text, and no column the count does not read.
+    expect(own[0].ops.find((op) => op.method === 'select')!.args[0]).toBe('atom_id')
+    expect(filtered(own[0], 'eq', 'company_id', COMPANY)).toBe(true)
+    expect(own[0].ops.find((op) => op.method === 'not')!.args).toEqual(['atom_id', 'is', null])
+    // The registry once, by which item and of which kind.
+    const registry = calls.filter((c) => c.table === 'agent_atom_registry')
+    expect(registry).toHaveLength(1)
+    expect(registry[0].ops.find((op) => op.method === 'select')!.args[0]).toBe('id, tier')
+    // The company's own row once for the count: its legal form and its team in one read.
+    const companyReads = calls.filter((c) => c.table === 'companies' && c.ops.some((op) => op.method === 'select' && typeof op.args[0] === 'string' && op.args[0].includes('entity_type')))
+    expect(companyReads).toHaveLength(1)
+    expect(companyReads[0].ops.find((op) => op.method === 'select')!.args[0]).toBe('entity_type, team_id')
+    expect(filtered(companyReads[0], 'eq', 'id', COMPANY)).toBe(true)
+  })
+
+  it('counts an item the company\'s team installed, read by the team the company\'s own row names', async () => {
+    const companies: Handler = (call) => {
+      const columns = call.ops.find((op) => op.method === 'select')?.args[0]
+      return columns === 'name' ? { data: { name: 'X' } } : { data: { entity_type: 'aktiebolag', team_id: 'team-1', tic_snapshot_fetched_at: null } }
+    }
+    const company_skills: Handler = (call) => (filtered(call, 'eq', 'team_id', 'team-1') ? { data: [{ atom_id: 'vertical/e-handel' }] } : { data: [] })
+    const { client, calls } = fakeSupabase(tables({ companies, company_skills, agent_profiles: { data: null } }))
+    const picture = await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
+    expect(picture.company.knowledge).toEqual({ items: 3, active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'vertical/e-handel'] })
+    const reads = calls.filter((c) => c.table === 'company_skills')
+    expect(reads).toHaveLength(2)
+    for (const read of reads) expect(read.ops.find((op) => op.method === 'select')!.args[0]).toBe('atom_id')
+  })
+
+  it('reads the registry by the filters the catalogue\'s own list is read by', async () => {
+    const filters = (call: Call) => call.ops.filter((op) => op.method !== 'select' && op.method !== 'order' && op.method !== 'range')
+    const catalogue = fakeSupabase(tables())
+    await loadKnowledgeOptions(catalogue.client, COMPANY)
+    const picture = fakeSupabase(tables())
+    await loadAgentPicture(picture.client, COMPANY, USER, ports(), NOW)
+    const ofCatalogue = catalogue.calls.find((c) => c.table === 'agent_atom_registry')!
+    const ofPicture = picture.calls.find((c) => c.table === 'agent_atom_registry')!
+    expect(filters(ofPicture).length).toBeGreaterThan(0)
+    expect(filters(ofPicture)).toEqual(filters(ofCatalogue))
+  })
+
+  it('says unknown, and guesses nothing, when the profile, the list or the installed items cannot be read', async () => {
+    const brokenReads: Array<Record<string, Handler>> = [
+      { agent_profiles: { error: { message: 'boom' } } },
+      { agent_atom_registry: { error: { message: 'boom' } } },
+      { company_skills: { error: { message: 'boom' } } },
+    ]
+    for (const broken of brokenReads) {
+      const picture = await loadAgentPicture(fakeSupabase(tables(broken)).client, COMPANY, USER, ports(), NOW)
+      expect(picture.company.knowledge).toEqual({ items: null, active: null })
+      expect(picture.company.counts.vouchers).toBe(4912)
+    }
   })
 })
 
@@ -1136,6 +1197,8 @@ describe('loadAgentPicture: the whole answer', () => {
       if (call.table === 'companies') expect(filtered(call, 'eq', 'id', COMPANY)).toBe(true)
       else if (call.table === 'whatsapp_phone_links') expect(filtered(call, 'eq', 'user_id', USER)).toBe(true)
       else if (call.table === 'api_keys') expect(byCompany || filtered(call, 'eq', 'user_id', USER)).toBe(true)
+      // The knowledge registry is the same for every company.
+      else if (call.table === 'agent_atom_registry') expect(byCompany).toBe(false)
       else expect(byCompany, `${call.table} is read without the company filter`).toBe(true)
     }
   })

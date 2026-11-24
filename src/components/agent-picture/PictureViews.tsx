@@ -7,7 +7,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { ContextGraph } from '@/components/context-graph/ContextGraph'
 import { AgentMemoryPanel } from '@/components/settings/AgentMemoryPanel'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { LoadError } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/components/ui/slide-over'
 import { StatusGlyph, type StatusTone } from '@/components/ui/status-glyph'
@@ -51,8 +51,17 @@ export interface PictureAgentView {
 /** What the side panel holds: a row's view, or an agent card. */
 type Shown = { sheet: SheetView } | { agent: PictureAgentView }
 
-/** The briefing, as the page that hosts the picture loads it (once): the context graph is drawn from its text. */
-export type PictureContext = { state: 'loading' } | { state: 'ok'; text: string } | { state: 'failed'; description: string; onRetry: () => void }
+/**
+ * The briefing, as the page that hosts the picture loads it (once, when the
+ * Kontext row is first opened): the context graph is drawn from its text.
+ * `unavailable`: the installation has no briefing to read, said in the
+ * server's own sentence.
+ */
+export type PictureContext =
+  | { state: 'loading' }
+  | { state: 'ok'; text: string }
+  | { state: 'failed'; description: string; onRetry: () => void }
+  | { state: 'unavailable'; sentence: string }
 
 const TONE: Record<PictureCheckStatus, StatusTone> = { agrees: 'ok', attention: 'warning', unknown: 'info' }
 
@@ -138,6 +147,8 @@ export function PictureViews({
             </>
           ) : context.state === 'failed' ? (
             <LoadError title={t('load_failed_title')} description={context.description} onRetry={context.onRetry} />
+          ) : context.state === 'unavailable' ? (
+            <EmptyState title={context.sentence} />
           ) : (
             <div aria-busy>
               <Skeleton className="h-80 w-full rounded-lg" />
