@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "accounted",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Official Accounted plugin: Swedish double-entry bookkeeping flows for your AI agent. Connects your ledger over MCP and ships short workflow skills (daily bookkeeping, health check, month close, VAT, payroll, year-end) that work from the company's live data and load Swedish accounting knowledge from the product when needed. Every write is staged for your approval; nothing is booked on its own.",
   "author": {
     "name": "Accounted (erp-mafia)"
