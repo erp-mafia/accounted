@@ -267,12 +267,13 @@ export function officeChoiceMissing(state: Pick<FlowState, 'bank' | 'bankDetails
 /**
  * Whether closing the flow removes its connection: a half-made one (a BankID
  * that was closed over, an unsaved selection) goes so no row lingers. A live
- * connection stays, and so does one resumed for the second signatory (it
- * belongs to the first); one the person came back to from the bank's page is
- * their own and goes.
+ * connection stays, also while its first sync still runs (`confirmed`: the
+ * server has made the row active), and so does one resumed for the second
+ * signatory (it belongs to the first); one the person came back to from the
+ * bank's page is their own and goes.
  */
-export function removesConnectionOnClose(state: Pick<FlowState, 'connectionId' | 'connection' | 'mode' | 'returned'>): boolean {
-  return Boolean(state.connectionId) && !state.connection && (state.mode !== 'resume' || state.returned !== null)
+export function removesConnectionOnClose(state: Pick<FlowState, 'connectionId' | 'connection' | 'mode' | 'returned' | 'confirmed'>): boolean {
+  return Boolean(state.connectionId) && !state.connection && !state.confirmed && (state.mode !== 'resume' || state.returned !== null)
 }
 
 /**
@@ -290,9 +291,12 @@ export type CloseOutcome = 'confirm' | 'remove' | 'close'
  * What a request to close does where the flow stands: ask first (a BankID is
  * running, a selection is unsaved), close at once and remove the half-made
  * connection behind the close (the bank has refused: there is nothing to
- * interrupt, and the row must not linger), or just close.
+ * interrupt, and the row must not linger), or just close. Once the consent
+ * is confirmed the connection is live and nothing is left to abort: it just
+ * closes, and the connection stays.
  */
-export function closeOutcome(state: Pick<FlowState, 'step' | 'pollState' | 'connectionId' | 'connection' | 'mode' | 'returned'>): CloseOutcome {
+export function closeOutcome(state: Pick<FlowState, 'step' | 'pollState' | 'connectionId' | 'connection' | 'mode' | 'returned' | 'confirmed'>): CloseOutcome {
+  if (state.confirmed) return 'close'
   if (dismissPolicy(state.step, consentRefused(state)) === 'confirm') return 'confirm'
   return removesConnectionOnClose(state) ? 'remove' : 'close'
 }
