@@ -150,7 +150,7 @@ describe('vacation_year_closures schema', () => {
 })
 
 describe('company_settings.salary_vacation_year_basis', () => {
-  it('defaults to calendar and rejects unknown values', async () => {
+  it('defaults to the statutory year and rejects unknown values', async () => {
     const seed = await seedEmployee()
     // company_settings row may not exist for a bare fixture company; insert one.
     await getPool().query(
@@ -163,7 +163,7 @@ describe('company_settings.salary_vacation_year_basis', () => {
       `SELECT salary_vacation_year_basis FROM public.company_settings WHERE company_id = $1`,
       [seed.companyId],
     )
-    expect(row.rows[0].salary_vacation_year_basis).toBe('calendar')
+    expect(row.rows[0].salary_vacation_year_basis).toBe('statutory_apr_mar')
 
     await expect(
       getPool().query(
@@ -173,7 +173,7 @@ describe('company_settings.salary_vacation_year_basis', () => {
     ).rejects.toThrow()
 
     await getPool().query(
-      `UPDATE public.company_settings SET salary_vacation_year_basis = 'statutory_apr_mar' WHERE company_id = $1`,
+      `UPDATE public.company_settings SET salary_vacation_year_basis = 'calendar' WHERE company_id = $1`,
       [seed.companyId],
     )
   })

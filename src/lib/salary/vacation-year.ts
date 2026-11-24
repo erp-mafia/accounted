@@ -2,10 +2,16 @@
  * Vacation year (semesterår) boundary helpers.
  *
  * Two bases exist (company_settings.salary_vacation_year_basis):
+ *   'statutory_apr_mar' : the Semesterlagen 3 § semesterår, Apr 1 to Mar 31.
+ *                         A new company starts on it: the column default
+ *                         since migration 20261124191700.
  *   'calendar'          : sammanfallande intjänande- och semesterår, Jan 1 to
- *                         Dec 31. Our default; it rests on a kollektivavtal
- *                         (vacationYearBasisNeedsAgreement).
- *   'statutory_apr_mar' : the Semesterlagen 3 § default, Apr 1 to Mar 31.
+ *                         Dec 31. It rests on a kollektivavtal
+ *                         (vacationYearBasisNeedsAgreement). A settings row
+ *                         saved before that migration keeps the basis it
+ *                         stores, calendar unless the company changed it, and
+ *                         payroll reads a company with no settings row as
+ *                         calendar.
  */
 import type { OperationWarning } from '@/lib/operations/types'
 
