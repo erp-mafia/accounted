@@ -1020,6 +1020,11 @@ describe('tools/list payload size guard', () => {
     // Prose, paid for on the same tool: allow_duplicate drops the clause
     // that repeats what the guard is. Measured 63 095 (full catalog 67 525;
     // main 63 097 and 67 526). Ceiling unchanged.
+    // 2026-11-24: gron_teknik on gnubok_generate_rot_rut_file's
+    // deduction_type, named in its description. Wire data on an existing
+    // tool, paid for on the same tool (a shorter description and
+    // other_type_counts note). Measured 63 098 (full catalog 67 528; main
+    // 63 095 and 67 525). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

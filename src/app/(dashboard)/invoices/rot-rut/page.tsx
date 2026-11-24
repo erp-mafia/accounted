@@ -175,9 +175,6 @@ export default function RotRutOverviewPage() {
     rut: 0,
     gron_teknik: 0,
   })
-  // Paid grön teknik invoices still inside their request window: shown apart
-  // from "Redo att begäras" (see readyTileOf).
-  const [gronTeknikOpen, setGronTeknikOpen] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   // 'initial': nothing loaded yet, the list says so in place of the rows.
   // 'refresh': a reload failed behind the rows already on screen, which stay.
@@ -227,10 +224,10 @@ export default function RotRutOverviewPage() {
       const body = (await requestsRes.json()) as { data: PayoutRequest[] }
       // null: that list could not be read (a failed answer or a body that
       // will not parse), which the page says instead of counting it as 0.
-      const readEligible = async (res: Response): Promise<Array<{ past_deadline?: boolean }> | null> => {
+      const readEligible = async (res: Response): Promise<unknown[] | null> => {
         if (!res.ok) return null
         try {
-          const json = (await res.json()) as { data?: { eligible?: Array<{ past_deadline?: boolean }> } }
+          const json = (await res.json()) as { data?: { eligible?: unknown[] } }
           return Array.isArray(json?.data?.eligible) ? json.data.eligible : null
         } catch {
           // A body that will not parse is a failed read: null, said on the page.
@@ -244,15 +241,14 @@ export default function RotRutOverviewPage() {
       ])
       const rot = rotEligible?.length ?? 0
       const rut = rutEligible?.length ?? 0
-      const gronTeknikEligible = gronTeknikRead ?? []
+      const gronTeknik = gronTeknikRead?.length ?? 0
       if (sequence !== loadSequence.current) return
       hasLoaded.current = true
       setLoaded(true)
       setLoadError(null)
       setEligibleFailed(rotEligible === null || rutEligible === null || gronTeknikRead === null)
       setRequests(body.data)
-      setEligibleCounts({ rot, rut, gron_teknik: gronTeknikEligible.length })
-      setGronTeknikOpen(gronTeknikEligible.filter((candidate) => !candidate.past_deadline).length)
+      setEligibleCounts({ rot, rut, gron_teknik: gronTeknik })
     } catch (error) {
       if (sequence !== loadSequence.current) return
       setLoadError({
@@ -450,7 +446,7 @@ export default function RotRutOverviewPage() {
     }
   }
 
-  const readyTile = readyTileOf({ rot: eligibleCounts.rot, rut: eligibleCounts.rut, gronTeknikOpen })
+  const readyTile = readyTileOf(eligibleCounts)
 
   return (
     <div className="space-y-8">
@@ -467,7 +463,6 @@ export default function RotRutOverviewPage() {
               <p>
                 <span className="font-medium">{t('tile_awaiting')}:</span> {t('tile_awaiting_help')}
               </p>
-              <p>{t('gron_teknik_help')}</p>
             </div>
           </HelpPopover>
         }
@@ -544,14 +539,6 @@ export default function RotRutOverviewPage() {
                   {readyTile.parts
                     .map((part) => `${part.count} ${DEDUCTION_TYPE_LABELS[part.kind].short}`)
                     .join(' · ')}
-                </dd>
-              )}
-              {/* Grön teknik is requested in Skatteverkets e-tjänst, which we
-                  cannot see: never "ready", only what is still inside its
-                  request window (the "?" says why). */}
-              {readyTile.gronTeknikOpen > 0 && (
-                <dd className="text-xs text-muted-foreground">
-                  {t('tile_ready_gron_teknik', { count: readyTile.gronTeknikOpen })}
                 </dd>
               )}
             </div>

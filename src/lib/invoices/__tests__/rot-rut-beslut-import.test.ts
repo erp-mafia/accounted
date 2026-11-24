@@ -99,6 +99,97 @@ describe('importRotRutBeslutFile', () => {
     })
   })
 
+  it('adds up the ärenden of one grön teknik invoice (one per installation type) on its one item', async () => {
+    enqueue(ORG_SETTINGS)
+    enqueue({ data: [makeRequestRow({ name: 'GT 2026-11-23', requested_total: 17500 })] })
+    enqueue({ data: [makeItemRow({ requested_amount: 17500 })] })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc
+
+    const result = await importRotRutBeslutFile(
+      db,
+      'company-1',
+      makeFile({
+        beslut: [
+          {
+            namn: 'GT 2026-11-23',
+            referensnummer: '20260000300-01',
+            arenden: [
+              { personnummer: PNR, fakturanummer: '96458', godkantBelopp: 7500 },
+              { personnummer: PNR, fakturanummer: '96458', godkantBelopp: 10000 },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(result.ok && result.results[0]).toMatchObject({ status: 'imported', decided_total: 17500, items_updated: 1 })
+    expect(supabase.rpc).toHaveBeenCalledWith('apply_rot_rut_beslut', expect.objectContaining({
+      p_items: [{ item_id: 'item-1', decided_amount: 17500 }],
+      p_decided_total: 17500,
+    }))
+  })
+
+  it('matches the 20-character FakturaNr the file sent for a longer invoice number', async () => {
+    const longNumber = 'PROJ-2026-SOLAR-000123'
+    enqueue(ORG_SETTINGS)
+    enqueue({ data: [makeRequestRow({ name: 'GT 2026-11-23', requested_total: 17500 })] })
+    enqueue({
+      data: [
+        makeItemRow({
+          requested_amount: 17500,
+          invoice: { invoice_number: longNumber, deduction_personnummer_encrypted: encryptPersonnummer(PNR) },
+        }),
+      ],
+    })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc
+
+    const sent = longNumber.slice(0, 20)
+    const result = await importRotRutBeslutFile(
+      db,
+      'company-1',
+      makeFile({
+        beslut: [
+          {
+            namn: 'GT 2026-11-23',
+            referensnummer: '20260000301-01',
+            arenden: [
+              { personnummer: PNR, fakturanummer: sent, godkantBelopp: 7500 },
+              { personnummer: PNR, fakturanummer: sent, godkantBelopp: 10000 },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(result.ok && result.results[0]).toMatchObject({ status: 'imported', decided_total: 17500, items_updated: 1 })
+  })
+
+  it('never lets two ärenden without fakturanummer take the same item by personnummer', async () => {
+    enqueue(ORG_SETTINGS)
+    enqueue({ data: [makeRequestRow()] })
+    enqueue({ data: [makeItemRow()] })
+
+    const result = await importRotRutBeslutFile(
+      db,
+      'company-1',
+      makeFile({
+        beslut: [
+          {
+            namn: 'ROT 2026-07-02',
+            referensnummer: '20260000185-01',
+            arenden: [
+              { personnummer: PNR, godkantBelopp: 1000 },
+              { personnummer: PNR, godkantBelopp: 1000 },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(result.ok && result.results[0]).toMatchObject({ status: 'error' })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('matches by personnummer when fakturanummer is absent', async () => {
     enqueue(ORG_SETTINGS)
     enqueue({ data: [makeRequestRow()] })

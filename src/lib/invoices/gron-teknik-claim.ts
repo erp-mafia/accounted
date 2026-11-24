@@ -1,5 +1,6 @@
 import type { Invoice, InvoiceItem } from '@/types'
 import { truncateToWholeKronor } from '@/lib/money'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import {
   isDeductionLine,
   isPastRequestDeadline,
@@ -15,6 +16,7 @@ import {
   GRON_TEKNIK_MAX,
   GRON_TEKNIK_WORK_TYPES,
   deductionSekConverter,
+  gronTeknikClaimCeiling,
   gronTeknikWorkType,
 } from '@/lib/bookkeeping/rot-rut-rules'
 
@@ -22,14 +24,13 @@ import {
  * Skattereduktion för grön teknik: what the payout claim for one invoice is.
  *
  * The payout is requested in Skatteverkets e-tjänst "Grön teknik: företag",
- * by hand or with a Begaran file (Begaran.xsd V1, TypAvBegaran GRON_TEKNIK).
- * This module evaluates a paid invoice against the rules that claim needs and
- * returns exactly the figures an ärende asks for, so the dialog can list them
- * today and the file generator can emit them later from the same evaluation.
- * It emits no XML.
+ * with a Begaran file (Begaran.xsd V1, TypAvBegaran GRON_TEKNIK). This module
+ * evaluates a paid invoice against the rules that claim needs and returns
+ * exactly the figures an ärende asks for, so the dialog lists the same
+ * figures that gron-teknik-file.ts emits. It emits no XML.
  *
  * What an ärende carries (Begaran.xsd V1 and Skatteverket's example file
- * gron_teknik_exempel.xml, checked 2026-09-30): the buyer, the property,
+ * Gronteknik_V1.0.xml, checked 2026-11-23): the buyer, the property,
  * ONE installation type ("Endast en typ av installation kan anges per
  * ärende") with AntalTimmar and Kostnad (arbete och material for the
  * installation), OvrigKostnad, Betalningsdatum, BetaltBelopp and
@@ -42,28 +43,31 @@ import {
  * buyers is #3314 and multiplies these entries per buyer without changing
  * them.
  *
- * Amounts, in SEK:
- *   - kostnad: the flagged lines of the type incl. moms, to the nearest krona
- *     (the same rule as PrisForArbete in the HUS file).
+ * Amounts, in SEK, every one in whole kronor with the öre dropped: "Uppgifter
+ * om belopp ska anges i hela krontal så att öretal faller bort" (SFS
+ * 2020:1066 5 §, checked 2026-11-24).
+ *   - kostnad: the flagged lines of the type incl. moms (debiterad ersättning
+ *     för installationen, 9 § 4).
  *   - begart_belopp: the deduction the invoice credited for the type (the
- *     1513 debit), truncated to whole kronor, and never above the type's
- *     rate of the whole-krona kostnad: never ask for more than the invoice
- *     booked, the only direction that cannot breach "Begärt belopp får inte
- *     vara större än Betalt belopp", and never more than the rate allows on
- *     the kostnad the begäran states (33 333.49 kr incl. moms at 15 % books
- *     5 000.02, but the ärende states kostnad 33 333, so 4 999 is the most it
- *     can ask). The remainder clears against 3740 when the payout is settled,
- *     as for ROT/RUT.
- *   - betalt_belopp: kostnad - begart_belopp, what the buyer paid for the
- *     installation (Skatteverket's example: 50 000 SOLCELLER, 7 500 begärt,
- *     42 500 betalt).
+ *     1513 debit), never above the type's rate of the whole-krona kostnad
+ *     (gronTeknikClaimCeiling, the same cap the invoice credits under:
+ *     33 333.75 kr incl. moms at 15 % states kostnad 33 333, so 4 999, though
+ *     15 % of the price is 5 000.06) and never above the rate's share of
+ *     betalt_belopp (7 §). An öre remainder on 1513 clears against 3740 when
+ *     the payout is settled, as for ROT/RUT.
+ *   - betalt_belopp: what the buyer paid for the installation, its price
+ *     less the deduction the invoice credited (9 § 4; Skatteverket's
+ *     example: 50 000 SOLCELLER, 7 500 begärt, 42 500 betalt). With the öre
+ *     dropped from each it can be a krona below kostnad - begart_belopp;
+ *     the e-tjänst only refuses the two adding up to more than kostnad.
  *   - ovrig_kostnad: the invoice's unflagged priced lines incl. moms (travel,
- *     machinery, projektering), whole kronor, never negative.
- * A foreign-currency invoice converts with its booking rate, the same
- * conversion as the 1513 debit, and is blocked without one. Skatteverket's
- * private-person pages mention the rate of the payment day for the buyer's
- * own figures; the file generator has to confirm which rate the begäran
- * expects before emitting foreign invoices.
+ *     machinery, projektering), never negative.
+ * A foreign-currency invoice is not requested from here. The begäran is in
+ * kronor, and which rate converts it is not confirmed: the booking rate (the
+ * 1513 debit, which the HUS file uses) or the rate of the payment day, which
+ * Skatteverket's private-person pages mention for the buyer's own figures.
+ * Until a source settles it, such an invoice is requested by hand in the
+ * e-tjänst.
  *
  * Pure and deterministic: the caller passes the invoice (with items) and
  * `today`; blocker messages are Swedish (statutory surface) and name the
@@ -80,9 +84,9 @@ export interface GronTeknikInstallation {
   antal_timmar: number
   /** Arbete och material incl. moms, whole kronor (Kostnad). */
   kostnad: number
-  /** Deduction credited for the type, truncated to whole kronor (BegartBelopp). */
+  /** Deduction credited for the type, whole kronor, within 7 § (BegartBelopp). */
   begart_belopp: number
-  /** kostnad - begart_belopp (BetaltBelopp). */
+  /** What the buyer paid for the installation, whole kronor (BetaltBelopp). */
   betalt_belopp: number
 }
 
@@ -198,22 +202,30 @@ export function evaluateGronTeknikClaim(
   const property = readClaimProperty(lines, GRON_TEKNIK_PROPERTY_MISSING)
   if (!property.ok) return block(property.code, property.message)
 
-  const toSek = deductionSekConverter({ currency: invoice.currency, exchangeRate: invoice.exchange_rate })
-  if (!toSek) {
+  if (!isKronorCurrency(invoice.currency)) {
     return block(
-      'MISSING_EXCHANGE_RATE',
-      `Fakturan är utställd i ${invoice.currency} men saknar växelkurs. Begäran om utbetalning anges alltid i hela kronor: komplettera fakturans växelkurs först.`,
+      'FOREIGN_CURRENCY',
+      `Fakturan är utställd i ${invoice.currency}. Filen för grön teknik tar bara fakturor i kronor: begär den här fakturan för hand i Skatteverkets e-tjänst för grön teknik.`,
     )
   }
+  // Every amount below is kronor: a foreign invoice stopped above.
+  const toSek = deductionSekConverter({ currency: invoice.currency, exchangeRate: invoice.exchange_rate })!
 
   const installations: GronTeknikInstallation[] = []
   for (const def of GRON_TEKNIK_WORK_TYPES) {
     const typeLines = linesByType.get(def.code)
     if (!typeLines) continue
-    const kostnad = Math.round(typeLines.reduce((sum, l) => sum + sekLineTotalInclVat(l, toSek), 0))
-    const booked = truncateToWholeKronor(typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0))
-    const begart = Math.min(booked, truncateToWholeKronor(def.percent * kostnad))
-    const betalt = kostnad - begart
+    const price = typeLines.reduce((sum, l) => sum + sekLineTotalInclVat(l, toSek), 0)
+    const credited = typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0)
+    const kostnad = truncateToWholeKronor(price)
+    const betalt = truncateToWholeKronor(price - credited)
+    // 7 §: the payout is at most the rate's share of what the buyer paid
+    // (three seventeenths for solar cells at 15 %, the same amount at 50 %).
+    // An invoice that credited whole kronor never reaches it; an older one
+    // with öre can, by a krona.
+    const rateBp = Math.round(def.percent * 10_000)
+    const shareOfPaid = Math.max(0, Math.floor((betalt * rateBp) / (10_000 - rateBp)))
+    const begart = Math.min(truncateToWholeKronor(credited), gronTeknikClaimCeiling(def.percent, price), shareOfPaid)
     if (begart > betalt) {
       return block(
         'DEDUCTION_EXCEEDS_PAYMENT',
@@ -237,7 +249,7 @@ export function evaluateGronTeknikClaim(
 
   const ovrigKostnad = Math.max(
     0,
-    Math.round(
+    truncateToWholeKronor(
       items
         .filter((i) => i.line_type !== 'text' && !i.deduction_type)
         .reduce((sum, l) => sum + sekLineTotalInclVat(l, toSek), 0),

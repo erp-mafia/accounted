@@ -3202,26 +3202,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     </DefRow>
                   )}
                   <DefRow label={t('deduction_status_label')}>
-                    {hasGronTeknik && payoutRequests.length === 0 ? (
-                      // No grön teknik file yet: the payout is requested in
-                      // Skatteverkets e-tjänst. The link opens the figures it
-                      // asks for, on this invoice's row.
-                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="text-muted-foreground">{t('deduction_claim_gron_teknik')}</span>
-                        {skvClaimable && (
-                          <Link
-                            href={`/invoices/rot-rut?new=1&type=gron_teknik&invoice=${invoice.id}`}
-                            className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}
-                          >
-                            {t('deduction_claim_gron_teknik_cta')}
-                          </Link>
-                        )}
-                      </span>
-                    ) : payoutRequests.length === 0 ? (
+                    {payoutRequests.length === 0 ? (
                       <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span className="text-muted-foreground">{t('deduction_claim_none')}</span>
                         {skvClaimable && (
-                          <Link href="/invoices?rot-rut=1" className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}>
+                          // Grön teknik opens its own file list on this
+                          // invoice's row; ROT/RUT the list's file dialog.
+                          <Link
+                            href={
+                              hasGronTeknik
+                                ? `/invoices/rot-rut?new=1&type=gron_teknik&invoice=${invoice.id}`
+                                : '/invoices?rot-rut=1'
+                            }
+                            className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}
+                          >
                             {t('deduction_claim_cta')}
                           </Link>
                         )}

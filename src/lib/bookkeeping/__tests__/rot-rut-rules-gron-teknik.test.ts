@@ -23,6 +23,7 @@ import {
   deductionLineIssues,
   deductionPercent,
   deductionTypeForWorkType,
+  gronTeknikClaimCeiling,
   isDeductionType,
   normalizeHouseworkType,
   parseArticleHouseworkType,
@@ -163,6 +164,17 @@ describe("Skatteverket's worked example (Sol AB, solceller)", () => {
     expect(totalInclVat).toBe(200000)
     expect(reduction).toBe(29100)
     expect(totalInclVat - reduction).toBe(170900)
+  })
+})
+
+describe('grön teknik credit in whole kronor', () => {
+  // SFS 2020:1066 5 §: amounts in the begäran drop the öre. 1 002.80 + 250.70
+  // moms = 1 253.50 states kostnad 1 253, and 15 % of that is 187.95: the
+  // invoice credits 187, what the begäran may ask, not 188 (15 % of 1 254).
+  it('credits no more than the rate of the price with its öre dropped', () => {
+    expect(computeInvoiceDeductionTotal([solar({ unit_price: 1002.8 })], { currency: 'SEK' })).toBe(187)
+    expect(gronTeknikClaimCeiling(0.15, 1253.5)).toBe(187)
+    expect(gronTeknikClaimCeiling(0.5, 1251.99)).toBe(625)
   })
 })
 
