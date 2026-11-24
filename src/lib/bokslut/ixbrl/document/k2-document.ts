@@ -29,6 +29,7 @@ import type { IxbrlArsredovisningInput } from '../types'
 import { renderEquityTable } from './equity-table'
 import { FactWriter } from './ix'
 import { assembleXhtml, fmtRange, registerContexts, type GeneratedIxbrl } from './layout'
+import type { PrintPage } from './print-model'
 import {
   emitAllmanInformation,
   renderCoverPage,
@@ -70,7 +71,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
 
   // Page bodies in print order; each gets its header (with the final page
   // count) when the document is assembled.
-  const pages: string[] = []
+  const pages: Array<string | PrintPage> = []
 
   // ====== Titel + innehåll + fastställelseintyg ======
   pages.push(renderCoverPage(writer, input, orgNumber))
@@ -343,7 +344,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   }
 
   // ====== Noter ======
-  pages.push(renderNotes(writer, registry, input, ctx, warnings))
+  pages.push(...renderNotes(writer, registry, input, ctx, warnings))
 
   // ====== Underskrifter ======
   pages.push(renderSignatures(writer, registry, input))

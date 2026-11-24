@@ -99,9 +99,11 @@ function plainAmount(value: number, displayMinus: boolean): string {
 
 /**
  * The tables of the note, one column for the year (K2 punkt 3.10 asks for no
- * jämförelsetal in notes). The opening balances sit at the previous balance
- * sheet date (context balans1, declared here when the document has no
- * jämförelseår); a first year without opening balances prints them untagged.
+ * jämförelsetal in notes): one piece of markup per balance sheet post, its
+ * heading and its table, which print on the same sheet. The opening balances
+ * sit at the previous balance sheet date (context balans1, declared here
+ * when the document has no jämförelseår); a first year without opening
+ * balances prints them untagged.
  */
 export function renderFixedAssetTables(
   writer: FactWriter,
@@ -109,7 +111,7 @@ export function renderFixedAssetTables(
   input: IxbrlArsredovisningInput,
   tables: readonly FixedAssetNoteTable[],
   warnings: string[],
-): string {
+): string[] {
   const hasOpening = tables.some((table) =>
     table.blocks.some((block) => block.rows.some((row) => row.kind === 'opening' && wholeKronor(row.amount) !== 0)),
   )
@@ -151,9 +153,9 @@ export function renderFixedAssetTables(
           el('td', { class: 'num' }, carryingCell(writer, registry, input, table, warnings)),
       ),
     )
-    parts.push(el('h4', {}, escapeText(table.label)), el('table', {}, rows.join('')))
+    parts.push(el('h4', {}, escapeText(table.label)) + '\n' + el('table', {}, rows.join('')))
   }
-  return parts.join('\n')
+  return parts
 }
 
 /**

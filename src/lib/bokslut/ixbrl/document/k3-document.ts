@@ -29,6 +29,7 @@ import { K3_CASH_FLOW_RESULT_LINES, k3ConceptAmounts } from '../k3-adapters'
 import { flowFact, renderEquityTable, signedSek } from './equity-table'
 import { FactWriter } from './ix'
 import { assembleXhtml, fmtRange, registerContexts, type Ctx, type GeneratedIxbrl } from './layout'
+import type { PrintPage } from './print-model'
 import {
   emitAllmanInformation,
   renderCoverPage,
@@ -183,7 +184,7 @@ export function generateK3IxbrlDocument(input: IxbrlArsredovisningInput): Genera
 
   emitAllmanInformation(writer, input, { beloppsformat: false })
 
-  const pages: string[] = []
+  const pages: Array<string | PrintPage> = []
 
   // ====== Titel + innehåll + fastställelseintyg ======
   pages.push(renderCoverPage(writer, input, orgNumber, { matEnhet: true }))
@@ -275,7 +276,7 @@ export function generateK3IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   }
 
   // ====== Noter ======
-  pages.push(renderNotes(writer, registry, input, ctx, warnings))
+  pages.push(...renderNotes(writer, registry, input, ctx, warnings))
 
   // ====== Underskrifter ======
   pages.push(renderSignatures(writer, registry, input))

@@ -56,10 +56,11 @@ export function selfClosing(tag: string, attrs: Attrs): string {
 }
 
 /**
- * Turn user-authored multi-line text into XHTML paragraphs. Blank lines split
- * paragraphs; single newlines become <br/>. All content is escaped.
+ * Turn user-authored multi-line text into XHTML paragraphs, one per element
+ * of the list. Blank lines split paragraphs; single newlines become <br/>.
+ * All content is escaped.
  */
-export function paragraphs(text: string, className?: string): string {
+export function paragraphList(text: string, className?: string): string[] {
   const classAttr = className ? ` class="${escapeAttr(className)}"` : ''
   return text
     .split(/\r?\n\s*\r?\n/)
@@ -72,7 +73,11 @@ export function paragraphs(text: string, className?: string): string {
           .map((line) => escapeText(line))
           .join('<br/>')}</p>`,
     )
-    .join('\n')
+}
+
+/** The same paragraphs as one piece of markup. */
+export function paragraphs(text: string, className?: string): string {
+  return paragraphList(text, className).join('\n')
 }
 
 /**

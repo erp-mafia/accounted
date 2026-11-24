@@ -53,15 +53,16 @@ export function depreciationPrincipleConcepts(
 
 /**
  * The note: its text lines as paragraphs, and its rows as one table where
- * the first row stood. A row whose post has no table in the taxonomy prints
- * untagged.
+ * the first row stood, each a piece of markup of its own (the table with
+ * the declarations of its tuples). A row whose post has no table in the
+ * taxonomy prints untagged.
  */
 export function renderDepreciationPrinciples(
   writer: FactWriter,
   registry: TaxonomyRegistry,
   body: string,
   rows: readonly DepreciationPrinciple[],
-): string {
+): string[] {
   const declarations: string[] = []
   const tableRows = rows.map((row) => {
     const concepts = depreciationPrincipleConcepts(registry, row.post)
@@ -97,5 +98,5 @@ export function renderDepreciationPrinciples(
     }
   }
   if (!tablePrinted) parts.push(table)
-  return parts.join('\n')
+  return parts
 }

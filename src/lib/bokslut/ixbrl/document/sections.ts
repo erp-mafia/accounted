@@ -12,11 +12,12 @@ import { certificateRole } from '../certificate-role'
 import { getConcept, type TaxonomyRegistry } from '../taxonomy/registry'
 import type { FlerarsRow, IxbrlArsredovisningInput, Resultatdisposition } from '../types'
 import type { FactWriter } from './ix'
-import { fmtRange, periodColumnLabel, type Ctx } from './layout'
+import { periodColumnLabel, unbroken, type Ctx } from './layout'
 import { renderDepreciationPrinciples } from './depreciation-principles'
 import { renderFixedAssetTables } from './fixed-asset-note'
+import { paginate, printBlock, type PrintBlock, type PrintPage } from './print-model'
 import { renderRevisorspateckning } from './revisorspateckning-section'
-import { el, escapeText, formatSekAbs, paragraphs } from './xml'
+import { el, escapeText, formatSekAbs, paragraphList, paragraphs } from './xml'
 
 /**
  * Hidden allmän-information facts (TA §2.15, §3.9.3): språk, land, valuta,
@@ -68,7 +69,7 @@ export function renderCoverPage(
   // date. Preflight 1103 blocks the submission path until the date exists.
   const arsstammaFact =
     fb.arsstammaDatum !== null
-      ? writer.date('Arsstamma', 'balans0', fb.arsstammaDatum)
+      ? unbroken(writer.date('Arsstamma', 'balans0', fb.arsstammaDatum))
       : escapeText('[datum för årsstämma saknas]')
   // The decision sentences are enumerations in the schema: the stämma
   // decides on a "vinstdisposition" when the free equity at its disposal is
@@ -184,7 +185,11 @@ export function renderCoverPage(
         writer.textPlain('Organisationsnummer', 'period0', orgNumber) +
         (sate ? '<br/>Säte: ' + writer.textPlain('ForetagetsSate', 'period0', sate) : ''),
     ),
-    el('h1', {}, `Årsredovisning för räkenskapsåret ${escapeText(fmtRange(input.period.start, input.period.end))}`),
+    el(
+      'h1',
+      {},
+      `Årsredovisning för räkenskapsåret ${unbroken(escapeText(input.period.start))} till ${unbroken(escapeText(input.period.end))}`,
+    ),
     el(
       'p',
       {},
@@ -376,6 +381,13 @@ export function renderResultatdisposition(writer: FactWriter, rd: Resultatdispos
  * medelantal anställda, the ÅRL 5 kap. disclosures, aktiekapital, the K2
  * anläggningstillgångar tables); every other note body is rendered untagged. A concept the registry does not
  * hold leaves its note untagged instead of failing the document.
+ *
+ * The notes are as long as the company makes them, so they are divided into
+ * pages that each fit a sheet (print-model.ts). A note's heading stays with
+ * the first piece of its body, and the section's heading with the first
+ * note; a note is divided only between pieces that stand on their own: the
+ * tables of two balance sheet posts, two paragraphs of an untagged text. A
+ * tagged text is one fact and one piece, however long.
  */
 export function renderNotes(
   writer: FactWriter,
@@ -383,17 +395,18 @@ export function renderNotes(
   input: IxbrlArsredovisningInput,
   ctx: Ctx,
   warnings: string[],
-): string {
+): PrintPage[] {
   const has = (concept: string) => getConcept(registry, concept) !== null
-  const parts: string[] = [el('h2', {}, 'Noter')]
+  const blocks: PrintBlock[] = []
+  let sectionHeading = el('h2', {}, 'Noter') + '\n'
   for (const note of input.noter) {
-    parts.push(
-      el(
-        'h3',
-        { id: `not-${note.number}` },
-        `Not ${note.number} ${escapeText(note.title)}`,
-      ),
+    const heading = el(
+      'h3',
+      { id: `not-${note.number}` },
+      `Not ${note.number} ${escapeText(note.title)}`,
     )
+    // The pieces of the note's body, each printed on one sheet.
+    const parts: string[] = []
     const isPrinciples = /redovisnings.*principer/i.test(note.title)
     const isMedelantal = /medelantal.*anst/i.test(note.title)
     const isLongTermDebt = /långfristiga skulder/i.test(note.title)
@@ -405,11 +418,11 @@ export function renderNotes(
     if (note.fixedAssets && note.fixedAssets.length > 0) {
       // The K2 note on anläggningstillgångar: tagged tables per balance
       // sheet post instead of the text body (fixed-asset-note.ts).
-      parts.push(renderFixedAssetTables(writer, registry, input, note.fixedAssets, warnings))
+      parts.push(...renderFixedAssetTables(writer, registry, input, note.fixedAssets, warnings))
     } else if (note.depreciationPrinciples && note.depreciationPrinciples.length > 0) {
       // The K2 note on avskrivningar: each row a tuple of its post's table
       // of avskrivningsprinciper (depreciation-principles.ts).
-      parts.push(renderDepreciationPrinciples(writer, registry, note.body, note.depreciationPrinciples))
+      parts.push(...renderDepreciationPrinciples(writer, registry, note.body, note.depreciationPrinciples))
     } else if (isAktiekapital && aktiekapitalNot) {
       // Same sentence as the PDF note (build-data.ts), with the registered
       // amount tagged: it repeats the BR fact Aktiekapital@balans0, and
@@ -480,8 +493,11 @@ export function renderNotes(
         ),
       )
     } else if (isLongTermDebt && has('LangfristigaSkulderForfallerSenare5Ar')) {
+      // The tagged amount stays with the last paragraph of the note's text.
+      const text = paragraphList(note.body)
       parts.push(
-        paragraphs(note.body) +
+        ...text.slice(0, -1),
+        (text[text.length - 1] ?? '') +
           el(
             'p',
             { class: 'note-fact' },
@@ -515,10 +531,15 @@ export function renderNotes(
         writer.textPlain('NotUpplysningModerforetag', 'period0', input.disclosures.parentCompany),
       )
     } else {
-      parts.push(paragraphs(note.body))
+      parts.push(...paragraphList(note.body))
     }
+    const [first = '', ...rest] = parts
+    blocks.push(printBlock(sectionHeading + heading + '\n' + first))
+    sectionHeading = ''
+    for (const part of rest) blocks.push(printBlock(part))
   }
-  return parts.join('\n')
+  if (sectionHeading) blocks.push(printBlock(el('h2', {}, 'Noter')))
+  return paginate(blocks)
 }
 
 /**
