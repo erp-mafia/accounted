@@ -2,47 +2,66 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
-import { isOutboxNotDeployed } from '@/lib/events/outbox-dispatcher'
 
 /**
  * GET /api/events/cleanup/cron: daily 02:00 UTC.
  *
- * Differentiated retention:
- * - Delivery events (invoice.created, transaction.synced, …): 30 days. They
- *   exist for external automation polling (n8n/Make/Zapier) and go stale fast.
- * - Agent telemetry (mcp.*, agent.*): 180 days. Error-rate trends and
- *   skill-load correlation need more than one month of signal: a 30-day
- *   window made it impossible to tell whether a tool or skill change actually
- *   moved failure rates.
+ * Event data is kept. Business events in event_log (invoice.created,
+ * transaction.synced, …: what GET /api/events serves) and the event outbox
+ * (event_outbox, event_deliveries) are never deleted here; their rows go only
+ * with their company (ON DELETE CASCADE). prune_delivery_events and
+ * prune_event_outbox, which this cron called until 2026-11-23, are left in
+ * the database and nothing calls them.
  *
- * Retention is declared in the record of processing activities (id: mcp.telemetry).
+ * What can name a person stays in an event for 30 days: as long as the
+ * webhooks retry it and GET /api/events serves it in full. Then the event
+ * keeps its ids, dates, amounts, statuses and codes, and loses names, e-mail
+ * addresses, addresses and other text (remove_event_personal_details; the
+ * database defines both the 30 days and what stays).
  *
- * The steps are independent, so one failing does not stop the others, and the
- * run answers with an error when any of them failed:
- * 1. Roll whole days of telemetry into anonymous daily counts that are kept
- *    (rollup_agent_telemetry, ropa id mcp.telemetry_rollup). First, so
- *    nothing before it can keep a day from being counted.
- * 2. Delivery events past 30 days (prune_delivery_events, which never reads
- *    the telemetry rows).
- * 3. Everything past 180 days, only when step 1 succeeded: a telemetry day is
- *    never purged before it is counted.
- * 4. The event outbox (event_outbox, event_deliveries): finished events after
- *    7 days, events with a dead delivery after 30 (prune_event_outbox).
+ * Agent telemetry (mcp.*, agent.*) is the one thing deleted. The privacy
+ * policy (app/(public)/privacy) promises that API and agent call metadata is
+ * kept 180 days and after that only as anonymous daily counts. Retention is
+ * declared in the record of processing activities (id: mcp.telemetry).
  *
- * Time: a rollup call may run 30 s (pre_request_statement_timeout), every
- * other call 8 s, so seven slow rollups, ten slow batches and the two last
- * calls add up to about 306 s against the route's limit (300 s, declared by
- * the route). No call is started after
- * TIME_BUDGET_MS (250 s + one 30 s call = 280 s); what was not started is
- * named in `deferred`, logged as an error and done by the next night's run,
- * which starts from the same cutoffs.
+ * The steps:
+ * 1. Take the personal details out of events past 30 days, a batch per call,
+ *    until none is left (remove_event_personal_details).
+ * 2. Roll whole days of telemetry into anonymous daily counts that are kept
+ *    (rollup_agent_telemetry, ropa id mcp.telemetry_rollup).
+ * 3. Delete telemetry past 180 days, only when step 2 succeeded: a telemetry
+ *    day is never purged before it is counted. Nothing else is deleted.
+ *
+ * Time: a batch of step 1 takes about a second and may run 8 s, a rollup call
+ * 30 s (pre_request_statement_timeout), a delete 8 s; a night's events take a
+ * few batches. No call is started after TIME_BUDGET_MS (250 s + one 30 s call
+ * = 280 s, inside the route's limit of 300 s, declared by the route); what
+ * was not started is named in `deferred`, logged as an error and done by the
+ * next night's run, which starts from the same cutoffs.
  */
 const TIME_BUDGET_MS = 250_000
-const DELIVERY_RETENTION_DAYS = 30
 const TELEMETRY_RETENTION_DAYS = 180
 const ROLLUP_MAX_CALLS = 7
-const DELIVERY_BATCH = 20_000
-const DELIVERY_MAX_BATCHES = 10
+
+/** Rows of each table one call of step 1 takes: about a second of work, far inside the 8 s statement timeout. */
+const PERSONAL_DETAILS_BATCH = 2000
+
+/** Calls of step 1 per run: a night's events take a few; the cap leaves the telemetry steps their time after missed nights. */
+const PERSONAL_DETAILS_MAX_CALLS = 40
+
+/**
+ * The telemetry the purge deletes: the event types the rollup counts (mcp.*
+ * and agent.*), one delete per prefix. `like` is the set itself. The range
+ * around it is what lets the (event_type, created_at) index serve the delete:
+ * under the database's collation (en_US.UTF-8) a LIKE alone cannot use that
+ * index, and the planner would read through the business events kept beside
+ * the telemetry, every one of them once they are older than the cutoff.
+ * Every type that matches `like` sorts inside [from, to).
+ */
+const TELEMETRY_PREFIXES = [
+  { like: 'mcp.%', from: 'mcp', to: 'mcq' },
+  { like: 'agent.%', from: 'agent', to: 'agenu' },
+] as const
 
 /** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
 export const maxDuration = 300
@@ -50,17 +69,9 @@ export const maxDuration = 300
 export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) => {
   const supabase = createServiceClient()
 
-  const deliveryCutoff = new Date()
-  deliveryCutoff.setDate(deliveryCutoff.getDate() - DELIVERY_RETENTION_DAYS)
   const telemetryCutoff = new Date()
   telemetryCutoff.setDate(telemetryCutoff.getDate() - TELEMETRY_RETENTION_DAYS)
 
-  // 1. One day per call keeps each call inside its 30 s budget; the loop
-  // catches up after missed nights. 181 days: the 180-day cutoff plus the day
-  // the last purge may have cut into, which must not be rolled from a partial
-  // set of rows.
-  const rollupSince = new Date()
-  rollupSince.setDate(rollupSince.getDate() - TELEMETRY_RETENTION_DAYS - 1)
   const deadline = ctx.startedAt + TIME_BUDGET_MS
   const deferred: string[] = []
   const outOfTime = (step: string): boolean => {
@@ -68,6 +79,37 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
     if (!deferred.includes(step)) deferred.push(step)
     return true
   }
+
+  // 1. A call does one batch of each table and returns the rows it changed;
+  // 0 means none is left. A failed call ends the step: the next night starts
+  // where this one stopped. Independent of the telemetry steps.
+  let removedPersonalDetails = 0
+  let personalDetailsError: unknown = null
+  for (let call = 0; ; call++) {
+    if (call === PERSONAL_DETAILS_MAX_CALLS) {
+      deferred.push('personal_details')
+      break
+    }
+    if (outOfTime('personal_details')) break
+    const { data: removed, error } = await supabase.rpc('remove_event_personal_details', {
+      p_limit: PERSONAL_DETAILS_BATCH,
+    })
+    if (error) {
+      personalDetailsError = error
+      ctx.log.error('removing personal details from events failed', error)
+      break
+    }
+    const n = typeof removed === 'number' ? removed : 0
+    removedPersonalDetails += n
+    if (n === 0) break
+  }
+
+  // 2. One day per call keeps each call inside its 30 s budget; the loop
+  // catches up after missed nights. 181 days: the 180-day cutoff plus the day
+  // the last purge may have cut into, which must not be rolled from a partial
+  // set of rows.
+  const rollupSince = new Date()
+  rollupSince.setDate(rollupSince.getDate() - TELEMETRY_RETENTION_DAYS - 1)
 
   let rolledUpDays = 0
   let rollupError: unknown = null
@@ -87,69 +129,37 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
     if (n === 0) break
   }
 
-  // 2. Batches until one comes back short.
-  let deletedDelivery = 0
-  let deliveryError: unknown = null
-  for (let batch = 0; batch < DELIVERY_MAX_BATCHES; batch++) {
-    if (outOfTime('delivery_prune')) break
-    const { data: pruned, error } = await supabase.rpc('prune_delivery_events', {
-      p_before: deliveryCutoff.toISOString(),
-      p_limit: DELIVERY_BATCH,
-    })
-    if (error) {
-      deliveryError = error
-      ctx.log.error('event log delivery cleanup failed', error)
-      break
-    }
-    const n = typeof pruned === 'number' ? pruned : 0
-    deletedDelivery += n
-    if (n < DELIVERY_BATCH) break
-  }
-
-  // 3. Everything past 180 days, catches the telemetry rows step 2 skipped.
+  // 3. Telemetry past 180 days, and nothing else. A rollup cut short by the
+  // clock skips the purge like a failed one: a telemetry day is never purged
+  // before it is counted. The prefixes are independent: one failing does not
+  // stop the other.
   let deletedTelemetry = 0
   let telemetryError: unknown = null
-  // A rollup cut short by the clock skips the purge like a failed one: a
-  // telemetry day is never purged before it is counted.
-  if (!rollupError && !deferred.includes('rollup') && !outOfTime('telemetry_purge')) {
-    const { error, count } = await supabase
-      .from('event_log')
-      .delete({ count: 'exact' })
-      .lt('created_at', telemetryCutoff.toISOString())
-    if (error) {
-      telemetryError = error
-      ctx.log.error('event log telemetry cleanup failed', error)
-    } else {
-      deletedTelemetry = count ?? 0
+  if (!rollupError && !deferred.includes('rollup')) {
+    for (const prefix of TELEMETRY_PREFIXES) {
+      if (outOfTime('telemetry_purge')) break
+      const { error, count } = await supabase
+        .from('event_log')
+        .delete({ count: 'exact' })
+        .gte('event_type', prefix.from)
+        .lt('event_type', prefix.to)
+        .like('event_type', prefix.like)
+        .lt('created_at', telemetryCutoff.toISOString())
+      if (error) {
+        telemetryError ??= error
+        ctx.log.error('event log telemetry cleanup failed', error, { prefix: prefix.like })
+        continue
+      }
+      deletedTelemetry += count ?? 0
     }
   }
 
-  const deleted = deletedDelivery + deletedTelemetry
   ctx.log.info('event log cleanup summary', {
-    deleted,
-    deletedDelivery,
+    removedPersonalDetails,
     deletedTelemetry,
     rolledUpDays,
-    deliveryCutoff: deliveryCutoff.toISOString(),
     telemetryCutoff: telemetryCutoff.toISOString(),
   })
-
-  // 4. The event outbox, whatever EVENT_OUTBOX_MODE is: rows written while
-  // shadow mode was on must still age out after it is switched off (raw
-  // payloads). With the mode never on it deletes nothing. Best effort: it
-  // never fails the run, and a database the outbox migration has not reached
-  // yet answers PGRST202, which is a skip.
-  let prunedOutbox = 0
-  const { data: pruned, error: pruneError } = outOfTime('outbox_prune')
-    ? { data: 0, error: null }
-    : await supabase.rpc('prune_event_outbox')
-  if (pruneError) {
-    if (isOutboxNotDeployed(pruneError)) ctx.log.info('event outbox not deployed; prune skipped')
-    else ctx.log.error('event outbox prune failed', pruneError)
-  } else {
-    prunedOutbox = typeof pruned === 'number' ? pruned : 0
-    ctx.log.info('event outbox prune summary', { prunedOutbox })
-  }
 
   if (deferred.length > 0) {
     ctx.log.error('event log cleanup ran out of time; the steps left wait for the next run', {
@@ -158,16 +168,14 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
     })
   }
 
-  const failure = rollupError ?? deliveryError ?? telemetryError
+  const failure = personalDetailsError ?? rollupError ?? telemetryError
   if (failure) return errorResponse(failure, ctx.log, { requestId: ctx.requestId })
 
   return NextResponse.json({
     success: true,
-    deleted,
-    deletedDelivery,
+    removedPersonalDetails,
     deletedTelemetry,
     rolledUpDays,
-    prunedOutbox,
     ...(deferred.length > 0 ? { deferred } : {}),
   })
 })

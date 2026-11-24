@@ -1683,12 +1683,12 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     'WORM verification log (SHA-256 recompute outcomes); failures reach the archive via audit_log in revision/behandlingshistorik.json',
   email_change_requests:
     'per-user in-flight login-email change claim (migration 20260903083000); gates token re-issue, not räkenskapsinformation',
-  event_log: '30-day TTL event bus log',
+  event_log: 'event bus log (the GET /api/events feed and agent telemetry), not räkenskapsinformation',
   agent_telemetry_daily: 'anonymous daily counts of agent telemetry across all companies; no company_id, so nothing company-scoped to archive',
   agent_tool_transitions_daily: 'anonymous daily counts of which MCP tool followed which across all companies; no company_id, so nothing company-scoped to archive',
   agent_telemetry_rollup_days: 'which days the agent telemetry rollup has counted; platform bookkeeping, no company data',
   event_outbox:
-    'event delivery queue (raw internal event payloads, pruned after 7 days; event_deliveries has no company_id), not räkenskapsinformation',
+    'event delivery queue (raw internal event payloads; event_deliveries has no company_id), not räkenskapsinformation',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
   idempotency_keys: 'infrastructure',
   sandbox_seed_attempts: 'infrastructure: disposable demo seed coordination, no accounting records',

@@ -661,7 +661,7 @@ describe('GET /api/events', () => {
   })
 
   it('answers the rows the page read finds when one went between the reads', async () => {
-    // Sequence 2 was pruned (30-day retention) after the type read.
+    // Sequence 2 went after the type read (its company was deleted).
     enqueue(seqs(1, 2, 3))
     enqueue({ data: [eventAt(1, 'invoice.paid'), eventAt(3, 'invoice.paid')] })
 

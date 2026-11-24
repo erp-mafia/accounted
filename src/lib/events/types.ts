@@ -298,8 +298,8 @@ export type CoreEvent =
   | { type: 'company.accounting_framework_changed'; payload: { companyId: string; userId: string; fiscalPeriodId: string | null; framework: 'k2' | 'k3'; previousFramework: 'k2' | 'k3' | null; cascadedPeriodIds: string[]; k3ToK2: boolean } }
   | { type: 'account.deleted'; payload: { userId: string; deletedAt: string } }
   // MCP telemetry: fired from the MCP dispatcher.
-  // Persisted to event_log (180-day TTL for mcp.*/agent.* rows, vs 30 days for
-  // delivery events) for hot-tool / error-rate / latency analytics.
+  // Persisted to event_log (180-day TTL for mcp.*/agent.* rows, while every
+  // other event type is kept) for hot-tool / error-rate / latency analytics.
   // Intentionally lightweight: no args, no result body, only metadata.
   | { type: 'mcp.tool_called'; payload: {
       tool: string                                  // e.g. 'gnubok_create_invoice'

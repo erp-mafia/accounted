@@ -29,7 +29,8 @@ const INTERNAL_PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'supplier_invoice.confirmed',
   // MCP telemetry: every tool invocation, tools/list call, and resources/read.
   // Lightweight metadata only. mcp.*/agent.* rows are retained 180 days by the
-  // cleanup cron (error-rate trends need more than the 30-day delivery window).
+  // cleanup cron, then kept only as anonymous daily counts; every other event
+  // type is kept.
   'mcp.tool_called',
   'mcp.tools_list_called',
   'mcp.resource_read',
