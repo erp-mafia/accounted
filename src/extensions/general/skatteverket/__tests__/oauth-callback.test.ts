@@ -47,6 +47,8 @@ const {
   mockConsumeState,
   mockConsumeHandoff,
   mockMintHandoff,
+  mockInspectState,
+  mockInspectHandoff,
   mockResolveBrandByHost,
 } = vi.hoisted(() => ({
   mockPeekState: vi.fn(),
@@ -54,6 +56,8 @@ const {
   mockConsumeState: vi.fn(),
   mockConsumeHandoff: vi.fn(),
   mockMintHandoff: vi.fn(),
+  mockInspectState: vi.fn(),
+  mockInspectHandoff: vi.fn(),
   mockResolveBrandByHost: vi.fn(),
 }))
 vi.mock('@/lib/branding/resolve', () => ({
@@ -74,6 +78,8 @@ vi.mock('@/lib/auth/oauth-flows', async (importOriginal) => {
     consumeOAuthFlowState: mockConsumeState,
     consumeOAuthFlowHandoff: mockConsumeHandoff,
     mintOAuthFlowHandoff: mockMintHandoff,
+    inspectOAuthFlowState: mockInspectState,
+    inspectOAuthFlowHandoff: mockInspectHandoff,
     createOAuthFlow: vi.fn(),
     purgeExpiredOAuthFlows: vi.fn(),
   }
@@ -82,14 +88,15 @@ vi.mock('@/lib/auth/oauth-flows', async (importOriginal) => {
 import { after } from 'next/server'
 import { skatteverketExtension } from '../index'
 import { exchangeCodeForTokens } from '../lib/oauth'
-import { storeTokens } from '../lib/token-store'
+import { getTokens, storeTokens } from '../lib/token-store'
 import { runPostConnectRefresh } from '../lib/post-connect-refresh'
-import type { OAuthFlow, OAuthFlowHandoff } from '@/lib/auth/oauth-flows'
+import type { OAuthFlow, OAuthFlowHandoff, UsedOAuthFlow } from '@/lib/auth/oauth-flows'
 import { testRoutes } from '@/tests/helpers'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 
 const mockExchange = vi.mocked(exchangeCodeForTokens)
 const mockStoreTokens = vi.mocked(storeTokens)
+const mockGetTokens = vi.mocked(getTokens)
 const mockRefresh = vi.mocked(runPostConnectRefresh)
 
 // The callback's own sentences, as the person reads them.
@@ -132,6 +139,49 @@ function stateIs(flow: OAuthFlow) {
 function handoffIs(handoff: OAuthFlowHandoff) {
   mockPeekHandoff.mockResolvedValue({ userId: handoff.userId, companyId: handoff.companyId, origin: handoff.origin })
   mockConsumeHandoff.mockResolvedValue(handoff)
+}
+
+/** A flow a first delivery already consumed; by default its wait window has passed. */
+function usedFlowOn(origin: string, overrides: Partial<UsedOAuthFlow> = {}): UsedOAuthFlow {
+  const now = Date.now()
+  return {
+    id: STATE,
+    userId: 'user-1',
+    companyId: 'company-1',
+    origin,
+    returnTo: '/settings/tax',
+    startedAt: now - 60_000,
+    usedAt: now - 50_000,
+    ...overrides,
+  }
+}
+
+/** The state is spent: the peek refuses it and the inspection knows whose it was. */
+function stateWasUsed(spent: UsedOAuthFlow) {
+  mockPeekState.mockResolvedValue(null)
+  mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+}
+
+/** The connection the token store holds for user-1 and company-1, stored at `storedAt`. */
+function connectionStoredAt(storedAt: number) {
+  mockGetTokens.mockResolvedValue({
+    access_token: 'at',
+    refresh_token: 'rt',
+    expires_at: Date.now() + 3_600_000,
+    refresh_count: 0,
+    scope: 'momsdeklaration',
+    row_id: 'token-row-1',
+    stored_at: storedAt,
+  })
+}
+
+/** What the logger wrote at warn level (it is silent under NODE_ENV=test). */
+function warnings(): string {
+  return vi
+    .mocked(console.warn)
+    .mock.calls.flat()
+    .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+    .join('\n')
 }
 
 /** Service client: only the membership check runs through it here. */
@@ -204,6 +254,10 @@ describe('skatteverket OAuth callback', () => {
     mockConsumeState.mockResolvedValue(null)
     mockConsumeHandoff.mockResolvedValue(null)
     mockMintHandoff.mockResolvedValue('handoff-minted')
+    mockInspectState.mockResolvedValue({ status: 'unknown' })
+    mockInspectHandoff.mockResolvedValue('handoff_unknown')
+    mockGetTokens.mockReset()
+    mockGetTokens.mockResolvedValue(null)
     mockRefresh.mockResolvedValue({ synced: true, reconciled: 0 } as any)
     mockExchange.mockResolvedValue({
       access_token: 'at',
@@ -541,9 +595,259 @@ describe('skatteverket OAuth callback', () => {
     })
   })
 
+  describe('a second delivery of the same redirect (a phone opening it in two tabs)', () => {
+    it('sends it from the registered host to the initiating origin with the spent state, never the code', async () => {
+      stateWasUsed(usedFlowOn(BRAND))
+
+      const response = await callbackRoute().handler(
+        callbackRequest(OAUTH_HOST, `code=second-code&state=${STATE}`),
+      )
+
+      expect(response.status).toBe(302)
+      const location = new URL(response.headers.get('location') as string)
+      expect(location.origin).toBe(BRAND)
+      expect(location.pathname).toBe('/api/extensions/ext/skatteverket/callback')
+      expect([...location.searchParams.keys()]).toEqual(['replay'])
+      expect(location.searchParams.get('replay')).toBe(STATE)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(mockInspectState).toHaveBeenCalledWith(expect.anything(), STATE, 'skatteverket')
+      // Nothing is consumed, minted or exchanged, and no session is read here.
+      expect(mockConsumeState).not.toHaveBeenCalled()
+      expect(mockMintHandoff).not.toHaveBeenCalled()
+      expect(mockCreateClient).not.toHaveBeenCalled()
+      expect(mockExchange).not.toHaveBeenCalled()
+      expect(mockStoreTokens).not.toHaveBeenCalled()
+    })
+
+    it('treats a delivery that lost the consume to a concurrent one the same way', async () => {
+      const spent = usedFlowOn(BRAND)
+      mockPeekState.mockResolvedValue({ userId: 'user-1', companyId: 'company-1', origin: BRAND })
+      mockConsumeState.mockResolvedValue(null)
+      mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+
+      const response = await callbackRoute().handler(callbackRequest(OAUTH_HOST, `code=abc&state=${STATE}`))
+
+      expect(response.status).toBe(302)
+      expect(new URL(response.headers.get('location') as string).searchParams.get('replay')).toBe(STATE)
+      expect(mockMintHandoff).not.toHaveBeenCalled()
+      expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it('lands the initiator where the first delivery landed once that flow stored the connection', async () => {
+      const spent = usedFlowOn(BRAND)
+      mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+      connectionStoredAt(spent.startedAt + 5_000)
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `replay=${STATE}`))
+
+      expect(response.status).toBe(200)
+      const html = await response.text()
+      expect(html).toContain(`postMessage({ type: 'skatteverket-oauth-success' }, ${JSON.stringify(BRAND)})`)
+      expect(html).toContain(JSON.stringify(`${BRAND}/settings/tax?skv_connected=true`))
+      expect(mockGetTokens).toHaveBeenCalledWith(expect.anything(), 'user-1', 'company-1')
+      // A replay spends nothing and connects nothing.
+      expect(mockPeekState).not.toHaveBeenCalled()
+      expect(mockConsumeState).not.toHaveBeenCalled()
+      expect(mockPeekHandoff).not.toHaveBeenCalled()
+      expect(mockConsumeHandoff).not.toHaveBeenCalled()
+      expect(mockExchange).not.toHaveBeenCalled()
+      expect(mockStoreTokens).not.toHaveBeenCalled()
+      expect(mockRefresh).not.toHaveBeenCalled()
+    })
+
+    it('waits for a first delivery that is still exchanging the code', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout'] })
+      try {
+        const spent = usedFlowOn(BRAND, { usedAt: Date.now() })
+        mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+        connectionStoredAt(spent.startedAt + 5_000)
+        mockGetTokens.mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+
+        let settled = false
+        const pending = callbackRoute()
+          .handler(callbackRequest(BRAND, `replay=${STATE}`))
+          .finally(() => {
+            settled = true
+          })
+        for (let tick = 0; tick < 10 && !settled; tick++) await vi.advanceTimersByTimeAsync(500)
+        const response = await pending
+
+        expect(await response.text()).toContain('skatteverket-oauth-success')
+        expect(mockGetTokens).toHaveBeenCalledTimes(3)
+        expect(mockExchange).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('refuses once the first delivery had its time and no connection was stored', async () => {
+      vi.stubEnv('NODE_ENV', 'development')
+      mockInspectState.mockResolvedValue({ status: 'used', flow: usedFlowOn(BRAND) })
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `replay=${STATE}`))
+
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+      // Past the window: one look, no waiting.
+      expect(mockGetTokens).toHaveBeenCalledTimes(1)
+      expect(warnings()).toContain('check="used" replay="not_connected"')
+      expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it('does not count a connection stored before the flow started', async () => {
+      const spent = usedFlowOn(BRAND)
+      mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+      connectionStoredAt(spent.startedAt - 1)
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `replay=${STATE}`))
+
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+    })
+
+    it('refuses another signed-in user, saying nothing about the flow', async () => {
+      vi.stubEnv('NODE_ENV', 'development')
+      const spent = usedFlowOn(BRAND)
+      mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+      connectionStoredAt(spent.startedAt + 5_000)
+      mockCreateClient.mockResolvedValue(makeCookieClient('user-2') as any)
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `replay=${STATE}`))
+
+      // The same refusal an unknown state gets: not the mismatch sentence,
+      // not the flow's landing page or origin.
+      const html = await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+      expect(html).not.toContain('annat användarkonto')
+      expect(html).not.toContain('/settings/tax')
+      expect(html).not.toContain(BRAND)
+      expect(warnings()).toContain('check="used" replay="other_user"')
+      expect(mockGetTokens).not.toHaveBeenCalled()
+      expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it('refuses a signed-out arrival instead of sending it to login', async () => {
+      const spent = usedFlowOn(BRAND)
+      mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+      connectionStoredAt(spent.startedAt + 5_000)
+      mockCreateClient.mockResolvedValue(makeCookieClient(null) as any)
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `replay=${STATE}`))
+
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+      expect(mockGetTokens).not.toHaveBeenCalled()
+      expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it('refuses an initiator who is no longer a member', async () => {
+      const spent = usedFlowOn(BRAND)
+      mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+      connectionStoredAt(spent.startedAt + 5_000)
+      mockCreateServiceClient.mockReturnValue(makeServiceSupabase({ isMember: false }) as any)
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `replay=${STATE}`))
+
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+    })
+
+    it('answers only on the origin the flow started on', async () => {
+      const spent = usedFlowOn(BRAND)
+      mockInspectState.mockResolvedValue({ status: 'used', flow: spent })
+      connectionStoredAt(spent.startedAt + 5_000)
+
+      const response = await callbackRoute().handler(callbackRequest(APP, `replay=${STATE}`))
+
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+      expect(mockCreateClient).not.toHaveBeenCalled()
+    })
+
+    it.each(['unknown', 'expired', 'live'] as const)(
+      'refuses a bounce whose state is %s',
+      async (status) => {
+        mockInspectState.mockResolvedValue({ status })
+
+        const response = await callbackRoute().handler(callbackRequest(BRAND, `replay=${STATE}`))
+
+        await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+        expect(mockCreateClient).not.toHaveBeenCalled()
+        expect(mockExchange).not.toHaveBeenCalled()
+      },
+    )
+  })
+
+  describe('the refusal names its check in the log', () => {
+    const SECRET_STATE = 'state-value-never-logged'
+    const SECRET_HANDOFF = 'handoff-value-never-logged'
+
+    beforeEach(() => {
+      vi.stubEnv('NODE_ENV', 'development')
+    })
+
+    it.each(['unknown', 'expired'] as const)('a %s state', async (status) => {
+      mockInspectState.mockResolvedValue({ status })
+
+      const response = await callbackRoute().handler(
+        callbackRequest(OAUTH_HOST, `code=abc&state=${SECRET_STATE}`),
+      )
+
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+      expect(warnings()).toContain(`check="${status}"`)
+      expect(warnings()).not.toContain(SECRET_STATE)
+      expect(warnings()).not.toContain('abc')
+    })
+
+    it('a live state the peek still refused is a failed lookup', async () => {
+      mockInspectState.mockResolvedValue({ status: 'live' })
+
+      await callbackRoute().handler(callbackRequest(OAUTH_HOST, `code=abc&state=${SECRET_STATE}`))
+
+      expect(warnings()).toContain('check="lookup_failed"')
+    })
+
+    it.each(['handoff_expired', 'handoff_unknown', 'handoff_wrong_origin'] as const)(
+      'a handoff refused as %s',
+      async (check) => {
+        mockInspectHandoff.mockResolvedValue(check)
+
+        const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${SECRET_HANDOFF}`))
+
+        await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+        expect(mockInspectHandoff).toHaveBeenCalledWith(expect.anything(), SECRET_HANDOFF, BRAND, 'skatteverket')
+        expect(warnings()).toContain(`check="${check}"`)
+        expect(warnings()).not.toContain(SECRET_HANDOFF)
+      },
+    )
+  })
+
   describe('single hop when the callback host is the app host (self-hosted)', () => {
     beforeEach(() => {
       vi.stubEnv('NEXT_PUBLIC_SKV_OAUTH_BASE_URL', APP)
+    })
+
+    it('answers a second delivery here, where the session is, without spending or exchanging anything', async () => {
+      const spent = usedFlowOn(APP)
+      stateWasUsed(spent)
+      connectionStoredAt(spent.startedAt + 5_000)
+
+      const response = await callbackRoute().handler(callbackRequest(APP, `code=abc&state=${STATE}`))
+
+      expect(response.status).toBe(200)
+      const html = await response.text()
+      expect(html).toContain('skatteverket-oauth-success')
+      expect(html).toContain(JSON.stringify(`${APP}/settings/tax?skv_connected=true`))
+      expect(mockConsumeState).not.toHaveBeenCalled()
+      expect(mockMintHandoff).not.toHaveBeenCalled()
+      expect(mockExchange).not.toHaveBeenCalled()
+      expect(mockStoreTokens).not.toHaveBeenCalled()
+    })
+
+    it('refuses a second delivery here by another signed-in user', async () => {
+      const spent = usedFlowOn(APP)
+      stateWasUsed(spent)
+      connectionStoredAt(spent.startedAt + 5_000)
+      mockCreateClient.mockResolvedValue(makeCookieClient('user-2') as any)
+
+      const response = await callbackRoute().handler(callbackRequest(APP, `code=abc&state=${STATE}`))
+
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+      expect(mockExchange).not.toHaveBeenCalled()
     })
 
     it('binds and exchanges directly without a handoff', async () => {

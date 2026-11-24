@@ -8,6 +8,8 @@ import {
   consumeOAuthFlowHandoff,
   consumeOAuthFlowState,
   createOAuthFlow,
+  inspectOAuthFlowHandoff,
+  inspectOAuthFlowState,
   mintOAuthFlowHandoff,
   newOAuthFlowId,
   peekOAuthFlowHandoff,
@@ -295,6 +297,61 @@ describe('mintOAuthFlowHandoff / consumeOAuthFlowHandoff', () => {
     )
   })
 
+  it('puts the claimed row back spent: identity and times only, no secret, no handoff', async () => {
+    const handoffId = 'handoff-1'
+    const ctx = (col: string) => JSON.stringify(['state-1', handoffId, 'user-1', 'https://brand.example', col])
+    const times = {
+      created_at: '2026-11-24T10:00:00.000Z',
+      expires_at: '2026-11-24T10:10:00.000Z',
+      used_at: '2026-11-24T10:01:00.000Z',
+    }
+    const row = rowFor(
+      { ...FLOW, connectorState: 'signed-cs' },
+      { ...times, handoff_code: encryptOAuthFlowValue('code-1', ctx('handoff_code')), handoff_error: null },
+    )
+    const { db, calls, call, payload } = makeDb({ data: row, error: null })
+
+    const result = await consumeOAuthFlowHandoff(db, handoffId, 'https://brand.example', 'skatteverket')
+
+    expect(result?.providerCode).toBe('code-1')
+    // The claim reads the times it puts back, and deletes before it inserts.
+    expect(call('select')?.[0]).toEqual(expect.stringContaining('used_at'))
+    const ops = calls.map(([n]) => n).filter((n) => n === 'delete' || n === 'insert')
+    expect(ops).toEqual(['delete', 'insert'])
+    // Exactly these columns: no verifier, connector state or provider
+    // result, and no handoff, so no consume can match the row again.
+    expect(payload('insert')).toEqual({
+      id: 'state-1',
+      kind: 'skatteverket',
+      company_id: 'company-1',
+      user_id: 'user-1',
+      origin: 'https://brand.example',
+      redirect_uri: 'https://oauth.example/cb',
+      return_to: '/settings/tax',
+      ...times,
+    })
+  })
+
+  it('still answers the claim when the spent row cannot be put back', async () => {
+    const handoffId = 'handoff-1'
+    const ctx = (col: string) => JSON.stringify(['state-1', handoffId, 'user-1', 'https://brand.example', col])
+    const row = rowFor(FLOW, {
+      created_at: '2026-11-24T10:00:00.000Z',
+      expires_at: '2026-11-24T10:10:00.000Z',
+      used_at: '2026-11-24T10:01:00.000Z',
+      handoff_code: encryptOAuthFlowValue('code-1', ctx('handoff_code')),
+      handoff_error: null,
+    })
+    const claim = makeDb({ data: row, error: null })
+    const keep = makeDb({ data: null, error: { message: 'insert refused' } })
+    const db = { from: vi.fn().mockReturnValueOnce(claim.db.from()).mockReturnValueOnce(keep.db.from()) }
+
+    const result = await consumeOAuthFlowHandoff(db as any, handoffId, 'https://brand.example', 'skatteverket')
+
+    expect(result?.providerCode).toBe('code-1')
+    expect(keep.payload('insert')).toMatchObject({ id: 'state-1' })
+  })
+
   it('returns null for a missing row and for a tampered payload', async () => {
     expect(
       await consumeOAuthFlowHandoff(makeDb({ data: null, error: null }).db, 'h', 'https://brand.example', 'skatteverket'),
@@ -350,6 +407,89 @@ describe('peekOAuthFlowState / peekOAuthFlowHandoff', () => {
     expect(
       await peekOAuthFlowHandoff(makeDb({ data: null, error: { message: 'x' } }).db, 'h', 'https://brand.example', 'skatteverket'),
     ).toBeNull()
+  })
+})
+
+describe('inspectOAuthFlowState / inspectOAuthFlowHandoff', () => {
+  const inAMinute = () => new Date(Date.now() + 60_000).toISOString()
+  const aMinuteAgo = () => new Date(Date.now() - 60_000).toISOString()
+
+  function stateRow(extra: Record<string, unknown>) {
+    return {
+      id: 'state-1',
+      company_id: 'company-1',
+      user_id: 'user-1',
+      origin: 'https://brand.example',
+      return_to: '/settings/tax',
+      created_at: '2026-11-24T10:00:00.000Z',
+      expires_at: inAMinute(),
+      used_at: null,
+      ...extra,
+    }
+  }
+
+  it('reads the row with no liveness filter and without writing', async () => {
+    const { db, calls } = makeDb({ data: null, error: null })
+    await inspectOAuthFlowState(db, 'state-1', 'skatteverket')
+    expect(calls[0]?.[0]).toBe('select')
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        ['eq', ['id', 'state-1']],
+        ['eq', ['kind', 'skatteverket']],
+      ]),
+    )
+    const names = calls.map(([n]) => n)
+    for (const forbidden of ['is', 'gt', 'update', 'delete', 'insert']) expect(names).not.toContain(forbidden)
+  })
+
+  it('names a consumed, unexpired state with whose flow it was and when', async () => {
+    const row = stateRow({ used_at: '2026-11-24T10:01:00.000Z' })
+    expect(await inspectOAuthFlowState(makeDb({ data: row, error: null }).db, 'state-1', 'skatteverket')).toEqual({
+      status: 'used',
+      flow: {
+        id: 'state-1',
+        userId: 'user-1',
+        companyId: 'company-1',
+        origin: 'https://brand.example',
+        returnTo: '/settings/tax',
+        startedAt: Date.parse('2026-11-24T10:00:00.000Z'),
+        usedAt: Date.parse('2026-11-24T10:01:00.000Z'),
+      },
+    })
+  })
+
+  it('tells unknown, expired (used or not), live and a failed read apart', async () => {
+    const inspect = (terminal: { data?: any; error?: any }) =>
+      inspectOAuthFlowState(makeDb(terminal).db, 'state-1', 'skatteverket')
+    expect(await inspect({ data: null, error: null })).toEqual({ status: 'unknown' })
+    expect(await inspect({ data: null, error: { message: 'x' } })).toEqual({ status: 'lookup_failed' })
+    expect(await inspect({ data: stateRow({ expires_at: aMinuteAgo() }), error: null })).toEqual({ status: 'expired' })
+    expect(
+      await inspect({ data: stateRow({ expires_at: aMinuteAgo(), used_at: aMinuteAgo() }), error: null }),
+    ).toEqual({ status: 'expired' })
+    expect(await inspect({ data: stateRow({}), error: null })).toEqual({ status: 'live' })
+  })
+
+  it('names why a handoff was refused, by its id alone', async () => {
+    const inspect = (terminal: { data?: any; error?: any }) =>
+      inspectOAuthFlowHandoff(makeDb(terminal).db, 'handoff-1', 'https://brand.example', 'skatteverket')
+    const handoff = (extra: Record<string, unknown>) => ({
+      origin: 'https://brand.example',
+      handoff_expires_at: inAMinute(),
+      ...extra,
+    })
+
+    const { db, calls } = makeDb({ data: null, error: null })
+    expect(await inspectOAuthFlowHandoff(db, 'handoff-1', 'https://brand.example', 'skatteverket')).toBe(
+      'handoff_unknown',
+    )
+    expect(calls).toEqual(expect.arrayContaining([['eq', ['handoff_id', 'handoff-1']]]))
+    expect(calls.map(([n]) => n)).not.toContain('delete')
+
+    expect(await inspect({ data: null, error: { message: 'x' } })).toBe('lookup_failed')
+    expect(await inspect({ data: handoff({ handoff_expires_at: aMinuteAgo() }), error: null })).toBe('handoff_expired')
+    expect(await inspect({ data: handoff({ origin: 'https://app.example' }), error: null })).toBe('handoff_wrong_origin')
+    expect(await inspect({ data: handoff({}), error: null })).toBe('lookup_failed')
   })
 })
 

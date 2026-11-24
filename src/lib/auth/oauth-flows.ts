@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { createLogger } from '@/lib/logger'
 import { decryptOAuthFlowValue, encryptOAuthFlowValue } from './oauth-flow-crypto'
 
 /**
@@ -24,8 +25,17 @@ import { decryptOAuthFlowValue, encryptOAuthFlowValue } from './oauth-flow-crypt
  * check: a replayed or concurrent callback loses the row-lock race and gets
  * null, with no read-then-write window. Every failure mode (unknown, forged,
  * expired, consumed, wrong origin, unreadable ciphertext) is the same null:
- * the callbacks are unauthenticated and must not be an oracle.
+ * the callbacks are unauthenticated and must not be an oracle. Only after a
+ * refusal, the inspect functions below say which check it was, for the log
+ * and for recognising a second delivery of a flow that already finished.
+ *
+ * Claiming the handoff leaves a spent row behind (keepSpentOAuthFlow): the
+ * flow's identity with no secret, which no consume can match again, so a
+ * second delivery of the same provider redirect is known as this flow's
+ * rather than looking unknown.
  */
+
+const log = createLogger('auth/oauth-flows')
 
 export type OAuthFlowKind = 'skatteverket'
 
@@ -248,6 +258,92 @@ export async function peekOAuthFlowHandoff(
   }
 }
 
+/** A flow whose state was consumed and has not expired: who, where, and when. */
+export interface UsedOAuthFlow extends OAuthFlowIdentity {
+  id: string
+  returnTo: string | null
+  /** When /authorize created the row, epoch ms (database clock). */
+  startedAt: number
+  /** When hop 1 consumed the state, epoch ms. */
+  usedAt: number
+}
+
+/**
+ * What a state row says after a peek or consume refused it. `live` means the
+ * row is unconsumed and unexpired, so the refusal was not about the state (a
+ * failed read); `lookup_failed` means this read failed too.
+ */
+export type OAuthFlowStateInspection =
+  | { status: 'used'; flow: UsedOAuthFlow }
+  | { status: 'unknown' | 'expired' | 'live' | 'lookup_failed' }
+
+/**
+ * Read a state row with no liveness filter, to tell a refusal apart: never
+ * there (or purged), past its expiry (used or not), consumed, or still live.
+ * Never a gate: it consumes nothing, and the page answers every refusal the
+ * same way. A consumed flow comes back with its identity so the callback can
+ * recognise a second delivery of a flow that already finished.
+ */
+export async function inspectOAuthFlowState(
+  db: SupabaseClient,
+  state: string,
+  kind: OAuthFlowKind,
+): Promise<OAuthFlowStateInspection> {
+  const { data, error } = await db
+    .from('oauth_flows')
+    .select('id, company_id, user_id, origin, return_to, created_at, expires_at, used_at')
+    .eq('id', state)
+    .eq('kind', kind)
+    .maybeSingle()
+  if (error) return { status: 'lookup_failed' }
+  if (!data) return { status: 'unknown' }
+  if (new Date(data.expires_at as string).getTime() <= Date.now()) return { status: 'expired' }
+  if (data.used_at === null) return { status: 'live' }
+  return {
+    status: 'used',
+    flow: {
+      id: data.id as string,
+      userId: data.user_id as string,
+      companyId: data.company_id as string,
+      origin: data.origin as string,
+      returnTo: (data.return_to as string | null) ?? null,
+      startedAt: new Date(data.created_at as string).getTime(),
+      usedAt: new Date(data.used_at as string).getTime(),
+    },
+  }
+}
+
+/**
+ * Why a handoff was refused, for the log. A claimed handoff is gone (the
+ * claim removes it), so it reads as unknown, like one that never existed.
+ */
+export type OAuthFlowHandoffRefusal =
+  | 'handoff_unknown'
+  | 'handoff_expired'
+  | 'handoff_wrong_origin'
+  | 'lookup_failed'
+
+/** Same as inspectOAuthFlowState, for a handoff refused on `origin`. Never a gate. */
+export async function inspectOAuthFlowHandoff(
+  db: SupabaseClient,
+  handoffId: string,
+  origin: string,
+  kind: OAuthFlowKind,
+): Promise<OAuthFlowHandoffRefusal> {
+  const { data, error } = await db
+    .from('oauth_flows')
+    .select('origin, handoff_expires_at')
+    .eq('handoff_id', handoffId)
+    .eq('kind', kind)
+    .maybeSingle()
+  if (error) return 'lookup_failed'
+  if (!data) return 'handoff_unknown'
+  if (new Date(data.handoff_expires_at as string).getTime() <= Date.now()) return 'handoff_expired'
+  if (data.origin !== origin) return 'handoff_wrong_origin'
+  // Live and on this origin: the refusal was a failed read, not the handoff.
+  return 'lookup_failed'
+}
+
 /**
  * Consume the state once. The UPDATE's WHERE clause is the entire check:
  * unconsumed, unexpired, of the expected kind. Null for every failure.
@@ -311,10 +407,48 @@ export async function mintOAuthFlowHandoff(
   return handoffId
 }
 
+type ClaimedHandoffRow = FlowRow & {
+  created_at: string
+  expires_at: string
+  used_at: string
+  handoff_code: string | null
+  handoff_error: string | null
+}
+
+/**
+ * Put back what is left of a flow once its handoff is claimed: who started
+ * it, where it finishes, and when it was started and used. No verifier, no
+ * connector state, no provider result. Consumed and without a handoff, so no
+ * consume can match it again; purged with the rest an hour after expiry.
+ * Best-effort: without it a second delivery of the same provider redirect is
+ * refused as unknown, which is what happened before it existed.
+ */
+async function keepSpentOAuthFlow(db: SupabaseClient, row: ClaimedHandoffRow): Promise<void> {
+  try {
+    const { error } = await db.from('oauth_flows').insert({
+      id: row.id,
+      kind: row.kind,
+      company_id: row.company_id,
+      user_id: row.user_id,
+      origin: row.origin,
+      redirect_uri: row.redirect_uri,
+      return_to: row.return_to,
+      created_at: row.created_at,
+      expires_at: row.expires_at,
+      used_at: row.used_at,
+    })
+    if (error) log.warn('spent oauth flow could not be kept', { error: error.message })
+  } catch (err) {
+    log.warn('spent oauth flow could not be kept', { error: (err as Error).message })
+  }
+}
+
 /**
  * Hop 2: claim the handoff once, only from the origin it was minted for.
  * DELETE RETURNING, so the held provider code leaves the database the moment
- * it is read. Null for every failure, including unreadable ciphertext.
+ * it is read; the row comes back as a spent row without it
+ * (keepSpentOAuthFlow). Null for every failure, including unreadable
+ * ciphertext.
  */
 export async function consumeOAuthFlowHandoff(
   db: SupabaseClient,
@@ -329,10 +463,11 @@ export async function consumeOAuthFlowHandoff(
     .eq('origin', origin)
     .eq('kind', kind)
     .gt('handoff_expires_at', new Date().toISOString())
-    .select(`${FLOW_COLUMNS}, handoff_code, handoff_error`)
+    .select(`${FLOW_COLUMNS}, created_at, expires_at, used_at, handoff_code, handoff_error`)
     .maybeSingle()
   if (error || !data) return null
-  const row = data as FlowRow & { handoff_code: string | null; handoff_error: string | null }
+  const row = data as ClaimedHandoffRow
+  await keepSpentOAuthFlow(db, row)
   try {
     const identity = { id: row.id, user_id: row.user_id, origin: row.origin }
     return {
