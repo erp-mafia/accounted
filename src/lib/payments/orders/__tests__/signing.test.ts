@@ -1391,6 +1391,34 @@ describe('restartPaymentSigning', () => {
     expect(provider.cancelPayment).toHaveBeenCalledWith(expect.anything(), 'pay-1', 'swedish-giro')
     expect(orders[0]).toMatchObject({ status: 'approved', provider_payment_id: null })
   })
+
+  it('still cancels the payments of an ended start when its orders cannot be read again', async () => {
+    const lastStart = new Date(Date.now() - 2 * 60 * 60_000).toISOString()
+    const signing = batch({ signing_target: 'payment', order_count: 1, provider_authorisation_id: 'auth-old', signing_started_at: lastStart })
+    const orders = [waitingOrder('o1', 1, { submitted_at: lastStart })]
+    holdSigning(db, signing, orders)
+    const held = rowsTable(orders)
+    // The move into the signing answers with an error, and so does the read of
+    // the signing's orders after it: the orders read before the bank call are stopped.
+    let moveTried = false
+    db.setTable('payment_orders', (chain) => {
+      const update = chain.find((c) => c.method === 'update')
+      if (update && (update.args[0] as { status?: string }).status === 'awaiting_signature') {
+        moveTried = true
+        return { data: null, error: { message: 'connection reset' } }
+      }
+      if (moveTried && chain.some((c) => c.method === 'order')) return { data: null, error: { message: 'read failed' } }
+      return held(chain)
+    })
+    db.setTable('rpc:rebatch_payment_orders_for_signing', () => ({ data: { ok: true, same: true, batch: { ...signing }, orders: orders.map((o) => ({ ...o })) } }))
+    const provider = fakeProvider({ startSigning: vi.fn().mockResolvedValue({ providerAuthorisationId: 'auth-new', method: 'qr', state: 'pending', challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.new', qrImage: null, redirectUrl: null }, failureCode: null }) })
+    registerPaymentInitiationProvider(provider)
+
+    await expect(restart()).rejects.toMatchObject({ message: 'connection reset' })
+    expect(signing).toMatchObject({ status: 'failed', provider_authorisation_id: 'auth-new' })
+    expect(provider.cancelPayment).toHaveBeenCalledWith(expect.anything(), 'pay-1', 'swedish-giro')
+    expect(orders[0]).toMatchObject({ status: 'approved', provider_payment_id: null })
+  })
 })
 
 describe('pollPaymentSigning', () => {

@@ -685,9 +685,12 @@ async function beginSca(
     // are cancelled, so no poll offers it meanwhile (endFailedSigning).
     const code = 'ORDER_MOVED_DURING_SIGNING_START'
     ctx.log.warn('an order of the signing moved while BankID started', { batchId: batch.id, moved: moved?.length ?? null, expected: waiting.length, error: Boolean(movedError) })
-    let orders: PaymentOrderRow[] = []
+    // The orders as they stand now, or, when they cannot be read, the ones
+    // that waited before the bank call: cancelAndRelease reads each order
+    // again before it asks the bank, so a stale row stops nothing that moved on.
+    let toStop: readonly PaymentOrderRow[] = waiting
     try {
-      orders = (await loadBatch(writer, ctx.companyId, batch.id))?.orders ?? []
+      toStop = (await loadBatch(writer, ctx.companyId, batch.id))?.orders ?? waiting
     } catch (error) {
       ctx.log.error('ended signing could not read its orders', error, { batchId: batch.id })
     }
@@ -697,7 +700,7 @@ async function beginSca(
       provider,
       party,
       { batchId: batch.id, authorisationId: started.providerAuthorisationId },
-      orders,
+      toStop,
       { reason: code, detail: { code, stage: 'start' } },
     )
     if (movedError) throw movedError
