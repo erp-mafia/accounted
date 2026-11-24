@@ -175,9 +175,10 @@ describe('POST /api/supplier-invoices/[id]/bank-entered', () => {
     expect(mockFindSignedBankPayment).not.toHaveBeenCalled()
   })
 
-  it('refuses a registered invoice still waiting for attest (faktureringsmetoden)', async () => {
+  it('refuses a registered invoice still waiting for attest (faktureringsmetoden with the attest policy on)', async () => {
     enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'registered' }) })
     enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ data: { enabled: true } })
 
     const response = await post({ entered: true })
     const { status, body } = await parseJsonResponse<{
@@ -188,6 +189,36 @@ describe('POST /api/supplier-invoices/[id]/bank-entered', () => {
     expect(body.error.code).toBe('SI_BANK_ENTERED_NOT_PAYABLE')
     expect(body.error.details.currentStatus).toBe('registered')
     expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(findCalls('company_attest_policies', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(findCall('supplier_invoices', 'update')).toBeUndefined()
+  })
+
+  // Without an attest policy on there is no attest step: a registered invoice
+  // is payable as it stands, as under kontantmetoden.
+  it('marks a registered invoice under faktureringsmetoden without an attest policy on', async () => {
+    for (const policy of [null, { enabled: false }]) {
+      reset()
+      enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'registered' }) })
+      enqueue({ data: { accounting_method: 'accrual' } })
+      enqueue({ data: policy })
+      enqueue({ data: { id: 'si-1', bank_entered_at: '2026-10-20T10:00:00.000Z' } })
+
+      const response = await post({ entered: true })
+      expect(response.status, JSON.stringify(policy)).toBe(200)
+      expect(findCall('supplier_invoices', 'in')).toEqual([
+        'status',
+        ['registered', 'approved', 'overdue', 'partially_paid'],
+      ])
+    }
+  })
+
+  it('fails closed when the attest policy cannot be read', async () => {
+    enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'registered' }) })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ data: null, error: { code: '42501', message: 'permission denied' } })
+
+    const response = await post({ entered: true })
+    expect(response.status).toBeGreaterThanOrEqual(400)
     expect(findCall('supplier_invoices', 'update')).toBeUndefined()
   })
 
@@ -196,6 +227,7 @@ describe('POST /api/supplier-invoices/[id]/bank-entered', () => {
   it('marks a registered invoice under kontantmetoden, with registered in the compare-and-set', async () => {
     enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'registered' }) })
     enqueue({ data: { accounting_method: 'cash' } })
+    enqueue({ data: { enabled: true } })
     enqueue({ data: { id: 'si-1', bank_entered_at: '2026-10-20T10:00:00.000Z' } })
 
     const response = await post({ entered: true })
@@ -212,12 +244,13 @@ describe('POST /api/supplier-invoices/[id]/bank-entered', () => {
     ])
   })
 
-  it('reads the accounting method only when the status depends on it', async () => {
+  it('reads the accounting method and the attest policy only when the status depends on them', async () => {
     enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'overdue' }) })
     enqueue({ data: { id: 'si-1', bank_entered_at: '2026-10-20T10:00:00.000Z' } })
 
     expect((await post({ entered: true })).status).toBe(200)
     expect(findCall('company_settings', 'select')).toBeUndefined()
+    expect(findCall('company_attest_policies', 'select')).toBeUndefined()
   })
 
   it('fails closed when the accounting method cannot be read', async () => {

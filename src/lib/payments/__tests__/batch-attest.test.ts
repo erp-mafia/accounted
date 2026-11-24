@@ -86,16 +86,19 @@ describe('payment file under the attest policy', () => {
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('policy off: the unattested invoice is in the file with the warning, as before', async () => {
-    const mock = db(null)
-    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })
-    expect(preview.excluded).toEqual([])
-    expect(preview.eligible[0]!.warnings).toContain('unattested')
+  it('policy off: the unattested invoice is in the file, and nothing warns: there is no attest step', async () => {
+    for (const policy of [null, { ...POLICY_ON, enabled: false }]) {
+      const mock = db(policy)
+      const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })
+      expect(preview.excluded).toEqual([])
+      expect(preview.eligible[0]!.warnings).not.toContain('unattested')
+    }
   })
 })
 
 // crm#1141: kontantmetoden has no attest step (companyAttestsSupplierInvoices),
-// so the warning sat on every one of its invoices in the betalfil dialog.
+// so the warning sat on every one of its invoices in the betalfil dialog; the
+// same holds for faktureringsmetoden without an attest policy on.
 describe('payment file: the unattested warning follows the attest rule', () => {
   const DEBTOR_SETTINGS = { company_name: 'Testbolaget AB', org_number: '556677-8899', city: 'Stockholm', iban: 'SE3550000000054910000003', bic: 'ESSESESS', bankgiro: '991-2346', clearing_number: null, bank_name: null }
 
@@ -114,9 +117,11 @@ describe('payment file: the unattested warning follows the attest rule', () => {
     expect(planned.ok && planned.plan.warnings).toEqual([[]])
   })
 
-  it('faktureringsmetoden, and a company without a setting: the warning stays', async () => {
+  // Below the policy's threshold the invoice is not held back, but the
+  // company still attests: the warning stays, as before.
+  it('faktureringsmetoden with the attest policy on, and a company without a setting: the warning stays', async () => {
     for (const method of ['accrual', null]) {
-      const mock = db(null, method)
+      const mock = db({ ...POLICY_ON, threshold_amount: 10000 }, method)
       const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested', 'attested'] })
       expect(preview.eligible.map((l) => [l.id, l.warnings]), String(method)).toEqual([
         ['unattested', ['unattested']],
@@ -134,6 +139,20 @@ describe('payment file: the unattested warning follows the attest rule', () => {
     const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })
     expect(preview.excluded).toEqual([])
     expect(preview.eligible[0]!.warnings).toEqual([])
+  })
+
+  it('faktureringsmetoden without an attest policy: preview and plan carry no unattested warning', async () => {
+    const mock = db(null, 'accrual')
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested', 'attested'] })
+    expect(preview.excluded).toEqual([])
+    expect(preview.eligible.map((l) => [l.id, l.warnings])).toEqual([
+      ['unattested', []],
+      ['attested', []],
+    ])
+    const planned = await planSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, {
+      items: [{ supplier_invoice_id: 'unattested' }],
+    })
+    expect(planned.ok && planned.plan.warnings).toEqual([[]])
   })
 
   it('a failed method read keeps the warning: it never blocks, so the safe side is to show it', async () => {

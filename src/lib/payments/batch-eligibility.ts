@@ -97,8 +97,9 @@ export interface BatchEvaluationOptions {
   attestBlocked?: ReadonlySet<string>
   /**
    * Whether the company attests supplier invoices at all
-   * (PAYMENT_ATTEST_GATE.attestsSupplierInvoices). False (kontantmetoden): an
-   * invoice without approved_at is not 'unattested'. Absent reads as true, as
+   * (PAYMENT_ATTEST_GATE.attestsSupplierInvoices). False (no attest step:
+   * kontantmetoden, or no attest policy on): an invoice without approved_at
+   * is not 'unattested'. Absent reads as true, as
    * a company without a setting reads as faktureringsmetoden.
    */
   companyAttests?: boolean

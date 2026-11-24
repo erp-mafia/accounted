@@ -208,6 +208,7 @@ import { invoiceTotalSek, type AttestInvoiceFacts } from '@/lib/supplier-invoice
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { readAttestHold, type AttestHold } from '@/lib/supplier-invoices/attest-hold'
+import { loadAttestPolicyOn } from '@/lib/supplier-invoices/attest-policy-read'
 import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
 import { isToPayInList, type ListTabInvoice } from '@/lib/supplier-invoices/list-tabs'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
@@ -19933,6 +19934,10 @@ export const tools: McpTool[] = [
           : null,
       ].filter((note): note is string => note !== null)
 
+      // Attest is a step only with the attest policy on
+      // (companyAttestsSupplierInvoices); a failed read keeps the attest hint.
+      const attestPolicyOn = await loadAttestPolicyOn(supabase, companyId).catch(() => true)
+
       return stage({
         supabase,
         companyId,
@@ -19944,11 +19949,14 @@ export const tools: McpTool[] = [
         actor,
         ...(complianceNotes.length > 0 ? { complianceNote: complianceNotes.join(' ') } : {}),
         next: {
-          // Kontantmetoden has no attest step: pointing its agent at the
-          // attest tool sent it after a step the app never shows (crm#1156).
-          description: companyAttestsSupplierInvoices(accountingMethod)
+          // Without an attest step (kontantmetoden, or no attest policy on),
+          // pointing the agent at the attest tool sent it after a step the
+          // app never shows (crm#1156).
+          description: companyAttestsSupplierInvoices(accountingMethod, attestPolicyOn)
             ? 'After approval, attest via gnubok_approve_supplier_invoice and pay via the bank flow.'
-            : 'After approval, pay it via the bank flow: kontantmetoden has no attest step, and the purchase is booked when the outgoing bank transaction is matched to the invoice.',
+            : accountingMethod === 'cash'
+              ? 'After approval, pay it via the bank flow: kontantmetoden has no attest step, and the purchase is booked when the outgoing bank transaction is matched to the invoice.'
+              : 'After approval, pay it via the bank flow: the company has no attest policy on, so the invoice is ready to pay once registered.',
           tool: 'gnubok_get_inbox_item',
           args: { inbox_item_id: inboxItemId },
         },

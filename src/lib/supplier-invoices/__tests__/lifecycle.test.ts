@@ -110,14 +110,23 @@ describe('canApproveSupplierInvoice', () => {
 })
 
 describe('companyAttestsSupplierInvoices', () => {
-  it('has no attest step under kontantmetoden (crm#1156)', () => {
-    expect(companyAttestsSupplierInvoices('cash')).toBe(false)
+  it('has no attest step under kontantmetoden (crm#1156), policy or not', () => {
+    expect(companyAttestsSupplierInvoices('cash', true)).toBe(false)
+    expect(companyAttestsSupplierInvoices('cash', false)).toBe(false)
   })
 
-  it('attests under faktureringsmetoden, and when the setting is missing', () => {
-    expect(companyAttestsSupplierInvoices('accrual')).toBe(true)
-    expect(companyAttestsSupplierInvoices(null)).toBe(true)
-    expect(companyAttestsSupplierInvoices(undefined)).toBe(true)
+  it('attests under faktureringsmetoden with the attest policy on, and when the setting is missing', () => {
+    expect(companyAttestsSupplierInvoices('accrual', true)).toBe(true)
+    expect(companyAttestsSupplierInvoices(null, true)).toBe(true)
+    expect(companyAttestsSupplierInvoices(undefined, true)).toBe(true)
+  })
+
+  it('has no attest step under faktureringsmetoden without an attest policy on', () => {
+    expect(companyAttestsSupplierInvoices('accrual', false)).toBe(false)
+    // Not read yet, or no policy row: off.
+    expect(companyAttestsSupplierInvoices('accrual', null)).toBe(false)
+    expect(companyAttestsSupplierInvoices('accrual', undefined)).toBe(false)
+    expect(companyAttestsSupplierInvoices(null, false)).toBe(false)
   })
 })
 
@@ -214,17 +223,23 @@ describe('findChangedVerifikatFields', () => {
 
 describe('canMarkSupplierInvoicePaid', () => {
   it.each(['approved', 'overdue', 'partially_paid'])(
-    'offers a %s invoice under faktureringsmetoden',
+    'offers a %s invoice under faktureringsmetoden, policy or not',
     (status) => {
-      expect(canMarkSupplierInvoicePaid({ status }, 'accrual')).toBe(true)
+      expect(canMarkSupplierInvoicePaid({ status }, 'accrual', true)).toBe(true)
+      expect(canMarkSupplierInvoicePaid({ status }, 'accrual', false)).toBe(true)
     },
   )
 
-  it('keeps a registered invoice behind attest under faktureringsmetoden', () => {
-    expect(canMarkSupplierInvoicePaid({ status: 'registered' }, 'accrual')).toBe(false)
+  it('keeps a registered invoice behind attest under faktureringsmetoden with the attest policy on', () => {
+    expect(canMarkSupplierInvoicePaid({ status: 'registered' }, 'accrual', true)).toBe(false)
     // A company without a setting reads as faktureringsmetoden, as on the pages.
-    expect(canMarkSupplierInvoicePaid({ status: 'registered' }, null)).toBe(false)
-    expect(canMarkSupplierInvoicePaid({ status: 'registered' }, undefined)).toBe(false)
+    expect(canMarkSupplierInvoicePaid({ status: 'registered' }, null, true)).toBe(false)
+    expect(canMarkSupplierInvoicePaid({ status: 'registered' }, undefined, true)).toBe(false)
+  })
+
+  it('offers a registered invoice under faktureringsmetoden without an attest policy: no attest step', () => {
+    expect(canMarkSupplierInvoicePaid({ status: 'registered' }, 'accrual', false)).toBe(true)
+    expect(canMarkSupplierInvoicePaid({ status: 'registered' }, null, undefined)).toBe(true)
   })
 
   // crm#1141: kontantmetoden has no attest step, so a just-registered invoice
@@ -233,42 +248,47 @@ describe('canMarkSupplierInvoicePaid', () => {
   it.each(['registered', 'approved', 'overdue', 'partially_paid'])(
     'offers a %s invoice under kontantmetoden',
     (status) => {
-      expect(canMarkSupplierInvoicePaid({ status }, 'cash')).toBe(true)
+      expect(canMarkSupplierInvoicePaid({ status }, 'cash', true)).toBe(true)
+      expect(canMarkSupplierInvoicePaid({ status }, 'cash', false)).toBe(true)
     },
   )
 
   it.each(['paid', 'credited', 'reversed', 'disputed'])(
     'never offers a settled or disputed %s invoice',
     (status) => {
-      expect(canMarkSupplierInvoicePaid({ status }, 'accrual')).toBe(false)
-      expect(canMarkSupplierInvoicePaid({ status }, 'cash')).toBe(false)
+      for (const policyOn of [true, false]) {
+        expect(canMarkSupplierInvoicePaid({ status }, 'accrual', policyOn)).toBe(false)
+        expect(canMarkSupplierInvoicePaid({ status }, 'cash', policyOn)).toBe(false)
+      }
     },
   )
 
   it('agrees with companyAttestsSupplierInvoices on whether registered waits for attest', () => {
     for (const method of ['accrual', 'cash', null, undefined]) {
-      expect(canMarkSupplierInvoicePaid({ status: 'registered' }, method)).toBe(
-        !companyAttestsSupplierInvoices(method),
-      )
+      for (const policyOn of [true, false, null, undefined]) {
+        expect(canMarkSupplierInvoicePaid({ status: 'registered' }, method, policyOn)).toBe(
+          !companyAttestsSupplierInvoices(method, policyOn),
+        )
+      }
     }
   })
 })
 
 describe('payableSupplierInvoiceStatuses', () => {
   it('adds registered only where the company has no attest step', () => {
-    expect([...payableSupplierInvoiceStatuses('accrual')]).toEqual(['approved', 'overdue', 'partially_paid'])
-    expect([...payableSupplierInvoiceStatuses('cash')]).toEqual([
-      'registered',
-      'approved',
-      'overdue',
-      'partially_paid',
-    ])
+    expect([...payableSupplierInvoiceStatuses('accrual', true)]).toEqual(['approved', 'overdue', 'partially_paid'])
+    const withRegistered = ['registered', 'approved', 'overdue', 'partially_paid']
+    expect([...payableSupplierInvoiceStatuses('accrual', false)]).toEqual(withRegistered)
+    expect([...payableSupplierInvoiceStatuses('cash', true)]).toEqual(withRegistered)
+    expect([...payableSupplierInvoiceStatuses('cash', false)]).toEqual(withRegistered)
   })
 
   it('stays inside the statuses the settlement doors accept', () => {
     for (const method of ['accrual', 'cash']) {
-      for (const status of payableSupplierInvoiceStatuses(method)) {
-        expect(isMatchableSupplierInvoiceStatus(status)).toBe(true)
+      for (const policyOn of [true, false]) {
+        for (const status of payableSupplierInvoiceStatuses(method, policyOn)) {
+          expect(isMatchableSupplierInvoiceStatus(status)).toBe(true)
+        }
       }
     }
   })
@@ -278,25 +298,29 @@ describe('canMarkSupplierInvoiceBankEntered', () => {
   // "Inlagd i banken" (#2220) is the step right before "Markera som betald",
   // so it is offered on exactly the rows that action is offered on.
   it.each(['approved', 'overdue', 'partially_paid'])('allows a payable %s invoice', (status) => {
-    expect(canMarkSupplierInvoiceBankEntered({ status }, 'accrual')).toBe(true)
-    expect(canMarkSupplierInvoiceBankEntered({ status }, 'cash')).toBe(true)
+    expect(canMarkSupplierInvoiceBankEntered({ status }, 'accrual', true)).toBe(true)
+    expect(canMarkSupplierInvoiceBankEntered({ status }, 'accrual', false)).toBe(true)
+    expect(canMarkSupplierInvoiceBankEntered({ status }, 'cash', false)).toBe(true)
   })
 
-  it('allows a registered invoice under kontantmetoden only (crm#1141)', () => {
-    expect(canMarkSupplierInvoiceBankEntered({ status: 'registered' }, 'cash')).toBe(true)
-    expect(canMarkSupplierInvoiceBankEntered({ status: 'registered' }, 'accrual')).toBe(false)
+  it('allows a registered invoice wherever the company has no attest step (crm#1141)', () => {
+    expect(canMarkSupplierInvoiceBankEntered({ status: 'registered' }, 'cash', false)).toBe(true)
+    expect(canMarkSupplierInvoiceBankEntered({ status: 'registered' }, 'accrual', false)).toBe(true)
+    expect(canMarkSupplierInvoiceBankEntered({ status: 'registered' }, 'accrual', true)).toBe(false)
   })
 
   it.each(['paid', 'credited', 'reversed', 'disputed'])(
     'refuses a %s invoice',
     (status) => {
-      expect(canMarkSupplierInvoiceBankEntered({ status }, 'accrual')).toBe(false)
-      expect(canMarkSupplierInvoiceBankEntered({ status }, 'cash')).toBe(false)
+      expect(canMarkSupplierInvoiceBankEntered({ status }, 'accrual', true)).toBe(false)
+      expect(canMarkSupplierInvoiceBankEntered({ status }, 'accrual', false)).toBe(false)
+      expect(canMarkSupplierInvoiceBankEntered({ status }, 'cash', false)).toBe(false)
     },
   )
 
   it('refuses a credit note whatever its status', () => {
-    expect(canMarkSupplierInvoiceBankEntered({ status: 'approved', is_credit_note: true }, 'accrual')).toBe(false)
-    expect(canMarkSupplierInvoiceBankEntered({ status: 'registered', is_credit_note: true }, 'cash')).toBe(false)
+    expect(canMarkSupplierInvoiceBankEntered({ status: 'approved', is_credit_note: true }, 'accrual', true)).toBe(false)
+    expect(canMarkSupplierInvoiceBankEntered({ status: 'registered', is_credit_note: true }, 'cash', false)).toBe(false)
+    expect(canMarkSupplierInvoiceBankEntered({ status: 'registered', is_credit_note: true }, 'accrual', false)).toBe(false)
   })
 })

@@ -6,9 +6,10 @@
  * through lib/supplier-invoices/attest-service.ts, so none of them can grow a
  * rule of its own.
  *
- * A company without a policy row, or with the policy off, attests the way it
- * always has: one click by anyone with write access, and payment only warns
- * about an unattested invoice. With the policy on, an invoice at or above the
+ * A company without a policy row, or with the policy off, has no attest step
+ * (companyAttestsSupplierInvoices): its invoices are ready to pay once
+ * registered, and an attest asked for through the API or MCP is one click by
+ * anyone who keeps the books. With the policy on, an invoice at or above the
  * threshold (in SEK) needs attest by the attesters; until the policy is
  * satisfied, payments leave it out. Kontantmetoden has no attest step at all
  * (companyAttestsSupplierInvoices), so the policy never applies there, and a
@@ -236,8 +237,7 @@ export function invoiceNeedsAttest(
   accountingMethod: string | null | undefined,
   invoice: AttestInvoiceFacts,
 ): boolean {
-  if (!policy.enabled) return false
-  if (!companyAttestsSupplierInvoices(accountingMethod)) return false
+  if (!companyAttestsSupplierInvoices(accountingMethod, policy.enabled)) return false
   if (invoice.is_credit_note) return false
   if (policy.threshold_amount === null || policy.threshold_amount === undefined) return true
   const sek = invoiceTotalSek(invoice)

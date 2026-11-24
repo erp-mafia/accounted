@@ -60,6 +60,7 @@ import {
   payableSupplierInvoiceStatuses,
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
+import { loadAttestPolicyOn } from '@/lib/supplier-invoices/attest-policy-read'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -513,9 +514,13 @@ export async function setSupplierInvoiceBankEntered(
   if (!invoice) return NOT_FOUND
 
   // Whether a registered invoice is payable depends on the company's attest
-  // step (kontantmetoden has none, crm#1141); every other status answers the
-  // same for every company, so the method is read only when it decides.
+  // step (companyAttestsSupplierInvoices: kontantmetoden and a company without
+  // an attest policy on have none, crm#1141); every other status answers the
+  // same for every company, so the method and the policy are read only when
+  // they decide. Unread, they answer as the attest step does, so the
+  // compare-and-set keeps any other status out of 'registered'.
   let accountingMethod: string | null = null
+  let attestPolicyOn = true
   if (entered && invoice.status === 'registered') {
     const { data: settings, error: settingsError } = await supabase
       .from('company_settings')
@@ -524,9 +529,14 @@ export async function setSupplierInvoiceBankEntered(
       .maybeSingle()
     if (settingsError) return failed(settingsError)
     accountingMethod = (settings?.accounting_method as string | null | undefined) ?? null
+    try {
+      attestPolicyOn = await loadAttestPolicyOn(supabase, companyId)
+    } catch (policyError) {
+      return failed(policyError)
+    }
   }
 
-  if (entered && !canMarkSupplierInvoiceBankEntered(invoice, accountingMethod)) {
+  if (entered && !canMarkSupplierInvoiceBankEntered(invoice, accountingMethod, attestPolicyOn)) {
     return { ok: false, code: 'SI_BANK_ENTERED_NOT_PAYABLE', details: { currentStatus: invoice.status } }
   }
   // Typing the payment into the internet bank by hand beside a bank payment
@@ -567,7 +577,7 @@ export async function setSupplierInvoiceBankEntered(
   if (entered) {
     // Compare-and-set on the eligibility just read: a payment landing in
     // between becomes zero matched rows, not a mark on a paid invoice.
-    update = update.in('status', [...payableSupplierInvoiceStatuses(accountingMethod)]).eq('is_credit_note', false)
+    update = update.in('status', [...payableSupplierInvoiceStatuses(accountingMethod, attestPolicyOn)]).eq('is_credit_note', false)
   }
   const { data, error } = await update.select('id, bank_entered_at').maybeSingle()
   if (error) {

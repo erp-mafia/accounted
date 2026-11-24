@@ -22,8 +22,8 @@ const SUPPLIER_INVOICE_STATUS_DISPLAY: Record<SupplierInvoiceStatus, StatusDispl
 }
 
 /**
- * A company that never attests (kontantmetoden, see
- * companyAttestsSupplierInvoices) leaves every unpaid invoice on
+ * A company without an attest step (kontantmetoden, or no attest policy on,
+ * see companyAttestsSupplierInvoices) leaves every unpaid invoice on
  * 'registered', so the "waiting for attest" chip would sit on every open
  * row. There registered is the normal state and reads as muted "Att betala".
  */
