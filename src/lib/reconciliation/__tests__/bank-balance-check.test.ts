@@ -44,8 +44,8 @@ function client(
   const supabase = {
     from(table: string) {
       if (table === 'transactions') rowReads.count++
-      // The bank-row reads filter on date: through (lte), after (gt) or on (eq).
-      const filter: { lte?: string; gt?: string; on?: string } = {}
+      // The bank-row reads filter on date: through (lte), before (lt), after (gt) or on (eq).
+      const filter: { lte?: string; lt?: string; gt?: string; on?: string } = {}
       const chain = {
         select: () => chain,
         eq: (column: string, value: string) => {
@@ -59,6 +59,10 @@ function client(
           filter.lte = value
           return chain
         },
+        lt: (_column: string, value: string) => {
+          filter.lt = value
+          return chain
+        },
         gt: (_column: string, value: string) => {
           filter.gt = value
           return chain
@@ -70,9 +74,12 @@ function client(
           if (table === 'transactions') {
             const dates = rows
               .map((r) => r.date)
-              .filter((d) => (filter.lte ? d <= filter.lte : true) && (filter.gt ? d > filter.gt : true))
+              .filter(
+                (d) =>
+                  (filter.lte ? d <= filter.lte : true) && (filter.lt ? d < filter.lt : true) && (filter.gt ? d > filter.gt : true),
+              )
               .sort()
-            const date = filter.lte ? dates[dates.length - 1] : dates[0]
+            const date = filter.lte || filter.lt ? dates[dates.length - 1] : dates[0]
             return answer(date ? { date } : null)
           }
           return answer(null)
@@ -367,6 +374,35 @@ describe('checkBankBalance on a given day', () => {
     const result = await checkBankBalance(supabase, COMPANY, account({ id: ID }), { on: '2026-10-26' })
     expect(result.check).toMatchObject({ as_of: '2026-10-26', fetched_at: '2026-10-26T10:00:00Z', bank_balance: 1000 })
     expect(rowReads.count).toBe(0)
+  })
+
+  it('ends a day that nets to zero where the day before it ended', async () => {
+    // The 4th: +200 and -200 from 1 350 (the 3rd's end), which its rows alone cannot place.
+    const netZero: BankRow[] = [
+      ...ROWS,
+      { date: '2026-11-04', amount: -200, balance_after: 1350 },
+      { date: '2026-11-04', amount: 200, balance_after: 1550 },
+      { date: '2026-11-05', amount: 10, balance_after: 1360 },
+    ]
+    const { supabase } = client({ rows: netZero })
+    bookedOn({ '2026-11-04': 1350 })
+    const result = await checkBankBalance(supabase, COMPANY, account({ id: ID }), { on: '2026-11-04' })
+    expect(result.check).toMatchObject({ as_of: '2026-11-04', bank_balance: 1350, booked_balance: 1350, difference: 0 })
+  })
+
+  it('has no balance for a day that nets to zero when the day before cannot have been its start', async () => {
+    // The 3rd ended on 1 350, but the 4th's rows start from 1 550 or 1 750: a row is missing.
+    const gap: BankRow[] = [
+      ...ROWS,
+      { date: '2026-11-04', amount: 200, balance_after: 1750 },
+      { date: '2026-11-04', amount: -200, balance_after: 1550 },
+      { date: '2026-11-05', amount: 10, balance_after: 1560 },
+    ]
+    const { supabase } = client({ rows: gap })
+    expect(await checkBankBalance(supabase, COMPANY, account({ id: ID }), { on: '2026-11-04' })).toEqual({
+      check: null,
+      refusal: 'NO_BANK_BALANCE',
+    })
   })
 })
 

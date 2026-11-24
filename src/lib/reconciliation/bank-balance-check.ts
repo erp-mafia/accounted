@@ -146,6 +146,35 @@ function reportedBalance(account: BankBalanceCheckAccount): BankBalanceClaim | n
   return { balance: ore(Number(account.balance)), date: day.date, type: day.type, fetched_at: account.balance_updated_at }
 }
 
+type DayRow = { amount: number | string; balance_after: number | string | null | undefined }
+
+/**
+ * The chain of one day's rows. `end` is the balance after the day's last row
+ * (see dayEndBalance). `closed` is a day whose every balance after a row is
+ * another row's start: it nets to zero and ends where it began, which its
+ * rows alone cannot place; `starts` are the balances it may have begun from.
+ */
+function dayChain(rows: ReadonlyArray<DayRow>): { end: number | null; closed: boolean; starts: number[] } {
+  if (rows.length === 0) return { end: null, closed: false, starts: [] }
+  const afters: number[] = []
+  const befores: number[] = []
+  for (const row of rows) {
+    if (row.balance_after == null) return { end: null, closed: false, starts: [] }
+    const after = ore(Number(row.balance_after))
+    afters.push(after)
+    befores.push(ore(after - Number(row.amount)))
+  }
+  const starts = [...befores]
+  const ends = afters.filter((after) => {
+    const start = befores.findIndex((before) => equalOre(before, after))
+    if (start === -1) return true
+    befores.splice(start, 1)
+    return false
+  })
+  if (ends.length === 0) return { end: null, closed: true, starts }
+  return { end: ends.every((end) => equalOre(end, ends[0])) ? ends[0] : null, closed: false, starts }
+}
+
 /**
  * The bank's balance at the end of one day from that day's rows: the balance
  * after its last row. The rows of a day carry no order of their own, so the
@@ -154,35 +183,24 @@ function reportedBalance(account: BankBalanceCheckAccount): BankBalanceClaim | n
  * except for the first row's; the one balance after that no row starts from
  * is the day's end. Null when a row has no balance_after or the rows do not
  * lead to one end (a row missing, or a day that nets to zero, whose rows
- * alone cannot tell where it ended).
+ * alone cannot tell where it ended: rowBalanceOn takes the day before's end).
  */
-export function dayEndBalance(
-  rows: ReadonlyArray<{ amount: number | string; balance_after: number | string | null | undefined }>,
-): number | null {
-  if (rows.length === 0) return null
-  const afters: number[] = []
-  const befores: number[] = []
-  for (const row of rows) {
-    if (row.balance_after == null) return null
-    const after = ore(Number(row.balance_after))
-    afters.push(after)
-    befores.push(ore(after - Number(row.amount)))
-  }
-  const ends = afters.filter((after) => {
-    const start = befores.findIndex((before) => equalOre(before, after))
-    if (start === -1) return true
-    befores.splice(start, 1)
-    return false
-  })
-  return ends.length > 0 && ends.every((end) => equalOre(end, ends[0])) ? ends[0] : null
+export function dayEndBalance(rows: ReadonlyArray<DayRow>): number | null {
+  return dayChain(rows).end
 }
+
+/** At most this many days in a row that net to zero are passed over to the day before (rowBalanceOn). */
+const CLOSED_DAYS_MAX = 5
 
 /**
  * The bank's balance at the end of `date` from its rows: the day-end balance
- * (dayEndBalance) of the last day through `date` that has a row. Claimed only
- * when the bank's history reaches `date`: a row on that day or later, or a
- * balance the bank reported for that day or later. Otherwise rows still to
- * come could move it, and there is no balance for the day.
+ * (dayEndBalance) of the last day through `date` that has a row. A day that
+ * nets to zero ends where it began, so its end is the end of the day before
+ * it with rows, provided that is one of the balances the day may have begun
+ * from. Claimed only when the bank's history reaches `date`: a row on that
+ * day or later, or a balance the bank reported for that day or later.
+ * Otherwise rows still to come could move it, and there is no balance for
+ * the day.
  */
 async function rowBalanceOn(
   supabase: SupabaseClient,
@@ -214,14 +232,34 @@ async function rowBalanceOn(
   if (lastDay === null) return null
   if (lastDay < date && laterRead.data == null) return null
 
-  const dayRead = await scope(
-    supabase.from('transactions').select('amount, balance_after').eq('company_id', companyId),
-  ).eq('date', lastDay)
-  if (dayRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${dayRead.error.message}`)
-  const balance = dayEndBalance(
-    (dayRead.data ?? []) as unknown as Array<{ amount: number | string; balance_after: number | string | null }>,
-  )
-  return balance === null ? null : { balance, date, type: null, fetched_at: null }
+  // Days passed over because they net to zero: the end found before them
+  // must be one of the balances each of them may have begun from.
+  const closedStarts: number[][] = []
+  let day = lastDay
+  for (let step = 0; step <= CLOSED_DAYS_MAX; step++) {
+    const dayRead = await scope(
+      supabase.from('transactions').select('amount, balance_after').eq('company_id', companyId),
+    ).eq('date', day)
+    if (dayRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${dayRead.error.message}`)
+    const chain = dayChain((dayRead.data ?? []) as unknown as DayRow[])
+    if (chain.end !== null) {
+      const end = chain.end
+      const fits = closedStarts.every((starts) => starts.some((start) => equalOre(start, end)))
+      return fits ? { balance: end, date, type: null, fetched_at: null } : null
+    }
+    if (!chain.closed) return null
+    closedStarts.push(chain.starts)
+    const beforeRead = await scope(supabase.from('transactions').select('date').eq('company_id', companyId))
+      .lt('date', day)
+      .order('date', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (beforeRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${beforeRead.error.message}`)
+    const before = (beforeRead.data as unknown as { date?: string } | null)?.date ?? null
+    if (before === null) return null
+    day = before
+  }
+  return null
 }
 
 /**
