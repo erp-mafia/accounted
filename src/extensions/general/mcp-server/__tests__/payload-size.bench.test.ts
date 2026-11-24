@@ -12,7 +12,7 @@ import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routi
 // data on existing tools. A raise needs a maintainer decision, stated in the PR.
 const FULL_CATALOG_CEILING = 67_600
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 63_100
+const SIMPLE_CATALOG_CEILING = 63_150
 const DEFAULT_CATALOG_TOOL_LIMIT = 140
 import { projectToolReferences } from '../tool-namespace'
 
@@ -1025,6 +1025,13 @@ describe('tools/list payload size guard', () => {
     // tool, paid for on the same tool (a shorter description and
     // other_type_counts note). Measured 63 098 (full catalog 67 528; main
     // 63 095 and 67 525). Ceiling unchanged.
+    // 63 100 to 63 150 on 2026-11-24: customer_receivables on
+    // gnubok_match_batch_allocate, the customer side of supplier_debts (a
+    // Bankgirot deposit that also pays invoices issued in the bookkeeping kept
+    // before, booked on their 1510 balance), bare like its twin. Paid for in
+    // part on the same tool (a shorter description that also names the new
+    // field); the rest is the field's own schema, and the tool's other listed
+    // bytes are the shared staging fields. Measured 63 147 (main 63 098).
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

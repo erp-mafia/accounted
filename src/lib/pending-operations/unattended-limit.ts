@@ -116,7 +116,8 @@ const PRICED_BY_PREVIEW: Readonly<Record<string, (record: Record<string, unknown
  * The two sums the lines are built from are the floor, and the whole price of
  * a row staged without lines: on a supplier payment the bank amount
  * (allocations + fees + supplier debts = |transaction_amount|), on a customer
- * payment the invoices (allocations = |transaction_amount| + fees).
+ * payment the larger of the invoices and the deposit (allocations - fees +
+ * customer receivables = |transaction_amount|).
  * total_allocated alone left a supplier payment's fee and debt rows out.
  */
 function batchAllocationPrice(record: Record<string, unknown>): number | null {

@@ -9834,6 +9834,25 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_sv: 'En tidigare leverantörsskuld kan bara bokas på en utbetalning till leverantörer, inte på en inbetalning.',
     message_en: 'An earlier supplier debt can only be booked on a payment to suppliers, not on an incoming payment.',
   },
+  BATCH_RECEIVABLE_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En rad för tidigare kundfordran är ogiltig. Högst 5 extra rader tillsammans med avgiftsraderna, var och en med konto och ett belopp över noll i hela ören.',
+    message_en:
+      'A row for an earlier customer receivable is invalid. At most 5 extra rows together with the fee rows, each with an account and an amount above zero in whole öre.',
+  },
+  BATCH_RECEIVABLE_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En tidigare kundfordran bokförs på ett aktivt konto för kundfordringar, 1510 till 1519. Aktivera kontot i kontoplanen eller välj ett annat.',
+    message_en:
+      'An earlier customer receivable is booked on an active customer receivable account, 1510 to 1519. Activate the account in the chart of accounts or choose another.',
+  },
+  BATCH_RECEIVABLE_CUSTOMER_ONLY: {
+    httpStatus: 400,
+    message_sv: 'En tidigare kundfordran kan bara bokas på en inbetalning från kunder, inte på en utbetalning.',
+    message_en: 'An earlier customer receivable can only be booked on a payment from customers, not on an outgoing payment.',
+  },
   BATCH_MIXED_KINDS_UNSUPPORTED: {
     httpStatus: 400,
     message_sv:

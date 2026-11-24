@@ -266,12 +266,15 @@ describe('match_batch_allocate supplier debt rows: the rest of a supplier paymen
       return result
     }
 
-    it('debt rows on a customer batch: BATCH_DEBT_SUPPLIER_ONLY', async () => {
+    // Since 20261124100000 a customer batch's rows from before are customer
+    // receivable rows (tests/pg/match-batch-allocate-receivable-lines.pg.test.ts):
+    // a supplier debt account on one is the wrong account, never a debit.
+    it('a 244x row on a customer batch: BATCH_RECEIVABLE_ACCOUNT_INVALID', async () => {
       const invoice = await customerInvoice(1000)
       const txId = await bankRow(1500)
       await asServiceRole()
       const result = await refused(txId, [{ kind: 'customer_invoice', invoice_id: invoice, amount: 1000 }], [{ account: '2440', amount: 500 }])
-      expect(result.code).toBe('BATCH_DEBT_SUPPLIER_ONLY')
+      expect(result).toMatchObject({ code: 'BATCH_RECEIVABLE_ACCOUNT_INVALID', details: { account: '2440' } })
     })
 
     it('an account outside 244x, an inactive 244x account and one outside the chart: BATCH_DEBT_ACCOUNT_INVALID', async () => {
