@@ -136,6 +136,10 @@ describe('a Swedish VAT number beside an address abroad', () => {
     expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address })).toBe(country)
   })
 
+  it('reads a country beside a postcode in another script\'s digits', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Street, Cairo\n١١٥١١ مصر' })).toBe('EG')
+  })
+
   it('takes no floor, giro or box beside a number for a country code', () => {
     expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Kungsgatan 12, 4 tr' })).toBeNull()
     expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm, 2 tr' })).toBeNull()

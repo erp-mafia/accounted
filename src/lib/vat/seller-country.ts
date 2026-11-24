@@ -228,8 +228,9 @@ function withoutTrailingContact(text: string): string {
 /** A name without the postcode words before or after it: "Malaysia" of "50000 Malaysia". */
 function withoutPostcode(text: string): string {
   const words = text.trim().split(/\s+/)
-  while (words.length > 0 && /\d/.test(words[0]!)) words.shift()
-  while (words.length > 0 && /\d/.test(words[words.length - 1]!)) words.pop()
+  // Any script's digits: a postcode in Arabic-Indic digits beside "مصر" is one too.
+  while (words.length > 0 && /\p{Nd}/u.test(words[0]!)) words.shift()
+  while (words.length > 0 && /\p{Nd}/u.test(words[words.length - 1]!)) words.pop()
   return words.join(' ')
 }
 

@@ -728,11 +728,30 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
   })
 
   it('checks the inbox items matched to the row when the caller names none, as the agent door sends it', async () => {
+    // Answers only the read of this row's unbooked items in this company: a wrong filter finds nothing and books.
+    const has = (calls: { method: string; args: unknown[] }[], method: string, ...args: unknown[]) =>
+      calls.some((c) => c.method === method && JSON.stringify(c.args) === JSON.stringify(args))
     const { supabase } = ledger({
-      invoice_inbox_items: { data: [{ document_id: 'doc-7', extracted_data: { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250, vatAmount: 216.94 } } }], error: null },
+      invoice_inbox_items: (calls) =>
+        has(calls, 'eq', 'matched_transaction_id', TX_ID) &&
+        has(calls, 'eq', 'company_id', COMPANY_ID) &&
+        has(calls, 'is', 'created_journal_entry_id', null) &&
+        has(calls, 'is', 'created_supplier_invoice_id', null)
+          ? { data: [{ document_id: 'doc-7', extracted_data: { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250, vatAmount: 216.94 } } }], error: null }
+          : { data: [], error: null },
     })
     const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, software, api)
     expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT', details: { document_id: 'doc-7', reason: 'not_confirmed' } })
+  })
+
+  it('refuses a reverse charge when the underlag cannot be read, never taking it for none', async () => {
+    const { supabase } = ledger({ invoice_inbox_items: { data: null, error: { message: 'timeout' } } })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, reverse_charge_kind: 'eu_services' }, {
+      onBooked: 'refuse',
+      reverseChargeBoxParam: 'reverse_charge_kind',
+    })
+    expect(outcome).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+    expect(createTxJE).not.toHaveBeenCalled()
   })
 
   it('checks the inbox item\'s document beside the row\'s own, since the booking anchors both', async () => {

@@ -1014,7 +1014,9 @@ export async function categorizeTransaction(
   // refused whatever is stated.
   let underlag: CategorizeUnderlag | null = null
   let documentSeller: SellerIdentity | null = null
-  const underlagDocuments = await categorizeUnderlagDocuments(supabase, companyId, transaction, input, dryRun)
+  const { documents: underlagDocuments, readError: underlagReadError } = await categorizeUnderlagDocuments(supabase, companyId, transaction, input, dryRun)
+  // An underlag that could not be read is not one without the seller's VAT: a reverse charge waits for it.
+  if (underlagReadError && input.vat_treatment === 'reverse_charge') return refuseFor('INTERNAL_ERROR', undefined, { cause: underlagReadError })
   const [doc] = underlagDocuments
   if (doc) {
     const ex = doc.reading
@@ -2182,7 +2184,8 @@ type UnderlagReading =
  * (propagateUnderlagForBookedTransaction): the item it started from and the
  * items matched to the row, unless another booking took them. Each is checked
  * for the seller's VAT as the bulk door checks an item, so none is booked as
- * reverse charge without the caller's word.
+ * reverse charge without the caller's word. A read that fails is returned,
+ * never taken as no document.
  */
 async function categorizeUnderlagDocuments(
   supabase: SupabaseClient,
@@ -2190,24 +2193,26 @@ async function categorizeUnderlagDocuments(
   transaction: Transaction,
   input: CategorizeInput,
   dryRun: boolean,
-): Promise<Array<{ id: string; reading: UnderlagReading }>> {
+): Promise<{ documents: Array<{ id: string; reading: UnderlagReading }>; readError: unknown }> {
   const reverseCharge = input.vat_treatment === 'reverse_charge'
   const documents: Array<{ id: string; reading: UnderlagReading }> = []
+  let readError: unknown = null
   const add = (id: string | null | undefined, reading: unknown) => {
     if (id && !documents.some((one) => one.id === id)) documents.push({ id, reading: (reading ?? null) as UnderlagReading })
   }
   if (transaction.document_id && (dryRun || reverseCharge)) {
-    const { data: doc } = await supabase
+    const { data: doc, error } = await supabase
       .from('document_attachments')
       .select('id, extracted_data')
       .eq('id', transaction.document_id)
       .eq('company_id', companyId)
       .maybeSingle()
+    readError ||= error
     if (doc) add(doc.id as string, doc.extracted_data)
   }
-  if (!reverseCharge) return documents
+  if (!reverseCharge) return { documents, readError }
   if (input.inbox_item_id) {
-    const { data: item } = await supabase
+    const { data: item, error } = await supabase
       .from('invoice_inbox_items')
       .select('document_id, extracted_data')
       .eq('id', input.inbox_item_id)
@@ -2215,20 +2220,22 @@ async function categorizeUnderlagDocuments(
       .is('created_journal_entry_id', null)
       .is('created_supplier_invoice_id', null)
       .maybeSingle()
+    readError ||= error
     const one = item as { document_id?: string | null; extracted_data?: unknown } | null
     add(one?.document_id, one?.extracted_data)
   }
-  const { data: matched } = await supabase
+  const { data: matched, error } = await supabase
     .from('invoice_inbox_items')
     .select('document_id, extracted_data')
     .eq('company_id', companyId)
     .eq('matched_transaction_id', transaction.id)
     .is('created_journal_entry_id', null)
     .is('created_supplier_invoice_id', null)
+  readError ||= error
   for (const one of (Array.isArray(matched) ? matched : []) as Array<{ document_id?: string | null; extracted_data?: unknown }>) {
     add(one.document_id, one.extracted_data)
   }
-  return documents
+  return { documents, readError }
 }
 
 /**
