@@ -1,7 +1,7 @@
 ---
 name: clients
 description: Cross-company view for a person who belongs to several companies (byrå with clients, koncern, several own bolag). Use when the user says "mina klienter", "alla bolag", "all my companies", "vilka klienter", "portfölj", "kör för alla", asks which company needs attention first, or wants one task done for every company at once.
-argument-hint: [filter such as "moms inom 14 dagar", or a task to run for every client]
+argument-hint: "[filter such as 'moms inom 14 dagar', or a task to run for every client]"
 ---
 
 # Clients
