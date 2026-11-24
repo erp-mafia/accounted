@@ -8,6 +8,7 @@ import { LoadError } from '@/components/ui/empty-state'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn } from '@/lib/utils'
 import { agentCardState } from '@/lib/agent-context/agent-cards'
@@ -803,8 +804,9 @@ function initialsOf(name: string): string {
 /**
  * The company's card in its shell. The shell's label row carries the host's
  * brand; the card inside has the company's initials and name, what waits on
- * the company's people (WaitingLine), when it was last updated, and four
- * rows that are buttons, each opening its own view.
+ * the company's people (WaitingLine, which says it waits on the reader only
+ * for someone who may act on it), when it was last updated, and four rows
+ * that are buttons, each opening its own view.
  * The sentences are built from the numbers and the check results as they
  * were read; a part that could not be read says so.
  */
@@ -827,6 +829,8 @@ function CompanyCard({
   onOpen: (view: PictureView) => void
 }) {
   const t = useTranslations('wiki')
+  // Answering a question and approving a proposal both need more than read access.
+  const { canWrite } = useCanWrite()
   const name = company.name ?? t('picture.company')
 
   const counted = countParts(company.counts)
@@ -899,7 +903,7 @@ function CompanyCard({
             <span className="truncate text-[13px] font-medium leading-4 text-strong" data-ph-mask="">
               {name}
             </span>
-            <WaitingLine waiting={company.waiting} />
+            <WaitingLine waiting={company.waiting} canAnswer={canWrite} canApprove={canWrite} />
             {updated && <span className="text-xs tabular-nums text-muted-foreground">{t('picture.updated', { when: updated })}</span>}
           </span>
         </div>

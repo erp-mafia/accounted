@@ -11,16 +11,18 @@ import { NextIntlClientProvider } from 'next-intl'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { waitingLine } from '@/lib/agent-context/agent-picture-view'
+import { waitingLine, waitsOnReader, type WaitingAbilities } from '@/lib/agent-context/agent-picture-view'
 import type { PictureWaiting } from '@/lib/agent-context/agent-picture'
 import { countOpenQuestions } from '@/lib/questions/app-answer'
 import { WaitingLine } from '../WaitingLine'
 
 const IntlProvider = NextIntlClientProvider as (props: Omit<ComponentProps<typeof NextIntlClientProvider>, 'children'>) => ReturnType<typeof NextIntlClientProvider>
 
-function render(waiting: PictureWaiting | null, locale: 'sv' | 'en' = 'sv'): string {
-  return renderToStaticMarkup(createElement(IntlProvider, { locale, messages: locale === 'sv' ? sv : en }, createElement(WaitingLine, { waiting })))
+function render(waiting: PictureWaiting | null, locale: 'sv' | 'en' = 'sv', abilities: Partial<WaitingAbilities> = {}): string {
+  return renderToStaticMarkup(createElement(IntlProvider, { locale, messages: locale === 'sv' ? sv : en }, createElement(WaitingLine, { waiting, ...abilities })))
 }
+/** Someone with read access alone: they can neither answer a question nor approve a proposal. */
+const READ_ONLY: WaitingAbilities = { canAnswer: false, canApprove: false }
 /** The text between the tags of some markup. */
 const textOf = (html: string): string =>
   html
@@ -86,6 +88,51 @@ describe('the waiting line of the company card', () => {
     expect(render({ questions: 0, proposals: 0 })).toBe('')
     expect(render(null)).toBe('')
     expect(render({ questions: 0, proposals: 0 }, 'en')).toBe('')
+  })
+})
+
+describe('the waiting line for someone who cannot act on what waits', () => {
+  it('says the proposals wait, not that they wait on a reader who cannot approve them, and keeps the link', () => {
+    const html = render({ questions: 0, proposals: 3 }, 'sv', READ_ONLY)
+    expect(textOf(html)).toBe('3 förslag väntar')
+    expect(textOf(html)).not.toContain('på dig')
+    expect(linksOf(html)).toEqual([['/pending', '3 förslag']])
+    expect(textOf(render({ questions: 0, proposals: 3 }, 'en', READ_ONLY))).toBe('3 proposals wait')
+    expect(textOf(render({ questions: 0, proposals: 1 }, 'en', READ_ONLY))).toBe('1 proposal waits')
+  })
+
+  it('says the same of the questions for a reader who cannot answer them', () => {
+    const html = render({ questions: 2, proposals: 0 }, 'sv', READ_ONLY)
+    expect(textOf(html)).toBe('2 frågor väntar')
+    expect(linksOf(html)).toEqual([['/questions', '2 frågor']])
+    expect(textOf(render({ questions: 1, proposals: 0 }, 'sv', READ_ONLY))).toBe('1 fråga väntar')
+    expect(textOf(render({ questions: 1, proposals: 0 }, 'en', READ_ONLY))).toBe('1 question waits')
+  })
+
+  it('says both wait, with both links', () => {
+    const html = render({ questions: 2, proposals: 3 }, 'sv', READ_ONLY)
+    expect(textOf(html)).toBe('2 frågor och 3 förslag väntar')
+    expect(linksOf(html)).toEqual([
+      ['/questions', '2 frågor'],
+      ['/pending', '3 förslag'],
+    ])
+    expect(textOf(render({ questions: 2, proposals: 3 }, 'en', READ_ONLY))).toBe('2 questions and 3 proposals wait')
+  })
+
+  it('says it waits on the reader only when they can act on every part the line names', () => {
+    const cases: Array<[WaitingAbilities, string, string, string]> = [
+      [{ canAnswer: true, canApprove: true }, '2 frågor och 3 förslag väntar på dig', '2 frågor väntar på dig', '3 förslag väntar på dig'],
+      [{ canAnswer: true, canApprove: false }, '2 frågor och 3 förslag väntar', '2 frågor väntar på dig', '3 förslag väntar'],
+      [{ canAnswer: false, canApprove: true }, '2 frågor och 3 förslag väntar', '2 frågor väntar', '3 förslag väntar på dig'],
+      [READ_ONLY, '2 frågor och 3 förslag väntar', '2 frågor väntar', '3 förslag väntar'],
+    ]
+    for (const [abilities, both, questions, proposals] of cases) {
+      expect(textOf(render({ questions: 2, proposals: 3 }, 'sv', abilities))).toBe(both)
+      expect(textOf(render({ questions: 2, proposals: 0 }, 'sv', abilities))).toBe(questions)
+      expect(textOf(render({ questions: 0, proposals: 3 }, 'sv', abilities))).toBe(proposals)
+    }
+    expect(waitsOnReader({ kind: 'proposals', count: 3 }, READ_ONLY)).toBe(false)
+    expect(waitsOnReader({ kind: 'both', questions: 1, proposals: 1 }, { canAnswer: true, canApprove: true })).toBe(true)
   })
 })
 

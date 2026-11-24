@@ -134,6 +134,24 @@ export function waitingLine(waiting: PictureWaiting | null | undefined): Waiting
   return proposals > 0 ? { kind: 'proposals', count: proposals } : null
 }
 
+/** What the signed-in person may do with what waits: answer a question, approve a proposal. */
+export interface WaitingAbilities {
+  canAnswer: boolean
+  canApprove: boolean
+}
+
+/**
+ * Whether the line says that what it names waits on the person reading it:
+ * only when they can act on every part it names (answer its questions,
+ * approve its proposals). For anyone else the line says what waits and
+ * nothing of whom it waits on.
+ */
+export function waitsOnReader(line: WaitingLine, abilities: WaitingAbilities): boolean {
+  if (line.kind === 'questions') return abilities.canAnswer
+  if (line.kind === 'proposals') return abilities.canApprove
+  return abilities.canAnswer && abilities.canApprove
+}
+
 // ---------------------------------------------------------------- memory dots
 
 export const DOTS_PER_ROW = 12
