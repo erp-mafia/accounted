@@ -1100,13 +1100,20 @@ export async function categorizeTransaction(
     // A Swedish VAT number beside an address abroad, confirmed as a seller not established here: the address's
     // country, for a service.
     const item = input.inbox_item_id ? await inboxItemSellerById(supabase, companyId, input.inbox_item_id) : null
-    const region =
-      purchaseSellerRegion(documentSeller) ??
-      (input.confirm_foreign_seller_vat === true ? confirmedAbroadRegion(documentSeller, finalCategory) : null) ??
-      (item?.region ?? null)
-    const box = reverseChargeBoxFor(region, finalCategory, [documentSeller, item?.seller])
-    if (box.ok) input = { ...input, reverse_charge_kind: box.kind }
-    else boxUnknown = box.reason
+    if (item === 'unread') {
+      // An item that could not be read is not one that names nobody: it may show a Swedish VAT number beside an
+      // address abroad, so no box is taken from the rest.
+      txLog.warn('inbox item unreadable for the reverse-charge box', { inboxItemId: input.inbox_item_id })
+      boxUnknown = 'seller_country_unknown'
+    } else {
+      const region =
+        purchaseSellerRegion(documentSeller) ??
+        (input.confirm_foreign_seller_vat === true ? confirmedAbroadRegion(documentSeller, finalCategory) : null) ??
+        (item?.region ?? null)
+      const box = reverseChargeBoxFor(region, finalCategory, [documentSeller, item?.seller])
+      if (box.ok) input = { ...input, reverse_charge_kind: box.kind }
+      else boxUnknown = box.reason
+    }
   }
 
   const mapped = await buildCategorizeMapping(supabase, companyId, transaction, input, context, {
@@ -2172,19 +2179,20 @@ export async function bulkBookMatchedInboxItems(
 /**
  * An inbox item's seller, by its id: the single door's underlag when the bank
  * row has no document of its own yet (#94), as read and where it is. Null for
- * an item of another company or none.
+ * an item of another company or none; 'unread' when the read failed.
  */
 async function inboxItemSellerById(
   supabase: SupabaseClient,
   companyId: string,
   itemId: string,
-): Promise<{ seller: SellerIdentity | null; region: SellerRegion | null } | null> {
-  const { data } = await supabase
+): Promise<{ seller: SellerIdentity | null; region: SellerRegion | null } | 'unread' | null> {
+  const { data, error } = await supabase
     .from('invoice_inbox_items')
     .select('extracted_data, matched_supplier_id')
     .eq('id', itemId)
     .eq('company_id', companyId)
     .maybeSingle()
+  if (error) return 'unread'
   if (!data) return null
   const item = data as { extracted_data?: unknown; matched_supplier_id?: string | null }
   return { seller: inboxItemReading(item), region: await inboxItemSellerRegion(supabase, companyId, item) }
