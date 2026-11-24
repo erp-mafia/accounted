@@ -10,12 +10,14 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
  */
 
 const mockListCandidates = vi.fn()
+const mockListGronTeknik = vi.fn()
 const mockCreateRequest = vi.fn()
 const mockUploadDocument = vi.fn()
 
 vi.mock('@/lib/invoices/rot-rut-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/invoices/rot-rut-service')>()),
   listRotRutCandidates: (...args: unknown[]) => mockListCandidates(...args),
+  listGronTeknikCandidates: (...args: unknown[]) => mockListGronTeknik(...args),
   createRotRutPayoutRequest: (...args: unknown[]) => mockCreateRequest(...args),
 }))
 
@@ -79,6 +81,7 @@ describe('gnubok_generate_rot_rut_file: the file reaches the user, not the model
   beforeEach(() => {
     vi.clearAllMocks()
     mockListCandidates.mockResolvedValue(candidates())
+    mockListGronTeknik.mockResolvedValue(candidates())
     mockCreateRequest.mockResolvedValue(created())
     mockUploadDocument.mockResolvedValue({ id: DOCUMENT_ID, storage_path: `documents/${COMPANY}/${USER}/${DOCUMENT_ID}.xml` })
   })
@@ -109,6 +112,22 @@ describe('gnubok_generate_rot_rut_file: the file reaches the user, not the model
     expect(findCalls('rot_rut_payout_requests', 'update')).toEqual([[{ file_document_id: DOCUMENT_ID }]])
     expect(findCalls('rot_rut_payout_requests', 'eq')).toEqual([['id', REQUEST_ID], ['company_id', COMPANY]])
     expect(supabase.storage.from).toHaveBeenCalledWith('documents')
+  })
+
+  it('makes the grön teknik file from the grön teknik list, with the same masking', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // file_document_id update
+
+    const result = (await tool.execute({ deduction_type: 'gron_teknik' }, COMPANY, USER, supabase as never)) as GeneratedResult & {
+      upload_url: string
+    }
+
+    expect(mockListGronTeknik).toHaveBeenCalledWith(supabase, COMPANY)
+    expect(mockListCandidates).not.toHaveBeenCalled()
+    expect(mockCreateRequest).toHaveBeenCalledWith(supabase, COMPANY, USER, expect.objectContaining({ type: 'gron_teknik', invoiceIds: ['inv-1'] }))
+    expect(result.generated).toBe(true)
+    expect(JSON.stringify(result)).not.toContain(BUYER_PERSONNUMMER)
+    expect(result.upload_url).toContain('gronteknik')
   })
 
   it('undoes the begäran when the file cannot be archived, so the same call can run again', async () => {

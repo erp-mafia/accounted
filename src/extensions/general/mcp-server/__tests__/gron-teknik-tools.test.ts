@@ -145,19 +145,41 @@ describe('gnubok_update_invoice: grön teknik', () => {
   })
 })
 
-describe('gnubok_generate_rot_rut_file stays a ROT/RUT (HUS) file', () => {
-  it('keeps its enum to rot and rut', () => {
+describe('gnubok_generate_rot_rut_file: the HUS file for rot/rut, the Begaran file for grön teknik', () => {
+  it('takes all three kinds', () => {
     const schema = (tool('gnubok_generate_rot_rut_file').inputSchema.properties as Record<string, unknown>)
       .deduction_type as { enum: string[] }
-    expect(schema.enum).toEqual(['rot', 'rut'])
+    expect(schema.enum).toEqual(['rot', 'rut', 'gron_teknik'])
   })
 
-  it('refuses gron_teknik with a pointer to the e-tjänst, before reading anything', async () => {
+  it('refuses an unknown kind before reading anything', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
-      tool('gnubok_generate_rot_rut_file').execute({ deduction_type: 'gron_teknik' }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/e-tjänst for grön teknik/)
+      tool('gnubok_generate_rot_rut_file').execute({ deduction_type: 'green' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/rot, rut or gron_teknik/)
     expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('lists grön teknik invoices on the grön teknik list, with its upload page', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const rot = {
+      id: 'inv-2',
+      invoice_number: '8',
+      status: 'paid',
+      paid_at: '2026-09-20T10:00:00Z',
+      deduction_total: 6000,
+      items: [{ id: 'j', invoice_id: 'inv-2', line_type: 'product', deduction_type: 'rot', work_type: 'EL' }],
+    }
+    enqueueMany([{ data: [rot] }, { data: [] }, { data: [] }])
+    const result = (await tool('gnubok_generate_rot_rut_file').execute(
+      { deduction_type: 'gron_teknik', list_only: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { eligible: unknown[]; other_type_counts: Record<string, number>; upload_url: string }
+    expect(result.eligible).toEqual([])
+    expect(result.other_type_counts).toEqual({ rot: 1 })
+    expect(result.upload_url).toContain('gronteknik')
   })
 
   it('reports grön teknik invoices as other_type_counts when listing ROT', async () => {

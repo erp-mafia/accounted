@@ -86,7 +86,6 @@ import {
   ARTICLE_HOUSEWORK_TYPE_VALUES,
   DEDUCTION_LINE_ERRORS,
   DEDUCTION_TYPES,
-  HUS_DEDUCTION_TYPES,
   deductionLineIssues,
   normalizeHouseworkType,
   type DeductionType,
@@ -1099,9 +1098,8 @@ export type InvoicePreviewInput = z.infer<typeof InvoicePreviewSchema>
 // ============================================================
 
 export const RotRutPayoutFileSchema = z.object({
-  // The HUS file: ROT and RUT only. Grön teknik is requested in its own
-  // e-tjänst with its own schema, so gron_teknik is a 400 here.
-  deduction_type: z.enum(HUS_DEDUCTION_TYPES),
+  // rot and rut make the HUS file, gron_teknik the grön teknik Begaran file.
+  deduction_type: z.enum(DEDUCTION_TYPES),
   invoice_ids: z.array(uuid).min(1).max(500),
   // NamnPaBegaran: the XSD caps it at 16 chars; omitted → generated.
   name: z.string().min(1).max(16).optional(),
