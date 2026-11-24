@@ -143,11 +143,12 @@ describe.each([
     }
   })
 
-  it('keeps /rules a page, and the other ids under /skills by the Agenter page switch alone', async () => {
+  it('keeps /rules a page, an own item\'s pages open, and the other ids under /skills by the Agenter page switch alone', async () => {
     expect(await walk('/rules')).toEqual({ end: '/rules', steps: [] })
-    for (const address of ['/skills/bookkeep', '/skills/ny']) {
-      expect(await walk(address), address).toEqual(agents ? { end: address, steps: [] } : { end: 'not found', steps: [] })
-    }
+    // The pages the Kunskap panel leads to answer with the picture on, whatever the Agenter page switch says.
+    expect(await walk('/skills/ny')).toEqual({ end: '/skills/ny', steps: [] })
+    // Every other id follows the Agenter page switch, as before.
+    expect(await walk('/skills/bookkeep')).toEqual(agents ? { end: '/skills/bookkeep', steps: [] } : { end: 'not found', steps: [] })
   })
 
   it('never goes in a circle and never takes a second step, from any address', async () => {

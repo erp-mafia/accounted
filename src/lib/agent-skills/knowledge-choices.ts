@@ -29,26 +29,40 @@ export const PACK_LEGAL_FORMS: Readonly<Record<string, readonly EntityType[]>> =
 }
 
 /**
- * The tax planning packs, one per legal form: each says in its own text
- * which form it is written for and sends the other form to the other pack
- * (.claude/skills/swedish-ef-skatteplanering: enskild firma, "for AB planning
- * use swedish-tax-planning"; .claude/skills/swedish-tax-planning: "AB only,
- * for enskild firma use swedish-ef-skatteplanering"). A company of a form
- * that has a pack here is offered that one and not the other. A form neither
- * text names has no entry and is offered both: nothing is decided for it.
+ * General packs whose own text says which legal form they are written for:
+ * the `description` and the opening lines of .claude/skills/<pack>/SKILL.md.
+ *
+ * - swedish-ef-skatteplanering: "Swedish tax planning for enskild firma (sole
+ *   proprietorship)", and "for AB planning use `swedish-tax-planning`".
+ * - swedish-tax-planning: "Scope: AB only; for enskild firma tax planning use
+ *   swedish-ef-skatteplanering".
+ * - swedish-sru-filing: "Swedish SRU file generation for Skatteverket digital
+ *   tax filing (INK2, INK2R, INK2S declarations for aktiebolag)".
+ *
+ * A company of a form that a pack here is written for is offered the packs
+ * written for its own form and none of those written for another. A form no
+ * text here names is offered every one of them: nothing is decided for it.
+ * A pack whose text names no legal form, or more than one, is not listed and
+ * fits every company.
+ *
+ * A Map: it is read by a pack id that comes from the registry.
  */
-export const TAX_PLANNING_PACK_BY_FORM: Readonly<Partial<Record<EntityType, string>>> = {
-  enskild_firma: 'horizontal/swedish-ef-skatteplanering',
-  aktiebolag: 'horizontal/swedish-tax-planning',
-}
+export const PACK_WRITTEN_FOR: ReadonlyMap<string, readonly EntityType[]> = new Map<string, readonly EntityType[]>([
+  ['horizontal/swedish-ef-skatteplanering', ['enskild_firma']],
+  ['horizontal/swedish-tax-planning', ['aktiebolag']],
+  ['horizontal/swedish-sru-filing', ['aktiebolag']],
+])
+
+/** The legal forms that some pack of PACK_WRITTEN_FOR is written for: the forms those texts tell apart. */
+const FORMS_WITH_OWN_PACK: ReadonlySet<EntityType> = new Set<EntityType>([...PACK_WRITTEN_FOR.values()].flat())
 
 /** Whether a pack applies to a company of this legal form. */
 export function packFitsForm(atomId: string, entityType: EntityType): boolean {
   const forms = PACK_LEGAL_FORMS[atomId]
   if (forms && !forms.includes(entityType)) return false
-  // A tax planning pack is left out only for a form that has the other one as its own.
-  const own = TAX_PLANNING_PACK_BY_FORM[entityType]
-  return !own || own === atomId || !Object.values(TAX_PLANNING_PACK_BY_FORM).includes(atomId)
+  // A pack written for one form is left out only for a form that has packs written for it.
+  const writtenFor = PACK_WRITTEN_FOR.get(atomId)
+  return !writtenFor || writtenFor.includes(entityType) || !FORMS_WITH_OWN_PACK.has(entityType)
 }
 
 /**
