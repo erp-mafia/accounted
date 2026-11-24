@@ -21,7 +21,6 @@ import { DataListEmpty } from '@/components/ui/data-list'
 import {
   TH_CLASS,
   TD_CLASS,
-  QUIET_LINK_CLASS,
   RowSelectCheckbox,
   HOVER_REVEAL_CLASS,
   SortableTh,
@@ -997,18 +996,21 @@ export default function SupplierInvoicesPage() {
                       className={cn(TD_CLASS, 'whitespace-nowrap text-right')}
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {/* A row button, not a bare link: on a touch screen it
+                          is 40px high, so a near miss is not swallowed by
+                          the cell that stops the row's click. -my-1 keeps
+                          the row 44px with a mouse. */}
                       {canApprove && (
-                        <button
-                          type="button"
-                          className={cn(
-                            QUIET_LINK_CLASS,
-                            HOVER_REVEAL_CLASS,
-                            approvingId !== null && 'pointer-events-none opacity-50',
-                          )}
-                          onClick={() => handleApprove(inv.id)}
-                        >
-                          {t('approve')}
-                        </button>
+                        <span className={HOVER_REVEAL_CLASS}>
+                          <Button
+                            type="button"
+                            variant="row"
+                            className={cn('-my-1', approvingId !== null && 'pointer-events-none opacity-50')}
+                            onClick={() => handleApprove(inv.id)}
+                          >
+                            {t('approve')}
+                          </Button>
+                        </span>
                       )}
                       {/* The bock (#2220): hover-revealed until set, then it
                           stays, because a set bock is the state the payer

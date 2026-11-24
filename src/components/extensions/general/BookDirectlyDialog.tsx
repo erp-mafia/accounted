@@ -981,133 +981,138 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   {formatCounterpartyName(accountSuggestion.counterparty)}
                 </p>
               )}
-              <table className="w-full border-collapse text-[13px]">
-                <thead>
-                  <tr>
-                    <th className={cn(VTH_CLASS, 'pr-3')}>Konto</th>
-                    <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>Debet</th>
-                    <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>Kredit</th>
-                    <th className={cn(VTH_CLASS, 'w-8 pr-0')}>
-                      <span className="sr-only">{tJournal('remove_line')}</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.flatMap((line, idx) => [
-                    <tr key={`line-${idx}`}>
-                      <td className={cn(LINE_TD_CLASS, 'pr-3')}>
-                        {/* The account, its name, and the line's tag toggle:
-                            a bag describes the account's line. */}
-                        <div className="flex items-center gap-2">
-                          <div className="w-[120px] shrink-0">
-                            <AccountCombobox
-                              value={line.account_number}
-                              accounts={accounts}
-                              catalog={catalog}
-                              onChange={(v) => updateLine(idx, { account_number: v })}
-                              className="h-7"
-                            />
+              {/* overflow-x-auto: the fixed columns need about 400px, so on a phone
+                  the Kredit field and the remove button scroll instead of clipping
+                  (as BulkBookDialog's manual lines). */}
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-[13px]">
+                  <thead>
+                    <tr>
+                      <th className={cn(VTH_CLASS, 'pr-3')}>Konto</th>
+                      <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>Debet</th>
+                      <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>Kredit</th>
+                      <th className={cn(VTH_CLASS, 'w-8 pr-0')}>
+                        <span className="sr-only">{tJournal('remove_line')}</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.flatMap((line, idx) => [
+                      <tr key={`line-${idx}`}>
+                        <td className={cn(LINE_TD_CLASS, 'pr-3')}>
+                          {/* The account, its name, and the line's tag toggle:
+                              a bag describes the account's line. */}
+                          <div className="flex items-center gap-2">
+                            <div className="w-[120px] shrink-0">
+                              <AccountCombobox
+                                value={line.account_number}
+                                accounts={accounts}
+                                catalog={catalog}
+                                onChange={(v) => updateLine(idx, { account_number: v })}
+                                className="h-7"
+                              />
+                            </div>
+                            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                              {accountLabel(line.account_number)}
+                            </span>
+                            {dimensionsEnabled && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => toggleLineDimensions(idx)}
+                                disabled={isSubmitting}
+                                aria-label={tJournal('row_dimensions_aria')}
+                                aria-expanded={line.dimensions != null}
+                                title={tJournal('row_dimensions_aria')}
+                                className={cn('shrink-0', line.dimensions != null ? 'text-foreground' : 'text-muted-foreground')}
+                              >
+                                <HashtagIcon className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
                           </div>
-                          <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                            {accountLabel(line.account_number)}
+                        </td>
+                        <td className={LINE_TD_CLASS}>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            inputMode="decimal"
+                            value={line.debit_amount}
+                            onChange={(e) => updateLine(idx, { debit_amount: e.target.value, credit_amount: e.target.value ? '' : line.credit_amount })}
+                            onDoubleClick={() => handleFillBalance(idx, 'debit')}
+                            disabled={isSubmitting}
+                            className="h-7 text-right tabular-nums"
+                            placeholder="0,00"
+                          />
+                        </td>
+                        <td className={LINE_TD_CLASS}>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            inputMode="decimal"
+                            value={line.credit_amount}
+                            onChange={(e) => updateLine(idx, { credit_amount: e.target.value, debit_amount: e.target.value ? '' : line.debit_amount })}
+                            onDoubleClick={() => handleFillBalance(idx, 'credit')}
+                            disabled={isSubmitting}
+                            className="h-7 text-right tabular-nums"
+                            placeholder="0,00"
+                          />
+                        </td>
+                        <td className={cn(LINE_TD_CLASS, 'pr-0 text-right')}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="text-muted-foreground"
+                            onClick={() => removeLine(idx)}
+                            disabled={isSubmitting || lines.length <= 2}
+                            aria-label={tJournal('remove_line')}
+                          >
+                            <XMarkIcon className="h-3.5 w-3.5" />
+                          </Button>
+                        </td>
+                      </tr>,
+                      // The line's kostnadsställe/projekt, posted with the line.
+                      ...(dimensionsEnabled && line.dimensions != null
+                        ? [
+                            <tr key={`dims-${idx}`}>
+                              <td colSpan={4} className="border-b-hairline py-2 pr-0">
+                                <div className="max-w-md">
+                                  <LineDimensionFields
+                                    dimensions={line.dimensions}
+                                    onChange={(dimNo, code) => updateLineDimension(idx, dimNo, code)}
+                                    disabled={isSubmitting}
+                                    inputClassName="h-8"
+                                  />
+                                </div>
+                              </td>
+                            </tr>,
+                          ]
+                        : []),
+                    ])}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      {/* Where the user reconciles the sums: whether it
+                          balances, or what is still missing to balance. */}
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-3')}>
+                        {totals.balanced ? (
+                          <span className="font-normal text-muted-foreground">{tInbox('book_direct_balanced')}</span>
+                        ) : totals.diff !== 0 ? (
+                          <span className="text-destructive">
+                            {tInbox('book_direct_off_by', { amount: formatAmount(Math.abs(totals.diff)) })}
                           </span>
-                          {dimensionsEnabled && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => toggleLineDimensions(idx)}
-                              disabled={isSubmitting}
-                              aria-label={tJournal('row_dimensions_aria')}
-                              aria-expanded={line.dimensions != null}
-                              title={tJournal('row_dimensions_aria')}
-                              className={cn('shrink-0', line.dimensions != null ? 'text-foreground' : 'text-muted-foreground')}
-                            >
-                              <HashtagIcon className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                        </div>
+                        ) : (
+                          <span className="font-normal text-muted-foreground">{tJournal('sum')}</span>
+                        )}
                       </td>
-                      <td className={LINE_TD_CLASS}>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          value={line.debit_amount}
-                          onChange={(e) => updateLine(idx, { debit_amount: e.target.value, credit_amount: e.target.value ? '' : line.credit_amount })}
-                          onDoubleClick={() => handleFillBalance(idx, 'debit')}
-                          disabled={isSubmitting}
-                          className="h-7 text-right tabular-nums"
-                          placeholder="0,00"
-                        />
-                      </td>
-                      <td className={LINE_TD_CLASS}>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          value={line.credit_amount}
-                          onChange={(e) => updateLine(idx, { credit_amount: e.target.value, debit_amount: e.target.value ? '' : line.debit_amount })}
-                          onDoubleClick={() => handleFillBalance(idx, 'credit')}
-                          disabled={isSubmitting}
-                          className="h-7 text-right tabular-nums"
-                          placeholder="0,00"
-                        />
-                      </td>
-                      <td className={cn(LINE_TD_CLASS, 'pr-0 text-right')}>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="text-muted-foreground"
-                          onClick={() => removeLine(idx)}
-                          disabled={isSubmitting || lines.length <= 2}
-                          aria-label={tJournal('remove_line')}
-                        >
-                          <XMarkIcon className="h-3.5 w-3.5" />
-                        </Button>
-                      </td>
-                    </tr>,
-                    // The line's kostnadsställe/projekt, posted with the line.
-                    ...(dimensionsEnabled && line.dimensions != null
-                      ? [
-                          <tr key={`dims-${idx}`}>
-                            <td colSpan={4} className="border-b-hairline py-2 pr-0">
-                              <div className="max-w-md">
-                                <LineDimensionFields
-                                  dimensions={line.dimensions}
-                                  onChange={(dimNo, code) => updateLineDimension(idx, dimNo, code)}
-                                  disabled={isSubmitting}
-                                  inputClassName="h-8"
-                                />
-                              </div>
-                            </td>
-                          </tr>,
-                        ]
-                      : []),
-                  ])}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    {/* Where the user reconciles the sums: whether it
-                        balances, or what is still missing to balance. */}
-                    <td className={cn(TOTAL_TD_CLASS, 'pr-3')}>
-                      {totals.balanced ? (
-                        <span className="font-normal text-muted-foreground">{tInbox('book_direct_balanced')}</span>
-                      ) : totals.diff !== 0 ? (
-                        <span className="text-destructive">
-                          {tInbox('book_direct_off_by', { amount: formatAmount(Math.abs(totals.diff)) })}
-                        </span>
-                      ) : (
-                        <span className="font-normal text-muted-foreground">{tJournal('sum')}</span>
-                      )}
-                    </td>
-                    <td className={cn(TOTAL_TD_CLASS, 'pr-2 text-right')}>{formatAmount(totals.debit)}</td>
-                    <td className={cn(TOTAL_TD_CLASS, 'pr-2 text-right')}>{formatAmount(totals.credit)}</td>
-                    <td className={cn(TOTAL_TD_CLASS, 'pr-0')} />
-                  </tr>
-                </tfoot>
-              </table>
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-2 text-right')}>{formatAmount(totals.debit)}</td>
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-2 text-right')}>{formatAmount(totals.credit)}</td>
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-0')} />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <Button
                   type="button"

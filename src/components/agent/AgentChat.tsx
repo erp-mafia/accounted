@@ -1151,8 +1151,10 @@ function MessageActions({
   const btn =
     'inline-flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors'
 
+  // Hover-revealed with a mouse; always shown on a touch screen, which has no
+  // hover (the named group/msg escapes the coarse-pointer rule in globals.css).
   return (
-    <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/msg:opacity-100 transition-opacity">
+    <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/msg:opacity-100 pointer-coarse:opacity-100 transition-opacity">
       <button type="button" onClick={handleCopy} className={btn} title="Kopiera svaret">
         {copied ? <CheckIcon className="h-3 w-3" /> : <Square2StackIcon className="h-3 w-3" />}
         {copied ? 'Kopierat' : 'Kopiera'}
