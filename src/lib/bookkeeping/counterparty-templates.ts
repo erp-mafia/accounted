@@ -1429,6 +1429,20 @@ export function momsKindOfTreatment(treatment: string | null | undefined): MomsK
   return isRateBearing(treatment) ? 'rated' : 'none'
 }
 
+/**
+ * The kind of moms a counterparty template replays. A single pair replays its
+ * field. A pattern replays its own lines and never the field
+ * (contradictsLearnedMoms): a moms line at a rate is booked whatever the field
+ * or a basis pair beside it says, and only a basis pair books a reverse
+ * charge (patternReplayPlan).
+ */
+export function momsKindOfTemplate(template: Pick<CategorizationTemplate, 'vat_treatment' | 'line_pattern'>): MomsKind {
+  const pattern = template.line_pattern
+  if (!pattern || pattern.length === 0) return momsKindOfTreatment(template.vat_treatment)
+  if (pattern.some((e) => e.type === 'vat' && !!e.vat_rate)) return 'rated'
+  return patternReplayPlan(pattern).rcPair ? 'reverse_charge' : 'none'
+}
+
 function momsKindOfLines(lines: ReadonlyArray<{ account_number: string }>): MomsKind {
   if (lines.some((l) => REVERSE_CHARGE_VAT_ACCOUNTS.has(l.account_number))) return 'reverse_charge'
   return lines.some((l) => isVatAccount(l.account_number)) ? 'rated' : 'none'

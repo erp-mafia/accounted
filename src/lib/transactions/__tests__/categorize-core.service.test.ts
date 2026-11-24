@@ -636,6 +636,18 @@ describe('categorizeTransaction: refusals every door shares', () => {
           },
         ],
         [
+          'a learned pattern without a basis pair or moms whose field says reverse charge',
+          {
+            vat_treatment: 'reverse_charge',
+            vat_account: '2645',
+            line_pattern: [
+              { account: '5420', type: 'business', side: 'debit', ratio: 0.8 },
+              { account: '6540', type: 'business', side: 'debit', ratio: 0.2 },
+            ],
+          },
+        ],
+        ['a learned pair without moms', { vat_treatment: null, vat_account: null, line_pattern: null }],
+        [
           'a learned pattern at 25 % whose field says reverse charge',
           {
             vat_treatment: 'reverse_charge',
@@ -733,6 +745,40 @@ describe('categorizeTransaction: refusals every door shares', () => {
         expect(outcome).toMatchObject({ ok: true, dryRun: true })
         if (!outcome.ok || !outcome.dryRun) return
         expect(outcome.preview.lines.map((l) => l.account_number)).not.toContain('2611')
+      })
+
+      // A learned sale at a rate would charge output VAT on a sale stated as
+      // reverse charge. One without moms is refused too: its accounts are
+      // those of a refund of a purchase, which would drop the reversed
+      // reverse charge.
+      it.each([
+        ['a learned sale at 25 %', { vat_treatment: 'standard_25', vat_account: '2611', credit_account: '3308' }],
+        ['a learned sale without moms', { vat_treatment: null, vat_account: null, credit_account: '3308' }],
+        ['a learned refund of a purchase without moms', { vat_treatment: null, vat_account: null, credit_account: '5420' }],
+      ])('refuses %s beside a stated reverse charge on money in', async (_case, learned) => {
+        const template = makeCategorizationTemplate({
+          id: 'tmpl-1',
+          company_id: COMPANY_ID,
+          debit_account: '1930',
+          line_pattern: null,
+          ...learned,
+        } as Parameters<typeof makeCategorizationTemplate>[0])
+        const outcome = await categorizeTransaction(
+          ledger({
+            transactions: { data: row({ amount: 1250, amount_sek: 1250 }), error: null },
+            categorization_templates: { data: template, error: null },
+          }).supabase as never,
+          'user-1',
+          COMPANY_ID,
+          TX_ID,
+          { is_business: true, counterparty_template_id: 'tmpl-1', vat_treatment: 'reverse_charge' },
+          dry,
+        )
+        expect(outcome).toMatchObject({
+          ok: false,
+          code: 'VALIDATION_ERROR',
+          details: { field: 'vat_treatment', counterparty_template_id: 'tmpl-1' },
+        })
       })
 
       it.each([
