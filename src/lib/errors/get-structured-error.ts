@@ -442,10 +442,17 @@ export function getStructuredError(
 
   const classified = classifyError(error)
   const { code } = classified
-  const message_en = classified.message_en ?? extractEnglishMessage(error)
-  const message_sv = classified.message_sv ?? getErrorMessage(error)
-
   const entry = getErrorEntry(code)
+  // A typed error thrown without a sentence of its own (an empty message, or
+  // only its code) would answer an agent "" or the bare code, and an empty one
+  // "Något gick fel" in Swedish. The registry's sentences say what is wrong
+  // and what to send instead (#3907).
+  const thrown = extractEnglishMessage(error)
+  const unworded = entry !== undefined && (thrown.trim() === '' || thrown === code)
+  const message_en = classified.message_en ?? (unworded ? entry.message_en : thrown)
+  const message_sv =
+    classified.message_sv ?? (unworded && thrown.trim() === '' ? entry.message_sv : getErrorMessage(error))
+
   let remediation = classified.remediation ?? entry?.remediation
 
   // Specialize INSUFFICIENT_SCOPE with the actual scope name when known.

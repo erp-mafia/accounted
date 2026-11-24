@@ -31,7 +31,10 @@ import {
   hasPostedDepreciation,
   previewAssetDisposal,
   AssetNotFoundError,
+  AssetJamkningDataRequiredError,
 } from '@/lib/bokslut/assets/asset-service'
+import { toToolError } from '../tool-result'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const listTool = tools.find((t) => t.name === 'gnubok_list_assets')!
 const getTool = tools.find((t) => t.name === 'gnubok_get_asset')!
@@ -324,6 +327,24 @@ describe('gnubok_dispose_asset', () => {
     await expect(disposeTool.execute(sale, COMPANY_ID, 'user-1', noopSupabase)).rejects.toMatchObject({
       code: 'ASSET_NOT_FOUND',
     })
+  })
+
+  it('tells the agent which jämkning fields a sale needs, in both languages', async () => {
+    vi.mocked(previewAssetDisposal).mockRejectedValue(new AssetJamkningDataRequiredError())
+    const err = await disposeTool.execute(sale, COMPANY_ID, 'user-1', noopSupabase).catch((e: unknown) => e)
+    const entry = getErrorEntry('ASSET_JAMKNING_DATA_REQUIRED')!
+    expect(toToolError(err, { toolName: 'gnubok_dispose_asset' }).error).toMatchObject({
+      code: 'ASSET_JAMKNING_DATA_REQUIRED',
+      message_sv: entry.message_sv,
+      message_en: entry.message_en,
+      retryable: false,
+    })
+  })
+
+  it('names when the jämkning fields are required in the tool description', () => {
+    const props = disposeTool.inputSchema.properties as Record<string, { description?: string }>
+    expect(props.jamkning_original_input_vat.description).toMatch(/ASSET_JAMKNING_DATA_REQUIRED/)
+    expect(props.jamkning_original_deduction_percent.description).toMatch(/jamkning_original_input_vat/)
   })
 
   it('dry_run previews the exact plan lines and gain/loss', async () => {

@@ -28840,8 +28840,15 @@ export const tools: McpTool[] = [
         proceeds_account: { type: 'string', description: "Account the proceeds landed on (default: the company's primary bank account)" },
         fiscal_period_id: { type: 'string', description: 'Open fiscal period the voucher is posted in' },
         vat_treatment: { type: 'string', enum: [...ASSET_DISPOSAL_VAT_TREATMENTS], description: 'Required for a sale with proceeds; forbidden otherwise' },
-        jamkning_original_input_vat: { type: 'number', description: 'Original input VAT at acquisition (with the deduction percent) enables the jämkning assessment' },
-        jamkning_original_deduction_percent: { type: 'number', description: '0-100' },
+        jamkning_original_input_vat: {
+          type: 'number',
+          description:
+            'Input VAT on the purchase in SEK, the whole amount whether deducted or not; 0 when none was charged. Required with jamkning_original_deduction_percent when the asset may be an investment good (ML 15 kap.): disposed inside its adjustment period (5 years; 10 for buildings and land) with an acquisition cost of at least 200 000 SEK (400 000 for buildings and land). Without them the call answers ASSET_JAMKNING_DATA_REQUIRED.',
+        },
+        jamkning_original_deduction_percent: {
+          type: 'number',
+          description: '0-100: the share of that VAT deducted at purchase. Required with jamkning_original_input_vat.',
+        },
         business_transfer_confirmed: { type: 'boolean', description: 'Required for business_transfer' },
         adjustment_document_confirmed: { type: 'boolean', description: 'Required when the jämkning obligation transfers (justeringshandling)' },
         ...STAGING_ARGS_PROPERTIES,

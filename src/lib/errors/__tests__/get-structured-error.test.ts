@@ -6,6 +6,7 @@ import { dbError } from '../db-error'
 import { badArgument, codedRefusal } from '../refusal'
 import { userFacing } from '../user-facing'
 import { gatewayErrorMessage } from '@/lib/supabase/gateway-error-page'
+import { getErrorEntry } from '../structured-errors'
 
 describe('getStructuredError', () => {
   it.each([
@@ -288,6 +289,38 @@ describe('getStructuredError: throw-site remediation', () => {
     expect(result.code).toBe('PERIOD_NOT_LOCKED')
     expect(result.remediation?.tool).toBe('gnubok_lock_period')
     expect(result.remediation?.description).toBeTruthy()
+  })
+})
+
+describe('getStructuredError: a typed error thrown without a sentence', () => {
+  class NoSentence extends Error {
+    readonly code = 'ASSET_JAMKNING_DATA_REQUIRED'
+  }
+  class CodeAsSentence extends Error {
+    readonly code = 'ASSET_ADJUSTMENT_DOCUMENT_REQUIRED'
+    constructor() {
+      super('ASSET_ADJUSTMENT_DOCUMENT_REQUIRED')
+    }
+  }
+
+  it('answers the registry text in both languages when the thrown message is empty', () => {
+    expect(getStructuredError(new NoSentence())).toEqual({
+      code: 'ASSET_JAMKNING_DATA_REQUIRED',
+      message_sv: getErrorEntry('ASSET_JAMKNING_DATA_REQUIRED')!.message_sv,
+      message_en: getErrorEntry('ASSET_JAMKNING_DATA_REQUIRED')!.message_en,
+      retryable: false,
+    })
+  })
+
+  it('answers the registry English when the thrown message is only the code', () => {
+    const result = getStructuredError(new CodeAsSentence())
+    expect(result.message_en).toBe(getErrorEntry('ASSET_ADJUSTMENT_DOCUMENT_REQUIRED')!.message_en)
+    expect(result.message_sv).toBe(getErrorEntry('ASSET_ADJUSTMENT_DOCUMENT_REQUIRED')!.message_sv)
+  })
+
+  it('keeps a sentence the thrower wrote', () => {
+    const err = Object.assign(new Error('Asset 1224 was sold in March'), { code: 'ASSET_ALREADY_DISPOSED' })
+    expect(getStructuredError(err).message_en).toBe('Asset 1224 was sold in March')
   })
 })
 
