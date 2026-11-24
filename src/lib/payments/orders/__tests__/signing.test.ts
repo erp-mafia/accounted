@@ -7,7 +7,7 @@ import { createTableMockSupabase } from '@/tests/helpers'
 import { PaymentProviderError, registerPaymentInitiationProvider, resetPaymentInitiationProviders } from '@/lib/payments/initiation/provider'
 import type { OperationContext } from '@/lib/operations/types'
 import { sanitizedProviderMessage } from '../types'
-import { batch, claimedOrder, COMPANY, fakeProvider, holdSigning, invoiceFor, order, SIGNER, USER, waitingOrder } from './fixtures'
+import { batch, claimedOrder, COMPANY, fakeProvider, holdSigning, invoiceFor, order, rowsTable, SIGNER, USER, waitingOrder } from './fixtures'
 
 const mock = vi.hoisted(() => ({ supabase: null as unknown, storedBatchPsu: vi.fn(), rememberBatchPsu: vi.fn(), readMonth: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => mock.supabase }))
@@ -24,6 +24,7 @@ vi.mock('@/lib/auth/resource-psu', () => ({
 }))
 
 import { FOLLOW_BANK_CONFIRMATION_MS, PERMANENT_SIGNING_FAILURES, pollPaymentSigning, restartPaymentSigning, startPaymentSigning, startSecondSignature } from '../signing'
+import { cancelPaymentOrder } from '../lifecycle'
 import { PERMANENT_SIGNING_FAILURES as CLIENT_PERMANENT_SIGNING_FAILURES } from '@/components/payments/payment-order-status'
 
 let db: ReturnType<typeof createTableMockSupabase>
@@ -89,7 +90,7 @@ describe('startPaymentSigning', () => {
       { data: [{ id: 'o2' }] },
       { data: [{ id: 'o2' }] },
       { data: [waitingOrder('o1', 1), waitingOrder('o2', 2)] }, // beginSca: still waiting in this signing
-      { data: null }, // -> awaiting_signature
+      { data: [{ id: 'o1' }, { id: 'o2' }] }, // -> awaiting_signature
       { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' }), waitingOrder('o2', 2, { status: 'awaiting_signature' })] },
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: batch(), orders: [claimedOrder('o1'), claimedOrder('o2')] } })
@@ -145,7 +146,7 @@ describe('startPaymentSigning', () => {
       { data: [{ id: 'o2' }] },
       { data: [{ id: 'o2' }] },
       { data: [waitingOrder('o1', 1), waitingOrder('o2', 2)] },
-      { data: null },
+      { data: [{ id: 'o1' }, { id: 'o2' }] },
       { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' }), waitingOrder('o2', 2, { status: 'awaiting_signature' })] },
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: batch(), orders: [claimedOrder('o1'), claimedOrder('o2')] } })
@@ -199,7 +200,7 @@ describe('startPaymentSigning', () => {
       { data: [{ id: 'o2' }] },
       { data: [{ id: 'o2' }] },
       { data: [waitingOrder('o1', 1), waitingOrder('o2', 2)] },
-      { data: null },
+      { data: [{ id: 'o1' }, { id: 'o2' }] },
       { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' }), waitingOrder('o2', 2, { status: 'awaiting_signature' })] },
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', {
@@ -310,7 +311,7 @@ describe('startPaymentSigning', () => {
         { data: [{ id: 'o1' }] },
         { data: [{ id: 'o1' }] },
         { data: [waitingOrder('o1', 1)] },
-        { data: null },
+        { data: [{ id: 'o1' }] },
         { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' })] },
       ])
       db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single, orders: [claimedOrder('o1')] } })
@@ -578,7 +579,7 @@ describe('startPaymentSigning', () => {
       { error: { message: 'connection reset' } }, // store: no answer
       { data: { provider_payment_id: 'pay-1' } }, // read back: it landed
       { data: [waitingOrder('o1', 1)] }, // beginSca
-      { data: null },
+      { data: [{ id: 'o1' }] },
       { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' })] },
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single, orders: [claimedOrder('o1')] } })
@@ -699,7 +700,7 @@ describe('startPaymentSigning', () => {
       { data: [{ id: 't1' }] },
       { data: [{ id: 't1' }] },
       { data: [waitingOrder('o1', 1), waitingOrder('t1', 2, tax)] }, // beginSca: still waiting
-      { data: null },
+      { data: [{ id: 'o1' }, { id: 't1' }] },
       { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' }), waitingOrder('t1', 2, { ...tax, status: 'awaiting_signature' })] },
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: batch(), orders: [claimedOrder('o1'), claimedOrder('t1', tax)] } })
@@ -948,7 +949,7 @@ describe('restartPaymentSigning', () => {
     const same = batch({ provider_batch_id: 'basket-old' })
     const both = [waitingOrder('o1', 1), waitingOrder('o2', 2)]
     db.setTable('payment_order_batches', [{ data: same }, { data: same }, { data: same }, { data: { ...same, status: 'awaiting_signature' } }, { data: same }])
-    db.setTable('payment_orders', [{ data: both }, { data: both }, { data: both }, { data: null }, { data: both }])
+    db.setTable('payment_orders', [{ data: both }, { data: both }, { data: both }, { data: [{ id: 'o1' }, { id: 'o2' }] }, { data: both }])
     db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: same, orders: both } })
 
     const result = await restart()
@@ -988,7 +989,7 @@ describe('restartPaymentSigning', () => {
       { data: old },
       { data: old },
       { data: [waitingOrder('o1', 1, { batch_id: 'batch-2' })] },
-      { data: null },
+      { data: [{ id: 'o1' }] },
       { data: [waitingOrder('o1', 1, { batch_id: 'batch-2', status: 'awaiting_signature' })] },
     ])
     db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: false, batch: next, orders: [waitingOrder('o1', 1, { batch_id: 'batch-2' })] } })
@@ -1018,7 +1019,7 @@ describe('restartPaymentSigning', () => {
       { data: old },
       { data: old },
       { data: [waitingOrder('o1', 1, { batch_id: 'batch-2' })] },
-      { data: null },
+      { data: [{ id: 'o1' }] },
       { data: [waitingOrder('o1', 1, { batch_id: 'batch-2', status: 'awaiting_signature' })] },
     ])
     db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: false, batch: next, orders: [waitingOrder('o1', 1, { batch_id: 'batch-2' })] } })
@@ -1042,7 +1043,7 @@ describe('restartPaymentSigning', () => {
     const same = batch({ provider_batch_id: 'basket-old' })
     const both = [waitingOrder('o1', 1), waitingOrder('o2', 2)]
     db.setTable('payment_order_batches', [{ data: same }, { data: same }, { data: same }, { data: { ...same, status: 'awaiting_signature' } }, { data: same }])
-    db.setTable('payment_orders', [{ data: both }, { data: both }, { data: both }, { data: null }, { data: both }])
+    db.setTable('payment_orders', [{ data: both }, { data: both }, { data: both }, { data: [{ id: 'o1' }, { id: 'o2' }] }, { data: both }])
     db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: same, orders: both } })
 
     const result = await restart()
@@ -1058,7 +1059,7 @@ describe('restartPaymentSigning', () => {
     const same = batch({ provider_batch_id: 'basket-old' })
     const both = [waitingOrder('o1', 1), waitingOrder('o2', 2)]
     db.setTable('payment_order_batches', [{ data: same }, { data: same }, { data: same }, { data: { ...same, status: 'awaiting_signature' } }, { data: same }])
-    db.setTable('payment_orders', [{ data: both }, { data: both }, { data: both }, { data: null }, { data: both }])
+    db.setTable('payment_orders', [{ data: both }, { data: both }, { data: both }, { data: [{ id: 'o1' }, { id: 'o2' }] }, { data: both }])
     db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: same, orders: both } })
 
     expect(await restart()).toMatchObject({ ok: true })
@@ -1148,7 +1149,7 @@ describe('restartPaymentSigning', () => {
       { data: { id: 'o2' } }, // o2 still waits with its payment
       { data: [waitingOrder('o1', 1)] },
       { data: [waitingOrder('o1', 1, { batch_id: 'batch-2' })] },
-      { data: null },
+      { data: [{ id: 'o1' }] },
       { data: [waitingOrder('o1', 1, { batch_id: 'batch-2', status: 'awaiting_signature' })] },
     ])
     db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: false, batch: next, orders: [waitingOrder('o1', 1, { batch_id: 'batch-2' })] } })
@@ -1194,7 +1195,7 @@ describe('restartPaymentSigning', () => {
         { data: [{ id: 'o1' }] }, // new create started
         { data: [{ id: 'o1' }] }, // new id stored
         { data: [waitingOrder('o1', 2, { batch_id: 'batch-2' })] }, // beginSca on the new signing
-        { data: null }, // -> awaiting_signature
+        { data: [{ id: 'o1' }] }, // -> awaiting_signature
         { data: [waitingOrder('o1', 2, { batch_id: 'batch-2', status: 'awaiting_signature' })] },
       ])
       db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: signedOnce, orders: [waitingOrder('o1', 1)] } })
@@ -1321,6 +1322,74 @@ describe('restartPaymentSigning', () => {
     db.setTable('payment_order_batches', { data: batch({ status: 'failed' }) })
     db.setTable('payment_orders', { data: [claimedOrder('o1', { outcome_unknown_at: '2026-09-30T09:00:00Z' })] })
     expect(await restart()).toMatchObject({ ok: false, code: 'PAYMENT_SIGNING_NOTHING_TO_SIGN' })
+  })
+
+  it('hands out no BankID when an order of the signing is released here while the bank starts it', async () => {
+    // A signing the status sync set back to waiting long after its last BankID:
+    // Signera igen restarts it, and Avbryt may release a payment of it that the
+    // bank holds unsigned and refuses to cancel (isReleasableUnsigned).
+    const lastStart = new Date(Date.now() - 2 * 60 * 60_000).toISOString()
+    const signing = batch({ provider_batch_id: 'basket-old', provider_authorisation_id: 'auth-old', signing_method: 'qr', signer_user_id: USER, signing_started_at: lastStart })
+    const orders = [waitingOrder('o1', 1, { submitted_at: lastStart }), waitingOrder('o2', 2, { submitted_at: lastStart })]
+    holdSigning(db, signing, orders)
+    db.setTable('rpc:rebatch_payment_orders_for_signing', () => ({ data: { ok: true, same: true, batch: { ...signing }, orders: orders.map((o) => ({ ...o })) } }))
+    let release: unknown
+    const signingAtCancel: string[] = []
+    const provider = fakeProvider({
+      cancelPayment: vi.fn().mockImplementation(async (_party: unknown, paymentId: string) => {
+        if (paymentId === 'pay-2') return { outcome: 'too_late', providerStatus: 'RCVD', unsigned: true }
+        signingAtCancel.push(`${signing.status}:${signing.provider_authorisation_id}`)
+        return { outcome: 'cancelled', providerStatus: 'CANC' }
+      }),
+      // The release commits while the bank is starting BankID over both payments.
+      startSigning: vi.fn().mockImplementation(async () => {
+        release = await cancelPaymentOrder(ctx, { orderId: 'o2', releaseUnsigned: true, signer: { ipAddress: null, userAgent: null } })
+        return {
+          providerAuthorisationId: 'auth-new',
+          method: 'qr',
+          state: 'pending',
+          challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.new', qrImage: null, redirectUrl: null },
+          failureCode: null,
+        }
+      }),
+    })
+    registerPaymentInitiationProvider(provider)
+
+    const result = await restart()
+
+    // The race happened: o2 is cancelled here, its payment still unsigned at the bank.
+    expect(release).toMatchObject({ ok: true, data: { cancelled: true, released_unsigned: true } })
+    expect(orders.find((o) => o.id === 'o2')).toMatchObject({ status: 'cancelled', provider_payment_id: 'pay-2' })
+    // Nobody gets the BankID that would sign it, and nothing offers it later.
+    expect(result).toMatchObject({ ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE' })
+    expect(JSON.stringify(result)).not.toContain('bankid.qr.new')
+    expect(signing).toMatchObject({ status: 'failed', provider_authorisation_id: 'auth-new' })
+    // The signing ended before the first cancel at the bank, so no poll offered its BankID meanwhile;
+    // the rest of it then stops as any signing that cannot go on: cancelled at the bank, back to approved.
+    expect(signingAtCancel).toEqual(['failed:auth-new'])
+    expect(orders.find((o) => o.id === 'o1')).toMatchObject({ status: 'approved', provider_payment_id: null })
+    expect(events()).toContainEqual(expect.objectContaining({ batch_id: 'batch-1', event_type: 'error', detail: { code: 'ORDER_MOVED_DURING_SIGNING_START', stage: 'start' } }))
+  })
+
+  it('ends the signing before anyone gets its BankID when its orders cannot be moved into it', async () => {
+    const lastStart = new Date(Date.now() - 2 * 60 * 60_000).toISOString()
+    const signing = batch({ signing_target: 'payment', order_count: 1, provider_authorisation_id: 'auth-old', signing_started_at: lastStart })
+    const orders = [waitingOrder('o1', 1, { submitted_at: lastStart })]
+    holdSigning(db, signing, orders)
+    const held = rowsTable(orders)
+    // The move into the signing answers with an error: whether it moved anything is not known.
+    db.setTable('payment_orders', (chain) => {
+      const update = chain.find((c) => c.method === 'update')
+      return update && (update.args[0] as { status?: string }).status === 'awaiting_signature' ? { data: null, error: { message: 'connection reset' } } : held(chain)
+    })
+    db.setTable('rpc:rebatch_payment_orders_for_signing', () => ({ data: { ok: true, same: true, batch: { ...signing }, orders: orders.map((o) => ({ ...o })) } }))
+    const provider = fakeProvider({ startSigning: vi.fn().mockResolvedValue({ providerAuthorisationId: 'auth-new', method: 'qr', state: 'pending', challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.new', qrImage: null, redirectUrl: null }, failureCode: null }) })
+    registerPaymentInitiationProvider(provider)
+
+    await expect(restart()).rejects.toMatchObject({ message: 'connection reset' })
+    expect(signing).toMatchObject({ status: 'failed', provider_authorisation_id: 'auth-new' })
+    expect(provider.cancelPayment).toHaveBeenCalledWith(expect.anything(), 'pay-1', 'swedish-giro')
+    expect(orders[0]).toMatchObject({ status: 'approved', provider_payment_id: null })
   })
 })
 
