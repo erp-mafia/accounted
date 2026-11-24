@@ -177,22 +177,23 @@ export interface SeededRowDetails extends PaymentDetails {
   payee_iban?: string | null
 }
 
-/** Whether the seeded row's details name this account: its printed IBAN, or its clearing and account number. */
-function seededRowNames(holder: SeededRowDetails, account: ConsentAccountRef): boolean {
+/** Whether the IBAN the seeded row's invoices print is exactly this account's IBAN. */
+function printedIbanNames(holder: SeededRowDetails, account: ConsentAccountRef): boolean {
   const printed = normalizeIban(holder.payee_iban)
-  if (printed !== null && printed === normalizeIban(account.iban)) return true
-  return paymentDetailsPointAt(holder, account)
+  return printed !== null && printed === normalizeIban(account.iban)
 }
 
 /**
  * Whether the seeded row (no IBAN of its own) belongs to ANOTHER account of
- * the same consent than `want`: its details (the printed IBAN, or the
- * clearing and account number) point at exactly one same-currency account in
- * `consent`, and that is not `want`. Then `want` leaves the row, its ledger
- * and the statement rows already on it to that account. With no match, or
- * more than one, the first account to ask takes the row as before
+ * the same consent than `want`: its clearing and account number, or when
+ * those name no account its printed IBAN, point at exactly one same-currency
+ * account in `consent`, and that is not `want`. Then `want` leaves the row,
+ * its ledger and the statement rows already on it to that account. With no
+ * match, or more than one, the first account to ask takes the row as before
  * (crm#1498: the empty second account took 1930 and the company's own
- * account, the one the details named, overflowed).
+ * account, the one the details named, overflowed). The number decides when
+ * it names an account, so the printed IBAN only adds a match where there was
+ * none and never moves the row away from the account the number names.
  */
 export function seededRowBelongsToAnother(
   holder: SeededRowDetails,
@@ -200,9 +201,11 @@ export function seededRowBelongsToAnother(
   consent: readonly ConsentAccountRef[],
 ): boolean {
   if (normalizeIban(holder.iban) !== null) return false
-  const matches = consent.filter(
-    (account) => account.currency.toUpperCase() === holder.currency && seededRowNames(holder, account),
-  )
+  const sameCurrency = consent.filter((account) => account.currency.toUpperCase() === holder.currency)
+  const byNumber = sameCurrency.filter((account) => paymentDetailsPointAt(holder, account))
+  const matches = byNumber.length > 0
+    ? byNumber
+    : sameCurrency.filter((account) => printedIbanNames(holder, account))
   if (matches.length !== 1) return false
   return !sameConsentAccount(matches[0], want)
 }
