@@ -87,6 +87,37 @@ export function enableBankingSunset(env: BankFeedEnv = process.env, now: Date = 
 export const ENABLE_BANKING_SUNSET_MESSAGE =
   'Den gamla bankkopplingen har upphört. Byt till ny koppling för att fortsätta hämta transaktioner.'
 
+/**
+ * Whether Enable Banking takes no new connection and no renewal: from the
+ * moment the campaign is on, since a consent signed there now ends with the
+ * feed on the deadline anyway. A bank the new provider reaches is switched
+ * (Kopplingar, Byt till ny koppling); one it does not reach goes on as a
+ * file import. The feed of the connections that exist runs on until the
+ * sunset. Off with the campaign, so an installation that keeps Enable
+ * Banking keeps every door.
+ */
+export function enableBankingClosedToNew(env: BankFeedEnv = process.env): boolean {
+  return switchCampaign(env).on
+}
+
+/**
+ * What a refused Enable Banking connect, renewal or reuse says
+ * (ENABLE_BANKING_CLOSED). The first sentence is the structured error
+ * registry's message_sv, pinned equal by test; the bank's own sentence says
+ * where that bank goes instead, when the bank is known.
+ */
+export const ENABLE_BANKING_CLOSED_MESSAGE = 'Den gamla bankkopplingen tar inte emot nya kopplingar.'
+
+export function enableBankingClosedMessage(bankName: string | null | undefined): string {
+  const bank = (bankName ?? '').trim()
+  if (!bank) {
+    return `${ENABLE_BANKING_CLOSED_MESSAGE} Koppla banken med BankID under Kopplingar i stället, eller importera kontoutdrag som fil om banken inte finns där.`
+  }
+  return bankCoveredByOpenPayments(bank)
+    ? `${ENABLE_BANKING_CLOSED_MESSAGE} Koppla ${bank} med BankID under Kopplingar i stället, så hämtas transaktionerna genom den nya leverantören.`
+    : `${ENABLE_BANKING_CLOSED_MESSAGE} ${bank} nås inte av den nya leverantören: importera kontoutdrag därifrån som fil under Importera, Bankfil.`
+}
+
 // The uncovered-bank list lives in ./bank-coverage (dependency-free, read in the browser too).
 export { UNCOVERED_BANK_NEEDLES, bankCoveredByOpenPayments } from './bank-coverage'
 
@@ -270,7 +301,7 @@ export async function switchStatesForCompanies(
 }
 
 // The deep link lives in ./switch-link (dependency-free, read in the browser too).
-export { SWITCH_DEEP_LINK_PARAM, switchDeepLink, switchLinkFor } from './switch-link'
+export { BANK_FILE_IMPORT_PATH, SWITCH_DEEP_LINK_PARAM, switchDeepLink, switchLinkFor } from './switch-link'
 
 // ---------------------------------------------------------------------------
 // The counter: bank_switch_progress() totals across companies (service role)

@@ -17,3 +17,9 @@ export function switchDeepLink(connectionId: string, origin = ''): string {
 export function switchLinkFor(state: { pending: ReadonlyArray<{ connection_id: string }> }, origin = ''): string {
   return state.pending.length === 1 ? switchDeepLink(state.pending[0].connection_id, origin) : `${origin}/settings/connections`
 }
+
+/**
+ * Where a bank the new provider does not reach goes on: the bank file import.
+ * The mail to such a company and its Kopplingar row both lead here.
+ */
+export const BANK_FILE_IMPORT_PATH = '/import?mode=bank'

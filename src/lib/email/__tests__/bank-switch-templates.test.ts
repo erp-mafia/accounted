@@ -89,6 +89,31 @@ describe('bank switch email templates', () => {
     expect(html).not.toMatch(/#dc2626|#ea580c|#ef4444|#b91c1c/i)
   })
 
+  it('tells a company whose bank the new provider does not reach when its feed ends and how the file import goes on', () => {
+    const uncovered: BankSwitchEmailData = { ...announcement, kind: 'uncovered', bankNames: ['Wise'], daysLeft: 5, switchUrl: 'https://app.gnubok.se/import?mode=bank', byraManaged: true }
+    const subject = generateBankSwitchEmailSubject(uncovered)
+    const html = generateBankSwitchEmailHtml(uncovered)
+    const text = generateBankSwitchEmailText(uncovered)
+    expect(subject).toBe('Kopplingen till Wise slutar hämta transaktioner 9 nov. 2026 - Exempelbolaget AB')
+    expect(text).toContain('den nya leverantören når inte banken än. Efter 9 nov. 2026 hämtas inga nya transaktioner därifrån.')
+    expect(text).toContain('ladda ner kontoutdraget från Wise som fil (CSV eller camt) och importera det under Importera, Bankfil.')
+    expect(text).toContain('Hämtas till: 9 nov. 2026')
+    expect(text).toContain('Importera bankfil: https://app.gnubok.se/import?mode=bank')
+    expect(html).toContain('href="https://app.gnubok.se/import?mode=bank"')
+    expect(html).toContain('Hämtas till')
+    // Nothing to switch and no BankID to sign: no switch wording, no byrå line.
+    expect(text).not.toMatch(/Byt till ny koppling|BankID/)
+  })
+
+  it('adds the banks the new provider does not reach to a switch mail, as the file import after the deadline', () => {
+    const text = generateBankSwitchEmailText({ ...announcement, uncoveredBankNames: ['PayPal', 'Wise'] })
+    expect(text).toContain('PayPal och Wise nås inte av den nya leverantören: efter 9 nov. 2026 importerar du kontoutdrag därifrån som fil under Importera, Bankfil.')
+    expect(generateBankSwitchEmailText({ ...stopped, uncoveredBankNames: ['PayPal'] })).toContain(
+      'PayPal nås inte av den nya leverantören: importera kontoutdrag därifrån som fil under Importera, Bankfil.',
+    )
+    expect(generateBankSwitchEmailText(announcement)).not.toMatch(/nås inte/)
+  })
+
   it('leaves the company row out when the name is unknown', () => {
     const data = { ...announcement, companyName: '' }
     expect(generateBankSwitchEmailHtml(data)).not.toContain('Företag')

@@ -224,6 +224,34 @@ describe('a bank that signs on its own page', () => {
     expect(valid.step).toBe('accounts')
   })
 
+  it("Svea: a return from the bank's page after the second consent runs the first sync instead of asking for the accounts again", () => {
+    // The browser left for Svea's page to sign the consent naming the chosen
+    // accounts, so the flow that comes back never saw the first round. The
+    // server has already saved the selection and made the row live.
+    const back = openFlow('resume', { connectionId: 'c-1', returned: { result: 'ok', code: null } })
+    expect(back.secondConsent).toBe(false)
+    const valid = flowReducer(back, { type: 'polled', poll: poll({ state: 'valid', method: 'redirect', status: 'active' }) })
+    expect(valid.confirmed).toBe(true)
+    expect(valid.step).toBe('bankid')
+    expect(pollingActive(valid)).toBe(false)
+    // While the first sync runs the row is already live: closing neither
+    // asks to abort nor removes it.
+    expect(removesConnectionOnClose(valid)).toBe(false)
+    expect(closeOutcome(valid)).toBe('close')
+    const live = flowReducer(valid, { type: 'activated', connection: view({ bank_name: 'Svea Bank', bic: 'SVEASESS' }), sync: { imported: 12 }, syncPending: false })
+    expect(live.step).toBe('done')
+    expect(live.connection?.bank_name).toBe('Svea Bank')
+    // A live connection is never removed by closing the flow.
+    expect(removesConnectionOnClose(live)).toBe(false)
+  })
+
+  it("Svea: a second consent refused on the bank's page still closes at once and removes the half-made row", () => {
+    const back = openFlow('resume', { connectionId: 'c-1', returned: { result: 'error', code: 'SIGNING_UNSUCCESSFUL' } })
+    const refused = flowReducer(back, { type: 'polled', poll: poll({ state: 'failed', method: 'redirect', failure_code: 'SIGNING_UNSUCCESSFUL' }) })
+    expect(refused.confirmed).toBe(false)
+    expect(closeOutcome(refused)).toBe('remove')
+  })
+
   it('a redirect return whose consent lists no account still ends the wait at the accounts step, which says so (crm#1445)', () => {
     const back = openFlow('resume', { connectionId: 'c-1', returned: { result: 'ok', code: null } })
     const valid = flowReducer(back, { type: 'polled', poll: poll({ state: 'valid', method: 'redirect', accounts: [] }) })
@@ -623,6 +651,8 @@ describe('the accounts step', () => {
     expect(confirmed.step).toBe('bankid')
     expect(confirmed.confirmed).toBe(true)
     expect(pollingActive(confirmed)).toBe(false)
+    // The row is live from here: closing during the first sync keeps it.
+    expect(closeOutcome(confirmed)).toBe('close')
     const connection = view({ bank_name: 'Svea Bank', bic: 'SVEASESS', consent_expires: null })
     const live = flowReducer(confirmed, { type: 'activated', connection, sync: { imported: 3 }, syncPending: false })
     expect(live.step).toBe('done')

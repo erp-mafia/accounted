@@ -28,6 +28,7 @@ import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLed
 import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-campaign'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { bankCoveredByOpenPayments, enableBankingOffers } from '@/lib/bank-feed/bank-coverage'
+import { BANK_FILE_IMPORT_PATH } from '@/lib/bank-feed/switch-link'
 import {
   SettingsGroup,
   SettingsRow,
@@ -803,9 +804,15 @@ export default function BankingSettingsPanel() {
   // Exactly one page-level attention sentence for the worst state, or none
   // (design convention 6).
   const pageAttention = selectPageAttention(visibleConnections, stateNow)
+  // Once the switch campaign is on, Enable Banking takes no new connection,
+  // renewal or reuse (lib/bank-feed/switch-campaign.ts
+  // enableBankingClosedToNew; the routes refuse them too): the connect-new
+  // surface and the reuse offer give way to one line saying where a bank
+  // goes now.
+  const ebClosedToNew = Boolean(switchCampaign.progress?.campaign.on)
   // With zero connections the bank list IS the page; with any connection it
   // collapses behind one button.
-  const connectNewExpanded = connectNewOpen || !hasVisibleConnections
+  const connectNewExpanded = !ebClosedToNew && (connectNewOpen || !hasVisibleConnections)
 
   const pickerConnection = pickerConnectionId
     ? bankConnections.find(c => c.id === pickerConnectionId)
@@ -1015,7 +1022,16 @@ export default function BankingSettingsPanel() {
           the group, but the bank list is replaced by an upgrade
           note: the server gate would 403 the connect anyway. The former "Om
           bankintegration (PSD2)" card lives on as group-level help. */}
-      {!connectNewExpanded ? (
+      {ebClosedToNew ? (
+        <p className="px-1 pt-8 text-xs leading-relaxed text-muted-foreground">
+          {openPayments.status === 'available'
+            ? t('eb_closed_to_new', { button: t('op_connect_button'), group: t('op_group') })
+            : t('eb_closed_to_new_file')}{' '}
+          <Link href={BANK_FILE_IMPORT_PATH} className="underline underline-offset-2 hover:text-foreground">
+            {t('eb_closed_to_new_import')}
+          </Link>
+        </p>
+      ) : !connectNewExpanded ? (
         <div className="px-1 pt-8">
           <Button variant="outline" onClick={() => setConnectNewOpen(true)} disabled={!canWrite} title={lockedTitle}>
             {/* While the BankID connection is open to the company this list

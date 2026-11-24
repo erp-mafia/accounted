@@ -2,28 +2,33 @@ import { getBranding } from '@/lib/branding/service'
 import { formatDateLong } from '@/lib/utils'
 
 /**
- * The switch campaign's three mails: the announcement (once per company),
- * the reminder (at 14, 7, 3 and 1 days before the deadline) and the sunset
- * mail on the day the old feed stops, the first day after the deadline
- * (once: from today the old connection fetches nothing). Swedish, short, what to do: one button to the switch, a line
- * that the history is kept, the deadline, and for a byrå-managed company the
- * note that the client's own BankID is what signs the switch. Same calm
- * chrome as the consent expiry mail (lib/email/consent-notification-
- * templates.ts): no red, the destination URL in plain text beside the
- * button, signed by the app.
+ * The switch campaign's mails: the announcement (once per company), the
+ * reminder (at 14, 7, 3 and 1 days before the deadline) and the sunset mail
+ * on the day the old feed stops, the first day after the deadline (once:
+ * from today the old connection fetches nothing). Swedish, short, what to
+ * do: one button to the switch, a line that the history is kept, the
+ * deadline, and for a byrå-managed company the note that the client's own
+ * BankID is what signs the switch. A company whose banks the new provider
+ * does not reach gets `uncovered` instead, once: the feed ends on the
+ * deadline and the bank statement is imported as a file from then on.
+ * Same calm chrome as the consent expiry mail (lib/email/consent-
+ * notification-templates.ts): no red, the destination URL in plain text
+ * beside the button, signed by the app.
  */
 
-export type BankSwitchEmailKind = 'announcement' | 'reminder' | 'sunset'
+export type BankSwitchEmailKind = 'announcement' | 'reminder' | 'sunset' | 'uncovered'
 
 export interface BankSwitchEmailData {
   kind: BankSwitchEmailKind
-  /** The banks still to switch, as their Enable Banking rows name them. */
+  /** The banks still to switch (for `uncovered`, the banks the new provider does not reach), as their Enable Banking rows name them. */
   bankNames: string[]
+  /** For a switch mail: the company's other banks, the ones the new provider does not reach (their path is the file import). */
+  uncoveredBankNames?: string[]
   /** The campaign deadline (ISO date). */
   deadline: string
   /** Whole days to the deadline; negative once it has passed. */
   daysLeft: number
-  /** Where the switch is done: the connection's deep link, or Kopplingar when several banks wait. */
+  /** Where the switch is done: the connection's deep link, or Kopplingar when several banks wait; for `uncovered`, the bank file import. */
   switchUrl: string
   /** The company the connection belongs to; shown so the recipient knows which one, never used as the sender. */
   companyName: string
@@ -54,17 +59,45 @@ interface Lines {
   title: string
   intro: string
   howTo: string
+  /** The company's banks the new provider does not reach, in a switch mail: their file import. */
+  uncovered: string | null
   history: string
   byra: string | null
   button: string
+  /** The deadline row's label. */
+  dateLabel: string
+  /** Where else the page is, after the button's URL. */
+  elsewhere: string
+}
+
+const HISTORY = 'Historiken behålls: redan hämtade transaktioner, kontona och bokföringen påverkas inte.'
+
+/** The mail to a company whose banks the new provider does not reach: the feed ends on the deadline, then the file import. */
+function uncoveredLines(data: BankSwitchEmailData): Lines {
+  const banks = joinBankNames(data.bankNames)
+  const several = data.bankNames.length > 1
+  const date = formatDateLong(data.deadline, 'sv')
+  return {
+    title: `${several ? 'Kopplingarna' : 'Kopplingen'} till ${banks} slutar hämta transaktioner ${date}`,
+    intro: `Transaktionerna från ${banks} hämtas i dag genom en leverantör vi slutar använda, och den nya leverantören når inte ${several ? 'de bankerna' : 'banken'} än. Efter ${date} hämtas inga nya transaktioner därifrån.`,
+    howTo: `Så gör du: ladda ner kontoutdraget från ${banks} som fil (CSV eller camt) och importera det under Importera, Bankfil. Välj samma bokföringskonto som i dag, så känns redan hämtade transaktioner igen.`,
+    uncovered: null,
+    history: HISTORY,
+    byra: null,
+    button: 'Importera bankfil',
+    dateLabel: 'Hämtas till',
+    elsewhere: 'Du kan också logga in som vanligt och gå till Importera och sedan Bankfil.',
+  }
 }
 
 function lines(data: BankSwitchEmailData): Lines {
+  if (data.kind === 'uncovered') return uncoveredLines(data)
   const banks = joinBankNames(data.bankNames)
   const several = data.bankNames.length > 1
   const date = formatDateLong(data.deadline, 'sv')
   const passed = data.daysLeft < 0
   const koppling = several ? 'bankkopplingarna' : 'bankkopplingen'
+  const uncoveredBanks = (data.uncoveredBankNames ?? []).map((n) => n.trim()).filter(Boolean)
 
   let title: string
   let intro: string
@@ -89,11 +122,19 @@ function lines(data: BankSwitchEmailData): Lines {
     title,
     intro,
     howTo: `Så gör du: öppna länken nedan, välj Byt till ny koppling och signera med BankID hos banken. Det tar cirka två minuter${several ? ' per bank' : ''}.`,
-    history: 'Historiken behålls: redan hämtade transaktioner, kontona och bokföringen påverkas inte.',
+    uncovered:
+      uncoveredBanks.length === 0
+        ? null
+        : passed
+          ? `${joinBankNames(uncoveredBanks)} nås inte av den nya leverantören: importera kontoutdrag därifrån som fil under Importera, Bankfil.`
+          : `${joinBankNames(uncoveredBanks)} nås inte av den nya leverantören: efter ${date} importerar du kontoutdrag därifrån som fil under Importera, Bankfil.`,
+    history: HISTORY,
     byra: data.byraManaged
       ? 'Bytet signeras med BankID av någon som har behörighet till företagets konton hos banken, så det behöver göras av er på företaget, inte av byrån.'
       : null,
     button: several ? 'Byt bankkopplingarna' : 'Byt bankkoppling',
+    dateLabel: 'Senast',
+    elsewhere: 'Du kan också logga in som vanligt och gå till Inställningar och sedan Kopplingar.',
   }
 }
 
@@ -132,6 +173,7 @@ export function generateBankSwitchEmailHtml(data: BankSwitchEmailData): string {
 
       <p style="margin: 0 0 14px 0; font-size: 15px;">${escapeHtml(l.intro)}</p>
       <p style="margin: 0 0 14px 0; font-size: 15px;">${escapeHtml(l.howTo)}</p>
+      ${l.uncovered ? `<p style="margin: 0 0 14px 0; font-size: 15px;">${escapeHtml(l.uncovered)}</p>` : ''}
       <p style="margin: 0 0 ${l.byra ? '14px' : '28px'} 0; font-size: 15px;">${escapeHtml(l.history)}</p>
       ${l.byra ? `<p style="margin: 0 0 28px 0; font-size: 15px;">${escapeHtml(l.byra)}</p>` : ''}
 
@@ -147,7 +189,7 @@ export function generateBankSwitchEmailHtml(data: BankSwitchEmailData): string {
         </tr>
         ` : ''}
         <tr>
-          <td style="padding: 8px 0; border-top: 1px solid #ececea; border-bottom: 1px solid #ececea; color: #9ca3af;">Senast</td>
+          <td style="padding: 8px 0; border-top: 1px solid #ececea; border-bottom: 1px solid #ececea; color: #9ca3af;">${escapeHtml(l.dateLabel)}</td>
           <td style="padding: 8px 0; border-top: 1px solid #ececea; border-bottom: 1px solid #ececea; color: #111111;">${date}</td>
         </tr>
       </table>
@@ -160,7 +202,7 @@ export function generateBankSwitchEmailHtml(data: BankSwitchEmailData): string {
 
       <p style="margin: 0 0 32px 0; font-size: 13px; color: #9ca3af;">
         Knappen leder till ${url}.<br>
-        Du kan också logga in som vanligt och gå till Inställningar och sedan Kopplingar.
+        ${escapeHtml(l.elsewhere)}
       </p>
 
       <div style="padding-top: 20px; border-top: 1px solid #ececea;">
@@ -188,13 +230,14 @@ export function generateBankSwitchEmailText(data: BankSwitchEmailData): string {
   let text = `${l.title}\n\n`
   text += `${l.intro}\n\n`
   text += `${l.howTo}\n\n`
+  if (l.uncovered) text += `${l.uncovered}\n\n`
   text += `${l.history}\n\n`
   if (l.byra) text += `${l.byra}\n\n`
   text += `Bank: ${joinBankNames(data.bankNames)}\n`
   if (data.companyName) text += `Företag: ${data.companyName}\n`
-  text += `Senast: ${date}\n`
+  text += `${l.dateLabel}: ${date}\n`
   text += `\n${l.button}: ${data.switchUrl}\n`
-  text += `Du kan också logga in som vanligt och gå till Inställningar och sedan Kopplingar.\n\n`
+  text += `${l.elsewhere}\n\n`
   text += `Med vänliga hälsningar,\n`
   text += `${appName}\n\n`
   text += `Du får det här mejlet eftersom det finns en bankkoppling i ${appName}${data.companyName ? ` för ${data.companyName}` : ''}. Undrar du något? Mejla ${supportEmail}.\n`

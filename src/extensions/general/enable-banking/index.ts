@@ -52,7 +52,12 @@ import { physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
 import { bankAccountLabel, ibanLast4, ledgerSyncedElsewhereMessage } from '@/lib/cash-accounts/selection-refusal'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { aggregatorOf, ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
-import { enableBankingSunset, ENABLE_BANKING_SUNSET_MESSAGE } from '@/lib/bank-feed/switch-campaign'
+import {
+  enableBankingClosedMessage,
+  enableBankingClosedToNew,
+  enableBankingSunset,
+  ENABLE_BANKING_SUNSET_MESSAGE,
+} from '@/lib/bank-feed/switch-campaign'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
 import { bankConnectorMode } from '@/lib/connect/instance/upstreams'
 import { signerFromRequest } from '@/lib/payments/orders/request-signer'
@@ -220,6 +225,15 @@ export const enableBankingExtension: Extension = {
         const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
         if (blocked) return blocked
 
+        // A reused session is a new Enable Banking connection for this
+        // company: refused like a connect once the switch campaign is on.
+        if (enableBankingClosedToNew()) {
+          return NextResponse.json(
+            { error: enableBankingClosedMessage(null), code: 'ENABLE_BANKING_CLOSED' },
+            { status: 409 }
+          )
+        }
+
         const rl = await checkRateLimit({
           prefix: 'enable-banking:attach',
           identifier: ctx.userId,
@@ -338,6 +352,21 @@ export const enableBankingExtension: Extension = {
             return NextResponse.json(
               { error: 'aspsp_name and aspsp_country are required' },
               { status: 400 }
+            )
+          }
+
+          // Enable Banking takes no new connection and no renewal once the
+          // switch campaign is on (lib/bank-feed/switch-campaign.ts): the
+          // sentence names where this bank goes instead. Nothing is revoked
+          // and nothing reaches the bank.
+          if (enableBankingClosedToNew()) {
+            log.info('[enable-banking] Connect refused: Enable Banking takes no new connections', {
+              bank: resolvedAspspName,
+              reconnect: isReconnect,
+            })
+            return NextResponse.json(
+              { error: enableBankingClosedMessage(resolvedAspspName), code: 'ENABLE_BANKING_CLOSED' },
+              { status: 409 }
             )
           }
 

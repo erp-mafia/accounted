@@ -217,13 +217,14 @@ describe('bank switch notices', () => {
       category: 'bank_switch_uncovered',
       severity: 'warning',
       messageKey: 'bank_uncovered_one',
-      messageParams: { bank: 'Wise' },
+      // Before the deadline the line names the day the feed ends.
+      messageParams: { bank: 'Wise', deadline: DEADLINE_PARAM },
       actionKey: 'bank_uncovered_action',
       actionHref: '/import',
     })
     expect(bankSwitchUncoveredNotice(state({ uncovered: [{ connection_id: 'a', bank_name: 'Wise' }, { connection_id: 'b', bank_name: 'PayPal' }] }) as never)).toMatchObject({
       messageKey: 'bank_uncovered_many',
-      messageParams: { count: 2 },
+      messageParams: { count: 2, deadline: DEADLINE_PARAM },
     })
   })
 

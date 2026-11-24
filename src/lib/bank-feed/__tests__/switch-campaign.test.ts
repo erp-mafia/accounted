@@ -14,7 +14,10 @@ import {
   admittedCompanyIds,
   bankCoveredByOpenPayments,
   bankSwitchProgressTotals,
+  enableBankingClosedMessage,
+  enableBankingClosedToNew,
   enableBankingSunset,
+  ENABLE_BANKING_CLOSED_MESSAGE,
   ENABLE_BANKING_SUNSET_MESSAGE,
   getBankSwitchProgress,
   switchCampaign,
@@ -115,16 +118,42 @@ describe('enableBankingSunset', () => {
   })
 })
 
+describe('enableBankingClosedToNew', () => {
+  it('closes Enable Banking to new connections and renewals from the moment the campaign is on, and never while it is off', () => {
+    expect(enableBankingClosedToNew({})).toBe(false)
+    expect(enableBankingClosedToNew({ OPENPAYMENTS_SWITCH_DEADLINE: 'soon' })).toBe(false)
+    expect(enableBankingClosedToNew({ OPENPAYMENTS_SWITCH_DEADLINE: '2099-01-01' })).toBe(true)
+    expect(enableBankingClosedToNew({ OPENPAYMENTS_SWITCH_DEADLINE: '2026-01-01' })).toBe(true)
+  })
+
+  it('says where the bank goes instead: Kopplingar for a bank the new provider reaches, the file import for one it does not', () => {
+    expect(enableBankingClosedMessage('SEB')).toBe(
+      'Den gamla bankkopplingen tar inte emot nya kopplingar. Koppla SEB med BankID under Kopplingar i stället, så hämtas transaktionerna genom den nya leverantören.',
+    )
+    expect(enableBankingClosedMessage('Wise')).toBe(
+      'Den gamla bankkopplingen tar inte emot nya kopplingar. Wise nås inte av den nya leverantören: importera kontoutdrag därifrån som fil under Importera, Bankfil.',
+    )
+    expect(enableBankingClosedMessage(null)).toMatch(/^Den gamla bankkopplingen tar inte emot nya kopplingar\. Koppla banken med BankID under Kopplingar/)
+  })
+
+  it('refuses with the sentence the error registry carries', () => {
+    const entry = getStructuredError(Object.assign(new Error('x'), { code: 'ENABLE_BANKING_CLOSED' }))
+    expect(entry.code).toBe('ENABLE_BANKING_CLOSED')
+    expect(entry.message_sv).toBe(ENABLE_BANKING_CLOSED_MESSAGE)
+    for (const bank of ['SEB', 'Wise', null]) expect(enableBankingClosedMessage(bank).startsWith(ENABLE_BANKING_CLOSED_MESSAGE)).toBe(true)
+  })
+})
+
 describe('bankCoveredByOpenPayments', () => {
   it('names the banks Open Payments does not reach, case aside, and treats every other bank as covered', () => {
-    // Svea until a Svea consent through Open Payments reads transactions (bank-coverage.ts).
-    for (const name of ['Wise', 'PayPal', 'Bank Norwegian', 'Nordea First Card', 'Juni', 'JUNI Technology', 'Svea Bank', 'Svea']) {
+    for (const name of ['Wise', 'PayPal', 'Bank Norwegian', 'Nordea First Card', 'Juni', 'JUNI Technology', 'Wamo', 'Pleo']) {
       expect(bankCoveredByOpenPayments(name)).toBe(false)
     }
-    for (const name of ['Swedbank', 'Nordea', 'Länsförsäkringar Bank', 'Lunar', 'Revolut', null, '']) {
+    // Svea Bank is served under SVEASESS although the provider's catalogue leaves it out (bank-coverage.ts).
+    for (const name of ['Swedbank', 'Nordea', 'Länsförsäkringar Bank', 'Lunar', 'Revolut', 'Svea Bank', null, '']) {
       expect(bankCoveredByOpenPayments(name)).toBe(true)
     }
-    expect(UNCOVERED_BANK_NEEDLES).toEqual(['wise', 'paypal', 'norwegian', 'first card', 'juni', 'svea'])
+    expect(UNCOVERED_BANK_NEEDLES).toEqual(['wise', 'paypal', 'norwegian', 'first card', 'juni', 'wamo', 'pleo'])
   })
 })
 
@@ -301,7 +330,7 @@ describe('the counter', () => {
   it('asks the RPC with the uncovered list and fills in missing totals', async () => {
     const mock = createTableMockSupabase({ 'rpc:bank_switch_progress': { data: { companies: { pending: 3 }, banks: [{ bank: 'SEB', pending: 2, uncovered: 0, switched: 1 }] } } })
     const totals = await bankSwitchProgressTotals(mock.supabase as unknown as SupabaseClient)
-    expect(mock.findCall('rpc:bank_switch_progress', 'rpc')).toEqual([{ p_uncovered: ['wise', 'paypal', 'norwegian', 'first card', 'juni', 'svea'] }])
+    expect(mock.findCall('rpc:bank_switch_progress', 'rpc')).toEqual([{ p_uncovered: ['wise', 'paypal', 'norwegian', 'first card', 'juni', 'wamo', 'pleo'] }])
     expect(totals).toEqual({
       companies: { pending: 3, uncovered: 0, done: 0 },
       connections: { pending: 0, uncovered: 0, switched: 0 },

@@ -158,15 +158,16 @@ describe('listBankFeedBanks', () => {
     const banks = vi.fn().mockResolvedValue([
       { bic: 'SWEDSESS', name: 'Swedbank', logoUrl: null, decoupled: true, redirect: null },
       { bic: 'SVEASESS', name: 'Svea Bank', logoUrl: null, decoupled: false, redirect: true },
+      { bic: 'TRWIBEB1', name: 'Wise', logoUrl: null, decoupled: false, redirect: true },
     ])
     mocks.door.mockResolvedValue({ ok: true, connect: fakeConnect({ banks }) })
     const reached = async () => {
       const outcome = await listBankFeedBanks(ctx)
       return outcome.ok && !outcome.dryRun ? outcome.data.banks.map((b) => [b.bic, b.reached]) : outcome
     }
-    expect(await reached()).toEqual([['SWEDSESS', true], ['SVEASESS', false]])
+    expect(await reached()).toEqual([['SWEDSESS', true], ['SVEASESS', true], ['TRWIBEB1', false]])
     mocks.uncoveredPilot.mockReturnValue(true)
-    expect(await reached()).toEqual([['SWEDSESS', true], ['SVEASESS', true]])
+    expect(await reached()).toEqual([['SWEDSESS', true], ['SVEASESS', true], ['TRWIBEB1', true]])
     expect(mocks.uncoveredPilot).toHaveBeenCalledWith('co-1')
   })
 })

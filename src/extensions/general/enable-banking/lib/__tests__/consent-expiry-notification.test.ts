@@ -17,10 +17,16 @@ describe('sendConsentExpiryNotification (Enable Banking)', () => {
   })
   afterEach(() => vi.unstubAllEnvs())
 
-  it('passes through to the shared mail while the feed runs', async () => {
-    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2099-01-01')
+  it('passes through to the shared mail while there is no switch campaign', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '')
     await sendConsentExpiryNotification(supabase, connection, 3, false, 'https://app.test')
     expect(mocks.sendCore).toHaveBeenCalledWith(supabase, connection, 3, false, 'https://app.test')
+  })
+
+  it('sends nothing once the switch campaign is on, before the deadline too: a renewal there is refused', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2099-01-01')
+    await sendConsentExpiryNotification(supabase, connection, 3, false, 'https://app.test')
+    expect(mocks.sendCore).not.toHaveBeenCalled()
   })
 
   it('sends nothing once the Enable Banking feed has ended: the consent is moot', async () => {

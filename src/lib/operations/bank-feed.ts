@@ -129,7 +129,7 @@ export const bankFeedBanks = defineOperation({
     description: 'Lists the banks the account information provider reaches (BIC, name, logo, whether BankID can be signed in our screen, and `reached`: whether Open Payments reads the bank for this company yet). Answers OPEN_BANKING_NOT_AVAILABLE when reading through Open Payments is not switched on for the company.',
     useWhen: 'Before starting a bank connection with BankID.',
     doNotUseFor: 'Enable Banking connections (the bank list of the enable-banking extension).',
-    pitfalls: ['A sparbank is reached through SWEDSESS with its affiliate id; ask bank for the list.', 'reached false: the bank is listed but not read through Open Payments for this company yet (Svea); keep its earlier connection or import statements as a file.'],
+    pitfalls: ['A sparbank is reached through SWEDSESS with its affiliate id; ask bank for the list.', 'reached false: the bank is listed but not read through Open Payments for this company yet; import its bank statements as a file.'],
     example: { response: { data: { banks: [{ bic: 'SWEDSESS', name: 'Swedbank', logo_url: null, decoupled: true, redirect: false, reached: true }] } } },
   },
   input: z.object({}),
