@@ -1102,7 +1102,7 @@ export async function computeVatCloseCheck(
   const entityType = isEntityType(settings?.entity_type) ? settings.entity_type : null
   // 3) Deadline: of the requested period, when it is a declaration period: a
   //    period of another cadence than moms_period has none (nothing is filed
-  //    for it), and says so in the not_declaration_period blocker below.
+  //    for it), and says so in the not_declaration_period finding below.
   //    Never turn missing settings into a plausible statutory date. Monthly
   //    deadlines need the turnover threshold; annual deadlines additionally
   //    need the filing profile and a configured fiscal year matching the
@@ -1216,15 +1216,19 @@ export async function computeVatCloseCheck(
   ])
 
   const blockers: VatCloseBlocker[] = []
+  // Medium: it never stops the close. moms_period is the company's cadence
+  // now, with no history, so the last period of a cadence it switched from
+  // is still declared and must not be held back by this finding.
   if (notDeclarationPeriod && declaredCadence) {
     blockers.push({
       kind: 'not_declaration_period',
-      severity: 'high',
+      severity: 'medium',
       count: 1,
       message: notDeclarationPeriod,
       hint:
         `Kör om med företagets egen period, period_type=${declaredCadence}` +
-        `${declaredCadence === 'yearly' ? ' och year = året räkenskapsåret slutar' : ''}. Redovisar företaget ` +
+        `${declaredCadence === 'yearly' ? ' och year = året räkenskapsåret slutar' : ''}. Bytte företaget ` +
+        'redovisningsperiod efter den här perioden deklareras den ändå enligt den tidigare perioden. Redovisar företaget ' +
         'en annan period hos Skatteverket, rätta inställningen med gnubok_update_company_tax_profile (eller Inställningar, Moms).',
     })
   } else if (!deadline) {
@@ -1553,11 +1557,15 @@ export async function computeVatCloseCheck(
     : psWarning.count > 0
       ? ` Periodisk sammanställning: ${psWarning.count} EU-försäljning${psWarning.count === 1 ? '' : 'ar'} i ruta 39 saknar köpare.`
       : ' Periodisk sammanställning kunde inte stämmas av.'
+  // The cadence finding does not stop the close either, so "klart" names it.
+  const cadenceNote = notDeclarationPeriod
+    ? ' Perioden är ingen deklarationsperiod enligt moms_period och har inget inlämningsdatum (not_declaration_period).'
+    : ''
   let summary: string
   if (readyToClose && sanity.anomalies.length === 0) {
-    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}${psNote}`
+    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}${psNote}${cadenceNote}`
   } else if (readyToClose) {
-    summary = `Klart för stängning men ${sanity.anomalies.length} avvikelse(r) att granska.${psNote}`
+    summary = `Klart för stängning men ${sanity.anomalies.length} avvikelse(r) att granska.${psNote}${cadenceNote}`
   } else if (declarationBlocked) {
     summary = `Inte klart: deklarationsunderlaget är ofullständigt (${declarationErrors} fel), ${highBlockers} kritiska blockerare totalt.`
   } else {

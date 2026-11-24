@@ -241,7 +241,7 @@ describe('gnubok_vat_close_check: yearly period follows the räkenskapsår', () 
 })
 
 describe('gnubok_vat_close_check: a period of another cadence than moms_period', () => {
-  it('gives a quarter of a yearly filer no deadline and blocks it as no declaration period', async () => {
+  it('gives a quarter of a yearly filer no deadline and a medium finding that does not stop the close', async () => {
     const { supabase } = mockSupabase({
       fiscalPeriods: [{ period_start: '2025-04-01', period_end: '2026-03-31' }],
       settings: BROKEN_FY_SETTINGS,
@@ -256,13 +256,17 @@ describe('gnubok_vat_close_check: a period of another cadence than moms_period',
     expect(result.payment).toMatchObject({ deadline: null, deadline_label: null, moms_period: 'yearly' })
     expect(result.blockers).toContainEqual(expect.objectContaining({
       kind: 'not_declaration_period',
-      severity: 'high',
+      severity: 'medium',
       message: expect.stringContaining('Q1 2026 (2026-01-01..2026-03-31) är ingen deklarationsperiod'),
       hint: expect.stringContaining('period_type=yearly'),
     }))
-    // The specific blocker says why there is no date; the generic one would not.
+    // The specific finding says why there is no date; the generic one would not.
     expect(result.blockers).not.toContainEqual(expect.objectContaining({ kind: 'deadline_unavailable' }))
-    expect(result.ready_to_close).toBe(false)
+    // moms_period has no history: the last period of a cadence the company
+    // switched from is still declared, so the finding never stops the close.
+    expect(result.blockers.filter((b) => b.severity === 'high')).toEqual([])
+    expect(result.ready_to_close).toBe(true)
+    expect(result.summary).toContain('not_declaration_period')
   })
 
   it('keeps the deadline of a period of the company\'s own cadence', async () => {
