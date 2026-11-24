@@ -75,7 +75,7 @@ import {
   deadlineAfterYearEnd,
 } from '@/lib/tax/annual-report-deadlines'
 import { parseAmountInput } from '@/lib/money'
-import { defaultDispositionText } from '@/lib/bokslut/arsredovisning/disposition-text'
+import { defaultDispositionText, isGeneratedDispositionText } from '@/lib/bokslut/arsredovisning/disposition-text'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -113,8 +113,7 @@ function sameNoteOverrides(a: Record<string, string>, b: Record<string, string>)
  * amount reads as no dividend; the save refuses an unreadable one anyway.
  */
 function dispositionDefaultFor(dividendInput: string, distributable: number): string {
-  const dividend = parseAmountInput(dividendInput) ?? 0
-  return defaultDispositionText({ proposed_dividend: dividend, carried_forward: distributable - dividend })
+  return defaultDispositionText({ proposed_dividend: parseAmountInput(dividendInput) ?? 0, total: distributable })
 }
 
 export default function ArsredovisningPage() {
@@ -593,10 +592,7 @@ export default function ArsredovisningPage() {
             // The generated sentence is not stored as the board's text:
             // stored, it would keep stating this dividend after the
             // dividend changes. Null lets the report write it per amount.
-            resultatdisposition:
-              resultatdisposition.trim() === dispositionDefaultFor(proposedDividend, distributableEquity)
-                ? null
-                : resultatdisposition,
+            resultatdisposition: isGeneratedDispositionText(resultatdisposition) ? null : resultatdisposition,
             proposed_dividend: proposedDividendParsed,
             agm_date: agmDate || null,
             agm_disposition_outcome: agmDispositionOutcome || null,
@@ -688,7 +684,6 @@ export default function ArsredovisningPage() {
     importantEvents,
     resultatdisposition,
     proposedDividend,
-    distributableEquity,
     agmDate,
     agmDispositionOutcome,
     agmDispositionDecision,
@@ -1245,7 +1240,7 @@ export default function ArsredovisningPage() {
                     // A text that is still the generated sentence follows
                     // the dividend, so it never says the result is carried
                     // forward beside a dividend. A text the board wrote stays.
-                    if (resultatdisposition.trim() === dispositionDefaultFor(proposedDividend, distributableEquity)) {
+                    if (isGeneratedDispositionText(resultatdisposition)) {
                       setResultatdisposition(dispositionDefaultFor(next, distributableEquity))
                     }
                     setProposedDividend(next)

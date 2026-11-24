@@ -677,10 +677,7 @@ export async function buildArsredovisningReport(
       // amounts: never "balanseras i ny räkning" beside a dividend.
       resultatdisposition:
         overrides.resultatdisposition ??
-        dispositionText(persistedRd, {
-          proposed_dividend: proposedDividend,
-          carried_forward: distributableEquity - proposedDividend,
-        }),
+        dispositionText(persistedRd, { proposed_dividend: proposedDividend, total: distributableEquity }),
       proposed_dividend: proposedDividend,
       resultatdisposition_amounts: {
         retained_earnings: retainedEarnings,

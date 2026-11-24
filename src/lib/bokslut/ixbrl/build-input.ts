@@ -41,7 +41,11 @@ import { arsredovisningDatering } from '@/lib/bokslut/arsredovisning/datering'
 import { signatureDate } from '@/lib/bokslut/arsredovisning/signature-pages'
 import { effectiveDisclosureTexts } from '@/lib/bokslut/arsredovisning/register-disclosures'
 import { k2EquityTableInput } from '@/lib/bokslut/arsredovisning/equity-specification'
-import { defaultDispositionText } from '@/lib/bokslut/arsredovisning/disposition-text'
+import {
+  defaultDispositionText,
+  isGeneratedDispositionText,
+  statedDividend,
+} from '@/lib/bokslut/arsredovisning/disposition-text'
 import {
   AGM_DATE_MISSING_WARNING,
   AGM_DECISION_MISSING_WARNING,
@@ -221,11 +225,8 @@ export async function buildIxbrlInput(
   // same context: the disposition row must carry the identical value
   // (TA §2.7.3), so fri överkursfond (2097) is its own row tagged with the
   // separate Overkursfond concept instead of being folded into balanserat.
-  const proposedDividend = Math.max(
-    0,
-    Math.round(
-      options.proposedDividend ?? pdfData.forvaltningsberattelse.proposed_dividend,
-    ),
+  const proposedDividend = statedDividend(
+    options.proposedDividend ?? pdfData.forvaltningsberattelse.proposed_dividend,
   )
   const dispositionAmounts = pdfData.forvaltningsberattelse.resultatdisposition_amounts
   const dispBalanserat = dispositionAmounts.retained_earnings
@@ -239,13 +240,13 @@ export async function buildIxbrlInput(
       `Föreslagen utdelning (${proposedDividend} kr) överstiger fritt eget kapital (${dispSumma} kr).`,
     )
   }
-  // A live draft filed with another dividend (the route's utdelning): the
-  // report's own sentence only stated the report's amounts, so it follows the
-  // dividend the document states. A sentence the board wrote stays as written.
+  // The report's own sentence states the dividend this document states, also
+  // for a live draft filed with another dividend (the route's utdelning). A
+  // sentence the board wrote stays as written.
   const statedText = pdfData.forvaltningsberattelse.resultatdisposition
   const kommentar =
-    options.proposedDividend !== undefined && statedText === defaultDispositionText(dispositionAmounts)
-      ? defaultDispositionText({ proposed_dividend: proposedDividend, carried_forward: dispSumma - proposedDividend })
+    isGeneratedDispositionText(statedText)
+      ? defaultDispositionText({ proposed_dividend: proposedDividend, total: dispSumma })
       : statedText
   const resultatdisposition: Resultatdisposition = {
     balanseratResultat: dispBalanserat,

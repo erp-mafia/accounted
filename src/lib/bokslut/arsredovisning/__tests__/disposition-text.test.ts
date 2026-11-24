@@ -16,7 +16,13 @@ import { generateIxbrlDocument } from '@/lib/bokslut/ixbrl/document/generate'
 import { ArsredovisningPDF } from '../arsredovisning-pdf'
 import { buildCanonicalAnnualReport } from '../model'
 import { formatPdfKronor } from '../pdf-format'
-import { NO_DIVIDEND_DISPOSITION_TEXT, defaultDispositionText, dispositionText } from '../disposition-text'
+import {
+  NO_DIVIDEND_DISPOSITION_TEXT,
+  defaultDispositionText,
+  dispositionText,
+  isGeneratedDispositionText,
+  proposalTextWithoutAmounts,
+} from '../disposition-text'
 
 const OPTIONS = { generatedAt: '2026-02-01T10:00:00.000Z', todayIso: '2026-02-01' }
 const RENDER_TIMEOUT = 30_000
@@ -52,23 +58,53 @@ afterEach(() => {
 
 describe('the disposition sentence', () => {
   it('names the dividend and what is carried forward when one is proposed', () => {
-    expect(defaultDispositionText({ proposed_dividend: 30_000, carried_forward: 1_036_618 })).toBe(
+    expect(defaultDispositionText({ proposed_dividend: 30_000, total: 1_066_618 })).toBe(
       'Styrelsen föreslår att vinstmedlen disponeras så att 30 000 kr delas ut och 1 036 618 kr balanseras i ny räkning.',
     )
   })
 
   it('is the sentence every report has printed when none is proposed', () => {
-    expect(defaultDispositionText({ proposed_dividend: 0, carried_forward: 500 })).toBe(NO_DIVIDEND_DISPOSITION_TEXT)
+    expect(defaultDispositionText({ proposed_dividend: 0, total: 500 })).toBe(NO_DIVIDEND_DISPOSITION_TEXT)
   })
 
-  it('keeps a stored text as written unless it is the no-dividend sentence beside a dividend', () => {
-    const withDividend = { proposed_dividend: 30_000, carried_forward: 70_000 }
-    const without = { proposed_dividend: 0, carried_forward: 100_000 }
+  it('states the dividend in whole kronor and carries forward the rest, as the iXBRL table does', () => {
+    expect(defaultDispositionText({ proposed_dividend: 0.49, total: 100 })).toBe(NO_DIVIDEND_DISPOSITION_TEXT)
+    expect(defaultDispositionText({ proposed_dividend: 0.5, total: 1 })).toBe(dividendSentence(1, 0))
+    expect(defaultDispositionText({ proposed_dividend: 30_000.5, total: 100_000 })).toBe(dividendSentence(30_001, 69_999))
+  })
+
+  it('keeps a stored text as written unless it is a generated sentence for other amounts', () => {
+    const withDividend = { proposed_dividend: 30_000, total: 100_000 }
+    const without = { proposed_dividend: 0, total: 100_000 }
     expect(dispositionText(BOARD_TEXT, withDividend)).toBe(BOARD_TEXT)
     expect(dispositionText('', withDividend)).toBe('')
     expect(dispositionText(`${NO_DIVIDEND_DISPOSITION_TEXT} `, without)).toBe(`${NO_DIVIDEND_DISPOSITION_TEXT} `)
     expect(dispositionText(NO_DIVIDEND_DISPOSITION_TEXT, withDividend)).toBe(defaultDispositionText(withDividend))
     expect(dispositionText(undefined, withDividend)).toBe(defaultDispositionText(withDividend))
+    // A dividend sentence stored for other amounts, by the editor or an API
+    // write that copied the report's text, states the current ones.
+    const stale = defaultDispositionText({ proposed_dividend: 30_000, total: 90_000 })
+    const raised = { proposed_dividend: 40_000, total: 100_000 }
+    expect(dispositionText(stale, raised)).toBe(dividendSentence(40_000, 60_000))
+    expect(dispositionText(stale, without)).toBe(NO_DIVIDEND_DISPOSITION_TEXT)
+    expect(dispositionText(`${defaultDispositionText(withDividend)}\n`, withDividend)).toBe(`${defaultDispositionText(withDividend)}\n`)
+    expect(dispositionText(`${stale} Utdelningen betalas i juni.`, raised)).toBe(`${stale} Utdelningen betalas i juni.`)
+  })
+
+  it('knows its own sentences by their form, with any amounts and spacing', () => {
+    expect(isGeneratedDispositionText(` ${NO_DIVIDEND_DISPOSITION_TEXT}\n`)).toBe(true)
+    expect(isGeneratedDispositionText(dividendSentence(1_250_000, -4_000))).toBe(true)
+    expect(isGeneratedDispositionText('Styrelsen föreslår att vinstmedlen disponeras så att 30 000 kr delas ut och 70 000 kr balanseras i ny räkning.')).toBe(true)
+    expect(isGeneratedDispositionText(BOARD_TEXT)).toBe(false)
+    expect(isGeneratedDispositionText('')).toBe(false)
+  })
+
+  it('gives a reader without the amounts the board text, the no-dividend sentence, or nothing', () => {
+    expect(proposalTextWithoutAmounts(BOARD_TEXT, DIVIDEND)).toBe(BOARD_TEXT)
+    expect(proposalTextWithoutAmounts(null, 0)).toBe(NO_DIVIDEND_DISPOSITION_TEXT)
+    expect(proposalTextWithoutAmounts(NO_DIVIDEND_DISPOSITION_TEXT, 0)).toBe(NO_DIVIDEND_DISPOSITION_TEXT)
+    expect(proposalTextWithoutAmounts(NO_DIVIDEND_DISPOSITION_TEXT, DIVIDEND)).toBeNull()
+    expect(proposalTextWithoutAmounts(null, DIVIDEND)).toBeNull()
   })
 })
 
@@ -76,6 +112,7 @@ describe('an annual report that proposes a dividend', () => {
   it.each([
     ['with no text of the board', { proposed_dividend: DIVIDEND }],
     ['with the no-dividend sentence the editor saved', { proposed_dividend: DIVIDEND, resultatdisposition: NO_DIVIDEND_DISPOSITION_TEXT }],
+    ['with a dividend sentence stored for other amounts', { proposed_dividend: DIVIDEND, resultatdisposition: dividendSentence(10_000, 5) }],
   ])('states the dividend in the sentence of the report, the PDF and the iXBRL, %s', async (_, narrative) => {
     const model = await build(narrative)
     const amounts = model.report.forvaltningsberattelse.resultatdisposition_amounts
@@ -93,6 +130,15 @@ describe('an annual report that proposes a dividend', () => {
     expect(pdf).toContain(plain(expected))
     expect(pdf).not.toContain('årets resultat balanseras i ny räkning')
   }, RENDER_TIMEOUT)
+
+  it('states in the iXBRL sentence the whole kronor the iXBRL table states, for a dividend in öre', async () => {
+    const model = await build({ proposed_dividend: DIVIDEND + 0.5 })
+    if (!model.ixbrl) throw new Error('the model carries no iXBRL input')
+    const { summa, utdelning, balanserasINyRakning } = model.ixbrl.forvaltningsberattelse.resultatdisposition
+    expect(utdelning).toBe(DIVIDEND + 1)
+    expect(ixbrlComment(generateIxbrlDocument(model.ixbrl).xhtml)).toBe(plain(dividendSentence(utdelning, summa - utdelning)))
+    expect(balanserasINyRakning).toBe(summa - utdelning)
+  })
 
   it('keeps a text the board wrote', async () => {
     const model = await build({ proposed_dividend: DIVIDEND, resultatdisposition: BOARD_TEXT })

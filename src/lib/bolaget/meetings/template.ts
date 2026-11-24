@@ -16,6 +16,7 @@ import { loadShareRegisterData } from '../share-register'
 import { BOARD_MEMBER_ROLES, type CompanyRoleKind } from '../types'
 import { AUDITOR_ELECTION_ROLES, BOARD_ELECTION_ROLES, type DecisionPayloads } from './payloads'
 import { dividendPerShare, heldDuring } from './rules'
+import { proposalTextWithoutAmounts } from '@/lib/bokslut/arsredovisning/disposition-text'
 import type { DecisionKind, MeetingKind, MeetingOrgan } from './types'
 
 export interface DecisionDraft {
@@ -220,7 +221,13 @@ export async function loadAnnualReportProposal(
   if (narrativeError) throw new Error(`arsredovisning_narratives read failed: ${narrativeError.message}`)
   if (!narrative) return null
   const row = narrative as { resultatdisposition: string | null; proposed_dividend: number | string | null }
-  return { versionId: null, resultatdisposition: row.resultatdisposition, proposedDividend: Number(row.proposed_dividend ?? 0), amounts: null }
+  const proposedDividend = Number(row.proposed_dividend ?? 0)
+  return {
+    versionId: null,
+    resultatdisposition: proposalTextWithoutAmounts(row.resultatdisposition, proposedDividend),
+    proposedDividend,
+    amounts: null,
+  }
 }
 
 /** Everything the årsstämma template reads, loaded for one fiscal year and meeting day. */
