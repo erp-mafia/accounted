@@ -9479,6 +9479,7 @@
     "correction_date_label": "Correction date",
     "correction_date_hint": "The storno is posted on the original's date ({date}). The correction is posted on this date, in the fiscal year the date belongs to.",
     "correction_date_hint_locked": "The original's period is locked or closed. The storno is posted in the first open period and the correction on the same day, unless you pick a date. Both refer to {voucher} ({date}), which stays as it is.",
+    "correction_closed_year_note": "The error belongs to a year closed with a year-end closing. The correction is posted in the open year and affects its result. If the error is material and the company applies K3, it is instead corrected against equity at the start of the year (correction of an error, K3 10.12); K2 allows either route (2.12). If the correction changes neither the result nor the balance sheet, for example an account within the same line item, no posting is needed.",
     "correction_lines_hint": "The storno that zeroes {voucher} is posted automatically; do not enter it yourself. Enter the lines the verifikat should have had: every account that should remain must stay.",
     "negates_original_inline": "These lines are the original with debit and credit swapped, a second reversal of {voucher}.",
     "negates_original_reset": "Start again from the original lines",

@@ -555,6 +555,7 @@ import {
 } from '@/lib/import/opening-balance/existing'
 import { assertNoOpeningBalance } from '@/lib/import/opening-balance/existing'
 import { assertStornoTarget, movedCorrectionDescription } from '@/lib/core/bookkeeping/storno-target'
+import { correctionLanding } from '@/lib/vat/moved-correction-vat'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import {
   checkVoucherGapExplanation,
@@ -27851,7 +27852,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_correct_entry',
     keywords: ['rättelse', 'rätta verifikat', 'verifikation', 'ändra verifikat'],
     title: 'Correct Posted Entry (Rättelse)',
-    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in its period (first open one if locked), never in-place edit. Use for partial fixes like 2641 → 2614/2645; lines accept dimensions bags. Account drives ruta. HIGH risk.',
+    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in its period (locked: first open period). Use for partial fixes like 2641 → 2614/2645; lines accept dimensions bags. Account drives ruta. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -28017,9 +28018,9 @@ export const tools: McpTool[] = [
       // refusals carry the registry's answer: TARGET_PERIOD_LOCKED or
       // TARGET_PERIOD_CLOSED for an entry type whose date is fixed,
       // NO_OPEN_PERIOD_FOR_DATE when the next year is not created yet.
-      const stornoTarget = await assertStornoTarget(supabase, companyId, original, undefined, {
-        inFirstOpenPeriodWhenLocked: true,
-      })
+      // A pair moved out of a locked period that changes VAT also says which
+      // momsperiod the error belongs to (lib/vat/moved-correction-vat.ts).
+      const { target: stornoTarget, vatWarning } = await correctionLanding(supabase, companyId, original, lines)
 
       // Importmoms keeps its ruta 50 base in the corrected lines (#94): the
       // rule correctEntry runs at commit, refused here before staging.
@@ -28109,7 +28110,10 @@ export const tools: McpTool[] = [
             })),
           },
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
-          ...(ownedBy ? { owned_by: ownedBy, warnings: [ownedBy.hint_sv] } : {}),
+          ...(ownedBy ? { owned_by: ownedBy } : {}),
+          ...(ownedBy || vatWarning
+            ? { warnings: [ownedBy?.hint_sv, vatWarning?.message_sv].filter((w): w is string => !!w) }
+            : {}),
           will: stornoTarget.moved
             ? `post a storno that mirrors the original and a new corrected entry, both dated ${stornoTarget.date} in the first open period and naming the original; the original stays as booked in its locked period (BFL 5 kap 5§)`
             : 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',

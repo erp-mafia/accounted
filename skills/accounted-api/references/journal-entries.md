@@ -642,7 +642,7 @@ Atomically advances the voucher series and flips the draft to posted. The vouche
 Request body:
 ```ts
 {
-  acknowledged_warnings?: ("INPUT_VAT_ABOVE_RATE" | "OUTPUT_VAT_ABOVE_RATE" | "INPUT_VAT_ON_OUTPUT_ACCOUNT" | "REVERSE_CHARGE_ONE_SIDED" | "REVENUE_DEBITED_IN_PURCHASE" | "POSSIBLE_DUPLICATE_VOUCHER" | "BANK_MOVEMENT_ALREADY_BOOKED" | "VAT_PERIOD_ALREADY_FILED")[]
+  acknowledged_warnings?: ("INPUT_VAT_ABOVE_RATE" | "OUTPUT_VAT_ABOVE_RATE" | "INPUT_VAT_ON_OUTPUT_ACCOUNT" | "REVERSE_CHARGE_ONE_SIDED" | "REVENUE_DEBITED_IN_PURCHASE" | "POSSIBLE_DUPLICATE_VOUCHER" | "BANK_MOVEMENT_ALREADY_BOOKED" | "VAT_PERIOD_ALREADY_FILED" | "VAT_OF_MOVED_CORRECTION")[]
 }
 ```
 
@@ -710,7 +710,7 @@ Per Bokföringslagen 5 kap 5 §, posted entries cannot be modified. This endpoin
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - The new lines must balance. JOURNAL_ENTRY_NOT_BALANCED if not.
-- The original's entry_date and fiscal_period_id are inherited. When the original's fiscal year is locked or closed, or its date is on or before the company lock date, the storno and the corrected entry are both dated in the first open, unlocked period instead (today when today lies in it), their descriptions name the original voucher and date, and the original stays as booked; a dry run returns that entry_date. An opening balance, year-end or VAT settlement entry keeps its date and returns PERIOD_LOCKED; NO_OPEN_PERIOD_FOR_DATE when the next fiscal year does not exist yet.
+- The original's entry_date and fiscal_period_id are inherited. When the original's fiscal year is locked or closed, or its date is on or before the company lock date, the storno and the corrected entry are both dated in the first open, unlocked period instead (today when today lies in it), their descriptions name the original voucher and date, and the original stays as booked; a dry run and the answer return that entry_date. When such a pair changes VAT (26xx), warnings[] (code VAT_OF_MOVED_CORRECTION) names the momsperiod the error belongs to and whether it is filed: a filed return is corrected instead. An opening balance, year-end or VAT settlement entry keeps its date and returns PERIOD_LOCKED; NO_OPEN_PERIOD_FOR_DATE when the next fiscal year does not exist yet.
 - Three voucher numbers are advanced in this call: the original (already burned), the reversal, and the corrected. The series stays unbroken.
 - A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.
 - Lines that are the original with debit and credit swapped return MEANINGLESS_CORRECTION (400, details.reason negates_original): the storno already reverses the original. To only cancel an entry use /reverse; pass sides_swapped=true only when the original itself was booked with the sides swapped.
@@ -764,7 +764,9 @@ Response `200`:
     voucher_series: string,
     reversal_voucher_number: number,
     corrected_voucher_number: number,
-    owned_by: { kind: "invoice" | "credit_note" | "supplier_invoice" | "supplier_credit_note" | "accrual_schedule" | "asset" | "salary_run", owner_id: string, label: string | null, href: string, action: "credit_invoice" | "open_invoice" | "credit_supplier_invoice" | "open_supplier_invoice" | "open_accrual" | "open_asset" | "open_salary_run", action_href: string, tool: string | null, hint_sv: string, hint_en: string } | null
+    owned_by: { kind: "invoice" | "credit_note" | "supplier_invoice" | "supplier_credit_note" | "accrual_schedule" | "asset" | "salary_run", owner_id: string, label: string | null, href: string, action: "credit_invoice" | "open_invoice" | "credit_supplier_invoice" | "open_supplier_invoice" | "open_accrual" | "open_asset" | "open_salary_run", action_href: string, tool: string | null, hint_sv: string, hint_en: string } | null,
+    entry_date: string,
+    warnings?: { code: string, message_sv: string, message_en: string }[]
   },
   meta: {
     request_id: string,
@@ -788,7 +790,8 @@ Example response `200`:
     "voucher_series": "A",
     "reversal_voucher_number": 144,
     "corrected_voucher_number": 145,
-    "owned_by": null
+    "owned_by": null,
+    "entry_date": "2026-03-14"
   },
   "meta": {
     "request_id": "req_…",

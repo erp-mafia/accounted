@@ -657,17 +657,26 @@ export async function correctEntry(
   // stand (isStandingStorno) is cancelled here, before its corrected
   // verifikat exists.
   if (moved) {
+    // A storno the cleanup door cannot cancel stands without its corrected
+    // verifikat and nets the original out of the open year: never a refusal
+    // that reads as nothing happened.
+    const dropStorno = async (refusal: Error): Promise<never> => {
+      if (await cancelEntry(supabase, companyId, userId, reversalEntry.id)) throw refusal
+      console.error(
+        `[storno] correctEntry: moved storno ${reversalEntry.id} of ${originalEntryId} could not be cancelled; it stands without a corrected verifikat`,
+      )
+      throw new BookkeepingDatabaseError(
+        'post_reversal_entry',
+        `storno ${reversalEntry.id} could not be cancelled after: ${refusal.message}`,
+      )
+    }
     let standing = false
     try {
       standing = await isStandingStorno(supabase, companyId, originalEntryId, reversalEntry.id)
     } catch (err) {
-      await cancelEntry(supabase, companyId, userId, reversalEntry.id)
-      throw err
+      await dropStorno(err instanceof Error ? err : new Error(String(err)))
     }
-    if (!standing) {
-      await cancelEntry(supabase, companyId, userId, reversalEntry.id)
-      throw new EntryAlreadyReversedError()
-    }
+    if (!standing) await dropStorno(new EntryAlreadyReversedError())
   }
 
   // NOTE: Original entry is NOT marked as 'reversed' here. We defer that

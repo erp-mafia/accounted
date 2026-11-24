@@ -296,7 +296,7 @@ describe('isStandingStorno', () => {
 
     await expect(isStandingStorno(supabase as never, 'company-1', 'orig-1', 'storno-1')).resolves.toBe(true)
     await expect(isStandingStorno(supabase as never, 'company-1', 'orig-1', 'storno-2')).resolves.toBe(false)
-    expect(findCalls('journal_entries', 'order')[0]).toEqual(['committed_at', { ascending: true }])
+    expect(findCalls('journal_entries', 'order')[0]).toEqual(['voucher_number', { ascending: true }])
   })
 
   it('throws when the stornos cannot be read', async () => {

@@ -178,12 +178,17 @@ async function firstOpenPeriodTarget(
   return { date: target.date, fiscal_period_id: target.fiscal_period_id }
 }
 
-/** Refuses a storno of an original a posted storno already reverses. */
-async function assertNoStandingStorno(
+/**
+ * The posted storno that already reverses `originalId`, or null. A storno
+ * moved out of a locked year leaves the original 'posted', so its status
+ * alone does not say it is done: every correction path asks this first (a
+ * storno here, an inline rättelse in journal-entry-corrections.ts).
+ */
+export async function standingStornoOf(
   supabase: SupabaseClient,
   companyId: string,
   originalId: string,
-): Promise<void> {
+): Promise<{ id: string } | null> {
   const { data, error } = await supabase
     .from('journal_entries')
     .select('id')
@@ -192,12 +197,21 @@ async function assertNoStandingStorno(
     .eq('status', 'posted')
     .limit(1)
   if (error) throw new BookkeepingDatabaseError('load_stornos_of_original', error.message, error.code)
-  if ((data ?? []).length > 0) throw new EntryAlreadyReversedError()
+  return Array.isArray(data) && data.length > 0 ? (data[0] as { id: string }) : null
+}
+
+/** Refuses a storno of an original a posted storno already reverses. */
+async function assertNoStandingStorno(
+  supabase: SupabaseClient,
+  companyId: string,
+  originalId: string,
+): Promise<void> {
+  if (await standingStornoOf(supabase, companyId, originalId)) throw new EntryAlreadyReversedError()
 }
 
 /**
  * Whether `stornoId` is the storno that stands for the original: the first
- * posted one (by commit time). A moved storno leaves the original 'posted',
+ * posted one (by voucher number, drawn in commit order). A moved storno leaves the original 'posted',
  * so the compare-and-set that keeps a second storno out in an open year
  * (status posted to reversed) has nothing to set, and two corrections that
  * pass assertStornoTarget at the same moment would both post one. Asked
@@ -216,7 +230,7 @@ export async function isStandingStorno(
     .eq('company_id', companyId)
     .eq('reverses_id', originalId)
     .eq('status', 'posted')
-    .order('committed_at', { ascending: true })
+    .order('voucher_number', { ascending: true })
     .order('id', { ascending: true })
     .limit(1)
   if (error) throw new BookkeepingDatabaseError('load_stornos_of_original', error.message, error.code)

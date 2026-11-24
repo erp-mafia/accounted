@@ -1509,6 +1509,34 @@ describe('commitPendingOperation: correct_entry', () => {
     expect(vi.mocked(correctEntry).mock.calls[0][5]).toMatchObject({ inFirstOpenPeriodWhenLocked: true })
   })
 
+  it('says in the answer when the pair landed in the first open period', async () => {
+    vi.mocked(correctEntry).mockResolvedValueOnce({
+      reversal: makeJournalEntry({ id: 'je-storno', voucher_number: 3, entry_date: '2026-11-24' }),
+      corrected: makeJournalEntry({ id: 'je-corrected', voucher_number: 4, entry_date: '2026-11-24' }),
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'je-original', status: 'posted', entry_date: '2025-11-15' }, error: null }) // pre-flight
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'correct_entry',
+      params: {
+        entry_id: 'je-original',
+        lines: [
+          { account_number: '5410', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ moved_to_first_open_period: true, entry_date: '2026-11-24' })
+    expect(String((result.data as { note_sv?: string }).note_sv)).toContain('första öppna period')
+  })
+
   it('rejects the operation when correctEntry refuses (an entry type whose date cannot move)', async () => {
     vi.mocked(correctEntry).mockRejectedValueOnce(new TargetPeriodClosedError('2025-03-15'))
     const { supabase, enqueue } = createQueuedMockSupabase()

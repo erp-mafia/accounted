@@ -461,7 +461,8 @@
           "voucher_series": "A",
           "reversal_voucher_number": 7,
           "corrected_voucher_number": 7,
-          "owned_by": null
+          "owned_by": null,
+          "entry_date": "2026-05-12"
         }
       }
     }

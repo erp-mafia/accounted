@@ -46,6 +46,13 @@ vi.mock('@/lib/composition/voucher-block-warnings', () => ({
   VOUCHER_BLOCK_WARNINGS: [{ id: 'vat-period-already-filed', module: 'vat', warn: mockBlockWarn }],
 }))
 
+// Where the pair lands (lib/vat/moved-correction-vat.ts): on the original's
+// own date by default; one test moves it out of a locked period.
+const mockLanding = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/vat/moved-correction-vat', () => ({
+  correctionLanding: (...args: unknown[]) => mockLanding(...args),
+}))
+
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { POST } from '../route'
 
@@ -77,6 +84,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     mockVoucherOwner.mockResolvedValue(null)
     mockBlockWarn.mockResolvedValue(null)
     mockOriginalRead.mockResolvedValue({ data: ORIGINAL, error: null })
+    mockLanding.mockResolvedValue({ target: { date: '2026-09-27', fiscal_period_id: 'fp-1', moved: false }, vatWarning: null })
     mockCreateClient.mockResolvedValue({
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: originalQuery,
@@ -200,6 +208,33 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
       await correct({ lines })
 
       expect(mockBlockWarn).toHaveBeenCalledWith(expect.anything(), 'company-1', expect.objectContaining({ opening_balance: true }))
+    })
+
+    // A locked or closed original: the storno and the rättelse land in the
+    // first open period, so the blocks judge the pair there, and a pair that
+    // changes VAT asks for confirmation of where the error belongs.
+    it('judges a pair moved out of a locked period on its own date and adds the VAT advice', async () => {
+      const VAT_ADVICE = {
+        code: 'VAT_OF_MOVED_CORRECTION',
+        message_sv: 'Rättelsen ändrar momsen.',
+        message_en: 'The correction changes VAT.',
+        details: {},
+      }
+      mockLanding.mockResolvedValueOnce({ target: { date: '2026-11-24', fiscal_period_id: 'fp-2', moved: true }, vatWarning: VAT_ADVICE })
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(
+        await correct({ lines }),
+      )
+
+      expect(mockBlockWarn).toHaveBeenCalledWith(expect.anything(), 'company-1', {
+        entry_date: '2026-11-24',
+        lines,
+        replaces: { entry_date: '2026-11-24', lines: ORIGINAL.lines },
+      })
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
+      expect(body.error.details.warnings.map((w) => w.code)).toEqual(['VAT_OF_MOVED_CORRECTION'])
+      expect(mockCorrectEntry).not.toHaveBeenCalled()
     })
 
     it('asks for confirmation when the rättelse changes the moms of the filed period, before any storno', async () => {

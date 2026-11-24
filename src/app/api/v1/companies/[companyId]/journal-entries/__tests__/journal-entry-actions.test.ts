@@ -258,6 +258,20 @@ describe('POST /journal-entries/:id/correct-metadata', () => {
     expect(client.calls.some((c) => c.table === 'journal_entries' && WRITES.has(c.method))).toBe(false)
   })
 
+  // A verifikat corrected by a storno in a later open period stays posted in
+  // its own year; once that year is unlocked its lines must not change under
+  // the storno that already reverses them.
+  it('409 JOURNAL_RATTELSE_REFUSED before the RPC when a posted storno already reverses the verifikat', async () => {
+    const client = makeClient({ company_members: OWNER, journal_entries: { data: [{ id: OTHER_ENTRY }], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ description: 'Ny text' })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('JOURNAL_RATTELSE_REFUSED')
+    expect(body.error.details).toMatchObject({ rule: 'stornoed_in_later_period', storno_id: OTHER_ENTRY })
+    expect(client.rpc).not.toHaveBeenCalledWith('correct_entry_metadata', expect.anything())
+  })
+
   it('409 JOURNAL_RATTELSE_PERIOD_LOCKED when the RPC refuses a locked period', async () => {
     mockServiceClient.mockReturnValue(
       makeClient({
@@ -411,6 +425,16 @@ describe('POST /journal-entries/:id/strike-lines', () => {
       p_actor_label: 'CI key',
     })
     expect(client.calls.some((c) => c.table === 'journal_entry_lines' && WRITES.has(c.method))).toBe(false)
+  })
+
+  it('409 JOURNAL_RATTELSE_REFUSED before backfill and RPC when a posted storno already reverses the verifikat', async () => {
+    const client = makeClient({ company_members: OWNER, journal_entries: { data: [{ id: OTHER_ENTRY }], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(SWAP)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.details).toMatchObject({ rule: 'stornoed_in_later_period' })
+    expect(backfillMock).not.toHaveBeenCalled()
+    expect(client.rpc).not.toHaveBeenCalledWith('correct_entry_lines_inline', expect.anything())
   })
 
   it('409 JOURNAL_RATTELSE_REFUSED carries the RPC\'s Swedish rule', async () => {

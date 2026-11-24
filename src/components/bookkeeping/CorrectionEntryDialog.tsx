@@ -87,7 +87,8 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   // or before the lock date): the server books the storno and, without a
   // date of its own, the rättelse in the first open period. Read when the
   // dialog opens, best-effort: unknown keeps the ordinary hint.
-  const [originalLocked, setOriginalLocked] = useState(false)
+  const [originalLock, setOriginalLock] = useState<'locked' | 'closed' | null>(null)
+  const originalLocked = originalLock !== null
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Non-null when the server refused with CORRECTION_CHAIN_TOO_DEEP: holds the
   // reported chain depth and opens the bypass confirm ("Rätta ändå").
@@ -137,7 +138,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   // Whether the original's date is locked: then the date field starts empty
   // (the first open period's day) unless the person already typed one.
   useEffect(() => {
-    setOriginalLocked(false)
+    setOriginalLock(null)
     const prefill = entry.entry_date?.slice(0, 10) || ''
     if (!open || !prefill) return
     let cancelled = false
@@ -146,7 +147,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         if (!res.ok) return
         const { data } = await res.json()
         if (cancelled || (data?.status !== 'locked' && data?.status !== 'closed')) return
-        setOriginalLocked(true)
+        setOriginalLock(data.status)
         setEntryDate((current) => (current === prefill ? '' : current))
       })
       .catch(() => {
@@ -414,6 +415,11 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
               ? t('correction_date_hint_locked', { voucher: formatVoucher(entry), date: formatDate(entry.entry_date) })
               : t('correction_date_hint', { date: formatDate(entry.entry_date) })}
           </p>
+          {/* A closed year: the open year's result takes the correction, which
+              is not always the right home for it (K3 10.12, K2 2.12). */}
+          {originalLock === 'closed' && (
+            <p className="text-xs text-muted-foreground">{t('correction_closed_year_note')}</p>
+          )}
         </div>
 
         {/* Corrected lines (editable) */}

@@ -5295,7 +5295,7 @@ async function commitCorrectEntry(
   // error before anything is written when neither works.
   const { data: original, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status')
+    .select('id, status, entry_date')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -5339,6 +5339,11 @@ async function commitCorrectEntry(
         },
       },
     })
+    // The original's date took no write (its period was locked, perhaps
+    // after the proposal was staged): the pair landed in the first open
+    // period, and the answer says so instead of implying the original's date.
+    const moved =
+      !!original.entry_date && !!result.reversal.entry_date && result.reversal.entry_date !== original.entry_date
     return {
       data: {
         original_entry_id: entryId,
@@ -5346,6 +5351,13 @@ async function commitCorrectEntry(
         corrected_entry_id: result.corrected.id,
         storno_voucher_number: result.reversal.voucher_number,
         corrected_voucher_number: result.corrected.voucher_number,
+        ...(moved
+          ? {
+              moved_to_first_open_period: true,
+              entry_date: result.reversal.entry_date,
+              note_sv: `Originalets period var låst: stornot och rättelsen bokfördes ${result.reversal.entry_date} i första öppna period, med hänvisning till originalet.`,
+            }
+          : {}),
       },
     }
   } catch (err) {

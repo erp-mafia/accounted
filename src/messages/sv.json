@@ -9479,6 +9479,7 @@
     "correction_date_label": "Datum för rättelsen",
     "correction_date_hint": "Stornon bokförs på originalets datum ({date}). Rättelsen bokförs på det här datumet, i det räkenskapsår datumet hör till.",
     "correction_date_hint_locked": "Originalets period är låst eller stängd. Stornot bokförs i första öppna period och rättelsen samma dag, om du inte väljer ett eget datum. Båda hänvisar till {voucher} ({date}), som står kvar oförändrat.",
+    "correction_closed_year_note": "Felet hör till ett år som är stängt med bokslut. Rättelsen bokförs i det öppna året och påverkar dess resultat. Är felet väsentligt och följer företaget K3 rättas det i stället mot eget kapital vid årets ingång (rättelse av fel, K3 punkt 10.12); K2 tillåter båda vägarna (punkt 2.12). Ändrar rättelsen varken resultatet eller balansräkningen, till exempel ett konto inom samma post, behövs ingen bokning.",
     "correction_lines_hint": "Stornon som nollställer {voucher} bokförs automatiskt, den ska du inte skriva själv. Ange raderna som verifikationen borde ha haft: alla konton som ska finnas kvar måste stå kvar.",
     "negates_original_inline": "Raderna är originalets med debet och kredit omkastade, en andra återföring av {voucher}.",
     "negates_original_reset": "Börja om från originalets rader",

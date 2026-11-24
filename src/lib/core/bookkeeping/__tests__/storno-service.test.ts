@@ -388,6 +388,22 @@ describe('correctEntry', () => {
       expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(1)
     })
 
+    it('says so when the storno that does not stand cannot be cancelled', async () => {
+      setupMovedResults()
+      mockAssertStornoTarget.mockResolvedValueOnce(MOVED)
+      mockIsStandingStorno.mockResolvedValueOnce(false)
+      vi.mocked(cancelOrphanedEntry).mockResolvedValueOnce({ error: { message: 'refused' } } as never)
+      const supabase = makeClient()
+
+      const err = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+        inFirstOpenPeriodWhenLocked: true,
+      }).catch((e) => e)
+
+      expect(err).toBeInstanceOf(BookkeepingDatabaseError)
+      expect(String(err.cause)).toContain('reversal-1')
+      expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(1)
+    })
+
     it('refuses the same lines again: the original still stands in its year', async () => {
       setupMovedResults()
       mockAssertStornoTarget.mockResolvedValueOnce(MOVED)
