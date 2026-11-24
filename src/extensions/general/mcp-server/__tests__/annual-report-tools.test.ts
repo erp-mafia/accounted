@@ -68,6 +68,27 @@ describe('annual report MCP tools', () => {
     expect(result).toMatchObject({ fiscal_period_id: 'period-1', framework: 'k2' })
   })
 
+  it('says in the preview where the framework comes from and whether it is a confirmed choice', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    vi.mocked(buildCanonicalAnnualReport).mockResolvedValue({
+      report: { accounting_framework: 'k2' },
+      framework_source: 'company_default',
+      framework_confirmed: false,
+      profile: {},
+      eligibility: { k2_eligible: true },
+      validation: { ok: true, issues: [] },
+    } as never)
+
+    const result = await tool('gnubok_preview_arsredovisning').execute(
+      { fiscal_period_id: 'period-1' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    expect(result).toMatchObject({ framework_source: 'company_default', framework_confirmed: false })
+  })
+
   it('lists immutable versions through the canonical version service', async () => {
     const { supabase } = createQueuedMockSupabase()
     vi.mocked(listAnnualReportVersions).mockResolvedValue([

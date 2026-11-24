@@ -28866,6 +28866,8 @@ export const tools: McpTool[] = [
         schema_version: model.schema_version,
         generated_at: model.generated_at,
         report: model.report,
+        framework_source: model.framework_source,
+        framework_confirmed: model.framework_confirmed,
         profile: model.profile,
         disclosures: model.disclosures,
         eligibility: model.eligibility,

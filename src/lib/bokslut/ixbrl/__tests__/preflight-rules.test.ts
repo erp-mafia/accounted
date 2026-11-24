@@ -170,6 +170,11 @@ describe('runPreflightChecks', () => {
     expect(codes(input)).toContain('ACC-2099')
   })
 
+  it('ACC-2099: a year not closed yet blocks although its statements tie', () => {
+    expect(codes(makeInput())).not.toContain('ACC-2099')
+    expect(codes({ ...makeInput(), yearNotClosed: true })).toContain('ACC-2099')
+  })
+
   it('ACC-DISP/ACC-UTD: resultatdisposition consistency', () => {
     const broken = makeInput()
     broken.forvaltningsberattelse.resultatdisposition.balanserasINyRakning = 1

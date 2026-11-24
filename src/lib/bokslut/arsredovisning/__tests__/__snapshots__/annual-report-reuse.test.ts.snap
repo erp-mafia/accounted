@@ -303,6 +303,8 @@ exports[`annual report over a ledger: aktiebolag > builds the canonical model, i
   },
   "entity_type": "aktiebolag",
   "fiscal_period_id": "fp-2025",
+  "framework_confirmed": false,
+  "framework_source": "company_fallback",
   "generated_at": "2026-02-01T10:00:00.000Z",
   "ixbrl": {
     "br": {
@@ -2643,6 +2645,8 @@ exports[`annual report over a ledger: enskild_firma > builds the canonical model
   },
   "entity_type": "enskild_firma",
   "fiscal_period_id": "fp-2025",
+  "framework_confirmed": false,
+  "framework_source": "company_fallback",
   "generated_at": "2026-02-01T10:00:00.000Z",
   "ixbrl": {
     "br": {
