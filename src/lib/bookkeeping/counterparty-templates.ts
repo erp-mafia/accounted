@@ -1422,9 +1422,9 @@ export function samePairButBankLedger(
  * compared: a 2641 line whose text states no rate (an underlag's moms amount)
  * reads as 25 % (detectVatTreatment), so a 12 % template would flip on it.
  */
-type MomsKind = 'none' | 'rated' | 'reverse_charge'
+export type MomsKind = 'none' | 'rated' | 'reverse_charge'
 
-function momsKindOfTreatment(treatment: string | null | undefined): MomsKind {
+export function momsKindOfTreatment(treatment: string | null | undefined): MomsKind {
   if (treatment === 'reverse_charge' || treatment === 'reverse_charge_domestic') return 'reverse_charge'
   return isRateBearing(treatment) ? 'rated' : 'none'
 }

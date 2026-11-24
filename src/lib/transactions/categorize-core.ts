@@ -63,6 +63,8 @@ import {
   upsertCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
   loadCounterpartyTemplateMatch,
+  momsKindOfTreatment,
+  patternReplayPlan,
 } from '@/lib/bookkeeping/counterparty-templates'
 import {
   AccountsNotInChartError,
@@ -535,6 +537,9 @@ export async function buildCategorizeMapping(
   const { template, finalCategory, entityType, vatRegistered } = context
 
   let mappingResult: MappingResult
+  // Set when a template decides the lines: which one, and whether its own
+  // treatment is a reverse charge.
+  let bookedByTemplate: { by: Record<string, string>; reverseCharge: boolean } | null = null
   if (input.counterparty_template_id && isBusiness) {
     // Learned codes the registry no longer accepts are dropped on load; an
     // explicit input.dimensions (applied below) is never filtered.
@@ -543,11 +548,19 @@ export async function buildCategorizeMapping(
       return refuse('NOT_FOUND', { resource: 'counterparty_template', id: input.counterparty_template_id })
     }
     mappingResult = buildMappingResultFromCounterpartyTemplate(match, transaction, entityType, vatRegistered)
+    const pattern = match.template.line_pattern
+    bookedByTemplate = {
+      by: { counterparty_template_id: input.counterparty_template_id },
+      reverseCharge:
+        momsKindOfTreatment(match.template.vat_treatment) === 'reverse_charge' ||
+        (Array.isArray(pattern) && pattern.length > 0 && patternReplayPlan(pattern).rcPair !== null),
+    }
   } else if (template) {
     // A template that names the skattekonto (1630) books the company's
     // skattekonto account: 2012 for an enskild firma that runs it there.
     const skattekontoAccount = await templateSkattekontoAccountFor(supabase, companyId, template)
     mappingResult = buildMappingResultFromTemplate(template, transaction, entityType, vatRegistered, skattekontoAccount)
+    bookedByTemplate = { by: { template_id: template.id }, reverseCharge: momsKindOfTreatment(template.vat_treatment) === 'reverse_charge' }
     if (input.vat_amount != null) {
       // The underlag's moms replaces the template's rate-based line; the
       // helper refuses a treatment it cannot apply to.
@@ -581,6 +594,31 @@ export async function buildCategorizeMapping(
         reason: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+
+  // A template books its own moms and never reads input.vat_treatment. A
+  // reverse charge stated beside one whose own treatment is not a reverse
+  // charge would post the template's moms instead: at a rate, the seller's
+  // VAT deducted as ingående moms, which confirm_foreign_seller_vat states it
+  // is not (ML 2023:200 13 kap. 4 §, 2 kap. 12 §). Refused, the preview as
+  // the booking. The template's treatment is compared, not its lines: a
+  // reverse-charge sale rightly books no fiktiv moms.
+  if (bookedByTemplate && !bookedByTemplate.reverseCharge && input.vat_treatment === 'reverse_charge') {
+    return refuse(
+      'VALIDATION_ERROR',
+      {
+        field: 'vat_treatment',
+        ...bookedByTemplate.by,
+        message:
+          'The template books its own VAT, which is not reverse charge: book by category with vat_treatment "reverse_charge", or pick a reverse-charge template.',
+      },
+      {
+        message: {
+          sv: 'Mallen bokför sin egen moms, och den är inte omvänd skattskyldighet. Bokför köpet med en kategori och vat_treatment "reverse_charge" i stället, eller välj en mall för omvänd skattskyldighet.',
+          en: 'The template books its own VAT, which is not reverse charge. Book the purchase by category with vat_treatment "reverse_charge" instead, or pick a reverse-charge template.',
+        },
+      },
+    )
   }
 
   // Book the bank leg against the transaction's ACTUAL settlement account,

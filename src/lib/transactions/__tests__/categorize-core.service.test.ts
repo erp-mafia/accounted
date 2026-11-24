@@ -536,6 +536,146 @@ describe('categorizeTransaction: refusals every door shares', () => {
       const checks = vi.mocked(recordDecisions).mock.calls[0]?.[2][0]?.checks
       expect(checks).toContainEqual({ id: 'reverse_charge_seller_vat', result: 'warn', detail: 'confirm_foreign_seller_vat' })
     })
+
+    // A template books its own moms: a reverse charge stated beside one at a
+    // rate would deduct the seller's VAT the flag says is foreign.
+    describe('with a template that books its own moms', () => {
+      const atRate = makeCategorizationTemplate({
+        id: 'tmpl-1',
+        company_id: COMPANY_ID,
+        debit_account: '5420',
+        credit_account: '1930',
+        vat_treatment: 'standard_25',
+        vat_account: '2641',
+      })
+      const withTemplate = (extracted: Record<string, unknown> = dutch) =>
+        ledger({
+          transactions: { data: row({ document_id: 'doc-1' }), error: null },
+          document_attachments: { data: { id: 'doc-1', extracted_data: extracted }, error: null },
+          categorization_templates: { data: atRate, error: null },
+        })
+      const stated = { is_business: true, vat_treatment: 'reverse_charge', confirm_foreign_seller_vat: true } as const
+
+      it.each([
+        ['a catalog template at 25 %', { template_id: 'it_saas_subscription' }],
+        ['a counterpart template at 25 %', { counterparty_template_id: 'tmpl-1' }],
+      ])('refuses %s, in the preview and the booking', async (_case, by) => {
+        for (const options of [dry, { onBooked: 'refuse' } as const]) {
+          const outcome = await categorizeTransaction(
+            withTemplate().supabase as never,
+            'user-1',
+            COMPANY_ID,
+            TX_ID,
+            { ...stated, ...by },
+            options,
+          )
+          expect(outcome).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'vat_treatment', ...by } })
+          if (!outcome.ok) expect(outcome.message?.sv).toMatch(/omvänd skattskyldighet/)
+        }
+        expect(createTxJE).not.toHaveBeenCalled()
+      })
+
+      it('refuses it without the flag when the underlag shows no VAT', async () => {
+        const outcome = await categorizeTransaction(
+          withTemplate({ totals: { total: 1250 } }).supabase as never,
+          'user-1',
+          COMPANY_ID,
+          TX_ID,
+          { is_business: true, template_id: 'it_saas_subscription', vat_treatment: 'reverse_charge' },
+          dry,
+        )
+        expect(outcome).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'vat_treatment' } })
+      })
+
+      it('books a reverse-charge template as reverse charge, nothing deducted', async () => {
+        const outcome = await categorizeTransaction(
+          withTemplate().supabase as never,
+          'user-1',
+          COMPANY_ID,
+          TX_ID,
+          { ...stated, template_id: 'it_saas_eu' },
+          dry,
+        )
+
+        expect(outcome).toMatchObject({ ok: true, dryRun: true })
+        if (!outcome.ok || !outcome.dryRun) return
+        const accounts = outcome.preview.lines.map((l) => l.account_number)
+        expect(accounts).toEqual(expect.arrayContaining(['2645', '2614']))
+        expect(accounts).not.toContain('2641')
+      })
+
+      // A reverse-charge template that rightly books no fiktiv moms: the
+      // treatment is compared, not the lines.
+      it('books a reverse-charge sale, which carries no moms lines', async () => {
+        const { supabase } = ledger({ transactions: { data: row({ amount: 1250, amount_sek: 1250 }), error: null } })
+        const outcome = await categorizeTransaction(
+          supabase as never,
+          'user-1',
+          COMPANY_ID,
+          TX_ID,
+          { is_business: true, template_id: 'revenue_eu_services', vat_treatment: 'reverse_charge' },
+          dry,
+        )
+        expect(outcome).toMatchObject({ ok: true, dryRun: true })
+        if (!outcome.ok || !outcome.dryRun) return
+        expect(outcome.preview.lines.map((l) => l.account_number)).not.toContain('2611')
+      })
+
+      it.each([
+        ['a learned reverse-charge pair', { vat_treatment: 'reverse_charge', vat_account: '2645', line_pattern: null }],
+        [
+          'a learned pattern with a basis pair',
+          {
+            vat_treatment: null,
+            vat_account: null,
+            line_pattern: [
+              { account: '5420', type: 'business', side: 'debit', ratio: 1 },
+              { account: '4535', type: 'business', side: 'debit', ratio: 1 },
+              { account: '4598', type: 'business', side: 'credit', ratio: 1 },
+            ],
+          },
+        ],
+      ])('books a counterpart template that is %s', async (_case, learned) => {
+        const template = makeCategorizationTemplate({
+          id: 'tmpl-1',
+          company_id: COMPANY_ID,
+          debit_account: '5420',
+          credit_account: '1930',
+          ...learned,
+        } as Parameters<typeof makeCategorizationTemplate>[0])
+        const outcome = await categorizeTransaction(
+          ledger({
+            transactions: { data: row({ document_id: 'doc-1' }), error: null },
+            document_attachments: { data: { id: 'doc-1', extracted_data: dutch }, error: null },
+            categorization_templates: { data: template, error: null },
+          }).supabase as never,
+          'user-1',
+          COMPANY_ID,
+          TX_ID,
+          { ...stated, counterparty_template_id: 'tmpl-1' },
+          dry,
+        )
+        expect(outcome).toMatchObject({ ok: true, dryRun: true })
+        if (!outcome.ok || !outcome.dryRun) return
+        const accounts = outcome.preview.lines.map((l) => l.account_number)
+        expect(accounts).toEqual(expect.arrayContaining(['2645', '2614']))
+        expect(accounts).not.toContain('2641')
+      })
+
+      it('books the template as it is when no treatment is stated', async () => {
+        const outcome = await categorizeTransaction(
+          withTemplate().supabase as never,
+          'user-1',
+          COMPANY_ID,
+          TX_ID,
+          { is_business: true, counterparty_template_id: 'tmpl-1' },
+          dry,
+        )
+        expect(outcome).toMatchObject({ ok: true, dryRun: true })
+        if (!outcome.ok || !outcome.dryRun) return
+        expect(outcome.preview.lines.map((l) => l.account_number)).toContain('2641')
+      })
+    })
   })
 
   it('refuses an account override on a private marking', async () => {
