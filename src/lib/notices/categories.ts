@@ -308,7 +308,7 @@ export function bankSwitchUncoveredNotice(state: CompanySwitchState): Notice | n
   const bankName = one ? one.bank_name || null : null
   const stopped = state.passed ? '_stopped' : ''
   // Before the deadline the line names the day the feed ends.
-  const deadline = state.passed ? {} : { deadline: deadlineParam(state.deadline) }
+  const deadline: Record<string, string | number> = state.passed ? {} : { deadline: deadlineParam(state.deadline) }
   const params: Record<string, string | number> = one ? (bankName ? { bank: bankName, ...deadline } : deadline) : { count: state.uncovered.length, ...deadline }
   return {
     id: `bank_switch_uncovered:${boundedDiscriminator(state.uncovered.map((u) => u.connection_id))}${state.passed ? ':stopped' : ''}`,
