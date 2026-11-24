@@ -157,8 +157,9 @@ export class FactWriter {
     // Presentational minus is an XOR: a cost row (displayMinus) with its
     // natural sign shows "−X", but a DEVIATING cost (negative fact value,
     // sign="-", i.e. net income on a cost line) displays positive per the
-    // RR convention; conversely a deviating income row displays "−X".
-    if ((opts.displayMinus ?? false) !== shown < 0) markup = `−${markup}`
+    // RR convention; conversely a deviating income row displays "−X". A
+    // zero prints as 0 on every row, never as "−0".
+    if (shown !== 0 && (opts.displayMinus ?? false) !== shown < 0) markup = `−${markup}`
     return markup
   }
 

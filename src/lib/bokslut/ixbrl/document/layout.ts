@@ -11,12 +11,15 @@
 import type { TaxonomyEntryPoint } from '../taxonomy/entry-points'
 import type { IxbrlArsredovisningInput, ConceptAmount } from '../types'
 import type { FactWriter } from './ix'
+import type { PrintPage } from './print-model'
 import { el, selfClosing, escapeText, escapeAttr } from './xml'
 
 // Print layout (Bolagsverket asks for a clean printout with page breaks):
 // every .ar-page starts on a new sheet, rows never split across sheets, and
 // no inline styles or flexbox (TA §3.7.4-3.7.5) so their PDF converter reads
-// the structure from plain block elements.
+// the structure from plain block elements. In print a page has no padding
+// under its last element: nothing but content can reach the foot of a sheet
+// (print-model.ts measures pages against these rules; change them together).
 export const CSS = `
 body { font-family: 'Times New Roman', Times, serif; margin: 0 auto; max-width: 46em; color: #000; }
 .ar-page { padding: 2em 2.5em; margin: 1em 0; border: 1px solid #eee; page-break-after: always; }
@@ -33,6 +36,7 @@ tr { page-break-inside: avoid; }
 th, td { text-align: left; vertical-align: bottom; padding: 0.15em 0.4em 0.15em 0; font-size: 95%; }
 th.indent { padding-left: 1.2em; }
 th.num, td.num { text-align: right; white-space: nowrap; }
+.nowrap { white-space: nowrap; }
 table.ar-equity th.num { white-space: normal; }
 table.ar-cols-m th, table.ar-cols-m td { font-size: 80%; }
 table.ar-cols-l th, table.ar-cols-l td { font-size: 65%; }
@@ -44,7 +48,7 @@ tr.subsection th { font-style: italic; }
 .ar-cert { border: 1px solid #000; padding: 1em 1.25em; margin: 1.5em 0; }
 .ar-sign-name { margin-top: 2.2em; }
 .ar-sign-name .sig { font-style: italic; }
-@media print { .ar-page { border: none; margin: 0; } }
+@media print { .ar-page { border: none; margin: 0; padding-bottom: 0; } }
 `.trim()
 
 export interface Ctx {
@@ -155,25 +159,36 @@ function pageHeader(
   )
 }
 
+/** A date that is never divided between two lines (the converter breaks a line at a hyphen). */
+export function unbroken(markup: string): string {
+  return el('span', { class: 'nowrap' }, markup)
+}
+
 /**
- * The XHTML envelope: each page gets its header (with the final page
- * count), the ix:header carries only the contexts and units the body used,
- * and <head> the TA §4.3 programvara metadata.
+ * The XHTML envelope: each page gets its header, numbered by the sheet it
+ * prints on out of the document's sheets (a page counts one sheet unless it
+ * says otherwise), the ix:header carries only the contexts and units the
+ * body used, and <head> the TA §4.3 programvara metadata.
  */
 export function assembleXhtml(
   input: IxbrlArsredovisningInput,
   entryPoint: TaxonomyEntryPoint,
   writer: FactWriter,
-  pages: string[],
+  pages: ReadonlyArray<string | PrintPage>,
   orgNumber: string,
 ): string {
-  const pageDivs = pages.map((content, index) =>
-    el(
+  const printed = pages.map((page) => (typeof page === 'string' ? { html: page, sheets: 1 } : page))
+  const sheets = printed.reduce((sum, page) => sum + page.sheets, 0)
+  let sheet = 1
+  const pageDivs = printed.map((page, index) => {
+    const div = el(
       'div',
       { class: 'ar-page', id: `ar-page-${index + 1}` },
-      pageHeader(input, orgNumber, index + 1, pages.length) + '\n' + content,
-    ),
-  )
+      pageHeader(input, orgNumber, sheet, sheets) + '\n' + page.html,
+    )
+    sheet += page.sheets
+    return div
+  })
   const xmlnsAttrs = Object.entries(entryPoint.namespaces)
     .map(([prefix, uri]) => `xmlns:${prefix}="${escapeAttr(uri)}"`)
     .join('\n      ')

@@ -99,7 +99,7 @@ describe('fastställelseintyg values the schema enumerates', () => {
 
   it('keeps a space between the intyg sentences in the XBRL value', () => {
     const { xhtml } = generate()
-    expect(xhtml).toMatch(/2026-03-15<\/ix:nonNumeric>\. <br\/>/)
+    expect(xhtml).toMatch(/2026-03-15<\/ix:nonNumeric><\/span>\. <br\/>/)
   })
 })
 
@@ -225,6 +225,127 @@ describe('print layout', () => {
     expect(pages[3]).toContain('Balansräkning: Tillgångar')
     expect(pages[3]).not.toContain('Balansräkning: Eget kapital och skulder')
     expect(pages[4]).toContain('Balansräkning: Eget kapital och skulder')
+  })
+
+  it('divides long notes into pages that each carry their header and their own sheet number', () => {
+    // A page taller than a sheet runs on to a sheet without a header in
+    // Bolagsverket's PDF, and every header after it counts a sheet too few.
+    const paragraph =
+      'Bolaget tillämpar samma redovisningsprinciper som föregående räkenskapsår om inte annat anges i noten. '.repeat(4)
+    const long = generate((input) => {
+      for (let index = 0; index < 12; index += 1) {
+        input.noter.push({
+          number: input.noter.length + 1,
+          title: `Övrig upplysning ${index + 1}`,
+          body: [paragraph, paragraph, paragraph].join('\n\n'),
+        })
+      }
+    })
+    const pages = long.xhtml.split('<div class="ar-page"').slice(1)
+    const notePages = pages.filter((page) => /<h3 id="not-\d+">/.test(page))
+    expect(notePages.length).toBeGreaterThan(2)
+    // Every page has one header, numbered in sequence out of the same total.
+    const headers = [...long.xhtml.matchAll(/<span class="ar-page-no">(\d+) \((\d+)\)<\/span>/g)]
+    expect(headers).toHaveLength(pages.length)
+    expect(headers.map((match) => Number(match[1]))).toEqual(pages.map((_, index) => index + 1))
+    expect(new Set(headers.map((match) => Number(match[2])))).toEqual(new Set([pages.length]))
+    // The section's heading is printed once, with the first note, and every
+    // note once, in order; a note's heading is never the last thing on a page.
+    expect(long.xhtml.match(/<h2>Noter<\/h2>/g)).toHaveLength(1)
+    expect(notePages[0]).toMatch(/<h2>Noter<\/h2>\n<h3 id="not-1">/)
+    const numbers = [...long.xhtml.matchAll(/<h3 id="not-(\d+)">/g)].map((match) => Number(match[1]))
+    expect(numbers).toEqual(Array.from({ length: 18 }, (_, index) => index + 1))
+    for (const page of notePages) expect(page).not.toMatch(/<\/h3>\s*<\/div>\s*$/)
+  })
+
+  it('numbers the page after a note taller than a sheet by the sheets that note fills', () => {
+    // One paragraph of 150 forced lines is a single piece: it printed on
+    // four sheets in Bolagsverket's converter, three of them without a header.
+    const tall = generate((input) => {
+      input.noter.push(
+        {
+          number: input.noter.length + 1,
+          title: 'Uppställning',
+          body: Array.from({ length: 150 }, (_, index) => `Rad ${index + 1}`).join('\n'),
+        },
+        { number: input.noter.length + 2, title: 'Efter uppställningen', body: 'Inga.' },
+      )
+    })
+    const pages = tall.xhtml.split('<div class="ar-page"').slice(1)
+    const headers = pages.map((page) => /<span class="ar-page-no">(\d+) \((\d+)\)<\/span>/.exec(page)!)
+    const numbers = headers.map((match) => Number(match[1]))
+    const tallPage = pages.findIndex((page) => page.includes('Rad 150'))
+    expect(tallPage).toBeGreaterThan(0)
+    expect(pages[tallPage + 1]).toContain('Efter uppställningen')
+    // Every page before it is one sheet, the tall one four, the rest one.
+    expect(numbers).toEqual(pages.map((_, index) => (index <= tallPage ? index + 1 : index + 4)))
+    expect(new Set(headers.map((match) => Number(match[2])))).toEqual(new Set([pages.length + 3]))
+  })
+
+  it('divides a long note on långfristiga skulder between its paragraphs and keeps the amount with the last one', () => {
+    const paragraph =
+      'Bolaget har lån hos kreditinstitut som amorteras enligt plan och som löper med rörlig ränta under hela löptiden. '.repeat(3)
+    const long = generate((input) => {
+      input.noter = input.noter.map((note) =>
+        note.title === 'Långfristiga skulder'
+          ? { ...note, body: Array.from({ length: 40 }, () => paragraph).join('\n\n') }
+          : note,
+      )
+    })
+    const pages = long.xhtml.split('<div class="ar-page"').slice(1)
+    const withText = pages.filter((page) => page.includes('Bolaget har lån hos kreditinstitut'))
+    expect(withText.length).toBeGreaterThan(1)
+    expect(long.xhtml.split('Bolaget har lån hos kreditinstitut').length - 1).toBe(40 * 3)
+    // The tagged amount follows the last paragraph of the text on its page.
+    expect(withText[withText.length - 1]).toMatch(/hela löptiden\.<\/p><p class="note-fact">Belopp som förfaller/)
+    const headers = [...long.xhtml.matchAll(/<span class="ar-page-no">(\d+) \((\d+)\)<\/span>/g)]
+    expect(headers.map((match) => Number(match[1]))).toEqual(pages.map((_, index) => index + 1))
+  })
+
+  it('keeps a tagged text of any length as one fact on a page of its own, and numbers the pages after it by its sheets', () => {
+    // The principles are one fact: it cannot be divided between two pages
+    // without a continuation, so it runs over the sheets it needs.
+    const paragraph =
+      'Bolaget tillämpar samma redovisningsprinciper som föregående räkenskapsår om inte annat anges i noten. '.repeat(3)
+    const tagged = generate((input) => {
+      input.noter = input.noter.map((note) =>
+        note.number === 1 ? { ...note, body: Array.from({ length: 60 }, () => paragraph).join('\n\n') } : note,
+      )
+    })
+    const pages = tagged.xhtml.split('<div class="ar-page"').slice(1)
+    const facts = nonNumeric(tagged.xhtml, 'se-gen-base:RedovisningsVarderingsprinciper')
+    expect(facts).toHaveLength(1)
+    expect(facts[0].split('<p>').length - 1).toBe(60)
+    const factPage = pages.findIndex((page) => page.includes('se-gen-base:RedovisningsVarderingsprinciper'))
+    const numbers = pages.map((page) => Number(/<span class="ar-page-no">(\d+) \(\d+\)<\/span>/.exec(page)![1]))
+    const totals = new Set(pages.map((page) => Number(/<span class="ar-page-no">\d+ \((\d+)\)<\/span>/.exec(page)![1])))
+    const sheets = numbers[factPage + 1] - numbers[factPage]
+    expect(sheets).toBeGreaterThan(2)
+    // Every other page is one sheet: the total is the pages and the fact's further sheets.
+    expect(totals).toEqual(new Set([pages.length + sheets - 1]))
+    expect(numbers[numbers.length - 1]).toBe(pages.length + sheets - 1)
+  })
+
+  it('leaves notes that fit one sheet on one page, as before', () => {
+    const pages = xhtml.split('<div class="ar-page"').slice(1)
+    expect(pages.filter((page) => /<h3 id="not-\d+">/.test(page))).toHaveLength(1)
+  })
+
+  it('prints a zero as 0 on a cost row, never as a minus and a zero', () => {
+    const writer = new FactWriter(entryPoint, registry, '556999-9997')
+    writer.addDurationContext('period0', '2025-01-01', '2025-12-31')
+    expect(writer.money('OvrigaRorelsekostnader', 'period0', 0, { displayMinus: true })).toMatch(/^<ix:nonFraction[^>]*>0<\/ix:nonFraction>$/)
+    expect(writer.money('OvrigaRorelsekostnader', 'period0', 5000, { displayMinus: true })).toMatch(/^−<ix:nonFraction[^>]*>5 000<\/ix:nonFraction>$/)
+    // A cost that is an income for the year still shows without the minus.
+    expect(writer.money('OvrigaRorelsekostnader', 'period0', -5000, { displayMinus: true })).toMatch(/^<ix:nonFraction[^>]*sign="-"[^>]*>5 000<\/ix:nonFraction>$/)
+  })
+
+  it('keeps each date of the title and of the intyg on one line', () => {
+    expect(xhtml).toContain(
+      '<h1>Årsredovisning för räkenskapsåret <span class="nowrap">2025-01-01</span> till <span class="nowrap">2025-12-31</span></h1>',
+    )
+    expect(xhtml).toMatch(/<span class="nowrap"><ix:nonNumeric[^>]*name="se-bol-base:Arsstamma">2026-03-15<\/ix:nonNumeric><\/span>/)
+    expect(xhtml).toContain('.nowrap { white-space: nowrap; }')
   })
 
   it('uses no inline layout styles or flexbox', () => {
