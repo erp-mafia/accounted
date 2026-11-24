@@ -92,6 +92,7 @@ import { GET as getBokslut } from '../bokslutsbilagor/route'
 import { GET as getKpi } from '../kpi/route'
 import { GET as getDimPnl } from '../dimension-pnl/route'
 import { GET as getAuditTrail } from '../../audit-trail/route'
+import { codedRefusal } from '@/lib/errors/refusal'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -479,6 +480,24 @@ describe('GET /reports/vat-declaration/eskd', () => {
     const body = await res.text()
     expect(body).toContain('<OrgNr>556677-8899</OrgNr>')
     expect(body).toContain('<MomsBetala>21800</MomsBetala>')
+  })
+
+  it('404 VAT_REPORT_FISCAL_YEAR_NOT_FOUND for a yearly year no räkenskapsår ends in, naming the years', async () => {
+    useClient({ company_settings: { data: { org_number: '5566778899' }, error: null } })
+    // As resolvePeriodDates throws it (lib/reports/vat-declaration.ts).
+    m.vat.mockRejectedValue(
+      codedRefusal(
+        'VAT_REPORT_FISCAL_YEAR_NOT_FOUND',
+        "No räkenskapsår ends in 2025, so there is no helårsmoms period 2025. The company's räkenskapsår: 2025-07-17..2026-12-31 (year 2026).",
+        { description: "Pass year = the year one of the company's räkenskapsår ends.", tool: 'gnubok_list_fiscal_periods' },
+      ),
+    )
+    const res = await get(getEskd, '/reports/vat-declaration/eskd?period_type=yearly&year=2025&period=1')
+    expect(res.status).toBe(404)
+    const { error } = await res.json()
+    expect(error.code).toBe('VAT_REPORT_FISCAL_YEAR_NOT_FOUND')
+    expect(error.message_en).toContain('2025-07-17..2026-12-31 (year 2026)')
+    expect(error.recovery_hint).toContain('Pass year')
   })
 })
 

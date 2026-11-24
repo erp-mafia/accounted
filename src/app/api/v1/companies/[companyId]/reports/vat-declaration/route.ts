@@ -21,7 +21,12 @@ const AccountingMethodEnum = z.enum(['accrual', 'cash'])
 const DeclarationQuery = z
   .object({
     period_type: VatPeriodTypeEnum.describe('Declaration period length. Required.'),
-    year: z.coerce.number().int().min(2000).max(2100).describe('Calendar year of the period, 2000-2100. Required.'),
+    year: z.coerce
+      .number()
+      .int()
+      .min(2000)
+      .max(2100)
+      .describe('Calendar year of the period, 2000-2100; for yearly, the year the räkenskapsår ends. Required.'),
     period: z.coerce
       .number()
       .int()
@@ -67,6 +72,7 @@ registerEndpoint({
   pitfalls: [
     '`period_type` (monthly|quarterly|yearly), `year`, and `period` are all required.',
     'For monthly: period is 1-12. For quarterly: period is 1-4. For yearly: period is 1.',
+    'Yearly (helårsmoms) covers the räkenskapsår that ends in `year`, an extended or shortened one in full; a year no recorded räkenskapsår ends in answers 404 VAT_REPORT_FISCAL_YEAR_NOT_FOUND, naming the räkenskapsår that exist.',
     '`accounting_method` is accepted for backward compatibility but has no effect on the figures: the declaration is a pure ledger projection, and the method (faktureringsmetoden vs kontantmetoden per ML 15 kap 8-11 §§, ML 2023:200) is already reflected in when VAT-bearing journal entries are posted.',
     'Output ruta 49 = (10+11+12+30+31+32+60+61+62) − 48. Positive = pay; negative = refund.',
   ],
@@ -108,7 +114,10 @@ registerEndpoint({
   reversible: false,
   dryRunSupported: false,
   request: { query: DeclarationQuery },
-  response: { success: dataEnvelope(z.unknown()) },
+  response: {
+    success: dataEnvelope(z.unknown()),
+    errorCodes: ['VALIDATION_ERROR', 'VAT_REPORT_FISCAL_YEAR_NOT_FOUND', 'REPORT_GENERATION_FAILED'],
+  },
 })
 
 export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
@@ -135,7 +144,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           year,
           period,
         ),
-      { log: ctx.log, requestId: ctx.requestId, reportName: 'vat-declaration' },
+      {
+        log: ctx.log,
+        requestId: ctx.requestId,
+        reportName: 'vat-declaration',
+        // A yearly `year` no räkenskapsår ends in has no helårsmoms period.
+        refusals: ['VAT_REPORT_FISCAL_YEAR_NOT_FOUND'],
+      },
     )
     if (!gen.ok) return gen.response
 

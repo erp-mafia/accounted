@@ -60,6 +60,7 @@ import {
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import { filesIncomeReturn, resolveCompanyEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { StructuredErrorRemediation } from '@/lib/errors/structured-errors'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { DimensionCrossLinesPage, DimensionCrossReport, DimensionPnlReport, VatPeriodType } from '@/types'
 
@@ -351,6 +352,25 @@ export interface VatPeriodInput {
 }
 
 /**
+ * The failure for a yearly `year` no recorded räkenskapsår ends in, as
+ * resolvePeriodDates (lib/reports/vat-declaration.ts) refuses it: there is no
+ * helårsmoms period to file or settle, so it is the caller's to change, under
+ * its own code (404) with the sentence naming the räkenskapsår that exist,
+ * never a failed generation. Null for any other error.
+ */
+export function noHelarsmomsPeriodFailure(err: unknown): Failure | null {
+  const refusal = err as { code?: unknown; remediation?: StructuredErrorRemediation } | null
+  if (!(err instanceof Error) || refusal?.code !== 'VAT_REPORT_FISCAL_YEAR_NOT_FOUND') return null
+  return {
+    ok: false,
+    code: 'VAT_REPORT_FISCAL_YEAR_NOT_FOUND',
+    messageSv: getUserErrorMessage(err),
+    messageEn: err.message,
+    ...(refusal.remediation ? { remediation: refusal.remediation } : {}),
+  }
+}
+
+/**
  * The eSKDUpload (v6.0) XML the user uploads at skatteverket.se ("Deklarera
  * via fil"), computed purely from the bookkeeping. Refused without a valid
  * 10- or 12-digit org number: the header would be an "avvisande fel".
@@ -394,6 +414,8 @@ export async function getVatEskdFile(
       },
     }
   } catch (err) {
+    const noPeriod = noHelarsmomsPeriodFailure(err)
+    if (noPeriod) return noPeriod
     ctx.log.error('eSKD file generation failed', err as Error, { ...input })
     return {
       ok: false,

@@ -7,7 +7,7 @@ const { countUnbooked, latestSignoffs } = vi.hoisted(() => ({
 vi.mock('@/lib/transactions/unbooked', () => ({ countUnbookedBankTransactions: countUnbooked }))
 vi.mock('@/lib/reconciliation/signoff-store', () => ({ getLatestSignoffs: latestSignoffs }))
 
-import { buildReportDataStatus, type ReportDataStatus } from '../data-status'
+import { buildRangeDataStatus, buildReportDataStatus, type ReportDataStatus } from '../data-status'
 
 // Last month end relative to NOW is 2026-08-31.
 const NOW = new Date('2026-09-26T12:00:00.000Z')
@@ -77,8 +77,20 @@ function makeSupabase(t: Tables) {
     }
     chain.single = async () => settle(table, local)
     chain.maybeSingle = async () => settle(table, local)
-    chain.then = (resolve: (v: unknown) => void) => resolve(settle(table, local))
+    chain.then = (resolve: (v: unknown) => void) =>
+      resolve(table === 'fiscal_periods' ? periodList(local) : settle(table, local))
     return chain
+  }
+  /** fiscal_periods read as a list (buildRangeDataStatus), honouring the lte/gte range filters. */
+  const periodList = (local: Array<{ method: string; args: unknown[] }>) => {
+    if (t.periodError) return { data: null, error: t.periodError }
+    let rows = [t.period ?? OPEN_PERIOD] as Array<Record<string, unknown>>
+    for (const { method, args } of local) {
+      const [column, value] = args as [string, string]
+      if (method === 'lte') rows = rows.filter((row) => String(row[column]) <= value)
+      if (method === 'gte') rows = rows.filter((row) => String(row[column]) >= value)
+    }
+    return { data: rows, error: null }
   }
   const find = (table: string, method: string) =>
     calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
@@ -355,5 +367,52 @@ describe('buildReportDataStatus', () => {
     countUnbooked.mockRejectedValueOnce(new Error('anchor lookup failed'))
     const unbookedFail = await buildReportDataStatus(makeSupabase({}).supabase, 'co-1', { periodId: 'fp-1' })
     expect(unbookedFail).toEqual({ unavailable: true, reason: 'anchor lookup failed' })
+  })
+})
+
+describe('buildRangeDataStatus (a momsperiod)', () => {
+  it('builds the status over the range on the fiscal period that holds it', async () => {
+    const double = makeSupabase({})
+    const status = (await buildRangeDataStatus(double.supabase, 'co-1', { from: '2026-07-01', to: '2026-09-30' }, NOW)) as ReportDataStatus
+
+    expect(double.find('fiscal_periods', 'eq')).toContainEqual(['company_id', 'co-1'])
+    expect(double.find('fiscal_periods', 'lte')).toContainEqual(['period_start', '2026-09-30'])
+    expect(double.find('fiscal_periods', 'gte')).toContainEqual(['period_end', '2026-09-30'])
+    expect(status.range).toEqual({ from: '2026-07-01', to: '2026-09-30' })
+    expect(status.period).toMatchObject({ period_id: 'fp-1', status: 'open' })
+    expect(status.preliminary).toBe(true)
+  })
+
+  it('is not preliminary for a closed year with nothing left to book', async () => {
+    const status = (await buildRangeDataStatus(
+      makeSupabase({ period: { ...OPEN_PERIOD, is_closed: true, locked_at: '2027-03-01T00:00:00Z' } }).supabase,
+      'co-1',
+      { from: '2026-01-01', to: '2026-12-31' },
+      NOW,
+    )) as ReportDataStatus
+
+    expect(status.period.status).toBe('closed')
+    expect(status.preliminary).toBe(false)
+  })
+
+  it('is null when the range starts before the fiscal period holding its end', async () => {
+    expect(
+      await buildRangeDataStatus(makeSupabase({}).supabase, 'co-1', { from: '2025-12-01', to: '2026-02-28' }, NOW),
+    ).toBeNull()
+  })
+
+  it('is null when no fiscal period holds the range', async () => {
+    expect(
+      await buildRangeDataStatus(makeSupabase({}).supabase, 'co-1', { from: '2027-01-01', to: '2027-03-31' }, NOW),
+    ).toBeNull()
+  })
+
+  it('fails soft on a failed fiscal period read', async () => {
+    expect(
+      await buildRangeDataStatus(makeSupabase({ periodError: { message: 'boom' } }).supabase, 'co-1', {
+        from: '2026-07-01',
+        to: '2026-09-30',
+      }),
+    ).toEqual({ unavailable: true, reason: 'fiscal period read failed: boom' })
   })
 })

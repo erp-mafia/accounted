@@ -4818,6 +4818,23 @@ const VAT_REPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Momsdeklarationen kunde inte beräknas.',
     message_en: 'Failed to calculate VAT declaration.',
   },
+  // Helårsmoms is named by the year its räkenskapsår ends; a year no recorded
+  // räkenskapsår ends in has no helårsmoms period (resolvePeriodDates). The
+  // thrown message_en names the räkenskapsår the company has.
+  VAT_REPORT_FISCAL_YEAR_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv:
+      'Inget räkenskapsår slutar det året, så det finns ingen helårsmoms för det. Helårsmoms redovisas per ' +
+      'räkenskapsår och anges med året då räkenskapsåret slutar.',
+    message_en:
+      'No räkenskapsår ends in that year, so there is no helårsmoms period for it. Helårsmoms is declared per ' +
+      'räkenskapsår and named by the year it ends.',
+    remediation: {
+      description: 'Pass year = the year one of the company\'s räkenskapsår ends (period_type yearly, period 1).',
+      tool: 'gnubok_list_fiscal_periods',
+    },
+    retryable: false,
+  },
   // Korrigera on the reverse-charge basis worklist (crm#1096): the route reads
   // the verifikat again at correction time and refuses rather than add a basis
   // the declaration would count twice.

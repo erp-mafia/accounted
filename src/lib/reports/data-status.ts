@@ -105,6 +105,45 @@ export async function buildReportDataStatus(
   }
 }
 
+/**
+ * The data status of a range that is not a fiscal period's own, such as a
+ * momsperiod: buildReportDataStatus over the range, on the fiscal period that
+ * holds its last day. Null when no fiscal period holds the whole range (a
+ * quarter across a räkenskapsår boundary, dates before the first year): no
+ * one period's state describes it. Never throws, like buildReportDataStatus.
+ */
+export async function buildRangeDataStatus(
+  supabase: SupabaseClient,
+  companyId: string,
+  range: { from: string; to: string },
+  now?: Date,
+): Promise<ReportDataStatusResult | null> {
+  let period: { id: string; period_start: string } | undefined
+  try {
+    const { data, error } = await supabase
+      .from('fiscal_periods')
+      .select('id, period_start')
+      .eq('company_id', companyId)
+      .lte('period_start', range.to)
+      .gte('period_end', range.to)
+      .order('period_start', { ascending: false })
+      .limit(1)
+    if (error) throw new Error(`fiscal period read failed: ${error.message}`)
+    period = ((data ?? []) as Array<{ id: string; period_start: string }>)[0]
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    log.warn('report data status unavailable', { companyId, reason })
+    return { unavailable: true, reason }
+  }
+  if (!period || range.from < period.period_start) return null
+  return buildReportDataStatus(supabase, companyId, {
+    periodId: period.id,
+    fromDate: range.from,
+    toDate: range.to,
+    ...(now ? { now } : {}),
+  })
+}
+
 async function build(
   supabase: SupabaseClient,
   companyId: string,

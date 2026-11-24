@@ -13,6 +13,7 @@ import type { VatCheckAccountTotals } from './vat-declaration-checks'
 import { rcBasisTotalsByRate } from './vat-filing-gate'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
 import { createLogger } from '@/lib/logger'
+import { codedRefusal } from '@/lib/errors/refusal'
 import { calculatePeriodDates, fiscalPeriodForVatYear } from './period-dates'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { isInterimBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -106,17 +107,44 @@ export const RC_INPUT_VAT_ACCOUNTS = ['2645', '2647'] as const
  * can be extended or shortened (up to 18 months for a first/changed year per
  * BFL 3 kap 3 §), so a calendar Jan-Dec span would silently drop part of an
  * extended year (e.g. a first year 2025-07-03 → 2026-12-31). When the caller
- * supplies the fiscal period we therefore use its actual bounds. If the period
- * can't be resolved we fall back to the calendar span so behaviour degrades
- * gracefully instead of erroring.
+ * supplies the fiscal period we therefore use its actual bounds, and otherwise
+ * the recorded räkenskapsår that ends in `year`, the year that names the
+ * period (the deadline calendar's recorded years, fiscalYearsEndingIn).
  *
- * `source` names the branch that answered. The yearly fallback is silent on
- * purpose (a calendar-FY company with no fiscal_periods row still works), so a
- * caller that puts the range on the wire must be able to tell a resolved
- * räkenskapsår from a guessed Jan-Dec: for a broken fiscal year the guess puts
- * both the figures and the Skatteverket redovisningsperiod on the wrong period.
+ * When the company has recorded räkenskapsår and none ends in `year`, there is
+ * no helårsmoms period `year`, and this refuses (VAT_REPORT_FISCAL_YEAR_NOT_FOUND,
+ * naming the years that exist) instead of computing January to December: an
+ * extended first year starting mid-year once got a period over the calendar
+ * year it started in, which the next year's declaration then counted again.
+ * Only a company with no räkenskapsår recorded at all still gets the calendar
+ * year: it has no verifikat (each one belongs to a fiscal period), so the
+ * figures are zero whatever the range.
+ *
+ * `source` names the branch that answered, so a caller that puts the range on
+ * the wire can tell a resolved räkenskapsår from that calendar year.
  */
 export type VatPeriodSource = 'fiscal_period' | 'calendar' | 'calendar_fallback'
+
+/** The refusal for a helårsmoms year no recorded räkenskapsår ends in. */
+function noFiscalYearEndsIn(
+  year: number,
+  recorded: readonly { period_start: string; period_end: string }[],
+): Error {
+  const named = recorded
+    .map((fy) => `${fy.period_start}..${fy.period_end} (year ${fy.period_end.slice(0, 4)})`)
+    .join(', ')
+  return codedRefusal(
+    'VAT_REPORT_FISCAL_YEAR_NOT_FOUND',
+    `No räkenskapsår ends in ${year}, so there is no helårsmoms period ${year}: helårsmoms is declared per ` +
+      `räkenskapsår (SFL 26 kap. 10-11 §§) and named by the year it ends. The company's räkenskapsår: ${named}.`,
+    {
+      description:
+        'Pass year = the year one of the company\'s räkenskapsår ends (period_type yearly, period 1). ' +
+        'gnubok_list_fiscal_periods lists them.',
+      tool: 'gnubok_list_fiscal_periods',
+    },
+  )
+}
 
 export async function resolvePeriodDates(
   supabase: SupabaseClient,
@@ -137,33 +165,34 @@ export async function resolvePeriodDates(
       if (fp?.period_start && fp?.period_end) {
         return { start: fp.period_start, end: fp.period_end, source: 'fiscal_period' }
       }
-    } else {
-      // No explicit fiscal period: resolve the räkenskapsår ending in `year`
-      // instead of assuming a calendar FY. Helårsmoms is filed per
-      // räkenskapsår (SFL 26 kap 10-11 §§), so for a broken fiscal year the
-      // calendar-year assumption would put both the redovisningsperiod and
-      // the figures on the wrong period. For calendar-FY companies this
-      // resolves to Jan-Dec of `year`, identical to the arithmetic fallback.
-      // The year the picker names (fiscalPeriodForVatYear); one that has not
-      // started only when nothing else ends in `year`.
-      const { data: endingInYear } = await supabase
-        .from('fiscal_periods')
-        .select('period_start, period_end')
-        .eq('company_id', companyId)
-        .gte('period_end', `${year}-01-01`)
-        .lte('period_end', `${year}-12-31`)
-        .order('period_end', { ascending: false })
-      const candidates = (endingInYear ?? []) as { period_start: string; period_end: string }[]
-      const fp = fiscalPeriodForVatYear(candidates, year, todayIsoStockholm()) ?? candidates[0]
-      if (fp?.period_start && fp?.period_end) {
-        return { start: fp.period_start, end: fp.period_end, source: 'fiscal_period' }
-      }
     }
+    // No fiscal period given (or not one of the company's): the räkenskapsår
+    // ending in `year`, never an assumed calendar FY. Helårsmoms is filed per
+    // räkenskapsår (SFL 26 kap 10-11 §§), so for a broken or extended year the
+    // calendar-year assumption would put both the redovisningsperiod and the
+    // figures on the wrong period. For calendar-FY companies this is Jan-Dec
+    // of `year`. The year the picker names (fiscalPeriodForVatYear); one that
+    // has not started only when nothing else ends in `year`.
+    const { data: years, error: yearsError } = await supabase
+      .from('fiscal_periods')
+      .select('period_start, period_end')
+      .eq('company_id', companyId)
+      .order('period_start', { ascending: true })
+    if (yearsError) throw new Error(`fiscal_periods read failed: ${yearsError.message}`)
+    const recorded = (years ?? []) as { period_start: string; period_end: string }[]
+    const candidates = recorded
+      .filter((fy) => fy.period_end?.startsWith(`${year}-`))
+      .sort((a, b) => (a.period_end < b.period_end ? 1 : a.period_end > b.period_end ? -1 : 0))
+    const fp = fiscalPeriodForVatYear(candidates, year, todayIsoStockholm()) ?? candidates[0]
+    if (fp?.period_start && fp?.period_end) {
+      return { start: fp.period_start, end: fp.period_end, source: 'fiscal_period' }
+    }
+    if (recorded.length > 0) throw noFiscalYearEndsIn(year, recorded)
   }
   return {
     ...calculatePeriodDates(periodType, year, period),
     // Monthly and quarterly ARE calendar periods by law; only the yearly
-    // branch landing here means a räkenskapsår was asked for and not found.
+    // branch landing here means the company has no räkenskapsår recorded.
     source: periodType === 'yearly' ? 'calendar_fallback' : 'calendar',
   }
 }

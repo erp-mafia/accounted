@@ -35,12 +35,13 @@ import { euTradeInRutor, formatEuTradeBoxes, helarsmomsHasEuTrade } from '@/lib/
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 import { computeSettlementAccountDrift, type SettlementAccountAging, type SettlementAccountDrift } from '@/lib/reports/vat-settlement-account-drift'
+import { buildRangeDataStatus, type ReportDataStatusResult } from '@/lib/reports/data-status'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
-import type { KontantmetodCutoffVatFacts, VatDeclaration, VatDeclarationRutor } from '@/types'
+import type { KontantmetodCutoffVatFacts, MomsPeriod, VatDeclaration, VatDeclarationRutor } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { parseVatPeriodArgs } from './vat-period-args'
 import { compareVatPeriods, type VatCloseSanity, type VatSanityRutor } from './vat-period-comparison'
@@ -231,19 +232,35 @@ interface VatReportWithRutor {
    * The close check names the shape-detected ones from this list.
    */
   excludedSettlementEntries: VatExcludedSettlementEntry[]
+  /** The company's moms_period, null when not set. */
+  momsPeriod: MomsPeriod | null
+  /**
+   * The warning, also in `report.warnings`, when the period asked for is of
+   * another cadence than moms_period: no declaration is filed for it, so the
+   * close check gives it no deadline. Null for a declaration period.
+   */
+  notDeclarationPeriod: string | null
 }
 
 /**
- * Agent-facing VAT report. Thin wrapper over {@link computeVatReportWithRutor}
- * so callers that only need the report keep the old signature.
+ * Agent-facing VAT report: {@link computeVatReportWithRutor}'s report with
+ * data_status, whether the figures can still change (an open period, unbooked
+ * bank rows, drafts), as every report tool answers it, over the momsperiod's
+ * own dates (buildRangeDataStatus). Null when no one fiscal period holds the
+ * momsperiod. Not declared in VAT_REPORT_OUTPUT_SCHEMA, like the other
+ * report tools' data_status (tools/list budget).
  */
 export async function computeVatReport(
   args: Record<string, unknown>,
   companyId: string,
   supabase: SupabaseClient
-): Promise<VatReportResult> {
+): Promise<VatReportResult & { data_status: ReportDataStatusResult | null }> {
   const { report } = await computeVatReportWithRutor(args, companyId, supabase)
-  return report
+  const dataStatus = await buildRangeDataStatus(supabase, companyId, {
+    from: report.period.start,
+    to: report.period.end,
+  })
+  return { ...report, data_status: dataStatus }
 }
 
 async function computeVatReportWithRutor(
@@ -267,13 +284,16 @@ async function computeVatReportWithRutor(
     period,
   )
   const { start: startDate, end: endDate } = declaration.period
-  const excludedEntries = await listExcludedSettlementEntries(
-    supabase,
-    companyId,
-    startDate,
-    endDate,
-    settlementShapedEntries,
-  )
+  const [excludedEntries, momsPeriod] = await Promise.all([
+    listExcludedSettlementEntries(
+      supabase,
+      companyId,
+      startDate,
+      endDate,
+      settlementShapedEntries,
+    ),
+    readMomsPeriod(supabase, companyId),
+  ])
 
   const rutor: VatDeclarationRutor = { ...declaration.rutor }
   const { ruta30, ruta31, ruta32 } = rutor
@@ -323,6 +343,15 @@ async function computeVatReportWithRutor(
   if (vatWithoutRuta.length > 0) {
     warnings.push(vatAccountWithoutRutaFinding(vatWithoutRuta).message)
   }
+  // A period of another cadence than the company's moms_period is no
+  // declaration period: nothing is filed for it, so it has no deadline (the
+  // close check names none) and its figures only describe its dates.
+  const notDeclarationPeriod = momsPeriod !== null && momsPeriod !== periodType
+    ? `Företaget redovisar moms ${MOMS_PERIOD_SV[momsPeriod]} (moms_period ${momsPeriod}): ${periodLabel} ` +
+      `(${startDate}..${endDate}) är ingen deklarationsperiod för företaget och har inget inlämningsdatum. ` +
+      'Siffrorna gäller bara de datumen.'
+    : null
+  if (notDeclarationPeriod) warnings.push(notDeclarationPeriod)
 
   const report: VatReportResult = {
     period: { type: periodType, year, period, start: startDate, end: endDate },
@@ -350,7 +379,35 @@ async function computeVatReportWithRutor(
     declaration,
     periodSource,
     excludedSettlementEntries: excludedEntries,
+    momsPeriod,
+    notDeclarationPeriod,
   }
+}
+
+/** The company's moms_period, as a sentence reads it. */
+const MOMS_PERIOD_SV: Record<MomsPeriod, string> = {
+  monthly: 'per månad',
+  quarterly: 'per kvartal',
+  yearly: 'per helår (räkenskapsår)',
+}
+
+/**
+ * The company's moms_period: the cadence it declares VAT in. Null when it is
+ * not set or cannot be read; a period is then not called a non-declaration
+ * period.
+ */
+async function readMomsPeriod(supabase: SupabaseClient, companyId: string): Promise<MomsPeriod | null> {
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('moms_period')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) {
+    log.warn('moms_period unavailable', { companyId, error: error.message })
+    return null
+  }
+  const value = (data as { moms_period?: unknown } | null)?.moms_period
+  return value === 'monthly' || value === 'quarterly' || value === 'yearly' ? value : null
 }
 
 /**
@@ -566,6 +623,7 @@ interface VatCloseBlocker {
     | 'reverse_charge_input_missing'
     | 'declaration_incomplete'
     | 'deadline_unavailable'
+    | 'not_declaration_period'
     | 'fiscal_year_not_found'
     | 'momsredovisning_entries_excluded'
     | 'eu_trade_setting_off'
@@ -1026,6 +1084,8 @@ export async function computeVatCloseCheck(
     declaration,
     periodSource,
     excludedSettlementEntries,
+    momsPeriod: declaredCadence,
+    notDeclarationPeriod,
   } = await computeVatReportWithRutor(args, companyId, supabase)
   const declarationRutor = declaration.rutor
   const { start, end, type: periodType, year, period } = vatReport.period
@@ -1040,8 +1100,9 @@ export async function computeVatCloseCheck(
     .single()
   const momsPeriod = (settings?.moms_period as 'monthly' | 'quarterly' | 'yearly' | null) ?? null
   const entityType = isEntityType(settings?.entity_type) ? settings.entity_type : null
-  // 3) Deadline: based on the *requested* period type, not company setting,
-  //    so the model gets the right deadline even when querying ad-hoc periods.
+  // 3) Deadline: of the requested period, when it is a declaration period: a
+  //    period of another cadence than moms_period has none (nothing is filed
+  //    for it), and says so in the not_declaration_period finding below.
   //    Never turn missing settings into a plausible statutory date. Monthly
   //    deadlines need the turnover threshold; annual deadlines additionally
   //    need the filing profile and a configured fiscal year matching the
@@ -1057,7 +1118,9 @@ export async function computeVatCloseCheck(
   const ledgerEuTrade = euTradeInRutor(declarationRutor)
   const periodHasEuTrade = ledgerEuTrade.purchases.length > 0 || ledgerEuTrade.sales.length > 0
   let deadline: { date: string; label: string } | null = null
-  if (periodType === 'quarterly') {
+  if (notDeclarationPeriod) {
+    // No declaration period, no deadline.
+  } else if (periodType === 'quarterly') {
     deadline = computeMomsDeadline('quarterly', Number(year), Number(period), {
       vat_taxable_base_over_40m: false,
     })
@@ -1093,7 +1156,7 @@ export async function computeVatCloseCheck(
       deadline = computeMomsDeadline('yearly', Number(year), Number(period), deadlineSettings)
     }
   }
-  if (!deadline) {
+  if (!deadline && !notDeclarationPeriod) {
     log.warn('VAT deadline unavailable', {
       companyId,
       periodType,
@@ -1153,7 +1216,22 @@ export async function computeVatCloseCheck(
   ])
 
   const blockers: VatCloseBlocker[] = []
-  if (!deadline) {
+  // Medium: it never stops the close. moms_period is the company's cadence
+  // now, with no history, so the last period of a cadence it switched from
+  // is still declared and must not be held back by this finding.
+  if (notDeclarationPeriod && declaredCadence) {
+    blockers.push({
+      kind: 'not_declaration_period',
+      severity: 'medium',
+      count: 1,
+      message: notDeclarationPeriod,
+      hint:
+        `Kör om med företagets egen period, period_type=${declaredCadence}` +
+        `${declaredCadence === 'yearly' ? ' och year = året räkenskapsåret slutar' : ''}. Bytte företaget ` +
+        'redovisningsperiod efter den här perioden deklareras den ändå enligt den tidigare perioden. Redovisar företaget ' +
+        'en annan period hos Skatteverket, rätta inställningen med gnubok_update_company_tax_profile (eller Inställningar, Moms).',
+    })
+  } else if (!deadline) {
     blockers.push({
       kind: 'deadline_unavailable',
       severity: 'high',
@@ -1177,12 +1255,13 @@ export async function computeVatCloseCheck(
       hint: 'Slå på vat_has_eu_trade med gnubok_update_company_tax_profile (eller Inställningar, Moms) så stämmer inställningen med bokföringen.',
     })
   }
-  // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). When no fiscal
-  // year ends in `year` the report silently fell back to Jan-Dec, which for a
-  // company whose fiscal year does not start in January means every figure
-  // above describes the wrong period (feedback seq 330091: FY Apr-Mar, yearly
-  // 2026 came back as 2026-01-01..2026-12-31). Say so instead of leaving the
-  // agent to infer it from an unavailable deadline.
+  // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). A company with
+  // räkenskapsår recorded and none ending in `year` is refused before this
+  // (resolvePeriodDates); one with none recorded at all falls back to Jan-Dec,
+  // which for a company whose fiscal year does not start in January is the
+  // wrong period (feedback seq 330091: FY Apr-Mar, yearly 2026 came back as
+  // 2026-01-01..2026-12-31). Say so instead of leaving the agent to infer it
+  // from an unavailable deadline.
   if (
     periodType === 'yearly'
     && periodSource === 'calendar_fallback'
@@ -1428,7 +1507,7 @@ export async function computeVatCloseCheck(
   const prevArgs = previousPeriodArgs(periodType as 'monthly' | 'quarterly' | 'yearly', Number(year), Number(period))
   if (prevArgs) {
     try {
-      previousRutor = (await computeVatReport(prevArgs, companyId, supabase)).rutor
+      previousRutor = (await computeVatReportWithRutor(prevArgs, companyId, supabase)).report.rutor
     } catch (err) {
       log.warn('previous VAT period unavailable, sanity comparison skipped', {
         companyId,
@@ -1478,11 +1557,15 @@ export async function computeVatCloseCheck(
     : psWarning.count > 0
       ? ` Periodisk sammanställning: ${psWarning.count} EU-försäljning${psWarning.count === 1 ? '' : 'ar'} i ruta 39 saknar köpare.`
       : ' Periodisk sammanställning kunde inte stämmas av.'
+  // The cadence finding does not stop the close either, so "klart" names it.
+  const cadenceNote = notDeclarationPeriod
+    ? ' Perioden är ingen deklarationsperiod enligt moms_period och har inget inlämningsdatum (not_declaration_period).'
+    : ''
   let summary: string
   if (readyToClose && sanity.anomalies.length === 0) {
-    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}${psNote}`
+    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}${psNote}${cadenceNote}`
   } else if (readyToClose) {
-    summary = `Klart för stängning men ${sanity.anomalies.length} avvikelse(r) att granska.${psNote}`
+    summary = `Klart för stängning men ${sanity.anomalies.length} avvikelse(r) att granska.${psNote}${cadenceNote}`
   } else if (declarationBlocked) {
     summary = `Inte klart: deklarationsunderlaget är ofullständigt (${declarationErrors} fel), ${highBlockers} kritiska blockerare totalt.`
   } else {

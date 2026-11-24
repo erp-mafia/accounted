@@ -69,6 +69,7 @@ import { GET as incomeStatement } from '../income-statement/route'
 import { GET as sieExport } from '../sie-export/route'
 import { GET as vatDeclaration } from '../vat-declaration/route'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { codedRefusal } from '@/lib/errors/refusal'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -638,5 +639,54 @@ describe('GET /reports/vat-declaration', () => {
       2026,
       4,
     )
+  })
+
+  it('answers a yearly year no räkenskapsår ends in with its own code, not a 500', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }).supabase,
+    )
+    // As resolvePeriodDates throws it (lib/reports/vat-declaration.ts).
+    mocks.calculateVatDeclaration.mockRejectedValue(
+      codedRefusal(
+        'VAT_REPORT_FISCAL_YEAR_NOT_FOUND',
+        "No räkenskapsår ends in 2025, so there is no helårsmoms period 2025. The company's räkenskapsår: 2025-07-17..2026-12-31 (year 2026).",
+        { description: "Pass year = the year one of the company's räkenskapsår ends.", tool: 'gnubok_list_fiscal_periods' },
+      ),
+    )
+
+    const res = await vatDeclaration(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/vat-declaration?period_type=yearly&year=2025&period=1`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('VAT_REPORT_FISCAL_YEAR_NOT_FOUND')
+    expect(body.error.message_en).toContain('2025-07-17..2026-12-31 (year 2026)')
+    expect(body.error.message).toContain('räkenskapsår')
+    expect(body.error.recovery_hint).toContain('Pass year')
+  })
+
+  it('still answers REPORT_GENERATION_FAILED when the lib crashes', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }).supabase,
+    )
+    mocks.calculateVatDeclaration.mockRejectedValue(new Error('lib crash'))
+
+    const res = await vatDeclaration(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/vat-declaration?period_type=yearly&year=2025&period=1`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).error.code).toBe('REPORT_GENERATION_FAILED')
   })
 })

@@ -628,7 +628,7 @@ interface PeriodRange {
 /**
  * The momsperiod of the same cadence that holds a date: its calendar month or
  * quarter, or for helårsmoms the räkenskapsår (the fiscal period covering
- * it, the calendar year when none does, as resolvePeriodDates falls back).
+ * it, the calendar year when none does).
  */
 export async function vatPeriodHolding(
   supabase: SupabaseClient,
