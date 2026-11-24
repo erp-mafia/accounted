@@ -48,6 +48,7 @@ import {
   payoutFeesWithinInvoices,
 } from '@/lib/bookkeeping/payout-fee-lines'
 import { SUPPLIER_DEBT_DESCRIPTION_MAX, isSupplierDebtAccount } from '@/lib/bookkeeping/supplier-debt-lines'
+import { CUSTOMER_RECEIVABLE_DESCRIPTION_MAX, isCustomerReceivableAccount } from '@/lib/bookkeeping/customer-receivable-lines'
 import {
   isAccruedCostAccount,
   pastPeriodDeferralSuggestion,
@@ -3487,6 +3488,28 @@ export const MatchBatchSchema = z
         }),
       )
       .optional(),
+    // The customer side of supplier_debts: a customer invoice the row also
+    // pays that was issued before the company kept its books here, so it is
+    // only in the 1510 balance (lib/bookkeeping/customer-receivable-lines.ts):
+    // a credit on a 151x account, no VAT. Customer batches only; not a fee,
+    // so it may exceed the invoices.
+    customer_receivables: z
+      .array(
+        z.object({
+          account: z
+            .string()
+            .refine(isCustomerReceivableAccount, 'Receivable account must be a customer receivable account 1510 to 1519, e.g. 1510'),
+          amount: z.number().refine((amount) => amount > 0, 'Receivable amount must be greater than 0'),
+          description: z
+            .string()
+            .refine(
+              (text) => text.length <= CUSTOMER_RECEIVABLE_DESCRIPTION_MAX,
+              `At most ${CUSTOMER_RECEIVABLE_DESCRIPTION_MAX} characters`,
+            )
+            .optional(),
+        }),
+      )
+      .optional(),
   })
   .superRefine((data, ctx) => {
     if (data.force && !(data.expected_journal_entry_ids?.length)) {
@@ -3513,13 +3536,21 @@ export const MatchBatchSchema = z
         message: 'supplier_debts go with supplier_invoice allocations only (an outgoing payment)',
       })
     }
-    // At most five extra rows on the verifikat, fees and debts together, as the RPC.
-    const debtRows = data.supplier_debts?.length ?? 0
-    if ((data.fees?.length ?? 0) + debtRows > MAX_PAYOUT_FEES) {
+    if (data.customer_receivables?.length && data.allocations.some((a) => a.kind !== 'customer_invoice')) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: [debtRows > 0 ? 'supplier_debts' : 'fees'],
-        message: `At most ${MAX_PAYOUT_FEES} fee and debt rows together`,
+        path: ['customer_receivables'],
+        message: 'customer_receivables go with customer_invoice allocations only (an incoming payment)',
+      })
+    }
+    // At most five extra rows on the verifikat, fees and the rows from before together, as the RPC.
+    const debtRows = data.supplier_debts?.length ?? 0
+    const receivableRows = data.customer_receivables?.length ?? 0
+    if ((data.fees?.length ?? 0) + debtRows + receivableRows > MAX_PAYOUT_FEES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [debtRows > 0 ? 'supplier_debts' : receivableRows > 0 ? 'customer_receivables' : 'fees'],
+        message: `At most ${MAX_PAYOUT_FEES} fee, debt and receivable rows together`,
       })
     }
     // Reject mixed customer + supplier in a single batch: semantically a

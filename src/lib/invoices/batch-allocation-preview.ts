@@ -6,6 +6,7 @@ import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT, bookedOreRounding, oreSettlementResid
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from '@/lib/bookkeeping/payout-fee-lines'
 import { supplierDebtLines, supplierDebtTotal, type SupplierDebt } from '@/lib/bookkeeping/supplier-debt-lines'
+import { customerReceivableLines, type CustomerReceivable } from '@/lib/bookkeeping/customer-receivable-lines'
 
 /**
  * The verifikat `match_batch_allocate` will post, computed from the same
@@ -41,6 +42,10 @@ import { supplierDebtLines, supplierDebtTotal, type SupplierDebt } from '@/lib/b
  * before the company kept its books here, lib/bookkeeping/supplier-debt-lines.ts)
  * follow the fee rows as debits, the bank row carries them too, and a single
  * invoice with a debt row keeps the "Samlingsbetalning <date>" header.
+ * Since 20261124100000 a customer batch's receivable rows (the customer
+ * receivable from before, lib/bookkeeping/customer-receivable-lines.ts) follow
+ * the fee rows as credits, the bank row carries them too, and a single invoice
+ * with a receivable row keeps the "Samlingsinbetalning <date>" header.
  * When the RPC changes, this file changes with it; the pg-real suites (tests/pg/match-batch-allocate.pg.test.ts,
  * tests/pg/match-batch-preview-parity.pg.test.ts,
  * tests/pg/match-batch-allocate-series-description.pg.test.ts) are the
@@ -144,6 +149,8 @@ export function buildBatchAllocationPreview(input: {
   cashLines?: Readonly<Record<string, readonly { account_number: string; debit_amount: number; credit_amount: number }[]>>
   /** A supplier batch: the supplier debt from before the row also pays, one debit line each, no VAT. */
   supplierDebts?: readonly SupplierDebt[] | null
+  /** A customer batch: the customer receivable from before the row also pays, one credit line each, no VAT. */
+  customerReceivables?: readonly CustomerReceivable[] | null
 }): BatchAllocationPreview {
   const { transaction, allocations, bankAccount } = input
   if (allocations.length === 0) throw new Error('allocations must not be empty')
@@ -157,9 +164,13 @@ export function buildBatchAllocationPreview(input: {
   const txAbs = Math.abs(transaction.amount)
   const totalAllocated = roundOre(allocations.reduce((sum, a) => sum + a.amount, 0))
   const fees = payoutFeeLines(input.fees)
-  const debts = supplierDebtLines(input.supplierDebts)
-  // The RPC refuses BATCH_DEBT_SUPPLIER_ONLY: a customer batch has no supplier debt to clear.
-  if (isCustomer && debts.length > 0) throw new Error('supplier debt rows go with supplier invoices only')
+  // The rows from before go with their own side (BATCH_DEBT_SUPPLIER_ONLY,
+  // BATCH_RECEIVABLE_CUSTOMER_ONLY): the RPC books them by the batch's side.
+  if (isCustomer && (input.supplierDebts?.length ?? 0) > 0) throw new Error('supplier debt rows go with supplier invoices only')
+  if (!isCustomer && (input.customerReceivables?.length ?? 0) > 0) {
+    throw new Error('customer receivable rows go with customer invoices only')
+  }
+  const debts = isCustomer ? customerReceivableLines(input.customerReceivables) : supplierDebtLines(input.supplierDebts)
   const settled = payoutBankAmount(allocations[0].kind, totalAllocated, payoutFeeTotal(fees), supplierDebtTotal(debts))
   // The RPC refuses BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX outside
   // this tolerance, so there is no verifikat to preview.
@@ -259,9 +270,14 @@ export function buildBatchAllocationPreview(input: {
   for (const fee of fees) {
     lines.push({ account_number: fee.account, description: fee.description, debit: fee.amount, credit: 0 })
   }
-  // The supplier debt from before: a debit on its 244x skuld, after the fees.
+  // The rows from before, after the fees: the supplier debt a debit on its
+  // 244x skuld, the customer receivable a credit on its 151x fordran.
   for (const debt of debts) {
-    lines.push({ account_number: debt.account, description: debt.description, debit: debt.amount, credit: 0 })
+    lines.push(
+      isCustomer
+        ? { account_number: debt.account, description: debt.description, debit: 0, credit: debt.amount }
+        : { account_number: debt.account, description: debt.description, debit: debt.amount, credit: 0 },
+    )
   }
 
   lines.push(
@@ -272,7 +288,8 @@ export function buildBatchAllocationPreview(input: {
 
   // One invoice: the RPC appends "<number>, <counterparty>" to this wording;
   // the preview leaves both out, like the neutral line descriptions. One
-  // invoice with a debt row beside it is a samlingsbetalning, as in the RPC.
+  // invoice with a row from before beside it is a samlingsbetalning or
+  // samlingsinbetalning, as in the RPC.
   const singleInvoiceDescription = isCustomer ? 'Inbetalning kundfaktura' : 'Utbetalning leverantörsfaktura'
   const batchDescription = `${isCustomer ? 'Samlingsinbetalning' : 'Samlingsbetalning'} ${entryDate}`
 
