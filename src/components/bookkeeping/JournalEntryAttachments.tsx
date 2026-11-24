@@ -53,8 +53,12 @@ interface DocumentRecord {
   referenced?: boolean
 }
 
+import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
+
 interface JournalEntryAttachmentsProps {
   journalEntryId: string
+  references?: UnderlagReference[]
+  referencesState?: 'loading' | 'error' | 'ready'
   onCountChange?: (count: number) => void
   /**
    * 'section': embedded under a DetailSection kicker that already names the
@@ -74,6 +78,8 @@ function formatFileSize(bytes: number): string {
 
 export default function JournalEntryAttachments({
   journalEntryId,
+  references,
+  referencesState = 'ready',
   onCountChange,
   variant = 'default',
 }: JournalEntryAttachmentsProps) {
@@ -111,14 +117,18 @@ export default function JournalEntryAttachments({
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
 
+  const documentReadGeneration = useRef(0)
   const fetchDocuments = useCallback(async () => {
+    const generation = ++documentReadGeneration.current
     try {
-      const [documentsRes, referencesRes] = await Promise.all([
+      const [documentsRes, referencesData] = await Promise.all([
         fetch(`/api/documents?journal_entry_id=${journalEntryId}&current_only=true`),
-        fetch(`/api/bookkeeping/journal-entries/${journalEntryId}/references`),
+        references !== undefined ? Promise.resolve(references) :
+          fetch(`/api/bookkeeping/journal-entries/${journalEntryId}/references`)
+            .then(async response => response.ok ? (await response.json()).data?.references ?? [] : []),
       ])
       if (!documentsRes.ok) {
-        setLoadFailed(true)
+        if (generation === documentReadGeneration.current) setLoadFailed(true)
         return
       }
       const { data: directDocuments } = await documentsRes.json()
@@ -126,10 +136,9 @@ export default function JournalEntryAttachments({
       const directIds = new Set(direct.map((document) => document.id))
 
       let referenced: DocumentRecord[] = []
-      if (referencesRes.ok) {
-        const { data: referenceData } = await referencesRes.json()
+      if (referencesData) {
         const documentIds = Array.from(new Set<string>(
-          (referenceData?.references || [])
+          referencesData
             .map((reference: { document_id?: string }) => reference.document_id)
             .filter((documentId: string | undefined): documentId is string => (
               Boolean(documentId) && !directIds.has(documentId as string)
@@ -154,18 +163,23 @@ export default function JournalEntryAttachments({
       }
 
       const allDocuments = [...direct, ...referenced]
+      if (generation !== documentReadGeneration.current) return
       setDocuments(allDocuments)
       onCountChangeRef.current?.(allDocuments.length)
       setLoadFailed(false)
     } catch {
-      setLoadFailed(true)
+      if (generation === documentReadGeneration.current) setLoadFailed(true)
     } finally {
-      setLoading(false)
+      if (generation === documentReadGeneration.current) setLoading(false)
     }
-  }, [journalEntryId])
+  }, [journalEntryId, references])
+
+  const fetchDocumentsRef = useRef(fetchDocuments)
+  fetchDocumentsRef.current = fetchDocuments
 
   useEffect(() => {
     fetchDocuments()
+    return () => { documentReadGeneration.current += 1 }
   }, [fetchDocuments])
 
   // Refresh documents when uploads complete
@@ -240,7 +254,7 @@ export default function JournalEntryAttachments({
           variant: 'destructive',
         })
       } else {
-        await fetchDocuments()
+        await fetchDocumentsRef.current()
         setBlockedDoc(null)
       }
     } catch {
@@ -279,7 +293,7 @@ export default function JournalEntryAttachments({
           variant: 'destructive',
         })
       } else {
-        await fetchDocuments()
+        await fetchDocumentsRef.current()
         setBlockedDoc(null)
       }
     } catch {
@@ -351,6 +365,8 @@ export default function JournalEntryAttachments({
 
       {loadFailed && documents.length === 0 ? (
         <LoadError title={t('load_failed')} onRetry={() => void fetchDocuments()} />
+      ) : documents.length === 0 && referencesState !== 'ready' ? (
+        referencesState === 'loading' ? <LateReveal aria-label={t('loading')}><Skeleton className="h-8 w-full" /></LateReveal> : null
       ) : documents.length === 0 && !showUpload ? (
         !embedded && (
           <p className="text-sm text-muted-foreground py-1">

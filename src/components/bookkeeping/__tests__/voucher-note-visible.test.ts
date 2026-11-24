@@ -6,7 +6,7 @@ const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, rel), 'utf
 
 const LIST = read('../JournalEntryList.tsx')
 const FORM = read('../JournalEntryForm.tsx')
-const DETAIL = read('../../../app/(dashboard)/bookkeeping/[id]/page.tsx')
+const DETAIL = read('../JournalEntryDetail.tsx')
 const SV = JSON.parse(read('../../../messages/sv.json'))
 const EN = JSON.parse(read('../../../messages/en.json'))
 
