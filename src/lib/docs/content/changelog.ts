@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Transactions: a template refuses a stated reverse charge it does not book (2026-11)
+
+- **Fix: \`POST /transactions/{id}/categorize\` answers \`400 VALIDATION_ERROR\` (\`details.field\`: \`vat_treatment\`) for \`vat_treatment: "reverse_charge"\` beside a \`template_id\` or \`counterparty_template_id\` whose own moms is not a reverse charge** (#3854, 2026-11-24), on a dry run too, and \`POST /transactions/batch-categorize\` refuses such an item with the same code. A learned template with a line pattern is judged by its lines: one with a moms line at a rate is never a reverse charge. **Before**, the template's own moms was booked and the stated treatment dropped, so a 25 % template deducted as ingående moms the seller's VAT that \`confirm_foreign_seller_vat\` had confirmed as foreign. Book such a purchase by category with \`vat_treatment: "reverse_charge"\`, or pick a reverse-charge template. The API version date is unchanged.
+
 ### Webhooks: an operation linked to a question (2026-11)
 
 - **New webhook: \`company_question.prepared\`** (2026-11-23): a staged operation was linked to a question on the company's question list, with the new MCP tool \`accounted_link_question_operation\` (\`question_id\`, \`operation_id\`; scope \`agent:write\`). The tool links an operation the calling connection staged itself to a question that is answered, or closed as settled; a question takes at most five operations, and linking the same pair again answers \`linked\` and writes nothing. The payload carries \`questionId\` and \`operationId\` (the pending operation, as \`GET /pending-operations/{id}\` reads it) and nothing else about either. It is sent once per question and operation. Like the other \`company_question.*\` types it needs \`agent:read\` in addition to \`webhooks:manage\`, and it is in \`GET /api/events\` for a key that holds \`agent:read\` beside \`events:read\`. Additive; the API version date is unchanged.

@@ -549,11 +549,16 @@ export async function buildCategorizeMapping(
     }
     mappingResult = buildMappingResultFromCounterpartyTemplate(match, transaction, entityType, vatRegistered)
     const pattern = match.template.line_pattern
+    const isPattern = Array.isArray(pattern) && pattern.length > 0
     bookedByTemplate = {
       by: { counterparty_template_id: input.counterparty_template_id },
+      // A pattern replays its own lines, never the field
+      // (contradictsLearnedMoms): a rated moms line in it is booked whatever
+      // the field says, so such a pattern is never a reverse charge.
       reverseCharge:
-        momsKindOfTreatment(match.template.vat_treatment) === 'reverse_charge' ||
-        (Array.isArray(pattern) && pattern.length > 0 && patternReplayPlan(pattern).rcPair !== null),
+        !(isPattern && pattern.some((e) => e.type === 'vat' && !!e.vat_rate)) &&
+        (momsKindOfTreatment(match.template.vat_treatment) === 'reverse_charge' ||
+          (isPattern && patternReplayPlan(pattern).rcPair !== null)),
     }
   } else if (template) {
     // A template that names the skattekonto (1630) books the company's
@@ -614,8 +619,8 @@ export async function buildCategorizeMapping(
       },
       {
         message: {
-          sv: 'Mallen bokför sin egen moms, och den är inte omvänd skattskyldighet. Bokför köpet med en kategori och vat_treatment "reverse_charge" i stället, eller välj en mall för omvänd skattskyldighet.',
-          en: 'The template books its own VAT, which is not reverse charge. Book the purchase by category with vat_treatment "reverse_charge" instead, or pick a reverse-charge template.',
+          sv: 'Mallen bokför sin egen moms, och den är inte omvänd skattskyldighet. Bokför transaktionen med en kategori och vat_treatment "reverse_charge" i stället, eller välj en mall för omvänd skattskyldighet.',
+          en: 'The template books its own VAT, which is not reverse charge. Book the transaction by category with vat_treatment "reverse_charge" instead, or pick a reverse-charge template.',
         },
       },
     )

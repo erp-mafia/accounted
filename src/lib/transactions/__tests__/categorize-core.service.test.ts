@@ -575,6 +575,74 @@ describe('categorizeTransaction: refusals every door shares', () => {
         expect(createTxJE).not.toHaveBeenCalled()
       })
 
+      // A pattern replays its lines, not its field: 25 % moms in it is
+      // deducted however the field or a basis pair beside it reads.
+      it.each([
+        [
+          'a learned pattern without a basis pair or moms',
+          {
+            vat_treatment: null,
+            vat_account: null,
+            line_pattern: [
+              { account: '5420', type: 'business', side: 'debit', ratio: 0.6 },
+              { account: '6540', type: 'business', side: 'debit', ratio: 0.4 },
+            ],
+          },
+        ],
+        [
+          'a learned pattern at 25 % whose field says reverse charge',
+          {
+            vat_treatment: 'reverse_charge',
+            vat_account: null,
+            line_pattern: [
+              { account: '5420', type: 'business', side: 'debit', ratio: 1 },
+              { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+            ],
+          },
+        ],
+        [
+          'a learned pattern with a basis pair beside 25 % moms',
+          {
+            vat_treatment: null,
+            vat_account: null,
+            line_pattern: [
+              { account: '5420', type: 'business', side: 'debit', ratio: 1 },
+              { account: '4535', type: 'business', side: 'debit', ratio: 1 },
+              { account: '4598', type: 'business', side: 'credit', ratio: 1 },
+              { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+            ],
+          },
+        ],
+      ])('refuses %s, in the preview and the booking', async (_case, learned) => {
+        const template = makeCategorizationTemplate({
+          id: 'tmpl-1',
+          company_id: COMPANY_ID,
+          debit_account: '5420',
+          credit_account: '1930',
+          ...learned,
+        } as Parameters<typeof makeCategorizationTemplate>[0])
+        for (const options of [dry, { onBooked: 'refuse' } as const]) {
+          const outcome = await categorizeTransaction(
+            ledger({
+              transactions: { data: row({ document_id: 'doc-1' }), error: null },
+              document_attachments: { data: { id: 'doc-1', extracted_data: dutch }, error: null },
+              categorization_templates: { data: template, error: null },
+            }).supabase as never,
+            'user-1',
+            COMPANY_ID,
+            TX_ID,
+            { ...stated, counterparty_template_id: 'tmpl-1' },
+            options,
+          )
+          expect(outcome).toMatchObject({
+            ok: false,
+            code: 'VALIDATION_ERROR',
+            details: { field: 'vat_treatment', counterparty_template_id: 'tmpl-1' },
+          })
+        }
+        expect(createTxJE).not.toHaveBeenCalled()
+      })
+
       it('refuses it without the flag when the underlag shows no VAT', async () => {
         const outcome = await categorizeTransaction(
           withTemplate({ totals: { total: 1250 } }).supabase as never,
