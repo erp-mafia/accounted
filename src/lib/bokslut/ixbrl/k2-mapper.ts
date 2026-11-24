@@ -662,9 +662,11 @@ export interface K2MappingOptions {
   /**
    * The current year has no closing entry yet: its result still sits on the
    * result accounts. Årets resultat is then derived for the current year as
-   * for a comparison year, so a preview before the close shows the balance
-   * sheet as the close will book it. No notice is added: the result says so
-   * (`currentYearDerived`) and the caller decides what it may be used for.
+   * for a comparison year, so a preview before the close shows a balance
+   * sheet that ties, with the result as the books stand. No notice is added:
+   * the result says so (`currentYearDerived`) and the caller decides what it
+   * may be used for (the årsredovisning's AR-YEAR-NOT-CLOSED, the iXBRL
+   * preflight's ACC-2099).
    */
   currentYearOpen?: boolean
 }

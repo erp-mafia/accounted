@@ -111,6 +111,13 @@ export interface IxbrlArsredovisningInput {
   br: ConceptAmounts
   /** Computed subtotals/totals from the mapper (same orientation rules). */
   totals: import('./k2-mapper').K2MappingResult['totals']
+  /**
+   * The year has no closing entry yet: Årets resultat in the balance sheet is
+   * derived from the income statement (K2MappingResult.currentYearDerived),
+   * so the statements tie although the result is not booked. The preflight
+   * refuses it for filing (ACC-2099). Absent for a closed year.
+   */
+  yearNotClosed?: true
 
   forvaltningsberattelse: {
     allmantOmVerksamheten: string

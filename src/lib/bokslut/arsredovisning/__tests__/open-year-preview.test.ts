@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createLedgerFakeDb, type LedgerRow } from '@/tests/ledger-fake-db'
 import { BOOKS_COMPANY_ID, reportBooks } from '@/tests/fixtures/report-books'
 import { buildCanonicalAnnualReport } from '../model'
+import { runPreflightChecks } from '@/lib/bokslut/ixbrl/validate/rules'
 
 const OPTIONS = { generatedAt: '2026-02-01T10:00:00.000Z', todayIso: '2026-02-01' }
 
@@ -77,6 +78,16 @@ describe('årsredovisning of a year not closed yet', () => {
     const notClosed = open.validation.issues.find((issue) => issue.code === 'AR-YEAR-NOT-CLOSED')
     expect(notClosed?.severity).toBe('error')
     expect(open.validation.ok).toBe(false)
+  })
+
+  it('cannot be filed: the iXBRL preflight still says the result is not booked', async () => {
+    const open = await build(beforeClose(reportBooks('aktiebolag')))
+    const closed = await build(reportBooks('aktiebolag'))
+    const errors = (model: typeof open) =>
+      runPreflightChecks(model.ixbrl!, OPTIONS.todayIso).errors.map((issue) => issue.code)
+    expect(errors(open)).toContain('ACC-2099')
+    expect(errors(closed)).not.toContain('ACC-2099')
+    expect(closed.ixbrl).not.toHaveProperty('yearNotClosed')
   })
 
   it('reads a closed year as booked: nothing derived, nothing said', async () => {
