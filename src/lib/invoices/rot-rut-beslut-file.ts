@@ -24,16 +24,16 @@ export const RotRutBeslutFileSchema = z.object({
         // against rot_rut_payout_requests.name.
         namn: z.string().min(1),
         referensnummer: z.string().regex(/^\d{11}(-\d+)?$/),
-        arenden: z
-          .array(
-            z.object({
-              personnummer: z.string().regex(/^\d{12}$/),
-              fakturanummer: z.string().max(20).optional(),
-              // Whole kronor; 0 = avslag for the ärende.
-              godkantBelopp: z.number().int().min(0),
-            }),
-          )
-          .min(1),
+        // May be empty: Skatteverket's own schema example has a beslut with
+        // no ärenden. The import records nothing for one.
+        arenden: z.array(
+          z.object({
+            personnummer: z.string().regex(/^\d{12}$/),
+            fakturanummer: z.string().max(20).optional(),
+            // Whole kronor; 0 = avslag for the ärende.
+            godkantBelopp: z.number().int().min(0),
+          }),
+        ),
       }),
     )
     .min(1),

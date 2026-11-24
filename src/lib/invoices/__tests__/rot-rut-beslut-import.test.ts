@@ -252,14 +252,103 @@ describe('importRotRutBeslutFile', () => {
   it('errors on ambiguous names instead of guessing', async () => {
     enqueue(ORG_SETTINGS)
     enqueue({ data: [makeRequestRow(), makeRequestRow({ id: 'other-request' })] })
+    // The same buyer in both requests, and an ärende without fakturanummer:
+    // the ärenden fit either request.
+    enqueue({ data: [makeItemRow()] })
+    enqueue({ data: [makeItemRow({ id: 'item-2', invoice_id: 'inv-2', invoice: { invoice_number: '777', deduction_personnummer_encrypted: encryptPersonnummer(PNR) } })] })
 
-    const result = await importRotRutBeslutFile(db, 'company-1', makeFile())
+    const file = makeFile()
+    file.beslut[0].arenden = [{ personnummer: PNR, godkantBelopp: 1500 }]
+    const result = await importRotRutBeslutFile(db, 'company-1', file)
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.errors).toBe(1)
     expect(result.results[0].status).toBe('error')
     expect(result.results[0].error).toContain('entydigt')
+  })
+
+  it('tells two requests with the same name apart by the invoices their ärenden name', async () => {
+    // Two files made the same day without a name share the default name.
+    const OTHER_ID = '33333333-3333-4333-8333-333333333333'
+    enqueue(ORG_SETTINGS)
+    enqueue({
+      data: [
+        makeRequestRow({ name: 'ROT 2026-11-24' }),
+        makeRequestRow({ id: OTHER_ID, name: 'ROT 2026-11-24' }),
+      ],
+    })
+    // First beslut: both candidates' items are read, only the second holds 9265412.
+    enqueue({ data: [makeItemRow()] })
+    enqueue({
+      data: [
+        makeItemRow({
+          id: 'item-2',
+          invoice_id: 'inv-2',
+          invoice: { invoice_number: '9265412', deduction_personnummer_encrypted: encryptPersonnummer(PNR2) },
+        }),
+      ],
+    })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc, first beslut
+    // Second beslut: the other request is decided, so only the first is left.
+    enqueue({ data: [makeItemRow()] })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc, second beslut
+
+    const result = await importRotRutBeslutFile(
+      db,
+      'company-1',
+      makeFile({
+        beslut: [
+          {
+            namn: 'ROT 2026-11-24',
+            referensnummer: '20260000186-01',
+            arenden: [{ personnummer: PNR2, fakturanummer: '9265412', godkantBelopp: 800 }],
+          },
+          {
+            namn: 'ROT 2026-11-24',
+            referensnummer: '20260000185-01',
+            arenden: [{ personnummer: PNR, fakturanummer: '96458', godkantBelopp: 2000 }],
+          },
+        ],
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.imported).toBe(2)
+    expect(result.results[0]).toMatchObject({ status: 'imported', request_id: OTHER_ID, decided_total: 800 })
+    expect(result.results[1]).toMatchObject({ status: 'imported', request_id: REQUEST_ID, decided_total: 2000 })
+    expect(supabase.rpc).toHaveBeenNthCalledWith(1, 'apply_rot_rut_beslut', expect.objectContaining({
+      p_request_id: OTHER_ID,
+      p_items: [{ item_id: 'item-2', decided_amount: 800 }],
+    }))
+    expect(supabase.rpc).toHaveBeenNthCalledWith(2, 'apply_rot_rut_beslut', expect.objectContaining({
+      p_request_id: REQUEST_ID,
+      p_items: [{ item_id: 'item-1', decided_amount: 2000 }],
+    }))
+  })
+
+  it('records nothing for a beslut without ärenden, and imports the rest of the file', async () => {
+    enqueue(ORG_SETTINGS)
+    enqueue({ data: [makeRequestRow()] })
+    enqueue({ data: [makeItemRow()] }) // items for the second beslut
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc for the second beslut
+
+    const file = makeFile()
+    // An empty beslut under the request's own name must not read as an avslag.
+    file.beslut.unshift({ namn: 'ROT 2026-07-02', referensnummer: '20260000184', arenden: [] })
+    const result = await importRotRutBeslutFile(db, 'company-1', file)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results[0]).toMatchObject({ status: 'error' })
+    expect(result.results[0].error).toContain('inga ärenden')
+    expect(result.results[1]).toMatchObject({ status: 'imported', request_id: REQUEST_ID, decided_total: 2000, rejected: false })
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenCalledWith('apply_rot_rut_beslut', expect.objectContaining({
+      p_skv_referensnummer: '20260000185-01',
+      p_new_status: 'submitted',
+    }))
   })
 
   it('errors when no active request carries the name', async () => {
