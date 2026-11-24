@@ -162,6 +162,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode(outcome.code, txLog, {
         requestId: ctx.requestId,
         details: outcome.details,
+        // The refusal's own sentences (the account, the boxes), as the batch
+        // route answers them; both locales or neither, as the dashboard door.
+        ...(outcome.message?.en ? { messageSv: outcome.message.sv, messageEn: outcome.message.en } : {}),
       })
     }
 

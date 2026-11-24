@@ -2803,7 +2803,8 @@ export const CategorizeTransactionSchema = z
     // the seller charged in error: a reverse charge is then booked on the
     // whole amount paid instead of refused (crm#1765,
     // TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT). A Swedish seller's VAT is
-    // refused all the same.
+    // refused all the same; a Swedish VAT number beside an address abroad
+    // is no Swedish seller, and the flag then says it is not established here.
     confirm_foreign_seller_vat: z.boolean().optional(),
     // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE). force
     // bypasses it after the user reviews the candidate; the bypass is bound to

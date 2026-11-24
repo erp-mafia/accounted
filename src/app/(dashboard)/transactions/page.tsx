@@ -118,6 +118,7 @@ import { refreshWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { getCountryName } from '@/lib/vat/country-codes'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -2287,16 +2288,20 @@ export default function TransactionsPage() {
           // crm#1765: the underlag shows the seller's VAT. Foreign VAT charged
           // in error still books as reverse charge, on the whole amount paid,
           // once the person says that is what it is; a Swedish seller's VAT
-          // (reason seller_vat_swedish) keeps the plain refusal below.
+          // (reason seller_vat_swedish) keeps the plain refusal below. A
+          // Swedish VAT number beside an address abroad (address_country)
+          // asks whether the seller is established in Sweden for the sale.
+          const addressCountry = result.error.details?.address_country
+          const abroad = typeof addressCountry === 'string' && addressCountry !== ''
+          const confirmLabel = abroad ? t('rc_seller_vat_se_abroad_confirm_action') : t('rc_seller_vat_confirm_action')
           toast({
             title: t('rc_seller_vat_title'),
-            description: t('rc_seller_vat_description'),
+            description: abroad
+              ? t('rc_seller_vat_se_abroad_description', { country: getCountryName(addressCountry, errorLocale) })
+              : t('rc_seller_vat_description'),
             action: (
-              <ToastAction
-                altText={t('rc_seller_vat_confirm_action')}
-                onClick={() => void runCategorize({ ...args, confirmForeignSellerVat: true })}
-              >
-                {t('rc_seller_vat_confirm_action')}
+              <ToastAction altText={confirmLabel} onClick={() => void runCategorize({ ...args, confirmForeignSellerVat: true })}>
+                {confirmLabel}
               </ToastAction>
             ),
           })

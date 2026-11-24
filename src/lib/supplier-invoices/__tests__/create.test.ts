@@ -620,3 +620,85 @@ describe('createSupplierInvoice registerOnly (suppliers:register)', () => {
     expect(result.preview.would_create_registration_journal_entry).toBe(false)
   })
 })
+
+// A reverse-charge line on an account that declares the purchase in a box of
+// its own (the import basis in ruta 50, trepartshandel in ruta 37, the 4598
+// offset) got the basis pair beside it: one purchase in two boxes. Refused
+// before anything is written, also under kontantmetoden, where the verifikat
+// would only be booked at the payment.
+describe('createSupplierInvoice: a reverse-charge line on an account with a box of its own', () => {
+  const rc = (account: string) =>
+    body({
+      reverse_charge: true,
+      items: [
+        { description: 'Licens', amount: 500, account_number: '6540', vat_rate: 0 },
+        { description: 'Köp', amount: 1000, account_number: account, vat_rate: 0 },
+      ],
+    } as Partial<CreateSupplierInvoiceInput>)
+
+  beforeEach(() => {
+    setTable('suppliers', { data: makeSupplier({ id: SUPPLIER_ID, supplier_type: 'non_eu_business' }) })
+    setTable('company_settings', { data: { accounting_method: 'cash', vat_registered: true } })
+    setTable('chart_of_accounts', { data: [] })
+  })
+
+  for (const dryRun of [true, false]) {
+    it(`refuses the import basis 4545 and writes nothing (dryRun=${dryRun})`, async () => {
+      const result = await createSupplierInvoice(ctx(), rc('4545'), { dryRun })
+
+      expect(result).toEqual({
+        ok: false,
+        code: 'SI_REVERSE_CHARGE_ACCOUNT',
+        details: { field: 'items[1].account_number', account_number: '4545', reason: 'other_box', account_box: 'ruta50' },
+      })
+      expectNothingWritten()
+    })
+  }
+
+  it('refuses trepartshandel 4512 and the 4598 offset', async () => {
+    expect(await createSupplierInvoice(ctx(), rc('4512'), { dryRun: true })).toMatchObject({
+      code: 'SI_REVERSE_CHARGE_ACCOUNT',
+      details: { reason: 'other_box', account_box: 'ruta37' },
+    })
+    expect(await createSupplierInvoice(ctx(), rc('4598'), { dryRun: true })).toMatchObject({
+      code: 'SI_REVERSE_CHARGE_ACCOUNT',
+      details: { reason: 'basis_offset', account_number: '4598' },
+    })
+  })
+
+  it('refuses a cost account whose momskod in the kontoplan is import, or reverse charge without a sats', async () => {
+    setTable('chart_of_accounts', {
+      data: [
+        { account_number: '4010', default_vat_treatment: 'import_goods', default_vat_rate: 0.25 },
+        { account_number: '5420', default_vat_treatment: 'reverse_charge_non_eu_services', default_vat_rate: 0 },
+      ],
+    })
+    expect(await createSupplierInvoice(ctx(), rc('4010'), { dryRun: true })).toMatchObject({
+      code: 'SI_REVERSE_CHARGE_ACCOUNT',
+      details: { reason: 'other_box', account_box: 'ruta50' },
+    })
+    expect(await createSupplierInvoice(ctx(), rc('5420'), { dryRun: true })).toMatchObject({
+      code: 'SI_REVERSE_CHARGE_ACCOUNT',
+      details: { reason: 'no_rate' },
+    })
+  })
+
+  it('registers 4531, which reports ruta 22 itself, and an ordinary cost account as before', async () => {
+    for (const account of ['4531', '6550']) {
+      const result = await createSupplierInvoice(ctx(), rc(account), { dryRun: true })
+      if (!result.ok || !result.dryRun) throw new Error(`expected a dry-run preview for ${account}`)
+      expect(result.preview).toMatchObject({ reverse_charge: true, total: 1500 })
+    }
+    expectNothingWritten()
+  })
+
+  it('leaves an invoice without reverse charge alone', async () => {
+    setTable('suppliers', { data: makeSupplier({ id: SUPPLIER_ID, supplier_type: 'swedish_business' }) })
+    const result = await createSupplierInvoice(
+      ctx(),
+      body({ items: [{ description: 'Köp', amount: 1000, account_number: '4545', vat_rate: 0.25 }] }),
+      { dryRun: true },
+    )
+    expect(result.ok).toBe(true)
+  })
+})

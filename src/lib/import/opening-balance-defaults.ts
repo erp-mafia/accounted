@@ -61,3 +61,21 @@ export function defaultImportOpeningBalancesOn(args: {
 }): boolean {
   return args.hasOpeningBalances && args.existingIbEntryCount === 0
 }
+
+/**
+ * How many of the fiscal year's posted opening-balance vouchers still stand
+ * when the import books. A replace stornos every posted voucher of the
+ * import it supersedes before the new one books (the undo selects them by
+ * `import_batch_id`), its IB voucher included, so that one never counts: the
+ * same rule as findBookedOpeningBalance in sie-continuity.ts. Counting it
+ * turned the IB toggle off on a replace, and the replaced year was left with
+ * no opening balances. An IB voucher booked by hand or by another import
+ * (`import_batch_id` null or different) still counts.
+ */
+export function standingOpeningBalanceVoucherCount(
+  vouchers: readonly { import_batch_id: string | null }[],
+  replacingImportId: string | null,
+): number {
+  if (!replacingImportId) return vouchers.length
+  return vouchers.filter((voucher) => voucher.import_batch_id !== replacingImportId).length
+}

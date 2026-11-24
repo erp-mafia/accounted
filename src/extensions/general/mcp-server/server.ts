@@ -482,7 +482,7 @@ import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFo
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
 import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
 import { previewVoucherVatDeclaration } from '@/lib/vat/voucher-vat-impact'
-import { FOREIGN_SELLER_VAT_NOTE, FOREIGN_SELLER_VAT_RATE_WARNING } from '@/lib/vat/reverse-charge-box'
+import { FOREIGN_SELLER_VAT_NOTE, FOREIGN_SELLER_VAT_RATE_WARNING, swedishVatNumberAbroadNote } from '@/lib/vat/reverse-charge-box'
 import { runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
@@ -9827,8 +9827,8 @@ export const tools: McpTool[] = [
           additionalProperties: { type: 'string' },
           description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"1":"KS01","6":"P001"}. Tags the expense/business lines of the generated voucher: never the bank or VAT lines. Unknown values rejected, never auto-created.',
         },
-        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard. Set true ONLY after the user confirms this bank line is a separate event: the guard blocks a second verifikat for an event already booked.' },
-        confirm_foreign_seller_vat: { type: 'boolean', description: 'reverse_charge on an underlag with VAT: it is FOREIGN VAT charged in error. Never deducted.' },
+        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard. Set true ONLY after the user confirms this bank line is a separate event.' },
+        confirm_foreign_seller_vat: { type: 'boolean', description: 'reverse_charge on an underlag with VAT: charged in error (FOREIGN VAT, or an SE VAT number abroad and the seller not established here for the sale). Never deducted.' },
         proposal_id: { type: 'string', maxLength: 200, description: 'Id of the suggestion booked from (in its categorize_args). Recorded only.' },
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
       },
@@ -9929,20 +9929,13 @@ export const tools: McpTool[] = [
       // seller gave (#94), staged so the commit books the same.
       const stagedKind = reverseChargeKind ?? preview.reverse_charge_kind
       // A cost account that reports ruta 20-24 itself decides the box the
-      // lines book (crm#1454): 4531 is ruta 22 whatever kind was sent.
+      // lines book (crm#1454): 4531 is ruta 22. A box sent that it
+      // contradicts was refused by the dry run above (reverseChargeAccountConflict).
       const selfReporting = tx.amount < 0 && vatTreatment === 'reverse_charge' &&
         !mapping.vat_lines.some((l) => l.debit_amount > 0 && isReverseChargeBasisAccount(l.account_number))
       const ownAccount = selfReporting
         ? reverseChargeKindOnOwnAccount(mapping.debit_account, (await loadChart()).get(mapping.debit_account))
         : null
-      if (ownAccount && reverseChargeKind && reverseChargeKind !== ownAccount.kind) {
-        throw badArgument(
-          'vat_treatment',
-          `vat_treatment names ${reverseChargeKindRuta(reverseChargeKind)}, but account ${mapping.debit_account} reports ${ownAccount.ruta} itself, ` +
-            'so the purchase would be declared in a box other than the one asked. Book it on a cost account without a box of its own (the basis pair then books the box asked), ' +
-            `or send the box ${mapping.debit_account} reports.`,
-        )
-      }
       const reverseCharge = tx.amount < 0
         ? reverseChargeBasisSummary(mapping.vat_lines, stagedKind, mapping.debit_account, reverseChargeKind ? 'vat_treatment' : 'underlag', ownAccount)
         : undefined
@@ -9974,7 +9967,11 @@ export const tools: McpTool[] = [
       // the document cannot tell the charge from Swedish VAT.
       const foreignSellerVat = preview.underlag?.foreign_seller_vat
       const foreignSellerVatNote = foreignSellerVat
-        ? [FOREIGN_SELLER_VAT_NOTE.sv, ...(foreignSellerVat.could_be_swedish_vat ? [FOREIGN_SELLER_VAT_RATE_WARNING.sv] : [])].join(' ')
+        ? [
+            ...(foreignSellerVat.address_country ? [swedishVatNumberAbroadNote(foreignSellerVat.address_country).sv] : []),
+            FOREIGN_SELLER_VAT_NOTE.sv,
+            ...(foreignSellerVat.could_be_swedish_vat ? [FOREIGN_SELLER_VAT_RATE_WARNING.sv] : []),
+          ].join(' ')
         : undefined
 
       // Resolve-don't-select: codes AND natural-language names resolve against
@@ -10001,6 +9998,9 @@ export const tools: McpTool[] = [
           category,
           vat_treatment: vatTreatment ?? null,
           ...(stagedKind ? { reverse_charge_kind: stagedKind } : {}),
+          // The caller named the box (not read off the underlag): the
+          // approval holds it against the cost account's own box again.
+          ...(reverseChargeKind ? { reverse_charge_box_param: 'vat_treatment' } : {}),
           vat_amount: vatAmount ?? null,
           account_override: accountOverride ?? null,
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0
