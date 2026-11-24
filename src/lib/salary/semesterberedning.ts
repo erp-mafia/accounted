@@ -23,11 +23,16 @@
  *                              vacation_day_value policy percent_4_6
  *   procentregeln            : the earning year's day value (rate x the
  *                              intjänandeår's semesterlönegrundande lön /
- *                              earned days, 16 b §, procentregeln-liability.ts),
- *                              and only where Accounted lacks that year the
- *                              estimate below
- *   procentregeln estimate   : monthly x 12 x rate / entitled days, or
- *                              hourly x hours_per_week x 52 x rate / entitled
+ *                              earned days, 16 b §, procentregeln-liability.ts;
+ *                              on the calendar basis, where the employee was
+ *                              not employed the whole previous year, the
+ *                              running year's semesterlön so far over the days
+ *                              it earned), and only where Accounted lacks the
+ *                              pay the estimate below
+ *   procentregeln estimate   : monthly x 12 x rate / days per year, or
+ *                              hourly x hours_per_week x 52 x rate / days per
+ *                              year (a full year's day; a mid-year hire's days
+ *                              are fewer, Semesterlagen 7 §)
  * The days valued are vacationLiabilityDays' (vacation-liability-days.ts):
  * the year's untaken paid days, the sparade dagar and, on the statutory
  * basis, the next semesterår's days earned in the closing intjänandeår. The
@@ -56,7 +61,7 @@ import { paidDaysPerDayOff } from './vacation-net-days'
 import { resolveVacationPayRate } from './vacation-pay-rate'
 import { loadVariablePayRuns, previousVacationYearStart, unpaidVariableVacationPayAtYearEnd } from './variable-vacation-pay'
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
-import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
+import { computeEntitledDays, getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
 import { remainingSavedDays } from './vacation-category'
 import {
   liabilityAvgifterRate,
@@ -227,18 +232,14 @@ export function dayValueSek(emp: DayValueEmployee, dayValuePolicy: VacationDayVa
   return roundOre((monthly * 12 * rate) / Math.max(emp.vacation_days_per_year, 1))
 }
 
-/** Prorated entitlement for the new year (Semesterlagen 3a §: round UP). */
-function nextYearEntitled(emp: EmployeeRosterRow, newYearStart: string, newYearEnd: string): number {
+/**
+ * The new semesterår's paid days (Semesterlagen 7 §, computeEntitledDays: the
+ * days its intjänandeår earns, rounded up); none when the employment ended
+ * before the new year begins.
+ */
+function nextYearEntitled(emp: EmployeeRosterRow, basis: VacationYearBasis, newYearStart: string): number {
   if (emp.employment_end && emp.employment_end < newYearStart) return 0
-  if (emp.employment_start >= newYearEnd) return 0
-  const yearStartMs = Date.parse(`${newYearStart}T00:00:00Z`)
-  const yearEndMs = Date.parse(`${newYearEnd}T00:00:00Z`)
-  const fromMs = Math.max(yearStartMs, Date.parse(`${emp.employment_start}T00:00:00Z`))
-  const toMs = emp.employment_end
-    ? Math.min(yearEndMs, Date.parse(`${emp.employment_end}T00:00:00Z`) + 86_400_000)
-    : yearEndMs
-  const fraction = Math.max(0, toMs - fromMs) / (yearEndMs - yearStartMs)
-  return Math.min(emp.vacation_days_per_year, Math.ceil(fraction * emp.vacation_days_per_year))
+  return computeEntitledDays(basis, newYearStart, emp.vacation_days_per_year, emp.employment_start, emp.employment_end)
 }
 
 async function loadRoster(
@@ -302,7 +303,6 @@ export async function previewVacationYearClose(
   const bounds = getVacationYearBounds(closingYearStart)
   const yearEnd = lastDayBefore(bounds.end)
   const newYearStart = bounds.end
-  const newYearBounds = getVacationYearBounds(newYearStart)
 
   // A year can only be closed once it has ended.
   const today = todayIsoStockholm()
@@ -405,7 +405,8 @@ export async function previewVacationYearClose(
 
   for (const emp of roster.data) {
     const ledger = ledgerByEmployee.get(emp.id)
-    const entitled = ledger?.entitled_days ?? emp.vacation_days_per_year
+    const entitled =
+      ledger?.entitled_days ?? computeEntitledDays(basis, closingYearStart, emp.vacation_days_per_year, emp.employment_start)
     const taken = ledger?.taken_days ?? 0
     // Sparade dagar still held: the seeded years minus what 'saved' vacation
     // lines consumed during the year.
@@ -488,7 +489,7 @@ export async function previewVacationYearClose(
       // they come off the new year's entitlement.
       next_year_entitled: Math.max(
         0,
-        roundOre(nextYearEntitled(emp, newYearStart, newYearBounds.end) - advanceTaken),
+        roundOre(nextYearEntitled(emp, basis, newYearStart) - advanceTaken),
       ),
       variable_vacation_pay_sek: variableVacationPay,
       ...(days.earning_days > 0 ? { earning_days: days.earning_days } : {}),

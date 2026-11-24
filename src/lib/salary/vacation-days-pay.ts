@@ -40,7 +40,7 @@ import { roundOre, sumOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { CalculationStep } from './calculation-engine'
 import { isCalculatedLine } from './calculated-line-items'
-import { computeEntitledDays } from './vacation-ledger'
+import { paidDaysEarnedIn } from './vacation-ledger'
 import { roundPaidDays } from './vacation-net-days'
 import { resolveVacationPayRate } from './vacation-pay-rate'
 import { getVacationYearBounds, getVacationYearStart, type VacationYearBasis } from './vacation-year'
@@ -247,12 +247,12 @@ export function procentregelnDayValue(input: {
   const lastDay = dayBefore(yearEnd)
   const employedTo = input.employmentEnd && input.employmentEnd < lastDay ? input.employmentEnd : lastDay
 
+  // The base year is an intjänandeår on either basis: on the statutory one
+  // the payment's semesterår's, on the calendar one its own (sammanfallande).
   const earnedDays =
     employedFrom > employedTo
       ? 0
-      : input.basis === 'statutory_apr_mar'
-        ? computeEntitledDays('statutory_apr_mar', currentStart, input.vacationDaysPerYear, input.employmentStart)
-        : input.vacationDaysPerYear
+      : paidDaysEarnedIn({ start: yearStart, end: yearEnd }, input.vacationDaysPerYear, input.employmentStart)
   if (!(earnedDays > 0)) {
     return {
       known: false,

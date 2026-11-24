@@ -23,11 +23,14 @@
  *     null when Accounted does not hold that whole year (a new company, a
  *     cutover, a hire during the year): the caller falls back to the
  *     estimate.
- *   - earningSek (statutory April to March basis only): the semesterlön of
- *     the days being earned in the running intjänandeår, the rate times the
- *     semesterunderlag of the payslips paid in it so far (16 b § exactly; the
- *     same figure the per-run accrual books). null when a month the employee
- *     was employed has passed without a counted payslip in Accounted.
+ *   - earningSek: the semesterlön of the days being earned in the running
+ *     intjänandeår, the rate times the semesterunderlag of the payslips paid
+ *     in it so far (16 b § exactly; the same figure the per-run accrual
+ *     books). The running intjänandeår is the running vacation year on
+ *     either basis: on the statutory one it earns the next semesterår's days,
+ *     under sammanfallande semesterår (calendar) its own. null when a month
+ *     the employee was employed has passed without a counted payslip in
+ *     Accounted.
  *
  * Counted payslips: booked, or the run being booked (`inFlightRunId`). The
  * earning year's base follows procentregelnDayValue's own rule (approved,
@@ -41,8 +44,10 @@ import { resolveVacationPayRate } from './vacation-pay-rate'
 import { getVacationYearStart, type VacationYearBasis } from './vacation-year'
 import { previousVacationYearStart } from './variable-vacation-pay'
 import type { VacationLiabilityDays } from './vacation-liability-days'
+import { roundPaidDays } from './vacation-net-days'
 
 export interface ProcentregelnLiabilityValue {
+  basis: VacationYearBasis
   perDay: number | null
   earningSek: number | null
 }
@@ -103,27 +108,23 @@ export function procentregelnLiabilityValue(input: {
     payslips: input.payslips,
   })
 
-  let earningSek: number | null = 0
-  if (basis === 'statutory_apr_mar') {
-    const runningStart = getVacationYearStart(asOfDate, basis)
-    const counted = input.payslips.filter(
-      (p) =>
-        (p.status === 'booked' || p.salaryRunId === input.inFlightRunId) &&
-        p.paymentDate >= runningStart &&
-        p.paymentDate <= asOfDate,
-    )
-    // Every month the employee was employed that has fully passed needs a
-    // counted payslip calculated under procentregeln; the running month may
-    // still be unpaid.
-    const employedFrom = employee.employment_start > runningStart ? employee.employment_start : runningStart
-    const lastMonth = previousMonth(asOfDate)
-    const employedTo = employee.employment_end && employee.employment_end.slice(0, 7) < lastMonth ? employee.employment_end.slice(0, 7) : lastMonth
-    const paidMonths = new Set(counted.filter((p) => p.vacationBasis !== null).map((p) => p.paymentDate.slice(0, 7)))
-    const missing = employedFrom.slice(0, 7) <= employedTo ? monthsFrom(employedFrom, employedTo).filter((m) => !paidMonths.has(m)) : []
-    earningSek =
-      missing.length > 0 ? null : roundOre(rate * sumOre(counted.map((p) => p.vacationBasis ?? 0)))
-  }
-  return { perDay: day.known ? day.perDay : null, earningSek }
+  const runningStart = getVacationYearStart(asOfDate, basis)
+  const counted = input.payslips.filter(
+    (p) =>
+      (p.status === 'booked' || p.salaryRunId === input.inFlightRunId) &&
+      p.paymentDate >= runningStart &&
+      p.paymentDate <= asOfDate,
+  )
+  // Every month the employee was employed that has fully passed needs a
+  // counted payslip calculated under procentregeln; the running month may
+  // still be unpaid.
+  const employedFrom = employee.employment_start > runningStart ? employee.employment_start : runningStart
+  const lastMonth = previousMonth(asOfDate)
+  const employedTo = employee.employment_end && employee.employment_end.slice(0, 7) < lastMonth ? employee.employment_end.slice(0, 7) : lastMonth
+  const paidMonths = new Set(counted.filter((p) => p.vacationBasis !== null).map((p) => p.paymentDate.slice(0, 7)))
+  const missing = employedFrom.slice(0, 7) <= employedTo ? monthsFrom(employedFrom, employedTo).filter((m) => !paidMonths.has(m)) : []
+  const earningSek = missing.length > 0 ? null : roundOre(rate * sumOre(counted.map((p) => p.vacationBasis ?? 0)))
+  return { basis, perDay: day.known ? day.perDay : null, earningSek }
 }
 
 /**
@@ -168,23 +169,53 @@ export async function loadProcentregelnLiabilityValues(
   return values
 }
 
+export interface ProcentregelnLiabilitySek {
+  /** What one valued day is worth. */
+  dayValue: number
+  /** The days priced at dayValue; the rest of the liability is the running intjänandeår's semesterlön. */
+  valuedDays: number
+  liability: number
+  /** No day was priced at the estimate from today's pay. */
+  fromEarningYear: boolean
+}
+
 /**
  * A procentregeln employee's liability: the days owed at the earning year's
  * day value, plus on the statutory basis the running intjänandeår's
- * semesterlön. Where Accounted lacks the year, the estimate from today's pay
- * (dayValueSek) stands in. Pure.
+ * semesterlön. Under sammanfallande semesterår (calendar) the payout prices
+ * the running year's days at the previous year's day value, so the liability
+ * does too; where the payout has none (the employee was not employed the
+ * whole previous year) the running year's own days are worth its semesterlön
+ * so far over the days it has earned (16 b §, 7 §). Where Accounted lacks
+ * the pay, the estimate from today's pay (dayValueSek) stands in. Pure.
  */
 export function procentregelnLiabilitySek(
   days: VacationLiabilityDays,
   value: ProcentregelnLiabilityValue | undefined,
   estimateDayValue: number,
-): { dayValue: number; liability: number; fromEarningYear: boolean } {
+): ProcentregelnLiabilitySek {
+  const earnedDays = days.current_year_earned_days ?? 0
+  if (value?.basis === 'calendar' && value.perDay == null && value.earningSek != null && days.current_year_days > 0 && earnedDays > 0) {
+    const runningDayValue = roundOre(value.earningSek / earnedDays)
+    const otherDays = roundPaidDays(days.total_days - days.current_year_days)
+    if (otherDays <= 0) {
+      return { dayValue: runningDayValue, valuedDays: days.total_days, liability: roundOre(days.total_days * runningDayValue), fromEarningYear: true }
+    }
+    // Sparade dagar or an earlier year not closed yet: those days keep the estimate.
+    return {
+      dayValue: estimateDayValue,
+      valuedDays: otherDays,
+      liability: roundOre(otherDays * estimateDayValue + days.current_year_days * runningDayValue),
+      fromEarningYear: false,
+    }
+  }
   const dayValue = value?.perDay ?? estimateDayValue
   const owedDays = days.total_days - days.earning_days
   const earning = days.earning_days > 0 ? (value?.earningSek ?? days.earning_days * estimateDayValue) : 0
   return {
     dayValue,
+    valuedDays: roundOre(owedDays),
     liability: roundOre(owedDays * dayValue + earning),
-    fromEarningYear: value?.perDay != null && (days.earning_days === 0 || value.earningSek != null),
+    fromEarningYear: (value?.perDay != null || owedDays <= 0) && (days.earning_days === 0 || value?.earningSek != null),
   }
 }

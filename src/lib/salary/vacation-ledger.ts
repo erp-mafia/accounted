@@ -31,7 +31,7 @@ import {
   getVacationYearStart,
   type VacationYearBasis,
 } from './vacation-year'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface VacationBalanceRow {
   id: string
@@ -367,15 +367,38 @@ function wholeMonthsBetween(from: string, to: string): number {
 }
 
 /**
- * Betalda semesterdagar for a semesterår, per Semesterlagen 7 §:
+ * Betalda semesterdagar for a semesterår, per Semesterlagen 7 §: the paid
+ * days its intjänandeår earns (paidDaysEarnedIn).
+ *
+ * The intjänandeår (3 §) is the twelve months immediately preceding the
+ * semesterår on the statutory basis. Under sammanfallande intjänande- och
+ * semesterår (the calendar basis, a deviation from 3 § that 2 a § allows by
+ * kollektivavtal) it is the semesterår itself. 7 § is not one of the sections
+ * an agreement may deviate from, so on either basis someone hired part-way
+ * through the intjänandeår earns proportionally fewer PAID days while keeping
+ * the right to take unpaid ones. `employmentEnd`, when given, ends the
+ * employed days the same way.
+ */
+export function computeEntitledDays(
+  basis: VacationYearBasis,
+  yearStart: string,
+  vacationDaysPerYear: number,
+  employmentStart: string,
+  employmentEnd?: string | null,
+): number {
+  const semesterBounds = getVacationYearBounds(yearStart)
+  const intjanandear =
+    basis === 'statutory_apr_mar' ? { start: shiftYear(semesterBounds.start, -1), end: semesterBounds.start } : semesterBounds
+  return paidDaysEarnedIn(intjanandear, vacationDaysPerYear, employmentStart, employmentEnd)
+}
+
+/**
+ * The paid semesterdagar an intjänandeår ([start, end), half-open) earns,
+ * per Semesterlagen 7 §:
  *
  *   anställningsdagar under intjänandeåret / dagar under intjänandeåret
  *   x semesterdagar, and "om ett brutet tal då uppstår, avrundas detta till
  *   närmast högre hela tal" (round UP, always).
- *
- * The intjänandeår is the twelve months immediately preceding the semesterår
- * (3 §), so someone hired part-way through it earns proportionally fewer PAID
- * days while keeping the right to take unpaid ones.
  *
  * Two deliberate omissions, both of which can only overstate entitlement and
  * never understate it, so neither can silently deny an employee a paid day:
@@ -386,29 +409,21 @@ function wholeMonthsBetween(from: string, to: string): number {
  *    starts after 31 August of the semesterår. That is a cap on days off,
  *    paid or unpaid, which is a different quantity from the paid days 7 §
  *    computes, so it does not belong in this number.
- *
- * Only applied on the statutory basis. Under sammanfallande semesterår the
- * employee earns and takes in the same year, commonly with förskottssemester,
- * and how a mid-year hire is treated is a collective-agreement question rather
- * than a statutory one. Those companies keep the flat entitlement until that
- * is decided.
  */
-export function computeEntitledDays(
-  basis: VacationYearBasis,
-  yearStart: string,
+export function paidDaysEarnedIn(
+  intjanandear: { start: string; end: string },
   vacationDaysPerYear: number,
   employmentStart: string,
+  employmentEnd?: string | null,
 ): number {
-  if (basis !== 'statutory_apr_mar') return vacationDaysPerYear
-  // The intjänandeår is the year immediately BEFORE this semesterår.
-  const semesterBounds = getVacationYearBounds(yearStart)
-  const earningStart = shiftYear(semesterBounds.start, -1)
-  const earningEnd = semesterBounds.start
-  if (employmentStart >= earningEnd) return 0
-  const totalDays = daysBetween(earningStart, earningEnd)
+  const { start, end } = intjanandear
+  if (employmentStart >= end) return 0
+  if (employmentEnd && employmentEnd < start) return 0
+  const totalDays = daysBetween(start, end)
   if (totalDays <= 0) return vacationDaysPerYear
-  const employedFrom = employmentStart > earningStart ? employmentStart : earningStart
-  const employedDays = daysBetween(employedFrom, earningEnd)
+  const employedFrom = employmentStart > start ? employmentStart : start
+  const dayAfterEmployment = employmentEnd ? addDaysIso(employmentEnd, 1) : end
+  const employedDays = daysBetween(employedFrom, dayAfterEmployment < end ? dayAfterEmployment : end)
   const quota = (employedDays / totalDays) * vacationDaysPerYear
   return Math.min(vacationDaysPerYear, Math.ceil(quota))
 }
