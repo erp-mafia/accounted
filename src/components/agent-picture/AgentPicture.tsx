@@ -41,6 +41,7 @@ import { withoutPictureRow } from '@/lib/agent-context/wiki-views'
 import { PictureViews, isPictureView, type PictureAgentView, type PictureContext, type PictureView } from './PictureViews'
 import { WaitingLine } from './WaitingLine'
 import { agentCardDetail, shortDay, type CardWords } from './agent-card-text'
+import { cardInk } from './picture-card-ink'
 import { AgentMark, LogoTile, SourceMark } from './picture-marks'
 
 export type { PictureContext } from './PictureViews'
@@ -702,11 +703,12 @@ function CardGroup({ label, children }: { label: string; children: ReactNode }) 
  * One card: a source or an agent. The whole card is the link to where it is
  * managed (`href`); with `onPress` it is instead a button that opens what is
  * behind it in place, and with neither it is not a control at all. A card
- * that is not connected is flat with a hairline,
- * faded, its mark greyed, and says Koppla. A ring says something is
- * happening: blue for a connection that just made a call, ochre for a source
- * that just delivered. The data attributes are what the lines are measured
- * from, and what a press is placed by while a view is closing.
+ * that is not connected is flat with a hairline, its text in the quiet ink
+ * (cardInk: never an opacity on text), its mark greyed, and says Koppla. A
+ * ring says something is happening: blue for a connection that just made a
+ * call, ochre for a source that just delivered. The data attributes are what
+ * the lines are measured from, and what a press is placed by while a view is
+ * closing.
  */
 function PictureCard({
   flowId,
@@ -738,6 +740,7 @@ function PictureCard({
 }) {
   const t = useTranslations('wiki')
   const off = state === 'not_connected'
+  const ink = cardInk(state)
   const control = onPress !== undefined || href !== undefined
   const flow = {
     'data-flow-id': flowId,
@@ -757,11 +760,11 @@ function PictureCard({
   const body = (
     <>
       {mark}
-      <span className={cn('flex min-w-0 flex-1 flex-col', off && 'opacity-60')}>
-        <span className="truncate text-[13px] font-medium text-strong" {...(maskName ? { 'data-ph-mask': '' } : {})}>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className={cn('truncate text-[13px] font-medium', ink.name)} {...(maskName ? { 'data-ph-mask': '' } : {})}>
           {name}
         </span>
-        <span className={cn('flex min-w-0 text-xs tabular-nums', state === 'needs_attention' ? 'text-attn' : 'text-muted-foreground')} data-ph-mask="">
+        <span className={cn('flex min-w-0 text-xs tabular-nums', ink.detail)} data-ph-mask="">
           {/* Both may shrink, the lead far more readily: it gives way to an ellipsis before the tail loses a character. */}
           <span className={cn('min-w-0', !wrapDetail && 'flex-[0_9999_auto] truncate')}>{detail.lead}</span>
           {detail.tail && <span className="min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-pre">{detail.tail}</span>}
