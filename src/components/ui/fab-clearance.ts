@@ -17,7 +17,10 @@
  * AgentTrigger) and the clearance grows by the same step, so the end of the
  * page still clears the lifted button.
  *
- * Desktop only: on a phone a fresh button is not shown at all.
+ * On a phone a fresh button is not shown at all, so the clearance is desktop
+ * only. A collapsed handle does show there, and it lifts above a bottom bar
+ * too (5.5rem above the bottom nav in AgentTrigger), so it never covers the
+ * bar's primary.
  */
 export const AGENT_FAB_PROPS = { 'data-agent-fab': '' } as const
 

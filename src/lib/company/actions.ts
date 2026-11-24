@@ -7,7 +7,7 @@ import {
   BOOKS_GATE_MAX_AGE_SECONDS,
   shouldArmBooksGate,
 } from '@/lib/onboarding/books-gate'
-import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
+import { setActiveCompany } from '@/lib/company/context'
 import { httpOnlyCookieOptions } from '@/lib/supabase/cookie-options'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
@@ -16,43 +16,6 @@ import { isEntityType, isEntityTypeCreatable } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-
-/**
- * Switch the active company. Returns an error *code* (translated by the
- * caller, same pattern as `org_number_invalid` below): 'not_member' when the
- * user lacks membership, 'persist_failed' when the user_preferences write
- * failed or could not be verified (#701).
- */
-export async function switchCompany(companyId: string): Promise<{ error?: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return { error: 'Unauthorized' }
-  }
-
-  try {
-    await setActiveCompany(supabase, user.id, companyId)
-    // No revalidatePath: the client performs a hard navigation
-    // (window.location.assign) after this action returns, which wipes
-    // every React/router/fetch cache wholesale. revalidatePath would be a
-    // no-op and would just race with the hard reload.
-    return {}
-  } catch (err) {
-    console.error('[switchCompany] failed', err)
-    if (err instanceof CompanyContextError && err.code === 'not_member') {
-      return { error: 'not_member' }
-    }
-    if (err instanceof CompanyContextError && err.code === 'company_locked') {
-      // Multi-user seat gate: the company is frozen for this (non-owner)
-      // membership until someone pays. Translated by the caller.
-      return { error: 'company_locked' }
-    }
-    // persist_failed and anything unexpected: a retryable failure, not a
-    // permissions problem: don't tell the user they lack access.
-    return { error: 'persist_failed' }
-  }
-}
 
 /**
  * Create a company from onboarding wizard data.
@@ -165,8 +128,8 @@ async function createCompanyFromOnboardingImpl(params: {
   let rollbackClient: SupabaseClient | undefined
 
   if ((teamRow as { kind?: string } | null)?.kind !== 'byra' && user.email) {
-    // Dynamic imports: this file is imported by client components (through
-    // switch-client.ts) for its other actions, and these two modules reach
+    // Dynamic imports: this file is imported by a client component
+    // (OnboardingJourney) for its action, and these two modules reach
     // node:crypto; a static import would drag Node builtins into the client
     // graph (client-node-builtin guard). Server actions always execute
     // server-side, so the dynamic import is free here.

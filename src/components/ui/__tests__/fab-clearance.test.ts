@@ -28,6 +28,12 @@ describe('assistant button clearance', () => {
     }
   })
 
+  it('on a phone the collapsed handle lifts above a bottom bar too, measured from the bottom nav', () => {
+    for (const attr of Object.keys(PAGE_BOTTOM_BAR_PROPS)) {
+      expect(trigger).toContain(`max-md:[body:has([${attr}])_&]:bottom-[calc(var(--bottom-nav-h)+5.5rem)]`)
+    }
+  })
+
   it('the page and the transaction panel reserve the corner', () => {
     expect(read('src/components/dashboard/MainContainer.tsx')).toContain('AGENT_FAB_CLEARANCE_CLASS)')
     expect(read('src/components/transactions/TransactionDrawer.tsx')).toContain('AGENT_FAB_CLEARANCE_CLASS)')

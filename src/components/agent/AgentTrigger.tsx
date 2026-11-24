@@ -207,15 +207,15 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   //   fresh open  -> 'hidden md:flex'. `display: none` (not opacity/visibility)
   //                  so the button is genuinely non-interactive on mobile: not
   //                  clickable, not tabbable, out of the accessibility tree.
-  //                  Losing it costs nothing, the bottom nav's "Assistent" tab
-  //                  reaches the same agent.
-  //   collapsed   -> 'flex' on every viewport. Off /chat this is the ONLY route
-  //                  back to a minimized conversation: the bottom-nav tab opens
-  //                  the /chat surface instead of restoring the in-progress
-  //                  sheet, so hiding the handle on mobile would strand a
-  //                  session mid-booking with no way to reopen it. On /chat the
-  //                  handle is suppressed outright (see above), which is exactly
-  //                  the case where the nav tab does lead somewhere useful.
+  //                  The bottom nav has no assistant tab; on a phone a new
+  //                  conversation starts on /chat, under the Agenter area in
+  //                  the bottom nav's menu.
+  //   collapsed   -> 'flex' on every viewport. Off /chat this is the one way
+  //                  back to a minimized conversation on the page the user
+  //                  stands on: without it a session mid-booking could only be
+  //                  found again by leaving the page for /chat. On /chat the
+  //                  handle is suppressed outright (see above): there the
+  //                  conversation is already on screen.
   //
   // A pure CSS switch on purpose: no useMediaQuery, so no hydration mismatch,
   // no resize listener, no layout shift on first paint.
@@ -242,6 +242,10 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // never covers the bar's primary button. The marker is read with :has(),
       // so a bar only has to render the attribute. It used to be expected on
       // <body>, which nothing set, so the lift never happened (crm#1841).
+      // A phone lifts the collapsed handle the same way: the bars sit on the
+      // bottom nav there (StepBar, the Börja step bar) or float 1.5rem above
+      // it (the bulk bar, 3.5rem tall on a touch screen), and each keeps its
+      // primary on its lowest line, so 5.5rem above the nav clears it.
       // z-[45]: above the DialogVeil (z-40) so the assistant can be OPENED
       // while a non-modal dialog (booking, invoice) holds the page inert, but
       // below dialog content (z-50). Under a true modal dialog Radix sets
@@ -251,7 +255,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // non-modal dialog (DialogContent treats this as inside).
       data-agent-ui=""
       {...AGENT_FAB_PROPS}
-      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-pop bg-foreground text-background shadow-float bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body:has([data-page-bottom-bar])_&]:bottom-20`}
+      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-pop bg-foreground text-background shadow-float bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 max-md:[body:has([data-page-bottom-bar])_&]:bottom-[calc(var(--bottom-nav-h)+5.5rem)] md:[body:has([data-page-bottom-bar])_&]:bottom-20`}
     >
       <button
         onClick={handleClick}

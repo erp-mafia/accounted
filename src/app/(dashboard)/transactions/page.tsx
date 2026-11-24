@@ -4812,18 +4812,25 @@ export default function TransactionsPage() {
             )}
 
             {/* Negative margin + matching padding: the scroll container runs
-                to the panel edges while the columns keep the page padding. */}
+                to the panel edges while the columns keep the page padding.
+                On a phone (below sm) a row is its description, the amount and
+                Bokför: Datum, Kategori and Konto hide (the drawer shows them),
+                and so does the chooser that toggles them. */}
             <div className="overflow-x-auto -mx-4 px-2 md:-mx-6 md:px-4">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
                     <th className={cn(TH_CLASS, 'w-7 !pl-0 !pr-2')} aria-hidden="true"></th>
                     {txColumns.has('date') && (
-                      <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
+                      <th className={cn(TH_CLASS, 'hidden !pl-0 sm:table-cell')}>{t('th_date')}</th>
                     )}
                     <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
-                    {txColumns.has('category') && <th className={TH_CLASS}>{t('th_category')}</th>}
-                    {txColumns.has('account') && <th className={TH_CLASS}>{t('th_account')}</th>}
+                    {txColumns.has('category') && (
+                      <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_category')}</th>
+                    )}
+                    {txColumns.has('account') && (
+                      <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_account')}</th>
+                    )}
                     {txColumns.has('amount') && (
                       <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
                     )}
@@ -4838,7 +4845,7 @@ export default function TransactionsPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="-my-2 ml-2 mr-2 align-middle text-muted-foreground hover:text-foreground"
+                            className="-my-2 ml-2 mr-2 hidden align-middle text-muted-foreground hover:text-foreground sm:inline-flex"
                             aria-label={t('columns_button')}
                             title={t('columns_button')}
                           >
