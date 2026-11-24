@@ -8,7 +8,7 @@
  * an invoice where the seller charged moms.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createTableMockSupabase, makeCategorizationTemplate } from '@/tests/helpers'
+import { createTableMockSupabase, makeCategorizationTemplate, type TableMockResolver } from '@/tests/helpers'
 
 const { createTxJE, propagate, saveRule, intercept, lock, covered } = vi.hoisted(() => ({
   createTxJE: vi.fn(),
@@ -918,7 +918,11 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
       { ...software, category: 'expense_equipment', confirm_foreign_seller_vat: true },
       api,
     )
-    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN', details: { reason: 'seller_country_unknown' } })
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN',
+      details: { reason: 'goods_under_swedish_vat_number' },
+    })
   })
 
   it('boxes a confirmed service from a Swedish VAT number with an address abroad by the address', async () => {
@@ -1045,6 +1049,115 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
       document_id: 'doc-9',
       foreign_seller_vat: { could_be_swedish_vat: false, address_country: 'SG' },
     })
+  })
+
+  // A card of type eu_business says where the seller is, not that the goods
+  // were sent here from another member state (ruta 20).
+  it('lets no supplier card box goods from a Swedish VAT number with an address abroad, on either underlag, flag or not', async () => {
+    const shapes = [
+      // The row's own document has the number; the item the booking started from reads nothing.
+      { rowDocument: swedishNumberAbroad, itemReading: {} },
+      // The row has no document; the item has the number.
+      { rowDocument: null, itemReading: { supplier: swedishNumberAbroad } },
+    ]
+    for (const { rowDocument, itemReading } of shapes) {
+      for (const confirm of [true, false]) {
+        const { supabase } = ledger({
+          ...(rowDocument
+            ? {
+                transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
+                document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: rowDocument, totals: { total: 1250, vatAmount: 0 } } }, error: null },
+              }
+            : {}),
+          invoice_inbox_items: { data: { extracted_data: itemReading, matched_supplier_id: 'sup-1' }, error: null },
+          suppliers: { data: { supplier_type: 'eu_business' }, error: null },
+        })
+        const outcome = await categorizeTransaction(
+          supabase as never,
+          'user-1',
+          COMPANY_ID,
+          TX_ID,
+          { ...software, category: 'expense_equipment', inbox_item_id: 'item-1', confirm_foreign_seller_vat: confirm },
+          api,
+        )
+        expect(outcome).toMatchObject({
+          ok: false,
+          code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN',
+          details: { reason: 'goods_under_swedish_vat_number', parameter: 'reverse_charge_kind' },
+        })
+        if (!outcome.ok) expect(outcome.message?.sv).toMatch(/ruta 23/)
+      }
+    }
+  })
+
+  it('leaves goods unboxed when any underlag matched to the row shows a Swedish VAT number abroad, in any order', async () => {
+    const reading = (supplier: Record<string, unknown>) => ({ supplier, totals: { total: 1250, vatAmount: 0 } })
+    const german = { document_id: 'doc-7', extracted_data: reading({ vatNumber: 'DE123456789' }) }
+    const abroad = { document_id: 'doc-8', extracted_data: reading(swedishNumberAbroad) }
+    const shapes = [
+      // No document on the row and no item named, as the agent door sends it: the items matched to the row, both orders.
+      { rowDocument: null, matched: [german, abroad] },
+      { rowDocument: null, matched: [abroad, german] },
+      // The row's own document names a German seller; an item matched to the row has the number.
+      { rowDocument: reading({ vatNumber: 'DE123456789' }), matched: [abroad] },
+    ]
+    for (const { rowDocument, matched } of shapes) {
+      const { supabase } = ledger({
+        ...(rowDocument
+          ? {
+              transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
+              document_attachments: { data: { id: 'doc-1', extracted_data: rowDocument }, error: null },
+            }
+          : {}),
+        invoice_inbox_items: { data: matched, error: null },
+      })
+      const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, category: 'expense_equipment' }, api)
+      expect(outcome).toMatchObject({ ok: false, details: { reason: 'goods_under_swedish_vat_number' } })
+    }
+  })
+
+  // The underlag check reads the inbox item first and refuses on its own when that read fails; here only the box's
+  // own read of the item (its reading and supplier card) fails.
+  const itemUnreadForTheBox: TableMockResolver = (chain) =>
+    chain.some((call) => call.method === 'select' && call.args[0] === 'extracted_data, matched_supplier_id')
+      ? { data: null, error: { message: 'connection reset' } }
+      : { data: null, error: null }
+
+  it('takes no box for goods when the inbox item could not be read, whatever the row\'s document says', async () => {
+    const { supabase } = ledger({
+      transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
+      document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: { vatNumber: 'DE123456789' }, totals: { total: 1250, vatAmount: 0 } } }, error: null },
+      invoice_inbox_items: itemUnreadForTheBox,
+    })
+    const outcome = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { ...software, category: 'expense_equipment', inbox_item_id: 'item-1' },
+      api,
+    )
+    // A failure of ours to retry: no box, and no refusal that says the underlag named no country.
+    expect(outcome).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+  })
+
+  it('boxes a service by the row\'s document without reading the inbox item, which cannot change it', async () => {
+    const { supabase } = ledger({
+      transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
+      document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: { vatNumber: 'DE123456789' }, totals: { total: 1250, vatAmount: 0 } } }, error: null },
+      invoice_inbox_items: itemUnreadForTheBox,
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
+  })
+
+  it('still boxes a service from the same seller by its supplier card', async () => {
+    const { supabase } = ledger({
+      invoice_inbox_items: { data: { extracted_data: { supplier: swedishNumberAbroad }, matched_supplier_id: 'sup-1' }, error: null },
+      suppliers: { data: { supplier_type: 'eu_business' }, error: null },
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
   })
 
   it('keeps a box the caller named, and refuses a category that says neither goods nor service', async () => {

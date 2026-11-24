@@ -126,6 +126,7 @@ import {
 import { linkBasisColumns } from '@/lib/links/stamp'
 import {
   confirmedAbroadRegion,
+  isReverseChargeGoods,
   purchaseSellerRegion,
   reverseChargeBoxAsk,
   reverseChargeBoxFor,
@@ -1142,11 +1143,25 @@ export async function categorizeTransaction(
   ) {
     // A Swedish VAT number beside an address abroad, confirmed as a seller not established here: the address's
     // country, for a service.
-    const region =
+    const documentRegion =
       purchaseSellerRegion(documentSeller) ??
-      (input.confirm_foreign_seller_vat === true ? confirmedAbroadRegion(documentSeller, finalCategory) : null) ??
-      (input.inbox_item_id ? await inboxItemSellerRegionById(supabase, companyId, input.inbox_item_id) : null)
-    const box = reverseChargeBoxFor(region, finalCategory)
+      (input.confirm_foreign_seller_vat === true ? confirmedAbroadRegion(documentSeller, finalCategory) : null)
+    // The inbox item is read only where it can change the box: for the region when the row's document names none,
+    // and for goods, which a Swedish VAT number abroad on any underlag leaves unboxed.
+    const item =
+      input.inbox_item_id && (!documentRegion || isReverseChargeGoods(finalCategory))
+        ? await inboxItemSellerById(supabase, companyId, input.inbox_item_id)
+        : null
+    if (item === 'unread') {
+      // An item that could not be read is not one that names nobody: it may show a Swedish VAT number beside an
+      // address abroad. A failure of ours to retry, not a box for the caller to name.
+      txLog.error('inbox item unreadable for the reverse-charge box', { inboxItemId: input.inbox_item_id })
+      return refuseFor('INTERNAL_ERROR')
+    }
+    // Every underlag the booking anchors (the row's document, the named item's, the items matched to the row) and the
+    // named item's own reading: goods are left unboxed when any of them shows a Swedish VAT number abroad.
+    const sellers = [...underlagDocuments.map((one) => one.reading?.supplier), item?.seller]
+    const box = reverseChargeBoxFor(documentRegion ?? item?.region ?? null, finalCategory, sellers)
     if (box.ok) input = { ...input, reverse_charge_kind: box.kind }
     else boxUnknown = box.reason
   }
@@ -2079,7 +2094,16 @@ export async function bulkBookMatchedInboxItems(
       continue
     }
     if (vat_treatment === 'reverse_charge' && category.startsWith('expense_')) {
-      const box = reverseChargeBoxFor(await inboxItemSellerRegion(supabase, companyId, item), category)
+      // Goods: every underlag the booking anchors on the row, as the single door reads them (the row's own
+      // document, the items matched to it). A Swedish VAT number abroad on any of them leaves the goods unboxed.
+      const rowSellers = isReverseChargeGoods(category)
+        ? await rowUnderlagSellers(supabase, companyId, item.matched_transaction_id as string)
+        : []
+      if (rowSellers === 'unread') {
+        skipped.push({ item_id: itemId, reason: 'error', detail: 'Bankradens underlag kunde inte läsas, så momsrutan kan inte avgöras. Försök igen.' })
+        continue
+      }
+      const box = reverseChargeBoxFor(await inboxItemSellerRegion(supabase, companyId, item), category, [inboxItemReading(item), ...rowSellers])
       if (!box.ok) {
         skipped.push({ item_id: itemId, reason: 'reverse_charge_box_unknown', detail: box.messageSv })
         continue
@@ -2228,8 +2252,8 @@ type UnderlagReading =
 async function categorizeUnderlagDocuments(
   supabase: SupabaseClient,
   companyId: string,
-  transaction: Transaction,
-  input: CategorizeInput,
+  transaction: Pick<Transaction, 'id' | 'document_id'>,
+  input: Pick<CategorizeInput, 'vat_treatment' | 'inbox_item_id'>,
   dryRun: boolean,
 ): Promise<{ documents: Array<{ id: string; reading: UnderlagReading }>; readError: unknown }> {
   const reverseCharge = input.vat_treatment === 'reverse_charge'
@@ -2277,22 +2301,59 @@ async function categorizeUnderlagDocuments(
 }
 
 /**
- * Where an inbox item's seller is, by its id: the single door's underlag when
- * the bank row has no document of its own yet (#94). Null for an item of
- * another company or none.
+ * What every underlag on a bank row reads about its seller, as the single door
+ * reads them for a reverse charge (categorizeUnderlagDocuments): the row's own
+ * document and the inbox items matched to it. 'unread' when a read failed.
  */
-async function inboxItemSellerRegionById(
+async function rowUnderlagSellers(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionId: string,
+): Promise<Array<SellerIdentity | null> | 'unread'> {
+  const { data: row, error } = await supabase
+    .from('transactions')
+    .select('id, document_id')
+    .eq('id', transactionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return 'unread'
+  if (!row) return []
+  const { documents, readError } = await categorizeUnderlagDocuments(
+    supabase,
+    companyId,
+    row as Pick<Transaction, 'id' | 'document_id'>,
+    { vat_treatment: 'reverse_charge' },
+    false,
+  )
+  if (readError) return 'unread'
+  return documents.map((one) => one.reading?.supplier ?? null)
+}
+
+/**
+ * An inbox item's seller, by its id: the single door's underlag when the bank
+ * row has no document of its own yet (#94), as read and where it is. Null for
+ * an item of another company or none; 'unread' when the read failed.
+ */
+async function inboxItemSellerById(
   supabase: SupabaseClient,
   companyId: string,
   itemId: string,
-): Promise<SellerRegion | null> {
-  const { data: item } = await supabase
+): Promise<{ seller: SellerIdentity | null; region: SellerRegion | null } | 'unread' | null> {
+  const { data, error } = await supabase
     .from('invoice_inbox_items')
     .select('extracted_data, matched_supplier_id')
     .eq('id', itemId)
     .eq('company_id', companyId)
     .maybeSingle()
-  return item ? inboxItemSellerRegion(supabase, companyId, item as { extracted_data?: unknown; matched_supplier_id?: string | null }) : null
+  if (error) return 'unread'
+  if (!data) return null
+  const item = data as { extracted_data?: unknown; matched_supplier_id?: string | null }
+  return { seller: inboxItemReading(item), region: await inboxItemSellerRegion(supabase, companyId, item) }
+}
+
+/** What an inbox item's reading says about its seller. */
+function inboxItemReading(item: { extracted_data?: unknown }): SellerIdentity | null {
+  return (item.extracted_data as { supplier?: SellerIdentity | null } | null)?.supplier ?? null
 }
 
 /**
@@ -2305,7 +2366,7 @@ async function inboxItemSellerRegion(
   companyId: string,
   item: { extracted_data?: unknown; matched_supplier_id?: string | null },
 ): Promise<SellerRegion | null> {
-  const reading = (item.extracted_data as { supplier?: SellerIdentity | null } | null)?.supplier ?? null
+  const reading = inboxItemReading(item)
   const fromReading = purchaseSellerRegion(reading)
   if (fromReading || !item.matched_supplier_id) return fromReading
   const { data: supplier } = await supabase

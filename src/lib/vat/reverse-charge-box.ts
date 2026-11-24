@@ -62,6 +62,7 @@ export type ReverseChargeBoxRefusal =
   | 'seller_in_sweden'
   | 'goods_from_outside_eu'
   | 'purchase_kind_unknown'
+  | 'goods_under_swedish_vat_number'
 
 export type ReverseChargeBox =
   | { ok: true; kind: ReverseChargeKind }
@@ -76,6 +77,8 @@ const REFUSAL_SV: Record<ReverseChargeBoxRefusal, string> = {
     'Varor från ett land utanför EU är import: momsen redovisas på tullvärdet i ruta 50 och 60, inte som omvänd skattskyldighet. Bokför underlaget för sig.',
   purchase_kind_unknown:
     'Kategorin säger inte om köpet är en vara eller en tjänst (eller om omvänd skattskyldighet gäller alls), så rutan kan inte avgöras. Välj en mer precis kategori eller bokför underlaget för sig.',
+  goods_under_swedish_vat_number:
+    'Säljaren har ett svenskt momsnummer men adress utomlands, och köpet är varor. Underlaget visar inte om varorna skickats hit från ett annat EU-land (ruta 20) eller köpts i Sverige, där säljaren normalt tar ut svensk moms (omvänd moms i ruta 23 gäller bara vissa varor, som varor med anknytning till en fastighet här). Bokför underlaget för sig och välj där.',
 }
 
 function refuse(reason: ReverseChargeBoxRefusal): ReverseChargeBox {
@@ -100,14 +103,38 @@ export function purchaseSellerRegion(
   return null
 }
 
-/** The box a reverse-charge purchase in this category from a seller in this region reports, or why it cannot be told. */
-export function reverseChargeBoxFor(region: SellerRegion | null, category: TransactionCategory): ReverseChargeBox {
+/**
+ * The box a reverse-charge purchase in this category from a seller in this
+ * region reports, or why it cannot be told. sellers: what the purchase's
+ * underlag read about its seller. Goods sold under a Swedish VAT number beside
+ * an address abroad on any of them are boxed by no region, whether read, stated
+ * for a service (confirmedAbroadRegion) or taken from a supplier card: an
+ * unionsinternt förvärv (ruta 20) is goods sent here from another EU country
+ * (ML 2023:200 5 kap. 22 §), and the invoice shows the number the goods were
+ * supplied under (17 kap. 24 § p. 3), so they may as well have been supplied in
+ * Sweden, where the seller owes the VAT (16 kap. 5 §) unless the goods are of a
+ * kind the buyer reports in ruta 23 (16 kap. 6 §: goods linked to property in
+ * Sweden). The person names the box.
+ */
+export function reverseChargeBoxFor(
+  region: SellerRegion | null,
+  category: TransactionCategory,
+  sellers: ReadonlyArray<SellerIdentity | null | undefined> = [],
+): ReverseChargeBox {
+  if (isReverseChargeGoods(category) && sellers.some((seller) => swedishVatNumberAbroad(seller))) {
+    return refuse('goods_under_swedish_vat_number')
+  }
   if (!region) return refuse('seller_country_unknown')
   if (region === 'se') return refuse('seller_in_sweden')
   const nature = CATEGORY_NATURE[category]
   if (!nature) return refuse('purchase_kind_unknown')
   if (nature === 'goods') return region === 'eu' ? { ok: true, kind: 'eu_goods' } : refuse('goods_from_outside_eu')
   return { ok: true, kind: region === 'eu' ? 'eu_services' : 'non_eu_services' }
+}
+
+/** Whether a reverse-charge purchase in this category is goods. */
+export function isReverseChargeGoods(category: TransactionCategory): boolean {
+  return CATEGORY_NATURE[category] === 'goods'
 }
 
 /**
@@ -150,6 +177,10 @@ const ASK_REASON: Record<ReverseChargeBoxRefusal, { sv: string; en: string }> = 
   purchase_kind_unknown: {
     sv: 'kategorin säger inte om köpet är en vara eller en tjänst',
     en: 'the category does not say whether goods or a service was bought',
+  },
+  goods_under_swedish_vat_number: {
+    sv: 'underlaget visar ett svenskt momsnummer med adress utomlands, och för varor visar det inte om de skickats hit från ett annat EU-land (ruta 20) eller köpts i Sverige, där säljaren normalt tar ut svensk moms (omvänd moms i ruta 23 gäller bara vissa varor, som varor med anknytning till en fastighet här, och bokförs inte med en kategori)',
+    en: 'the underlag shows a Swedish VAT number beside an address abroad, and for goods it does not show whether they were sent here from another EU country (box 20) or bought in Sweden, where the seller normally charges Swedish VAT (reverse charge in box 23 covers only certain goods, such as goods linked to property here, and is not booked by category)',
   },
 }
 
