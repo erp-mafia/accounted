@@ -195,6 +195,29 @@ describe('sellerVatOnReverseCharge', () => {
     expect(purchaseSellerRegion(ABROAD, 'non_eu_business')).toBe('non_eu')
   })
 
+  // Ruta 20 is goods sent here from another EU country (ML 2023:200 5 kap. 22 §); the invoice shows the
+  // number the goods were supplied under (17 kap. 24 § p. 3). An SE number may be a purchase in Sweden.
+  it('boxes no goods sold under a Swedish VAT number abroad, whatever region a card or a statement gives', () => {
+    const LUXEMBOURG = { vatNumber: 'SE502012345601', address: '38 Example Avenue, L-1855 Luxembourg' }
+    for (const category of ['expense_equipment', 'expense_consumables'] as const) {
+      for (const region of ['eu', 'non_eu', null] as const) {
+        const box = reverseChargeBoxFor(region, category, [{}, LUXEMBOURG])
+        expect(box).toMatchObject({ ok: false, reason: 'goods_under_swedish_vat_number' })
+        if (!box.ok) expect(box.messageSv).toMatch(/ruta 20\).*ruta 23\).*svensk moms/)
+      }
+    }
+    // A service from the same seller keeps its region (#3814), and goods from another state's number box in ruta 20.
+    expect(reverseChargeBoxFor('eu', 'expense_software', [LUXEMBOURG])).toEqual({ ok: true, kind: 'eu_services' })
+    expect(reverseChargeBoxFor('eu', 'expense_equipment', [EU_SELLER, null])).toEqual({ ok: true, kind: 'eu_goods' })
+    expect(reverseChargeBoxFor(purchaseSellerRegion(null, 'eu_business'), 'expense_equipment', [null])).toEqual({ ok: true, kind: 'eu_goods' })
+  })
+
+  it('asks for the box of such goods naming ruta 23, in both locales', () => {
+    const ask = reverseChargeBoxAsk('goods_under_swedish_vat_number', 'reverse_charge_kind')
+    expect(ask.sv).toMatch(/svenskt momsnummer med adress utomlands.*ruta 23/)
+    expect(ask.en).toMatch(/Swedish VAT number beside an address abroad.*box 23/)
+  })
+
   it('words each refusal in both locales: the flag by name, or why it is not honoured', () => {
     const ask = sellerVatRefusalMessage('not_confirmed', '21 EUR')
     expect(ask.sv).toContain(`${FOREIGN_SELLER_VAT_FLAG}=true`)

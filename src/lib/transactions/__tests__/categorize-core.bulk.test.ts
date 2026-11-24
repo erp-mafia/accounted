@@ -523,6 +523,20 @@ describe('bulkBookMatchedInboxItems: the reverse-charge box per item', () => {
     expect(kindsBooked()).toEqual(['non_eu_services'])
   })
 
+  it('leaves out goods sold under a Swedish VAT number with an address abroad, whatever the supplier card says', async () => {
+    const supabase = queuedSupabase([
+      item('i1', 'tx-1', { vatNumber: 'SE502012345601', address: '38 Example Avenue, L-1855 Luxembourg' }, { matched_supplier_id: 'sup-1' }),
+      { data: { supplier_type: 'eu_business' } },
+      ...bookedChain('tx-1'),
+    ])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'], category: 'expense_equipment', vat_treatment: 'reverse_charge',
+    })
+    expect(booked).toEqual([])
+    expect(skipped).toEqual([{ item_id: 'i1', reason: 'reverse_charge_box_unknown', detail: expect.stringMatching(/svenskt momsnummer.*ruta 23/) }])
+    expect(mockMapping).not.toHaveBeenCalled()
+  })
+
   it('books each item of a mixed run in its own box and leaves out the one it cannot place', async () => {
     const supabase = queuedSupabase([
       item('i-eu', 'tx-1', { vatNumber: 'IE1234567T' }),

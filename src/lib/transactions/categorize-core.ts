@@ -1099,11 +1099,12 @@ export async function categorizeTransaction(
   ) {
     // A Swedish VAT number beside an address abroad, confirmed as a seller not established here: the address's
     // country, for a service.
+    const item = input.inbox_item_id ? await inboxItemSellerById(supabase, companyId, input.inbox_item_id) : null
     const region =
       purchaseSellerRegion(documentSeller) ??
       (input.confirm_foreign_seller_vat === true ? confirmedAbroadRegion(documentSeller, finalCategory) : null) ??
-      (input.inbox_item_id ? await inboxItemSellerRegionById(supabase, companyId, input.inbox_item_id) : null)
-    const box = reverseChargeBoxFor(region, finalCategory)
+      (item?.region ?? null)
+    const box = reverseChargeBoxFor(region, finalCategory, [documentSeller, item?.seller])
     if (box.ok) input = { ...input, reverse_charge_kind: box.kind }
     else boxUnknown = box.reason
   }
@@ -2037,7 +2038,7 @@ export async function bulkBookMatchedInboxItems(
       continue
     }
     if (vat_treatment === 'reverse_charge' && category.startsWith('expense_')) {
-      const box = reverseChargeBoxFor(await inboxItemSellerRegion(supabase, companyId, item), category)
+      const box = reverseChargeBoxFor(await inboxItemSellerRegion(supabase, companyId, item), category, [inboxItemReading(item)])
       if (!box.ok) {
         skipped.push({ item_id: itemId, reason: 'reverse_charge_box_unknown', detail: box.messageSv })
         continue
@@ -2169,22 +2170,29 @@ export async function bulkBookMatchedInboxItems(
 }
 
 /**
- * Where an inbox item's seller is, by its id: the single door's underlag when
- * the bank row has no document of its own yet (#94). Null for an item of
- * another company or none.
+ * An inbox item's seller, by its id: the single door's underlag when the bank
+ * row has no document of its own yet (#94), as read and where it is. Null for
+ * an item of another company or none.
  */
-async function inboxItemSellerRegionById(
+async function inboxItemSellerById(
   supabase: SupabaseClient,
   companyId: string,
   itemId: string,
-): Promise<SellerRegion | null> {
-  const { data: item } = await supabase
+): Promise<{ seller: SellerIdentity | null; region: SellerRegion | null } | null> {
+  const { data } = await supabase
     .from('invoice_inbox_items')
     .select('extracted_data, matched_supplier_id')
     .eq('id', itemId)
     .eq('company_id', companyId)
     .maybeSingle()
-  return item ? inboxItemSellerRegion(supabase, companyId, item as { extracted_data?: unknown; matched_supplier_id?: string | null }) : null
+  if (!data) return null
+  const item = data as { extracted_data?: unknown; matched_supplier_id?: string | null }
+  return { seller: inboxItemReading(item), region: await inboxItemSellerRegion(supabase, companyId, item) }
+}
+
+/** What an inbox item's reading says about its seller. */
+function inboxItemReading(item: { extracted_data?: unknown }): SellerIdentity | null {
+  return (item.extracted_data as { supplier?: SellerIdentity | null } | null)?.supplier ?? null
 }
 
 /**
@@ -2197,7 +2205,7 @@ async function inboxItemSellerRegion(
   companyId: string,
   item: { extracted_data?: unknown; matched_supplier_id?: string | null },
 ): Promise<SellerRegion | null> {
-  const reading = (item.extracted_data as { supplier?: SellerIdentity | null } | null)?.supplier ?? null
+  const reading = inboxItemReading(item)
   const fromReading = purchaseSellerRegion(reading)
   if (fromReading || !item.matched_supplier_id) return fromReading
   const { data: supplier } = await supabase
