@@ -455,6 +455,26 @@ describe('categorize: a box named beside a template', () => {
     expect(booked(await viaTemplate(learnedId, 'eu_services', { amount: 1000 }))).toMatchObject({ echo: 'eu_services' })
   })
 
+  it('reads the box of a basis pair that no cost line stands beside, which the booking keeps whole', async () => {
+    // The pattern's cost line is a tax line: the pair keeps the whole purchase in ruta 21.
+    const learned = {
+      vat_treatment: null,
+      vat_account: null,
+      line_pattern: [
+        { account: '6540', type: 'tax' as const, side: 'debit' as const, ratio: 1 },
+        { account: '4535', type: 'business' as const, side: 'debit' as const, ratio: 1 },
+        { account: '4598', type: 'business' as const, side: 'credit' as const, ratio: 1 },
+      ],
+    }
+    expect(booked(await viaTemplate(learnedId, 'eu_services', { learned }))).toMatchObject({
+      vat: expect.arrayContaining(['4535', '4598']), echo: 'eu_services',
+    })
+    expect(await viaTemplate(learnedId, 'non_eu_services', { learned })).toMatchObject({
+      ok: false,
+      details: { template_boxes: ['ruta21'], requested_box: 'ruta22' },
+    })
+  })
+
   it('offers no box for a template in ruta 24, which no door can name', async () => {
     const refused = await viaTemplate(learnedId, 'eu_services', { learned: pattern(['6540'], '4425') })
     expect(refused).toMatchObject({ ok: false, details: { template_boxes: ['ruta24'], requested_box: 'ruta21' } })
