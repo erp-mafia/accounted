@@ -28843,7 +28843,7 @@ export const tools: McpTool[] = [
         jamkning_original_input_vat: {
           type: 'number',
           description:
-            'Input VAT on the purchase in SEK, the whole amount whether deducted or not; 0 when none was charged. Required with jamkning_original_deduction_percent when the asset may be an investment good (ML 15 kap.): disposed inside its adjustment period (5 years; 10 for buildings and land) with an acquisition cost of at least 200 000 SEK (400 000 for buildings and land). Without them the call answers ASSET_JAMKNING_DATA_REQUIRED.',
+            'The original input VAT in SEK (ML 15 kap. 15 §), the whole amount whether deducted or not. For equipment it is the VAT on acquiring or importing it, including VAT you accounted for yourself on an EU purchase or under reverse charge: no VAT on the invoice does not make it 0. For a building it is the amount ML 15 kap. 15 § names. 0 only when no VAT arose. Required with jamkning_original_deduction_percent when the asset may be an investment good (ML 15 kap.): disposed inside its adjustment period (5 years; 10 for buildings and land) with an acquisition cost of at least 200 000 SEK (400 000 for buildings and land). Without them the call answers ASSET_JAMKNING_DATA_REQUIRED.',
         },
         jamkning_original_deduction_percent: {
           type: 'number',

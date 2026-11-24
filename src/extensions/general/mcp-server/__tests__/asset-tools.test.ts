@@ -344,6 +344,9 @@ describe('gnubok_dispose_asset', () => {
   it('names when the jämkning fields are required in the tool description', () => {
     const props = disposeTool.inputSchema.properties as Record<string, { description?: string }>
     expect(props.jamkning_original_input_vat.description).toMatch(/ASSET_JAMKNING_DATA_REQUIRED/)
+    // VAT the buyer accounts for itself (EU purchase, reverse charge, import)
+    // is input VAT too (ML 13 kap. 4 §, 15 kap. 15 §): never "0 because the invoice had none".
+    expect(props.jamkning_original_input_vat.description).toMatch(/reverse charge/)
     expect(props.jamkning_original_deduction_percent.description).toMatch(/jamkning_original_input_vat/)
   })
 
