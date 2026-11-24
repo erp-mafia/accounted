@@ -6371,6 +6371,21 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'Björn Lundén found no company for this company key. Check that the whole key (GUID) was copied from Integrations → the gear icon in Lundify and try again.',
   },
+  WINT_API_KEY_INVALID: {
+    // 422, same reasoning as PROVIDER_TOKEN_INVALID. What was pasted as the
+    // WINT API key holds no UUID, so WINT can never accept it and it is not
+    // sent there: a typo, or the password the account logs in with. A login
+    // was the only way in before, and WINT refuses it for an account that
+    // requires BankID (prod, 2026-11-19, where that read as "check the
+    // details and try again"). The names are WINT's own: Inställningar,
+    // Integrationer, Egen app, Användarnamn, API-nyckel (its web app's
+    // texts, read 2026-11-24).
+    httpStatus: 422,
+    message_sv:
+      'API-nyckeln från WINT har fel format. Det är en lång kod med bokstäver, siffror och bindestreck (ett GUID) som står tillsammans med användarnamnet vid din egna app under Inställningar > Integrationer i WINT. Lösenordet du loggar in i WINT med går inte att använda här. Finns det ingen egen app att skapa: ta ut bokföringen som SIE-fil från WINT och importera den.',
+    message_en:
+      'The API key from WINT has the wrong format. It is a long code of letters, digits and hyphens (a GUID) shown together with the username at your own app under Settings > Integrations in WINT. The password you sign in to WINT with cannot be used here. If there is no such app to create: export the bookkeeping from WINT as a SIE file and import that.',
+  },
   PROVIDER_COMPANY_MISMATCH: {
     // 422, same reasoning as PROVIDER_TOKEN_INVALID: the credentials are valid,
     // but they open a DIFFERENT legal entity than the one being imported into.

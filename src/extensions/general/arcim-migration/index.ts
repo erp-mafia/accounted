@@ -809,6 +809,13 @@ export const arcimMigrationExtension: Extension = {
                 details: { provider, reason: error.message },
               })
             }
+            // WINT: what was pasted is no API key, so a retry cannot help;
+            // say what the key looks like and where it is.
+            if (error.kind === 'api-key-invalid') {
+              return errorResponseFromCode('WINT_API_KEY_INVALID', moduleLog, {
+                details: { provider, reason: error.message },
+              })
+            }
             return errorResponseFromCode('PROVIDER_TOKEN_INVALID', moduleLog, {
               details: { provider, reason: error.message },
             })

@@ -915,6 +915,35 @@ describe('POST /submit-token Björn Lundén error mapping', () => {
   })
 })
 
+describe('POST /submit-token WINT error mapping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  // What a user who types their WINT login now reads. Prod, 2026-11-19: a
+  // login WINT refused for BankID read "Kontrollera integrationsuppgifterna
+  // och försök igen", which no retry could satisfy.
+  it('answers what is no WINT API key with what the key is and where to find it', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new ProviderTokenInvalidError('WINT API key holds no UUID', 'api-key-invalid'),
+    )
+
+    const response = await submitTokenHandler(submitTokenRequest(), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('WINT_API_KEY_INVALID')
+    expect(body.error.message).toContain('Inställningar > Integrationer')
+    expect(body.error.message).toContain('Lösenordet')
+    expect(body.error.message).toContain('SIE-fil')
+    expect(body.error.message).not.toContain('avvisade autentiseringen')
+    expect(body.error.message_en).toContain('Settings > Integrations')
+  })
+})
+
 describe('POST /submit-token asks for the credentials the catalog names', () => {
   beforeEach(() => {
     vi.clearAllMocks()

@@ -39,8 +39,8 @@ export function getOAuthConfig(provider: string): OAuthConfig {
     };
   }
   if (provider === 'wint') {
-    // No app-level credentials: WINT has no OAuth. The user's login is
-    // exchanged once for a token pair at submit (loginWint). No env vars.
+    // No app-level credentials: WINT has no OAuth. The customer pastes the
+    // username and API key of an app they create inside WINT. No env vars.
     return {
       clientId: '',
       clientSecret: '',

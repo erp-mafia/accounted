@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { WintClient, WintApiError } from '../client';
+import { WintClient, WintApiError, wintAppCredential } from '../client';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -33,6 +33,19 @@ describe('WintClient', () => {
       const [, init] = fetchSpy.mock.calls[0];
       expect((init as RequestInit).headers).toMatchObject({
         Authorization: 'Bearer jwt-abc',
+      });
+    });
+
+    it("sends an app's username and API key as HTTP Basic, the scheme WINT's API names", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({}));
+
+      const client = new WintClient();
+      await client.get(wintAppCredential('app-user', '0b7f5c1e-2a44-4d0c-9f5e-6d1f0a2b3c4d'), '/api/Auth');
+
+      const [, init] = fetchSpy.mock.calls[0];
+      const expected = Buffer.from('app-user:0b7f5c1e-2a44-4d0c-9f5e-6d1f0a2b3c4d').toString('base64');
+      expect((init as RequestInit).headers).toMatchObject({
+        Authorization: `Basic ${expected}`,
       });
     });
   });

@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { mockBlGet, mockBokioGetCompany, mockWintGet, mockLoginWint, mockLogWarn } = vi.hoisted(() => ({
+const { mockBlGet, mockBokioGetCompany, mockWintGet, mockLogWarn } = vi.hoisted(() => ({
   mockBlGet: vi.fn(),
   mockBokioGetCompany: vi.fn(),
   mockWintGet: vi.fn(),
-  mockLoginWint: vi.fn(),
   mockLogWarn: vi.fn(),
 }))
 
@@ -62,8 +61,8 @@ vi.mock('@/lib/providers/bokio/client', async (importOriginal) => {
   }
 })
 
-// WINT: keep the real WintApiError / WintLoginRejectedError classes (the
-// instanceof branches in provider-client depend on them), swap the network.
+// WINT: keep the real WintApiError class (the instanceof branch in
+// provider-client depends on it) and wintAppCredential, swap the network.
 vi.mock('@/lib/providers/wint/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/providers/wint/client')>()
   return {
@@ -74,20 +73,11 @@ vi.mock('@/lib/providers/wint/client', async (importOriginal) => {
   }
 })
 
-vi.mock('@/lib/providers/wint/oauth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/providers/wint/oauth')>()
-  return {
-    ...actual,
-    loginWint: mockLoginWint,
-  }
-})
-
 import { createServiceClient } from '@/lib/supabase/server'
 import { openConsentToken } from '@/lib/providers/consent-tokens'
 import { BjornLundenApiError } from '@/lib/providers/bjornlunden/client'
 import { BokioApiError } from '@/lib/providers/bokio/client'
-import { WintApiError } from '@/lib/providers/wint/client'
-import { WintLoginRejectedError } from '@/lib/providers/wint/oauth'
+import { WintApiError, wintAppCredential } from '@/lib/providers/wint/client'
 import {
   submitProviderToken,
   ProviderTokenInvalidError,
@@ -599,11 +589,13 @@ describe('submitProviderToken', () => {
     ])
   })
 
-  // ── WINT login exchange ───────────────────────────────────────────
+  // ── WINT ──────────────────────────────────────────────────────────
   //
-  // WINT has no API keys: the wizard sends mail (as providerCompanyId) +
-  // password (as apiToken). The password is exchanged for a token pair and
-  // must never reach the database.
+  // The forms send the username (as providerCompanyId) and API key (as
+  // apiToken) of an app the customer creates inside WINT. Nothing logs in:
+  // WINT refused the account's own login for an account that requires BankID
+  // (prod, 2026-11-19), and the answer read "check the details and try
+  // again".
 
   describe('wint', () => {
     const wintCompany = {
@@ -611,94 +603,118 @@ describe('submitProviderToken', () => {
       Name: 'Wintbolaget AB',
       Org: '556012-5790',
     }
+    const apiKey = '0b7f5c1e-2a44-4d0c-9f5e-6d1f0a2b3c4d'
+    const credential = wintAppCredential('app-user', apiKey)
 
-    const loginOk = () =>
-      mockLoginWint.mockResolvedValueOnce({
-        access_token: 'wint-jwt',
-        refresh_token: 'wint-refresh',
-        token_type: 'Bearer',
-        expires_in: 900,
-      })
-
-    it('exchanges the login, labels the consent and stores the token pair with the WINT company id', async () => {
+    /** The rows a connect reads and writes when everything matches. */
+    const connectOk = () => {
       mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
       mock.enqueue({ data: { org_number: '5560125790' } }) // target company
       mock.enqueue({ data: null }) // consent label update
       mock.enqueue({ data: null }) // token upsert
-      loginOk()
       mockWintGet.mockResolvedValueOnce(wintCompany)
+    }
 
-      const result = await submitProviderToken('consent-1', 'wint', 'hemligt', 'user@bolag.se', 'company-A')
+    it("connects with the app's username and API key, labels the consent and stores the sealed credential", async () => {
+      connectOk()
+
+      const result = await submitProviderToken('consent-1', 'wint', ` ${apiKey} `, ' app-user ', 'company-A')
 
       expect(result).toEqual({ success: true, consentId: 'consent-1' })
-      expect(mockLoginWint).toHaveBeenCalledWith('user@bolag.se', 'hemligt')
+      // The probe that learns the company runs on the app credential.
+      expect(mockWintGet).toHaveBeenCalledWith(credential, '/api/Auth')
       expect(tablesTouched()).toEqual([
         'provider_consents',
         'company_settings',
         'provider_consents',
         'provider_consent_tokens',
       ])
-      // The stored row carries the token pair and the WINT company id; the
-      // login mail and password must never reach the database.
-      const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, string>
-      expect(upsert).toMatchObject({ provider: 'wint', provider_company_id: '4711' })
-      expect(openConsentToken(upsert.access_token!)).toBe('wint-jwt')
-      expect(openConsentToken(upsert.refresh_token!)).toBe('wint-refresh')
-      expect(JSON.stringify(upsert)).not.toContain('wint-jwt')
-      expect(JSON.stringify(upsert)).not.toContain('user@bolag.se')
-      expect(JSON.stringify(upsert)).not.toContain('hemligt')
+      // Nothing expires and nothing refreshes; the WINT company id is kept.
+      const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, string | null>
+      expect(upsert).toMatchObject({
+        provider: 'wint',
+        provider_company_id: '4711',
+        refresh_token: null,
+        token_expires_at: null,
+      })
+      expect(openConsentToken(upsert.access_token!)).toBe(credential)
+      // Sealed at rest: neither the key nor the username in the clear.
+      expect(JSON.stringify(upsert)).not.toContain(apiKey)
+      expect(JSON.stringify(upsert)).not.toContain('app-user')
     })
 
-    it('rejects a login WINT refused (WrongUsernameOrPassword) without writing tokens', async () => {
+    it('takes an e-mail shaped username like any other', async () => {
+      connectOk()
+
+      await submitProviderToken('consent-1', 'wint', apiKey, 'app@bolag.se', 'company-A')
+
+      expect(mockWintGet).toHaveBeenCalledWith(wintAppCredential('app@bolag.se', apiKey), '/api/Auth')
+    })
+
+    // What a user who types their WINT login gets: no API key, so nothing is
+    // sent to WINT and nothing is stored.
+    it('refuses what is no API key before anything leaves, the password of a login included', async () => {
       mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
-      mockLoginWint.mockRejectedValueOnce(new WintLoginRejectedError('WrongUsernameOrPassword'))
 
       const err: unknown = await submitProviderToken(
-        'consent-1', 'wint', 'fel-lösenord', 'user@bolag.se', 'company-A',
+        'consent-1', 'wint', 'hemligt-lösenord', 'user@bolag.se', 'company-A',
       ).catch((e: unknown) => e)
 
       expect(err).toBeInstanceOf(ProviderTokenInvalidError)
-      expect((err as Error).message).toContain('WrongUsernameOrPassword')
+      expect((err as ProviderTokenInvalidError).kind).toBe('api-key-invalid')
+      expect(mockWintGet).not.toHaveBeenCalled()
       expect(tablesTouched()).toEqual(['provider_consents'])
     })
 
-    it('requires a login e-mail in the companyId field', async () => {
+    it('requires the app username in the companyId field', async () => {
       mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
 
       const err: unknown = await submitProviderToken(
-        'consent-1', 'wint', 'lösenord', undefined, 'company-A',
+        'consent-1', 'wint', apiKey, undefined, 'company-A',
       ).catch((e: unknown) => e)
 
       expect(err).toBeInstanceOf(ProviderTokenInvalidError)
-      expect(mockLoginWint).not.toHaveBeenCalled()
+      expect(mockWintGet).not.toHaveBeenCalled()
     })
 
-    it('refuses to store tokens when the WINT company org number differs from the target company', async () => {
+    it('reports app credentials WINT refuses (401) as invalid, without writing tokens', async () => {
+      mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
+      mockWintGet.mockRejectedValueOnce(new WintApiError('WINT API error: 401', 401))
+
+      const err: unknown = await submitProviderToken(
+        'consent-1', 'wint', apiKey, 'app-user', 'company-A',
+      ).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+      expect((err as ProviderTokenInvalidError).kind).toBe('credentials')
+      expect(tablesTouched()).toEqual(['provider_consents'])
+    })
+
+    it('rethrows a WINT outage on the probe (5xx) as a generic error, not invalid credentials', async () => {
+      mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
+      mockWintGet.mockRejectedValueOnce(new WintApiError('WINT API error: 503', 503))
+
+      const err: unknown = await submitProviderToken(
+        'consent-1', 'wint', apiKey, 'app-user', 'company-A',
+      ).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(WintApiError)
+      expect(err).not.toBeInstanceOf(ProviderTokenInvalidError)
+    })
+
+    it('refuses to store the credential when the WINT company org number differs from the target company', async () => {
       mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
       mock.enqueue({ data: { org_number: '5566778899' } }) // a DIFFERENT target company
-      loginOk()
       mockWintGet.mockResolvedValueOnce(wintCompany)
 
       const err: unknown = await submitProviderToken(
-        'consent-1', 'wint', 'hemligt', 'user@bolag.se', 'company-A',
+        'consent-1', 'wint', apiKey, 'app-user', 'company-A',
       ).catch((e: unknown) => e)
 
       expect(err).toBeInstanceOf(ProviderCompanyMismatchError)
       expect((err as ProviderCompanyMismatchError).actualOrgNumber).toBe('5560125790')
       // No token upsert, no consent label write
       expect(tablesTouched()).toEqual(['provider_consents', 'company_settings'])
-    })
-
-    it('rethrows transient login failures (5xx) as generic errors, not invalid credentials', async () => {
-      mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
-      mockLoginWint.mockRejectedValueOnce(new WintApiError('WINT login failed: 503', 503))
-
-      const err: unknown = await submitProviderToken(
-        'consent-1', 'wint', 'hemligt', 'user@bolag.se', 'company-A',
-      ).catch((e: unknown) => e)
-
-      expect(err).toBeInstanceOf(WintApiError)
-      expect(err).not.toBeInstanceOf(ProviderTokenInvalidError)
     })
   })
 })

@@ -1209,19 +1209,19 @@ function ConnectStep({
   const hasLundifyActivation = isClientCredentials && !!activationUrl
   const manualKeyVisible = !hasLundifyActivation || showManualKey
 
-  // WINT has no API keys: the "token" is the user's WINT login (e-post +
-  // lösenord), exchanged server-side for ett tokenpar; lösenordet sparas aldrig.
-  const isWintLogin = provider === 'wint'
+  // WINT: the username and API key of an app the customer creates inside
+  // WINT (why, and not the account's login: submitProviderToken).
+  const isWint = provider === 'wint'
   // The fields come from the catalog rule /submit-token checks. Briox: the
   // account ID is the `clientid` half of the token exchange; WINT reuses the
-  // company field for the login e-mail.
+  // company field for the app's username.
   const { secret: needsApiToken, companyId: needsCompanyId } = tokenCredentials(provider)
   const companyIdLabel = provider === 'briox'
     ? 'Konto-ID'
     : provider === 'bjornlunden'
       ? 'Företagsnyckel (User-Key)'
       : provider === 'wint'
-        ? 'E-postadress'
+        ? t('ext_arcim_wint_username_label')
         : provider === 'bokio'
           ? t('ext_arcim_bokio_company_id_label')
           : 'Företags-ID'
@@ -1230,8 +1230,8 @@ function ConnectStep({
     ? t('ext_arcim_bl_activate_description', { appName: branding.appName })
     : isClientCredentials
     ? t('ext_arcim_bl_token_description', { appName: branding.appName })
-    : isWintLogin
-      ? `Logga in med dina WINT-uppgifter för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata. Lösenordet används en gång för att skapa anslutningen och sparas aldrig.`
+    : isWint
+      ? t('ext_arcim_wint_token_description', { appName: branding.appName.toLowerCase() })
       : provider === 'briox'
         ? `Ange ditt konto-ID och din applikationstoken från Briox för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
         : provider === 'bokio'
@@ -1242,8 +1242,8 @@ function ConnectStep({
 
   const tokenHelpText = isClientCredentials
     ? t('ext_arcim_bl_token_help')
-    : isWintLogin
-      ? `Använd samma e-postadress och lösenord som när du loggar in på app.wint.se. Kräver ditt WINT-konto BankID-inloggning kan anslutningen inte skapas ännu: be i så fall WINT om en SIE-fil och importera den manuellt.`
+    : isWint
+      ? t('ext_arcim_wint_token_help')
       : provider === 'bokio'
       ? t('ext_arcim_bokio_token_help')
       : provider === 'briox'
@@ -1312,20 +1312,18 @@ function ConnectStep({
           <p className="text-sm text-muted-foreground">
             {tokenHelpText}
           </p>
-          {/* WINT is a login form: e-mail reads above password (CSS order;
-              the button keeps its place). Other token providers keep
-              token-first order. */}
-          <div className={cn('space-y-3', isWintLogin && 'flex flex-col gap-3 space-y-0')}>
+          {/* WINT shows the pair the way its own screen does: username above
+              API key (CSS order; the button keeps its place). Other token
+              providers keep token-first order. */}
+          <div className={cn('space-y-3', isWint && 'flex flex-col gap-3 space-y-0')}>
             {needsApiToken && (
-              <div className={cn(isWintLogin && 'order-2')}>
+              <div className={cn(isWint && 'order-2')}>
                 <label htmlFor="apiToken" className="text-sm font-medium">
                   {provider === 'briox'
                     ? 'Applikationstoken'
-                    : isWintLogin
-                      ? 'Lösenord'
-                      : provider === 'bokio'
-                        ? t('ext_arcim_bokio_token_label')
-                        : 'API-nyckel'}
+                    : provider === 'bokio'
+                      ? t('ext_arcim_bokio_token_label')
+                      : 'API-nyckel'}
                 </label>
                 <Input
                   id="apiToken"
@@ -1335,10 +1333,8 @@ function ConnectStep({
                   placeholder={
                     provider === 'briox'
                       ? 'Klistra in din applikationstoken'
-                      : isWintLogin
-                        ? 'Ditt lösenord hos WINT'
-                        : provider === 'bokio'
-                          ? t('ext_arcim_bokio_token_placeholder')
+                      : provider === 'bokio'
+                        ? t('ext_arcim_bokio_token_placeholder')
                         : 'Klistra in din API-nyckel'
                   }
                   value={apiToken}
@@ -1347,22 +1343,22 @@ function ConnectStep({
               </div>
             )}
             {needsCompanyId && (
-              <div className={cn(isWintLogin && 'order-1')}>
+              <div className={cn(isWint && 'order-1')}>
                 <label htmlFor="companyId" className="text-sm font-medium">
                   {companyIdLabel}
                 </label>
                 <Input
                   id="companyId"
                   name="companyId_nocomplete"
-                  type={isWintLogin ? 'email' : 'text'}
+                  type="text"
                   autoComplete="new-password"
                   placeholder={
                     isClientCredentials
                       ? 'Företagsnyckel, t.ex. 1f0e2d3c-4b5a-...'
                       : provider === 'briox'
                         ? 'Det långa numret inom parentes, t.ex. 35649125'
-                        : isWintLogin
-                          ? 'namn@foretaget.se'
+                        : isWint
+                          ? t('ext_arcim_wint_username_placeholder')
                           : 'GUID från URL:en, t.ex. 14ccad83-67f6-49bd-...'
                   }
                   value={companyId}
@@ -1371,7 +1367,7 @@ function ConnectStep({
               </div>
             )}
             <Button
-              className={cn(isWintLogin && 'order-3')}
+              className={cn(isWint && 'order-3')}
               onClick={() => onTokenSubmit(apiToken, companyId)}
               disabled={!canSubmit}
             >
