@@ -3,7 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   isSkattekontoDayInPayment,
-  readSkattekontoPaymentTowards,
+  readSkattekontoPaymentsTowards,
   skattekontoPaymentDayFor,
   skattekontoPaymentPaysDeclaration,
 } from '../skattekonto-day'
@@ -34,7 +34,7 @@ describe('isSkattekontoDayInPayment', () => {
   })
 })
 
-describe('readSkattekontoPaymentTowards', () => {
+describe('readSkattekontoPaymentsTowards', () => {
   const order = (status: string, day: string, batch: string | null = 'batch-1') => ({
     id: `order-${status}-${day}`,
     status,
@@ -43,20 +43,26 @@ describe('readSkattekontoPaymentTowards', () => {
     requested_execution_date: day,
   })
 
-  it('leaves out an order nobody signed and prefers the planned day', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: [order('draft', '2026-12-11', null), order('accepted', '2026-12-14'), order('executed', '2026-12-11')] })
+  it('reads from the banking day before the due date through the due date, earliest first', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [order('accepted', '2026-12-14'), order('draft', '2026-12-11', null), order('executed', '2026-12-11')] })
 
-    const found = await readSkattekontoPaymentTowards(supabase as unknown as SupabaseClient, 'company-1', '2026-12-14', '2026-12-11')
+    const found = await readSkattekontoPaymentsTowards(supabase as unknown as SupabaseClient, 'company-1', '2026-12-14')
 
-    expect(found?.id).toBe('order-executed-2026-12-11')
+    expect(found.map((o) => o.id)).toEqual(['order-executed-2026-12-11', 'order-accepted-2026-12-14'])
+    expect(findCalls('payment_orders', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['purpose', 'skattekonto'],
+    ])
+    expect(findCalls('payment_orders', 'gte')).toEqual([['requested_execution_date', '2026-12-11']])
+    expect(findCalls('payment_orders', 'lte')).toEqual([['requested_execution_date', '2026-12-14']])
   })
 
-  it('answers null when only unsigned orders exist', async () => {
+  it('answers nothing when only unsigned orders exist', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [order('draft', '2026-12-11', null), order('approved', '2026-12-11', null)] })
 
-    expect(await readSkattekontoPaymentTowards(supabase as unknown as SupabaseClient, 'company-1', '2026-12-14', '2026-11-24')).toBeNull()
+    expect(await readSkattekontoPaymentsTowards(supabase as unknown as SupabaseClient, 'company-1', '2026-12-14')).toEqual([])
   })
 })
 

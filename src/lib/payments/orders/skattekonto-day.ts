@@ -71,40 +71,39 @@ export function isSkattekontoDayInPayment(order: Pick<OpenSkattekontoOrder, 'sta
   return (order.status !== 'draft' && order.status !== 'approved') || !!order.batch_id
 }
 
-/** A bank payment to the skattekonto made towards a due date (readSkattekontoPaymentTowards). */
+/** A bank payment to the skattekonto made towards a due date (readSkattekontoPaymentsTowards). */
 export interface SkattekontoPaymentTowards extends OpenSkattekontoOrder {
   requested_execution_date: string
 }
 
 /**
- * The bank payment to the skattekonto made towards a due date: on the day it
- * goes out by default (the banking day before the draw, or the day the bank
- * takes now when that has passed), signed, at the bank or executed. An order
- * nobody signed yet pays nothing and is left out. The orders do not record
- * which declaration they pay: this is the payment of the due date's day,
- * whatever it covers; null when there is none.
+ * The bank payments to the skattekonto made towards a due date: signed, at
+ * the bank or executed, on a day from the one it goes out on by default (the
+ * banking day before the draw) through the due date itself, where a payment
+ * signed on that banking day after the bank's cut-off goes out. The days do
+ * not move with today, and the next due date's payment goes out on its own
+ * banking day before, a month later. A payment made after the due date, or on
+ * a day picked earlier, is not read: the orders do not record which
+ * declaration they pay, and such a day may be another period's. An order
+ * nobody signed yet pays nothing and is left out. Earliest day first.
  */
-export async function readSkattekontoPaymentTowards(
+export async function readSkattekontoPaymentsTowards(
   client: SupabaseClient,
   companyId: string,
   dueDate: string,
-  today: string,
-): Promise<SkattekontoPaymentTowards | null> {
-  const planned = previousBankDayIso(dueDate)
-  const days = [...new Set([planned, skattekontoPaymentDayFor(dueDate, today)])]
+): Promise<SkattekontoPaymentTowards[]> {
   const { data, error } = await client
     .from('payment_orders')
     .select('id, status, amount, batch_id, requested_execution_date')
     .eq('company_id', companyId)
     .eq('purpose', 'skattekonto')
-    .in('requested_execution_date', days)
+    .gte('requested_execution_date', previousBankDayIso(dueDate))
+    .lte('requested_execution_date', dueDate)
     .in('status', [...OPEN_SKATTEKONTO_ORDER_STATUSES, 'executed'])
   if (error) throw error
-  const paying = ((data ?? []) as SkattekontoPaymentTowards[]).filter(
-    (order) => order.status === 'executed' || isSkattekontoDayInPayment(order),
-  )
-  // The planned day first: the payment made before that day passed.
-  return paying.find((order) => order.requested_execution_date === planned) ?? paying[0] ?? null
+  return ((data ?? []) as SkattekontoPaymentTowards[])
+    .filter((order) => order.status === 'executed' || isSkattekontoDayInPayment(order))
+    .sort((a, b) => a.requested_execution_date.localeCompare(b.requested_execution_date))
 }
 
 /**

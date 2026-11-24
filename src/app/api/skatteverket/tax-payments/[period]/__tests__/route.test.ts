@@ -147,9 +147,11 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         ['company_id', 'company-1'],
         ['purpose', 'skattekonto'],
       ])
-      expect(findCalls('payment_orders', 'in')[0]).toEqual(['requested_execution_date', ['2026-12-11']])
+      // From the Friday before the due date through the due date itself.
+      expect(findCalls('payment_orders', 'gte')).toEqual([['requested_execution_date', '2026-12-11']])
+      expect(findCalls('payment_orders', 'lte')).toEqual([['requested_execution_date', '2026-12-14']])
       // Cancelled, failed and rejected orders pay nothing: never read.
-      expect(findCalls('payment_orders', 'in')[1]).toEqual([
+      expect(findCalls('payment_orders', 'in')[0]).toEqual([
         'status',
         ['draft', 'approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'],
       ])
@@ -240,13 +242,14 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
       expect(body.data.bank_payment).toMatchObject({ amount: 84568, pays_declaration: false })
     })
 
-    it('still finds it on its own day and once the bank has executed it', async () => {
-      // 11 December: the bank takes nothing before the 14th now, so both days are read.
-      vi.setSystemTime(new Date('2026-12-11T09:00:00+01:00'))
+    it('still finds a payment made on the last day once the due date has passed', async () => {
+      // Signed on Friday 11 December, so it went out on Monday the 14th;
+      // read on the Tuesday after, once the bank has executed it.
+      vi.setSystemTime(new Date('2026-12-15T09:00:00+01:00'))
       enqueue({ data: FILED })
       enqueue({ data: SETTINGS })
       enqueue({
-        data: [{ id: 'order-1', status: 'executed', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }],
+        data: [{ id: 'order-1', status: 'executed', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-14' }],
       })
 
       const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
@@ -254,10 +257,50 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
       expect(body.data.bank_payment).toEqual({
         status: 'executed',
         amount: 24568,
-        requested_execution_date: '2026-12-11',
+        requested_execution_date: '2026-12-14',
         pays_declaration: true,
       })
-      expect(findCalls('payment_orders', 'in')[0]).toEqual(['requested_execution_date', ['2026-12-11', '2026-12-14']])
+      // The days read do not move with today.
+      expect(findCalls('payment_orders', 'gte')).toEqual([['requested_execution_date', '2026-12-11']])
+      expect(findCalls('payment_orders', 'lte')).toEqual([['requested_execution_date', '2026-12-14']])
+    })
+
+    it('shows the payment of this declaration when another of the window comes first', async () => {
+      // The quarter's moms paid alone on the Friday, the AGI late on the Monday.
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [
+          { id: 'order-agi', status: 'accepted', amount: '24568.00', batch_id: 'batch-2', requested_execution_date: '2026-12-14' },
+          { id: 'order-moms', status: 'executed', amount: '60000.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' },
+        ],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 24568,
+        requested_execution_date: '2026-12-14',
+        pays_declaration: true,
+      })
+      expect(resolveDueDateMock).not.toHaveBeenCalled()
+    })
+
+    it('reads only its own due date\'s days for an overdue period', async () => {
+      // October, due Thursday 12 November and still unpaid on 10 December:
+      // the November AGI's payment on Friday 11 December is not October's.
+      vi.setSystemTime(new Date('2026-12-10T09:00:00+01:00'))
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [] })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-10'))
+
+      expect(body.data.payment_due_date).toBe('2026-11-12')
+      expect(body.data.bank_payment).toBeNull()
+      expect(findCalls('payment_orders', 'gte')).toEqual([['requested_execution_date', '2026-11-11']])
+      expect(findCalls('payment_orders', 'lte')).toEqual([['requested_execution_date', '2026-11-12']])
     })
 
     it('leaves out a draft nobody signed: a new payment joins it', async () => {
