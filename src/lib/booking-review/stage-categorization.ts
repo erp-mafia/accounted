@@ -53,6 +53,9 @@ export async function stageBlockedCategorization(
         category,
         vat_treatment: booking.vat_treatment ?? null,
         ...(reverseChargeKind ? { reverse_charge_kind: reverseChargeKind } : {}),
+        // The caller named the box (not read off the underlag): the approval
+        // holds it against the cost account's own box again.
+        ...(booking.reverse_charge_kind ? { reverse_charge_box_param: 'reverse_charge_kind' } : {}),
         vat_amount: booking.vat_amount ?? null,
         account_override: booking.account_override ?? null,
         notes: booking.notes?.trim() ? booking.notes.trim() : null,

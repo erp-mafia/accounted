@@ -132,6 +132,8 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     // The commit executor keeps one VatTreatment; the box travels as a kind.
     expect(params.vat_treatment).toBe('reverse_charge')
     expect(params.reverse_charge_kind).toBe('non_eu_services')
+    // Named by the caller: the approval holds it against the account again.
+    expect(params.reverse_charge_box_param).toBe('vat_treatment')
 
     const rows = lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
     expect(rows).toEqual(expect.arrayContaining([
@@ -179,6 +181,8 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     const { params, lines, result } = await stage({ vat_treatment: 'reverse_charge' }, undefined, [], usSeller)
 
     expect(params.reverse_charge_kind).toBe('non_eu_services')
+    // Read off the underlag, not named: no statement for the approval to hold.
+    expect(params.reverse_charge_box_param).toBeUndefined()
     expect(lines.find((l) => l.account_number === '4531')?.debit_amount).toBe(250)
     expect(lines.map((l) => l.account_number)).not.toContain('4535')
     expect(result.preview.reverse_charge).toMatchObject({ kind: 'non_eu_services', kind_source: 'underlag', ruta: 'ruta22' })
@@ -222,24 +226,41 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     })
   })
 
-  it('refuses a named box that the override account contradicts, and stages nothing (crm#1454)', async () => {
+  /** Stage a reverse charge onto `account`, expected refused before anything is staged. */
+  function refusedOnto(account: string, vatTreatment: string) {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow })
     enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount
-    enqueue({ data: { account_number: '4531', account_class: 4, is_active: true } }) // override chart row
+    enqueue({ data: { account_number: account, account_class: 4, is_active: true } }) // override chart row
     enqueue({ data: [] }) // momskoder
-    await expect(
-      categorize.execute(
-        { transaction_id: TX_ID, category: 'expense_software', vat_treatment: 'reverse_charge_eu_services', account_override: '4531' },
-        'company-1',
-        'user-1',
-        supabase as never,
-        { type: 'api_key' },
-      ),
-    ).rejects.toThrow(/account 4531 reports ruta22 itself/)
-    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+    const staging = categorize.execute(
+      { transaction_id: TX_ID, category: 'expense_software', vat_treatment: vatTreatment, account_override: account },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+    return { staging, staged: () => findCall('pending_operations', 'insert') }
+  }
+
+  it('refuses a named box that the override account contradicts, and stages nothing (crm#1454)', async () => {
+    const { staging, staged } = refusedOnto('4531', 'reverse_charge_eu_services')
+    await expect(staging).rejects.toMatchObject({
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT',
+      message: expect.stringContaining('Konto 4531 redovisar själv ruta 22, men vat_treatment anger ruta 21'),
+    })
+    expect(staged()).toBeUndefined()
+  })
+
+  it('refuses an override onto the import basis, which would declare the purchase in ruta 50 and ruta 22', async () => {
+    const { staging, staged } = refusedOnto('4545', 'reverse_charge_non_eu_services')
+    await expect(staging).rejects.toMatchObject({
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT',
+      details: { reason: 'other_box', account_number: '4545' },
+    })
+    expect(staged()).toBeUndefined()
   })
 
   it('stages no basis pair on a cost account whose momskod reports ruta 20-24 itself (crm#1096)', async () => {

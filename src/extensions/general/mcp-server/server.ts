@@ -9929,20 +9929,13 @@ export const tools: McpTool[] = [
       // seller gave (#94), staged so the commit books the same.
       const stagedKind = reverseChargeKind ?? preview.reverse_charge_kind
       // A cost account that reports ruta 20-24 itself decides the box the
-      // lines book (crm#1454): 4531 is ruta 22 whatever kind was sent.
+      // lines book (crm#1454): 4531 is ruta 22. A box sent that it
+      // contradicts was refused by the dry run above (reverseChargeAccountConflict).
       const selfReporting = tx.amount < 0 && vatTreatment === 'reverse_charge' &&
         !mapping.vat_lines.some((l) => l.debit_amount > 0 && isReverseChargeBasisAccount(l.account_number))
       const ownAccount = selfReporting
         ? reverseChargeKindOnOwnAccount(mapping.debit_account, (await loadChart()).get(mapping.debit_account))
         : null
-      if (ownAccount && reverseChargeKind && reverseChargeKind !== ownAccount.kind) {
-        throw badArgument(
-          'vat_treatment',
-          `vat_treatment names ${reverseChargeKindRuta(reverseChargeKind)}, but account ${mapping.debit_account} reports ${ownAccount.ruta} itself, ` +
-            'so the purchase would be declared in a box other than the one asked. Book it on a cost account without a box of its own (the basis pair then books the box asked), ' +
-            `or send the box ${mapping.debit_account} reports.`,
-        )
-      }
       const reverseCharge = tx.amount < 0
         ? reverseChargeBasisSummary(mapping.vat_lines, stagedKind, mapping.debit_account, reverseChargeKind ? 'vat_treatment' : 'underlag', ownAccount)
         : undefined
@@ -10005,6 +9998,9 @@ export const tools: McpTool[] = [
           category,
           vat_treatment: vatTreatment ?? null,
           ...(stagedKind ? { reverse_charge_kind: stagedKind } : {}),
+          // The caller named the box (not read off the underlag): the
+          // approval holds it against the cost account's own box again.
+          ...(reverseChargeKind ? { reverse_charge_box_param: 'vat_treatment' } : {}),
           vat_amount: vatAmount ?? null,
           account_override: accountOverride ?? null,
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0

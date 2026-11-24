@@ -1179,6 +1179,25 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
         'Resend with reverse_charge_kind eu_services, non_eu_services or eu_goods (MCP: vat_treatment reverse_charge_eu_services, reverse_charge_non_eu_services or reverse_charge_eu_goods), read off the seller country on the invoice. details.reason says why the box could not be read.',
     },
   },
+  // A reverse charge on a cost account that cannot take it
+  // (reverseChargeAccountConflict, the rule the utlägg books by): one that
+  // declares a box of its own, where the basis pair would declare the
+  // purchase twice, or one whose own ruta 20-24 is another than the box the
+  // caller stated. The service names the account, the boxes and the remedy;
+  // this is the fallback.
+  TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Omvänd betalningsskyldighet kan inte bokföras på det valda kostnadskontot: kontot redovisar själv en momsruta som köpet då också skulle deklareras i, eller en annan ruta än den angivna. Redovisar kontot trepartshandel (ruta 37) eller import (ruta 50) ska köpet bokföras utan omvänd betalningsskyldighet.',
+    message_en:
+      'Reverse charge cannot be booked on the chosen cost account: the account reports a VAT box of its own that the purchase would then also be declared in, or another box than the one stated. If the account reports triangulation (box 37) or import (box 50), book the purchase without reverse charge.',
+    thrown_message_sv: true,
+    remediation: {
+      description:
+        'details.reason "other_box": details.account_number reports details.account_box itself (ruta37 trepartshandel, ruta50 import); such a purchase is not reverse charge, so book it without reverse charge (trepartshandel without VAT, an import with its import VAT). "basis_offset": 4598 is the basis offset, book the purchase on its cost account. "no_rate": the account\'s reverse-charge momskod has no rate of 25, 12 or 6 %; correct the rate in the chart of accounts or book on an ordinary cost account. "other_kind": the account reports details.account_box itself, not details.requested_box; resend with no box (or with that box when it is ruta20, ruta21 or ruta22, the boxes a caller can name), or book the purchase on an ordinary cost account.',
+      resource: 'Accounted://chart-of-accounts',
+    },
+  },
   TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT: {
     httpStatus: 400,
     message_sv:
