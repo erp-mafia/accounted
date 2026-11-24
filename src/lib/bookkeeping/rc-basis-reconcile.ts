@@ -4,6 +4,9 @@ import {
   isReverseChargeBasisAccount,
   isReverseChargeVatAccount,
   reverseChargeKindForBasisAccount,
+  reverseChargeKindOnOwnAccount,
+  reverseChargeKindRuta,
+  reverseChargeOnAccount,
   reverseChargePurchasesOn,
   RC_BASIS_OFFSET_ACCOUNT,
   type ChartVatTreatments,
@@ -45,6 +48,7 @@ interface RcSet {
   purchase: { base: number; rate: number; kind: ReverseChargeKind }
   /** Where the basis leg sits: debit for a purchase, credit for a mirrored refund. */
   side: 'debit' | 'credit'
+  basisAccount: string
   offsetAccount: string
 }
 
@@ -95,6 +99,7 @@ function rcSetOf(mappingResult: MappingResult): RcSet | null {
     lines: [inputLeg, outputLeg, basis, offset],
     purchase: { base, rate: kindAndRate.rate, kind: kindAndRate.kind },
     side,
+    basisAccount: basis.account_number,
     offsetAccount: offset.account_number,
   }
 }
@@ -125,6 +130,33 @@ function costLinesOf(mappingResult: MappingResult, set: RcSet): Array<{ account:
 export function reverseChargeCostAccounts(mappingResult: MappingResult): string[] | null {
   const set = rcSetOf(mappingResult)
   return set ? costLinesOf(mappingResult, set).map((line) => line.account) : null
+}
+
+/**
+ * The momsdeklaration boxes (ruta 20-24) the purchase of a builder's
+ * reverse-charge set is declared in once it is booked, settled with the chart
+ * by the rule reconcileRcBasisWithCostLines settles it by: a cost line on an
+ * account that reports its own box (reverseChargeKindOnOwnAccount, by its
+ * momskod or its number) declares that box, and the share the basis pair
+ * keeps (reverseChargePurchasesOn; all of it when no cost line stands beside
+ * the set) declares the box of the set's basis account, read the same way.
+ * Null when the result carries no set. The review's reading of a proposal
+ * (proposal.ts reverseChargeBoxesOf) does not see the chart; this is the
+ * booking's.
+ */
+export function reverseChargeBoxesBooked(mappingResult: MappingResult, chart: ChartVatTreatments): string[] | null {
+  const set = rcSetOf(mappingResult)
+  if (!set) return null
+  const ownBox = (account: string) => reverseChargeKindOnOwnAccount(account, chart.get(account))?.ruta
+  const pairBox = ownBox(set.basisAccount) ?? reverseChargeKindRuta(set.purchase.kind)
+  const costLines = costLinesOf(mappingResult, set)
+  const boxes = costLines
+    .filter((line) => !reverseChargeOnAccount(line.account, set.purchase.rate, chart).basisPair)
+    .map((line) => ownBox(line.account) ?? pairBox)
+  const pairKept = reverseChargePurchasesOn(set.purchase, costLines, chart)
+    .some((purchase) => (purchase.basisBase ?? purchase.base) > 0)
+  if (pairKept) boxes.push(pairBox)
+  return [...new Set(boxes)].sort()
 }
 
 /** See the module comment. Returns `mappingResult` itself when the set stays as it is. */

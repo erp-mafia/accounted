@@ -41,7 +41,7 @@ import {
   type BookingTemplate,
 } from '@/lib/bookkeeping/booking-templates'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
-import { reconcileRcBasisWithCostLines, reverseChargeCostAccounts } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { reconcileRcBasisWithCostLines, reverseChargeBoxesBooked, reverseChargeCostAccounts } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { reverseChargeAccountConflict, type ReverseChargeAccountConflict } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { applySettlementAccount, saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
@@ -532,11 +532,12 @@ export interface CategorizeMappingOptions {
    */
   preview?: boolean
   /**
-   * The box the caller stated for a reverse-charge category booking: named
+   * The box the caller stated for a reverse-charge booking: named
    * at an agent or API door (reverseChargeBoxParam), or chosen in the app
    * for a whole selection (reverseChargeBoxChosen). A cost account that
    * reports another ruta 20-24 itself is then refused instead of declaring
-   * the purchase in its own box. A box read off the underlag is no such
+   * the purchase in its own box, and so is a template that books another box
+   * (templateBoxRefusal). A box read off the underlag is no such
    * statement (the account's own box decides, and the preview says so), nor
    * is the one a single row's review carries: the review names the account's box.
    */
@@ -551,6 +552,14 @@ interface StatedReverseChargeBox {
 }
 
 const CONFLICT_CODE = 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT'
+
+/**
+ * Whether a caller can state `box`: only rutor 20-22 have a kind in the
+ * doors' vocabulary (REVERSE_CHARGE_TREATMENT_KINDS).
+ */
+function boxCanBeNamed(box: string): boolean {
+  return Object.values(REVERSE_CHARGE_TREATMENT_KINDS).some((kind) => reverseChargeKindRuta(kind) === box)
+}
 
 /**
  * The refusal of a reverse-charge purchase on a cost account that cannot take
@@ -573,11 +582,9 @@ function reverseChargeAccountRefusal(
       const named = stated?.parameter
         ? { sv: `${stated.parameter} anger ruta ${asked}`, en: `${stated.parameter} names box ${asked}` }
         : { sv: `den valda rutan är ${asked}`, en: `the box chosen is ${asked}` }
-      // A caller can state only rutor 20-22 (REVERSE_CHARGE_TREATMENT_KINDS,
-      // the doors' vocabulary). On an account that reports ruta 23 or 24
-      // only no box, or the row on its own, gives the account's own.
-      const ownCanBeNamed = Object.values(REVERSE_CHARGE_TREATMENT_KINDS)
-        .some((kind) => reverseChargeKindRuta(kind) === conflict.box)
+      // On an account that reports ruta 23 or 24 only no box, or the row on
+      // its own, gives the account's own.
+      const ownCanBeNamed = boxCanBeNamed(conflict.box)
       const right = stated?.parameter
         ? {
           sv: `ange ${ownCanBeNamed ? `ruta ${own} eller ` : ''}ingen ruta, så gäller kontots egen`,
@@ -640,6 +647,44 @@ function reverseChargeAccountRefusal(
       return refuse(CONFLICT_CODE, { ...details, account_box: conflict.box }, { message })
     }
   }
+}
+
+/**
+ * The refusal of a box named beside a template that does not book its
+ * purchase in exactly that box (templateBoxes, reverseChargeBoxesBooked):
+ * one that books another box, or no reverse-charge purchase at all (a
+ * reverse-charge sale). Null when it books the box named. A caller can name
+ * only rutor 20-22 (boxCanBeNamed), so a template's ruta 23 or 24 is offered
+ * as no box.
+ */
+function templateBoxRefusal(
+  by: Record<string, string>,
+  templateBoxes: string[],
+  stated: StatedReverseChargeBox,
+): CategorizeRefusal | null {
+  const requested = reverseChargeKindRuta(stated.kind)
+  if (templateBoxes.length > 0 && templateBoxes.every((box) => box === requested)) return null
+  const parameter = stated.parameter ?? 'reverse_charge_kind'
+  const asked = requested.replace('ruta', '')
+  const own = templateBoxes.map((box) => box.replace('ruta', ''))
+  const details = { field: parameter, ...by, template_boxes: templateBoxes, requested_box: requested }
+  if (own.length === 0) {
+    const message = {
+      sv: `Mallen bokför inget köp med omvänd betalningsskyldighet, men ${parameter} anger ruta ${asked}. Ange ingen ruta med mallen, ` +
+        'eller bokför ett sådant köp med en kategori och den angivna rutan.',
+      en: `The template books no reverse-charge purchase, but ${parameter} names box ${asked}. Name no box with the template, ` +
+        'or book such a purchase by category with the box named.',
+    }
+    return refuse('VALIDATION_ERROR', { ...details, message: message.en }, { message })
+  }
+  const offer = own.length === 1 && boxCanBeNamed(templateBoxes[0]!)
+  const message = {
+    sv: `Mallen bokför köpet i ${own.length === 1 ? `ruta ${own[0]}` : `rutorna ${own.join(' och ')}`}, men ${parameter} anger ruta ${asked}. ` +
+      `Stämmer mallen, ange ${offer ? `ruta ${own[0]} eller ` : ''}ingen ruta. Annars bokför transaktionen med en kategori och den angivna rutan.`,
+    en: `The template books the purchase in ${own.length === 1 ? `box ${own[0]}` : `boxes ${own.join(' and ')}`}, but ${parameter} names box ${asked}. ` +
+      `If the template is right, name ${offer ? `box ${own[0]} or ` : ''}no box. Otherwise book the transaction by category with the box named.`,
+  }
+  return refuse('VALIDATION_ERROR', { ...details, message: message.en }, { message })
 }
 
 /**
@@ -810,6 +855,8 @@ export async function buildCategorizeMapping(
   // keeps its 45xx/4598 basis pair only when the account does not report
   // ruta 20-24 itself (crm#1096, #2919).
   const rcCostAccounts = reverseChargeCostAccounts(mappingResult)
+  // The boxes a template's purchase is declared in; none without a set.
+  let templateBoxes: string[] = []
   if (rcCostAccounts) {
     const chart = await (options.loadChart ?? chartVatTreatmentsLoader(supabase, companyId))()
     const stated = categoryBooking ? options.statedReverseChargeBox : undefined
@@ -817,7 +864,17 @@ export async function buildCategorizeMapping(
       const conflict = reverseChargeAccountConflict(account, chart.get(account), stated?.kind)
       if (conflict) return reverseChargeAccountRefusal(account, conflict, stated)
     }
+    if (bookedByTemplate) templateBoxes = reverseChargeBoxesBooked(mappingResult, chart) ?? []
     mappingResult = reconcileRcBasisWithCostLines(mappingResult, chart)
+  }
+  // A template books its own box and never reads reverse_charge_kind: its
+  // basis pair's, or the one its cost account reports itself. A box named
+  // beside it that it does not book is refused, not dropped, so the purchase
+  // is never declared in another box than the one named and the preview's
+  // reverse_charge_kind is the box booked.
+  if (bookedByTemplate && options.statedReverseChargeBox) {
+    const refusal = templateBoxRefusal(bookedByTemplate.by, templateBoxes, options.statedReverseChargeBox)
+    if (refusal) return refusal
   }
 
   // An explicit bag tags the business lines (bank/VAT legs stay untagged); it
