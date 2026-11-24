@@ -145,13 +145,15 @@ export async function markUnconfirmedReverseChargeBoxes(
   if (pending.length === 0) return
 
   const rows = [...new Map(pending.map(({ tx }) => [tx.id, tx])).values()]
+  // A failed chart read is no chart: an empty one would read the history's
+  // accounts by their numbers alone, past a momskod that moves the box.
   const [chart, precedents] = await Promise.all([
-    fetchChartVatTreatments(supabase, companyId).catch((err: unknown): ChartVatTreatments => {
+    fetchChartVatTreatments(supabase, companyId).catch((err: unknown): ChartVatTreatments | null => {
       log.warn('chart read failed; a learned reverse-charge pair asks for its box', {
         companyId,
         error: err instanceof Error ? err.message : String(err),
       })
-      return new Map()
+      return null
     }),
     loadBookingPrecedents(supabase, companyId, rows).catch((err: unknown) => {
       log.warn('booking precedents read failed; a learned reverse-charge pair asks for its box', {
@@ -163,8 +165,8 @@ export async function markUnconfirmedReverseChargeBoxes(
   ])
 
   for (const { tx, p, basis, cost } of pending) {
-    if (reverseChargeKindOnOwnAccount(cost, chart.get(cost))) continue
-    if (historyConfirmsBasis(precedents.get(tx.id) ?? [], basis, chart)) continue
+    if (chart && reverseChargeKindOnOwnAccount(cost, chart.get(cost))) continue
+    if (chart && historyConfirmsBasis(precedents.get(tx.id) ?? [], basis, chart)) continue
     proposals[tx.id] = (proposals[tx.id] ?? []).map((x) => (x === p ? { ...x, reverse_charge_box_unconfirmed: true } : x))
   }
 }

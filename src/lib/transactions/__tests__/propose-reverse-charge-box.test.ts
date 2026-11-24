@@ -76,6 +76,7 @@ const matchOf = (template: CategorizationTemplate): CounterpartyTemplateMatch =>
 interface Scene {
   booked?: PrecedentBooking[]
   precedentError?: boolean
+  chartError?: boolean
   chart?: Array<{ account_number: string; default_vat_treatment: string; default_vat_rate?: number | null }>
 }
 
@@ -84,7 +85,7 @@ function ledger(scene: Scene) {
     mapping_rules: { data: [], error: null },
     company_settings: { data: { entity_type: 'aktiebolag', direct_booking_enabled: true }, error: null },
     transaction_assistant_reads: { data: [], error: null },
-    chart_of_accounts: { data: scene.chart ?? [], error: null },
+    chart_of_accounts: scene.chartError ? { data: null, error: { message: 'timeout' } } : { data: scene.chart ?? [], error: null },
     'rpc:booking_precedents': (chain) => {
       if (scene.precedentError) return { data: null, error: { message: 'timeout' } }
       const asked = (chain[0].args[0] as { p_names: string[] }).p_names
@@ -144,6 +145,13 @@ describe('a learned reverse-charge pair books from one click only when its box i
 
   it('asks when the books cannot be read', async () => {
     const { reason } = await propose(pair(), { precedentError: true })
+    expect(reason).toBe('evidence')
+  })
+
+  it('asks when the chart cannot be read, even with every posted reverse charge in ruta 21', async () => {
+    // Without the momskoder the history's accounts read by number alone.
+    const { lead, reason } = await propose(pair(), { chartError: true, booked: [insideEu(), insideEu()] })
+    expect(lead.reverse_charge_box_unconfirmed).toBe(true)
     expect(reason).toBe('evidence')
   })
 
