@@ -28,9 +28,28 @@ const SignoffRequest = z.object({
   external_balance: z.number().finite().nullable().optional(),
 })
 
+const SignoffBankBalance = z
+  .object({
+    as_of: z.string(),
+    bank_balance: z.number().nullable(),
+    booked_balance: z.number().nullable(),
+    difference: z.number().nullable(),
+  })
+  .nullable()
+  .describe(
+    "Bank accounts only: the bank's own balance against the booked balance on the account at the end of through_date. bank_balance is what the bank reported for that day, else the balance after its last row through it; null when the feed has none.",
+  )
+
+const SignoffWarning = z
+  .object({ code: z.enum(['BANK_BALANCE_DIFFERS', 'NO_BANK_BALANCE']), message: z.string() })
+  .nullable()
+  .describe('Set when the bank balance differs from the books on through_date, or there is none to compare with. Never blocks the sign-off.')
+
 const SignoffResponse = z.object({
   dry_run: z.boolean(),
   signoff: ReconciliationSignoffSchema.optional(),
+  bank_balance: SignoffBankBalance.optional(),
+  warning: SignoffWarning.optional(),
   would_sign: z
     .object({
       account_key: z.string(),
@@ -41,6 +60,8 @@ const SignoffResponse = z.object({
       is_reconciled: z.boolean(),
       forced: z.boolean(),
       previous_through_date: z.string().nullable(),
+      bank_balance: SignoffBankBalance,
+      warning: SignoffWarning,
     })
     .optional(),
 })
@@ -117,7 +138,7 @@ registerEndpoint({
   example: {
     request: { through_date: '2026-07-31' },
     response: {
-      data: { dry_run: false, signoff: EXAMPLE_SIGNOFF },
+      data: { dry_run: false, signoff: EXAMPLE_SIGNOFF, bank_balance: null, warning: null },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },

@@ -5,7 +5,7 @@ vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: (...args: unknown[]) => trialBalanceMock(...args),
 }))
 
-import { bankBalanceDay, checkBankBalance, type BankBalanceCheckAccount } from '../bank-balance-check'
+import { bankBalanceDay, checkBankBalance, dayEndBalance, type BankBalanceCheckAccount } from '../bank-balance-check'
 
 const COMPANY = 'company-1'
 const PERIODS = [
@@ -23,24 +23,68 @@ interface Facts {
   ignored_total: number
 }
 
+interface BankRow {
+  date: string
+  amount: number
+  balance_after: number | null
+}
+
 /**
  * A client whose reads answer by table: the company's ledger currency, its
- * fiscal periods and get_bank_balance_facts. Records the RPC arguments.
+ * fiscal periods, the bank rows and get_bank_balance_facts. Records the RPC
+ * arguments and how many bank-row reads were made.
  */
-function client(options: { ledgerCurrency?: string | null; periods?: typeof PERIODS; facts?: Facts; factsError?: string } = {}) {
+function client(
+  options: { ledgerCurrency?: string | null; periods?: typeof PERIODS; facts?: Facts; factsError?: string; rows?: BankRow[] } = {},
+) {
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = []
+  const rowReads = { count: 0 }
   const answer = (data: unknown, error: unknown = null) => Promise.resolve({ data, error })
+  const rows = options.rows ?? []
   const supabase = {
     from(table: string) {
+      if (table === 'transactions') rowReads.count++
+      // The bank-row reads filter on date: through (lte), after (gt) or on (eq).
+      const filter: { lte?: string; gt?: string; on?: string } = {}
       const chain = {
         select: () => chain,
-        eq: () => chain,
-        maybeSingle: () =>
-          table === 'companies'
-            ? answer({ ledger_currency: options.ledgerCurrency === undefined ? 'SEK' : options.ledgerCurrency })
-            : answer(null),
+        eq: (column: string, value: string) => {
+          if (column === 'date') filter.on = value
+          return chain
+        },
+        or: () => chain,
+        order: () => chain,
+        limit: () => chain,
+        lte: (_column: string, value: string) => {
+          filter.lte = value
+          return chain
+        },
+        gt: (_column: string, value: string) => {
+          filter.gt = value
+          return chain
+        },
+        maybeSingle: () => {
+          if (table === 'companies') {
+            return answer({ ledger_currency: options.ledgerCurrency === undefined ? 'SEK' : options.ledgerCurrency })
+          }
+          if (table === 'transactions') {
+            const dates = rows
+              .map((r) => r.date)
+              .filter((d) => (filter.lte ? d <= filter.lte : true) && (filter.gt ? d > filter.gt : true))
+              .sort()
+            const date = filter.lte ? dates[dates.length - 1] : dates[0]
+            return answer(date ? { date } : null)
+          }
+          return answer(null)
+        },
         then(resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) {
-          return (table === 'fiscal_periods' ? answer(options.periods ?? PERIODS) : answer([])).then(resolve, reject)
+          const data =
+            table === 'fiscal_periods'
+              ? (options.periods ?? PERIODS)
+              : table === 'transactions'
+                ? rows.filter((r) => r.date === filter.on).map(({ amount, balance_after }) => ({ amount, balance_after }))
+                : []
+          return answer(data).then(resolve, reject)
         },
       }
       return chain
@@ -61,7 +105,7 @@ function client(options: { ledgerCurrency?: string | null; periods?: typeof PERI
       )
     },
   }
-  return { supabase: supabase as never, rpcCalls }
+  return { supabase: supabase as never, rpcCalls, rowReads }
 }
 
 /** The trial balance answers 1930 = `balances[toDate]` for the fiscal period it is asked about. */
@@ -252,6 +296,103 @@ describe('checkBankBalance', () => {
   it('throws when a read fails rather than reporting a difference', async () => {
     const { supabase } = client({ factsError: 'permission denied' })
     await expect(checkBankBalance(supabase, COMPANY, account())).rejects.toThrow('Kunde inte läsa bankens transaktioner')
+  })
+})
+
+describe('checkBankBalance on a given day', () => {
+  // A UUID id: the bank-row reads assert the scope's shape.
+  const ID = '11111111-1111-4111-8111-111111111111'
+  // The bank's rows, listed out of order on the 31st: 1 000 at the start of
+  // the month, 1 500 after the 30th, 1 250 at the end of the 31st.
+  const ROWS: BankRow[] = [
+    { date: '2026-10-31', amount: 50, balance_after: 1250 },
+    { date: '2026-10-30', amount: 500, balance_after: 1500 },
+    { date: '2026-10-31', amount: -300, balance_after: 1200 },
+    { date: '2026-11-03', amount: 100, balance_after: 1350 },
+  ]
+
+  beforeEach(() => {
+    trialBalanceMock.mockReset()
+  })
+
+  it('reads the bank at the end of the day from the balance after its last row, and both sides on that day', async () => {
+    const { supabase, rpcCalls } = client({ rows: ROWS })
+    bookedOn({ '2026-10-31': 1250 })
+    const result = await checkBankBalance(supabase, COMPANY, account({ id: ID }), { on: '2026-10-31' })
+    expect(result.refusal).toBeNull()
+    expect(result.check).toMatchObject({
+      as_of: '2026-10-31',
+      fetched_at: null,
+      balance_type: null,
+      bank_balance: 1250,
+      booked_balance: 1250,
+      difference: 0,
+    })
+    expect(rpcCalls[0].args.p_through).toBe('2026-10-31')
+  })
+
+  it('carries the last day with rows over a quiet day, once the history reaches past it', async () => {
+    const { supabase } = client({ rows: ROWS })
+    bookedOn({ '2026-11-01': 1000 })
+    const result = await checkBankBalance(supabase, COMPANY, account({ id: ID }), { on: '2026-11-01' })
+    expect(result.check).toMatchObject({ as_of: '2026-11-01', bank_balance: 1250, booked_balance: 1000, difference: 250 })
+  })
+
+  it('has no balance for a day the history has not reached yet', async () => {
+    // The feed stops on the 31st and the bank reported no later balance:
+    // rows still to come could move the 2nd.
+    const { supabase } = client({ rows: ROWS.filter((r) => r.date <= '2026-10-31') })
+    const result = await checkBankBalance(supabase, COMPANY, account({ id: ID, balance: null }), { on: '2026-11-02' })
+    expect(result).toEqual({ check: null, refusal: 'NO_BANK_BALANCE' })
+    expect(trialBalanceMock).not.toHaveBeenCalled()
+  })
+
+  it('has no balance when the day\'s rows carry none, or before the first row', async () => {
+    const withoutBalance = ROWS.map((r) => (r.date === '2026-10-31' && r.amount === 50 ? { ...r, balance_after: null } : r))
+    const { supabase } = client({ rows: withoutBalance })
+    expect(await checkBankBalance(supabase, COMPANY, account({ id: ID }), { on: '2026-10-31' })).toEqual({
+      check: null,
+      refusal: 'NO_BANK_BALANCE',
+    })
+    const { supabase: early } = client({ rows: ROWS })
+    expect(await checkBankBalance(early, COMPANY, account({ id: ID }), { on: '2026-10-01' })).toEqual({
+      check: null,
+      refusal: 'NO_BANK_BALANCE',
+    })
+  })
+
+  it('takes the balance the bank reported when it is for that very day, without reading rows', async () => {
+    const { supabase, rowReads } = client({ rows: ROWS })
+    bookedOn({ '2026-10-26': 1000 })
+    const result = await checkBankBalance(supabase, COMPANY, account({ id: ID }), { on: '2026-10-26' })
+    expect(result.check).toMatchObject({ as_of: '2026-10-26', fetched_at: '2026-10-26T10:00:00Z', bank_balance: 1000 })
+    expect(rowReads.count).toBe(0)
+  })
+})
+
+describe('dayEndBalance', () => {
+  it('finds the end of the day whatever order the rows come in', () => {
+    const rows = [
+      { amount: 50, balance_after: 1250 },
+      { amount: -300, balance_after: 1200 },
+      { amount: 100, balance_after: 1500 },
+    ]
+    expect(dayEndBalance(rows)).toBe(1250)
+    expect(dayEndBalance([...rows].reverse())).toBe(1250)
+    expect(dayEndBalance([{ amount: '12.10', balance_after: '1000.10' }])).toBe(1000.1)
+  })
+
+  it('counts a row the feed delivered twice once', () => {
+    expect(dayEndBalance([{ amount: 100, balance_after: 1100 }, { amount: 100, balance_after: 1100 }])).toBe(1100)
+  })
+
+  it('gives no balance when a row has none, when the chain breaks, or when the day nets to zero', () => {
+    expect(dayEndBalance([])).toBeNull()
+    expect(dayEndBalance([{ amount: 100, balance_after: 1100 }, { amount: 50, balance_after: null }])).toBeNull()
+    // Two rows that start from nothing on the day: a row is missing between them.
+    expect(dayEndBalance([{ amount: 100, balance_after: 1100 }, { amount: 50, balance_after: 2050 }])).toBeNull()
+    // +100 and -100: either row could be the last.
+    expect(dayEndBalance([{ amount: 100, balance_after: 1100 }, { amount: -100, balance_after: 1000 }])).toBeNull()
   })
 })
 

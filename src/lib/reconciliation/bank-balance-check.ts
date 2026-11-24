@@ -30,15 +30,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { isSaneDateString } from '@/lib/invariants/iso-date'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre } from '@/lib/money'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { scopeTransactionsToAccount } from './bank-reconciliation'
 
 export interface BankBalanceCheck {
   /** The bank's day for its balance (bankBalanceDay): both sides are read at its end. */
   as_of: string
-  /** When the balance was fetched (cash_accounts.balance_updated_at). */
-  fetched_at: string
-  /** The bank's type for its balance (closingBooked, CLBD, expected, ...); null when it gave no day. */
+  /**
+   * When the balance was fetched (cash_accounts.balance_updated_at); null when
+   * it is the balance after the bank's last row through as_of (checkBankBalance
+   * with `on`).
+   */
+  fetched_at: string | null
+  /** The bank's type for its balance (closingBooked, CLBD, expected, ...); null when it gave no day or the balance is a row's. */
   balance_type: string | null
   bank_balance: number
   /** Booked balance (debit minus credit) on the account at the end of as_of, as the balance sheet reads it. */
@@ -126,6 +131,99 @@ export function bankBalanceDay(balanceUpdatedAt: string, reference: unknown): { 
   return { date: fetchDay, type: null }
 }
 
+/** A balance the bank stated and the day it belongs to. */
+interface BankBalanceClaim {
+  balance: number
+  date: string
+  type: string | null
+  fetched_at: string | null
+}
+
+/** The balance the bank reported at its last refresh, on its own day (bankBalanceDay); null without one. */
+function reportedBalance(account: BankBalanceCheckAccount): BankBalanceClaim | null {
+  if (account.balance == null || account.balance_updated_at == null) return null
+  const day = bankBalanceDay(account.balance_updated_at, account.balance_reference)
+  return { balance: ore(Number(account.balance)), date: day.date, type: day.type, fetched_at: account.balance_updated_at }
+}
+
+/**
+ * The bank's balance at the end of one day from that day's rows: the balance
+ * after its last row. The rows of a day carry no order of their own, so the
+ * last one is found by the chain: the balance before each row
+ * (balance_after - amount) is the balance after another row of the day,
+ * except for the first row's; the one balance after that no row starts from
+ * is the day's end. Null when a row has no balance_after or the rows do not
+ * lead to one end (a row missing, or a day that nets to zero, whose rows
+ * alone cannot tell where it ended).
+ */
+export function dayEndBalance(
+  rows: ReadonlyArray<{ amount: number | string; balance_after: number | string | null | undefined }>,
+): number | null {
+  if (rows.length === 0) return null
+  const afters: number[] = []
+  const befores: number[] = []
+  for (const row of rows) {
+    if (row.balance_after == null) return null
+    const after = ore(Number(row.balance_after))
+    afters.push(after)
+    befores.push(ore(after - Number(row.amount)))
+  }
+  const ends = afters.filter((after) => {
+    const start = befores.findIndex((before) => equalOre(before, after))
+    if (start === -1) return true
+    befores.splice(start, 1)
+    return false
+  })
+  return ends.length > 0 && ends.every((end) => equalOre(end, ends[0])) ? ends[0] : null
+}
+
+/**
+ * The bank's balance at the end of `date` from its rows: the day-end balance
+ * (dayEndBalance) of the last day through `date` that has a row. Claimed only
+ * when the bank's history reaches `date`: a row on that day or later, or a
+ * balance the bank reported for that day or later. Otherwise rows still to
+ * come could move it, and there is no balance for the day.
+ */
+async function rowBalanceOn(
+  supabase: SupabaseClient,
+  companyId: string,
+  account: BankBalanceCheckAccount,
+  date: string,
+  reportedDay: string | null,
+): Promise<BankBalanceClaim | null> {
+  const currency = account.currency ?? 'SEK'
+  // The account's rows as get_bank_balance_facts scopes them.
+  const scope = <Q extends { or(filters: string): Q; eq(column: string, value: string): Q }>(query: Q): Q =>
+    scopeTransactionsToAccount(query, account.id, currency, Boolean(account.is_primary))
+  const [lastRead, laterRead] = await Promise.all([
+    scope(supabase.from('transactions').select('date').eq('company_id', companyId))
+      .lte('date', date)
+      .order('date', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    reportedDay !== null && reportedDay >= date
+      ? Promise.resolve({ data: { date: reportedDay }, error: null })
+      : scope(supabase.from('transactions').select('date').eq('company_id', companyId))
+          .gt('date', date)
+          .limit(1)
+          .maybeSingle(),
+  ])
+  if (lastRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${lastRead.error.message}`)
+  if (laterRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${laterRead.error.message}`)
+  const lastDay = (lastRead.data as unknown as { date?: string } | null)?.date ?? null
+  if (lastDay === null) return null
+  if (lastDay < date && laterRead.data == null) return null
+
+  const dayRead = await scope(
+    supabase.from('transactions').select('amount, balance_after').eq('company_id', companyId),
+  ).eq('date', lastDay)
+  if (dayRead.error) throw new Error(`Kunde inte läsa bankens transaktioner: ${dayRead.error.message}`)
+  const balance = dayEndBalance(
+    (dayRead.data ?? []) as unknown as Array<{ amount: number | string; balance_after: number | string | null }>,
+  )
+  return balance === null ? null : { balance, date, type: null, fetched_at: null }
+}
+
 /**
  * Booked balance (debit minus credit) of every account at the end of `date`,
  * as the balance sheet reads it: the fiscal period's opening balance plus its
@@ -163,22 +261,49 @@ async function bookedBalanceOn(
 }
 
 /**
+ * The booked balance on one account at the end of `date`, read as the check
+ * reads its booked side. For a day the bank has no balance for, so the books
+ * can still be held against a statement. Null when no fiscal year holds the
+ * day (0 before the company's first).
+ */
+export async function bookedBalanceOnDay(
+  supabase: SupabaseClient,
+  companyId: string,
+  accountNumber: string,
+  date: string,
+): Promise<number | null> {
+  const { data, error } = await supabase.from('fiscal_periods').select('id, period_start, period_end').eq('company_id', companyId)
+  if (error) throw new Error(`Kunde inte läsa räkenskapsår: ${error.message}`)
+  return bookedBalanceOn(supabase, companyId, (data ?? []) as unknown as FiscalPeriodRow[], accountNumber, date)
+}
+
+/**
  * The balance check for one bank cash account. Refuses, rather than guesses,
  * when there is no balance from the bank, when the account is kept in another
  * currency than the ledger, or when no fiscal year holds the bank's day.
  * Throws on a failed read: a balance read that failed is no balance claim.
+ *
+ * With `on`, both sides are read at the end of that day instead of the bank's
+ * own day: the bank's side is the balance it reported for that very day, else
+ * the balance after its last row through it (rowBalanceOn). A sign-off
+ * through a date reads it there.
  */
 export async function checkBankBalance(
   supabase: SupabaseClient,
   companyId: string,
   account: BankBalanceCheckAccount,
+  options: { on?: string } = {},
 ): Promise<BankBalanceCheckResult> {
-  if (account.balance == null || account.balance_updated_at == null) {
+  const reported = reportedBalance(account)
+  const claim =
+    options.on === undefined || reported?.date === options.on
+      ? reported
+      : await rowBalanceOn(supabase, companyId, account, options.on, reported?.date ?? null)
+  if (claim === null) {
     return { check: null, refusal: 'NO_BANK_BALANCE' }
   }
-  const bankBalance = ore(Number(account.balance))
-  const day = bankBalanceDay(account.balance_updated_at, account.balance_reference)
-  const asOf = day.date
+  const bankBalance = claim.balance
+  const asOf = claim.date
   const currency = account.currency ?? 'SEK'
 
   const [companyRead, periodsRead, factsRead] = await Promise.all([
@@ -231,8 +356,8 @@ export async function checkBankBalance(
     refusal: null,
     check: {
       as_of: asOf,
-      fetched_at: account.balance_updated_at,
-      balance_type: day.type,
+      fetched_at: claim.fetched_at,
+      balance_type: claim.type,
       bank_balance: bankBalance,
       booked_balance: bookedBalance,
       difference,

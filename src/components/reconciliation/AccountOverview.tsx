@@ -26,7 +26,8 @@ import type { BankBalanceCheck } from '@/lib/reconciliation/bank-balance-check'
 import { dropProposedLedgerDuplicates } from '@/lib/reconciliation/overview-rows'
 import { accountTransactionsHref } from '@/lib/reconciliation/account-links'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
-import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
+import { SignoffDialog, type SignoffPreviewBank, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
+import type { SignoffBankBalance, SignoffWarning } from '@/lib/reconciliation/signoff'
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { ReconciliationSummary } from './ReconciliationSummary'
@@ -384,14 +385,20 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       body: JSON.stringify({ ...input, dry_run: true }),
     })
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    // A bank account's comparison with the bank's own balance on the date
+    // rides on the preview and on the NOT_RECONCILED details alike.
+    type BankFields = { bank_balance?: SignoffBankBalance | null; warning?: SignoffWarning | null }
+    const bankOf = (fields: BankFields | undefined): SignoffPreviewBank | null =>
+      fields?.bank_balance ? { balance: fields.bank_balance, warning: fields.warning?.code ?? null } : null
     if (res.ok) {
-      const preview = (json.data as { would_sign?: { unexplained_difference?: number | null } } | undefined)?.would_sign
-      return { kind: 'ok', unexplained: preview?.unexplained_difference ?? null }
+      const preview = (json.data as { would_sign?: { unexplained_difference?: number | null } & BankFields } | undefined)
+        ?.would_sign
+      return { kind: 'ok', unexplained: preview?.unexplained_difference ?? null, bank: bankOf(preview) }
     }
     const code = typeof json.code === 'string' ? json.code : null
     if (code === 'NOT_RECONCILED') {
-      const details = json.details as { unexplained_difference?: number | null } | undefined
-      return { kind: 'needs_force', unexplained: details?.unexplained_difference ?? null }
+      const details = json.details as ({ unexplained_difference?: number | null } & BankFields) | undefined
+      return { kind: 'needs_force', unexplained: details?.unexplained_difference ?? null, bank: bankOf(details) }
     }
     if (code === 'OUTSIDE_UNKNOWN') return { kind: 'needs_force', unexplained: null }
     return { kind: 'blocked', message: signoffRefusal(json, res.status) }
@@ -1182,6 +1189,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         open={signoffOpen}
         onOpenChange={setSignoffOpen}
         accountName={account.name}
+        accountNumber={status.account_number}
         defaultDate={signoffDefaultDate}
         maxDate={signoffMaxDate}
         unexplained={status.unexplained_difference}

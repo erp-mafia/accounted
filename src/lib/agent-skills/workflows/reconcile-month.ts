@@ -41,7 +41,7 @@ Then tell the user in two lines what you found: the month, the accounts, which a
 - \`before_history\` (\`history_start\`, \`difference\`): the bank's balance before its first row against the books the day before. Non-zero is usually an opening balance that never reached the books (see "The opening balance is wrong"), or an ignored row that was a real payment (\`ignored\` counts them).
 - \`rest\`: what the books moved on the account since the bank's first row beyond the rows booked against it: a verifikat with no bank row, or a row booked on another account or amount.
 
-Read it before you tell the user a bank account is avstämt, and give its date. When \`as_of\` is after the month end, say so plainly ("Banken och bokföringen jämförs per 23 november, inte per 31 oktober"): it does not show the balance on the month's last day. For that, ask the user for the statement's closing balance that day and compare it with the account's closing balance from \`gnubok_get_general_ledger({ from_date, to_date, account_from, account_to })\`. \`balance_check\` null comes with \`balance_check_refusal\`: NO_BANK_BALANCE (the bank reported no balance) or FOREIGN_CURRENCY_ACCOUNT: ask for the statement's balance in the same way; NO_FISCAL_PERIOD: no fiscal year holds \`as_of\`.
+Read it before you tell the user a bank account is avstämt, and give its date. When \`as_of\` is after the month end, say so plainly ("Banken och bokföringen jämförs per 23 november, inte per 31 oktober"): it does not show the balance on the month's last day. The sign-off preview does: its \`bank_balance\` is the same comparison at the end of \`through_date\` (Step 4). \`balance_check\` null comes with \`balance_check_refusal\`: NO_BANK_BALANCE (the bank reported no balance) or FOREIGN_CURRENCY_ACCOUNT: ask the user for the statement's closing balance and compare it with the account's closing balance from \`gnubok_get_general_ledger({ from_date, to_date, account_from, account_to })\`; NO_FISCAL_PERIOD: no fiscal year holds \`as_of\`.
 
 ## Step 2: Work the buckets
 
@@ -120,7 +120,7 @@ The summary also lists balance accounts without a feed. For 1510 (kundreskontra)
 
 ## Step 4: Sign off
 
-When \`unexplained_difference\` is 0 through the month end: \`gnubok_reconcile_signoff({ account_key, through_date: "YYYY-MM-DD", dry_run: true })\` with the last day of the month, then without \`dry_run\`. It stages; the user approves. The sign-off judges the bridge only, not \`bank.balance_check\`: on a bank account, show the user the balance check with its date and parts beside the preview, so they approve knowing both. Refusals are policy:
+When \`unexplained_difference\` is 0 through the month end: \`gnubok_reconcile_signoff({ account_key, through_date: "YYYY-MM-DD", dry_run: true })\` with the last day of the month, then without \`dry_run\`. It stages; the user approves. The sign-off judges the bridge only. On a bank account the preview also carries \`bank_balance\`: the bank's own balance (\`bank_balance\`: what it reported for that day, else the balance after its last row through it; null when the feed has none), \`booked_balance\` and \`difference\` at the end of \`through_date\`, and \`warning\` (BANK_BALANCE_DIFFERS or NO_BANK_BALANCE, with a Swedish \`message\`). The warning never blocks: show it with the amounts before the user approves, so they approve knowing both. On NO_BANK_BALANCE ask for the statement's closing balance that day and compare it with \`booked_balance\`. Refusals are policy:
 
 - NOT_RECONCILED: something is still unexplained. Back to Step 3.
 - OUTSIDE_UNKNOWN: no outside balance (manual account without underlag, or no fetched data). Ask for the underlag or the fetch.
@@ -174,7 +174,7 @@ Stop, and say "Det här behöver ett beslut av dig (eller er redovisningskonsult
 
 - Links and sign-offs never touch the ledger. Booking does, and always stages.
 - Never delete, never edit a posted verifikat, never book a plug entry to force a zero, never invent an amount or an \`external_balance\`.
-- Judge on \`unexplained_difference\`, never on \`difference\`. On a bank account it compares movements only: never call the account avstämt without \`bank.balance_check\`.
+- Judge on \`unexplained_difference\`, never on \`difference\`. On a bank account it compares movements only: never call the account avstämt without the bank's balance (\`bank_balance\` on the sign-off preview, or \`bank.balance_check\`).
 - Round money to whole öre (two decimals), never with toFixed. Account numbers are strings ("1930").
 - One or more outside rows link to one verifikat. On the skattekonto the rows must sum to what the verifikat settles on 1630, unless the pair carries \`allow_remainder: true\` for a summarised verifikat. One row may also settle several verifikat: pass \`journal_entry_ids\` with several ids. On a bank account (a lump payout over utlägg, a Bankgirot deposit over two customer payments) optionally with \`allocations: [{ journal_entry_id, amount }]\` (signed, summing to the row). On the skattekonto (one event booked as a verifikat and its correction) the verifikat's open amounts on 1630 must sum exactly to the event; the verifikat then leave \`unmatched_ledger\` and are listed under \`matched\` with \`settlement\`. Unlinking the row undoes it all. A pair with no \`external_ids\` and two or more verifikat settles them against each other (SEK bank accounts, summing to 0). Other shapes come back as UNSUPPORTED_PAIR_SHAPE.
 - A wrong link is undone with \`gnubok_reconcile_unmatch({ account_key, external_id })\`; verifikat settled against each other with \`gnubok_reconcile_unmatch({ account_key, settlement_id })\`. The verifikat stay untouched either way.
@@ -183,7 +183,7 @@ Stop, and say "Det här behöver ett beslut av dig (eller er redovisningskonsult
 
 End with short groups, in the user's language:
 
-- **Klart**: per account, outside vs ledger and the sign-off date approved; for a bank account, the bank's balance against the booked one from \`bank.balance_check\`, with its date
+- **Klart**: per account, outside vs ledger and the sign-off date approved; for a bank account, the bank's balance against the booked one on the sign-off date (\`bank_balance\`), and any \`warning\`
 - **Väntar på godkännande**: what is staged, per account
 - **Behöver ditt svar**: each open question, with the facts
 - **Kunde inte göras**: what and why (not connected, locked period, stale data)

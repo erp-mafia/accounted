@@ -4,6 +4,8 @@ import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { formatCurrency } from '@/lib/utils'
+import { bookedBalanceOnDay, type BankBalanceCheck, type BankBalanceCheckRefusal } from './bank-balance-check'
 import { parseAccountKey, type ReconciliationSignoff, type ReconciliationStatus } from './schemas'
 import { getAccountStatus } from './service'
 import { getLatestSignoff, getSignoffById, insertSignoff, stampReopen } from './signoff-store'
@@ -21,6 +23,11 @@ const log = createLogger('reconciliation/signoff')
  *
  * Same function for the dashboard routes, the v1 API and the MCP executor,
  * so the rule is one rule.
+ *
+ * On a bank account the bridge compares movements in the window, never
+ * balances. Beside it the sign-off carries the bank's own balance against the
+ * books at the end of the date (bank_balance) and a warning when they differ
+ * or the bank has no balance for the date. The warning never blocks.
  */
 
 export type SignoffErrorCode =
@@ -39,6 +46,33 @@ export type SignoffErrorCode =
 export interface SignoffErrorDetails {
   /** NOT_RECONCILED: the unexplained difference the engine saw for the window, so a dialog can name the amount. */
   unexplained_difference?: number | null
+  /** NOT_RECONCILED on a bank account: the balance comparison, so a dialog shows it before a forced sign-off too. */
+  bank_balance?: SignoffBankBalance | null
+  warning?: SignoffWarning | null
+}
+
+export type SignoffWarningCode = 'BANK_BALANCE_DIFFERS' | 'NO_BANK_BALANCE'
+
+/** What the signer should see beside a sign-off; never a refusal. */
+export interface SignoffWarning {
+  code: SignoffWarningCode
+  /** Plain Swedish, for the signer. */
+  message: string
+}
+
+/**
+ * Bank accounts: the bank's own balance against the booked balance on the
+ * account at the end of the through-date, as the bank balance check reads
+ * them (bank-balance-check.ts). Shown and warned about, never judged.
+ */
+export interface SignoffBankBalance {
+  as_of: string
+  /** What the bank reported for the day, else the balance after its last row through it; null when the feed has none. */
+  bank_balance: number | null
+  /** Booked balance at the end of as_of, opening balance included; null when it cannot be read in the account's currency. */
+  booked_balance: number | null
+  /** bank_balance - booked_balance; null when either is unknown. */
+  difference: number | null
 }
 
 export class ReconciliationSignoffError extends Error {
@@ -91,11 +125,15 @@ export interface SignoffPreview {
   forced: boolean
   /** The active sign-off this one supersedes in the rail, when any (earlier through_date). */
   previous_through_date: string | null
+  /** Bank accounts (null for the others): the bank's balance against the books at the end of through_date. */
+  bank_balance: SignoffBankBalance | null
+  /** The bank's balance differs from the books on through_date, or there is none to compare with. */
+  warning: SignoffWarning | null
 }
 
 export type SignoffResult =
   | { dry_run: true; would_sign: SignoffPreview }
-  | { dry_run: false; signoff: ReconciliationSignoff }
+  | { dry_run: false; signoff: ReconciliationSignoff; bank_balance: SignoffBankBalance | null; warning: SignoffWarning | null }
 
 /**
  * The start of the fiscal period that covers `throughDate`, or null when no
@@ -129,6 +167,68 @@ async function fiscalPeriodStartFor(
   }
   const start = (data as { period_start?: string | null } | null)?.period_start
   return typeof start === 'string' && ISO_DATE_RE.test(start) ? start : null
+}
+
+/**
+ * The bank's balance against the books at the end of the through-date, from
+ * the status read with balanceCheckOn. Without a balance from the bank the
+ * booked side still comes along, so the signer can hold it against the
+ * statement; not for an account kept in another currency than the ledger,
+ * whose booked balance is in the ledger's.
+ */
+async function bankBalanceAt(
+  supabase: SupabaseClient,
+  companyId: string,
+  status: ReconciliationStatus,
+  throughDate: string,
+): Promise<SignoffBankBalance | null> {
+  if (status.kind !== 'bank') return null
+  const bank = status.bank as unknown as {
+    balance_check?: BankBalanceCheck | null
+    balance_check_refusal?: BankBalanceCheckRefusal | null
+  } | null
+  const check = bank?.balance_check ?? null
+  if (check) {
+    return {
+      as_of: check.as_of,
+      bank_balance: check.bank_balance,
+      booked_balance: check.booked_balance,
+      difference: check.difference,
+    }
+  }
+  let booked: number | null = null
+  if (bank?.balance_check_refusal === 'NO_BANK_BALANCE') {
+    booked = await bookedBalanceOnDay(supabase, companyId, status.account_number, throughDate).catch((err) => {
+      log.warn('booked balance for sign-off failed', {
+        companyId,
+        accountKey: status.account_key,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    })
+  }
+  return { as_of: throughDate, bank_balance: null, booked_balance: booked, difference: null }
+}
+
+function bankBalanceWarning(
+  comparison: SignoffBankBalance | null,
+  accountNumber: string,
+  currency: string,
+): SignoffWarning | null {
+  if (!comparison) return null
+  const { as_of: date, bank_balance: bank, booked_balance: booked, difference } = comparison
+  const money = (amount: number) => formatCurrency(amount, currency)
+  if (bank !== null && booked !== null && difference !== null) {
+    if (Math.abs(difference) < 0.005) return null
+    return {
+      code: 'BANK_BALANCE_DIFFERS',
+      message: `Bankens saldo per ${date} är ${money(bank)}, men ${accountNumber} visar ${money(booked)} samma dag: en skillnad på ${money(difference)}. Signeringen stoppas inte av det; kontrollera skillnaden mot kontoutdraget.`,
+    }
+  }
+  return {
+    code: 'NO_BANK_BALANCE',
+    message: `Det finns inget saldo från banken per ${date} att jämföra ${accountNumber} med${booked !== null ? ` (bokfört samma dag: ${money(booked)})` : ''}. Signeringen stoppas inte av det; kontrollera saldot mot kontoutdraget.`,
+  }
 }
 
 /**
@@ -173,6 +273,7 @@ export async function signOffAccount(
     today,
     windowTo: throughDate,
     ...(windowFrom ? { windowFrom } : {}),
+    ...(parsed.kind === 'bank' ? { balanceCheckOn: throughDate } : {}),
   })
   if (!status) return null
   const asOfDate = status.as_of.slice(0, 10)
@@ -201,6 +302,9 @@ export async function signOffAccount(
     status.is_reconciled = difference != null && Math.abs(difference) < 0.005
   }
 
+  const bankBalance = await bankBalanceAt(supabase, companyId, status, throughDate)
+  const warning = bankBalanceWarning(bankBalance, status.account_number, status.currency)
+
   // The sign-off's rule is the explained difference (decision 2026-08-23):
   // open rows that the bridge lists are the specification an attestation may
   // carry. Whether nothing is left open is the status's is_reconciled, which
@@ -217,7 +321,7 @@ export async function signOffAccount(
     throw new ReconciliationSignoffError(
       'Kontot har en oförklarad differens. Koppla eller bokför raderna först, eller signera med en notering.',
       'NOT_RECONCILED',
-      { unexplained_difference: unexplained },
+      { unexplained_difference: unexplained, ...(bankBalance ? { bank_balance: bankBalance, warning } : {}) },
     )
   }
 
@@ -238,6 +342,8 @@ export async function signOffAccount(
     is_reconciled: status.is_reconciled,
     forced: !explained,
     previous_through_date: latest?.through_date ?? null,
+    bank_balance: bankBalance,
+    warning,
   }
   if (options.dryRun) return { dry_run: true, would_sign: preview }
 
@@ -277,7 +383,7 @@ export async function signOffAccount(
   } catch (err) {
     log.warn('reconciliation.signed_off emit failed', { companyId, accountKey, error: err instanceof Error ? err.message : String(err) })
   }
-  return { dry_run: false, signoff }
+  return { dry_run: false, signoff, bank_balance: bankBalance, warning }
 }
 
 /**
