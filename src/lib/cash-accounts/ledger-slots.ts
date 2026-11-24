@@ -167,22 +167,41 @@ function sameConsentAccount(a: ConsentAccountRef, b: ConsentAccountRef): boolean
 }
 
 /**
+ * The seeded row as the allocator reads it: its payment details, and the IBAN
+ * its invoices print (payee_iban), which names the company's own account as
+ * surely as a clearing and account number do.
+ */
+export interface SeededRowDetails extends PaymentDetails {
+  iban: string | null
+  currency: string
+  payee_iban?: string | null
+}
+
+/** Whether the seeded row's details name this account: its printed IBAN, or its clearing and account number. */
+function seededRowNames(holder: SeededRowDetails, account: ConsentAccountRef): boolean {
+  const printed = normalizeIban(holder.payee_iban)
+  if (printed !== null && printed === normalizeIban(account.iban)) return true
+  return paymentDetailsPointAt(holder, account)
+}
+
+/**
  * Whether the seeded row (no IBAN of its own) belongs to ANOTHER account of
- * the same consent than `want`: its onboarding payment details point at
- * exactly one same-currency account in `consent`, and that is not `want`.
- * Then `want` leaves the row, and its ledger, to that account. With no match,
- * or more than one, the first account to ask takes the row as before
+ * the same consent than `want`: its details (the printed IBAN, or the
+ * clearing and account number) point at exactly one same-currency account in
+ * `consent`, and that is not `want`. Then `want` leaves the row, its ledger
+ * and the statement rows already on it to that account. With no match, or
+ * more than one, the first account to ask takes the row as before
  * (crm#1498: the empty second account took 1930 and the company's own
  * account, the one the details named, overflowed).
  */
 export function seededRowBelongsToAnother(
-  holder: PaymentDetails & { iban: string | null; currency: string },
+  holder: SeededRowDetails,
   want: ConsentAccountRef,
   consent: readonly ConsentAccountRef[],
 ): boolean {
   if (normalizeIban(holder.iban) !== null) return false
   const matches = consent.filter(
-    (account) => account.currency.toUpperCase() === holder.currency && paymentDetailsPointAt(holder, account),
+    (account) => account.currency.toUpperCase() === holder.currency && seededRowNames(holder, account),
   )
   if (matches.length !== 1) return false
   return !sameConsentAccount(matches[0], want)

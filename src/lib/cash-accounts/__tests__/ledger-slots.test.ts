@@ -107,6 +107,21 @@ describe('seededRowBelongsToAnother', () => {
     expect(seededRowBelongsToAnother(seeded, SECOND, [SECOND, { ...OWN, currency: 'EUR' }])).toBe(false)
   })
 
+  it('leaves the seeded row to the account its printed IBAN names when it has no clearing or account number', () => {
+    const printed = { iban: null, currency: 'SEK', clearing_number: null, account_number: null, payee_iban: 'se02 5000 0000 0550 1333 4444' }
+    expect(seededRowBelongsToAnother(printed, SECOND, [SECOND, OWN])).toBe(true)
+    expect(seededRowBelongsToAnother(printed, OWN, [SECOND, OWN])).toBe(false)
+  })
+
+  it('keeps the first-come rule when the printed IBAN names no account of the consent', () => {
+    const elsewhere = { iban: null, currency: 'SEK', payee_iban: 'SE9912000000000000000001' }
+    expect(seededRowBelongsToAnother(elsewhere, SECOND, [SECOND, OWN])).toBe(false)
+  })
+
+  it('keeps the first-come rule when the printed IBAN and the account number name different accounts', () => {
+    expect(seededRowBelongsToAnother({ ...seeded, payee_iban: SECOND.iban }, SECOND, [SECOND, OWN])).toBe(false)
+  })
+
   it('never applies to a row with an IBAN of its own (the IBAN rule decides)', () => {
     expect(seededRowBelongsToAnother({ ...seeded, iban: OWN.iban }, SECOND, [SECOND, OWN])).toBe(false)
   })

@@ -698,8 +698,9 @@ export async function getRevokedConnectionIds(
  *     so the account overflows instead of failing the whole connection.
  *     `options.iban` is the incoming account's IBAN; omitted, it counts as
  *     an account without one, which never takes over a holder that has one.
- *     A seeded row whose onboarding payment details name another account of
- *     the same consent (`options.consent`) is left to that account.
+ *     A seeded row whose payment details (its printed IBAN, or clearing and
+ *     account number) name another account of the same consent
+ *     (`options.consent`) is left to that account.
  *   - Overflow walks the free-use 1931-1959 sub-account slots, skipping the
  *     four currency defaults (reserved as suggestions for their currencies)
  *     and any slot held by ANY existing row - promoting an unrelated manual
@@ -735,7 +736,7 @@ export async function findFreeLedgerAccount(
 
   const { data: rows, error } = await supabase
     .from('cash_accounts')
-    .select('ledger_account, bank_connection_id, iban, currency, clearing_number, account_number')
+    .select('ledger_account, bank_connection_id, iban, currency, clearing_number, account_number, payee_iban')
     .eq('company_id', companyId)
 
   if (error) {
@@ -770,6 +771,7 @@ export async function findFreeLedgerAccount(
     currency: string
     clearing_number?: string | null
     account_number?: string | null
+    payee_iban?: string | null
   }>
   const revokedConnectionIds = await getRevokedConnectionIds(
     supabase,
