@@ -1027,8 +1027,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     mcc_codes: [4812, 4813, 4814],
     keywords: ['mobil', 'tele2', 'telia', 'tre', 'telenor', 'hallon', 'comviq', 'mobilabonnemang', 'telefon'],
     // A landline, VoIP or switchboard bill belongs on 6211 Fast telefoni, not
-    // on this template's 6212 Mobiltelefon (BAS 2026).
-    excluded_keywords: ['fast telefon', 'fasttelefon', 'ip-telefon', 'ip telefon', 'voip', 'telefonväxel', '=växel'],
+    // on this template's 6212 Mobiltelefon (BAS 2026). 'växel' sits inside any
+    // switchboard compound: telefonväxel, växeltjänst, molnväxel.
+    excluded_keywords: ['fast telefon', 'fasttelefon', 'ip-telefon', 'ip telefon', 'voip', 'växel'],
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 8,

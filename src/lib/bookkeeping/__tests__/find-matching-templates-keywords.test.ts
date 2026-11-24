@@ -142,6 +142,8 @@ describe('a landline bill is not a mobile subscription', () => {
     'Telavox VoIP',
     'Telefonväxel november',
     'Telenor växel',
+    'Telefon växeltjänst',
+    'Telia molnväxel',
   ])('the mobile template does not match "%s"', (description) => {
     expect(ids(description)).not.toContain('telecom_mobile')
     expect(ids(description, 4814)).not.toContain('telecom_mobile')
