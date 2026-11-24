@@ -67,3 +67,64 @@ describe('a gift is not a meal', () => {
     expect(matchIds('Teamlunch')).toContain('representation_internal')
   })
 })
+
+// A provider's name inside another word, or a provider that sells something
+// other than the template's thing, proposed that template's VAT: a ride at
+// 6 % for a meal delivery, an exempt payment fee for Stripe's taxable
+// software, Betald F-skatt for a tax-calculation fee.
+describe('a provider name proposes only the thing the template books', () => {
+  const ids = (description: string, entityType: 'aktiebolag' | 'enskild_firma' = 'aktiebolag') =>
+    findMatchingTemplates(
+      makeTransaction({ description, merchant_name: null, amount: -95, mcc_code: null }),
+      entityType,
+    ).map((m) => m.template.id)
+
+  it('reads "uber" and "bolt" only as whole words', () => {
+    expect(ids('HUBER GMBH')).not.toContain('travel_transport')
+    expect(ids('Boltzmann Instruments')).not.toContain('travel_transport')
+    expect(ids('UBER *TRIP HELP.UBER.COM')).toContain('travel_transport')
+    expect(ids('BOLT.EU/O/2611')).toContain('travel_transport')
+  })
+
+  it('does not propose a ride for a meal delivery', () => {
+    expect(ids('UBER *EATS')).not.toContain('travel_transport')
+    expect(ids('Uber Eats Stockholm')).not.toContain('travel_transport')
+    expect(ids('BOLT FOOD')).not.toContain('travel_transport')
+  })
+
+  it.each([
+    'Stripe: Billing - Usage Fee (2026-10-01 - 2026-10-31)',
+    'Stripe: Automatic Taxes (2026-10-01 - 2026-10-31): Automatic tax',
+    'Stripe: Radar (2026-10-01 - 2026-10-31): Radar for Fraud Teams',
+    'Stripe: Invoicing (2026-10-01 - 2026-10-31): Invoicing Starter',
+    'Stripe: Tax Api Calculation (2026-10-01 - 2026-10-31)',
+    'Stripe: Identity (2026-10-01 - 2026-10-31): Identity verification',
+    'Stripe Tax calculation fee',
+    'STRIPE BILLING',
+  ])('keeps the exempt Stripe fee off its taxable software: "%s"', (description) => {
+    expect(ids(description)).not.toContain('payment_fees_eu')
+  })
+
+  it('still proposes the exempt Stripe fee for a processing fee', () => {
+    expect(ids('Stripe-avgift (Stripe-betalning ch_3Q)')).toContain('payment_fees_eu')
+    expect(ids('STRIPE')).toContain('payment_fees_eu')
+    // The payer's name on a fee row is not Stripe's software.
+    expect(ids('Stripe-avgift (Stripe-betalning Tax Billing Radar AB)')).toContain('payment_fees_eu')
+  })
+
+  it.each([
+    'Stripe: Automatic Taxes (2026-10-01 - 2026-10-31): Automatic tax',
+    'Tax Api Calculation (2026-10-01 - 2026-10-31)',
+    'Stripe Tax calculation fee',
+    'Fee-transfer-1234 for Skatteverket tax payment',
+    'Avalara Tax Calculation',
+    'Avalara Tax service charge',
+  ])('does not propose Betald F-skatt for a provider fee: "%s"', (description) => {
+    expect(ids(description)).not.toContain('personnel_preliminary_tax')
+  })
+
+  it('still proposes Betald F-skatt for a tax payment', () => {
+    expect(ids('Tax payment on profit 2026')).toContain('personnel_preliminary_tax')
+    expect(ids('Preliminary tax Skatteverket')).toContain('personnel_preliminary_tax')
+  })
+})

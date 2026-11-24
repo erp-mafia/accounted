@@ -561,7 +561,10 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     deductibility: 'full',
     special_rules_sv: 'Persontransport har 6% moms (flyg, tåg, taxi)',
     mcc_codes: [3000, 3001, 3002, 3003, 4511, 4011, 4111, 4112, 4131, 4121],
-    keywords: ['flyg', 'sas', 'norwegian', 'bra', 'flight', 'tåg', 'train', 'sj', 'sl', 'västtrafik', 'skånetrafiken', 'kollektivtrafik', 'taxi', 'uber', 'bolt', 'cab'],
+    // Ride apps as whole words ("HUBER", "Boltzmann" are not rides), and not
+    // their meal deliveries (Uber Eats, Bolt Food), which are no persontransport.
+    keywords: ['flyg', 'sas', 'norwegian', 'bra', 'flight', 'tåg', 'train', 'sj', 'sl', 'västtrafik', 'skånetrafiken', 'kollektivtrafik', 'taxi', '=uber', '=bolt', 'cab'],
+    excluded_keywords: ['=eats', '=food'],
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 7,
@@ -893,6 +896,18 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
       'Transaktionsavgifter är en momsfri betaltjänst (ML 10 kap. 33 §), även från Irland: ingen omvänd moms och inget i momsdeklarationen. Stripes programvara (Billing, Radar, Tax) är momspliktig och bokförs separat.',
     mcc_codes: [],
     keywords: ['stripe'],
+    // Stripe's software, as its own balance rows name it ("Stripe: Billing -
+    // Usage Fee", "Stripe: Automatic Taxes", "Stripe: Tax Api Calculation")
+    // or a bank row does ("Stripe Tax calculation fee"): taxable, so never
+    // proposed as this exempt fee. Whole words with the product right after
+    // "Stripe", because a processing fee row carries the payer's name after
+    // "Stripe-betalning", which may read "Tax" or "Billing"
+    // (extensions/general/stripe/lib/transaction-sync.ts).
+    excluded_keywords: [
+      '=stripe billing', '=stripe automatic tax', '=stripe automatic taxes', '=stripe tax',
+      '=stripe radar', '=stripe invoicing', '=stripe sigma', '=stripe revenue recognition',
+      '=stripe identity',
+    ],
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 8,
@@ -1161,6 +1176,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     deductibility: 'full',
     mcc_codes: [],
     keywords: ['preliminärskatt', 'skatt', 'tax', 'skatteverket', 'skattekonto'],
+    // A provider's fee that names a tax (Stripe Tax, a tax API, a transfer
+    // service's fee on a tax payment) is a cost, not tax paid.
+    excluded_keywords: ['stripe', '=api', '=calculation', '=fee', '=fees', '=charge', '=charges'],
     risk_level: 'NONE',
     requires_review: true,
     impact_score: 7,
