@@ -120,8 +120,9 @@ export default function SkattekontoInboxCard({
           />
         )}
       </td>
+      {/* Datum, Kategori and Konto hide on a phone (below sm), as on the bank rows. */}
       {show('date') && (
-        <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap date-figures text-muted-foreground')}>
+        <td className={cn(TD_CLASS, 'hidden !pl-0 whitespace-nowrap date-figures text-muted-foreground sm:table-cell')}>
           {formatDate(row.transaktionsdatum)}
         </td>
       )}
@@ -141,7 +142,7 @@ export default function SkattekontoInboxCard({
         </span>
       </td>
       {columns.has('category') && (
-        <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+        <td className={cn(TD_CLASS, 'hidden whitespace-nowrap sm:table-cell')}>
           {/* What Bokför will do; the dialog behind it is where the account changes. */}
           <button
             type="button"
@@ -158,7 +159,7 @@ export default function SkattekontoInboxCard({
         </td>
       )}
       {columns.has('account') && (
-        <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+        <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground sm:table-cell')}>
           <span className="inline-flex items-center gap-2">
             {accountLogo && (
               // eslint-disable-next-line @next/next/no-img-element

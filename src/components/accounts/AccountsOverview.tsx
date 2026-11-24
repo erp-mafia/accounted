@@ -96,7 +96,9 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
         className={cn('group cursor-pointer transition-colors duration-150 hover:bg-secondary/35', a.superseded_by && 'opacity-60')}
         onClick={() => router.push(href)}
       >
-        <td className={cn(TD_CLASS, '!pl-0')}>
+        {/* max-w-0: the name takes the width the other columns leave and
+            truncates past it, instead of pushing Saldo off a phone's edge. */}
+        <td className={cn(TD_CLASS, 'max-w-0 !pl-0')}>
           <Link href={href} onClick={(e) => e.stopPropagation()} className="flex items-center gap-3">
             <AccountLogo account={a} className="h-7 w-7 text-xs" />
             {/* One line (convention 4): number, currency and the superseded
@@ -113,17 +115,20 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
             </span>
           </Link>
         </td>
-        <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
+        {/* On a phone (below sm) the row is the account and its balance:
+            the dates, the open rows and Oförklarat are in the account's
+            reconciliation, which the row opens. */}
+        <td className={cn(TD_CLASS, 'hidden whitespace-nowrap date-figures text-muted-foreground sm:table-cell')}>
           {lastRead ? formatDate(lastRead) : <DefEmpty />}
         </td>
         {/* Normal states are muted text (convention 5): a date, or never. */}
-        <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
+        <td className={cn(TD_CLASS, 'hidden whitespace-nowrap date-figures text-muted-foreground sm:table-cell')}>
           {a.signed_off_through ? formatDate(a.signed_off_through) : tRec('v2_never')}
         </td>
-        <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')} data-ph-mask>
+        <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground sm:table-cell')} data-ph-mask>
           {review > 0 ? tRec('v2_rows_open', { count: review }) : <DefEmpty />}
         </td>
-        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums', tone)} data-ph-mask>
+        <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums sm:table-cell', tone)} data-ph-mask>
           {unexplained == null ? <DefEmpty /> : formatRowAmount(unexplained, a.currency)}
         </td>
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
@@ -165,10 +170,10 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
           <thead>
             <tr>
               <th className={cn(TH_CLASS, '!pl-0 w-full')}>{t('th_account')}</th>
-              <th className={TH_CLASS}>{t('th_synced')}</th>
-              <th className={TH_CLASS}>{t('th_signed_off')}</th>
-              <th className={TH_CLASS}>{t('th_review')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{tRec('v2_th_unexplained')}</th>
+              <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_synced')}</th>
+              <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_signed_off')}</th>
+              <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_review')}</th>
+              <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{tRec('v2_th_unexplained')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('th_balance')}</th>
               <th className={cn(TH_CLASS, '!pr-0')} aria-hidden />
             </tr>

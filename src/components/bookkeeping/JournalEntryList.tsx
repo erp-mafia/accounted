@@ -9,6 +9,7 @@ import {
   DataListLoading,
 } from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
+import { StatusGlyph } from '@/components/ui/status-glyph'
 import { useCommitDraft } from '@/components/bookkeeping/use-commit-draft'
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
@@ -101,6 +102,22 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 // (skeptic finding on #1881: a hardcoded copy here missed webshop_order,
 // leaving flagged rows without chip or waiver toggle).
 const NEEDS_ATTACHMENT = new Set<string>(NEEDS_DOC_SOURCE_TYPES)
+
+// Tailwind's sm breakpoint (40rem): below it the list is on a phone.
+const PHONE_QUERY = '(max-width: 639px)'
+
+/**
+ * On a phone a row's foldout opens under the tapped row, often below the
+ * fold, so the tap looked like it did nothing. There the opened row scrolls
+ * to the top of the screen (under the sticky top bar, the row's scroll-mt)
+ * and its foldout unfolds in view. Wider screens keep the row where it is.
+ */
+function revealOpenedRowOnPhone(row: HTMLElement) {
+  if (!window.matchMedia(PHONE_QUERY).matches) return
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  // After the foldout row has mounted, so the page it scrolls in is complete.
+  requestAnimationFrame(() => row.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' }))
+}
 
 // Column-header sorting (support feedback: "filtrera/sortera alla rubriker").
 // The sort order is a priority-ordered STACK of keys (max 3): the second key
@@ -753,8 +770,10 @@ export default function JournalEntryList({
     }
   }, [])
 
-  const toggleExpand = (id: string) => {
-    setExpandedId(expandedId === id ? null : id)
+  const toggleExpand = (id: string, row: HTMLElement) => {
+    const opening = expandedId !== id
+    setExpandedId(opening ? id : null)
+    if (opening) revealOpenedRowOnPhone(row)
   }
 
   function switchMode(mode: 'committed' | 'drafts') {
@@ -1667,18 +1686,18 @@ export default function JournalEntryList({
                   <Fragment key={entry.id}>
                     <tr
                       className={cn(
-                        'group cursor-pointer transition-colors duration-150',
+                        'group cursor-pointer scroll-mt-14 transition-colors duration-150',
                         isExpanded ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                         selectedIds.has(entry.id) && 'bg-secondary/40',
                       )}
                       role="button"
                       tabIndex={0}
                       aria-expanded={isExpanded}
-                      onClick={() => toggleExpand(entry.id)}
+                      onClick={(e) => toggleExpand(entry.id, e.currentTarget)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
-                          toggleExpand(entry.id)
+                          toggleExpand(entry.id, e.currentTarget)
                         }
                       }}
                     >
@@ -1718,7 +1737,9 @@ export default function JournalEntryList({
                           >
                             {formatVoucher(entry)}
                           </IntentLink>
-                          <OpenInNewTab href={`/bookkeeping/${entry.id}`} />
+                          {/* A phone (below sm) has no tabs to open it in, and
+                              needs the width for the description. */}
+                          <OpenInNewTab href={`/bookkeeping/${entry.id}`} className="hidden sm:inline-flex" />
                         </span>
                       </td>
                       <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap date-figures text-muted-foreground', struckCell, cellPad)}>
@@ -1802,16 +1823,31 @@ export default function JournalEntryList({
                                 // Imported rows are counted once in the line
                                 // above the table, not chipped row by row.
                                 entry.source_type !== 'import' && (
-                                  <Badge variant="warning" title={t('missing_attachment_tooltip')}>
-                                    {t('missing_attachment_chip')}
-                                  </Badge>
+                                  <>
+                                    <Badge variant="warning" className="hidden sm:inline-flex" title={t('missing_attachment_tooltip')}>
+                                      {t('missing_attachment_chip')}
+                                    </Badge>
+                                    {/* A phone (below sm) has no room for the chip
+                                        beside the description and the amount: the
+                                        amber glyph marks the row, the chip's words
+                                        stay for screen readers. */}
+                                    <span className="inline-flex sm:hidden" title={t('missing_attachment_tooltip')}>
+                                      <StatusGlyph tone="warning" />
+                                      <span className="sr-only">{t('missing_attachment_chip')}</span>
+                                    </span>
+                                  </>
                                 )
                               )
                             )
                           )}
+                          {/* Below sm the row's own Bokför, copy and chevron
+                              hide so the description and the amount fit a
+                              phone; the foldout a tap opens carries Bokför
+                              and Kopiera. */}
                           {entry.status === 'draft' && (
                             <Button
                               variant="outline"
+                              className="hidden sm:inline-flex"
                               disabled={!canWrite}
                               loading={committingId === entry.id}
                               title={!canWrite ? t('read_only_tooltip') : undefined}
@@ -1840,10 +1876,10 @@ export default function JournalEntryList({
                                 // Compact rows: at 30px the button would set
                                 // the row height on its own.
                                 compact && 'p-1',
-                                // Quiet at rest; coarse pointers (phones and
-                                // tablets) keep the icon visible, since the
-                                // table has no mobile card to fall back on.
+                                // Quiet at rest; coarse pointers (tablets,
+                                // phones held sideways) keep the icon visible.
                                 HOVER_REVEAL_CLASS,
+                                'hidden sm:inline-flex',
                               )}
                             >
                               <Square2StackIcon className="h-3.5 w-3.5" />
@@ -1851,7 +1887,7 @@ export default function JournalEntryList({
                           )}
                           <ChevronRightIcon
                             className={cn(
-                              'h-3.5 w-3.5 text-muted-foreground transition-[transform,opacity] duration-150',
+                              'hidden h-3.5 w-3.5 text-muted-foreground transition-[transform,opacity] duration-150 sm:inline-flex',
                               isExpanded
                                 ? 'rotate-90 opacity-100'
                                 : 'opacity-0 group-hover:opacity-100',

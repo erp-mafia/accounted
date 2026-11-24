@@ -794,9 +794,12 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                 <span className="truncate">{tile.label}</span>
                 {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
               </div>
+              {/* 15px on a phone (below sm): a seven-figure balance at 20px is
+                  wider than half a phone, and it cannot wrap, so the right
+                  column ran past the screen's edge. */}
               <div
                 className={cn(
-                  'mt-1 text-xl font-semibold leading-tight tabular-nums',
+                  'mt-1 text-base font-semibold leading-tight tabular-nums sm:text-xl',
                   tile.tone === 'ok' && 'text-success',
                   tile.tone === 'attn' && 'text-warning',
                 )}

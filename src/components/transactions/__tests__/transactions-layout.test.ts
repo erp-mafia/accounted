@@ -55,3 +55,47 @@ describe('list scrollers bleed exactly the page padding', () => {
     expect(history).not.toMatch(/-mx-5|md:-mx-8/)
   })
 })
+
+// Measured at 390px the Att bokföra table was 793px wide: the description
+// showed five characters and both Belopp and the row's Bokför were off-screen.
+// Below sm a row is the description, the amount and Bokför; the drawer a tap
+// opens shows Datum, Kategori, Konto and the ⋯ actions.
+describe('Att bokföra rows on a phone', () => {
+  const bankRow = readFileSync(join(root, 'src/components/transactions/TransactionInboxCard.tsx'), 'utf8')
+  const skvRow = readFileSync(join(root, 'src/components/transactions/SkattekontoInboxCard.tsx'), 'utf8')
+  const cellOf = (src: string, column: string) => {
+    const start = src.indexOf(`${column}') && (`)
+    expect(start).toBeGreaterThan(-1)
+    return src.slice(start, src.indexOf('>', src.indexOf('<t', start)))
+  }
+
+  it('hides Datum, Kategori and Konto below sm, in the head and in both kinds of row', () => {
+    for (const src of [page, bankRow, skvRow]) {
+      for (const column of ['date', 'category', 'account']) {
+        const cell = cellOf(src, column)
+        expect(cell).toContain('hidden')
+        expect(cell).toContain('sm:table-cell')
+      }
+    }
+  })
+
+  it('keeps the description, Belopp and the row action on every width', () => {
+    expect(cellOf(bankRow, 'amount')).not.toContain('hidden')
+    expect(bankRow).toContain("'max-w-0 w-full overflow-hidden'")
+    expect(bankRow).toContain('{primaryLabel}')
+  })
+
+  it('hides the column chooser below sm, where the columns it toggles are hidden', () => {
+    const chooser = page.indexOf("aria-label={t('columns_button')}")
+    const button = page.slice(page.lastIndexOf('<Button', chooser), chooser)
+    expect(button).toContain('hidden')
+    expect(button).toContain('sm:inline-flex')
+  })
+
+  it("hides the bank row's ⋯ below sm; the drawer lists the same actions", () => {
+    const trigger = bankRow.indexOf("aria-label={t('more_actions_aria')}")
+    const button = bankRow.slice(bankRow.lastIndexOf('<Button', trigger), trigger)
+    expect(button).toContain("'hidden sm:inline-flex'")
+    expect(bankRow).toContain('actions={canWrite ? [...overflowItems, ...dangerItems] : []}')
+  })
+})
