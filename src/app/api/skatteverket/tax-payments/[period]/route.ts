@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
 import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declaration'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { roundOre } from '@/lib/money'
+import { readSkattekontoPaymentTowards } from '@/lib/payments/orders/skattekonto-day'
 
 /**
  * Get tax payment status for an AGI period.
@@ -19,10 +22,18 @@ import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declar
  * holds one run's totals while another live run is paid out in the month),
  * so the panel says so instead of offering to pay it; null when it may be
  * paid.
+ *
+ * `bank_payment` is the payment to the skattekonto through the bank made
+ * towards the period's due date: signed, at the bank or executed on the day
+ * it is paid on (readSkattekontoPaymentTowards). The panel shows it, and
+ * offers no second payment when it covers the declaration. null when there
+ * is none, when the period is marked paid or may not be paid, and when the
+ * payments cannot be read: it only informs, so a failed read never takes the
+ * panel down.
  */
 export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   'tax_payment.status',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, log }, { params }) => {
   const { period } = await params
   const periodMatch = /^(\d{4})-(\d{2})$/.exec(period)
   if (!periodMatch) {
@@ -73,6 +84,26 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       }
     : null
 
-  return NextResponse.json({ data: { ...payment, payment_due_date: paymentDueDate, period_conflict: periodConflict } })
+  let bankPayment: { status: string; amount: number; requested_execution_date: string } | null = null
+  if (!payment.tax_paid_at && !periodConflict && paymentDueDate) {
+    try {
+      const order = await readSkattekontoPaymentTowards(supabase, companyId, paymentDueDate, todayIsoStockholm())
+      if (order) {
+        bankPayment = {
+          status: order.status,
+          amount: roundOre(Number(order.amount)),
+          requested_execution_date: order.requested_execution_date,
+        }
+      }
+    } catch (error) {
+      // Without it the panel offers Betala via banken as before, and the
+      // dialog still refuses a second payment on a day already in payment.
+      log.warn('skattekonto bank payment read failed', { error })
+    }
+  }
+
+  return NextResponse.json({
+    data: { ...payment, payment_due_date: paymentDueDate, period_conflict: periodConflict, bank_payment: bankPayment },
+  })
   },
 )

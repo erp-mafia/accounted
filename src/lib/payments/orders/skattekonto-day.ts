@@ -9,6 +9,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OperationOutcome } from '@/lib/operations/types'
+import { executionDateFor, previousBankDayIso } from '@/lib/payments/bank-days'
 import type { PaymentOrderRow } from './types'
 
 /**
@@ -23,6 +24,87 @@ export const OPEN_SKATTEKONTO_ORDER_STATUSES = [
   'awaiting_second_signer',
   'accepted',
 ] as const
+
+/**
+ * The day a payment towards a due date goes out unless the person picks
+ * another: the banking day before Skatteverket draws, so the money is on the
+ * skattekonto by the due date, and never before the earliest day the bank takes.
+ */
+export function skattekontoPaymentDayFor(dueDate: string, today: string): string {
+  return executionDateFor(previousBankDayIso(dueDate), today)
+}
+
+/** A day's open skattekonto order, as the one-per-day rule reads it. */
+export interface OpenSkattekontoOrder {
+  id: string
+  status: string
+  amount: number | string
+  batch_id: string | null
+}
+
+/** The open skattekonto order on a day (the index allows one), or null. */
+export async function readOpenSkattekontoOrderOnDay(
+  client: SupabaseClient,
+  companyId: string,
+  day: string,
+): Promise<OpenSkattekontoOrder | null> {
+  const { data, error } = await client
+    .from('payment_orders')
+    .select('id, status, amount, batch_id')
+    .eq('company_id', companyId)
+    .eq('purpose', 'skattekonto')
+    .eq('requested_execution_date', day)
+    .in('status', [...OPEN_SKATTEKONTO_ORDER_STATUSES])
+  if (error) throw error
+  return ((data ?? []) as OpenSkattekontoOrder[])[0] ?? null
+}
+
+/**
+ * Whether a day's open order is in payment: signed, or at the bank. A new
+ * payment on that day is then refused (SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT),
+ * and a declaration paid on it offers no second payment. An order nobody
+ * signed yet (a draft, or approved and not claimed for signing) takes a new
+ * payment as an addition instead.
+ */
+export function isSkattekontoDayInPayment(order: Pick<OpenSkattekontoOrder, 'status' | 'batch_id'>): boolean {
+  return (order.status !== 'draft' && order.status !== 'approved') || !!order.batch_id
+}
+
+/** A bank payment to the skattekonto made towards a due date (readSkattekontoPaymentTowards). */
+export interface SkattekontoPaymentTowards extends OpenSkattekontoOrder {
+  requested_execution_date: string
+}
+
+/**
+ * The bank payment to the skattekonto made towards a due date: on the day it
+ * goes out by default (the banking day before the draw, or the day the bank
+ * takes now when that has passed), signed, at the bank or executed. An order
+ * nobody signed yet pays nothing and is left out. The orders do not record
+ * which declaration they pay: this is the payment of the due date's day,
+ * whatever it covers; null when there is none.
+ */
+export async function readSkattekontoPaymentTowards(
+  client: SupabaseClient,
+  companyId: string,
+  dueDate: string,
+  today: string,
+): Promise<SkattekontoPaymentTowards | null> {
+  const planned = previousBankDayIso(dueDate)
+  const days = [...new Set([planned, skattekontoPaymentDayFor(dueDate, today)])]
+  const { data, error } = await client
+    .from('payment_orders')
+    .select('id, status, amount, batch_id, requested_execution_date')
+    .eq('company_id', companyId)
+    .eq('purpose', 'skattekonto')
+    .in('requested_execution_date', days)
+    .in('status', [...OPEN_SKATTEKONTO_ORDER_STATUSES, 'executed'])
+  if (error) throw error
+  const paying = ((data ?? []) as SkattekontoPaymentTowards[]).filter(
+    (order) => order.status === 'executed' || isSkattekontoDayInPayment(order),
+  )
+  // The planned day first: the payment made before that day passed.
+  return paying.find((order) => order.requested_execution_date === planned) ?? paying[0] ?? null
+}
 
 export const SKATTEKONTO_DAY_TAKEN = 'SKATTEKONTO_PAYMENT_DAY_TAKEN'
 
