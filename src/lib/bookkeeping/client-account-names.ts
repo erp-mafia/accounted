@@ -73,7 +73,7 @@ const ACCOUNT_NAMES: Record<string, string> = {
   '6072': 'Representation, ej avdragsgill',
   '6110': 'Kontorsförbrukning',
   '6200': 'Telefon & internet',
-  '6211': 'Mobiltelefon',
+  '6212': 'Mobiltelefon',
   '6230': 'Internet',
   '6250': 'Porto',
   '6310': 'Företagsförsäkring',

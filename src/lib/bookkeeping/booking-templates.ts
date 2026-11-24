@@ -1018,21 +1018,25 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'telecom',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '6211',
+    debit_account: '6212',
     credit_account: '1930',
     vat_treatment: 'standard_25',
     vat_rate: 0.25,
     deductibility: 'conditional',
     deductibility_note_sv: 'Blandad användning: bara yrkesmässig del avdragsgill',
     mcc_codes: [4812, 4813, 4814],
-    keywords: ['mobil', 'tele2', 'telia', 'tre', 'telenor', 'hallon', 'comviq', 'mobilabonnemang', 'telefon', 'fast telefon', 'ip-telefoni', 'voip'],
+    keywords: ['mobil', 'tele2', 'telia', 'tre', 'telenor', 'hallon', 'comviq', 'mobilabonnemang', 'telefon'],
+    // A landline, VoIP or switchboard bill belongs on 6211 Fast telefoni, not
+    // on this template's 6212 Mobiltelefon (BAS 2026). 'växel' sits inside any
+    // switchboard compound: telefonväxel, växeltjänst, molnväxel.
+    excluded_keywords: ['fast telefon', 'fasttelefon', 'ip-telefon', 'ip telefon', 'voip', 'växel'],
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 8,
     auto_match_confidence: 0.85,
     default_private: false,
     fallback_category: 'expense_other',
-    description_sv: 'Telefon och mobilabonnemang (granska yrkesmässig andel)',
+    description_sv: 'Mobilabonnemang (granska yrkesmässig andel)',
     common: true,
   },
   {
