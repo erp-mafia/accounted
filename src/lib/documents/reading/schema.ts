@@ -48,7 +48,7 @@ export const DocumentReadingSchema = z
         seller_name: field(z.string(), 'BT-27 Seller name.'),
         seller_legal_registration_identifier: field(z.string(), 'BT-30: the organisationsnummer.'),
         seller_vat_identifier: field(z.string(), 'BT-31.'),
-        seller_country_code: field(z.string(), 'BT-40, ISO 3166; from a model reading derived from the VAT identifier.'),
+        seller_country_code: field(z.string(), 'BT-40, ISO 3166; from a model reading derived from the VAT identifier, or the address when a Swedish VAT identifier stands beside an address abroad.'),
         document_type: field(z.enum(INBOX_DOCUMENT_KINDS), "BT-3's role in the inbox kinds, decided by the inbox's kind rule."),
         invoice_type_code: field(z.string(), 'BT-3 (380, 381, ...): structured doors only.'),
         invoice_number: field(z.string(), 'BT-1.'),

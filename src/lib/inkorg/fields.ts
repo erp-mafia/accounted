@@ -58,7 +58,8 @@ export type PanelFieldName = (typeof PANEL_FIELDS)[number]
 
 /**
  * The fields a person corrects through the item's field correction. The
- * country follows the VAT number, and IBAN, the VAT breakdown and the lines
+ * country follows the VAT number (or, beside a Swedish one, an address
+ * abroad: lib/vat/seller-country.ts), and IBAN, the VAT breakdown and the lines
  * have no place in UpdateInboxItemFieldsSchema: they are read only here.
  */
 export const EDITABLE_FIELDS = [

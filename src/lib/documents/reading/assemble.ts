@@ -19,6 +19,7 @@ import { normalizeDate } from '@/lib/documents/extract/fields'
 import { orgNumberKey, sameOrgNumber } from '@/lib/invariants/org-number'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
 import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
+import { swedishVatNumberAbroad } from '@/lib/vat/seller-country'
 import type { PeppolInboundDocument } from '@/lib/invoices/peppol-inbound-ubl'
 import type {
   Corroboration,
@@ -125,7 +126,9 @@ export function prepaidDeduction(totals: unknown): number {
 /**
  * The canonical values of an inbox extraction (InvoiceExtractionResult, as
  * stored: older readings lack the optional fields). The seller country is
- * derived from the VAT identifier, since the extraction reads no country.
+ * derived from the VAT identifier, since the extraction reads no country,
+ * except a Swedish one beside an address abroad, which shows the address's
+ * country (a business established abroad can register for VAT in Sweden).
  * The amount due is the total less what was settled before this payment
  * (BT-115 = BT-112 - BT-113): a receipt paid from an account balance is due
  * nothing, while the total stays what is booked.
@@ -143,7 +146,7 @@ export function projectExtraction(raw: unknown): ReadingValueMap {
   put(out, 'seller_name', str(supplier.name))
   put(out, 'seller_legal_registration_identifier', str(supplier.orgNumber))
   put(out, 'seller_vat_identifier', vat)
-  put(out, 'seller_country_code', countryFromVatIdentifier(vat))
+  put(out, 'seller_country_code', swedishVatNumberAbroad({ vatNumber: vat, address: str(supplier.address) }) ?? countryFromVatIdentifier(vat))
   if (isInboxDocumentKind(raw.documentKind)) out.document_type = raw.documentKind
   put(out, 'invoice_number', str(invoice.invoiceNumber))
   put(out, 'invoice_issue_date', str(invoice.invoiceDate))

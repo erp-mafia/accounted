@@ -47,7 +47,9 @@
  *   48 and 52 §§), an unclear category, VAT charged by a foreign seller (not
  *   deductible here) or a company that is not VAT-registered: the editor,
  *   prefilled. A seller whose country nothing names, on a document with no
- *   VAT that looks foreign: ask where the seller is.
+ *   VAT that looks foreign: ask where the seller is. A Swedish VAT number
+ *   beside an address abroad names no country (seller-country.ts): the
+ *   editor when the document shows VAT, else the same question.
  *
  *   No periodisering: a one-click purchase is below K2's 7 000 kr per post
  *   (BFNAR 2025:2) or a person decides in the editor; accruals are
@@ -95,6 +97,7 @@ import {
 import {
   looksForeign,
   sellerCountry,
+  swedishVatNumberAbroad,
   supplierTypeForRegion,
   type SellerRegion,
   type SupplierTypeForRegion,
@@ -137,6 +140,7 @@ export type OneClickReason =
   | 'unknown_nature_abroad'
   | 'foreign_vat'
   | 'foreign_vat_unknown_country'
+  | 'swedish_vat_number_abroad'
   | 'not_vat_registered_abroad'
   | 'vat_exceeds_rate'
   | 'mixed_rates'
@@ -735,9 +739,12 @@ export function planOneClick(input: OneClickInput): OneClickPlan {
   let region = read.region
   if (!region) {
     const vatOnDocument = documentVat(reading).total > 0
-    const foreign = looksForeign({ currency: reading.invoice?.currency, address: reading.supplier?.address })
+    // A Swedish VAT number beside an address abroad: whether its VAT is Swedish input VAT or
+    // charged in error on a purchase the buyer owes the VAT on is the person's to say.
+    const swedishNumberAbroad = swedishVatNumberAbroad(reading.supplier) !== null
+    const foreign = swedishNumberAbroad || looksForeign({ currency: reading.invoice?.currency, address: reading.supplier?.address })
     if (foreign) {
-      if (vatOnDocument) return ask('editor', 'foreign_vat_unknown_country')
+      if (vatOnDocument) return ask('editor', swedishNumberAbroad ? 'swedish_vat_number_abroad' : 'foreign_vat_unknown_country')
       region = input.sellerRegionAnswer
       if (!region) return ask('seller_country', 'seller_country_unknown')
     } else {
