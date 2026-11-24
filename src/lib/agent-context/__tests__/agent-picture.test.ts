@@ -69,7 +69,7 @@ vi.mock('@/lib/documents/inbox-address', () => ({
 }))
 
 import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
-import { limitNotConnected, loadAgentActivity, loadAgentCards, loadAgentPicture, type PictureSource, type PictureSourceGroup } from '../agent-picture'
+import { limitNotConnected, loadAgentActivity, loadAgentCards, loadAgentPicture, type AgentPicturePorts, type PictureSource, type PictureSourceGroup } from '../agent-picture'
 
 const ALL_EXTENSIONS = ['enable-banking', 'skatteverket', 'tic', 'invoice-inbox', 'whatsapp-inbox', 'mail', 'stripe', 'shopify', 'woocommerce', 'zettle']
 
@@ -378,6 +378,25 @@ describe('loadAgentPicture: sources', () => {
     const off = picture.sources.flatMap((g) => g.items).filter((item) => item.state === 'not_connected')
     // Stripe and WhatsApp come first in the order; WooCommerce and Zettle are left out.
     expect(off.map((item) => item.key).sort()).toEqual(['stripe', 'whatsapp'])
+  })
+
+  it('offers a cash register only where the installation has a connector for one', async () => {
+    const withConnector: AgentPicturePorts = { ...ports(), posConnector: () => true }
+    const offered = await loadAgentPicture(fakeSupabase(tables({ whatsapp_phone_links: { data: null } })).client, COMPANY, USER, withConnector, NOW)
+    expect(sourceOf(offered, 'pos')).toMatchObject({ state: 'not_connected', href: '/settings/pos' })
+
+    // Without a connector there is nothing to connect it through: no card says "not connected".
+    const withoutConnector: AgentPicturePorts = { ...ports(), posConnector: () => false }
+    const neither: AgentPicturePorts[] = [withoutConnector, ports()]
+    for (const given of neither) {
+      const picture = await loadAgentPicture(fakeSupabase(tables({ whatsapp_phone_links: { data: null } })).client, COMPANY, USER, given, NOW)
+      expect(sourceOf(picture, 'pos')).toBeUndefined()
+    }
+
+    // A venue that is connected shows either way.
+    const pos_connections = { data: [{ venue_name: 'Butiken', provider_name: 'Kassa', health: 'ok' }] }
+    const connected = await loadAgentPicture(fakeSupabase(tables({ pos_connections })).client, COMPANY, USER, withoutConnector, NOW)
+    expect(sourceOf(connected, 'pos')).toMatchObject({ state: 'connected', detail: 'Butiken (Kassa)' })
   })
 
   it('leaves out a source whose extension is not built in', async () => {

@@ -129,6 +129,29 @@ describe('what /wiki shows for an address', () => {
     expect(wikiPlace({ view: 'map' }, without)).toEqual({ show: 'view', view: 'map' })
   })
 
+  it('leads every address of the picture to Bokföringsregler on an installation without the agent connection', () => {
+    const noConnection = { picture: true, facts: false, agentConnection: false }
+    // The bare address, each row of the picture, an item, an unknown view: none ends on a page that says the connection does not exist.
+    for (const view of [undefined, null, 'context', 'checks', 'memory', 'knowledge', 'skills', 'map', 'nonsense']) {
+      expect(wikiPlace({ view }, noConnection), String(view)).toEqual({ show: 'redirect', href: '/rules' })
+    }
+    expect(wikiPlace({ view: 'knowledge', item: 'horizontal.swedish-vat' }, noConnection)).toEqual({ show: 'redirect', href: '/rules' })
+    // Fakta is a view of its own where the company has it, with or without the connection.
+    expect(wikiPlace({ view: 'facts' }, { picture: true, facts: true, agentConnection: false })).toEqual({ show: 'view', view: 'facts' })
+  })
+
+  it('shows the picture where the installation has the agent connection, said or not', () => {
+    expect(wikiPlace({}, { picture: true, facts: false, agentConnection: true })).toEqual({ show: 'picture', row: null, item: null })
+    expect(wikiPlace({ view: 'memory' }, { picture: true, facts: false, agentConnection: true })).toEqual({ show: 'picture', row: 'memory', item: null })
+    expect(wikiPlace({ view: 'memory' }, { picture: true, facts: false })).toEqual({ show: 'picture', row: 'memory', item: null })
+  })
+
+  it('leaves a company without the picture as it was on an installation without the agent connection', () => {
+    for (const view of [...WIKI_VIEWS, 'nonsense', null]) {
+      expect(wikiPlace({ view }, { picture: false, facts: false, agentConnection: false })).toEqual(wikiPlace({ view }, { picture: false, facts: false }))
+    }
+  })
+
   it('never leads a company without the picture anywhere else', () => {
     for (const view of [...WIKI_VIEWS, ...PICTURE_ROWS, 'nonsense', null, undefined]) {
       for (const facts of [false, true]) expect(wikiPlace({ view }, { picture: false, facts }).show, String(view)).toBe('view')

@@ -289,6 +289,8 @@ export interface AgentPicturePorts {
   skatteverket?: () => Promise<{ state: 'connected' | 'not_connected' | 'unknown'; last_sync_at: string | null }>
   /** What waits on the company's people, from the counters Hem and the menu read. */
   waiting?: () => Promise<PictureWaiting>
+  /** Whether the installation has a cash register connector. Without one, or without this reader, a cash register is not offered. */
+  posConnector?: () => boolean
 }
 
 /** A part's deadline. The reads behind it keep running; their answer is just no longer waited for. */
@@ -496,8 +498,13 @@ async function gmailSource(supabase: SupabaseClient, companyId: string): Promise
   return source('gmail', rows.some((r) => r.status === 'active') ? 'connected' : 'needs_attention')
 }
 
-/** The connected cash register venues, labelled as the connections page labels them. */
-async function posSource(supabase: SupabaseClient, companyId: string): Promise<PictureSource> {
+/**
+ * The connected cash register venues, labelled as the connections page
+ * labels them. With none connected the cash register is offered only where
+ * the installation has a connector to connect it through (`offered`);
+ * elsewhere there is no card.
+ */
+async function posSource(supabase: SupabaseClient, companyId: string, offered: boolean): Promise<PictureSource | null> {
   const { data, error } = await supabase
     .from('pos_connections')
     .select('venue_name, provider_name, health')
@@ -505,7 +512,7 @@ async function posSource(supabase: SupabaseClient, companyId: string): Promise<P
     .eq('status', 'active')
   if (error) failed('cash register connections', error)
   const venues = (data ?? []) as Array<{ venue_name: string; provider_name: string; health: string }>
-  if (venues.length === 0) return source('pos', 'not_connected')
+  if (venues.length === 0) return offered ? source('pos', 'not_connected') : null
   return source('pos', venues.some((v) => v.health === 'action_required') ? 'needs_attention' : 'connected', {
     detail: venues.length === 1 ? `${venues[0].venue_name} (${venues[0].provider_name})` : venues.map((v) => v.venue_name).join(', '),
   })
@@ -568,7 +575,7 @@ async function loadSources(
     part('mailboxes', () => mailboxSources(supabase, companyId)),
     has('mail') ? part('gmail', () => gmailSource(supabase, companyId)) : none,
     has('stripe') ? part('stripe', () => stripeSource(supabase, companyId)) : none,
-    part('pos', () => posSource(supabase, companyId)),
+    part('pos', () => posSource(supabase, companyId, ports.posConnector?.() ?? false)),
     has('shopify') ? part('shopify', () => shopifySource(supabase, companyId)) : none,
     has('woocommerce') ? part('woocommerce', () => woocommerceSource(supabase, companyId)) : none,
     has('zettle') ? part('zettle', () => zettleSource(supabase, companyId)) : none,

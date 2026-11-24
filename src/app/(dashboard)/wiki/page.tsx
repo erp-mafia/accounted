@@ -6,6 +6,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { WikiViews } from '@/components/wiki/WikiViews'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { wikiPlace } from '@/lib/agent-context/wiki-views'
 import { getDashboardCompanyId } from '../request-context'
 
@@ -24,13 +25,18 @@ import { getDashboardCompanyId } from '../request-context'
  * picture's own title, and the map leads to Bokföringsregler, where its
  * lines are. The switch is read here, on the server: the browser gets a
  * boolean.
+ *
+ * On an installation without the agent connection (the MCP server
+ * extension) there is no picture to show, and the menu has no Kontext row
+ * (nav-v3.ts): an address that would show the picture leads to
+ * Bokföringsregler instead (wikiPlace).
  */
 export default async function WikiPage({ searchParams }: { searchParams: Promise<{ view?: string | string[] }> }) {
   const companyId = await getDashboardCompanyId()
   const facts = !!companyId && isArkivBrainEnabled(companyId)
   const picture = isAgentPictureEnabled(companyId)
   const raw = (await searchParams).view
-  const place = wikiPlace({ view: Array.isArray(raw) ? raw[0] : raw }, { picture, facts })
+  const place = wikiPlace({ view: Array.isArray(raw) ? raw[0] : raw }, { picture, facts, agentConnection: ENABLED_EXTENSION_IDS.has('mcp-server') })
   if (place.show === 'redirect') redirect(place.href)
   const t = await getTranslations('wiki')
   // The top bar names the view, as the menu does: Kontext and Minne are rows

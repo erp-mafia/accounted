@@ -132,7 +132,9 @@ export type WikiPlace =
 
 /**
  * What /wiki shows for `view` and `item`, for a company with or without the
- * agent picture (`picture`) and with or without Fakta (`facts`).
+ * agent picture (`picture`) and with or without Fakta (`facts`), on an
+ * installation with or without the agent connection (`agentConnection`,
+ * the MCP server extension; taken as there when not given).
  *
  * Without the picture it is the wiki view the address names: a `view` the
  * wiki does not know, the picture's own row names among them, lands on the
@@ -142,12 +144,21 @@ export type WikiPlace =
  * that row, and `item` one folder of the Kunskap row. The map leads to
  * Bokföringsregler, and Fakta (where the company has it) stays a view of
  * its own.
+ *
+ * With the picture on an installation without the agent connection there is
+ * no picture to show (it is what a connected agent gets): every address
+ * that would show it leads to Bokföringsregler, the other row of the
+ * Agenter menu there, so neither the address nor a redirect into it ends on
+ * a page that only says the connection does not exist.
  */
-export function wikiPlace(address: { view?: string | null; item?: string | null }, company: { picture: boolean; facts: boolean }): WikiPlace {
+export function wikiPlace(
+  address: { view?: string | null; item?: string | null },
+  company: { picture: boolean; facts: boolean; agentConnection?: boolean },
+): WikiPlace {
   const parsed = parseWikiView(address.view)
   const view = parsed === 'facts' && !company.facts ? 'context' : parsed
   if (!company.picture || view === 'facts') return { show: 'view', view }
-  if (view === 'map') return { show: 'redirect', href: PICTURE_PROFILE_HREF }
+  if (view === 'map' || company.agentConnection === false) return { show: 'redirect', href: PICTURE_PROFILE_HREF }
   const row = pictureRowOf(address.view)
   return { show: 'picture', row, item: row === 'knowledge' && address.item ? address.item : null }
 }
