@@ -114,6 +114,44 @@ describe('linkDocumentCopyToVoucher', () => {
     expect(findCall('document_attachments', 'update')).toBeUndefined()
   })
 
+  it('gives the copy the type the source already has, so it never lands untyped', async () => {
+    const { supabase } = supabaseFor([
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: OPEN_PERIOD },
+      { data: { ...SOURCE, doc_type: 'bank_statement', journal_entry_id: ORIGINAL_JE, journal_entry_line_id: null } },
+      { data: [] },
+    ])
+
+    await linkDocumentCopyToVoucher(asClient(supabase), 'company-1', 'user-1', { document_id: DOC, journal_entry_id: JE })
+
+    expect(uploadDocument.mock.calls[0]![4]).toMatchObject({ doc_type: 'bank_statement' })
+  })
+
+  it('takes the type from the classification when the period lock kept it off the source row', async () => {
+    const { supabase, findCall } = supabaseFor([
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: OPEN_PERIOD },
+      { data: { ...SOURCE, doc_type: null, journal_entry_id: ORIGINAL_JE, journal_entry_line_id: null } },
+      { data: [{ document_id: DOC, doc_type: 'tax_account_statement' }] }, // the current classification
+      { data: [] },
+    ])
+
+    await linkDocumentCopyToVoucher(asClient(supabase), 'company-1', 'user-1', { document_id: DOC, journal_entry_id: JE })
+
+    expect(findCall('document_classifications', 'select')).toBeDefined()
+    expect(uploadDocument.mock.calls[0]![4]).toMatchObject({ doc_type: 'tax_account_statement' })
+  })
+
+  it('leaves the type off when the source has none, so the copy is typed as before', async () => {
+    const { supabase } = supabaseFor([
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: OPEN_PERIOD },
+      { data: { ...SOURCE, doc_type: null, journal_entry_id: null, journal_entry_line_id: null } },
+      { data: [] },
+    ])
+
+    await linkDocumentCopyToVoucher(asClient(supabase), 'company-1', 'user-1', { document_id: DOC, journal_entry_id: JE })
+
+    expect(uploadDocument.mock.calls[0]![4]).not.toHaveProperty('doc_type')
+  })
+
   it('pins the copy to the line when one is given', async () => {
     const { supabase } = supabaseFor([
       { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: { id: LINE } }, { data: OPEN_PERIOD },

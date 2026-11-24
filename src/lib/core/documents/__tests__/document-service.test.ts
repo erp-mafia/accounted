@@ -724,6 +724,22 @@ describe('uploadDocument', () => {
     expect(upload).toHaveBeenCalledOnce()
   })
 
+  it('stores a type the caller already knows, and no type key when none is given', async () => {
+    results = [
+      { data: makeDocumentAttachment({ id: 'doc-typed' }), error: null },
+      { data: makeDocumentAttachment({ id: 'doc-plain' }), error: null },
+    ]
+    const supabase = makeClient()
+
+    await uploadDocument(supabase as never, 'user-1', 'company-1', { name: 'kontoutdrag.pdf', buffer: pdfBuffer(), type: 'application/pdf' }, { doc_type: 'bank_statement' })
+    await uploadDocument(supabase as never, 'user-1', 'company-1', { name: 'kvitto.pdf', buffer: pdfBuffer(), type: 'application/pdf' })
+
+    const typed = supabase.from.mock.results[0]!.value.insert.mock.calls[0]![0] as Record<string, unknown>
+    const plain = supabase.from.mock.results[1]!.value.insert.mock.calls[0]![0] as Record<string, unknown>
+    expect(typed.doc_type).toBe('bank_statement')
+    expect(plain.doc_type).toBeUndefined()
+  })
+
   it('writes to the company-scoped key, not the legacy uploader-scoped key', async () => {
     results = [{ data: makeDocumentAttachment({ id: 'doc-1' }), error: null }]
 

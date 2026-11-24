@@ -936,6 +936,14 @@ export async function uploadDocument(
      */
     idempotency_key?: string
     /**
+     * The document's type when the caller already knows it
+     * (document_attachments.doc_type): a copy of a typed document. The
+     * classifier never types a booked document unprompted, so a copy archived
+     * straight onto a verifikat without it stays untyped. Omit it to leave
+     * the type to the classifier.
+     */
+    doc_type?: string
+    /**
      * Content dedupe for intake channels: before storing, look for a
      * current-version document in the same company with the same SHA-256 and
      * return it (marked `deduplicated`) instead of archiving a copy. Opt-in,
@@ -1049,6 +1057,7 @@ export async function uploadDocument(
       // payload, so an unlinked one writes exactly what it wrote before.
       link_basis: metadata.journal_entry_id && metadata.linkBasis ? metadata.linkBasis.link_basis : undefined,
       link_evidence: metadata.journal_entry_id && metadata.linkBasis ? metadata.linkBasis.link_evidence : undefined,
+      doc_type: metadata.doc_type ?? undefined,
     })
     .select()
     .single()

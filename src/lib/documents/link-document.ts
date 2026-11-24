@@ -53,6 +53,7 @@ import {
 import { downloadDocumentObject } from '@/lib/core/documents/storage-key'
 import { dbError } from '@/lib/errors/db-error'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
+import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 import type { DocumentLinkHolder } from '@/lib/documents/link-holder'
 import { stampInboxItemsForLinkedDocument } from '@/lib/transactions/inbox-underlag'
 import type { DocumentAttachment, DocumentUploadSource } from '@/types'
@@ -337,7 +338,7 @@ export type LinkDocumentCopyResult =
  * asCopy). A verifikat that already holds these bytes gets nothing new, and
  * the copy's id is derived from (source, verifikat), so a retried approval
  * converges on one row. No inbox item and no model pass: the booking is
- * known, as for the provider underlag import.
+ * known, as for the provider underlag import, and the type is the source's.
  */
 export async function linkDocumentCopyToVoucher(
   supabase: SupabaseClient,
@@ -350,7 +351,7 @@ export async function linkDocumentCopyToVoucher(
 
   const { data: sourceRow, error: sourceError } = await supabase
     .from('document_attachments')
-    .select('id, storage_path, sha256_hash, file_name, mime_type, upload_source')
+    .select('id, storage_path, sha256_hash, file_name, mime_type, upload_source, doc_type, journal_entry_id, journal_entry_line_id')
     .eq('id', input.document_id)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -362,8 +363,16 @@ export async function linkDocumentCopyToVoucher(
     file_name: string
     mime_type: string | null
     upload_source: DocumentUploadSource | null
+    doc_type: string | null
+    journal_entry_id: string | null
+    journal_entry_line_id: string | null
   } | null
   if (!source) return { ok: false, code: 'NOT_FOUND', details: { resource: 'document' } }
+  // The copy is the same document, so it takes the type the source has: on
+  // its row, or on its classification when a period lock kept it off the row.
+  // Nothing types it later: the classifier skips a booked document until
+  // someone opens it.
+  await fillTypeFromClassification(supabase, [source])
 
   const { data: present, error: presentError } = await supabase
     .from('document_attachments')
@@ -402,6 +411,7 @@ export async function linkDocumentCopyToVoucher(
       ...(input.journal_entry_line_id ? { journal_entry_line_id: input.journal_entry_line_id } : {}),
       idempotency_key: `document-copy:${source.id}:${input.journal_entry_id}`,
       extractionOwner: 'none',
+      ...(source.doc_type ? { doc_type: source.doc_type } : {}),
     },
   )
   return { ok: true, document, source_document_id: source.id, target: check.target, reused: false }
