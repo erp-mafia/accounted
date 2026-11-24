@@ -28,6 +28,14 @@ vi.mock('@/lib/reconciliation/voucher-bank-link', () => ({
   linkOpenBankRowsToVoucher: (...args: unknown[]) => mockBankLink(...args),
 }))
 
+// Where a correction lands and its VAT advice (lib/vat/moved-correction-vat.ts,
+// tested there): here it answers "on the original's date" unless a test says
+// otherwise, so the queued mock answers stay in step.
+const mockCorrectionLanding = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/vat/moved-correction-vat', () => ({
+  correctionLanding: (...args: unknown[]) => mockCorrectionLanding(...args),
+}))
+
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase, makeJournalEntry } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
@@ -102,6 +110,11 @@ function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
 beforeEach(() => {
   mockVoucherGuard.mockReset()
   mockVoucherGuard.mockResolvedValue({ ok: true, acknowledged: [] })
+  mockCorrectionLanding.mockReset()
+  mockCorrectionLanding.mockResolvedValue({
+    target: { date: '2025-11-15', fiscal_period_id: 'fp-1', moved: false },
+    vatWarning: null,
+  })
   vi.clearAllMocks()
   eventBus.clear()
 })
@@ -1535,6 +1548,133 @@ describe('commitPendingOperation: correct_entry', () => {
     expect(result.status).toBe('committed')
     expect(result.data).toMatchObject({ moved_to_first_open_period: true, entry_date: '2026-11-24' })
     expect(String((result.data as { note_sv?: string }).note_sv)).toContain('första öppna period')
+  })
+
+  // The original's year was locked after the proposal was staged: the pair
+  // would land in the first open period, and its VAT advice
+  // (VAT_OF_MOVED_CORRECTION) was never in the staged preview.
+  describe('a period locked after staging', () => {
+    const ORIGINAL_ROW = {
+      id: 'je-original',
+      status: 'posted',
+      entry_date: '2025-11-15',
+      fiscal_period_id: 'fp-2025',
+      source_type: 'manual',
+      lines: [
+        { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '2641', debit_amount: 250, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 1250 },
+      ],
+    }
+    const CORRECTED_LINES = [
+      { account_number: '5410', debit_amount: 1250, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1250 },
+    ]
+    const VAT_WARNING = {
+      code: 'VAT_OF_MOVED_CORRECTION',
+      message_sv: 'Rättelsen ändrar momsen. Den bokförs 2026-11-24, men felet hör till 2025-11.',
+      message_en: 'The correction changes VAT.',
+      details: { original_entry_date: '2025-11-15', correction_date: '2026-11-24', vat_account_change: { '2641': -250 } },
+    }
+    const moved = (vatWarning: typeof VAT_WARNING | null) => ({
+      target: { date: '2026-11-24', fiscal_period_id: 'fp-2026', moved: true },
+      vatWarning,
+    })
+    const op = (preview: Record<string, unknown>) =>
+      makePendingOp({
+        operation_type: 'correct_entry',
+        params: { entry_id: 'je-original', lines: CORRECTED_LINES },
+        preview_data: preview,
+      })
+    // What gnubok_correct_entry stages for a pair on the original's date.
+    const STAGED_UNMOVED = { correction: { description: 'Rättelse: Skärm', line_count: 2 } }
+
+    it('refuses with CORRECTION_MOVED_SINCE_STAGED and posts nothing when the moved pair changes VAT', async () => {
+      mockCorrectionLanding.mockResolvedValueOnce(moved(VAT_WARNING))
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: ORIGINAL_ROW, error: null }) // executor's pre-flight fetch
+      enqueue({ data: null, error: null }) // dispatcher's reject update
+
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op(STAGED_UNMOVED))
+
+      expect(result).toMatchObject({
+        status: 'rejected',
+        auto_rejected: true,
+        http_status: 409,
+        code: 'CORRECTION_MOVED_SINCE_STAGED',
+        operation_status: 'rejected',
+        data: { entry_date: '2026-11-24', vat_warning: { code: 'VAT_OF_MOVED_CORRECTION' } },
+      })
+      expect(result.error).toMatch(/Inget har bokförts/)
+      expect(correctEntry).not.toHaveBeenCalled()
+      // The same landing check every correction door previews with, on the
+      // original's own lines and the staged ones.
+      expect(mockCorrectionLanding).toHaveBeenCalledWith(
+        supabase,
+        'company-1',
+        expect.objectContaining({
+          id: 'je-original',
+          fiscal_period_id: 'fp-2025',
+          entry_date: '2025-11-15',
+          source_type: 'manual',
+          lines: ORIGINAL_ROW.lines,
+        }),
+        [
+          expect.objectContaining({ account_number: '5410', debit_amount: 1250, credit_amount: 0 }),
+          expect.objectContaining({ account_number: '1930', debit_amount: 0, credit_amount: 1250 }),
+        ],
+      )
+      // The refusal and the warning are kept on the proposal.
+      const rejectWrite = findCalls('pending_operations', 'update').at(-1)?.[0]
+      expect(rejectWrite).toMatchObject({
+        status: 'rejected',
+        result_data: { error_code: 'CORRECTION_MOVED_SINCE_STAGED', details: { vat_warning: { code: 'VAT_OF_MOVED_CORRECTION' } } },
+      })
+    })
+
+    it('books a moved pair that changes no VAT account', async () => {
+      mockCorrectionLanding.mockResolvedValueOnce(moved(null))
+      vi.mocked(correctEntry).mockResolvedValueOnce({
+        reversal: makeJournalEntry({ id: 'je-storno', voucher_number: 3, entry_date: '2026-11-24' }),
+        corrected: makeJournalEntry({ id: 'je-corrected', voucher_number: 4, entry_date: '2026-11-24' }),
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: ORIGINAL_ROW, error: null }) // pre-flight
+      enqueue({ data: null, error: null }) // dispatcher's commit update
+
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op(STAGED_UNMOVED))
+
+      expect(result.status).toBe('committed')
+      expect(result.data).toMatchObject({ moved_to_first_open_period: true, entry_date: '2026-11-24' })
+      expect(correctEntry).toHaveBeenCalledTimes(1)
+    })
+
+    it('books a pair staged as moved: its preview carried the VAT advice', async () => {
+      vi.mocked(correctEntry).mockResolvedValueOnce({
+        reversal: makeJournalEntry({ id: 'je-storno', voucher_number: 3, entry_date: '2026-11-24' }),
+        corrected: makeJournalEntry({ id: 'je-corrected', voucher_number: 4, entry_date: '2026-11-24' }),
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: ORIGINAL_ROW, error: null }) // pre-flight
+      enqueue({ data: null, error: null }) // dispatcher's commit update
+
+      const result = await commitPendingOperation(
+        supabase as never,
+        'user-1',
+        'company-1',
+        op({
+          correction: { description: 'Rättelse av verifikat A12 (2025-11-15): Skärm', entry_date: '2026-11-20' },
+          warnings: [VAT_WARNING.message_sv],
+        }),
+      )
+
+      expect(result.status).toBe('committed')
+      expect(mockCorrectionLanding).not.toHaveBeenCalled()
+      expect(correctEntry).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('rejects the operation when correctEntry refuses (an entry type whose date cannot move)', async () => {

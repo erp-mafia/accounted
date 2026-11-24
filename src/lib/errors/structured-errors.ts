@@ -847,6 +847,20 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     },
     thrown_message_sv: true,
   },
+  // An approved gnubok_correct_entry whose original was locked after it was
+  // staged (lib/pending-operations/commit.ts, commitCorrectEntry).
+  CORRECTION_MOVED_SINCE_STAGED: {
+    httpStatus: 409,
+    message_sv:
+      'Originalverifikatets period har låsts sedan rättelsen föreslogs, så stornot och det rättade verifikatet skulle nu bokföras i första öppna period, och rättelsen ändrar momsen. Inget har bokförts. Rätta verifikatet med Rätta rader, eller be agenten föreslå rättelsen igen, så visas vilken momsperiod felet hör till innan något bokförs.',
+    message_en:
+      "The original's period was locked after this correction was staged, so the storno and the corrected entry would now be posted in the first open period, and the pair changes VAT (26xx). Nothing was posted. Stage the correction again: its preview then says which VAT period the error belongs to and whether that return is filed.",
+    remediation: {
+      description:
+        'Stage the same correction again with gnubok_correct_entry and tell the user its VAT warning (VAT_OF_MOVED_CORRECTION: which momsperiod the error belongs to, whether that return is filed) before they approve. Unlock the period only if the user explicitly asks for it.',
+      tool: 'gnubok_correct_entry',
+    },
+  },
   JOURNAL_RATTELSE_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunde inte rätta verifikationen. Försök igen.',

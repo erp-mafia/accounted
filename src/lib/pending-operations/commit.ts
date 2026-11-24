@@ -62,6 +62,7 @@ import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { isReverseChargeBoxParam } from '@/lib/vat/reverse-charge-box'
+import { correctionLanding } from '@/lib/vat/moved-correction-vat'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -5275,11 +5276,27 @@ async function commitCreateVoucher(
   }
 }
 
+/**
+ * Whether the staged correction already moved to the first open period when
+ * it was staged: gnubok_correct_entry states the moved pair's date as
+ * preview.correction.entry_date, and only then, with the VAT advice for it
+ * (VAT_OF_MOVED_CORRECTION) among preview.warnings.
+ */
+function stagedAsMovedCorrection(preview: Record<string, unknown> | null | undefined): boolean {
+  const correction = preview?.correction
+  return (
+    correction !== null &&
+    typeof correction === 'object' &&
+    typeof (correction as Record<string, unknown>).entry_date === 'string'
+  )
+}
+
 async function commitCorrectEntry(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  preview?: Record<string, unknown> | null,
 ): Promise<ExecutorResult> {
   const entryId = params.entry_id as string
   const lines = normalizeVoucherLines(params.lines)
@@ -5293,12 +5310,22 @@ async function commitCorrectEntry(
   // the one the staging tool ran): on the original's date in an open year,
   // else in the first open, unlocked period after it, refused with a typed
   // error before anything is written when neither works.
-  const { data: original, error: origErr } = await supabase
+  const { data, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status, entry_date')
+    .select(
+      'id, status, entry_date, fiscal_period_id, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
+    )
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
+  const original = data as unknown as {
+    id: string
+    status: string
+    entry_date: string
+    fiscal_period_id: string
+    source_type: string | null
+    lines: Array<{ account_number: string; debit_amount: number | string; credit_amount: number | string }> | null
+  } | null
 
   if (origErr || !original) {
     return { error: 'Verifikationen hittades inte.', status: 404 }
@@ -5311,6 +5338,25 @@ async function commitCorrectEntry(
   }
 
   try {
+    // The original's period was locked after this proposal was staged: the
+    // pair would now land in the first open period, and when it changes VAT
+    // the approver never saw which momsperiod the error belongs to. Refused
+    // before anything is written, so the correction is staged again and its
+    // preview carries that advice (the same landing check every correction
+    // door previews with). A proposal staged as moved carried it already.
+    if (!stagedAsMovedCorrection(preview)) {
+      const landing = await correctionLanding(supabase, companyId, original, lines)
+      if (landing.target.moved && landing.vatWarning) {
+        const entry = getErrorEntry('CORRECTION_MOVED_SINCE_STAGED')
+        return {
+          error: entry?.message_sv ?? 'Rättelsen ändrar momsen och skulle nu bokföras i första öppna period. Inget har bokförts.',
+          errorCode: 'CORRECTION_MOVED_SINCE_STAGED',
+          status: entry?.httpStatus ?? 409,
+          data: { entry_date: landing.target.date, vat_warning: landing.vatWarning },
+        }
+      }
+    }
+
     // Posting port (step 2i): ledger.storno and ledger.correction of the
     // verifikat while POSTING_EVENTS is on, this approval as evidence.
     const result = await postingPort.correctJournalEntry({
@@ -7026,7 +7072,7 @@ async function commitPendingOperationInner(
         result = await commitCreateVoucher(supabase, userId, companyId, pendingOp.params, opts)
         break
       case 'correct_entry':
-        result = await commitCorrectEntry(supabase, userId, companyId, pendingOp.params)
+        result = await commitCorrectEntry(supabase, userId, companyId, pendingOp.params, pendingOp.preview_data)
         break
       case 'reverse_entry':
         result = await commitReverseEntry(supabase, userId, companyId, pendingOp.params)
