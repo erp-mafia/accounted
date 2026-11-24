@@ -161,8 +161,9 @@ async function loadPostedEntry(
  * in its own year (storno-target.ts), so its status alone lets an inline
  * rättelse through once that year is unlocked or reopened: its lines would
  * change under the storno that already reverses them. Refused here, on the
- * preview and the commit alike; the RPCs check status only (a database guard
- * is a follow-up). Fails closed when the read fails.
+ * preview and the commit alike, and by both RPCs with the same sentence
+ * (migration 20261124183000), so a direct RPC call is refused too. Fails
+ * closed when the read fails.
  */
 async function stornoedRefusal(ctx: OperationContext, entryId: string): Promise<Failure | null> {
   let storno: { id: string } | null
