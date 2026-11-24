@@ -416,13 +416,13 @@ describe('findFreeLedgerAccount: the seeded row whose details are only a printed
     expect(ledgers).toEqual(['1931', '1930'])
   })
 
-  it('leaves 1930 to the first account when the account the printed IBAN names already has a row of its own', async () => {
+  it('never moves the seeded row to another account when the account the printed IBAN names already has a row of its own', async () => {
     const ownRow = {
       id: 'own-row', ledger_account: '1931', bank_connection_id: null, iban: OWN.iban, currency: 'SEK',
       clearing_number: null, account_number: null, payee_iban: null,
     }
     const supabase = selecting([{ ...seededRow, id: 'seeded-row' }, ownRow])
-    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { ...FIRST, consent })).toBe('1930')
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { ...FIRST, consent })).not.toBe('1930')
     const used = new Set<string>()
     const resolved = []
     for (const account of consent) {
@@ -430,7 +430,9 @@ describe('findFreeLedgerAccount: the seeded row whose details are only a printed
       resolved.push(resolution)
       used.add(resolution!.ledgerAccount)
     }
-    expect(resolved.map((r) => r!.ledgerAccount)).toEqual(['1930', '1931'])
+    expect(resolved.map((r) => r!.ledgerAccount)).not.toContain('1930')
+    expect(resolved[0]!.reuseCashAccountId).not.toBe('seeded-row')
+    expect(resolved[1]!.ledgerAccount).toBe('1931')
     expect(resolved[1]!.reuseCashAccountId).toBe('own-row')
   })
 })

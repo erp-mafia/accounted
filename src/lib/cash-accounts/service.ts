@@ -782,14 +782,9 @@ export async function findFreeLedgerAccount(
 
   const anyTaken = new Set(typedRows.map(r => r.ledger_account))
   const holder = typedRows.find(r => r.ledger_account === preferred)
-  // An account of the consent that already has a row of its own keeps that
-  // row (the IBAN step of resolvePsd2LedgerAccount) and never takes the seeded
-  // one, so seeded details that name it must not leave the seeded row to nobody.
-  const ownRowKeys = new Set(typedRows.map(r => physicalAccountKey(r)).filter((key): key is string => key !== null))
-  const claimants = options.consent?.filter(account => {
-    const key = physicalAccountKey({ iban: account.iban, currency: account.currency })
-    return key === null || !ownRowKeys.has(key)
-  })
+  // Also when the named account already has a row of its own: the seeded row
+  // and the statement rows on it then stay where they are, never moved to an
+  // account its details do not name.
   const preferredFree = !holder || holderAdoptableBy(
     {
       iban: holder.iban,
@@ -797,10 +792,10 @@ export async function findFreeLedgerAccount(
       live: holder.bank_connection_id !== null && !revokedConnectionIds.has(holder.bank_connection_id),
     },
     { iban: options.iban, currency },
-  ) && !(claimants && seededRowBelongsToAnother(
+  ) && !(options.consent && seededRowBelongsToAnother(
     holder,
     { iban: options.iban ?? null, bban: options.bban ?? null, currency },
-    claimants,
+    options.consent,
   ))
 
   if (!exclude.has(preferred) && preferredFree) return preferred
