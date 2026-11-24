@@ -91,6 +91,46 @@ describe('flowLayout', () => {
     expect(layout.lines.find((l) => l.id === 'claude')).toMatchObject({ dashed: false, active: true })
   })
 
+  it('dashes a stacked connector when not one card of its side is connected, and keeps it solid while any is', () => {
+    // A phone, for a company with nothing connected: two offered sources above, two offered clients below.
+    const core = rect(16, 300, 300, 200)
+    const stackedWith = (cards: FlowCard[]) =>
+      flowLayout({ map: rect(0, 0, 332, 700), core, cards, inColumn: rect(16, 20, 300, 240), outColumn: rect(16, 540, 300, 120) })!
+    const nothing = stackedWith([
+      card('bank', 'in', rect(16, 20, 300, 52), { connected: false }),
+      card('skv', 'in', rect(16, 80, 300, 52), { connected: false }),
+      card('offer:claude', 'out', rect(16, 560, 300, 52), { connected: false }),
+      card('offer:chatgpt', 'out', rect(16, 620, 300, 52), { connected: false }),
+    ])
+    expect(nothing.stacked).toBe(true)
+    expect(nothing.lines).toEqual([
+      { id: 'in', d: 'M166.0 260.0 L166.0 300.0', dashed: true, active: false },
+      { id: 'out', d: 'M166.0 500.0 L166.0 540.0', dashed: true, active: false },
+    ])
+
+    // Each connector follows its own side: sources connected, no agent yet.
+    const sourcesOnly = stackedWith([
+      card('bank', 'in', rect(16, 20, 300, 52)),
+      card('skv', 'in', rect(16, 80, 300, 52), { connected: false }),
+      card('offer:claude', 'out', rect(16, 560, 300, 52), { connected: false }),
+    ])
+    expect(sourcesOnly.lines.map((l) => [l.id, l.dashed])).toEqual([
+      ['in', false],
+      ['out', true],
+    ])
+
+    // One connected card among several is enough for a solid connector.
+    const oneAgent = stackedWith([
+      card('bank', 'in', rect(16, 20, 300, 52), { connected: false }),
+      card('claude', 'out', rect(16, 560, 300, 52)),
+      card('offer:chatgpt', 'out', rect(16, 620, 300, 52), { connected: false }),
+    ])
+    expect(oneAgent.lines.map((l) => [l.id, l.dashed])).toEqual([
+      ['in', true],
+      ['out', false],
+    ])
+  })
+
   it('joins stacked columns with one straight connector each way', () => {
     // A narrow screen: every card is as wide as the company card and above or below it.
     const core = rect(16, 300, 300, 200)
