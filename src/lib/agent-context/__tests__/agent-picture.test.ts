@@ -45,10 +45,11 @@ function fakeSupabase(tables: Record<string, Handler>) {
 const filtered = (call: Call, method: string, column: string, value?: unknown) =>
   call.ops.some((op) => op.method === method && op.args[0] === column && (value === undefined || op.args[1] === value))
 
-const { listUnexplainedMock, dataStatusMock, inboxAddressMock, enabled } = vi.hoisted(() => ({
+const { listUnexplainedMock, dataStatusMock, inboxAddressMock, mailboxAvailabilityMock, enabled } = vi.hoisted(() => ({
   listUnexplainedMock: vi.fn(),
   dataStatusMock: vi.fn(),
   inboxAddressMock: vi.fn(),
+  mailboxAvailabilityMock: vi.fn(),
   enabled: new Set<string>(),
 }))
 
@@ -66,6 +67,9 @@ vi.mock('@/lib/reports/data-status', () => ({
 }))
 vi.mock('@/lib/documents/inbox-address', () => ({
   resolveInboxAddress: (...args: unknown[]) => inboxAddressMock(...args),
+}))
+vi.mock('@/lib/digital-mailboxes/providers', () => ({
+  digitalMailboxAvailability: (...args: unknown[]) => mailboxAvailabilityMock(...args),
 }))
 
 import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
@@ -228,6 +232,7 @@ beforeEach(() => {
   listUnexplainedMock.mockResolvedValue(OK_QUEUE)
   dataStatusMock.mockResolvedValue(FEED_OK)
   inboxAddressMock.mockResolvedValue('exempel-ab12@inbox.example')
+  mailboxAvailabilityMock.mockReturnValue({ kivra: { receive: true, send: false }, billo: { receive: true, send: false } })
   skatteverket.mockResolvedValue({ state: 'connected', last_sync_at: '2026-03-01T21:14:00.000Z' })
 })
 
@@ -410,9 +415,78 @@ describe('loadAgentPicture: sources', () => {
     expect(skatteverket).not.toHaveBeenCalled()
   })
 
-  it('leaves out a sales source whose read failed instead of calling it not connected', async () => {
-    const picture = await loadAgentPicture(fakeSupabase(tables({ stripe_connections: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
-    expect(sourceOf(picture, 'stripe')).toBeUndefined()
+  /** Every source's own read, failed: none may then read as not connected, and none may go missing. */
+  const BROKEN: Record<string, Handler> = {
+    whatsapp_phone_links: { error: { message: 'boom' } },
+    digital_mailbox_connections: { error: { message: 'boom' } },
+    mail_connections: { error: { message: 'boom' } },
+    stripe_connections: { error: { message: 'boom' } },
+    pos_connections: { error: { message: 'boom' } },
+    shopify_connections: { error: { message: 'boom' } },
+    woocommerce_connections: { error: { message: 'boom' } },
+    zettle_connections: { error: { message: 'boom' } },
+  }
+  const READ_FAILED: Array<PictureSource['key']> = ['whatsapp', 'kivra', 'billo', 'gmail', 'stripe', 'pos', 'shopify', 'woocommerce', 'zettle']
+
+  it('shows a source whose status could not be read as unknown: not as not connected, and not left out', async () => {
+    enabled.add('mail')
+    const withConnector: AgentPicturePorts = { ...ports(), posConnector: () => true }
+    const picture = await loadAgentPicture(fakeSupabase(tables(BROKEN)).client, COMPANY, USER, withConnector, NOW)
+    for (const key of READ_FAILED) expect(sourceOf(picture, key), key).toMatchObject({ key, state: 'unknown', detail: null, last_delivered_at: null })
+    // Nothing is offered to connect while it is not known what is connected.
+    expect(picture.sources.flatMap((g) => g.items).filter((item) => item.state === 'not_connected')).toEqual([])
+    // The sources whose reads answered are as they were.
+    expect(sourceOf(picture, 'bank:cash-1')).toMatchObject({ state: 'connected' })
+    expect(sourceOf(picture, 'inbox')).toMatchObject({ state: 'connected' })
+  })
+
+  it('shows each of them as unknown when its read alone fails, and the others as they are', async () => {
+    const stripe = await loadAgentPicture(fakeSupabase(tables({ stripe_connections: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(stripe, 'stripe')).toMatchObject({ state: 'unknown', href: '/import?mode=stripe' })
+    expect(sourceOf(stripe, 'kivra')).toMatchObject({ state: 'connected' })
+
+    const whatsapp = await loadAgentPicture(fakeSupabase(tables({ whatsapp_phone_links: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(whatsapp, 'whatsapp')).toMatchObject({ state: 'unknown', detail: null })
+  })
+
+  it('shows Kivra and Billo as unknown only where the company is offered to receive through them', async () => {
+    const broken = { digital_mailbox_connections: { error: { message: 'boom' } } }
+    mailboxAvailabilityMock.mockReturnValue({ kivra: { receive: true, send: false }, billo: { receive: false, send: false } })
+    const one = await loadAgentPicture(fakeSupabase(tables(broken)).client, COMPANY, USER, ports(), NOW)
+    expect(mailboxAvailabilityMock).toHaveBeenCalledWith(COMPANY)
+    expect(sourceOf(one, 'kivra')).toMatchObject({ state: 'unknown' })
+    expect(sourceOf(one, 'billo')).toBeUndefined()
+
+    // A read that answers reads no availability: the connections say what there is.
+    mailboxAvailabilityMock.mockClear()
+    await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(mailboxAvailabilityMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps a source that answered nothing as it was: no mail and no venue is no card, and a cash register without a connector is not read as unknown', async () => {
+    enabled.add('mail')
+    const none = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(none, 'gmail')).toBeUndefined()
+    expect(sourceOf(none, 'pos')).toBeUndefined()
+    const failedWithoutConnector = await loadAgentPicture(fakeSupabase(tables({ pos_connections: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(failedWithoutConnector, 'pos')).toBeUndefined()
+  })
+
+  it('tells an inbox that could not be read from a company without one', async () => {
+    // The address's own reader answers nothing for both.
+    inboxAddressMock.mockResolvedValue(null)
+    const without = fakeSupabase(tables({ company_inboxes: { data: [] } }))
+    expect(sourceOf(await loadAgentPicture(without.client, COMPANY, USER, ports(), NOW), 'inbox')).toMatchObject({ state: 'not_connected' })
+    const asked = without.calls.find((c) => c.table === 'company_inboxes')!
+    expect(filtered(asked, 'eq', 'company_id', COMPANY)).toBe(true)
+    expect(filtered(asked, 'eq', 'status', 'active')).toBe(true)
+
+    const unreadable = await loadAgentPicture(fakeSupabase(tables({ company_inboxes: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(unreadable, 'inbox')).toMatchObject({ state: 'unknown' })
+
+    // The company has an inbox, and its address was not read.
+    const addressFailed = await loadAgentPicture(fakeSupabase(tables({ company_inboxes: { data: [{ id: 'inbox-1' }] } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(addressFailed, 'inbox')).toMatchObject({ state: 'unknown' })
   })
 })
 

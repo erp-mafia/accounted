@@ -5,6 +5,7 @@ import { cashAccountBankName, cashAccountLogoUrl, type CashAccountWithBank } fro
 import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
 import { stockholmWallTimeToUtc, todayIsoStockholm } from '@/lib/dates/iso'
 import { listConnections } from '@/lib/digital-mailboxes/connections'
+import { digitalMailboxAvailability } from '@/lib/digital-mailboxes/providers'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { isCompanyQuestionsEnabled } from '@/lib/env/company-questions-switch'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -439,10 +440,22 @@ async function bolagsverketSource(supabase: SupabaseClient, companyId: string): 
   return ENABLED_EXTENSION_IDS.has('tic') ? source('bolagsverket', 'not_connected') : null
 }
 
-/** The inbox address, how many documents came through it this calendar year and when the last one did. */
+/**
+ * The inbox address, how many documents came through it this calendar year
+ * and when the last one did. The address's own reader answers nothing both
+ * for a company without an inbox and for a read that failed, so without an
+ * address the company's inbox is asked for: not connected only when the
+ * company has none. Throws when that cannot be read, or when the company has
+ * an inbox whose address could not be read.
+ */
 async function inboxSource(supabase: SupabaseClient, companyId: string, now: Date): Promise<PictureSource> {
   const address = await resolveInboxAddress(supabase, companyId)
-  if (!address) return source('inbox', 'not_connected')
+  if (!address) {
+    const { data, error } = await supabase.from('company_inboxes').select('id').eq('company_id', companyId).eq('status', 'active').limit(1)
+    if (error) failed('inbox', error)
+    if (((data ?? []) as unknown[]).length > 0) failed('inbox address', { message: 'the company has an inbox whose address was not read' })
+    return source('inbox', 'not_connected')
+  }
   const yearStart = stockholmWallTimeToUtc(`${todayIsoStockholm(now).slice(0, 4)}-01-01`, '00:00').toISOString()
   const [count, last] = await Promise.all([
     headCount(
@@ -480,6 +493,12 @@ async function whatsappSource(supabase: SupabaseClient, userId: string): Promise
   const row = data as { phone_masked: string; last_message_at: string | null } | null
   if (!row) return source('whatsapp', 'not_connected')
   return source('whatsapp', 'connected', { detail: row.phone_masked, last_delivered_at: row.last_message_at })
+}
+
+/** Kivra and Billo as unknown, each where the company is offered to receive through it: what stands in when their connections could not be read. */
+function unreadMailboxSources(companyId: string): PictureSource[] {
+  const offered = digitalMailboxAvailability(companyId)
+  return (['kivra', 'billo'] as const).filter((provider) => offered[provider].receive).map((provider) => source(provider, 'unknown'))
 }
 
 /** Kivra and Billo, where the company receives through them. */
@@ -564,6 +583,9 @@ async function loadSources(
   const has = (id: string) => ENABLED_EXTENSION_IDS.has(id)
   const part = <T>(name: string, read: () => Promise<T>) => within(name, companyId, PART_DEADLINE_MS, read)
   const none = Promise.resolve(null)
+  const posConnector = ports.posConnector?.() ?? false
+  // A read that failed or ran out of time is null: its source is then unknown, never not connected and never left out.
+  const orUnknown = (key: PictureSourceKey, answer: PictureSource | null): PictureSource => answer ?? source(key, 'unknown')
 
   const [bank, skatteverket, bolagsverket, inbox, whatsapp, mailboxes, gmail, stripe, pos, shopify, woocommerce, zettle] = await Promise.all([
     part('bank', () => bankSources(supabase, companyId)),
@@ -573,9 +595,10 @@ async function loadSources(
     has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? part('inbox', () => inboxSource(supabase, companyId, now)) : none,
     has('whatsapp-inbox') ? part('whatsapp', () => whatsappSource(supabase, userId)) : none,
     part('mailboxes', () => mailboxSources(supabase, companyId)),
-    has('mail') ? part('gmail', () => gmailSource(supabase, companyId)) : none,
+    // No connected mailbox and no venue is an answer of its own (no card), so those two are wrapped: null is then a failed read alone.
+    has('mail') ? part('gmail', async () => ({ item: await gmailSource(supabase, companyId) })) : none,
     has('stripe') ? part('stripe', () => stripeSource(supabase, companyId)) : none,
-    part('pos', () => posSource(supabase, companyId, ports.posConnector?.() ?? false)),
+    part('pos', async () => ({ item: await posSource(supabase, companyId, posConnector) })),
     has('shopify') ? part('shopify', () => shopifySource(supabase, companyId)) : none,
     has('woocommerce') ? part('woocommerce', () => woocommerceSource(supabase, companyId)) : none,
     has('zettle') ? part('zettle', () => zettleSource(supabase, companyId)) : none,
@@ -597,13 +620,23 @@ async function loadSources(
     {
       id: 'documents',
       items: present([
-        has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? { ...(inbox ?? source('inbox', 'unknown')), href: inboxLink } : null,
-        whatsapp,
-        ...(mailboxes ?? []),
-        gmail,
+        has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? { ...orUnknown('inbox', inbox), href: inboxLink } : null,
+        has('whatsapp-inbox') ? orUnknown('whatsapp', whatsapp) : null,
+        ...(mailboxes ?? unreadMailboxSources(companyId)),
+        has('mail') ? (gmail ? gmail.item : source('gmail', 'unknown')) : null,
       ]),
     },
-    { id: 'sales', items: present([stripe, pos, shopify, woocommerce, zettle]) },
+    {
+      id: 'sales',
+      items: present([
+        has('stripe') ? orUnknown('stripe', stripe) : null,
+        // Without a connector there is no cash register to have read.
+        pos ? pos.item : posConnector ? source('pos', 'unknown') : null,
+        has('shopify') ? orUnknown('shopify', shopify) : null,
+        has('woocommerce') ? orUnknown('woocommerce', woocommerce) : null,
+        has('zettle') ? orUnknown('zettle', zettle) : null,
+      ]),
+    },
   ])
 }
 
