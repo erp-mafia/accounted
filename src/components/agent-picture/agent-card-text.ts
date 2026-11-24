@@ -60,6 +60,8 @@ export function agentLineText(line: AgentCardLine, t: PictureMessages, words: Pi
       return t('picture.last_used', { when: words.when(line.at) })
     case 'never_used':
       return t('picture.never_used')
+    case 'connected':
+      return t('picture.connected')
   }
 }
 

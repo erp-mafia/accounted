@@ -251,6 +251,25 @@ describe('what a card\'s line says', () => {
     expect(agentCardState(card([agent('a'), agent('b')]), activity())).toEqual({ line: { kind: 'never_used' }, active: false, calls: 0, last_call_at: null, capped: false, connections: 2 })
   })
 
+  it('says only that a connection made in another company is connected when this company\'s log holds no call of it', () => {
+    // The loader hands out no last use for such a key: it may be another company's.
+    const elsewhere = agent('a', { elsewhere: true })
+    expect(agentCardState(card([elsewhere]), activity()).line).toEqual({ kind: 'connected' })
+    expect(agentCardState(card([elsewhere]), null).line).toEqual({ kind: 'connected' })
+    // Beside a connection made here that was never used, the card still says no more than it knows.
+    expect(agentCardState(card([agent('b'), elsewhere]), activity()).line).toEqual({ kind: 'connected' })
+  })
+
+  it('reads the line of a connection made in another company from this company\'s own calls', () => {
+    const elsewhere = agent('a', { elsewhere: true })
+    const earlier = activity({ actors: { a: { calls_today: 0, last_call_at: '2026-02-25T10:00:00.000Z' } } })
+    expect(agentCardState(card([elsewhere]), earlier).line).toEqual({ kind: 'last_used', at: '2026-02-25T10:00:00.000Z' })
+    const today = activity({ actors: { a: { calls_today: 2, last_call_at: '2026-03-02T08:10:00.000Z' } } })
+    expect(agentCardState(card([elsewhere]), today).line).toEqual({ kind: 'calls', count: 2, last_call_at: '2026-03-02T08:10:00.000Z', capped: false })
+    // A connection made here that was used says so, whatever stands beside it.
+    expect(agentCardState(card([agent('b', { last_used_at: '2026-02-10T10:00:00.000Z' }), elsewhere]), activity()).line).toEqual({ kind: 'last_used', at: '2026-02-10T10:00:00.000Z' })
+  })
+
   it('says nothing about today without an activity answer: only when the card was last used', () => {
     const connections = [agent('a', { calls_today: 9, last_call_at: '2026-03-02T08:59:50.000Z', last_used_at: '2026-03-02T08:59:50.000Z' })]
     expect(agentCardState(card(connections), null)).toEqual({ line: { kind: 'last_used', at: '2026-03-02T08:59:50.000Z' }, active: false, calls: 9, last_call_at: '2026-03-02T08:59:50.000Z', capped: false, connections: 1 })

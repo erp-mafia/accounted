@@ -128,7 +128,8 @@ export function AgentPanelBody({
           {card.connections.map((connection) => {
             const by = connectedBy(connection)
             const when = words.when(connection.connected_at)
-            // The newest call the log holds for the connection, else when its key was last used.
+            // The newest call the log holds for the connection, else when its key was last used. Of a connection
+            // made in another company only this company's own calls are known: without one, nothing is said of its use.
             const lastUsed = (activity ? activity.actors[connection.id]?.last_call_at : connection.last_call_at) ?? connection.last_used_at
             return (
               <li key={connection.id} className={ROW_CLASS}>
@@ -139,7 +140,9 @@ export function AgentPanelBody({
                       ? t('picture.agent_connected_by_you', { when })
                       : t('picture.agent_connected', { when })}
                 </div>
-                <div className="text-xs tabular-nums text-muted-foreground">{lastUsed ? t('picture.last_used', { when: words.when(lastUsed) }) : t('picture.never_used')}</div>
+                {(lastUsed || !connection.elsewhere) && (
+                  <div className="text-xs tabular-nums text-muted-foreground">{lastUsed ? t('picture.last_used', { when: words.when(lastUsed) }) : t('picture.never_used')}</div>
+                )}
               </li>
             )
           })}

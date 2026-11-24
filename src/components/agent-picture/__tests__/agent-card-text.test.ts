@@ -50,6 +50,11 @@ describe('what an agent card\'s line says', () => {
     expect(both({ kind: 'last_used', at: '2026-03-02T09:12:00.000Z' })).toEqual(['Senast använd i dag 09:12', 'Last used today 09:12'])
     expect(both({ kind: 'never_used' })).toEqual(['Aldrig använd', 'Never used'])
   })
+
+  it('says only that a card is connected when its use is not this company\'s to say', () => {
+    expect(both({ kind: 'connected' })).toEqual(['Kopplad', 'Connected'])
+    expect(agentCardDetail({ line: { kind: 'connected' }, connections: 2 }, tSv, words('sv'))).toEqual({ lead: 'Kopplad', under: '2 anslutningar' })
+  })
 })
 
 describe('an agent card\'s detail line', () => {
@@ -118,6 +123,7 @@ describe('the text of a card that stands for several connections, against the ro
     { name: 'more calls than were read', lines: [{ kind: 'calls', count: CALLS, last_call_at: '2026-03-02T08:59:00.000Z', capped: true }] },
     { name: 'last used', lines: days.map((at): AgentCardLine => ({ kind: 'last_used', at })) },
     { name: 'never used', lines: [{ kind: 'never_used' }] },
+    { name: 'connected', lines: [{ kind: 'connected' }] },
   ]
 
   it('states the room as 23 characters', () => {

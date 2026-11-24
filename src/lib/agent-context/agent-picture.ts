@@ -225,6 +225,14 @@ export interface PictureAgent {
   is_own: boolean
   /** Whose a colleague's connection is (full name, else e-mail); null for the person's own, for a service account's, and when the name could not be read. */
   owner_name: string | null
+  /**
+   * True for a connection made in another company that reaches this one;
+   * absent for one made here. Such a key is used in its other companies
+   * too, so when the key was last used is not this company's to say:
+   * `last_used_at` is null, and what it did here is read from this
+   * company's own calls alone.
+   */
+  elsewhere?: true
 }
 
 /**
@@ -1132,6 +1140,8 @@ async function readConnections(
         ? partnerName !== null
         : !key.client?.startsWith('registered:')
     const seen = activity?.actors[key.id]
+    // Made in another company: the key's own last use may be that company's, so it is not handed out.
+    const elsewhere = key.company_id !== companyId
     return {
       id: key.id,
       kind,
@@ -1140,12 +1150,13 @@ async function readConnections(
       service_account: key.service_account_id ? (accountNames.get(key.service_account_id) ?? key.name) : null,
       service_account_id: key.service_account_id,
       label: labelKnown ? actor.label : null,
-      last_used_at: key.last_used_at,
+      last_used_at: elsewhere ? null : key.last_used_at,
       calls_today: seen?.calls_today ?? 0,
       last_call_at: seen?.last_call_at ?? null,
       connected_at: key.created_at,
       is_own: key.user_id === userId,
       owner_name: key.user_id === userId || key.service_account_id ? null : (owners.get(key.user_id) ?? null),
+      ...(elsewhere ? { elsewhere: true as const } : {}),
     }
   })
   // The ones that worked last come first.

@@ -13,7 +13,7 @@
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
-import type { PictureAgent, PictureAgents, PictureCheckLine, PictureChecks, PictureCounts, PictureSourceGroup, PictureWaiting } from './agent-picture'
+import type { PictureAgent, PictureAgents, PictureCheckLine, PictureChecks, PictureCounts, PictureSourceGroup, PictureSourceKey, PictureWaiting } from './agent-picture'
 
 // ---------------------------------------------------------------- times
 
@@ -35,11 +35,22 @@ export function isFresh(lastDeliveredAt: string | null | undefined, now: string 
   return isWithin(lastDeliveredAt, now, FRESH_SECONDS)
 }
 
-/** The newest time any connected source delivered: when the company was last updated. Null when no time is known. */
+/**
+ * The sources that are the signed-in person's own and not the company's: a
+ * phone link belongs to a person. What such a source delivered says nothing
+ * about the company.
+ */
+const PERSONAL_SOURCES: readonly PictureSourceKey[] = ['whatsapp']
+
+/**
+ * The newest time any of the company's connected sources delivered: when
+ * the company was last updated. A source that is the person's own
+ * (PERSONAL_SOURCES) is left out. Null when no time is known.
+ */
 export function latestDelivery(groups: readonly PictureSourceGroup[]): string | null {
   let latest: string | null = null
   for (const item of groups.flatMap((group) => group.items)) {
-    if (item.state !== 'connected' || !item.last_delivered_at) continue
+    if (item.state !== 'connected' || !item.last_delivered_at || PERSONAL_SOURCES.includes(item.key)) continue
     const at = Date.parse(item.last_delivered_at)
     if (Number.isNaN(at)) continue
     if (latest === null || at > Date.parse(latest)) latest = item.last_delivered_at

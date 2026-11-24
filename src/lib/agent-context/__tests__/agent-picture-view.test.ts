@@ -66,6 +66,17 @@ describe('latestDelivery', () => {
     expect(latestDelivery(groups)).toBe('2026-03-02T05:12:00.000Z')
   })
 
+  it('leaves out the signed-in person\'s own phone link: what it delivered says nothing of the company', () => {
+    const groups: PictureSourceGroup[] = [
+      { id: 'bank', items: [source({ id: 'a', last_delivered_at: '2026-03-01T05:12:00.000Z' })] },
+      // The newest time in the picture, and the person's own.
+      { id: 'documents', items: [source({ id: 'whatsapp', key: 'whatsapp', last_delivered_at: '2026-03-02T09:00:00.000Z' })] },
+    ]
+    expect(latestDelivery(groups)).toBe('2026-03-01T05:12:00.000Z')
+    // With nothing else that delivered, nothing is said about when the company was updated.
+    expect(latestDelivery([groups[1]])).toBeNull()
+  })
+
   it('is null when no connected source has a time', () => {
     expect(latestDelivery([])).toBeNull()
     expect(latestDelivery([{ id: 'bank', items: [source({ last_delivered_at: null }), source({ last_delivered_at: 'not a time' })] }])).toBeNull()

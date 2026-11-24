@@ -882,6 +882,26 @@ describe('loadAgentPicture: agents', () => {
     expect(lists.ops.find((op) => op.method === 'in')!.args).toEqual(['api_key_id', ['open', 'listed', 'other']])
   })
 
+  it('hands out no last use for a connection made in another company, and keeps it for one made here', async () => {
+    const used = '2026-03-01T15:00:00.000Z'
+    const api_keys: Handler = (call) =>
+      filtered(call, 'eq', 'company_id') ? { data: [keyRow('here', { last_used_at: used })] } : { data: [keyRow('away', { client: 'chatgpt', company_id: 'company-2', last_used_at: used })] }
+    // This company's own log holds a call of neither.
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    const connections = picture.agents!.list.flatMap((card) => card.connections)
+    expect(connections.find((c) => c.id === 'here')).toMatchObject({ last_used_at: used })
+    expect(connections.find((c) => c.id === 'here')).not.toHaveProperty('elsewhere')
+    // The key's own last use may be the other company's: it does not leave the server.
+    expect(connections.find((c) => c.id === 'away')).toMatchObject({ last_used_at: null, last_call_at: null, elsewhere: true })
+    // The time is in the answer once: for the connection made here.
+    expect(JSON.stringify(picture.agents).split(used)).toHaveLength(2)
+
+    // A call in this company's own log is this company's to show.
+    const event_log = { data: [{ created_at: '2026-02-27T10:00:00.000Z', actor_id: 'away' }] }
+    const called = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log })).client, COMPANY, USER, ports(), NOW)
+    expect(called.agents!.list.flatMap((card) => card.connections).find((c) => c.id === 'away')).toMatchObject({ last_used_at: null, last_call_at: '2026-02-27T10:00:00.000Z', elsewhere: true })
+  })
+
   it('leaves out connections homed elsewhere when their company lists cannot be read', async () => {
     const api_keys: Handler = (call) => (filtered(call, 'eq', 'company_id') ? { data: [] } : { data: [keyRow('open', { company_id: 'company-2' })] })
     service = fakeSupabase({ api_key_companies: { error: { message: 'boom' } } })
