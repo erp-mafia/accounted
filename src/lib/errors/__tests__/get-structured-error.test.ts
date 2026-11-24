@@ -318,6 +318,15 @@ describe('getStructuredError: a typed error thrown without a sentence', () => {
     expect(result.message_sv).toBe(getErrorEntry('ASSET_ADJUSTMENT_DOCUMENT_REQUIRED')!.message_sv)
   })
 
+  it('answers the registry Swedish for a plain object whose message is only the code', () => {
+    const result = getStructuredError({
+      code: 'ASSET_ADJUSTMENT_DOCUMENT_REQUIRED',
+      message: 'ASSET_ADJUSTMENT_DOCUMENT_REQUIRED',
+    })
+    expect(result.message_en).toBe(getErrorEntry('ASSET_ADJUSTMENT_DOCUMENT_REQUIRED')!.message_en)
+    expect(result.message_sv).toBe(getErrorEntry('ASSET_ADJUSTMENT_DOCUMENT_REQUIRED')!.message_sv)
+  })
+
   it('keeps a sentence the thrower wrote', () => {
     const err = Object.assign(new Error('Asset 1224 was sold in March'), { code: 'ASSET_ALREADY_DISPOSED' })
     expect(getStructuredError(err).message_en).toBe('Asset 1224 was sold in March')
