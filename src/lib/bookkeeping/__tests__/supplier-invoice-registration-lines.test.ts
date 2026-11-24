@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { SupplierInvoiceItem } from '@/types'
 import { makeSupplierInvoice } from '@/tests/helpers'
-import { supplierInvoiceRegistrationLines } from '../supplier-invoice-registration-lines'
+import { supplierInvoiceRegistrationLines, supplierInvoiceReverseChargeAccountConflict } from '../supplier-invoice-registration-lines'
 
 // The kontantmetoden year-end carry (#3440) books an open supplier invoice as
 // its registration verifikat with deferAccruals off: no accrual schedule
@@ -142,5 +142,53 @@ describe('supplierInvoiceRegistrationLines: EU goods or services', () => {
     const lines = supplierInvoiceRegistrationLines(rcInvoice('eu_goods'), rcItems, 'non_eu_business', DESC, NO_MOMSKODER)
     expect(lines.find((l) => l.account_number === '4531')).toMatchObject({ debit_amount: 1000 })
     expect(lines.some((l) => l.account_number === '4515')).toBe(false)
+  })
+})
+
+// A reverse-charge line on an account that declares the purchase in a box of
+// its own kept the basis pair beside it: 4545 (ruta 50) with 4531/4598 (ruta
+// 22), so one purchase was declared twice. The doors refuse such a line
+// (reverseChargeAccountRefusal) by this predicate.
+describe('supplierInvoiceReverseChargeAccountConflict', () => {
+  const rcInvoice = makeSupplierInvoice({
+    id: 'si-rc-box', supplier_invoice_number: 'LF-BOX', arrival_number: 14,
+    invoice_date: '2026-11-22', subtotal: 1000, vat_amount: 0, total: 1000,
+    reverse_charge: true, vat_treatment: 'reverse_charge',
+  })
+  const rcItem = (account: string) =>
+    item({ id: 'g', account_number: account, line_total: 1000, vat_rate: 0, vat_amount: 0, reverse_charge_rate: 0.25 })
+  const chart = new Map([
+    ['4010', { default_vat_treatment: 'import_goods', default_vat_rate: 0.25 }],
+    ['4020', { default_vat_treatment: 'triangulation_eu_goods', default_vat_rate: null }],
+    ['5420', { default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0 }],
+    ['6540', { default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.25 }],
+  ])
+
+  it.each([
+    ['4545', { reason: 'other_box', box: 'ruta50' }],
+    ['4546', { reason: 'other_box', box: 'ruta50' }],
+    ['4512', { reason: 'other_box', box: 'ruta37' }],
+    ['4598', { reason: 'basis_offset' }],
+    ['4010', { reason: 'other_box', box: 'ruta50' }],
+    ['4020', { reason: 'other_box', box: 'ruta37' }],
+    ['5420', { reason: 'no_rate' }],
+  ])('names %s as a line that cannot take the reverse charge', (account, conflict) => {
+    expect(supplierInvoiceReverseChargeAccountConflict([rcItem('6110'), rcItem(account)], chart)).toEqual({
+      index: 1, account, conflict,
+    })
+  })
+
+  it.each(['6110', '6540', '4531', '4535', '4011', '1930', '3740'])(
+    'lets %s take it',
+    (account) => {
+      expect(supplierInvoiceReverseChargeAccountConflict([rcItem(account)], chart)).toBeNull()
+    },
+  )
+
+  it('books 4531 in its own ruta 22 without the pair, and 6110 with it, as before', () => {
+    const own = supplierInvoiceRegistrationLines(rcInvoice, [rcItem('4531')], 'non_eu_business', DESC, NO_MOMSKODER)
+    expect(own.map((l) => l.account_number)).toEqual(['4531', '2645', '2614', '2440'])
+    const paired = supplierInvoiceRegistrationLines(rcInvoice, [rcItem('6110')], 'non_eu_business', DESC, NO_MOMSKODER)
+    expect(paired.map((l) => l.account_number)).toEqual(['6110', '2645', '2614', '4531', '4598', '2440'])
   })
 })
