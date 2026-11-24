@@ -512,6 +512,62 @@ describe('PATCH /api/v1/companies/:companyId/settings: turning dimensions on', (
   })
 })
 
+describe('PATCH /api/v1/companies/:companyId/settings: the vacation-year basis', () => {
+  const NO_OPEN_BALANCES = { data: null, count: 0, error: null }
+
+  it('setting the calendar year warns that it needs a kollektivavtal (semesterlagen 2 a §)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [
+        { data: { ...STORED, salary_vacation_year_basis: 'statutory_apr_mar' } },
+        { data: { ...STORED, salary_vacation_year_basis: 'calendar' } },
+      ],
+      employee_vacation_balances: NO_OPEN_BALANCES,
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateSettings(patch(BASE, { salary_vacation_year_basis: 'calendar' }), params)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.salary_vacation_year_basis).toBe('calendar')
+    expect(body.meta.warnings).toEqual([expect.objectContaining({ code: 'VACATION_YEAR_NEEDS_COLLECTIVE_AGREEMENT' })])
+    expect(JSON.parse(JSON.stringify(client.updates('company_settings')[0]))).toEqual({
+      salary_vacation_year_basis: 'calendar',
+    })
+  })
+
+  it('the dry run, which a staged MCP change shows, carries the same warning and writes nothing', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: { data: { ...STORED, salary_vacation_year_basis: 'statutory_apr_mar' } },
+      employee_vacation_balances: NO_OPEN_BALANCES,
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateSettings(patch(`${BASE}?dry_run=true`, { salary_vacation_year_basis: 'calendar' }), params)
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data.preview.warnings).toEqual([expect.objectContaining({ code: 'VACATION_YEAR_NEEDS_COLLECTIVE_AGREEMENT' })])
+    expect(client.updates('company_settings')).toHaveLength(0)
+  })
+
+  it('setting the statutory 1 April to 31 March year carries no warning', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [
+        { data: { ...STORED, salary_vacation_year_basis: 'calendar' } },
+        { data: { ...STORED, salary_vacation_year_basis: 'statutory_apr_mar' } },
+      ],
+      employee_vacation_balances: NO_OPEN_BALANCES,
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateSettings(patch(BASE, { salary_vacation_year_basis: 'statutory_apr_mar' }), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).meta.warnings).toBeUndefined()
+  })
+})
+
 describe('PATCH /api/v1/companies/:companyId/settings/tax-profile', () => {
   const URL_ = `${BASE}/tax-profile`
 

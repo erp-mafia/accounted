@@ -3965,6 +3965,8 @@
     "vacation_year_current": "Current: {start} to {end}",
     "vacation_year_locked_check_failed": "Could not check whether the vacation year can be changed. Reload the page and try again.",
     "vacation_year_locked_open_balances": "Locked: there are open vacation balances for the vacation year, and they would be misplaced if the vacation year changed. Contact support if you need to switch.",
+    "vacation_year_agreement_note": "Without a collective agreement, the Annual Leave Act's vacation year applies: 1 April to 31 March (3 §).",
+    "vacation_year_agreement_confirm": "The company is covered by a collective agreement that allows another vacation year (semesterlagen 2 a §), and I am responsible for this being correct.",
     "vacation_rule_label": "Default vacation rule",
     "info_payroll_scope": "The payroll module handles salaries for your employees: tax deductions, employer contributions, vacation pay liability and the employer declaration (AGI). If you run a sole proprietorship (enskild firma), you as the owner take money out via owner's drawings (account 2013), not salary.",
     "info_current_year": "<strong>Current year:</strong> 2026 (Arbetsgivaravgifter 31.42%, prisbasbelopp 59,200 SEK)"

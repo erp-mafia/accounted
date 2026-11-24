@@ -3965,6 +3965,8 @@
     "vacation_year_current": "Nuvarande: {start} till {end}",
     "vacation_year_locked_check_failed": "Det gick inte att kontrollera om semesteråret kan bytas. Ladda om sidan och försök igen.",
     "vacation_year_locked_open_balances": "Låst: det finns öppna semestersaldon för semesteråret, och de skulle hamna fel om semesteråret byttes. Kontakta supporten om ni behöver byta.",
+    "vacation_year_agreement_note": "Utan kollektivavtal gäller semesterlagens semesterår, 1 april till 31 mars (3 §).",
+    "vacation_year_agreement_confirm": "Företaget omfattas av ett kollektivavtal som tillåter ett annat semesterår (semesterlagen 2 a §), och jag ansvarar för att det stämmer.",
     "vacation_rule_label": "Standard semesterregel",
     "info_payroll_scope": "Lönemodulen hanterar löner till dina anställda: skatteavdrag, arbetsgivaravgifter, semesterlöneskuld och arbetsgivardeklaration (AGI). Driver du enskild firma tar du som ägare ut pengar via eget uttag (konto 2013), inte lön.",
     "info_current_year": "<strong>Aktuellt år:</strong> 2026 (Arbetsgivaravgifter 31,42 %, prisbasbelopp 59 200 SEK)"
