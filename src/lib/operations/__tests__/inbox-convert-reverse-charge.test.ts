@@ -16,6 +16,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
 const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+// The company's momskoder, read by the reverse-charge account check
+// (reverseChargeAccountRefusal): none configured.
+vi.mock('@/lib/bookkeeping/chart-vat-treatments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/chart-vat-treatments')>()),
+  fetchChartVatTreatments: vi.fn(async () => new Map()),
+}))
 vi.mock('@/lib/operations/inbox-pair-guard', () => ({
   refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
 }))
@@ -34,6 +40,7 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
 
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { convertInboxItemToSupplierInvoice } from '../inbox-convert'
+import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 const SUPPLIER_UUID = '00000000-0000-4000-8000-000000000001'
@@ -95,6 +102,25 @@ describe('inbox convert: reverse charge follows createSupplierInvoice', () => {
     if (outcome.ok) return
     expect(outcome.code).toBe('VALIDATION_ERROR')
     expect(outcome.details).toMatchObject({ field: 'items[0].vat_rate', reverse_charge: true })
+  })
+
+  it('a line on the import basis 4545 is refused like POST /supplier-invoices: ruta 50 beside the basis pair', async () => {
+    const outcome = await preview('non_eu_business', body({ reverse_charge: true }, { account_number: '4545' }))
+
+    expect(outcome).toEqual({
+      ok: false,
+      code: 'SI_REVERSE_CHARGE_ACCOUNT',
+      details: { field: 'items[0].account_number', account_number: '4545', reason: 'other_box', account_box: 'ruta50' },
+    })
+  })
+
+  it('a line on a cost account whose momskod is trepartshandel is refused, by the company momskoder', async () => {
+    vi.mocked(fetchChartVatTreatments).mockResolvedValueOnce(
+      new Map([['4020', { default_vat_treatment: 'triangulation_eu_goods', default_vat_rate: null }]]),
+    )
+    const outcome = await preview('eu_business', body({ reverse_charge: true }, { account_number: '4020' }))
+
+    expect(outcome).toMatchObject({ ok: false, code: 'SI_REVERSE_CHARGE_ACCOUNT', details: { reason: 'other_box', account_box: 'ruta37' } })
   })
 
   it('a foreign supplier without the flag defaults to reverse charge (decision 7)', async () => {

@@ -14,6 +14,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
 const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+// The company's momskoder, read by the reverse-charge account check
+// (reverseChargeAccountRefusal): none configured.
+vi.mock('@/lib/bookkeeping/chart-vat-treatments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/chart-vat-treatments')>()),
+  fetchChartVatTreatments: vi.fn(async () => new Map()),
+}))
 vi.mock('@/lib/operations/inbox-pair-guard', () => ({
   refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
 }))
