@@ -13,6 +13,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { K3TransitionBlockedError, K3TransitionInvalidError, k3TransitionBlockFromRpc } from '@/lib/bookkeeping/errors'
 import { frameworkForYear } from '@/lib/bokslut/framework-for-year'
+import {
+  getFiscalPeriodFramework,
+  isReliableFrameworkSource,
+  type AccountingFrameworkSource,
+} from '@/lib/company/accounting-framework'
 import { loadBuildingTemporaryDifferences } from '@/lib/bokslut/assets/building-tax-service'
 import { isTaxRealProperty, taxPlanForYear } from '@/lib/bokslut/assets/building-tax'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
@@ -137,10 +142,17 @@ export async function getK3Transition(supabase: SupabaseClient, companyId: strin
   return { transition: loaded.row, committed: loaded.committed, period, assets }
 }
 
-/** A fiscal year as the transition sees it: its framework, and whether it is open. */
+/**
+ * A fiscal year as the transition sees it: its framework, where that comes
+ * from and whether it is a choice made for the year (a company default is
+ * not: which framework applies is then still the owner's to decide), and
+ * whether the year is open.
+ */
 export interface K3TransitionYear {
   fiscal_period_id: string
   framework: 'k2' | 'k3'
+  framework_source: AccountingFrameworkSource
+  framework_confirmed: boolean
   open: boolean
 }
 
@@ -151,9 +163,12 @@ export async function k3TransitionYear(
 ): Promise<K3TransitionYear | null> {
   const period = await loadPeriod(supabase, companyId, fiscalPeriodId)
   if (!period) return null
+  const year = await getFiscalPeriodFramework(supabase, companyId, period.id)
   return {
     fiscal_period_id: period.id,
-    framework: await frameworkForYear(supabase, companyId, period.id),
+    framework: year.framework,
+    framework_source: year.source,
+    framework_confirmed: isReliableFrameworkSource(year.source),
     open: !period.is_closed && !period.locked_at,
   }
 }

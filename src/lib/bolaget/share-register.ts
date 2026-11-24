@@ -179,6 +179,16 @@ export async function loadShareRegisterData(ctx: OperationContext, asOf: string 
   }
 }
 
+/**
+ * The aktiebok as it stands today against the company settings, the same
+ * check the share register shows, for a reader that needs no more of the
+ * register (the årsredovisning's aktiekapital note prints the settings).
+ */
+export async function loadShareCapitalReconciliation(supabase: SupabaseClient, companyId: string): Promise<ShareCapitalReconciliation> {
+  const [events, capital] = await Promise.all([loadShareEvents(supabase, companyId), loadShareCapitalSettings(supabase, companyId)])
+  return reconcileWithSettings(replayShareRegister(events, null, STORED).totalShares, capital)
+}
+
 /** A class by id or code; null when neither names one. */
 function findClass(classes: readonly ShareClass[], id?: string | null, code?: string | null): ShareClass | null {
   if (id) return classes.find((c) => c.id === id) ?? null

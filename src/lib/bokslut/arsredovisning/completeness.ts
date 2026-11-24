@@ -17,6 +17,7 @@ import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { isEntityType, requiresAuditorRegardlessOfSize, requiresHousingKeyRatios } from '@/lib/company/entity-type'
 import { dividendExceedsFreeEquity } from './dividend-equity'
 import { exceedsFiscalYearCap } from '@/lib/bookkeeping/validate-period-duration'
+import type { ShareCapitalReconciliation } from '@/lib/bolaget/reconcile'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -251,6 +252,60 @@ function kontrollbalansIssues(report: ArsredovisningData): AnnualReportComplianc
   return issues
 }
 
+/**
+ * A year with no closing entry yet: the balance sheet shows Årets resultat
+ * from the income statement (build-data, result_pending_close), so the
+ * statements tie and a preview is not reported as broken. The year still has
+ * to be closed before the report is locked: a warning while drafting, an
+ * error from the signing stage on (the result is never filed unbooked).
+ */
+function openYearIssues(
+  report: ArsredovisningData,
+  stage: AnnualReportValidationStage,
+): AnnualReportComplianceIssue[] {
+  const pending = report.result_pending_close
+  if (!pending) return []
+  const kr = (amount: number) => `${amount.toLocaleString('sv-SE', { maximumFractionDigits: 0 })} kr`
+  const carriedIn = Math.round(pending.carried_in) !== 0
+    ? ` Saldot på konto 2099 vid årets ingång (${kr(pending.carried_in)}) är ett tidigare års resultat och visas som Balanserat resultat.`
+    : ''
+  const issues: AnnualReportComplianceIssue[] = []
+  push(
+    issues,
+    'AR-YEAR-NOT-CLOSED',
+    stage === 'draft' ? 'warning' : 'error',
+    'statements',
+    `Räkenskapsåret är inte avslutat i bokföringen: årets resultat (${kr(pending.result)}) står kvar på resultatkontona. Balansräkningen visar Årets resultat från resultaträkningen, som bokslutet bokar det.${carriedIn}`,
+    stage === 'draft'
+      ? 'Inget att rätta i årsredovisningen. Genomför bokslutet innan årsredovisningen låses för underskrift.'
+      : 'Genomför bokslutet för räkenskapsåret och skapa sedan om årsredovisningen.',
+  )
+  return issues
+}
+
+/**
+ * The aktiekapital note prints the number of shares in the company settings;
+ * the aktiebok holds the shares themselves (bolaget/reconcile.ts). When both
+ * have a number and they differ, one of them is wrong and only a person knows
+ * which: a warning, never a block. A company that keeps no aktiebok here is
+ * not checked.
+ */
+function shareRegisterIssues(
+  reconciliation: ShareCapitalReconciliation | null | undefined,
+): AnnualReportComplianceIssue[] {
+  if (reconciliation?.status !== 'mismatch' || reconciliation.settings_shares === null) return []
+  const issues: AnnualReportComplianceIssue[] = []
+  push(
+    issues,
+    'AR-SHARE-COUNT-REGISTER-MISMATCH',
+    'warning',
+    'notes',
+    `Antal aktier i företagsinställningarna (${reconciliation.settings_shares.toLocaleString('sv-SE')}), som aktiekapitalnoten anger, stämmer inte med aktieboken (${reconciliation.register_shares.toLocaleString('sv-SE')}).`,
+    'Kontrollera vilken uppgift som stämmer och rätta den andra under Inställningar → Företag eller i aktieboken.',
+  )
+  return issues
+}
+
 export interface ValidateAnnualReportInput {
   report: ArsredovisningData
   profile: AnnualReportProfile
@@ -258,6 +313,8 @@ export interface ValidateAnnualReportInput {
   eligibility: AnnualReportEligibilityResult
   stage: AnnualReportValidationStage
   todayIso?: string
+  /** The aktiebok against the settings the aktiekapital note prints; absent when the form keeps no aktiebok. */
+  shareRegister?: ShareCapitalReconciliation | null
 }
 
 export function validateAnnualReportCompleteness(
@@ -371,6 +428,7 @@ export function validateAnnualReportCompleteness(
   }
   issues.push(...kontrollbalansIssues(report))
 
+  issues.push(...openYearIssues(report, stage))
   issues.push(...validateStatementIntegrity(report))
   if (
     report.previous_period &&
@@ -388,6 +446,7 @@ export function validateAnnualReportCompleteness(
   if (report.noter.length === 0) {
     push(issues, 'AR-NOTES-EMPTY', 'error', 'notes', 'Årsredovisningen saknar noter.')
   }
+  issues.push(...shareRegisterIssues(input.shareRegister))
 
   // Each confirmation is a checkbox under "Lagstadgade upplysningar" on the
   // årsredovisning page, persisted by "Spara texten". Say so: a bare "är

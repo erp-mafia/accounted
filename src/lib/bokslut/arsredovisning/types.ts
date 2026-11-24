@@ -176,6 +176,13 @@ export interface ArsredovisningData {
    *  page and a richer note set) and lets the UI label the document
    *  correctly. K2 is the default for AB without an explicit election. */
   accounting_framework: 'k2' | 'k3'
+  /** The year has no closing entry yet, so its result (exact) still sits on
+   *  the result accounts: the balance sheet shows Årets resultat from the
+   *  income statement, as the close will book it, and a balance on 2099
+   *  carried in from an earlier year (`carried_in`) under Balanserat
+   *  resultat. Completeness keeps the report from being locked until the
+   *  close is booked. Absent for a closed year. */
+  result_pending_close?: { result: number; carried_in: number }
   forvaltningsberattelse: {
     /** Beskrivning av verksamheten (företaget kan editera). */
     description: string

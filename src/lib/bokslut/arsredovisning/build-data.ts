@@ -90,6 +90,7 @@ import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
 import {
   getFiscalPeriodFramework,
   previousYearFrameworkOf,
+  type AccountingFrameworkSource,
   type PreviousYearFramework,
 } from '@/lib/company/accounting-framework'
 
@@ -153,6 +154,9 @@ export interface ArsredovisningBuild {
   /** The figures the Aktiekapital note prints, so the iXBRL document can tag
    *  its amount; null when there is no such note. */
   shareCapital?: ShareCapital | null
+  /** Where the year's framework comes from (accounting-framework.ts): a
+   *  company default or fallback is not a confirmed choice for the year. */
+  frameworkSource?: AccountingFrameworkSource
 }
 
 /**
@@ -201,7 +205,7 @@ export async function buildArsredovisningReport(
   const [periodResult, settingsResult, companyResult, periodList, tbFull, tbPreClosing, narrative, yearFramework] = await Promise.all([
     supabase
       .from('fiscal_periods')
-      .select('id, name, period_start, period_end, previous_period_id, closing_entry_id')
+      .select('id, name, period_start, period_end, previous_period_id, closing_entry_id, is_closed')
       .eq('id', fiscalPeriodId)
       .eq('company_id', companyId)
       .single(),
@@ -349,10 +353,16 @@ export async function buildArsredovisningReport(
   // One equity table for every year the document presents (ÅRL 3 kap.
   // 10 a-10 b §§): the flerårsöversikt maps its earlier years with it too.
   const legalForm = k2LegalFormOf(entityType)
+  // A year with no closing entry yet still has its result on the result
+  // accounts: it is previewed as the close will book it, Årets resultat
+  // from the income statement (mapping.currentYearDerived). Completeness
+  // keeps such a report from being locked until the close is booked
+  // (AR-YEAR-NOT-CLOSED). A closed year is read as booked, as before.
+  const currentYearOpen = period.is_closed !== true && !period.closing_entry_id
   const mapping = mapTrialBalancesToK2(
     { full: tbFull.rows, preClosing: tbPreClosing.rows },
     previousTb,
-    { legalForm },
+    { legalForm, currentYearOpen },
   )
   const previousPeriod =
     prevPeriodRow && previousTb
@@ -392,6 +402,7 @@ export async function buildArsredovisningReport(
       ? { period: prevPeriodRow, tbRows: previousTb.full as TrialBalanceRow[] }
       : null,
     balanceSheet: balanceSheetMapping,
+    currentYearDerived: Boolean(mapping.currentYearDerived),
     overrides: equityMovementOverridesFrom(narrative?.equity_movement_overrides),
     placement: k3Presentation && narrative?.equity_statement_separate ? 'separate_statement' : 'management_report',
     // A K2 report names the rows as the K2 taxonomy does, as its iXBRL
@@ -634,6 +645,16 @@ export async function buildArsredovisningReport(
     },
     previous_period: previousPeriod,
     accounting_framework: accountingFramework,
+    // Only while the year's result is not closed: an absent key keeps the
+    // content hash of every closed year's report unchanged.
+    ...(mapping.currentYearDerived
+      ? {
+          result_pending_close: {
+            result: mapping.currentYearDerived.result,
+            carried_in: mapping.currentYearDerived.carriedIn,
+          },
+        }
+      : {}),
     forvaltningsberattelse: {
       description:
         overrides.description ??
@@ -735,6 +756,7 @@ export async function buildArsredovisningReport(
     },
     shareCapital,
     k3,
+    frameworkSource: yearFramework.source,
   }
 }
 
