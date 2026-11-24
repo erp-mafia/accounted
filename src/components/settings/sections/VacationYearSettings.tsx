@@ -6,8 +6,11 @@ import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsGroup, SettingsRow, SettingsRowNote, SettingsSelect } from '@/components/settings/SettingsRows'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import {
   getCurrentVacationYear,
+  vacationBasisAgreementPrompt,
   vacationBasisControl,
   type VacationBasisChangeAnswer,
   type VacationBasisControl,
@@ -29,6 +32,9 @@ function asBasis(value: unknown): VacationYearBasis {
  * vacation-ledger rows, which the first booked run creates). The lock state
  * comes from GET /api/settings/vacation-year-basis, which asks the same
  * function the save does. Its own small form so the choice saves alone.
+ * A year other than 1 April to 31 March needs a kollektivavtal
+ * (vacationBasisAgreementPrompt): saved, a quiet note says so; being chosen,
+ * the save waits for the person to confirm one allows it.
  */
 export function VacationYearSettings({
   settings,
@@ -40,6 +46,7 @@ export function VacationYearSettings({
   const t = useTranslations('settings_salary')
   const savedBasis = asBasis(settings.salary_vacation_year_basis)
   const [basis, setBasis] = useState<VacationYearBasis | null>(null)
+  const [agreementConfirmed, setAgreementConfirmed] = useState(false)
   const effectiveBasis = basis ?? savedBasis
 
   const { data, error, mutate } = useSWR<VacationBasisChangeAnswer>(
@@ -51,31 +58,38 @@ export function VacationYearSettings({
     },
   )
   const control: VacationBasisControl = vacationBasisControl(data, Boolean(error))
+  const shownBasis = control.state === 'choice' ? effectiveBasis : savedBasis
   const currentVacationYear = getCurrentVacationYear(formatDate(new Date()), effectiveBasis)
+  const agreementPrompt = vacationBasisAgreementPrompt(savedBasis, shownBasis)
+  const awaitingAgreement = agreementPrompt === 'confirm' && !agreementConfirmed
 
   function handleSave(formData: FormData) {
     const next = asBasis(formData.get('salary_vacation_year_basis'))
-    if (next === savedBasis) return {}
+    if (next === savedBasis || awaitingAgreement) return {}
     return {
       updates: { salary_vacation_year_basis: next },
       onSuccess: (saved: Record<string, unknown>) => {
         onSaved(saved as Partial<CompanySettings>)
         setBasis(null)
+        setAgreementConfirmed(false)
         void mutate()
       },
     }
   }
 
   return (
-    <SettingsFormWrapper onSave={handleSave}>
+    <SettingsFormWrapper onSave={handleSave} saveDisabled={awaitingAgreement}>
       <SettingsGroup label={t('vacation_heading')}>
         <SettingsRow label={t('vacation_year_label')} htmlFor="salary_vacation_year_basis" help={t('vacation_year_help')}>
           <div className="flex flex-col gap-1">
             <SettingsSelect
               id="salary_vacation_year_basis"
               name="salary_vacation_year_basis"
-              value={control.state === 'choice' ? effectiveBasis : savedBasis}
-              onChange={(e) => setBasis(asBasis(e.target.value))}
+              value={shownBasis}
+              onChange={(e) => {
+                setBasis(asBasis(e.target.value))
+                setAgreementConfirmed(false)
+              }}
               disabled={control.state !== 'choice'}
             >
               {BASES.map((b) => (
@@ -90,6 +104,20 @@ export function VacationYearSettings({
                 end: formatDate(currentVacationYear.end),
               })}
             </SettingsRowNote>
+            {agreementPrompt !== 'none' && <SettingsRowNote>{t('vacation_year_agreement_note')}</SettingsRowNote>}
+            {agreementPrompt === 'confirm' && (
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="vacation_year_agreement"
+                  checked={agreementConfirmed}
+                  onCheckedChange={(checked) => setAgreementConfirmed(checked === true)}
+                  className="mt-0.5"
+                />
+                <Label htmlFor="vacation_year_agreement" className="text-xs font-normal leading-5 text-muted-foreground">
+                  {t('vacation_year_agreement_confirm')}
+                </Label>
+              </div>
+            )}
             {control.state === 'locked' && (
               <SettingsRowNote>
                 {control.reason === 'open_balances'

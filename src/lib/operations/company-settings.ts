@@ -43,6 +43,7 @@ import { filedVatPeriodsReopenedBy } from '@/lib/vat/filed-periods-reopened'
 import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { INVOICE_QR_MODES } from '@/types'
 import { maskPersonnummer } from '@/lib/salary/personnummer-format'
+import { vacationYearAgreementWarnings } from '@/lib/salary/vacation-year'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 
 const S = UpdateSettingsSchema.shape
@@ -289,6 +290,8 @@ const AT_LEAST_ONE = 'At least one company setting must be supplied'
  * `preview.<field>` reads like the resource), plus what changes, what it was,
  * whether the save will regenerate the tax deadlines and whether it turns
  * dimensions on (and so registers the codes already on journal lines).
+ * A vacation-year basis that needs a kollektivavtal adds a warning saying
+ * so: the settings page asks for the confirmation, these doors cannot.
  */
 async function runSettingsWrite(
   ctx: OperationContext,
@@ -305,6 +308,7 @@ async function runSettingsWrite(
     findReopenedFiledVatPeriods: filedVatPeriodsReopenedBy,
   })
   if (!outcome.ok) return outcome
+  const agreementWarnings = vacationYearAgreementWarnings(changes.salary_vacation_year_basis)
   if (outcome.dryRun) {
     const preview = outcome.preview
     return {
@@ -316,17 +320,18 @@ async function runSettingsWrite(
         previous: publicKeys(preview.previous),
         deadlines_will_regenerate: preview.deadlines_will_regenerate,
         dimension_codes_will_import: preview.dimension_codes_will_import,
-        warnings: preview.warnings,
+        warnings: [...((preview.warnings as OperationWarning[] | undefined) ?? []), ...agreementWarnings],
       },
     }
   }
+  const warnings = [...(outcome.warnings ?? []), ...agreementWarnings]
   return {
     ok: true,
     data: {
       resource: toSettingsResource(ctx.companyId, outcome.data.settings),
       deadlines_regenerated: outcome.data.deadlines_regenerated,
     },
-    ...(outcome.warnings ? { warnings: outcome.warnings } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
   }
 }
 
