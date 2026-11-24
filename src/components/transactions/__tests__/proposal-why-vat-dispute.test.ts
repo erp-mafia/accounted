@@ -19,6 +19,12 @@ describe('the reason on a suggestion with a disputed VAT box', () => {
   })
 
   it('is appended only when the read disputes the box', () => {
-    expect(source).toMatch(/reverseChargeBoxDispute\(p\) \? `\$\{text\} · \$\{t\('rec_why_box_disputed'\)\}` : text/)
+    expect(source).toMatch(/if \(reverseChargeBoxDispute\(p\)\) return `\$\{text\} · \$\{t\('rec_why_box_disputed'\)\}`/)
+  })
+
+  it('says a learned pair\'s box is unconfirmed only when no read disputes it', () => {
+    expect(source).toMatch(/return p\.reverse_charge_box_unconfirmed \? `\$\{text\} · \$\{t\('rec_why_box_unconfirmed'\)\}` : text/)
+    expect(sv.tx_quick_review.rec_why_box_unconfirmed).toBeTruthy()
+    expect(en.tx_quick_review.rec_why_box_unconfirmed).toBeTruthy()
   })
 })

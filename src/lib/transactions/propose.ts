@@ -25,6 +25,7 @@ import { markBlockedProposals } from '@/lib/booking-review/proposals'
 import { isAutoLearnedMappingRule, mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
 import { isBookingPrecedentEnabled } from '@/lib/env/booking-precedent-switch'
 import { loadBookingPrecedents, precedentProposal, type PrecedentBooking } from './booking-precedent'
+import { markUnconfirmedReverseChargeBoxes } from './reverse-charge-box-evidence'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
 /**
@@ -41,6 +42,8 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * contested, which takes it off the row (contestCounterpart below). A
  * proposal the read puts in another reverse-charge box keeps its place and
  * carries the read's box, which sends it to a review (disputeReverseChargeBox).
+ * So does a learned pair whose reverse-charge box nothing confirms
+ * (markUnconfirmedReverseChargeBoxes).
  * A payment to Skatteverket is the exception to all of it: it leads with the
  * skattekonto, and no learned counterpart is offered for it (leadWithSkattekonto).
  * Money another block already booked onto a clearing account (the till's
@@ -74,7 +77,7 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * same row changes on purpose: a source added or dropped, the order, the
  * contest or box-dispute rules.
  */
-export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.6'
+export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.7'
 
 /**
  * The revision the proposals of this company come from: the common one, or
@@ -269,6 +272,12 @@ export async function proposeForTransactions(
       ...(proposals[tx.id] || []),
     ]
   }
+
+  // A learned pair that books reverse charge stores no box and books the
+  // EU-service default: unless its cost account or the company's posted
+  // bookings of the counterparty confirm that box, it asks
+  // (reverse_charge_box_unconfirmed, ./reverse-charge-box-evidence.ts).
+  await markUnconfirmedReverseChargeBoxes(supabase, companyId, transactions, proposals)
 
   // How the company last booked the counterparty, for the rows no
   // counterparty rule matches (active or switched off) and no rule of the

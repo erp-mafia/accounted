@@ -5650,6 +5650,7 @@
     "rec_why_precedent": "{count, plural, =1 {As last time: booked this way once before} other {As last time: booked this way # times before}}",
     "rec_why_manual": "Chosen by you",
     "rec_why_box_disputed": "check the VAT, the assistant reads it differently",
+    "rec_why_box_unconfirmed": "check the reverse-charge box on the invoice: a seller in another EU country or outside the EU",
     "rec_why_clearing_receipt": "Swish receipt {receipt} in the till on {date}; the sale is booked in the daily takings, so the money goes against {account}, not to revenue again",
     "rec_why_clearing_days": "{count, plural, one {Card sales in the till on {first}} other {Card sales in the till {first} to {last}}}; the sale is booked in the daily takings, so the money goes against {account}, not to revenue again",
     "rec_why_clearing_balance": "Card money from the till not yet received, up to {date}; the sale is booked in the daily takings, so the money goes against {account}, not to revenue again",

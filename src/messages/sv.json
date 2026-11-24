@@ -5650,6 +5650,7 @@
     "rec_why_precedent": "{count, plural, =1 {Som förra gången: bokförd så en gång tidigare} other {Som förra gången: bokförd så # gånger tidigare}}",
     "rec_why_manual": "Vald av dig",
     "rec_why_box_disputed": "kontrollera momsen, assistenten läser den annorlunda",
+    "rec_why_box_unconfirmed": "kontrollera rutan för omvänd moms på fakturan: säljare i ett annat EU-land eller utanför EU",
     "rec_why_clearing_receipt": "Swish-kvitto {receipt} i kassan {date}; försäljningen bokförs i dagskassan, så pengarna går mot {account} och inte som intäkt igen",
     "rec_why_clearing_days": "{count, plural, one {Kortförsäljningen i kassan {first}} other {Kortförsäljningen i kassan {first} till {last}}}; försäljningen bokförs i dagskassan, så pengarna går mot {account} och inte som intäkt igen",
     "rec_why_clearing_balance": "Kortpengar från kassan som inte kommit in, till och med {date}; försäljningen bokförs i dagskassan, så pengarna går mot {account} och inte som intäkt igen",
