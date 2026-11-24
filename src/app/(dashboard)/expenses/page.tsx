@@ -1292,10 +1292,12 @@ export default function ExpenseClaimsPage() {
 
       {/* Create dialog: step 1 receipt + details, step 2 verifikat review. */}
       <Dialog open={creating} onOpenChange={(open) => !open && !submitting && resetCreate()}>
+        {/* No max height of its own: DialogContent's dvh-based one keeps the
+            footer above Safari's toolbar on a phone, where a vh one does not. */}
         <DialogContent
           className={
             receiptDoc && showReceipt
-              ? 'flex max-h-[88vh] max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] flex-col overflow-y-hidden'
+              ? 'flex max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] flex-col overflow-y-hidden'
               : 'sm:max-w-xl'
           }
         >

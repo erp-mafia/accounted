@@ -341,7 +341,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
             </p>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
               <Label htmlFor="re-date">{t('expense_date')}</Label>
               <Input

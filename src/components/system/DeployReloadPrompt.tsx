@@ -104,7 +104,9 @@ export function DeployReloadPrompt() {
     // swallowed every click and tap in the strip behind it: the panel's
     // composer sits exactly there, and "a new version is available" turned
     // into "I can't type any more". Only the card itself takes input.
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex justify-center px-4">
+    // On a phone it sits 1rem above the bottom nav (--bottom-nav-h, 0px from
+    // md up), not over its tabs.
+    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--bottom-nav-h)+1rem)] z-[60] flex justify-center px-4">
       <div
         className={cn(
           'pointer-events-auto flex items-center gap-3 px-4 py-3 text-sm',

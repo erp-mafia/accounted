@@ -3,7 +3,7 @@
 import type Link from 'next/link'
 import type { LinkProps } from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import type { ComponentProps } from 'react'
+import { useTransition, type ComponentProps } from 'react'
 import { IntentLink } from '@/components/ui/intent-link'
 import { isCurrentPageHref, shouldWarmNavRoute } from './nav-prefetch'
 
@@ -31,12 +31,15 @@ type Props = Omit<ComponentProps<typeof Link>, 'prefetch'> & { href: LinkProps['
  *
  * A plain click on the link to the page already showing refreshes that page
  * from the server (isCurrentPageHref): the router would otherwise serve it
- * from its cache and nothing would change. Modified clicks (new tab, etc.)
- * and string-less hrefs keep the browser's and Link's own behaviour.
+ * from its cache and nothing would change. While that refresh runs the link
+ * carries `data-refreshing` and `aria-busy`, so a caller can show that the tap
+ * landed. Modified clicks (new tab, etc.) and string-less hrefs keep the
+ * browser's and Link's own behaviour.
  */
 export function NavLink({ href, onClick, children, ...rest }: Props) {
   const router = useRouter()
   const pathname = usePathname()
+  const [refreshing, startRefresh] = useTransition()
   const hrefString = typeof href === 'string' ? href : (href.pathname ?? '')
 
   return (
@@ -49,8 +52,10 @@ export function NavLink({ href, onClick, children, ...rest }: Props) {
         if (typeof href !== 'string' || (rest.target && rest.target !== '_self')) return
         if (!isCurrentPageHref(href, window.location.pathname, window.location.search)) return
         e.preventDefault()
-        router.refresh()
+        startRefresh(() => router.refresh())
       }}
+      data-refreshing={refreshing ? '' : undefined}
+      aria-busy={refreshing || undefined}
       {...rest}
     >
       {children}

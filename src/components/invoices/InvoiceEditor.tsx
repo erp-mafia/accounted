@@ -330,13 +330,29 @@ const QTY_UNIT_CELL_CLASS =
 const QTY_UNIT_INPUT_CLASS =
   'min-w-0 bg-transparent py-1 text-[13px] tabular-nums focus-visible:outline-none placeholder:text-muted-foreground/60'
 
+// The rows' query container: the row layout follows the rows' own width, not
+// the viewport's. It also sets the row menu's track, --row-icon: 24px, and
+// 40px on a touch screen, where ROW_ICON_BUTTON_CLASS is 40px wide.
+const ROWS_CONTAINER_CLASS = '@container [--row-icon:1.5rem] pointer-coarse:[--row-icon:2.5rem]'
+
 // The row table's columns: Beskrivning, Antal (with Enhet), à-pris, then Moms
 // and Avdrag only when they say something, Belopp and the row menu. Literal
 // classes so Tailwind sees every variant. Antal is wide enough for three
 // digits beside the longest suggested unit's picker ("månad").
-const ROW_GRID_BASE = 'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_5rem_1.5rem] items-center gap-1'
-const ROW_GRID_ONE_EXTRA = 'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_4rem_5rem_1.5rem] items-center gap-1'
-const ROW_GRID_TWO_EXTRA = 'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_4rem_4rem_5rem_1.5rem] items-center gap-1'
+// Under 30rem of rows (a phone) the columns do not fit side by side: the
+// description takes a line of its own, Antal, à-pris, Belopp and the menu
+// the second, and Moms and Avdrag, when shown, a third under Antal and
+// à-pris. The ROW_CELL_* classes place those cells; the head and the entry
+// row use them too, so every label stays over its cell.
+const ROW_GRID_BASE =
+  'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_5rem_var(--row-icon)] @max-[30rem]:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_5rem_var(--row-icon)] items-center gap-1'
+const ROW_GRID_ONE_EXTRA =
+  'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_4rem_5rem_var(--row-icon)] @max-[30rem]:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_5rem_var(--row-icon)] items-center gap-1'
+const ROW_GRID_TWO_EXTRA =
+  'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_4rem_4rem_5rem_var(--row-icon)] @max-[30rem]:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_5rem_var(--row-icon)] items-center gap-1'
+const ROW_CELL_DESCRIPTION_CLASS = '@max-[30rem]:col-span-full'
+const ROW_CELL_AMOUNT_CLASS = '@max-[30rem]:col-start-3 @max-[30rem]:row-start-2'
+const ROW_CELL_MENU_CLASS = '@max-[30rem]:col-start-4 @max-[30rem]:row-start-2'
 
 // The quiet field look of the one-line note and the claim fields.
 const FIELD_LABEL_CLASS = 'text-[13px] font-normal'
@@ -4488,7 +4504,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             label={tForm('rows_title')}
             aside={productRowCount > 0 ? t('rows_count', { count: productRowCount }) : null}
           >
-            <div ref={entryRootRef} className="relative">
+            <div ref={entryRootRef} className={cn('relative', ROWS_CONTAINER_CLASS)}>
               {/* relative: the rows' absolutely placed helpers stay inside the
                   scroller instead of widening the page on a phone. */}
               <div className="relative overflow-x-auto">
@@ -4496,13 +4512,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   {/* Header row: offset by the drag-grip gutter (w-8). */}
                   <div className="pl-8">
                     <div className={cn(rowGridClass, 'border-b-hairline pb-2 text-xs text-muted-foreground')}>
-                      <div className="px-2">{t('description_label')}</div>
+                      <div className={cn('px-2', ROW_CELL_DESCRIPTION_CLASS)}>{t('description_label')}</div>
                       <div className="px-2 text-right">{t('quantity_label')}</div>
                       <div className="px-2 text-right">{t('unit_price_label')}</div>
                       {showVatColumn && <div className="px-2">{t('vat_label')}</div>}
                       {showDeductionColumn && <div className="px-2">{tForm('deduction_column')}</div>}
-                      <div className="px-2 text-right">{t('amount_label')}</div>
-                      <div />
+                      <div className={cn('px-2 text-right', ROW_CELL_AMOUNT_CLASS)}>{t('amount_label')}</div>
+                      <div className={ROW_CELL_MENU_CLASS} />
                     </div>
                   </div>
 
@@ -4633,7 +4649,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             className={cn('group border-b-hairline', settleIndex === index && 'row-settle')}
                           >
                             <div className={cn(rowGridClass, 'py-1')}>
-                              <div className="min-w-0">
+                              <div className={cn('min-w-0', ROW_CELL_DESCRIPTION_CLASS)}>
                                 <AutoGrowTextarea
                                   {...register(`items.${index}.description`)}
                                   placeholder={t('description_placeholder')}
@@ -4796,10 +4812,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                   </DropdownMenuContent>
                                 </DropdownMenu>
                               )}
-                              <div className="whitespace-nowrap px-1 text-right text-[13px] tabular-nums">
+                              <div className={cn('whitespace-nowrap px-1 text-right text-[13px] tabular-nums', ROW_CELL_AMOUNT_CLASS)}>
                                 {formatCurrency(lineTotal, watchCurrency)}
                               </div>
-                              <span className={cn('flex items-center justify-end', HOVER_REVEAL_CLASS)}>
+                              <span className={cn('flex items-center justify-end', HOVER_REVEAL_CLASS, ROW_CELL_MENU_CLASS)}>
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
                                     <button type="button" className={ROW_ICON_BUTTON_CLASS} aria-label={t('row_actions_aria')}>
@@ -5126,7 +5142,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         }
                         aria-label={t('entry_aria')}
                         aria-describedby={entryOpen ? `${entryListId}-hint` : undefined}
-                        className={cn(CELL_INPUT_CLASS, 'w-full')}
+                        className={cn(CELL_INPUT_CLASS, 'w-full', ROW_CELL_DESCRIPTION_CLASS)}
                       />
                       {/* Ghost cells are tap targets (issues #2481, #2447): a
                           tap births the row and lands in that cell. tabIndex
@@ -5193,8 +5209,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         </button>
                       )}
                       {showDeductionColumn && <div />}
-                      <div />
-                      <div />
+                      <div className={ROW_CELL_AMOUNT_CLASS} />
+                      <div className={ROW_CELL_MENU_CLASS} />
                     </div>
                   </div>
                 </div>

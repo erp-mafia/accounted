@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, type ComponentProps, type ComponentType, type ReactNode } from 'react'
 import { NavLink } from './NavLink'
+import { isCurrentPageHref } from './nav-prefetch'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
@@ -565,10 +566,21 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
                 enabled={enabled}
                 href={item.href}
                 aria-current={item.active ? 'page' : undefined}
+                onClick={(e) => {
+                  // A tap on the tab of the page already showing, scrolled
+                  // down: back to the top (the phone tab-bar convention)
+                  // instead of a refresh that changes nothing visible. At the
+                  // top, NavLink refreshes and the tab dims while it runs.
+                  if (window.scrollY < 8) return
+                  if (!isCurrentPageHref(item.href, window.location.pathname, window.location.search)) return
+                  e.preventDefault()
+                  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                  window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' })
+                }}
                 className={cn(
                   'relative flex flex-col items-center justify-center flex-1 min-w-0 h-full text-xs',
                   enabled
-                    ? cn('transition-colors duration-150', item.active ? 'text-strong' : 'text-muted-foreground')
+                    ? cn('transition-[color,opacity] duration-150 data-[refreshing]:opacity-50', item.active ? 'text-strong' : 'text-muted-foreground')
                     : 'text-muted-foreground',
                 )}
               >
