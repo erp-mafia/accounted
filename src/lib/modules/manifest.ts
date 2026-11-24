@@ -475,7 +475,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'Incoming documents: the inbox, reading and extracting documents, the document graph archive, mail search and the receipt hunt that finds missing underlag.',
     dependsOn: [],
     layer: 'foundation',
-    uses: ['parties'],
+    // vat: the reading's seller country asks lib/vat/seller-country.ts.
+    uses: ['parties', 'vat'],
     libFolders: [
       'arkiv',
       // The new Inkorg page's rollout flag and its pure view logic (views,

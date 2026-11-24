@@ -199,8 +199,14 @@ export function swedishVatNumberAbroad(identity: SellerIdentity | null | undefin
   return countryEndingAddress(identity?.address)
 }
 
-/** What may follow an address's country: a postcode, punctuation, the end. */
-const AFTER_COUNTRY = /^[\s\d.,-]*$/
+/**
+ * What may follow an address's country, then the end: digits and
+ * punctuation ("10117", "95014-2083"), or one postcode of up to ten letters,
+ * digits, spaces or hyphens with a digit among them ("SW1A 1AA", "D02 X285").
+ * Prose after the name ("Danmark 1, 755 91 Uppsala", "Israel Andersson, ...")
+ * is no postcode.
+ */
+const AFTER_COUNTRY = /^(?:[\s\d.,-]*|[\s.,-]*(?=[A-Za-z0-9 -]*\d)[A-Za-z0-9][A-Za-z0-9 -]{0,9}[\s.,]*)$/
 
 /**
  * The country other than Sweden that ends an address, or null. Stricter than

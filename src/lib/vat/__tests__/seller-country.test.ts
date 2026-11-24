@@ -82,8 +82,17 @@ describe('a Swedish VAT number beside an address abroad', () => {
     })
   })
 
-  it('lets a postcode follow the country', () => {
+  it('lets a postcode follow the country, letters in it included', () => {
     expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: 'Example Strasse 2, Berlin, Germany 10117' })).toBe('DE')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '10 Example Road, London, United Kingdom SW1A 1AA' })).toBe('GB')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Street, Dublin, Ireland D02 X285' })).toBe('IE')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: 'Voorbeeldstraat 1, Amsterdam, Netherlands 1011 AB.' })).toBe('NL')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Way\nCupertino, CA\nUSA 95014-2083' })).toBe('US')
+  })
+
+  it('takes no prose after a country for a postcode', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm, Norge AB' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Kina 5 12345 Ankeby' })).toBeNull()
   })
 
   it('is about a Swedish number only: another state\'s number keeps its country', () => {

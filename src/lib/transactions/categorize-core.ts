@@ -116,6 +116,7 @@ import type {
 import { isReverseChargeBasisAccount, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import {
+  confirmedAbroadRegion,
   purchaseSellerRegion,
   reverseChargeBoxAsk,
   reverseChargeBoxFor,
@@ -127,7 +128,7 @@ import {
   type ReverseChargeBoxParam,
   type ReverseChargeBoxRefusal,
 } from '@/lib/vat/reverse-charge-box'
-import { regionOfCountry, swedishVatNumberAbroad, type SellerIdentity, type SellerRegion } from '@/lib/vat/seller-country'
+import { swedishVatNumberAbroad, type SellerIdentity, type SellerRegion } from '@/lib/vat/seller-country'
 import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 
 const log = createLogger('transactions/categorize-core')
@@ -954,11 +955,11 @@ export async function categorizeTransaction(
     !input.counterparty_template_id &&
     finalCategory.startsWith('expense_')
   ) {
-    // A Swedish VAT number beside an address abroad, confirmed as a seller not established here: the address's country.
-    const confirmedAbroad = input.confirm_foreign_seller_vat === true ? swedishVatNumberAbroad(documentSeller) : null
+    // A Swedish VAT number beside an address abroad, confirmed as a seller not established here: the address's
+    // country, for a service.
     const region =
       purchaseSellerRegion(documentSeller) ??
-      (confirmedAbroad ? regionOfCountry(confirmedAbroad) : null) ??
+      (input.confirm_foreign_seller_vat === true ? confirmedAbroadRegion(documentSeller, finalCategory) : null) ??
       (input.inbox_item_id ? await inboxItemSellerRegionById(supabase, companyId, input.inbox_item_id) : null)
     const box = reverseChargeBoxFor(region, finalCategory)
     if (box.ok) input = { ...input, reverse_charge_kind: box.kind }

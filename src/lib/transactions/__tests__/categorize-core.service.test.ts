@@ -649,6 +649,46 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
     expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
   })
 
+  // A Swedish VAT number beside an address abroad: the flag's statement (a
+  // seller not established in Sweden for the sale of a service) boxes a
+  // service only, and only on the document whose refusal asked for it.
+  const swedishNumberAbroad = { vatNumber: 'SE502012345601', address: '38 Example Avenue, L-1855 Luxembourg' }
+
+  it('leaves goods from a Swedish VAT number with an address abroad for the caller to box, flag or not', async () => {
+    const { supabase } = withDocument(swedishNumberAbroad)
+    const outcome = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { ...software, category: 'expense_equipment', confirm_foreign_seller_vat: true },
+      api,
+    )
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN', details: { reason: 'seller_country_unknown' } })
+  })
+
+  it('boxes a confirmed service from a Swedish VAT number with an address abroad by the address', async () => {
+    const { supabase } = withDocument(swedishNumberAbroad)
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, confirm_foreign_seller_vat: true }, api)
+    expect(accounts(outcome)).toContain('4535')
+    expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
+  })
+
+  it('takes no box from an inbox item\'s address abroad beside a Swedish VAT number: no refusal there asked for the flag', async () => {
+    const { supabase } = ledger({
+      invoice_inbox_items: { data: { extracted_data: { supplier: swedishNumberAbroad }, matched_supplier_id: null }, error: null },
+    })
+    const outcome = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { ...software, inbox_item_id: 'item-1', confirm_foreign_seller_vat: true },
+      api,
+    )
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN', details: { reason: 'seller_country_unknown' } })
+  })
+
   it('keeps a box the caller named, and refuses a category that says neither goods nor service', async () => {
     const named = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, reverse_charge_kind: 'eu_goods' }, api)
     expect(accounts(named)).toContain('4515')

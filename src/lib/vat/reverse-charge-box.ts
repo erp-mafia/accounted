@@ -29,7 +29,14 @@
  */
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { TransactionCategory } from '@/types'
-import { sellerCountry, swedishVatNumberAbroad, type SellerCountrySource, type SellerIdentity, type SellerRegion } from './seller-country'
+import {
+  regionOfCountry,
+  sellerCountry,
+  swedishVatNumberAbroad,
+  type SellerCountrySource,
+  type SellerIdentity,
+  type SellerRegion,
+} from './seller-country'
 import { getCountryName } from './country-codes'
 import { roundOre } from '@/lib/money'
 
@@ -101,6 +108,20 @@ export function reverseChargeBoxFor(region: SellerRegion | null, category: Trans
   if (!nature) return refuse('purchase_kind_unknown')
   if (nature === 'goods') return region === 'eu' ? { ok: true, kind: 'eu_goods' } : refuse('goods_from_outside_eu')
   return { ok: true, kind: region === 'eu' ? 'eu_services' : 'non_eu_services' }
+}
+
+/**
+ * The region a Swedish VAT number beside an address abroad gives the box once
+ * the caller has stated the seller is not established in Sweden for the sale
+ * (confirm_foreign_seller_vat): the address's, for a service only. That
+ * statement is about a service taxed here under the main rule (ML 2023:200
+ * 16 kap. 4 and 9 §§); goods sold under a Swedish VAT number stay unboxed
+ * (null), for the person to name.
+ */
+export function confirmedAbroadRegion(seller: SellerIdentity | null | undefined, category: TransactionCategory): SellerRegion | null {
+  if (CATEGORY_NATURE[category] !== 'service') return null
+  const country = swedishVatNumberAbroad(seller)
+  return country ? regionOfCountry(country) : null
 }
 
 /** How a door names the box parameter: v1 takes reverse_charge_kind, the MCP tool vat_treatment variants. */

@@ -1451,7 +1451,8 @@ export default function NewSupplierInvoiceForm({
 
   function openSupplierDialogPrefilled() {
     // Where the seller is, read as the Inkorg's one click reads it: Sweden unless the document names elsewhere.
-    // A Swedish VAT number beside an address abroad names neither: the type and country are the person's to set.
+    // A Swedish VAT number beside an address abroad names neither: the country is left empty and the type shows
+    // the form's default, for the person to change before the card is saved.
     const seller = sellerCountry(extractedData?.supplier)
     setNewSupplier({
       name: extractedData?.supplier?.name || '',
