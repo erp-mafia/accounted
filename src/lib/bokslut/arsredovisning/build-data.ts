@@ -354,8 +354,8 @@ export async function buildArsredovisningReport(
   // 10 a-10 b §§): the flerårsöversikt maps its earlier years with it too.
   const legalForm = k2LegalFormOf(entityType)
   // A year with no closing entry yet still has its result on the result
-  // accounts: it is previewed as the close will book it, Årets resultat
-  // from the income statement (mapping.currentYearDerived). Completeness
+  // accounts: it is previewed with Årets resultat from the income statement
+  // as the books stand (mapping.currentYearDerived). Completeness
   // keeps such a report from being locked until the close is booked
   // (AR-YEAR-NOT-CLOSED). A closed year is read as booked, as before.
   const currentYearOpen = period.is_closed !== true && !period.closing_entry_id

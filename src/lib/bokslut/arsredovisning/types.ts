@@ -178,8 +178,9 @@ export interface ArsredovisningData {
   accounting_framework: 'k2' | 'k3'
   /** The year has no closing entry yet, so its result (exact) still sits on
    *  the result accounts: the balance sheet shows Årets resultat from the
-   *  income statement, as the close will book it, and a balance on 2099
-   *  carried in from an earlier year (`carried_in`) under Balanserat
+   *  income statement as the books stand (bokslut entries not booked yet and
+   *  the close's currency revaluation still change it), and a balance on
+   *  2099 carried in from an earlier year (`carried_in`) under Balanserat
    *  resultat. Completeness keeps the report from being locked until the
    *  close is booked. Absent for a closed year. */
   result_pending_close?: { result: number; carried_in: number }

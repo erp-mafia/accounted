@@ -255,9 +255,12 @@ function kontrollbalansIssues(report: ArsredovisningData): AnnualReportComplianc
 /**
  * A year with no closing entry yet: the balance sheet shows Årets resultat
  * from the income statement (build-data, result_pending_close), so the
- * statements tie and a preview is not reported as broken. The year still has
- * to be closed before the report is locked: a warning while drafting, an
- * error from the signing stage on (the result is never filed unbooked).
+ * statements tie and a preview is not reported as broken. The figures are
+ * the books as they stand: bokslut entries not booked yet, and the close's
+ * own revaluation of foreign-currency items at balansdagen, still change
+ * them, and the issue says so. The year still has to be closed before the
+ * report is locked: a warning while drafting, an error from the signing
+ * stage on (the result is never filed unbooked).
  */
 function openYearIssues(
   report: ArsredovisningData,
@@ -275,10 +278,10 @@ function openYearIssues(
     'AR-YEAR-NOT-CLOSED',
     stage === 'draft' ? 'warning' : 'error',
     'statements',
-    `Räkenskapsåret är inte avslutat i bokföringen: årets resultat (${kr(pending.result)}) står kvar på resultatkontona. Balansräkningen visar Årets resultat från resultaträkningen, som bokslutet bokar det.${carriedIn}`,
+    `Räkenskapsåret är inte avslutat i bokföringen: årets resultat (${kr(pending.result)}) står kvar på resultatkontona. Balansräkningen visar det som Årets resultat, så att den går ihop. Siffrorna är preliminära: bokslutstransaktioner som inte är bokförda än (till exempel avskrivningar, periodiseringar, bokslutsdispositioner och skatt) och bokslutets omräkning av poster i utländsk valuta på balansdagen ändrar dem.${carriedIn}`,
     stage === 'draft'
-      ? 'Inget att rätta i årsredovisningen. Genomför bokslutet innan årsredovisningen låses för underskrift.'
-      : 'Genomför bokslutet för räkenskapsåret och skapa sedan om årsredovisningen.',
+      ? 'Inget att rätta i årsredovisningen. Boka bokslutstransaktionerna och genomför bokslutet innan årsredovisningen låses för underskrift.'
+      : 'Boka bokslutstransaktionerna, genomför bokslutet för räkenskapsåret och skapa sedan om årsredovisningen.',
   )
   return issues
 }

@@ -62,6 +62,10 @@ describe('årsredovisning of a year not closed yet', () => {
     expect(codes(open)).not.toContain('AR-IXBRL-STATEMENT-MISMATCH')
     const notClosed = open.validation.issues.find((issue) => issue.code === 'AR-YEAR-NOT-CLOSED')
     expect(notClosed?.severity).toBe('warning')
+    // Honest about what the close and the bokslut entries still change.
+    expect(notClosed?.message).toContain('preliminära')
+    expect(notClosed?.message).toContain('bokslutstransaktioner som inte är bokförda')
+    expect(notClosed?.message).toContain('utländsk valuta')
     // Exact in öre; the statements show it in whole kronor.
     expect(Math.round(open.report.result_pending_close?.result ?? 0)).toBe(
       open.report.resultatrakning.find((row) => row.semantic_key === 'income_statement_result')?.current,
