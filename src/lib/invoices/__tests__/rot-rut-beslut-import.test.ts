@@ -328,6 +328,61 @@ describe('importRotRutBeslutFile', () => {
     }))
   })
 
+  it('never lets the same buyer in another request of the name take the beslut by personnummer', async () => {
+    // One buyer with an invoice in each request: by number only the first fits.
+    const OTHER_ID = '33333333-3333-4333-8333-333333333333'
+    enqueue(ORG_SETTINGS)
+    enqueue({
+      data: [
+        makeRequestRow({ name: 'ROT 2026-11-24' }),
+        makeRequestRow({ id: OTHER_ID, name: 'ROT 2026-11-24' }),
+      ],
+    })
+    enqueue({ data: [makeItemRow()] })
+    enqueue({
+      data: [
+        makeItemRow({
+          id: 'item-2',
+          invoice_id: 'inv-2',
+          invoice: { invoice_number: '777', deduction_personnummer_encrypted: encryptPersonnummer(PNR) },
+        }),
+      ],
+    })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc
+
+    const file = makeFile()
+    file.beslut[0].namn = 'ROT 2026-11-24'
+    const result = await importRotRutBeslutFile(db, 'company-1', file)
+
+    expect(result.ok && result.results[0]).toMatchObject({ status: 'imported', request_id: REQUEST_ID, decided_total: 2000 })
+    expect(supabase.rpc).toHaveBeenCalledWith('apply_rot_rut_beslut', expect.objectContaining({
+      p_request_id: REQUEST_ID,
+      p_items: [{ item_id: 'item-1', decided_amount: 2000 }],
+    }))
+  })
+
+  it('applies nothing when no request of the name holds the invoices in the beslut', async () => {
+    const OTHER_ID = '33333333-3333-4333-8333-333333333333'
+    enqueue(ORG_SETTINGS)
+    enqueue({
+      data: [
+        makeRequestRow({ name: 'ROT 2026-11-24' }),
+        makeRequestRow({ id: OTHER_ID, name: 'ROT 2026-11-24' }),
+      ],
+    })
+    // Both hold the buyer, neither holds invoice 96458.
+    enqueue({ data: [makeItemRow({ invoice: { invoice_number: '555', deduction_personnummer_encrypted: encryptPersonnummer(PNR) } })] })
+    enqueue({ data: [makeItemRow({ id: 'item-2', invoice_id: 'inv-2', invoice: { invoice_number: '777', deduction_personnummer_encrypted: encryptPersonnummer(PNR) } })] })
+
+    const file = makeFile()
+    file.beslut[0].namn = 'ROT 2026-11-24'
+    const result = await importRotRutBeslutFile(db, 'company-1', file)
+
+    expect(result.ok && result.results[0]).toMatchObject({ status: 'error' })
+    expect(result.ok && result.results[0].error).toContain('ingen av dem har fakturorna')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('records nothing for a beslut without ärenden, and imports the rest of the file', async () => {
     enqueue(ORG_SETTINGS)
     enqueue({ data: [makeRequestRow()] })

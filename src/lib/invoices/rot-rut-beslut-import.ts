@@ -19,10 +19,11 @@ import { fileFakturaNr } from './rot-rut-file'
  *     re-import), else by exact name (NamnPaBegaran round-trips through
  *     SKV's file unchanged). Two active requests can share a name (two files
  *     made the same day carry the same default name), so when several do,
- *     the one whose items take every ärende is the request; the trigger
- *     enforce_single_active_rot_rut_request keeps an invoice in one active
- *     request, so the invoices name at most one. Ambiguity left after that
- *     is an error, not a guess.
+ *     the one whose invoice numbers take every ärende is the request: the
+ *     trigger enforce_single_active_rot_rut_request keeps an invoice in one
+ *     active request, so the numbers name at most one. The personnummer
+ *     fallback is not used to choose between them (one buyer can have an
+ *     invoice in each). Ambiguity left after that is an error, not a guess.
  *   - ärende -> item: by fakturanummer against the invoice number, else by
  *     the buyer's personnummer. Exactly one candidate or the beslut errors.
  *     A grön teknik invoice with two installation types is two ärenden in
@@ -170,16 +171,17 @@ async function applyBeslut(
 
   // 2-3. Match every ärende to exactly one item of the request
   //      (all-or-nothing per beslut). With several requests of the name, the
-  //      one whose items take every ärende is the request.
+  //      one whose invoice numbers take every ärende is the request.
+  const severalNamed = candidates.length > 1
   const fits: { request: RequestRow; decidedByItem: Map<string, number> }[] = []
   for (const candidate of candidates) {
     const loaded = await loadRequestItems(supabase, candidate.id)
     if (!loaded.ok) {
       return { ...base, status: 'error', request_id: candidate.id, error: loaded.error }
     }
-    const result = matchArenden(loaded.items, beslut.arenden)
+    const result = matchArenden(loaded.items, beslut.arenden, { byNumberOnly: severalNamed })
     if (result.ok) fits.push({ request: candidate, decidedByItem: result.decidedByItem })
-    else if (candidates.length === 1) {
+    else if (!severalNamed) {
       return { ...base, status: 'error', request_id: candidate.id, error: result.error }
     }
   }
@@ -187,7 +189,10 @@ async function applyBeslut(
     return {
       ...base,
       status: 'error',
-      error: `Flera begäran har namnet "${beslut.namn}": beslutet kan inte matchas entydigt.`,
+      error:
+        fits.length === 0
+          ? `Flera begäran har namnet "${beslut.namn}", och ingen av dem har fakturorna i beslutet. Inget har importerats.`
+          : `Flera begäran har namnet "${beslut.namn}": beslutet kan inte matchas entydigt.`,
     }
   }
   const matched = fits[0]
@@ -279,10 +284,13 @@ async function loadRequestItems(
 /**
  * Each ärende on exactly one item, the godkänt belopp added up per item; the
  * first ärende that matches no item, or several, fails the whole beslut.
+ * `byNumberOnly`: an ärende with a fakturanummer matches by it alone, never
+ * by the buyer's personnummer (choosing between requests of one name).
  */
 function matchArenden(
   items: MatchItem[],
-  arenden: RotRutBeslutFile['beslut'][number]['arenden']
+  arenden: RotRutBeslutFile['beslut'][number]['arenden'],
+  { byNumberOnly }: { byNumberOnly: boolean }
 ): { ok: true; decidedByItem: Map<string, number> } | { ok: false; error: string } {
   const consumed = new Set<string>()
   const decidedByItem = new Map<string, number>()
@@ -290,7 +298,7 @@ function matchArenden(
     let candidates = arende.fakturanummer
       ? items.filter((i) => i.invoiceNumber === arende.fakturanummer)
       : []
-    if (candidates.length !== 1) {
+    if (candidates.length !== 1 && !(byNumberOnly && arende.fakturanummer)) {
       candidates = items.filter((i) => !consumed.has(i.id) && i.personnummer === arende.personnummer)
     }
     if (candidates.length !== 1) {
