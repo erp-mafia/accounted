@@ -82,7 +82,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
 
     expect(status).toBe(200)
     // 12 September 2026 is a Saturday: the money is due on the Monday.
-    expect(body.data).toEqual({ ...AGI, payment_due_date: '2026-09-14', period_conflict: null })
+    expect(body.data).toEqual({ ...AGI, payment_due_date: '2026-09-14', period_conflict: null, bank_payment: null })
     expect(findCalls('agi_declarations', 'eq')).toEqual([
       ['company_id', 'company-1'],
       ['period_year', 2026],
@@ -158,6 +158,69 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
       enqueue({ data: null, error: { message: 'connection reset', code: '08006' } })
 
       const response = await get('2026-10')
+
+      expect(response.status).toBeGreaterThanOrEqual(500)
+    })
+  })
+
+  describe('a bank payment that pays the declaration', () => {
+    // A November AGI generated and filed, then paid through the bank from the
+    // salary run's tax panel: signed, accepted by the bank, paid the banking
+    // day before the due date (Monday 14 December).
+    const FILED = { ...AGI, status: 'submitted', salary_run_id: 'run-1', created_at: '2026-11-20T09:00:00Z' }
+    const SETTINGS = { vat_registered: true, vat_taxable_base_over_40m: false }
+    const ACCEPTED = {
+      status: 'accepted',
+      amount: '24568.00',
+      requested_execution_date: '2026-12-11',
+      created_at: '2026-11-20T09:10:00Z',
+      executed_at: null,
+      signing: { status: 'completed', signing_started_at: '2026-11-20T09:10:05Z' },
+    }
+
+    it('answers the payment, so the panel stops offering to pay the month again', async () => {
+      enqueue({ data: FILED }) // agi_declarations
+      enqueue({ data: SETTINGS }) // company_settings
+      enqueue({ data: [ACCEPTED] }) // payment_orders
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        executed_at: null,
+      })
+      expect(body.data).not.toHaveProperty('created_at')
+      expect(findCalls('payment_orders', 'eq')).toEqual([
+        ['company_id', 'company-1'],
+        ['purpose', 'skattekonto'],
+      ])
+      expect(findCalls('payment_orders', 'gte')).toEqual([['created_at', '2026-11-20T09:00:00Z']])
+    })
+
+    it('answers null for a payment of less than the declaration, and reads none once the month is marked paid', async () => {
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [{ ...ACCEPTED, amount: '20000.00' }] })
+      let { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+      expect(body.data.bank_payment).toBeNull()
+
+      reset()
+      enqueue({ data: { ...FILED, tax_paid_at: '2026-12-14T00:00:00Z' } })
+      enqueue({ data: SETTINGS })
+      ;({ body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11')))
+      expect(body.data.bank_payment).toBeNull()
+      expect(findCalls('payment_orders', 'select')).toEqual([])
+    })
+
+    it('fails the read when the payments cannot be read', async () => {
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: null, error: { message: 'connection reset', code: '08006' } })
+
+      const response = await get('2026-11')
 
       expect(response.status).toBeGreaterThanOrEqual(500)
     })

@@ -5,7 +5,7 @@
  * on the server (lib/worklist/categories.ts), the Skattekonto page's own
  * shortfall line in the browser, and the two must never disagree.
  */
-import { sumOre } from '@/lib/money'
+import { roundOre, sumOre } from '@/lib/money'
 import { SIGNING_FINISHED_BATCH_STATUSES, UNANSWERED_SIGNING_MINUTES } from './status'
 
 /** A skattekonto payment through the bank that a person approved and the bank has not finished: from approved to accepted. */
@@ -80,4 +80,40 @@ export function skattekontoPaymentsCovering(
       (order.status === 'executed' && fetchedAtMs !== null && order.executed_at !== null && Date.parse(order.executed_at) > fetchedAtMs),
   )
   return sumOre(covering.map((order) => Number(order.amount)))
+}
+
+/** A skattekonto bank payment as declarationBankPayment reads it. */
+export interface SkattekontoDeclarationPaymentOrder extends Pick<SkattekontoPaymentOrderCover, 'amount' | 'status' | 'executed_at' | 'signing'> {
+  requested_execution_date: string
+  created_at: string
+}
+
+/**
+ * The bank payment that pays a declaration in to the skattekonto, so the page
+ * stops offering Betala via banken and the payment file for it: they would pay
+ * it twice. Orders carry no link to a declaration, so this is the payment the
+ * declaration's own Betala via banken makes: made after the declaration was
+ * generated, for at least its amount (alone, or with the other declarations
+ * due the same day), paid on or before its due date, and on its way to the
+ * bank (isSkattekontoPaymentUnderway) or executed. A smaller payment leaves
+ * the rest to pay and is not it. The newest such order, or null; null also
+ * when the due date is unknown.
+ */
+export function declarationBankPayment<T extends SkattekontoDeclarationPaymentOrder>(
+  orders: readonly T[],
+  declaration: { declared: number; created_at: string; due_date: string | null },
+  nowMs: number = Date.now(),
+): T | null {
+  if (!declaration.due_date) return null
+  const dueDate = declaration.due_date
+  const generatedAt = Date.parse(declaration.created_at)
+  if (!Number.isFinite(generatedAt)) return null
+  const paying = orders.filter(
+    (order) =>
+      (order.status === 'executed' || isSkattekontoPaymentUnderway(order, nowMs)) &&
+      Date.parse(order.created_at) >= generatedAt &&
+      order.requested_execution_date <= dueDate &&
+      roundOre(Number(order.amount)) >= declaration.declared,
+  )
+  return paying.reduce<T | null>((newest, order) => (!newest || Date.parse(order.created_at) > Date.parse(newest.created_at) ? order : newest), null)
 }

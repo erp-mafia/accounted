@@ -2,6 +2,12 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
 import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declaration'
+import { roundOre } from '@/lib/money'
+import {
+  SKATTEKONTO_PAYMENT_COVER_STATUSES,
+  declarationBankPayment,
+  type SkattekontoDeclarationPaymentOrder,
+} from '@/lib/payments/orders/skattekonto-underway'
 
 /**
  * Get tax payment status for an AGI period.
@@ -19,6 +25,11 @@ import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declar
  * holds one run's totals while another live run is paid out in the month),
  * so the panel says so instead of offering to pay it; null when it may be
  * paid.
+ *
+ * `bank_payment` is the bank payment to the skattekonto that pays the
+ * declaration while it is not marked paid (declarationBankPayment): on its way
+ * to the bank or executed. Set, the panel shows it instead of offering Betala
+ * via banken and the payment file again; null when there is none.
  */
 export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   'tax_payment.status',
@@ -36,7 +47,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   const { data: agi } = await supabase
     .from('agi_declarations')
-    .select('total_tax, total_avgifter, tax_payment_file_generated_at, tax_payment_file_format, tax_paid_at, status, salary_run_id')
+    .select('total_tax, total_avgifter, tax_payment_file_generated_at, tax_payment_file_format, tax_paid_at, status, salary_run_id, created_at')
     .eq('company_id', companyId)
     .eq('period_year', periodYear)
     .eq('period_month', periodMonth)
@@ -56,7 +67,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     vat_taxable_base_over_40m: settings?.vat_taxable_base_over_40m === true,
   })
 
-  const { status, salary_run_id: salaryRunId, ...payment } = agi
+  const { status, salary_run_id: salaryRunId, created_at: createdAt, ...payment } = agi
   const check = await readAgiPaymentPeriodConflict(supabase, companyId, {
     salary_run_id: salaryRunId ?? null,
     status,
@@ -73,6 +84,37 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       }
     : null
 
-  return NextResponse.json({ data: { ...payment, payment_due_date: paymentDueDate, period_conflict: periodConflict } })
+  let bankPayment: SkattekontoDeclarationPaymentOrder | null = null
+  if (!payment.tax_paid_at) {
+    const { data: orders, error: ordersError } = await supabase
+      .from('payment_orders')
+      .select('status, amount, requested_execution_date, created_at, executed_at, signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)')
+      .eq('company_id', companyId)
+      .eq('purpose', 'skattekonto')
+      .in('status', [...SKATTEKONTO_PAYMENT_COVER_STATUSES])
+      .gte('created_at', createdAt)
+    if (ordersError) throw ordersError
+    bankPayment = declarationBankPayment((orders ?? []) as SkattekontoDeclarationPaymentOrder[], {
+      declared: roundOre(Number(payment.total_tax) + Number(payment.total_avgifter)),
+      created_at: createdAt,
+      due_date: paymentDueDate,
+    })
+  }
+
+  return NextResponse.json({
+    data: {
+      ...payment,
+      payment_due_date: paymentDueDate,
+      period_conflict: periodConflict,
+      bank_payment: bankPayment
+        ? {
+            status: bankPayment.status,
+            amount: roundOre(Number(bankPayment.amount)),
+            requested_execution_date: bankPayment.requested_execution_date,
+            executed_at: bankPayment.executed_at,
+          }
+        : null,
+    },
+  })
   },
 )

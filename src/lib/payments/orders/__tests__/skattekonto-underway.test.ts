@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { UNANSWERED_SIGNING_MINUTES } from '../status'
-import { isSkattekontoPaymentUnderway, skattekontoPaymentsCovering } from '../skattekonto-underway'
+import { declarationBankPayment, isSkattekontoPaymentUnderway, skattekontoPaymentsCovering } from '../skattekonto-underway'
 
 const FETCHED = Date.parse('2026-10-16T05:00:00Z')
 const NOW = Date.parse('2026-10-16T10:00:00Z')
@@ -80,5 +80,48 @@ describe('skattekontoPaymentsCovering', () => {
       const runs = [0, 5, 9, 10, 15, 60, 24 * 60].map((minutesLater) => isSkattekontoPaymentUnderway(order, NOW + minutesLater * 60_000))
       expect(runs).toEqual([true, true, true, false, false, false, false])
     })
+  })
+})
+
+describe('declarationBankPayment', () => {
+  // A November AGI of 24 568 kr, due Monday 14 December.
+  const DECLARATION = { declared: 24568, created_at: '2026-11-20T09:00:00Z', due_date: '2026-12-14' }
+  const AT = Date.parse('2026-11-20T10:00:00Z')
+  const order = (over: Partial<Parameters<typeof declarationBankPayment>[0][number]> = {}) => ({
+    amount: '24568.00',
+    status: 'accepted',
+    executed_at: null,
+    signing: null,
+    requested_execution_date: '2026-12-11',
+    created_at: '2026-11-20T09:10:00Z',
+    ...over,
+  })
+
+  it('finds the payment the declaration made, signed and at the bank', () => {
+    const paid = order()
+    expect(declarationBankPayment([paid], DECLARATION, AT)).toBe(paid)
+  })
+
+  it('still finds it once the bank executed it, and for a payment of the whole due day', () => {
+    expect(declarationBankPayment([order({ status: 'executed', executed_at: '2026-12-11T06:00:00Z' })], DECLARATION, AT)).not.toBeNull()
+    expect(declarationBankPayment([order({ amount: 41000 })], DECLARATION, AT)).not.toBeNull()
+  })
+
+  it('is not a payment made before the declaration, after its due date, for less, or one that pays nothing', () => {
+    expect(declarationBankPayment([order({ created_at: '2026-11-05T09:00:00Z' })], DECLARATION, AT)).toBeNull()
+    expect(declarationBankPayment([order({ requested_execution_date: '2026-12-15' })], DECLARATION, AT)).toBeNull()
+    expect(declarationBankPayment([order({ amount: 24567.99 })], DECLARATION, AT)).toBeNull()
+    for (const status of ['draft', 'rejected', 'failed', 'cancelled']) {
+      expect(declarationBankPayment([order({ status })], DECLARATION, AT)).toBeNull()
+    }
+    // A BankID nobody answered pays nothing (crm#1721's window).
+    const unanswered = { status: 'awaiting_signature', signing_started_at: new Date(AT - (UNANSWERED_SIGNING_MINUTES + 1) * 60_000).toISOString() }
+    expect(declarationBankPayment([order({ status: 'awaiting_signature', signing: unanswered })], DECLARATION, AT)).toBeNull()
+  })
+
+  it('is null without a due date, and picks the newest of several', () => {
+    expect(declarationBankPayment([order()], { ...DECLARATION, due_date: null }, AT)).toBeNull()
+    const newer = order({ created_at: '2026-11-20T09:30:00Z', status: 'approved' })
+    expect(declarationBankPayment([order(), newer], DECLARATION, AT)).toBe(newer)
   })
 })

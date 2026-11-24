@@ -43,7 +43,7 @@ import {
   SalaryBankPaymentSection,
   useSalaryBankPayments,
 } from '@/components/salary/SalaryBankPaymentSection'
-import { TaxPaymentPanel } from '@/components/salary/TaxPaymentPanel'
+import { TaxPaymentPanel, type TaxBankPayment } from '@/components/salary/TaxPaymentPanel'
 import { RunHeader } from '@/components/salary/run/RunHeader'
 import { RunProgressBar } from '@/components/salary/run/RunProgressBar'
 import { RunKpiCards } from '@/components/salary/run/RunKpiCards'
@@ -125,6 +125,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     tax_paid_at: string | null
     payment_due_date?: string | null
     period_conflict?: { code: string; message: string; message_en?: string } | null
+    bank_payment?: TaxBankPayment | null
   } | null>(null)
   const [taxPaymentLoading, setTaxPaymentLoading] = useState(false)
   // The run's bank payments and whether the company can make them: they pick
@@ -1211,6 +1212,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             paymentDueDate={taxPayment?.payment_due_date ?? null}
             agiPeriod={taxPayment ? formatAgiPeriodDashed(agiReportingPeriod(run)) : null}
             periodConflict={taxPayment?.period_conflict ?? null}
+            bankPayment={taxPayment?.bank_payment ?? null}
             defaultFormat={preferredPaymentFormat}
             senderBankgiro={senderBankgiro}
             fileAccount={taxFileAccount}
