@@ -41,6 +41,7 @@ import { arsredovisningDatering } from '@/lib/bokslut/arsredovisning/datering'
 import { signatureDate } from '@/lib/bokslut/arsredovisning/signature-pages'
 import { effectiveDisclosureTexts } from '@/lib/bokslut/arsredovisning/register-disclosures'
 import { k2EquityTableInput } from '@/lib/bokslut/arsredovisning/equity-specification'
+import { defaultDispositionText } from '@/lib/bokslut/arsredovisning/disposition-text'
 import {
   AGM_DATE_MISSING_WARNING,
   AGM_DECISION_MISSING_WARNING,
@@ -238,6 +239,14 @@ export async function buildIxbrlInput(
       `Föreslagen utdelning (${proposedDividend} kr) överstiger fritt eget kapital (${dispSumma} kr).`,
     )
   }
+  // A live draft filed with another dividend (the route's utdelning): the
+  // report's own sentence only stated the report's amounts, so it follows the
+  // dividend the document states. A sentence the board wrote stays as written.
+  const statedText = pdfData.forvaltningsberattelse.resultatdisposition
+  const kommentar =
+    options.proposedDividend !== undefined && statedText === defaultDispositionText(dispositionAmounts)
+      ? defaultDispositionText({ proposed_dividend: proposedDividend, carried_forward: dispSumma - proposedDividend })
+      : statedText
   const resultatdisposition: Resultatdisposition = {
     balanseratResultat: dispBalanserat,
     overkursfond: dispOverkursfond,
@@ -245,7 +254,7 @@ export async function buildIxbrlInput(
     summa: dispSumma,
     utdelning: proposedDividend,
     balanserasINyRakning: dispSumma - proposedDividend,
-    kommentar: pdfData.forvaltningsberattelse.resultatdisposition || null,
+    kommentar: kommentar || null,
   }
 
   // ---- underskrifter ---------------------------------------------------------

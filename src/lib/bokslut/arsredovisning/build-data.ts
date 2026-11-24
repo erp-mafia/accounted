@@ -22,6 +22,7 @@ import {
 import { k2AssetPostLabel } from '@/lib/bokslut/ixbrl/document/statements'
 import { buildBrRows, buildRrRows } from './statement-rows'
 import { getNarrative, listFixedAssetNoteRows, type NarrativeRow } from './narrative-service'
+import { dispositionText } from './disposition-text'
 import { loadRegisterNoteTexts } from '@/lib/commitments/disclosures'
 import {
   effectiveDisclosureTexts,
@@ -651,10 +652,14 @@ export async function buildArsredovisningReport(
       // when on: an absent key keeps the content hash of every other report.
       ...(narrative?.flerarsoversikt_tkr === true ? { flerarsoversikt_tkr: true } : {}),
       egen_kapital_changes,
+      // The board's own text, else a sentence that states the table's
+      // amounts: never "balanseras i ny räkning" beside a dividend.
       resultatdisposition:
         overrides.resultatdisposition ??
-        persistedRd ??
-        'Styrelsen föreslår att årets resultat balanseras i ny räkning.',
+        dispositionText(persistedRd, {
+          proposed_dividend: proposedDividend,
+          carried_forward: distributableEquity - proposedDividend,
+        }),
       proposed_dividend: proposedDividend,
       resultatdisposition_amounts: {
         retained_earnings: retainedEarnings,
