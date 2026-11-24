@@ -670,12 +670,42 @@ async function beginSca(
     : claimSigning.is('provider_authorisation_id', null)
   const { data: updated } = await claimSigning.select('*').maybeSingle()
   if (!updated) return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' }
-  await writer
+  const { data: moved, error: movedError } = await writer
     .from('payment_orders')
     .update({ status: 'awaiting_signature' })
     .eq('company_id', ctx.companyId)
     .eq('batch_id', batch.id)
     .eq('status', 'submitted')
+    .select('id')
+  if (movedError || (moved ?? []).length !== waiting.length) {
+    // An order left 'submitted' while the bank started BankID (an unsigned
+    // payment released here, a bank status applied), or nobody knows whether
+    // one did: a signature could pay a payment whose order moved on. The
+    // challenge is never handed out, and the signing ends before its payments
+    // are cancelled, so no poll offers it meanwhile (endFailedSigning).
+    const code = 'ORDER_MOVED_DURING_SIGNING_START'
+    ctx.log.warn('an order of the signing moved while BankID started', { batchId: batch.id, moved: moved?.length ?? null, expected: waiting.length, error: Boolean(movedError) })
+    // The orders as they stand now, or, when they cannot be read, the ones
+    // that waited before the bank call: cancelAndRelease reads each order
+    // again before it asks the bank, so a stale row stops nothing that moved on.
+    let toStop: readonly PaymentOrderRow[] = waiting
+    try {
+      toStop = (await loadBatch(writer, ctx.companyId, batch.id))?.orders ?? waiting
+    } catch (error) {
+      ctx.log.error('ended signing could not read its orders', error, { batchId: batch.id })
+    }
+    await endFailedSigning(
+      writer,
+      { companyId: ctx.companyId, userId: ctx.userId, log: ctx.log },
+      provider,
+      party,
+      { batchId: batch.id, authorisationId: started.providerAuthorisationId },
+      toStop,
+      { reason: code, detail: { code, stage: 'start' } },
+    )
+    if (movedError) throw movedError
+    return { ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE' }
+  }
   await logPaymentOrderEvents(writer, [
     { company_id: ctx.companyId, batch_id: batch.id, event_type: 'signing_started', actor_user_id: ctx.userId, detail: { method: started.method } },
   ], ctx.log)
