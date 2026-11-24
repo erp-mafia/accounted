@@ -486,6 +486,8 @@ const SETTINGS_FIELDS: Record<string, string> = {
   dimensions_enabled: 'Dimensioner',
   // accounted#130: off, every bank-row and Inkorg suggestion opens its review.
   direct_booking_enabled: 'Bokföring med ett klick',
+  // crm#2226: on, a payment that names its customer invoice by OCR books without a person.
+  auto_book_customer_payments: 'Automatisk bokföring av kundbetalningar',
   invoice_payment_accounts: 'Betalkonton för kundfakturor',
   last_supplier_payment_account: 'Standardkonto för leverantörsbetalning',
   schablon_mileage_rate: 'Milersättning (schablon)',

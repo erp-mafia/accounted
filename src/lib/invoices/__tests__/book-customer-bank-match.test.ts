@@ -41,6 +41,8 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
 vi.mock('@/lib/processing-history/append', () => ({ appendProcessingHistory: mockAppendHistory }))
 const mockPropagateUnderlag = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock('@/lib/transactions/inbox-underlag', () => ({ propagateUnderlagForBookedTransaction: mockPropagateUnderlag }))
+const mockFiledWarning = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/vat/voucher-filed-period-warning', () => ({ filedPeriodVoucherWarning: mockFiledWarning }))
 
 const { cancelOrphanedEntry, createJournalEntry, findFiscalPeriod, reverseEntry } = await import('@/lib/bookkeeping/engine')
 const { logMatchEvent } = await import('@/lib/invoices/match-log')
@@ -131,6 +133,7 @@ beforeEach(() => {
   vi.mocked(findFiscalPeriod).mockResolvedValue('fp-1')
   vi.mocked(createJournalEntry).mockResolvedValue({ id: PAYMENT_JE } as never)
   vi.mocked(cancelOrphanedEntry).mockResolvedValue({ error: null })
+  mockFiledWarning.mockResolvedValue(null)
 })
 
 describe('bookCustomerBankMatch: the claim', () => {
@@ -332,5 +335,86 @@ describe('bookCustomerBankMatch: what every door now gets', () => {
       code: 'MATCH_OVERPAYMENT_CHANGED',
       details: { shown_excess: 500, current_excess: 0 },
     })
+  })
+})
+
+describe('bookCustomerBankMatch: a match nobody confirmed (crm#2226)', () => {
+  const unattended = {
+    match: { method: 'auto_exact_reference', confidence: 0.99 },
+    linkBasis: { basis: 'rule_ocr_reference' as const, evidence: { rule_id: 'customer_payment_exact_reference', score: 0.99 } },
+  }
+
+  it('books with the rule as the link basis and logs it as auto_matched', async () => {
+    const { supabase, calls } = world()
+
+    expect(await book(supabase, { unattended })).toMatchObject({ ok: true, journalEntryId: PAYMENT_JE, invoiceStatus: 'paid' })
+
+    const claim = updatesOf(calls, 'transactions')[0]!.args[0] as Record<string, unknown>
+    expect(claim).toMatchObject({
+      invoice_id: INVOICE_ID,
+      link_basis: 'rule_ocr_reference',
+      link_evidence: { rule_id: 'customer_payment_exact_reference', score: 0.99 },
+    })
+    expect(logMatchEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      USER,
+      TX,
+      'auto_matched',
+      expect.objectContaining({ invoiceId: INVOICE_ID, matchMethod: 'auto_exact_reference', matchConfidence: 0.99 }),
+    )
+    expect(mockFiledWarning).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY,
+      expect.objectContaining({ entry_date: ROW.date }),
+      'bank_row',
+    )
+  })
+
+  it('a person\'s match keeps user_confirmed and manual_confirm, and asks nothing about filed periods', async () => {
+    const { supabase, calls } = world()
+
+    expect(await book(supabase)).toMatchObject({ ok: true })
+
+    expect(updatesOf(calls, 'transactions')[0]!.args[0]).toMatchObject({ link_basis: 'user_confirmed' })
+    expect(logMatchEvent).toHaveBeenCalledWith(expect.anything(), USER, TX, 'matched', expect.objectContaining({ matchMethod: 'manual_confirm' }))
+    expect(mockFiledWarning).not.toHaveBeenCalled()
+  })
+
+  it('refuses before anything is written when the verifikat would move a filed momsdeklaration', async () => {
+    mockFiledWarning.mockResolvedValue({
+      code: 'VAT_PERIOD_ALREADY_FILED',
+      message_sv: '',
+      message_en: '',
+      details: { entry_date: ROW.date, filed_periods: [{ tax_period: '2026-09' }] },
+    })
+    const { supabase, calls } = world()
+
+    const outcome = await book(supabase, { unattended })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'MATCH_INVOICE_UNATTENDED_FILED_VAT_PERIOD' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    expect(updatesOf(calls, 'transactions')).toEqual([])
+    expect(updatesOf(calls, 'invoices')).toEqual([])
+  })
+
+  it('refuses when the filed period check cannot be made', async () => {
+    mockFiledWarning.mockRejectedValue(new Error('read failed'))
+    const { supabase } = world()
+
+    expect(await book(supabase, { unattended })).toMatchObject({
+      ok: false,
+      code: 'MATCH_INVOICE_UNATTENDED_FILED_VAT_PERIOD',
+      details: { check_failed: true },
+    })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('keeps every refusal a person\'s match has: an excess of a krona or more is not booked', async () => {
+    const { supabase } = world({ row: { amount: 1600 } })
+
+    const outcome = await book(supabase, { unattended })
+
+    expect(outcome.ok).toBe(false)
+    expect(createJournalEntry).not.toHaveBeenCalled()
   })
 })

@@ -14,6 +14,7 @@ import { VoucherSeriesPerCashAccountForm } from '@/components/settings/VoucherSe
 import { applyDefaultSeriesToMap, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { DirectBookingToggle } from '@/components/settings/DirectBookingToggle'
+import { AutoBookCustomerPaymentsToggle } from '@/components/settings/AutoBookCustomerPaymentsToggle'
 import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import { DevelopmentModelForm } from '@/components/settings/DevelopmentModelForm'
@@ -270,6 +271,8 @@ export function BookkeepingSettingsContent() {
       <SettingsGroup label={t('group_automation')}>
         {/* accounted#130: whether a settled suggestion books with one click. */}
         <DirectBookingToggle />
+        {/* crm#2226: a payment that names its customer invoice by OCR books on arrival. */}
+        <AutoBookCustomerPaymentsToggle />
         {/* Periodisering is a review-gated wizard step, not an automation
             that can be switched on or off, so this row is a plain link. The
             old toggle here wrote a localStorage preference nothing read. */}

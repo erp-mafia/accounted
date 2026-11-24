@@ -20,7 +20,8 @@ describe('INGEST_MATCHERS', () => {
         finish: typeof m.finish === 'function',
       })),
     ).toEqual([
-      { order: 300, id: 'customer-invoice', module: 'invoicing', direction: 'income', onReread: true, prepare: false, finish: false },
+      // prepare: the company's auto-book switch, read lazily (crm#2226).
+      { order: 300, id: 'customer-invoice', module: 'invoicing', direction: 'income', onReread: true, prepare: true, finish: false },
       { order: 310, id: 'payment-order', module: 'payments', direction: 'expense', onReread: true, prepare: true, finish: false },
       { order: 320, id: 'supplier-invoice', module: 'supplier-invoices', direction: 'expense', onReread: true, prepare: false, finish: false },
       { order: 330, id: 'rot-rut-payout', module: 'invoicing', direction: 'income', onReread: false, prepare: true, finish: false },

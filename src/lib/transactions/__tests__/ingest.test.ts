@@ -29,10 +29,31 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
 
 const mockLoadInvoiceMatchPool = vi.fn()
 const mockBestInvoiceMatch = vi.fn()
-vi.mock('@/lib/invoices/invoice-matching', () => ({
+vi.mock('@/lib/invoices/invoice-matching', async (importOriginal) => ({
+  CONFIDENCE: (await importOriginal<typeof import('@/lib/invoices/invoice-matching')>()).CONFIDENCE,
   loadInvoiceMatchPool: (...args: unknown[]) => mockLoadInvoiceMatchPool(...args),
   bestInvoiceMatch: (...args: unknown[]) => mockBestInvoiceMatch(...args),
 }))
+// The company's auto-book switch (crm#2226) is off, as for every company
+// that has not turned it on: the passes here hint, they never book. The one
+// test that turns it on says so.
+const { mockReadAutoBook, mockAutoBookSplit } = vi.hoisted(() => ({ mockReadAutoBook: vi.fn(), mockAutoBookSplit: vi.fn() }))
+vi.mock('@/lib/invoices/customer-payment-auto-book', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/customer-payment-auto-book')>()),
+  readCustomerPaymentAutoBook: (...args: unknown[]) => mockReadAutoBook(...args),
+}))
+vi.mock('@/lib/composition/deposit-split-booking', async () => {
+  const { exactReferenceSplitAllocations } = await vi.importActual<typeof import('@/lib/invoices/customer-payment-auto-book')>(
+    '@/lib/invoices/customer-payment-auto-book',
+  )
+  return {
+    DEPOSIT_SPLIT_BOOKING: {
+      isOn: (...args: unknown[]) => mockReadAutoBook(...args),
+      allocations: exactReferenceSplitAllocations,
+      book: (...args: unknown[]) => mockAutoBookSplit(...args),
+    },
+  }
+})
 // Default: no open invoices. Survives vi.clearAllMocks like the pool below.
 mockLoadInvoiceMatchPool.mockResolvedValue({ invoices: [] })
 
@@ -204,6 +225,7 @@ function makeMappingResult(overrides: Record<string, unknown> = {}) {
 describe('ingestTransactions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockReadAutoBook.mockResolvedValue(false)
   })
 
   // -----------------------------------------------------------------------
@@ -3309,6 +3331,42 @@ describe('ingestTransactions', () => {
       // The row is explained by its parts: no single-invoice hint, no auto-categorisation.
       expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
       expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+    })
+
+    it('books a complete split whose every part names its invoice by OCR, where the company switched auto-booking on (crm#2226)', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      const raw = splitDeposit({ parts: [part({ amount: 500, reference: '10017', provider_part_id: 'P1' }), part({ amount: 1000, reference: '10025', provider_part_id: 'P2' })] })
+      mockLoadInvoiceMatchPool.mockResolvedValueOnce({ invoices: [invoice1001, invoice1002] })
+      mockReadAutoBook.mockResolvedValue(true)
+      mockAutoBookSplit.mockResolvedValueOnce({ ok: true, journalEntryId: 'je-split' })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] }) // booked map, unbooked map, supplier invoices, external_id dedup
+      enqueue({ data: makeTransaction({ id: 'tx-split', external_id: raw.external_id, amount: 1500, potential_invoice_id: null }) }) // insert
+      enqueue({ data: null }, { data: null }) // parts: delete, insert
+      enqueue({ data: null }, { data: null }) // the split marker, the match log
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ imported: 1, errors: 0, auto_matched_invoices: 1, auto_booked_payments: 1 })
+      expect(mockAutoBookSplit).toHaveBeenCalledWith(
+        expect.objectContaining({ companyId: COMPANY_ID, userId: USER_ID }),
+        'tx-split',
+        [
+          { invoice_id: 'inv-1001', amount: 500 },
+          { invoice_id: 'inv-1002', amount: 1000 },
+        ],
+      )
+      expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
+
+      // A part named in a message, not by OCR: the split stays a suggestion.
+      const mixed = createQueueMockSupabase()
+      mockLoadInvoiceMatchPool.mockResolvedValueOnce({ invoices: [invoice1001, invoice1002] })
+      mixed.enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] })
+      mixed.enqueue({ data: makeTransaction({ id: 'tx-split', external_id: raw.external_id, amount: 1500, potential_invoice_id: null }) })
+      mixed.enqueue({ data: null }, { data: null }, { data: null }, { data: null })
+      const suggested = await ingestTransactions(mixed.supabase as never, COMPANY_ID, USER_ID, [splitDeposit()])
+      expect(suggested).toMatchObject({ imported: 1, auto_matched_invoices: 1 })
+      expect(suggested.auto_booked_payments).toBeUndefined()
+      expect(mockAutoBookSplit).toHaveBeenCalledTimes(1)
     })
 
     it('stores a single part without a split marker and keeps the single-invoice path, and the parts of a payout against the supplier pool', async () => {

@@ -33,6 +33,13 @@
  * and cancels the verifikat. Only the sale stays: it is a correct booking of
  * the sent invoice whatever happens to the match, so every later failure
  * names it (details.posted_ids, partialPostedIds).
+ *
+ * A match nobody confirmed (args.unattended: an incoming payment that names
+ * its invoice by OCR, lib/invoices/customer-payment-auto-book.ts) books the
+ * same way, with its own match method and link basis in place of a person's,
+ * and one refusal more: a verifikat that would move a ruta of a
+ * momsdeklaration already filed, the sale's or the payment's, is left for a
+ * person (MATCH_INVOICE_UNATTENDED_FILED_VAT_PERIOD).
  */
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
@@ -67,12 +74,13 @@ import {
   planSaleBeforeSettlement,
   SALE_FIRST_NOT_REQUIRED,
 } from '@/lib/invoices/sale-first'
-import { linkBasisColumns } from '@/lib/links/stamp'
+import { linkBasisColumns, linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 import { roundOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { postingPort } from '@/lib/posting/port'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { filedPeriodVoucherWarning } from '@/lib/vat/voucher-filed-period-warning'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, Invoice, Transaction } from '@/types'
 
@@ -110,6 +118,18 @@ export interface BookCustomerBankMatchArgs {
   expectedJournalEntryId?: string
   /** Which door honoured the override, for behandlingshistorik. */
   overrideVia: string
+  /**
+   * Set when nobody confirmed this match: how it was decided, for
+   * payment_match_log (logged as auto_matched) and the link basis of the
+   * bank row, the verifikat and the payment row, in place of a person's
+   * manual_confirm and user_confirmed. Such a match is refused before
+   * anything is written when a verifikat it posts would move a ruta of a
+   * momsdeklaration already filed: a person decides that one.
+   */
+  unattended?: {
+    match: { method: string; confidence: number; newState?: Record<string, unknown> }
+    linkBasis: LinkBasisInput
+  }
 }
 
 export interface BookedCustomerBankMatch {
@@ -481,18 +501,45 @@ export async function bookCustomerBankMatch(
     if (overCeiling) return { ok: false, code: overCeiling.code, error: overCeiling }
   }
 
+  // A match nobody confirmed never changes a filed momsdeklaration: under
+  // kontantmetoden the payment books the moms, and a sale booked first books
+  // it on the invoice date. A check that cannot be made refuses too.
+  if (args.unattended) {
+    const postings = [
+      { entry_date: transaction.date, lines: paymentLines },
+      ...(salePlan.required ? [{ entry_date: salePlan.entry.entry_date, lines: salePlan.entry.lines }] : []),
+    ]
+    for (const posting of postings) {
+      let filed: Awaited<ReturnType<typeof filedPeriodVoucherWarning>>
+      try {
+        filed = await filedPeriodVoucherWarning(supabase, companyId, posting, 'bank_row')
+      } catch (err) {
+        log.warn('customer bank match: filed VAT period check failed; left for a person', err as Error)
+        return { ok: false, code: 'MATCH_INVOICE_UNATTENDED_FILED_VAT_PERIOD', details: { entry_date: posting.entry_date, check_failed: true } }
+      }
+      if (filed) {
+        return { ok: false, code: 'MATCH_INVOICE_UNATTENDED_FILED_VAT_PERIOD', details: { entry_date: posting.entry_date, ...filed.details } }
+      }
+    }
+  }
+
   // From here on the match writes. The sale first: a correct booking of the
   // sent invoice whatever happens to the match after it.
   const sale = await bookSaleBeforeSettlement(ctx, salePlan)
   if (!sale.ok) return sale
   if (sale.bookedHere && sale.journalEntryId) postedIds.sale_journal_entry_id = sale.journalEntryId
 
+  // Why the bank line, the verifikat and the payment row are linked: the
+  // caller named this bank line for this invoice (the request scope turns the
+  // basis into agent_proposed_user_approved inside an approval and
+  // client_asserted on an API key), or the rule that matched it unattended.
+  const linkBasis = () =>
+    args.unattended ? linkBasisColumnsFor(args.unattended.linkBasis) : linkBasisColumns('user_confirmed')
+
   // Posting port (step 2f-2): what the door saw, read only while
-  // POSTING_EVENTS is on. The caller named this bank line for this invoice;
-  // the request scope turns the basis into agent_proposed_user_approved
-  // inside an approval and client_asserted on an API key.
+  // POSTING_EVENTS is on.
   const posting = (): InvoicePaymentPostingContext => ({
-    linkBasis: linkBasisColumns('user_confirmed'),
+    linkBasis: linkBasis(),
     settledAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
   })
 
@@ -567,7 +614,7 @@ export async function bookCustomerBankMatch(
       // A stale link's method must not survive the new pointer. A literal so
       // the phantom-column scanner can verify the column set.
       reconciliation_method: null,
-      ...linkBasisColumns('user_confirmed'),
+      ...(args.unattended ? linkBasisColumnsFor(args.unattended.linkBasis) : linkBasisColumns('user_confirmed')),
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
@@ -670,8 +717,8 @@ export async function bookCustomerBankMatch(
     exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
     notes: manualRateNote,
     source: 'bank',
-    // The caller named this bank line for this invoice.
-    linkBasis: { basis: 'user_confirmed' },
+    // The caller named this bank line for this invoice, or the rule did.
+    linkBasis: args.unattended?.linkBasis ?? { basis: 'user_confirmed' },
   })
   if (!recorded.ok) {
     await unwind('Automatiskt makulerad: betalningen kunde inte registreras på fakturan', { invoice: true })
@@ -748,10 +795,10 @@ export async function bookCustomerBankMatch(
     )
   }
 
-  await logMatchEvent(supabase, userId, transactionId, 'matched', {
+  await logMatchEvent(supabase, userId, transactionId, args.unattended ? 'auto_matched' : 'matched', {
     invoiceId,
-    matchConfidence: 1.0,
-    matchMethod: 'manual_confirm',
+    matchConfidence: args.unattended?.match.confidence ?? 1.0,
+    matchMethod: args.unattended?.match.method ?? 'manual_confirm',
     // rate_source and exchange_rate keep a user-supplied rate on a money path
     // distinguishable from a Riksbanken lookup in the trail. Same-currency
     // matches carry rate_source: null.
@@ -761,6 +808,7 @@ export async function bookCustomerBankMatch(
       remaining_amount: newRemaining,
       rate_source: fx.required ? fx.source : null,
       exchange_rate: fx.required ? fx.rate : null,
+      ...(args.unattended?.match.newState ?? {}),
     },
   })
 

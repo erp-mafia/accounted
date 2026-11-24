@@ -13,6 +13,24 @@ vi.mock('@/lib/invoices/invoice-matching', async (importOriginal) => ({
   loadInvoiceMatchPool: (...args: unknown[]) => loadInvoiceMatchPool(...args),
 }))
 
+// The company's auto-book switch (crm#2226): off unless a test turns it on.
+const { mockReadSwitch, mockAutoBookPayment, mockAutoBookSplit, mockSplitAllocations } = vi.hoisted(() => ({
+  mockReadSwitch: vi.fn(),
+  mockAutoBookPayment: vi.fn(),
+  mockAutoBookSplit: vi.fn(),
+  mockSplitAllocations: vi.fn(),
+}))
+vi.mock('@/lib/invoices/customer-payment-auto-book', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/invoices/customer-payment-auto-book')>()
+  return {
+    ...actual,
+    readCustomerPaymentAutoBook: mockReadSwitch,
+    autoBookCustomerPayment: mockAutoBookPayment,
+    autoBookSplitDeposit: mockAutoBookSplit,
+    exactReferenceSplitAllocations: (...args: Parameters<typeof actual.exactReferenceSplitAllocations>) => mockSplitAllocations(...args),
+  }
+})
+
 // ── Fixtures ────────────────────────────────────────────────────────────
 
 const kundAb = makeCustomer({ id: 'cust-kund', name: 'Kund AB', org_number: '5560160680' })
@@ -68,9 +86,12 @@ function setup(rows: DepositRow[] = ROWS) {
   return mock
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
   loadInvoiceMatchPool.mockResolvedValue(POOL)
+  mockReadSwitch.mockResolvedValue(false)
+  const actual = await vi.importActual<typeof import('@/lib/invoices/customer-payment-auto-book')>('@/lib/invoices/customer-payment-auto-book')
+  mockSplitAllocations.mockImplementation(actual.exactReferenceSplitAllocations)
 })
 
 // ── Which row is the deposit ────────────────────────────────────────────
@@ -283,5 +304,72 @@ describe('attachBgMaxDeposits', () => {
         companyId: 'company-1', userId: 'user-1', deposits: deposits().slice(0, 1), apply: true,
       }),
     ).rejects.toThrow(/bank_transaction_parts delete refused/)
+  })
+})
+
+describe('attachBgMaxDeposits with auto_book_customer_payments (crm#2226)', () => {
+  const apply = (mock: ReturnType<typeof setup>) =>
+    attachBgMaxDeposits(mock.supabase as unknown as SupabaseClient, {
+      companyId: 'company-1',
+      userId: 'user-1',
+      deposits: deposits(),
+      apply: true,
+    })
+
+  it('books the payment whose OCR names its invoice, instead of hinting it', async () => {
+    mockReadSwitch.mockResolvedValue(true)
+    mockAutoBookPayment.mockResolvedValue({ ok: true, journalEntryId: 'je-1' })
+    const mock = setup()
+
+    const summary = await apply(mock)
+
+    // Deposit 3: one payment, OCR 10041 for invoice 1004.
+    expect(mockAutoBookPayment).toHaveBeenCalledTimes(1)
+    expect(mockAutoBookPayment).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ id: 'tx-worded' }),
+      { id: 'inv-1004' },
+    )
+    // Deposit 1 names invoice 1002 in a message, not by OCR: it stays a suggestion.
+    expect(mockAutoBookSplit).not.toHaveBeenCalled()
+    expect(mock.payloads('transactions', 'update')).toEqual([
+      { potential_match_method: 'bankgiro_split', potential_match_confidence: 0.95, potential_invoice_id: null, potential_supplier_invoice_id: null },
+    ])
+    expect(summary).toMatchObject({ ready_rows: 1, booked_rows: 1 })
+  })
+
+  it('books a complete split whose every part names its invoice by OCR', async () => {
+    mockReadSwitch.mockResolvedValue(true)
+    mockAutoBookPayment.mockResolvedValue({ ok: false, code: 'INVOICE_PAID_NO_FISCAL_PERIOD' })
+    mockSplitAllocations.mockReturnValue([
+      { invoice_id: 'inv-1001', amount: 500 },
+      { invoice_id: 'inv-1002', amount: 1000 },
+    ])
+    mockAutoBookSplit.mockResolvedValue({ ok: true, journalEntryId: 'je-split' })
+    const mock = setup()
+
+    const summary = await apply(mock)
+
+    expect(mockAutoBookSplit).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1' }),
+      expect.objectContaining({ id: 'tx-seb' }),
+      [
+        { invoice_id: 'inv-1001', amount: 500 },
+        { invoice_id: 'inv-1002', amount: 1000 },
+      ],
+    )
+    // The single payment's booking was refused: it keeps its hint.
+    expect(mock.payloads('transactions', 'update')).toContainEqual({ potential_invoice_id: 'inv-1004' })
+    expect(summary).toMatchObject({ booked_rows: 1, ready_rows: 1 })
+  })
+
+  it('books nothing with the switch off', async () => {
+    const mock = setup()
+
+    const summary = await apply(mock)
+
+    expect(mockAutoBookPayment).not.toHaveBeenCalled()
+    expect(mockAutoBookSplit).not.toHaveBeenCalled()
+    expect(summary).toMatchObject({ ready_rows: 2, booked_rows: 0 })
   })
 })

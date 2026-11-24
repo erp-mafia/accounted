@@ -17,6 +17,7 @@ import { applyTransactionSplit } from '@/lib/transactions/parts-apply'
 import { createLogger } from '@/lib/logger'
 import { INGEST_MATCHERS } from '@/lib/composition/ingest-matchers'
 import { OPEN_INVOICES } from '@/lib/composition/open-invoices'
+import { DEPOSIT_SPLIT_BOOKING } from '@/lib/composition/deposit-split-booking'
 import { INGEST_FEEDS } from '@/lib/composition/ingest-feeds'
 import { feedCarriesSplits, feedRereadsStoredRows } from '@/lib/transactions/ingest-feed'
 import { createIngestClaims, INGEST_POOL_OWNERS, startIngestMatchers, type IngestBatch } from '@/lib/transactions/ingest-matcher'
@@ -1327,6 +1328,17 @@ export async function ingestTransactions(
     return pending
   }
 
+  // The company's auto_book_customer_payments switch, read on the batch's
+  // first deposit split it could book (DEPOSIT_SPLIT_BOOKING, crm#2226).
+  let autoBookSwitch: Promise<boolean> | null = null
+  const customerPaymentAutoBook = (): Promise<boolean> =>
+    (autoBookSwitch ??= DEPOSIT_SPLIT_BOOKING.isOn(supabase, companyId).catch((error: unknown) => {
+      log.warn('auto-book switch unreadable; deposit splits stay suggestions', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return false
+    }))
+
   /**
    * The Bankgirot split of an Open Payments row (raw.parts), applied through
    * applyTransactionSplit (lib/transactions/parts-apply.ts, shared with the
@@ -1338,8 +1350,10 @@ export async function ingestTransactions(
    * hint it carried is cleared: the row pays several invoices, so the
    * one-click single match would only be refused. True exactly then, so the
    * caller skips the single-invoice passes and the mapping engine. A single
-   * part keeps today's single-invoice path. Suggestion only: nothing here
-   * books, and a failure leaves the row as it was and never fails the batch.
+   * part keeps today's single-invoice path. A deposit whose every part names
+   * its invoice by OCR is booked as one samlingsverifikat when the company
+   * switched auto_book_customer_payments on; everything else is a
+   * suggestion. A failure leaves the row as it was and never fails the batch.
    */
   const storePartsForRow = async (tx: Transaction, raw: RawTransaction): Promise<boolean> => {
     const parts = raw.parts
@@ -1374,6 +1388,7 @@ export async function ingestTransactions(
       }
       result.auto_matched_invoices++
       tallyPass('bankgiro-split', 'explained')
+      if (customerPool) await autoBookSplit(tx, parts, suggestions, customerPool.invoices)
       return true
     } catch (error) {
       tallyPass('bankgiro-split', 'failed')
@@ -1383,6 +1398,39 @@ export async function ingestTransactions(
         error: error instanceof Error ? error.message : String(error),
       })
       return false
+    }
+  }
+
+  /**
+   * Book a complete deposit split whose every part names its invoice by OCR,
+   * as one samlingsverifikat nobody confirmed, when the company asked for it.
+   * A refusal or a failure leaves the split's suggestion as it is.
+   */
+  const autoBookSplit = async (
+    tx: Transaction,
+    parts: NonNullable<RawTransaction['parts']>,
+    suggestions: Parameters<typeof DEPOSIT_SPLIT_BOOKING.allocations>[1],
+    invoices: InvoiceMatchPool['invoices'],
+  ): Promise<void> => {
+    try {
+      const allocations = DEPOSIT_SPLIT_BOOKING.allocations(parts, suggestions, invoices)
+      if (!allocations || !(await customerPaymentAutoBook())) return
+      const booked = await DEPOSIT_SPLIT_BOOKING.book({ supabase, companyId, userId, log }, tx.id, allocations)
+      if (booked.ok) {
+        result.auto_booked_payments = (result.auto_booked_payments ?? 0) + 1
+        log.info('deposit split booked by its OCR references', {
+          transactionId: tx.id,
+          journalEntryId: booked.journalEntryId,
+          parts: allocations.length,
+        })
+      } else {
+        log.info('deposit split left as a suggestion', { transactionId: tx.id, code: booked.code })
+      }
+    } catch (error) {
+      log.warn('deposit split auto-booking failed; the suggestion stands', {
+        transactionId: tx.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 
