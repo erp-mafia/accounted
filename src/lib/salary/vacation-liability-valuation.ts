@@ -26,8 +26,12 @@
  * previous and the running semesterår, less what was paid out since the
  * running year began). Under procentregeln: the days owed at the earning
  * year's day value and, on the statutory basis, the running intjänandeår's
- * semesterlön so far (procentregeln-liability.ts, 16 b §); dayValueSek's
- * estimate from today's pay only where Accounted lacks the earning year.
+ * semesterlön so far; on the calendar basis an employee the payout has no
+ * day value for (not employed the whole previous year, or its payslips are
+ * not in Accounted) has the running year's days valued from its semesterlön
+ * so far (procentregeln-liability.ts,
+ * 16 b §); dayValueSek's estimate from today's pay only where Accounted lacks
+ * the pay.
  * Avgifter: each employee's age-tier rate of the year after the date.
  */
 
@@ -57,9 +61,9 @@ export interface VacationLiabilityEmployeeValue {
   default_dimensions: Record<string, string> | null
   days: VacationLiabilityDays
   day_value_sek: number
-  /** Days priced at day_value_sek: every owed day, except under procentregeln on the statutory basis the days still being earned, which earning_sek values instead. */
+  /** Days priced at day_value_sek: every owed day, except under procentregeln the days of the running intjänandeår that earning_sek values instead (procentregelnLiabilitySek). */
   valued_days: number
-  /** Procentregeln, statutory basis: the running intjänandeår's semesterlön so far (16 b §). 0 otherwise. */
+  /** Procentregeln: the running intjänandeår's semesterlön so far (16 b §) for the days valued_days leaves out. 0 otherwise. */
   earning_sek: number
   /** Procentregeln: whether the value rests on the earning year's pay (16 b §) or, lacking it, on today's pay. Sammalöneregeln: always 'current_pay'. */
   day_value_basis: 'earning_year' | 'current_pay'
@@ -303,7 +307,7 @@ export async function computeVacationLiability(
       emp.vacation_rule === 'procentregeln' ? procentregelnLiabilitySek(days, procentValues.get(emp.id), estimate) : null
     const dayValue = procent ? procent.dayValue : estimate
     const liability = procent ? procent.liability : roundOre(days.total_days * dayValue + variableVacationPay)
-    const valuedDays = procent ? roundOre(days.total_days - days.earning_days) : days.total_days
+    const valuedDays = procent ? procent.valuedDays : days.total_days
     const earningSek = procent ? roundOre(liability - roundOre(valuedDays * dayValue)) : 0
     const rate = liabilityAvgifterRate(emp.personnummer, settlementYear)
     rows.push({

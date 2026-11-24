@@ -23,6 +23,7 @@ vi.mock('@/lib/salary/personnummer', async () => {
 import { roundOre } from '@/lib/money'
 import { dayValueSek, type DayValueEmployee } from '../semesterberedning'
 import { liabilityAvgifterRate, liabilitySettlementYear, vacationLiabilityDays } from '../vacation-liability-days'
+import { computeEntitledDays } from '../vacation-ledger'
 import { procentregelnLiabilitySek, procentregelnLiabilityValue } from '../procentregeln-liability'
 import { buildRemeasurePlan } from '../vacation-liability-plan'
 import type { VacationLiabilityEmployeeValue, VacationLiabilityValuation } from '../vacation-liability-valuation'
@@ -73,7 +74,7 @@ describe('vacationLiabilityDays', () => {
       takenDays: 18,
       savedDays: 3,
     })
-    expect(days).toEqual({ current_year_days: 7, saved_days: 3, earning_days: 0, unclosed_year_days: 0, total_days: 10 })
+    expect(days).toEqual({ current_year_days: 7, current_year_earned_days: 25, saved_days: 3, earning_days: 0, unclosed_year_days: 0, total_days: 10 })
   })
 
   it('calendar basis: a förskott (more taken than earned) is not netted, the employee owes 0 days, saved days still count', () => {
@@ -217,7 +218,7 @@ describe('procentregeln: days valued on the earning year\'s pay (Semesterlagen 1
     const estimate = dayValueSek({ ...MONTHLY, vacation_rule: 'procentregeln', monthly_salary: 42000 })
     expect(estimate).toBe(2419.2)
     const days = { current_year_days: 15, saved_days: 0, earning_days: 0, unclosed_year_days: 0, total_days: 15 }
-    expect(procentregelnLiabilitySek(days, value, estimate)).toEqual({ dayValue: 2304, liability: 34560, fromEarningYear: true })
+    expect(procentregelnLiabilitySek(days, value, estimate)).toEqual({ dayValue: 2304, valuedDays: 15, liability: 34560, fromEarningYear: true })
     // The estimate from today's salary would have overstated 2920 by 1 728 kr.
     expect(roundOre(15 * estimate)).toBe(36288)
   })
@@ -231,7 +232,7 @@ describe('procentregeln: days valued on the earning year\'s pay (Semesterlagen 1
     })
     expect(value.perDay).toBeNull()
     const days = { current_year_days: 10, saved_days: 0, earning_days: 0, unclosed_year_days: 0, total_days: 10 }
-    expect(procentregelnLiabilitySek(days, value, 2419.2)).toEqual({ dayValue: 2419.2, liability: 24192, fromEarningYear: false })
+    expect(procentregelnLiabilitySek(days, value, 2419.2)).toEqual({ dayValue: 2419.2, valuedDays: 10, liability: 24192, fromEarningYear: false })
   })
 
   it('hourly pay, statutory basis: the owed days at the earning year\'s day value plus 12 % of this year\'s semesterunderlag so far', () => {
@@ -272,6 +273,148 @@ describe('procentregeln: days valued on the earning year\'s pay (Semesterlagen 1
       payslips: slips.filter((p) => p.paymentDate !== '2026-06-25'),
     })
     expect(gap.earningSek).toBeNull()
+  })
+})
+
+describe('procentregeln: a hire during a sammanfallande calendar year (Semesterlagen 7 §, 16 b §)', () => {
+  // 35 000 kr a month from 1 June 2026, paid the 25th.
+  const hire = { id: 'emp-hire', vacation_days_per_year: 25, vacation_pay_rate: null, employment_start: '2026-06-01', employment_end: null }
+  // Today's-pay estimate: 35 000 x 12 x 12 % / 25.
+  const ESTIMATE = 2016
+  const calendarDays = (asOfDate: string, takenDays = 0, employmentStart = '2026-06-01') =>
+    vacationLiabilityDays({
+      basis: 'calendar',
+      yearStart: '2026-01-01',
+      asOfDate,
+      entitledDays: computeEntitledDays('calendar', '2026-01-01', 25, employmentStart),
+      takenDays,
+      savedDays: 0,
+      vacationDaysPerYear: 25,
+      employmentStart,
+      employmentEnd: null,
+    })
+
+  it('the year end: 15 days earned, worth 12 % of the seven months\' pay, 29 400 kr', () => {
+    const value = procentregelnLiabilityValue({ employee: hire, basis: 'calendar', asOfDate: '2026-12-31', payslips: payslips(2026, 6, 7, 35000) })
+    // The payout has no day value for a year not wholly employed (unchanged);
+    // the running year's semesterlön is 12 % x 245 000.
+    expect(value).toEqual({ basis: 'calendar', perDay: null, earningSek: 29400 })
+    const days = calendarDays('2026-12-31')
+    expect(days.current_year_days).toBe(15)
+    expect(days.current_year_earned_days).toBe(15)
+    expect(procentregelnLiabilitySek(days, value, ESTIMATE)).toEqual({ dayValue: 1960, valuedDays: 15, liability: 29400, fromEarningYear: true })
+    // Before: the flat 25 days at the estimate, 50 400 kr.
+    expect(roundOre(25 * ESTIMATE)).toBe(50400)
+  })
+
+  it('mid-year: the semesterlön of the pay fallen due so far, over the days earned so far', () => {
+    const value = procentregelnLiabilityValue({ employee: hire, basis: 'calendar', asOfDate: '2026-09-30', payslips: payslips(2026, 6, 4, 35000) })
+    expect(value.earningSek).toBe(16800)
+    const days = calendarDays('2026-09-30')
+    // 122 of the 214 employed days have passed: 15 x 122 / 214.
+    expect(days.current_year_earned_days).toBe(8.5514)
+    const sek = procentregelnLiabilitySek(days, value, ESTIMATE)
+    expect(sek.dayValue).toBe(roundOre(16800 / 8.5514))
+    // Priced per day like the payout: within an öre of the 16 800 earned.
+    expect(sek.liability).toBe(16799.99)
+    expect(sek.fromEarningYear).toBe(true)
+  })
+
+  it('days taken were paid: the rest of the earned semesterlön stays owed', () => {
+    const value = procentregelnLiabilityValue({ employee: hire, basis: 'calendar', asOfDate: '2026-12-31', payslips: payslips(2026, 6, 7, 35000) })
+    expect(procentregelnLiabilitySek(calendarDays('2026-12-31', 5), value, ESTIMATE)).toEqual({
+      dayValue: 1960,
+      valuedDays: 10,
+      liability: 19600,
+      fromEarningYear: true,
+    })
+  })
+
+  it('a month without a booked payslip: today\'s pay stands in over the 15 days, flagged', () => {
+    const slips = payslips(2026, 6, 7, 35000).filter((p) => p.paymentDate !== '2026-08-25')
+    const value = procentregelnLiabilityValue({ employee: hire, basis: 'calendar', asOfDate: '2026-12-31', payslips: slips })
+    expect(value.earningSek).toBeNull()
+    expect(procentregelnLiabilitySek(calendarDays('2026-12-31'), value, ESTIMATE)).toEqual({
+      dayValue: ESTIMATE,
+      valuedDays: 15,
+      liability: 30240,
+      fromEarningYear: false,
+    })
+  })
+
+  it('an employee of the whole previous year keeps the payout\'s day value, at the year end and mid-year', () => {
+    const veteran = { ...hire, id: 'emp-veteran', employment_start: '2020-01-01' }
+    const yearEnd = procentregelnLiabilityValue({ employee: veteran, basis: 'calendar', asOfDate: '2026-12-31', payslips: payslips(2026, 1, 12, 35000) })
+    expect(procentregelnLiabilitySek(calendarDays('2026-12-31', 0, '2020-01-01'), yearEnd, ESTIMATE)).toEqual({
+      dayValue: 2016,
+      valuedDays: 25,
+      liability: 50400,
+      fromEarningYear: true,
+    })
+    // Mid-year after a raise: last year's 2 304 a day, as the payout pays them, not this year's 12 %.
+    const midYear = procentregelnLiabilityValue({
+      employee: veteran,
+      basis: 'calendar',
+      asOfDate: '2026-09-30',
+      payslips: [...payslips(2025, 1, 12, 40000), ...payslips(2026, 1, 9, 42000)],
+    })
+    const days = calendarDays('2026-09-30', 0, '2020-01-01')
+    expect(procentregelnLiabilitySek(days, midYear, ESTIMATE)).toEqual({
+      dayValue: 2304,
+      valuedDays: roundOre(days.total_days),
+      liability: roundOre(days.total_days * 2304),
+      fromEarningYear: true,
+    })
+  })
+
+  it('an employee of the whole previous year whose payslips for it are not in Accounted: mid-year the running year\'s pay values the days, the year end the payout\'s day value', () => {
+    const veteran = { ...hire, id: 'emp-veteran', employment_start: '2020-01-01' }
+    const midYear = procentregelnLiabilityValue({ employee: veteran, basis: 'calendar', asOfDate: '2026-09-30', payslips: payslips(2026, 1, 9, 35000) })
+    expect(midYear).toEqual({ basis: 'calendar', perDay: null, earningSek: 37800 })
+    const days = calendarDays('2026-09-30', 0, '2020-01-01')
+    const sek = procentregelnLiabilitySek(days, midYear, ESTIMATE)
+    expect(sek.dayValue).toBe(roundOre(37800 / days.current_year_earned_days!))
+    // 12 % of the nine months' pay, within an öre, and no longer called an estimate.
+    expect(Math.abs(sek.liability - 37800)).toBeLessThanOrEqual(0.05)
+    expect(sek.fromEarningYear).toBe(true)
+    // The year end has the whole year: the payout's day value, the same 2 016.
+    const yearEnd = procentregelnLiabilityValue({ employee: veteran, basis: 'calendar', asOfDate: '2026-12-31', payslips: payslips(2026, 1, 12, 35000) })
+    expect(procentregelnLiabilitySek(calendarDays('2026-12-31', 0, '2020-01-01'), yearEnd, ESTIMATE)).toEqual({
+      dayValue: 2016,
+      valuedDays: 25,
+      liability: 50400,
+      fromEarningYear: true,
+    })
+  })
+
+  it('days of an earlier year not closed yet keep the estimate beside the running year\'s value', () => {
+    const days = { current_year_days: 10, current_year_earned_days: 10, saved_days: 0, earning_days: 0, unclosed_year_days: 3, total_days: 13 }
+    const value = { basis: 'calendar' as const, perDay: null, earningSek: 20000 }
+    expect(procentregelnLiabilitySek(days, value, ESTIMATE)).toEqual({
+      dayValue: ESTIMATE,
+      valuedDays: 3,
+      liability: roundOre(3 * ESTIMATE + 10 * 2000),
+      fromEarningYear: false,
+    })
+  })
+
+  it('statutory basis, a hire whose only owed days are still being earned: the same 29 400 kr, no longer called an estimate', () => {
+    const value = procentregelnLiabilityValue({ employee: hire, basis: 'statutory_apr_mar', asOfDate: '2026-12-31', payslips: payslips(2026, 6, 7, 35000) })
+    expect(value).toEqual({ basis: 'statutory_apr_mar', perDay: null, earningSek: 29400 })
+    const days = vacationLiabilityDays({
+      basis: 'statutory_apr_mar',
+      yearStart: '2026-04-01',
+      asOfDate: '2026-12-31',
+      entitledDays: computeEntitledDays('statutory_apr_mar', '2026-04-01', 25, '2026-06-01'),
+      takenDays: 0,
+      savedDays: 0,
+      vacationDaysPerYear: 25,
+      employmentStart: '2026-06-01',
+      employmentEnd: null,
+    })
+    expect(days.current_year_days).toBe(0)
+    expect(days.earning_days).toBe(14.6575)
+    expect(procentregelnLiabilitySek(days, value, ESTIMATE)).toEqual({ dayValue: ESTIMATE, valuedDays: 0, liability: 29400, fromEarningYear: true })
   })
 })
 
