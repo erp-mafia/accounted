@@ -123,7 +123,7 @@ Följande delsystem matar journalen:
 | Löner | Lönekörningar, arbetsgivardeklaration (AGI) | Debet 7xxx + 7510, kredit 2710/2731/1930; semesterlöneskuld 2920/2940 |
 | Anläggningstillgångar | Anläggningsregister med årliga avskrivningar | Debet 78xx, kredit ackumulerade avskrivningar (t.ex. 1219, 1229) |
 | Periodiseringar | Periodiseringsscheman över flera perioder | Debet/kredit 17xx respektive 29xx |
-| Kortbetalningar (Stripe) | Betalning av kundfaktura via betallänk och utbetalning till bankkontot | Betalning: debet 1686, kredit 1510. Utbetalning: debet 1930 och 6570 (avgift), kredit 1686, samt omvänd moms på avgiften |
+| Kortbetalningar (Stripe) | Betallänkar på kundfakturor; Stripe-saldots betalningar, avgifter och utbetalningar hämtas till transaktionsinkorgen och bokförs när användaren godkänner dem | Vid bokföring: betalning debet 1686, kredit 30xx och 26xx, eller 1510 mot kundfaktura. Avgifter: debet 6570 för kortavgiften (momsfri betaltjänst, ingen omvänd moms), övriga Stripe-tjänster med omvänd skattskyldighet (2645/2614), kredit 1686. Utbetalning: debet 1930, kredit 1686 |
 | Webbutiker (Shopify, WooCommerce, Zettle) | Order och återbetalningar hämtas som underlag | Kontering när användaren bokför ordern |
 
 [STRYK DE DELSYSTEM SOM INTE ANVÄNDS I DITT FÖRETAG]
@@ -283,7 +283,6 @@ Momsperiod: [ ] Månad  [ ] Kvartal  [ ] Helår
 [SJÄLVHOSTAD DRIFT: raden för Amazon Bedrock ovan beskriver den hostade tjänstens standardkonfiguration. Om din installation använder en annan AI-leverantör (t.ex. AI_PROVIDER=anthropic med direkt Anthropic-API, eller en egen endpoint via AI_BASE_URL) gäller inte skrivningen "datan lämnar inte EU" automatiskt; uppdatera raden så att den beskriver din faktiska leverantör, region och ditt faktiska dataflöde]
 
 **Maskinell och automatisk bokföring.** Förslag från maskinella hjälpmedel (kategorisering av banktransaktioner, avläsning av underlag) bokförs först när en användare har godkänt dem, i granskningsdialogen eller med ett klick. Följande kan skapa bokförda verifikationer utan att en användare godkänner varje verifikation, när funktionen har slagits på:
-- Stripe: betalningar via betallänk och utbetalningar som stämmer exakt
 - Periodiseringar: schemalagda delposter bokförs på förfallodagen
 - Återkommande fakturor med automatiskt utskick
 - API-nycklar och AI-assistenter med skrivbehörighet (avsnitt 12)

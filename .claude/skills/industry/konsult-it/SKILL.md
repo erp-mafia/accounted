@@ -77,8 +77,8 @@ Verifierat mot **Kontoplan BAS 2025 v.1.0** (bas.se/kontoplaner). Endast konton 
 | **3308** | Försäljning tjänster till annat EU-land | B2B-konsult/SaaS till EU företag: momsruta **39** + periodisk sammanställning. |
 | **3922** | Licensintäkter och royalties | SaaS-licensavgifter, white-label-royalty, API-användningsavgift. |
 | **3800** *(gruppkonto)* | Aktiverat arbete för egen räkning | K3-aktivering: motkonto till 1010/1012 när intern utvecklartid kapitaliseras. |
-| **4531** | Inköp av tjänster från ett land utanför EU, 25 % | AWS US, OpenAI, GitHub, Anthropic, Stripe: utlöser 2614/2645. Momsruta **22+30+48**, **ej** i periodisk sammanställning. |
-| **4535** | Inköp av tjänster från annat EU-land, 25 % | Microsoft IE, Atlassian NL, Google IE: utlöser 2614/2645. Momsruta **21+30+48**. |
+| **4531** | Inköp av tjänster från ett land utanför EU, 25 % | AWS US, OpenAI, GitHub, Anthropic: utlöser 2614/2645. Momsruta **22+30+48**, **ej** i periodisk sammanställning. |
+| **4535** | Inköp av tjänster från annat EU-land, 25 % | Microsoft IE, Atlassian NL, Google IE, Stripe IE för Billing, Radar och Tax: utlöser 2614/2645 (inte Stripes kortavgift, som är en momsfri betaltjänst utan omvänd moms). Momsruta **21+30+48**. |
 | **5420** | Programvoror | SaaS-licenser och off-the-shelf-mjukvara (löpande operativ kostnad, skiljs från 6540 enligt bolagets policy). |
 | **6540** | IT-tjänster | Molntjänster, IaaS, hosting, CI/CD, MDM, observability. Gränsdragning mot 5420 är policyfråga: tjänst vs licens. |
 | **6550** | Konsultarvoden | Köpta konsulttjänster (revision, jurist, övrig icke-IT-konsult). |
