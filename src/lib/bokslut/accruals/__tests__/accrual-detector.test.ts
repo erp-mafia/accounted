@@ -3,7 +3,7 @@
  * never a "zero it" card for a company whose payroll lives elsewhere.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, createTableMockSupabase } from '@/tests/helpers'
 import { generateVacationLiability } from '@/lib/reports/vacation-liability'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import {
@@ -317,6 +317,119 @@ describe('assessVacationLiability: the workings behind the target', () => {
     const result = await assessVacationLiability({} as never, 'c1', 'p1', OPTIONS)
 
     expect(result.proposal!.computation).not.toHaveProperty('employees')
+  })
+})
+
+// The real vacation report and valuation over a per-table mock; only the
+// trial balance (what 2920 holds) is stubbed.
+describe('assessVacationLiability: procentregeln hires during a calendar intjänandeår (Semesterlagen 7 §, 16 b §)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    const actual = await vi.importActual<typeof import('@/lib/reports/vacation-liability')>('@/lib/reports/vacation-liability')
+    vi.mocked(generateVacationLiability).mockImplementation(actual.generateVacationLiability)
+  })
+
+  const hire = (id: string) => ({
+    id,
+    first_name: id,
+    last_name: 'Hire',
+    personnummer_last4: '0000',
+    personnummer: null,
+    employment_type: 'employee',
+    personnel_category: 'tjansteman',
+    default_dimensions: null,
+    vacation_rule: 'procentregeln',
+    vacation_days_per_year: 25,
+    vacation_days_saved: 0,
+    vacation_pay_rate: null,
+    semestertillagg_rate: 0.0043,
+    salary_type: 'monthly',
+    monthly_salary: 35000,
+    employment_degree: 100,
+    hourly_rate: null,
+    hours_per_week: 40,
+    workdays_per_week: 5,
+    employment_start: '2026-06-01',
+    employment_end: null,
+  })
+
+  /** A booked payslip whose procentregeln step carries 35 000 kr of semesterunderlag, paid the 25th. */
+  const payslip = (employeeId: string, month: number) => {
+    const mm = String(month).padStart(2, '0')
+    return {
+      employee_id: employeeId,
+      calculation_breakdown: { steps: [{ label: 'Semesteravsättning (procentregeln 12 %)', input: { vacation_basis: 35000 } }] },
+      salary_run: { id: `run-${mm}`, payment_date: `2026-${mm}-25`, status: 'booked' },
+    }
+  }
+  const JUNE_TO_DECEMBER = [6, 7, 8, 9, 10, 11, 12]
+
+  function company(payslips: ReturnType<typeof payslip>[]) {
+    const { supabase } = createTableMockSupabase({
+      company_settings: { data: { salary_vacation_year_basis: 'calendar', salary_calculation_policy: {} } },
+      vacation_year_closures: { data: [] },
+      employees: { data: [hire('e-1'), hire('e-2')] },
+      employee_vacation_balances: { data: [] },
+      employee_opening_balances: { data: [] },
+      vacation_liability_remeasurements: { data: [] },
+      // The procentregeln payslips; no vacation was taken and the booked
+      // specification is not what the target reads.
+      salary_run_employees: (chain: Array<{ method: string; args: unknown[] }>) => {
+        const select = String(chain.find((c) => c.method === 'select')?.args[0] ?? '')
+        return { data: select.includes('calculation_breakdown') ? payslips : [] }
+      },
+    })
+    return supabase as never
+  }
+
+  const bothHires = () => [...JUNE_TO_DECEMBER.map((m) => payslip('e-1', m)), ...JUNE_TO_DECEMBER.map((m) => payslip('e-2', m))]
+
+  it('targets 15 days each at 12 % of seven months\' pay: 58 800 kr, and proposes the difference to 2920', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue(trialBalanceWith2920(50000) as never)
+
+    const { proposal } = await assessVacationLiability(company(bothHires()), 'c1', 'p1', { ...OPTIONS, employeeDetail: true })
+
+    expect(proposal!.computation).toMatchObject({ current_2920: 50000, closing_target: 58800, delta: 8800 })
+    const employees = (proposal!.computation as { employees: Array<Record<string, unknown>> }).employees
+    expect(employees).toHaveLength(2)
+    for (const employee of employees) {
+      expect(employee).toMatchObject({
+        employment_start: '2026-06-01',
+        entitled_days: 15,
+        valued_days: 15,
+        day_value: 1960,
+        day_value_estimated: false,
+        earning_pay: 0,
+        liability: 29400,
+      })
+    }
+    expect(proposal!.lines.find((l) => l.account_number === '2920')).toMatchObject({ credit_amount: 8800, debit_amount: 0 })
+    expect(proposal!.warnings.some((w) => w.includes('uppskattat'))).toBe(false)
+  })
+
+  it('proposes nothing when 2920 holds what the runs accrued (7 x 4 200 kr each); the flat 25 days proposed +42 000 kr', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue(trialBalanceWith2920(58800) as never)
+
+    const { proposal, notice } = await assessVacationLiability(company(bothHires()), 'c1', 'p1', OPTIONS)
+
+    expect(proposal).toBeNull()
+    expect(notice).toBeNull()
+  })
+
+  it('an employee whose payslips are missing still gets today\'s-pay estimate, flagged with the warning', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue(trialBalanceWith2920(50000) as never)
+    const withoutAugust = bothHires().filter((p) => !(p.employee_id === 'e-2' && p.salary_run.payment_date === '2026-08-25'))
+
+    const { proposal } = await assessVacationLiability(company(withoutAugust), 'c1', 'p1', { ...OPTIONS, employeeDetail: true })
+
+    const employees = (proposal!.computation as { employees: Array<Record<string, unknown>> }).employees
+    expect(employees.find((e) => e.employee_id === 'e-1')).toMatchObject({ day_value_estimated: false, liability: 29400 })
+    // 15 days (not 25) at 35 000 x 12 x 12 % / 25.
+    expect(employees.find((e) => e.employee_id === 'e-2')).toMatchObject({ day_value_estimated: true, day_value: 2016, liability: 30240 })
+    expect(proposal!.computation).toMatchObject({ closing_target: 59640 })
+    expect(proposal!.warnings).toContain(
+      'Dagvärdet är uppskattat från dagens lön för e-2 Hire: lönebesked för intjänandeåret saknas i Accounted. Kontrollera semesterlöneskulden innan du godkänner.',
+    )
   })
 })
 

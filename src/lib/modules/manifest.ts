@@ -433,7 +433,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'composite',
     // inbox: commitments (lib/commitments) shares the agreement store, its
     // schedule dates and its Viktiga datum sync with the Arkiv pipeline.
-    uses: ['import', 'inbox', 'parties', 'payroll', 'transactions'],
+    // corporate: the årsredovisning checks the aktiekapital note's share count
+    // against the aktiebok, when the company keeps one (bolaget/reconcile.ts).
+    uses: ['import', 'inbox', 'parties', 'payroll', 'transactions', 'corporate'],
     // commitments: agreements, ställda säkerheter and eventualförpliktelser,
     // the group structure (Bolaget, behind BOLAGET_COMPANY_IDS).
     libFolders: ['bokslut', 'commitments'],

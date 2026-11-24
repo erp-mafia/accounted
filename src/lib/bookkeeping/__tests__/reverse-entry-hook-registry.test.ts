@@ -29,9 +29,9 @@ vi.mock('@/lib/events', () => ({
 }))
 vi.mock('@/lib/bookkeeping/account-backfill', () => ({ backfillStandardBASAccounts: vi.fn().mockResolvedValue([]) }))
 vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
-  assertStornoTarget: vi.fn(async (_s: unknown, _c: unknown, original: { entry_date: string }) => {
+  assertStornoTarget: vi.fn(async (_s: unknown, _c: unknown, original: { entry_date: string; fiscal_period_id: string }) => {
     h.trace.push('assertStornoTarget')
-    return original.entry_date
+    return { date: original.entry_date, fiscal_period_id: original.fiscal_period_id, moved: false }
   }),
 }))
 

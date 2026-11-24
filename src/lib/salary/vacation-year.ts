@@ -2,12 +2,64 @@
  * Vacation year (semesterår) boundary helpers.
  *
  * Two bases exist (company_settings.salary_vacation_year_basis):
+ *   'statutory_apr_mar' : the Semesterlagen 3 § semesterår, Apr 1 to Mar 31.
+ *                         A new company starts on it: the column default
+ *                         since migration 20261124191700.
  *   'calendar'          : sammanfallande intjänande- och semesterår, Jan 1 to
- *                         Dec 31. The small-company norm and our default.
- *   'statutory_apr_mar' : the Semesterlagen 3 § default, Apr 1 to Mar 31.
+ *                         Dec 31. It rests on a kollektivavtal
+ *                         (vacationYearBasisNeedsAgreement). A settings row
+ *                         saved before that migration keeps the basis it
+ *                         stores, calendar unless the company changed it, and
+ *                         payroll reads a company with no settings row as
+ *                         calendar.
  */
+import type { OperationWarning } from '@/lib/operations/types'
 
 export type VacationYearBasis = 'calendar' | 'statutory_apr_mar'
+
+/**
+ * Whether a basis needs a kollektivavtal behind it. Semesterlagen 3 § sets
+ * the semesterår to 1 April through 31 March, and only a kollektivavtal
+ * concluded or approved by a central employee organisation may move it
+ * (2 a § andra stycket), so every basis but the statutory one does.
+ */
+export function vacationYearBasisNeedsAgreement(basis: VacationYearBasis): boolean {
+  return basis !== 'statutory_apr_mar'
+}
+
+/**
+ * What the semesterår row on the salary settings page says about that
+ * agreement: nothing for the statutory year, a quiet note for another year
+ * already saved, and the note with a confirmation the save waits for while
+ * another year is being chosen.
+ */
+export type VacationBasisAgreementPrompt = 'none' | 'note' | 'confirm'
+
+export function vacationBasisAgreementPrompt(
+  saved: VacationYearBasis,
+  shown: VacationYearBasis,
+): VacationBasisAgreementPrompt {
+  if (!vacationYearBasisNeedsAgreement(shown)) return 'none'
+  return shown === saved ? 'note' : 'confirm'
+}
+
+/**
+ * The warning a settings save over the API or MCP carries when it sets a
+ * basis that needs a kollektivavtal: those doors have no confirmation to
+ * ask, so the answer says it instead.
+ */
+export function vacationYearAgreementWarnings(requested: VacationYearBasis | undefined): OperationWarning[] {
+  if (requested === undefined || !vacationYearBasisNeedsAgreement(requested)) return []
+  return [
+    {
+      code: 'VACATION_YEAR_NEEDS_COLLECTIVE_AGREEMENT',
+      message_sv:
+        'Ett annat semesterår än 1 april till 31 mars kräver ett kollektivavtal som tillåter det (semesterlagen 2 a §). Utan kollektivavtal gäller semesterlagens semesterår, 1 april till 31 mars (3 §).',
+      message_en:
+        'A vacation year other than 1 April to 31 March needs a collective agreement that allows it (semesterlagen 2 a §). Without one, the Annual Leave Act\'s vacation year applies: 1 April to 31 March (3 §).',
+    },
+  ]
+}
 
 /** The vacation-year start date (YYYY-MM-DD) containing `dateIso`. */
 export function getVacationYearStart(dateIso: string, basis: VacationYearBasis): string {

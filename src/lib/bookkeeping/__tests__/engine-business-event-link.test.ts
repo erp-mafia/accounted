@@ -18,7 +18,11 @@ import type { CreateJournalEntryInput } from '@/types'
 
 vi.mock('@/lib/events', () => ({ eventBus: { emit: vi.fn().mockResolvedValue([]) } }))
 vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
-  assertStornoTarget: vi.fn(async (_s: unknown, _c: string, original: { entry_date: string }) => original.entry_date),
+  assertStornoTarget: vi.fn(async (_s: unknown, _c: string, original: { entry_date: string; fiscal_period_id: string }) => ({
+    date: original.entry_date,
+    fiscal_period_id: original.fiscal_period_id,
+    moved: false,
+  })),
 }))
 vi.mock('@/lib/core/bookkeeping/correction-chain', () => ({
   correctionChainDepth: vi.fn().mockResolvedValue({ depth: 0, rootVoucher: null }),

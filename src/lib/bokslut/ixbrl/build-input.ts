@@ -365,6 +365,9 @@ export async function buildIxbrlInput(
     rr: mapping.rr,
     br: mapping.br,
     totals: mapping.totals,
+    // Only while the result is not closed: an absent key keeps every closed
+    // year's input, and its content hash, unchanged.
+    ...(mapping.currentYearDerived ? { yearNotClosed: true as const } : {}),
     forvaltningsberattelse: {
       allmantOmVerksamheten: allmant,
       vasentligaHandelser: pdfData.forvaltningsberattelse.important_events,

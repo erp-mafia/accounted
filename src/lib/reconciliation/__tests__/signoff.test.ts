@@ -7,6 +7,7 @@ const byIdMock = vi.fn()
 const insertMock = vi.fn()
 const stampMock = vi.fn()
 const emitMock = vi.fn()
+const bookedOnDayMock = vi.fn()
 
 vi.mock('../service', () => ({
   getAccountStatus: (...args: unknown[]) => statusMock(...args),
@@ -18,6 +19,9 @@ vi.mock('../signoff-store', () => ({
   stampReopen: (...args: unknown[]) => stampMock(...args),
 }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...args: unknown[]) => emitMock(...args) } }))
+vi.mock('../bank-balance-check', () => ({
+  bookedBalanceOnDay: (...args: unknown[]) => bookedOnDayMock(...args),
+}))
 
 import { ReconciliationSignoffError, reopenSignoff, signOffAccount } from '../signoff'
 
@@ -380,6 +384,7 @@ describe('signOffAccount', () => {
       today: '2026-09-02',
       windowFrom: '2025-09-01',
       windowTo: '2026-08-31',
+      balanceCheckOn: '2026-08-31',
     })
   })
 
@@ -396,6 +401,7 @@ describe('signOffAccount', () => {
     expect(statusMock).toHaveBeenLastCalledWith(supabase, COMPANY, 'bank:11111111-1111-4111-8111-111111111111', {
       today: TODAY,
       windowTo: '2026-07-31',
+      balanceCheckOn: '2026-07-31',
     })
     await signOffAccount(supabase as never, COMPANY, USER, 'skattekonto', { through_date: '2026-07-31' }, { today: TODAY })
     expect(statusMock).toHaveBeenLastCalledWith(supabase, COMPANY, 'skattekonto', { today: TODAY, windowTo: '2026-07-31' })
@@ -422,6 +428,185 @@ describe('signOffAccount', () => {
         { today: TODAY },
       ),
     ).toBeNull()
+  })
+})
+
+describe('signOffAccount: the bank balance on the through-date', () => {
+  const BANK_KEY = 'bank:11111111-1111-4111-8111-111111111111'
+
+  function bankStatus(bank: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+    return status({
+      account_key: BANK_KEY,
+      kind: 'bank',
+      account_number: '1930',
+      as_of: '2026-11-24T08:00:00Z',
+      external_balance: null,
+      ledger_balance: 4200,
+      difference: 0,
+      unexplained_difference: 0,
+      bank,
+      ...overrides,
+    })
+  }
+
+  function check(bankBalance: number, bookedBalance: number) {
+    return {
+      as_of: '2026-10-31',
+      fetched_at: null,
+      balance_type: null,
+      bank_balance: bankBalance,
+      booked_balance: bookedBalance,
+      difference: bankBalance - bookedBalance,
+      unbooked: { count: 0, total: 0 },
+      before_history: null,
+      ignored: { count: 0, total: 0 },
+      rest: bankBalance - bookedBalance,
+    }
+  }
+
+  const sign = (supabase: unknown, dryRun = false, input: Record<string, unknown> = {}) =>
+    signOffAccount(supabase as never, COMPANY, USER, BANK_KEY, { through_date: '2026-10-31', ...input }, { today: '2026-11-24', dryRun })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    statusMock.mockReset()
+    latestMock.mockReset()
+    insertMock.mockReset()
+    bookedOnDayMock.mockReset()
+    emitMock.mockResolvedValue(undefined)
+    latestMock.mockResolvedValue(null)
+    insertMock.mockImplementation(async (_s: unknown, _c: unknown, input: Record<string, unknown>) =>
+      row({ account_key: BANK_KEY, through_date: input.through_date, note: input.note, external_balance: input.external_balance }),
+    )
+  })
+
+  it('shows the balances side by side and warns about nothing when they match', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(bankStatus({ balance_check: check(12345, 12345), balance_check_refusal: null }))
+    const result = await sign(supabase, true)
+    expect(result).toMatchObject({
+      dry_run: true,
+      would_sign: {
+        bank_balance: { as_of: '2026-10-31', bank_balance: 12345, booked_balance: 12345, difference: 0 },
+        warning: null,
+      },
+    })
+    expect(bookedOnDayMock).not.toHaveBeenCalled()
+  })
+
+  it('warns in plain Swedish when they differ, and still records the sign-off with nothing else changed', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(bankStatus({ balance_check: check(12345, 12000), balance_check_refusal: null }))
+    const result = await sign(supabase)
+    if (!result || result.dry_run) throw new Error('expected a sign-off')
+    expect(result.warning?.code).toBe('BANK_BALANCE_DIFFERS')
+    expect(result.warning?.message).toMatch(/^Bankens saldo per 2026-10-31 är 12\s345\skr, men 1930 visar 12\s000\skr samma dag: en skillnad på 345\skr\./)
+    expect(result.bank_balance).toEqual({
+      as_of: '2026-10-31',
+      bank_balance: 12345,
+      booked_balance: 12000,
+      difference: 345,
+      unbooked: { count: 0, total: 0 },
+      before_history: null,
+      rest: 345,
+    })
+    // The bridge still decides; the stored row carries no bank balance.
+    expect(insertMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      expect.objectContaining({ through_date: '2026-10-31', external_balance: null, ledger_balance: 4200, unexplained_difference: 0 }),
+    )
+    expect(result.signoff.through_date).toBe('2026-10-31')
+  })
+
+  it('warns that the bank has no balance for the date, gives the booked one, and still signs', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(bankStatus({ balance_check: null, balance_check_refusal: 'NO_BANK_BALANCE' }))
+    bookedOnDayMock.mockResolvedValue(12000)
+    const result = await sign(supabase)
+    if (!result || result.dry_run) throw new Error('expected a sign-off')
+    expect(bookedOnDayMock).toHaveBeenCalledWith(supabase, COMPANY, '1930', '2026-10-31')
+    expect(result.bank_balance).toEqual({
+      as_of: '2026-10-31',
+      bank_balance: null,
+      booked_balance: 12000,
+      difference: null,
+      unbooked: null,
+      before_history: null,
+      rest: null,
+    })
+    expect(result.warning).toEqual({
+      code: 'NO_BANK_BALANCE',
+      message: expect.stringMatching(/^Det finns inget saldo från banken per 2026-10-31 att jämföra 1930 med \(bokfört samma dag: 12\s000\skr\)\./),
+    })
+    expect(insertMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the parts of the difference: rows without a verifikat, and what lies before the bank\'s first row', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(
+      bankStatus({
+        balance_check: {
+          ...check(62345, 12000),
+          unbooked: { count: 2, total: 345 },
+          before_history: { history_start: '2026-10-13', bank_balance: 50000, booked_balance: 0, difference: 50000 },
+          rest: 0,
+        },
+        balance_check_refusal: null,
+      }),
+    )
+    const result = await sign(supabase, true)
+    if (!result || !result.dry_run) throw new Error('expected a preview')
+    expect(result.would_sign.bank_balance).toMatchObject({
+      unbooked: { count: 2, total: 345 },
+      before_history: { history_start: '2026-10-13', difference: 50000 },
+      rest: 0,
+    })
+    expect(result.would_sign.warning?.message).toMatch(
+      /2 banktransaktioner utan verifikation står för 345\skr\. Av skillnaden ligger 50\s000\skr före bankens första transaktion 2026-10-13, oftast ett ingående saldo som aldrig bokfördes\. Signeringen stoppas inte av det/,
+    )
+  })
+
+  it('claims nothing for an account in another currency than the books, and warns when the check failed', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(bankStatus({ balance_check: null, balance_check_refusal: 'FOREIGN_CURRENCY_ACCOUNT' }, { currency: 'EUR' }))
+    const foreign = await sign(supabase, true)
+    expect(foreign).toMatchObject({ would_sign: { bank_balance: null, warning: null } })
+    statusMock.mockResolvedValue(bankStatus({ balance_check: null, balance_check_refusal: 'NO_FISCAL_PERIOD' }))
+    expect(await sign(supabase, true)).toMatchObject({ would_sign: { bank_balance: null, warning: null } })
+    statusMock.mockResolvedValue(bankStatus({ balance_check: null, balance_check_refusal: null }))
+    const failed = await sign(supabase, true)
+    expect(failed).toMatchObject({ would_sign: { warning: { code: 'NO_BANK_BALANCE' } } })
+    expect(bookedOnDayMock).not.toHaveBeenCalled()
+  })
+
+  it('puts the comparison on a NOT_RECONCILED refusal too, so the dialog shows it before a forced sign-off', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(
+      bankStatus({ balance_check: check(12345, 12000), balance_check_refusal: null }, { unexplained_difference: 345, is_reconciled: false }),
+    )
+    await expect(sign(supabase, true)).rejects.toMatchObject({
+      code: 'NOT_RECONCILED',
+      details: {
+        unexplained_difference: 345,
+        bank_balance: { bank_balance: 12345, booked_balance: 12000, difference: 345 },
+        warning: { code: 'BANK_BALANCE_DIFFERS' },
+      },
+    })
+  })
+
+  it('carries no bank comparison for the skattekonto or a manual account', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(status())
+    const result = await signOffAccount(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { through_date: '2026-07-31' },
+      { today: TODAY, dryRun: true },
+    )
+    expect(result).toMatchObject({ would_sign: { bank_balance: null, warning: null } })
   })
 })
 

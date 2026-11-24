@@ -47,6 +47,11 @@ export interface VoucherWarningsGuardOptions {
   checkDuplicates?: boolean
   /** A draft being committed is never its own duplicate. */
   excludeJournalEntryId?: string
+  /**
+   * Warnings the door judged itself, confirmed like every other (a rättelse
+   * moved out of a locked period that changes VAT, lib/vat/moved-correction-vat.ts).
+   */
+  extra?: readonly VoucherWarning[]
 }
 
 export type VoucherWarningsGuardResult =
@@ -82,6 +87,7 @@ export async function runVoucherWarningsGuard(
       log.warn(`voucher block warning ${block.id} failed (continuing)`, err as Error)
     }
   }
+  warnings.push(...(options.extra ?? []))
   if (warnings.length === 0) return { ok: true, acknowledged: [] }
 
   const acknowledged = new Set(options.acknowledged ?? [])

@@ -26,4 +26,12 @@ describe('reconcile-month skill: a bank account is judged on its balance too', (
     }
     expect(body).toMatch(/When `as_of` is after the month end, say so plainly/)
   })
+
+  it('reads the bank balance on the sign-off date from the sign-off preview, and its warning never blocks', () => {
+    const step4 = body.slice(body.indexOf('## Step 4: Sign off'), body.indexOf('## Report'))
+    for (const field of ['`bank_balance`', '`booked_balance`', '`before_history`', '`warning`', 'BANK_BALANCE_DIFFERS', 'NO_BANK_BALANCE']) {
+      expect(step4, field).toContain(field)
+    }
+    expect(step4).toMatch(/The warning never blocks/)
+  })
 })

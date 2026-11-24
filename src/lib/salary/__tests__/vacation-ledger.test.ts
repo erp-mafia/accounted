@@ -9,7 +9,7 @@ import {
   getVacationYearBounds,
   getVacationYearStart,
 } from '@/lib/salary/vacation-year'
-import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import { computeEntitledDays, paidDaysEarnedIn, syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 
 describe('vacation-year helpers', () => {
   it('calendar basis: Jan 1 boundary', () => {
@@ -159,14 +159,27 @@ describe('syncVacationLedgerForEmployees', () => {
     expect(upserted![0].accrued_days).toBe(6.5)
   })
 
-  it('keeps the flat entitlement on a sammanfallande calendar year', async () => {
-    // Earning and taking share the year there, commonly with förskottssemester,
-    // so mid-year hires are a CBA question rather than a statutory one.
+  it('pro-rates entitled days for a hire during a sammanfallande calendar year (Semesterlagen 7 §)', async () => {
+    // The calendar year is both intjänandeår and semesterår, and 7 § is not
+    // one of the sections an agreement may set aside (2 a §). Hired
+    // 2026-05-19: 227 of 365 days employed, 227/365 x 25 = 15.55, rounded UP
+    // to 16. The flat 25 counted nine paid days nobody had earned.
     queueBase({ basis: 'calendar', employmentStart: '2026-05-19' })
 
     const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-07-13')
     expect(result.ok).toBe(true)
-    expect(upserted![0].entitled_days).toBe(25)
+    expect(upserted![0].entitled_days).toBe(16)
+    // Earning and taking share the year: nothing accrues toward another one.
+    expect(upserted![0].accrued_days).toBe(0)
+  })
+
+  it('a hire on 1 June earns 15 paid days of the calendar year (214/365 x 25 = 14.66, rounded up)', async () => {
+    queueBase({ basis: 'calendar', employmentStart: '2026-06-01' })
+
+    const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-12-31')
+    expect(result.ok).toBe(true)
+    expect(upserted![0].vacation_year_start).toBe('2026-01-01')
+    expect(upserted![0].entitled_days).toBe(15)
   })
 
   it('seeds entitled + saved days from the cutover opening row', async () => {
@@ -532,5 +545,40 @@ describe('syncVacationLedgerForEmployees past 1,000 booked payslips', () => {
     expect(result.ok).toBe(true)
     const [rows] = findCalls('employee_vacation_balances', 'upsert')[0] as [Array<Record<string, unknown>>]
     expect(rows[0].taken_days).toBe(3)
+  })
+})
+
+describe('computeEntitledDays: the paid days of a semesterår (Semesterlagen 7 §)', () => {
+  it('calendar basis: the year is its own intjänandeår, pro-rated by the employed days and rounded up', () => {
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2020-03-01')).toBe(25)
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2026-01-01')).toBe(25)
+    // 214 of 365 days: 14.66, rounded up.
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2026-06-01')).toBe(15)
+    // A leap year divides by 366: 184/366 x 25 = 12.57.
+    expect(computeEntitledDays('calendar', '2028-01-01', 25, '2028-07-01')).toBe(13)
+    // The rounding is always up: one day employed earns a paid day, 364 of 365 earn all 25.
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2026-12-31')).toBe(1)
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2026-01-02')).toBe(25)
+    // Hired after the year: nothing earned in it.
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2027-02-01')).toBe(0)
+  })
+
+  it('statutory basis: the year before the semesterår is the intjänandeår, as before', () => {
+    // Semesterår from 2026-04-01; intjänandeår 2025-04-01 to 2026-04-01.
+    expect(computeEntitledDays('statutory_apr_mar', '2026-04-01', 25, '2015-01-01')).toBe(25)
+    expect(computeEntitledDays('statutory_apr_mar', '2026-04-01', 25, '2025-05-19')).toBe(22)
+    expect(computeEntitledDays('statutory_apr_mar', '2026-04-01', 25, '2026-04-01')).toBe(0)
+  })
+
+  it('an employment end inside the intjänandeår ends the employed days', () => {
+    // Employed through 30 June 2026: 181 of 365 days, 12.40, rounded up.
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2020-03-01', '2026-06-30')).toBe(13)
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2020-03-01', '2025-12-31')).toBe(0)
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2020-03-01', '2027-03-31')).toBe(25)
+  })
+
+  it('a kollektivavtal entitlement above 25 days pro-rates the same way', () => {
+    // 214/365 x 30 = 17.59.
+    expect(paidDaysEarnedIn({ start: '2026-01-01', end: '2027-01-01' }, 30, '2026-06-01')).toBe(18)
   })
 })

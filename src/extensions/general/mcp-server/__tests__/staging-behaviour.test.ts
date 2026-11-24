@@ -325,6 +325,9 @@ function createRecordingClient(
     // Faithful to PostgREST: a query resolves to an ARRAY unless the chain
     // asked for one row. Tools that .map() or spread a list need that.
     let single = false
+    // A read for the posted storno of a verifikat (storno-target.ts) finds
+    // none: no verifikat here is corrected yet.
+    let stornoRead = false
     const chain: unknown = new Proxy(
       {},
       {
@@ -332,7 +335,7 @@ function createRecordingClient(
           if (prop === 'then') {
             return (resolve: (value: unknown) => void) =>
               resolve(
-                empty.includes(table)
+                empty.includes(table) || stornoRead
                   ? { data: single ? null : [], error: null, count: 0 }
                   : { data: single ? row : [row], error: null, count: counts[table] ?? 1 },
               )
@@ -352,6 +355,7 @@ function createRecordingClient(
           if (prop === 'eq') {
             // A read by id of a table with per-id rows answers that id's row.
             return (column: string, value: unknown) => {
+              if (column === 'reverses_id') stornoRead = true
               const byId = column === 'id' ? rowsById[table]?.[String(value)] : undefined
               if (byId) row = { ...row, id: value, ...byId }
               return chain

@@ -736,6 +736,29 @@ describe('mapTrialBalancesToK2: comparison year and its closing entry (crm#1080)
     expect(res.warnings).toEqual([`${DERIVED.replace('40000', '501')} ${CHECK}`])
   })
 
+  it('derives the current year when the caller says it has no closing entry yet, and names it instead of warning', () => {
+    const open = mapTrialBalancesToK2(NEVER_CLOSED, null, { currentYearOpen: true })
+    expect(open.br['AretsResultatEgetKapital'].current).toBe(40_000)
+    expect(open.totals.tillgangar.current).toBe(253_000)
+    expect(open.totals.egetKapitalSkulder.current).toBe(253_000)
+    expect(open.currentYearDerived).toEqual({ result: 40_000, carriedIn: 0 })
+    expect(open.warnings).toEqual([])
+
+    // An earlier year's result still on 2099 is Balanserat resultat, as for a comparison year.
+    const rows = [...withBalanserat(PREVIOUS.preClosing, 45_000), carriedIn(15_000)]
+    const carried = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null, { currentYearOpen: true })
+    expect(carried.br['AretsResultatEgetKapital'].current).toBe(40_000)
+    expect(carried.br['BalanseratResultat'].current).toBe(60_000)
+    expect(carried.currentYearDerived).toEqual({ result: 40_000, carriedIn: 15_000 })
+  })
+
+  it('reads a year marked open as booked when its books are closed', () => {
+    const res = mapTrialBalancesToK2(CURRENT, PREVIOUS, { currentYearOpen: true })
+    expect(figures(res)).toEqual(figures(closed))
+    expect(res.currentYearDerived).toBeUndefined()
+    expect(res.warnings).toEqual(closed.warnings)
+  })
+
   it('derives a prior year mapped on its own only when the caller says it is one', () => {
     // The flerårsöversikt maps each earlier year without a comparison year.
     const history = mapTrialBalancesToK2(NEVER_CLOSED, null, { currentIsPriorYear: true })

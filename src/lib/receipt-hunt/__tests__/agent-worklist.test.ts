@@ -13,7 +13,7 @@ vi.mock('../purchases-without-underlag', () => ({
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { nextStepKind, resolveAgentWorklist, UNDERLAG_ARCHIVED_ELSEWHERE_REASON } from '../agent-worklist'
+import { nextStepKind, resolveAgentWorklist, UNDERLAG_ARCHIVED_ELSEWHERE_REASON, verifikatNextStepKinds } from '../agent-worklist'
 
 type Row = Record<string, unknown>
 
@@ -470,29 +470,138 @@ describe('resolveAgentWorklist: what a verifikat booked', () => {
     expect(item(4)).toMatchObject({ mail_searchable: true, portal: { vendor: 'OpenAI' } })
   })
 
-  it('skips a share issue, a transfer between own accounts and a Stripe sales verifikat: they bought nothing', async () => {
+  it('skips a share issue, a move against an equity account and a sales verifikat: they bought nothing', async () => {
     const item = await worklist(
       [
         verifikat(11, 'SWED260727ABCDEF · Inbetalning nyemission. Omförs till 2081/2097 vid registrering.', 100000),
-        verifikat(12, 'Omklassificering av intern överföring sparkonto till företagskonto.', 80000),
         verifikat(13, 'Överföring internt · Intern överföring 1931 -> 1930, motsvarande insättning bokad mot 2082.', 60000),
         verifikat(14, 'Stripe kortförsäljning 2026-10-27, samlingsverifikat (6 betalningar)', 5000),
       ],
       [
         line(11, '1931', 100000), line(11, '2082', 0, 100000),
-        line(12, '1930', 0, 80000), line(12, '1940', 80000),
         line(13, '1931', 0, 60000), line(13, '2082', 60000),
         line(14, '1686', 5000), line(14, '2611', 0, 1000), line(14, '3001', 0, 4000),
       ],
     )
 
-    for (const n of [11, 12, 13, 14]) {
+    for (const n of [11, 13, 14]) {
       expect(item(n)).toMatchObject({
         mail_searchable: false,
         portal: null,
         next_step: 'Inget inköp, så inget kvitto: underlaget är kontoutdraget eller betalleverantörens rapport.',
       })
     }
+  })
+
+  // A transfer between the company's own accounts has the bank statement as
+  // its underlag: nothing is missing, so it is no errand for the hunt at all.
+  it('leaves out a transfer between own accounts, whatever it is called, and counts it out of the total', async () => {
+    mockFetchPurchases.mockResolvedValue([])
+    const rows = [
+      verifikat(12, 'Omklassificering av intern överföring sparkonto till företagskonto.', 80000),
+      verifikat(15, 'Lön till lönekontot', 40000),
+      verifikat(16, 'Kortköp Kontorsgiganten', 5000),
+    ]
+    const supabase = mockSupabase(
+      {
+        ...fixture(),
+        pending_operations: [],
+        supplier_invoices: [],
+        transactions: [],
+        journal_entry_lines: [
+          line(12, '1930', 0, 80000), line(12, '1940', 80000),
+          line(15, '1930', 0, 40000), line(15, '1941', 39990), line(15, '6570', 10),
+          line(16, '5410', 4000), line(16, '2640', 1000), line(16, '1930', 0, 5000),
+        ],
+      },
+      { ok: true, total_count: rows.length, verifikat: rows },
+    )
+
+    const result = await resolveAgentWorklist(supabase, 'co-1')
+
+    expect(result.items.map((i) => i.journal_entry_id)).toEqual(['je-16'])
+    expect(result.total_count).toBe(1)
+  })
+
+  // The day's Stripe sales are booked as one samlingsverifikat over the Stripe
+  // feed's rows, anchored by voucher links only: its underlag is Stripe's
+  // report, as for the rows before they were booked.
+  it("names Stripe's report for a verifikat booked from the Stripe feed, through a voucher link or the row's own pointer", async () => {
+    mockFetchPurchases.mockResolvedValue([])
+    const rows = [
+      verifikat(17, 'Stripe kortförsäljning 2026-10-27, samlingsverifikat (6 betalningar)', 5000),
+      verifikat(18, 'Stripe-utbetalning', 4000),
+      verifikat(19, 'Försäljning kassa', 3000),
+    ]
+    const supabase = mockSupabase(
+      {
+        ...fixture(),
+        pending_operations: [],
+        supplier_invoices: [],
+        transactions: [{ journal_entry_id: 'je-18', merchant_name: null, amount: -4000, currency: 'SEK', import_source: 'stripe' }],
+        transaction_voucher_links: [
+          { journal_entry_id: 'je-17', tx: { import_source: 'stripe' } },
+          { journal_entry_id: 'je-19', tx: { import_source: 'enable_banking' } },
+        ],
+        journal_entry_lines: [
+          line(17, '1686', 5000), line(17, '2611', 0, 1000), line(17, '3001', 0, 4000),
+          line(18, '1930', 4000), line(18, '1686', 0, 4000),
+          line(19, '1930', 3000), line(19, '2611', 0, 600), line(19, '3001', 0, 2400),
+        ],
+      },
+      { ok: true, total_count: rows.length, verifikat: rows },
+    )
+
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+    const item = (n: number) => items.find((i) => i.journal_entry_id === `je-${n}`)!
+
+    for (const n of [17, 18]) {
+      expect(item(n), `je-${n}`).toMatchObject({
+        mail_searchable: false,
+        portal: null,
+        next_step: 'Logga in på Stripe och ladda ner underlaget: månadsfakturan för Stripes avgifter, saldorapporten för övriga rader.',
+      })
+    }
+    expect(item(19).next_step).toBe('Inget inköp, så inget kvitto: underlaget är kontoutdraget eller betalleverantörens rapport.')
+  })
+
+  it('reads the same errand from the RPC rows alone, for the missing-underlag list and the VAT close check', async () => {
+    const rows = [
+      verifikat(1, 'Flyg SF KLM · KLM flyg Stockholm-New York, tjänsteresa.', 12000),
+      verifikat(12, 'Omklassificering av intern överföring sparkonto till företagskonto.', 80000),
+      verifikat(14, 'Stripe kortförsäljning 2026-10-27, samlingsverifikat (6 betalningar)', 5000),
+      verifikat(17, 'Stripe kortförsäljning 2026-10-28, samlingsverifikat (4 betalningar)', 5000),
+      verifikat(21, 'Inbetalning skat BG 0000050501055 · Inbetalning till skattekontot, avser AGI juli', 30000),
+    ]
+    const supabase = mockSupabase(
+      {
+        ...fixture(),
+        supplier_invoices: [],
+        transactions: rows.map((r) => ({ journal_entry_id: r.journal_entry_id, merchant_name: null, amount: -r.gross_amount, currency: 'SEK' })),
+        transaction_voucher_links: [{ journal_entry_id: 'je-17', tx: { import_source: 'stripe' } }],
+        journal_entry_lines: [
+          line(1, '1930', 0, 12000), line(1, '5890', 12000),
+          line(12, '1930', 0, 80000), line(12, '1940', 80000),
+          line(14, '1686', 5000), line(14, '2611', 0, 1000), line(14, '3001', 0, 4000),
+          line(17, '1686', 5000), line(17, '2611', 0, 1000), line(17, '3001', 0, 4000),
+          line(21, '1630', 30000), line(21, '1930', 0, 30000),
+        ],
+      },
+      { ok: true, total_count: 0, verifikat: [] },
+    )
+
+    const kinds = await verifikatNextStepKinds(supabase, 'co-1', rows)
+
+    // je-14 is the same sale as je-17 without a row of the Stripe feed behind
+    // it: read on its lines alone, it bought nothing.
+    expect(Object.fromEntries(kinds)).toEqual({
+      'je-1': 'mail',
+      'je-12': 'own_transfer',
+      'je-14': 'no_purchase',
+      'je-17': 'stripe',
+      'je-21': 'not_mail',
+    })
+    await expect(verifikatNextStepKinds(supabase, 'co-1', [])).resolves.toEqual(new Map())
   })
 
   it('keeps the skattekonto errand for a tax payment, and lets the words decide on salary', async () => {

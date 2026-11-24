@@ -22,8 +22,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
-import type { ApiV1Context } from '@/lib/api/v1/with-api-v1'
+import { stornoTargetLockedResponse } from '@/lib/api/v1/storno-target-refusal'
 import { voucherStornoBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
 import { entryUnattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -33,12 +32,7 @@ import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/b
 import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
 import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { OWNED_BY_PITFALL, VoucherOwnerSchema } from '@/lib/api/v1/voucher-owner-schema'
-import {
-  CorrectionChainTooDeepError,
-  isBookkeepingError,
-  TargetPeriodClosedError,
-  TargetPeriodLockedError,
-} from '@/lib/bookkeeping/errors'
+import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
 const ReverseRequest = z
   .object({
@@ -175,9 +169,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // year, and a locked year burned a voucher number at the trigger.
     let reversalDate: string
     try {
-      reversalDate = await assertStornoTarget(ctx.supabase, ctx.companyId!, typed, bodyReversalDate)
+      reversalDate = (await assertStornoTarget(ctx.supabase, ctx.companyId!, typed, bodyReversalDate)).date
     } catch (err) {
-      const refused = await periodLockedResponse(ctx, err, typed.fiscal_period_id)
+      const refused = await stornoTargetLockedResponse(ctx, err, typed.fiscal_period_id, 'reversal_date')
       if (refused) return refused
       if (isBookkeepingError(err)) return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
       throw err
@@ -245,7 +239,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     } catch (err) {
       // The year was locked between the pre-flight and the engine's own check.
-      const refused = await periodLockedResponse(ctx, err, typed.fiscal_period_id)
+      const refused = await stornoTargetLockedResponse(ctx, err, typed.fiscal_period_id, 'reversal_date')
       if (refused) return refused
       if (isBookkeepingError(err)) {
         return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
@@ -260,21 +254,3 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
   { requireIdempotencyKey: true },
 )
 
-/**
- * The storno target check's lock refusals in v1's documented PERIOD_LOCKED
- * shape (details.reason from checkPeriodLock, the layer that locked the date).
- * Null for any other error.
- */
-async function periodLockedResponse(ctx: ApiV1Context, err: unknown, fiscalPeriodId: string) {
-  if (!(err instanceof TargetPeriodClosedError) && !(err instanceof TargetPeriodLockedError)) return null
-  const verdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, err.date)
-  const fallback = err instanceof TargetPeriodClosedError ? 'period_is_closed' : 'period_locked_at_set'
-  return v1ErrorResponseFromCode('PERIOD_LOCKED', ctx.log, {
-    requestId: ctx.requestId,
-    details: {
-      reason: verdict.locked ? verdict.reason : fallback,
-      fiscal_period_id: fiscalPeriodId,
-      reversal_date: err.date,
-    },
-  })
-}

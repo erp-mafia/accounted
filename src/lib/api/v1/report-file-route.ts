@@ -84,6 +84,13 @@ export function v1ReportFileHandler<Q extends z.ZodTypeAny>(spec: ReportFileRout
         return v1ErrorResponseFromCode(outcome.code, ctx.log, {
           requestId: ctx.requestId,
           details: outcome.messageSv ? { ...(outcome.details ?? {}), reason: outcome.messageSv } : outcome.details,
+          // As the operation doors answer it (lib/operations/v1.ts): a
+          // sentence in both languages is the message, and the failure's own
+          // next step replaces the registry's.
+          ...(outcome.messageSv && outcome.messageEn
+            ? { messageSv: outcome.messageSv, messageEn: outcome.messageEn }
+            : {}),
+          ...(outcome.remediation ? { remediation: outcome.remediation } : {}),
         })
       }
       if (outcome.dryRun) {

@@ -77,6 +77,7 @@ import type { VoucherOwner } from '@/lib/core/bookkeeping/voucher-owner'
 import { OwnedVoucherActionDialog } from '@/components/bookkeeping/OwnedVoucherActionDialog'
 import { useReverseJournalEntry } from '@/components/bookkeeping/use-reverse-journal-entry'
 import type { SieDeleteBlock } from '@/lib/core/bookkeeping/voucher-delete-guard'
+import { DATE_FIXED_SOURCE_TYPES } from '@/lib/core/bookkeeping/date-fixed-source-types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
@@ -471,8 +472,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // A correction is itself a regular posted verifikation and can be corrected
   // again (BFL 5 kap. 5 §, the chain just grows). Storno entries are pure
   // reversals and cannot be corrected directly; the user walks to the latest
-  // correction (or the original) and corrects that one.
-  const canCorrect = entry.status === 'posted' && entry.source_type !== 'storno'
+  // correction (or the original) and corrects that one. A verifikat corrected
+  // by a storno in a later open period keeps status 'posted' (its locked year
+  // takes no write); the posted storno in its chain says it is done.
+  const stornoedInLaterPeriod = chain.some((linked) => linked.reverses_id === entry.id && linked.status === 'posted')
+  const canCorrect = entry.status === 'posted' && entry.source_type !== 'storno' && !stornoedInLaterPeriod
 
   // Inline rättelse (strike lines in the same verifikat) keeps structural
   // entry types on their dedicated flows: storno mirrors its original, IB
@@ -623,12 +627,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // a user who never opens the ⋯ menu concluded the feature did not exist).
   // The ⋯ item stays, so the menu remains the complete action list.
   const showStrikeButton = showRattelseGroup && canInlineRattelse && periodStatus === 'open'
-  // A year closed with a year-end closing takes no storno and no rättelse:
-  // every action in the Rätta group would be refused (crm#1290). They stay
-  // listed but disabled, with the way on in their place: a new verifikat in
-  // the open year, or support reopening a year whose årsredovisning is
-  // unsigned. Unknown status keeps them enabled; the server still decides.
+  // A year closed with a year-end closing takes no write (crm#1290): the
+  // actions that write in it stay listed but disabled, with the way on in
+  // their place. "Rätta rader" stays open: it books the storno and the
+  // corrected verifikat in the first open period, except for an entry type
+  // whose date is fixed. Unknown status keeps them enabled; the server still
+  // decides.
   const yearClosed = periodStatus === 'closed'
+  const correctLinesBlocked = yearClosed && DATE_FIXED_SOURCE_TYPES.includes(entry.source_type)
 
   const underlagAside = (() => {
     if (attachmentCount === 0 && references.length === 0) {
@@ -785,7 +791,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                         <PencilSquareIcon className="h-4 w-4" />
                         {t('correct_metadata')}
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_lines') : setShowCorrection(true))} disabled={!canWrite || yearClosed}>
+                      <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_lines') : setShowCorrection(true))} disabled={!canWrite || correctLinesBlocked}>
                         <PencilIcon className="h-4 w-4" />
                         {t('correct_lines')}
                       </DropdownMenuItem>

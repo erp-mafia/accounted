@@ -318,7 +318,8 @@
             }
           ],
           {
-            "description": "Rättelse: förbrukningsinventarier, inte kontorsmaterial"
+            "description": "Rättelse: förbrukningsinventarier, inte kontorsmaterial",
+            "inFirstOpenPeriodWhenLocked": true
           }
         ]
       ]
@@ -356,7 +357,8 @@
             }
           ],
           {
-            "allowDeepChain": true
+            "allowDeepChain": true,
+            "inFirstOpenPeriodWhenLocked": true
           }
         ]
       ]
@@ -394,7 +396,9 @@
               "credit_amount": 500
             }
           ],
-          {}
+          {
+            "inFirstOpenPeriodWhenLocked": true
+          }
         ]
       ]
     },

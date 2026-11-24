@@ -226,6 +226,11 @@ const RULES: Rule[] = [
     return input.totals.aretsResultat.previous === null ? missingComparatives('3007', 'resultaträkningen', input) : null
   },
   (input) => {
+    // A year not closed yet ties only because Årets resultat is derived from
+    // the income statement (yearNotClosed): the result is still not booked.
+    if (input.yearNotClosed) {
+      return issue('ACC-2099', 'error', 'Räkenskapsåret är inte avslutat i bokföringen: Årets resultat i balansräkningen är hämtat från resultaträkningen. Genomför bokslutet innan inlämning.')
+    }
     const rrResult = input.totals.aretsResultat.current
     const brResult = input.br['AretsResultatEgetKapital']?.current ?? 0
     return rrResult !== brResult

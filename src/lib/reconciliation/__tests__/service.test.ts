@@ -572,6 +572,21 @@ describe('getAccountStatus', () => {
     expect(s.external_balance).toBeNull()
   })
 
+  it('reads the balance check on the day a sign-off asks for', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { balance: 1000, balance_updated_at: '2026-08-20T05:12:00Z' }) })
+    bankStatusMock.mockResolvedValue(bankStatus())
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+    balanceCheckMock.mockResolvedValue({ check: null, refusal: 'NO_BANK_BALANCE' })
+
+    await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), {
+      today: '2026-08-20',
+      windowTo: '2026-07-31',
+      balanceCheckOn: '2026-07-31',
+    })
+    expect(balanceCheckMock).toHaveBeenCalledWith(supabase, COMPANY, expect.objectContaining({ id: ID_A }), { on: '2026-07-31' })
+  })
+
   it('says why there is no balance check', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: cashAccount(ID_A, { currency: 'EUR' }) })

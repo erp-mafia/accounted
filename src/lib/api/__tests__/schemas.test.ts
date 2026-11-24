@@ -2999,6 +2999,60 @@ describe('MatchBatchSchema', () => {
       ).toBe(true)
     })
   })
+
+  // The customer side: a deposit also pays invoices issued in the bookkeeping
+  // kept before, so its rest is booked against the 1510 balance.
+  describe('customer_receivables', () => {
+    const supplierAllocations = (n: number) =>
+      Array.from({ length: n }, () => ({ kind: 'supplier_invoice' as const, supplier_invoice_id: crypto.randomUUID(), amount: 100 }))
+    const receivable = (account: string, amount: number, description?: string) => ({
+      account,
+      amount,
+      ...(description ? { description } : {}),
+    })
+
+    it('takes 151x rows on a customer batch, larger than the invoices, with an optional text', () => {
+      const result = MatchBatchSchema.safeParse({
+        allocations: allocations(1),
+        customer_receivables: [receivable('1510', 1250, 'Faktura 9001'), receivable('1518', 1)],
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('refuses receivable rows on a supplier batch', () => {
+      const result = MatchBatchSchema.safeParse({ allocations: supplierAllocations(2), customer_receivables: [receivable('1510', 50)] })
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].path).toEqual(['customer_receivables'])
+    })
+
+    it('refuses an account outside 151x, a number account, a zero or negative amount and a long text', () => {
+      for (const account of ['1930', '2440', '1520', '151']) {
+        expect(
+          MatchBatchSchema.safeParse({ allocations: allocations(1), customer_receivables: [receivable(account, 1)] }).success,
+        ).toBe(false)
+      }
+      const refused = [
+        [{ account: 1510, amount: 1 }],
+        [receivable('1510', 0)],
+        [receivable('1510', -5)],
+        [{ account: '1510', amount: 1, description: 'x'.repeat(101) }],
+      ]
+      for (const customer_receivables of refused) {
+        expect(MatchBatchSchema.safeParse({ allocations: allocations(1), customer_receivables }).success).toBe(false)
+      }
+    })
+
+    it('refuses a sixth extra row, fee and receivable rows together', () => {
+      const fees = Array.from({ length: 3 }, () => ({ account: '6570', amount: 1 }))
+      const threeRows = Array.from({ length: 3 }, () => receivable('1510', 1))
+      const result = MatchBatchSchema.safeParse({ allocations: allocations(2), fees, customer_receivables: threeRows })
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].path).toEqual(['customer_receivables'])
+      expect(
+        MatchBatchSchema.safeParse({ allocations: allocations(2), fees, customer_receivables: threeRows.slice(1) }).success,
+      ).toBe(true)
+    })
+  })
 })
 
 // ============================================================

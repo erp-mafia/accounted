@@ -3161,7 +3161,8 @@ export async function reverseEntry(
   // original's fiscal year, so its date must lie inside that year and the year
   // must be open (BFL 5 kap 5 §, BFNAR 2013:2 p. 2.17-2.18). Checked before
   // anything is written: the period-lock trigger only refused the insert.
-  const entryDate = await assertStornoTarget(supabase, companyId, original, reversalDate)
+  // Also refused when a posted storno already reverses the original.
+  const { date: entryDate } = await assertStornoTarget(supabase, companyId, original, reversalDate)
 
   // Resolve account IDs: include inactive rows. The accounts on the
   // original committed entry were active at commit time; if the user has

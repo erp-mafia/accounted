@@ -24,6 +24,7 @@
  * (VAT_ACCOUNT_TABLE), so a check and the declaration read an account the same
  * way. Pure: lines in, warnings out.
  */
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { netVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre } from '@/lib/money'
 import { formatAmount } from '@/lib/utils'
@@ -49,6 +50,9 @@ export const VOUCHER_WARNING_CODES = [
   'POSSIBLE_DUPLICATE_VOUCHER',
   'BANK_MOVEMENT_ALREADY_BOOKED',
   'VAT_PERIOD_ALREADY_FILED',
+  // A rättelse moved out of a locked period that changes VAT
+  // (lib/vat/moved-correction-vat.ts).
+  'VAT_OF_MOVED_CORRECTION',
 ] as const
 
 export type VoucherWarningCode = (typeof VOUCHER_WARNING_CODES)[number]
@@ -139,6 +143,35 @@ export function booksPurchase(lines: readonly Pick<PlausibilityLine, 'account_nu
       isSupplierLiability(l.account_number) ||
       (isInputVat(l.account_number) && Number(l.debit_amount) > 0),
   )
+}
+
+/** The exchange gain a conversion realises (396x), beside the losses of isMoneyMovementCharge. */
+const isExchangeGain = (a: string) => inRange(a, '3960', '3969')
+
+/**
+ * Whether a verifikat only moves money between the company's own cash
+ * accounts (BAS 19xx, isCashLedger): one is debited, another credited, and
+ * nothing else is booked beyond what the move itself leaves (the bank's
+ * charge or an exchange difference: isMoneyMovementCharge, isExchangeGain).
+ * The bank statement shows both ends, so it is the underlag and there is
+ * nothing else to fetch. A payment provider's balance (Stripe's on 1686), a
+ * card or the skattekonto is no 19xx account, so a move to or from one is
+ * not this. Kvittojakten reads it (lib/receipt-hunt).
+ */
+export function movesOnlyBetweenOwnAccounts(
+  lines: readonly Pick<PlausibilityLine, 'account_number' | 'debit_amount'>[],
+): boolean {
+  const debited = new Set<string>()
+  const credited = new Set<string>()
+  for (const l of lines) {
+    if (isCashLedger(l.account_number)) {
+      if (Number(l.debit_amount) > 0) debited.add(l.account_number)
+      else credited.add(l.account_number)
+    } else if (!isMoneyMovementCharge(l.account_number) && !isExchangeGain(l.account_number)) {
+      return false
+    }
+  }
+  return [...debited].some((into) => [...credited].some((from) => from !== into))
 }
 
 /** Kundfordringar: what a customer invoice is booked on, and paid off. */

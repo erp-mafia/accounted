@@ -572,6 +572,12 @@ export interface BuildEquitySpecificationInput {
   current: EquityYearInput
   previous: EquityYearInput | null
   balanceSheet: EquityBalanceSheet
+  /**
+   * The balance sheet derives the current year's Årets resultat because the
+   * year is not closed yet (K2MappingResult.currentYearDerived): the current
+   * year is then tied to it as a comparison year is.
+   */
+  currentYearDerived?: boolean
   overrides?: EquityMovementOverrides
   placement?: EquitySpecification['placement']
   rowLabels?: EquitySpecification['row_labels']
@@ -723,19 +729,23 @@ export function buildEquitySpecification(input: BuildEquitySpecificationInput): 
   const overrides = input.overrides ?? {}
   const { balanceSheet } = input
   const hasPreviousColumn = input.previous !== null && balanceSheet.totals.egetKapital.previous !== null
-  const exactCurrent = computeEquitySpecificationYear(input.posts, input.current, overrides, warnings)
+  const presentedClosing = (field: 'current' | 'previous'): Record<string, number> =>
+    Object.fromEntries(
+      input.posts.flatMap((post) => {
+        const value = balanceSheet.br[post.concept]?.[field]
+        return value === null || value === undefined ? [] : [[post.concept, value]]
+      }),
+    )
+  const exactCurrent = computeEquitySpecificationYear(
+    input.posts,
+    input.currentYearDerived ? { ...input.current, balanceSheetClosing: presentedClosing('current') } : input.current,
+    overrides,
+    warnings,
+  )
   const exactPrevious = input.previous
     ? computeEquitySpecificationYear(
         input.posts,
-        {
-          ...input.previous,
-          balanceSheetClosing: Object.fromEntries(
-            input.posts.flatMap((post) => {
-              const value = balanceSheet.br[post.concept]?.previous
-              return value === null || value === undefined ? [] : [[post.concept, value]]
-            }),
-          ),
-        },
+        { ...input.previous, balanceSheetClosing: presentedClosing('previous') },
         overrides,
         warnings,
       )
@@ -1052,6 +1062,7 @@ export async function loadEquitySpecification(
     current: ReportEquityYear
     previous: ReportEquityYear | null
     balanceSheet: EquityBalanceSheet
+    currentYearDerived?: boolean
     overrides?: EquityMovementOverrides
     placement?: EquitySpecification['placement']
     rowLabels?: EquitySpecification['row_labels']
@@ -1094,6 +1105,7 @@ export async function loadEquitySpecification(
     current: toInput(input.current, currentEntries),
     previous: input.previous ? toInput(input.previous, previousEntries ?? []) : null,
     balanceSheet: input.balanceSheet,
+    currentYearDerived: input.currentYearDerived,
     overrides: input.overrides,
     placement: input.placement,
     rowLabels: input.rowLabels,

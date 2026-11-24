@@ -495,11 +495,17 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // defaults, the same values GET reported before this call, except the
     // voucher series map, which the column default sets to the standard
     // layout (salary_payment on K); see the pitfalls.
+    // The vacation year is the exception to the defaults: company creation
+    // writes the settings row (createCompanyCore), so a company without one
+    // was created before that, and payroll has read its vacation year as
+    // calendar (lib/salary reads a missing row so). The row keeps calendar
+    // rather than the column default, the statutory year a new company gets.
     const { data, error } = await ctx.supabase
       .from('company_settings')
       .insert({
         company_id: ctx.companyId!,
         user_id: ctx.userId,
+        salary_vacation_year_basis: 'calendar',
         salary_pay_day: changes.salary_pay_day,
         salary_deviation_period: changes.salary_deviation_period,
         preferred_payment_format: changes.preferred_payment_format,

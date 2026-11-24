@@ -5271,7 +5271,7 @@ Response `200`:
     transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
     committed: boolean,
     transition_date: string | null,
-    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", framework_source: string, framework_confirmed: boolean, open: boolean } | null,
     assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
   },
   meta: {
@@ -5343,7 +5343,7 @@ Response `200`:
     transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
     committed: boolean,
     transition_date: string | null,
-    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", framework_source: string, framework_confirmed: boolean, open: boolean } | null,
     assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
   },
   meta: {
@@ -5422,7 +5422,7 @@ Response `200`:
     transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
     committed: boolean,
     transition_date: string | null,
-    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", framework_source: string, framework_confirmed: boolean, open: boolean } | null,
     assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
   },
   meta: {

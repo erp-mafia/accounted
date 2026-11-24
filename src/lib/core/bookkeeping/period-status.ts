@@ -10,6 +10,7 @@
  * re-exports everything here, so existing imports keep working.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { addDaysIso } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('period-service')
@@ -145,6 +146,49 @@ export function periodLockVerdict(date: string, lockThrough: string | null, peri
     return { status: { period_id: period.id, status: 'locked', lock_date: period.locked_at }, layer: 'fiscal_period' }
   }
   return { status: { period_id: period.id, status: 'open', lock_date: null }, layer: null }
+}
+
+/** The layer that moved a date forward in firstBookableDate. */
+export type BookableDateReason = 'period_closed' | 'period_locked' | 'company_lock_date'
+
+/** What firstBookableDate reads of a fiscal period. */
+export interface BookableFiscalPeriod {
+  period_start: string
+  period_end: string
+  is_closed: boolean | null
+  locked_at: string | null
+}
+
+/**
+ * The first date on or after `date` that a verifikat can be posted on, by the
+ * same two layers the DB triggers enforce (the company lock date, then the
+ * covering fiscal period's is_closed / locked_at; periodLockVerdict): past the
+ * lock date, then past every closed or locked year that covers the date.
+ * `reason` names the first layer that moved it, null when `date` itself is
+ * bookable.
+ *
+ * A date no fiscal period covers is returned as is: the caller names the
+ * missing year.
+ */
+export function firstBookableDate(
+  date: string,
+  lockedThrough: string | null,
+  fiscalPeriods: readonly BookableFiscalPeriod[],
+): { date: string; reason: BookableDateReason | null } {
+  let first = date
+  let reason: BookableDateReason | null = null
+  if (lockedThrough && first <= lockedThrough) {
+    first = addDaysIso(lockedThrough, 1)
+    reason = 'company_lock_date'
+  }
+  const ordered = [...fiscalPeriods].sort((a, b) => a.period_start.localeCompare(b.period_start))
+  for (const fp of ordered) {
+    if (fp.period_start > first || fp.period_end < first) continue
+    if (!fp.is_closed && !fp.locked_at) break
+    reason ??= fp.is_closed ? 'period_closed' : 'period_locked'
+    first = addDaysIso(fp.period_end, 1)
+  }
+  return { date: first, reason }
 }
 
 /**

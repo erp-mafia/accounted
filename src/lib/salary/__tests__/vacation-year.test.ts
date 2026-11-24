@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { getCurrentVacationYear, vacationBasisControl } from '../vacation-year'
+import {
+  getCurrentVacationYear,
+  vacationBasisAgreementPrompt,
+  vacationBasisControl,
+  vacationYearAgreementWarnings,
+  vacationYearBasisNeedsAgreement,
+} from '../vacation-year'
 
 describe('getCurrentVacationYear', () => {
   it('calendar basis spans Jan 1 to Dec 31 of the same year', () => {
@@ -41,5 +47,46 @@ describe('vacationBasisControl', () => {
 
   it('is neither a choice nor locked while the check is in flight', () => {
     expect(vacationBasisControl(undefined, false)).toEqual({ state: 'checking' })
+  })
+})
+
+describe('vacationYearBasisNeedsAgreement (semesterlagen 2 a §, 3 §)', () => {
+  it('the statutory 1 April to 31 March year stands without a kollektivavtal', () => {
+    expect(vacationYearBasisNeedsAgreement('statutory_apr_mar')).toBe(false)
+  })
+
+  it('the calendar year needs one', () => {
+    expect(vacationYearBasisNeedsAgreement('calendar')).toBe(true)
+  })
+})
+
+describe('vacationBasisAgreementPrompt', () => {
+  it('says nothing about the statutory year, saved or being chosen', () => {
+    expect(vacationBasisAgreementPrompt('statutory_apr_mar', 'statutory_apr_mar')).toBe('none')
+    expect(vacationBasisAgreementPrompt('calendar', 'statutory_apr_mar')).toBe('none')
+  })
+
+  it('a quiet note for a calendar year already saved', () => {
+    expect(vacationBasisAgreementPrompt('calendar', 'calendar')).toBe('note')
+  })
+
+  it('asks for the confirmation while the calendar year is being chosen', () => {
+    expect(vacationBasisAgreementPrompt('statutory_apr_mar', 'calendar')).toBe('confirm')
+  })
+})
+
+describe('vacationYearAgreementWarnings', () => {
+  it('warns when a save sets the calendar year, saying the statutory year applies without an agreement', () => {
+    const [warning, ...rest] = vacationYearAgreementWarnings('calendar')
+    expect(rest).toEqual([])
+    expect(warning.code).toBe('VACATION_YEAR_NEEDS_COLLECTIVE_AGREEMENT')
+    expect(warning.message_sv).toContain('kollektivavtal')
+    expect(warning.message_sv).toContain('1 april till 31 mars')
+    expect(warning.message_en).toContain('1 April to 31 March')
+  })
+
+  it('is silent for the statutory year and for a save that leaves the basis alone', () => {
+    expect(vacationYearAgreementWarnings('statutory_apr_mar')).toEqual([])
+    expect(vacationYearAgreementWarnings(undefined)).toEqual([])
   })
 })
