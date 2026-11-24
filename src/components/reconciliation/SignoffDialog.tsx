@@ -15,8 +15,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { formatCurrency } from '@/lib/utils'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre, parseAmountInput } from '@/lib/money'
+import type { SignoffBankBalance, SignoffWarningCode } from '@/lib/reconciliation/signoff'
 
 /**
  * "Markera som avstämd": date, optional note, and (only when the engine
@@ -33,6 +35,11 @@ import { roundOre, parseAmountInput } from '@/lib/money'
  * period start to the date) while the tile is scoped to whatever period or
  * range the page has picked. Judging from the tile let the signer press
  * Signera on a sign-off the server then refused.
+ *
+ * On a bank account the preview also carries the bank's own balance against
+ * the books on the date, and the server's warning when they differ or the
+ * bank has none for the date. The dialog shows it before Signera and never
+ * blocks on it.
  */
 export interface SignoffSubmitInput {
   through_date: string
@@ -41,11 +48,17 @@ export interface SignoffSubmitInput {
   external_balance?: number | null
 }
 
+/** The bank's balance against the books on the date, with the server's warning code (null when they agree). */
+export interface SignoffPreviewBank {
+  balance: SignoffBankBalance
+  warning: SignoffWarningCode | null
+}
+
 export type SignoffPreviewResult =
   /** The server would sign as-is; `unexplained` is what it would record. */
-  | { kind: 'ok'; unexplained: number | null }
+  | { kind: 'ok'; unexplained: number | null; bank?: SignoffPreviewBank | null }
   /** The server refuses without the override: an unexplained difference (null = the outside balance is unknown). */
-  | { kind: 'needs_force'; unexplained: number | null }
+  | { kind: 'needs_force'; unexplained: number | null; bank?: SignoffPreviewBank | null }
   /** Refused for a reason the override does not lift (already signed through a later date, date in the future, ...). */
   | { kind: 'blocked'; message: string }
 
@@ -53,6 +66,8 @@ interface SignoffDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   accountName: string
+  /** The ledger account the bank balance is compared with (bank accounts). */
+  accountNumber?: string
   /** Default through-date (the window end, clamped to today). */
   defaultDate: string
   /** Latest possible date (today, or the skattekonto snapshot date). */
@@ -74,6 +89,7 @@ export function SignoffDialog({
   open,
   onOpenChange,
   accountName,
+  accountNumber = '',
   defaultDate,
   maxDate,
   unexplained,
@@ -142,6 +158,28 @@ export function SignoffDialog({
   const previewUnexplained = preview && preview.kind !== 'blocked' ? preview.unexplained : unexplained
   const effectiveUnexplained =
     stated != null && ledgerBalance != null ? roundOre(ledgerBalance - stated) : previewUnexplained
+  const bank = !previewing && preview && preview.kind !== 'blocked' ? (preview.bank ?? null) : null
+  // The parts of a difference, named as on the account page; they sum to it.
+  const bankParts =
+    bank?.warning === 'BANK_BALANCE_DIFFERS'
+      ? [
+          bank.balance.unbooked && bank.balance.unbooked.count > 0
+            ? t('balance_check_part_unbooked', {
+                count: bank.balance.unbooked.count,
+                amount: formatCurrency(bank.balance.unbooked.total, currency),
+              })
+            : null,
+          bank.balance.before_history && Math.abs(bank.balance.before_history.difference) >= 0.005
+            ? t('balance_check_part_before', {
+                date: formatDate(bank.balance.before_history.history_start),
+                amount: formatCurrency(bank.balance.before_history.difference, currency),
+              })
+            : null,
+          bank.balance.rest != null && Math.abs(bank.balance.rest) >= 0.005
+            ? t('balance_check_part_rest', { amount: formatCurrency(bank.balance.rest, currency) })
+            : null,
+        ].filter((part): part is string => part !== null)
+      : []
   const needsForce =
     preview?.kind === 'ok' && stated == null
       ? false
@@ -190,6 +228,52 @@ export function SignoffDialog({
             />
             {previewing && <p className="text-xs text-muted-foreground">{t('signoff_preview_pending')}</p>}
           </div>
+          {blocked === null && bank && (bank.warning !== null || bank.balance.bank_balance !== null) && (
+            <div
+              className={
+                bank.warning === null
+                  ? 'text-xs text-muted-foreground'
+                  : 'space-y-1 rounded-lg bg-warning/10 px-3 py-2.5 text-[13px] text-foreground'
+              }
+              data-ph-mask
+            >
+              <p>
+                {bank.warning === null && bank.balance.bank_balance !== null
+                  ? t('balance_check_ok', {
+                      date: formatDate(bank.balance.as_of),
+                      amount: formatCurrency(bank.balance.bank_balance, currency),
+                    })
+                  : bank.warning === 'BANK_BALANCE_DIFFERS' &&
+                      bank.balance.bank_balance !== null &&
+                      bank.balance.booked_balance !== null &&
+                      bank.balance.difference !== null
+                    ? t('balance_check_diff', {
+                        bank: formatCurrency(bank.balance.bank_balance, currency),
+                        date: formatDate(bank.balance.as_of),
+                        account: accountNumber,
+                        booked: formatCurrency(bank.balance.booked_balance, currency),
+                        difference: formatCurrency(bank.balance.difference, currency),
+                      })
+                    : bank.balance.booked_balance !== null
+                      ? t('signoff_bank_balance_missing', {
+                          date: formatDate(bank.balance.as_of),
+                          account: accountNumber,
+                          booked: formatCurrency(bank.balance.booked_balance, currency),
+                        })
+                      : t('signoff_bank_balance_missing_short', {
+                          date: formatDate(bank.balance.as_of),
+                          account: accountNumber,
+                        })}
+              </p>
+              {bankParts.length > 0 && (
+                <div className="flex items-center gap-1">
+                  <span>{t('balance_check_parts', { parts: bankParts.join(' · ') })}</span>
+                  <InfoTooltip content={t('balance_check_help', { account: accountNumber })} iconClassName="h-3 w-3" />
+                </div>
+              )}
+              {bank.warning !== null && <p className="text-muted-foreground">{t('signoff_bank_balance_hint')}</p>}
+            </div>
+          )}
           {askExternalBalance && (
             <div className="space-y-1.5">
               <Label htmlFor="signoff-external">{t('signoff_external_balance')}</Label>

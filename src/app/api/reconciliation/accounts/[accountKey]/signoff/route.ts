@@ -44,7 +44,9 @@ export const GET = withRouteContext<{ params: Promise<{ accountKey: string }> }>
  * dry_run? }. Refused (400 + code, plus details.unexplained_difference on
  * NOT_RECONCILED) unless the account is reconciled through the date, or
  * force + note is given. The dialog sends dry_run first so what it shows is
- * exactly what the real call will judge.
+ * exactly what the real call will judge. On a bank account the preview, the
+ * result and the NOT_RECONCILED details also carry bank_balance (the bank's
+ * balance against the books on the date) and warning, which never blocks.
  */
 export const POST = withRouteContext<{ params: Promise<{ accountKey: string }> }>(
   'reconciliation.accounts.signoff.create',

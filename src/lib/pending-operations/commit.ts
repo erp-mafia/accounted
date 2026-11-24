@@ -6524,7 +6524,9 @@ async function commitReconciliationSignoff(
     )
     if (!result) return { error: `Unknown account_key ${accountKey}`, status: 404 }
     if (result.dry_run) return { error: 'Unexpected dry-run result', status: 500 }
-    return { data: { account_key: accountKey, signoff: result.signoff } }
+    return {
+      data: { account_key: accountKey, signoff: result.signoff, bank_balance: result.bank_balance, warning: result.warning },
+    }
   } catch (err) {
     const code = (err as { code?: string }).code
     return {
