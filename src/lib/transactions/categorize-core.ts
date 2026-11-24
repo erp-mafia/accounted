@@ -1040,8 +1040,9 @@ export async function categorizeTransaction(
   const { context } = resolved
   const { finalCategory } = context
 
-  // The pinned document's own reading: shown on a preview, and the check on a
-  // reverse charge asked for on an invoice where the seller charged moms.
+  // The underlag's own reading (categorizeUnderlagDocuments): shown on a
+  // preview, and the check on a reverse charge asked for on an invoice where
+  // the seller charged moms, for every document the booking anchors.
   // Refused by default, since Swedish moms on an invoice is ordinary ingående
   // moms. Booked when the caller states the charge is foreign VAT debited in
   // error (crm#1765): the buyer is still liable (ML 16 kap. 9 §) on all the
@@ -1051,67 +1052,71 @@ export async function categorizeTransaction(
   // refused whatever is stated.
   let underlag: CategorizeUnderlag | null = null
   let documentSeller: SellerIdentity | null = null
-  if (transaction.document_id && (dryRun || input.vat_treatment === 'reverse_charge')) {
-    const { data: doc } = await supabase
-      .from('document_attachments')
-      .select('id, extracted_data')
-      .eq('id', transaction.document_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (doc) {
-      const ex = (doc.extracted_data ?? null) as
-        | { totals?: { total?: number; vatAmount?: number }; invoice?: { currency?: string }; supplier?: SellerIdentity | null }
-        | null
-      documentSeller = ex?.supplier ?? null
-      const total = ex?.totals?.total ?? null
-      const currency = ex?.invoice?.currency ?? null
-      const rowCurrency = transaction.currency ?? 'SEK'
-      underlag = {
-        document_id: doc.id as string,
-        total,
-        vat_amount: ex?.totals?.vatAmount ?? null,
-        currency,
-        matches_row_amount: amountAgreesForMatch(total, currency ?? 'SEK', null, transaction.amount, rowCurrency, transaction.amount),
+  const { documents: underlagDocuments, readError: underlagReadError } = await categorizeUnderlagDocuments(supabase, companyId, transaction, input, dryRun)
+  // An underlag that could not be read is not one without the seller's VAT: a reverse charge waits for it.
+  if (underlagReadError && input.vat_treatment === 'reverse_charge') return refuseFor('INTERNAL_ERROR', undefined, { cause: underlagReadError })
+  const [doc] = underlagDocuments
+  if (doc) {
+    const ex = doc.reading
+    documentSeller = ex?.supplier ?? null
+    const total = ex?.totals?.total ?? null
+    const currency = ex?.invoice?.currency ?? null
+    const rowCurrency = transaction.currency ?? 'SEK'
+    underlag = {
+      document_id: doc.id,
+      total,
+      vat_amount: ex?.totals?.vatAmount ?? null,
+      currency,
+      matches_row_amount: amountAgreesForMatch(total, currency ?? 'SEK', null, transaction.amount, rowCurrency, transaction.amount),
+    }
+  }
+  if (underlag && input.vat_treatment === 'reverse_charge') {
+    // Stated foreign on at least one document: what the approver reads (a 25 % charge, a Swedish number abroad).
+    let confirmed = false
+    let couldBeSwedishVat = false
+    let addressCountry: string | null = null
+    for (const one of underlagDocuments) {
+      // The charge as the bulk door and the one click read it: the breakdown's groups, else the total's VAT.
+      const charged = sellerChargedVat(one.reading)
+      const sellerVat = sellerVatOnReverseCharge({
+        sellerVat: charged,
+        total: one.reading?.totals?.total ?? null,
+        seller: one.reading?.supplier ?? null,
+        confirmedForeign: input.confirm_foreign_seller_vat === true,
+      })
+      if (sellerVat.verdict === 'refused') {
+        const currency = one.reading?.invoice?.currency ?? null
+        return refuseFor(
+          'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+          {
+            document_id: one.id,
+            seller_vat_amount: charged,
+            currency,
+            reason: sellerVat.reason,
+            ...(sellerVat.reason === 'not_confirmed' ? { confirm_with: FOREIGN_SELLER_VAT_FLAG } : {}),
+            ...(sellerVat.reason === 'not_confirmed' && sellerVat.addressCountry ? { address_country: sellerVat.addressCountry } : {}),
+          },
+          {
+            message: sellerVatRefusalMessage(
+              sellerVat.reason,
+              [charged, currency].filter(Boolean).join(' '),
+              sellerVat.reason === 'not_confirmed' ? sellerVat.addressCountry : null,
+            ),
+          },
+        )
       }
-      if (input.vat_treatment === 'reverse_charge') {
-        const sellerVat = sellerVatOnReverseCharge({
-          sellerVat: underlag.vat_amount,
-          total: underlag.total,
-          seller: documentSeller,
-          confirmedForeign: input.confirm_foreign_seller_vat === true,
-        })
-        if (sellerVat.verdict === 'refused') {
-          return refuseFor(
-            'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
-            {
-              document_id: underlag.document_id,
-              seller_vat_amount: underlag.vat_amount,
-              currency: underlag.currency,
-              reason: sellerVat.reason,
-              ...(sellerVat.reason === 'not_confirmed' ? { confirm_with: FOREIGN_SELLER_VAT_FLAG } : {}),
-              ...(sellerVat.reason === 'not_confirmed' && sellerVat.addressCountry ? { address_country: sellerVat.addressCountry } : {}),
-            },
-            {
-              message: sellerVatRefusalMessage(
-                sellerVat.reason,
-                [underlag.vat_amount, underlag.currency].filter(Boolean).join(' '),
-                sellerVat.reason === 'not_confirmed' ? sellerVat.addressCountry : null,
-              ),
-            },
-          )
-        }
-        if (sellerVat.verdict === 'confirmed') {
-          // A Swedish VAT number beside an address abroad: the approver reads what was stated.
-          const addressCountry = swedishVatNumberAbroad(documentSeller)
-          underlag.foreign_seller_vat = {
-            could_be_swedish_vat: sellerVat.couldBeSwedishVat,
-            ...(addressCountry ? { address_country: addressCountry } : {}),
-          }
-          checks.push(warned('reverse_charge_seller_vat', FOREIGN_SELLER_VAT_FLAG))
-        } else {
-          checks.push(passed('reverse_charge_seller_vat'))
-        }
+      if (sellerVat.verdict === 'confirmed') {
+        confirmed = true
+        couldBeSwedishVat ||= sellerVat.couldBeSwedishVat
+        // A Swedish VAT number beside an address abroad: the approver reads what was stated.
+        addressCountry ??= swedishVatNumberAbroad(one.reading?.supplier)
       }
+    }
+    if (confirmed) {
+      underlag.foreign_seller_vat = { could_be_swedish_vat: couldBeSwedishVat, ...(addressCountry ? { address_country: addressCountry } : {}) }
+      checks.push(warned('reverse_charge_seller_vat', FOREIGN_SELLER_VAT_FLAG))
+    } else {
+      checks.push(passed('reverse_charge_seller_vat'))
     }
   }
 
@@ -2058,8 +2063,7 @@ export async function bulkBookMatchedInboxItems(
     // (TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT) and the Inkorg's one click
     // sends it to the editor. Whether the charge is foreign VAT debited in
     // error is stated per purchase at the single door (crm#1765), never for
-    // a batch. The item's document is not on its bank row yet, so the single
-    // door's check would not see it.
+    // a batch.
     const sellerVat = vat_treatment === 'reverse_charge' ? sellerChargedVat(item.extracted_data as ChargedVatReading | null) : 0
     if (sellerVat > 0) {
       const currency = (item.extracted_data as { invoice?: { currency?: string | null } } | null)?.invoice?.currency
@@ -2204,6 +2208,72 @@ export async function bulkBookMatchedInboxItems(
   }
 
   return { booked, skipped }
+}
+
+/** A document's reading, as far as the seller's charge and country go (the extraction's shape fits). */
+type UnderlagReading =
+  | (ChargedVatReading & { totals?: { total?: number; vatAmount?: number } | null; invoice?: { currency?: string } | null; supplier?: SellerIdentity | null })
+  | null
+
+/**
+ * The documents a single categorize reads as the purchase's underlag, the
+ * row's own first: on a preview, the row's document; for a reverse charge,
+ * also every inbox item's document the booking anchors on the verifikat
+ * (propagateUnderlagForBookedTransaction): the item it started from and the
+ * items matched to the row, unless another booking took them. Each is checked
+ * for the seller's VAT as the bulk door checks an item, so none is booked as
+ * reverse charge without the caller's word. A read that fails is returned,
+ * never taken as no document.
+ */
+async function categorizeUnderlagDocuments(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction,
+  input: CategorizeInput,
+  dryRun: boolean,
+): Promise<{ documents: Array<{ id: string; reading: UnderlagReading }>; readError: unknown }> {
+  const reverseCharge = input.vat_treatment === 'reverse_charge'
+  const documents: Array<{ id: string; reading: UnderlagReading }> = []
+  let readError: unknown = null
+  const add = (id: string | null | undefined, reading: unknown) => {
+    if (id && !documents.some((one) => one.id === id)) documents.push({ id, reading: (reading ?? null) as UnderlagReading })
+  }
+  if (transaction.document_id && (dryRun || reverseCharge)) {
+    const { data: doc, error } = await supabase
+      .from('document_attachments')
+      .select('id, extracted_data')
+      .eq('id', transaction.document_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    readError ||= error
+    if (doc) add(doc.id as string, doc.extracted_data)
+  }
+  if (!reverseCharge) return { documents, readError }
+  if (input.inbox_item_id) {
+    const { data: item, error } = await supabase
+      .from('invoice_inbox_items')
+      .select('document_id, extracted_data')
+      .eq('id', input.inbox_item_id)
+      .eq('company_id', companyId)
+      .is('created_journal_entry_id', null)
+      .is('created_supplier_invoice_id', null)
+      .maybeSingle()
+    readError ||= error
+    const one = item as { document_id?: string | null; extracted_data?: unknown } | null
+    add(one?.document_id, one?.extracted_data)
+  }
+  const { data: matched, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('document_id, extracted_data')
+    .eq('company_id', companyId)
+    .eq('matched_transaction_id', transaction.id)
+    .is('created_journal_entry_id', null)
+    .is('created_supplier_invoice_id', null)
+  readError ||= error
+  for (const one of (Array.isArray(matched) ? matched : []) as Array<{ document_id?: string | null; extracted_data?: unknown }>) {
+    add(one.document_id, one.extracted_data)
+  }
+  return { documents, readError }
 }
 
 /**

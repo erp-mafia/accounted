@@ -75,13 +75,17 @@ beforeEach(() => {
   mockCreateJE.mockResolvedValue({ id: 'je-rc-1' })
 })
 
-/** The reads before the mapping: the row, the booked gate, the settings, the settlement account, the override's chart row. */
+/**
+ * The reads before the mapping: the row, the booked gate, the settings, the settlement account, the inbox items
+ * matched to the row (the seller-VAT check of a reverse charge), the override's chart row.
+ */
 function queued(accountOverride: string | undefined) {
   const mock = createQueuedMockSupabase()
   mock.enqueue({ data: txRow })
   mock.enqueue({ data: [] }) // the gate: no posted verifikat booked from the row
   mock.enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } })
   mock.enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+  mock.enqueue({ data: [] }) // the seller-VAT check: no inbox item matched to the row
   if (accountOverride) {
     mock.enqueue({ data: { account_number: accountOverride, account_class: Number(accountOverride[0]), is_active: true } })
   }

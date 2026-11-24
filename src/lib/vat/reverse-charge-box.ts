@@ -113,13 +113,15 @@ export function reverseChargeBoxFor(region: SellerRegion | null, category: Trans
 /**
  * The region a Swedish VAT number beside an address abroad gives the box once
  * the caller has stated the seller is not established in Sweden for the sale
- * (confirm_foreign_seller_vat): the address's, for a service only. That
- * statement is about a service taxed here under the main rule (ML 2023:200
- * 16 kap. 4 and 9 §§); goods sold under a Swedish VAT number stay unboxed
- * (null), for the person to name.
+ * (confirm_foreign_seller_vat): the address's, which boxes a service only.
+ * That statement is about a service taxed here under the main rule (ML
+ * 2023:200 16 kap. 4 and 9 §§); goods sold under a Swedish VAT number stay
+ * unboxed (null), for the person to name. A category that says neither gets
+ * the region too, so its refusal asks for the purchase kind
+ * (reverseChargeBoxFor), not for a country the address names.
  */
 export function confirmedAbroadRegion(seller: SellerIdentity | null | undefined, category: TransactionCategory): SellerRegion | null {
-  if (CATEGORY_NATURE[category] !== 'service') return null
+  if (CATEGORY_NATURE[category] === 'goods') return null
   const country = swedishVatNumberAbroad(seller)
   return country ? regionOfCountry(country) : null
 }

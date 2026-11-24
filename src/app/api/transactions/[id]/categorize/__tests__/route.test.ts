@@ -2719,6 +2719,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // the seller-VAT check: no inbox item matched to the row
     enqueue({ data: { account_number: account, account_class: Number(account[0]), is_active: true }, error: null })
     // reconcileRcBasisWithChart: the company's momskoder on class 4-6 accounts
     enqueue({ data: treatment ? [{ account_number: account, default_vat_treatment: treatment }] : [], error: null })
@@ -2767,6 +2768,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // the seller-VAT check: no inbox item matched to the row
     enqueue({ data: { account_number: account, account_class: Number(account[0]), is_active: true }, error: null })
     enqueue({ data: treatment ? [{ account_number: account, default_vat_treatment: treatment, default_vat_rate: 0.25 }] : [], error: null })
 
@@ -2806,6 +2808,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // the seller-VAT check: no inbox item matched to the row
     enqueue({ data: { account_number: '4531', account_class: 4, is_active: true }, error: null })
     enqueue({ data: [], error: null }) // the company's momskoder: none
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
@@ -2849,6 +2852,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // the seller-VAT check: no inbox item matched to the row
     // The company's momskoder: 5420 reports ruta 21 itself.
     enqueue({ data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.25 }], error: null })
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
@@ -2896,6 +2900,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // the seller-VAT check: no inbox item matched to the row
     // reconcileRcBasisWithChart: 5420 reports ruta 21 itself
     enqueue({ data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }], error: null })
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
@@ -2937,6 +2942,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // the seller-VAT check: no inbox item matched to the row
     enqueue({ data: [], error: null }) // reconcileRcBasisWithChart: no momskoder
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -2967,6 +2973,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // the seller-VAT check: no inbox item matched to the row
     enqueue({ data: { account_number: '6540', account_class: 6, is_active: true }, error: null })
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })

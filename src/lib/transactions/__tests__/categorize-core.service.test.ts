@@ -928,10 +928,29 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
     expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
   })
 
-  it('takes no box from an inbox item\'s address abroad beside a Swedish VAT number: no refusal there asked for the flag', async () => {
-    const { supabase } = ledger({
-      invoice_inbox_items: { data: { extracted_data: { supplier: swedishNumberAbroad }, matched_supplier_id: null }, error: null },
+  it('asks for the purchase kind, not the seller\'s country, when a confirmed category says neither goods nor service', async () => {
+    const { supabase } = withDocument(swedishNumberAbroad)
+    const outcome = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { ...software, category: 'expense_office', confirm_foreign_seller_vat: true },
+      api,
+    )
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN', details: { reason: 'purchase_kind_unknown' } })
+  })
+
+  // The inbox item the booking started from is the underlag the booking
+  // anchors when the row has no document: it is read as a pinned one is.
+  const inboxItem = (extracted: Record<string, unknown>, supplierType: string | null = null) =>
+    ledger({
+      invoice_inbox_items: { data: { document_id: 'doc-9', extracted_data: extracted, matched_supplier_id: supplierType ? 'sup-1' : null }, error: null },
+      ...(supplierType ? { suppliers: { data: { supplier_type: supplierType }, error: null } } : {}),
     })
+
+  it('boxes a confirmed service on the inbox item\'s underlag by its address, as on a pinned document', async () => {
+    const { supabase } = inboxItem({ supplier: swedishNumberAbroad })
     const outcome = await categorizeTransaction(
       supabase as never,
       'user-1',
@@ -940,7 +959,92 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
       { ...software, inbox_item_id: 'item-1', confirm_foreign_seller_vat: true },
       api,
     )
-    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN', details: { reason: 'seller_country_unknown' } })
+    expect(accounts(outcome)).toContain('4535')
+    expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
+  })
+
+  it('refuses a reverse charge on the inbox item\'s underlag where the seller charged VAT, whatever the supplier card says', async () => {
+    const singapore = { vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' }
+    const { supabase } = inboxItem({ supplier: singapore, totals: { total: 1250, vatAmount: 250 } }, 'non_eu_business')
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+      details: { document_id: 'doc-9', reason: 'not_confirmed', confirm_with: 'confirm_foreign_seller_vat', address_country: 'SG' },
+    })
+
+    const dutch = inboxItem({ supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250, vatAmount: 216.94 } })
+    const atTheDashboard = await categorizeTransaction(dutch.supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, {
+      onBooked: 'refuse',
+      dryRun: true,
+    })
+    expect(atTheDashboard).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT', details: { reason: 'not_confirmed' } })
+  })
+
+  it('checks the inbox items matched to the row when the caller names none, as the agent door sends it', async () => {
+    // Answers only the read of this row's unbooked items in this company: a wrong filter finds nothing and books.
+    const has = (calls: { method: string; args: unknown[] }[], method: string, ...args: unknown[]) =>
+      calls.some((c) => c.method === method && JSON.stringify(c.args) === JSON.stringify(args))
+    const { supabase } = ledger({
+      invoice_inbox_items: (calls) =>
+        has(calls, 'eq', 'matched_transaction_id', TX_ID) &&
+        has(calls, 'eq', 'company_id', COMPANY_ID) &&
+        has(calls, 'is', 'created_journal_entry_id', null) &&
+        has(calls, 'is', 'created_supplier_invoice_id', null)
+          ? { data: [{ document_id: 'doc-7', extracted_data: { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250, vatAmount: 216.94 } } }], error: null }
+          : { data: [], error: null },
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, software, api)
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT', details: { document_id: 'doc-7', reason: 'not_confirmed' } })
+  })
+
+  it('refuses a reverse charge when the underlag cannot be read, never taking it for none', async () => {
+    const { supabase } = ledger({ invoice_inbox_items: { data: null, error: { message: 'timeout' } } })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, reverse_charge_kind: 'eu_services' }, {
+      onBooked: 'refuse',
+      reverseChargeBoxParam: 'reverse_charge_kind',
+    })
+    expect(outcome).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('checks the inbox item\'s document beside the row\'s own, since the booking anchors both', async () => {
+    const { supabase } = ledger({
+      transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
+      document_attachments: { data: { id: 'doc-1', extracted_data: { supplier: { vatNumber: 'IE3668997OH' }, totals: { total: 1250, vatAmount: 0 } } }, error: null },
+      invoice_inbox_items: { data: { document_id: 'doc-9', extracted_data: { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250, vatAmount: 216.94 } } }, error: null },
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT', details: { document_id: 'doc-9', reason: 'not_confirmed' } })
+  })
+
+  it('reads the charge off the VAT breakdown when the total states none, as the bulk door does', async () => {
+    const { supabase } = inboxItem({ supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250 }, vatBreakdown: [{ rate: 21, amount: 216.94 }] })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+      details: { document_id: 'doc-9', seller_vat_amount: 216.94, reason: 'not_confirmed' },
+    })
+  })
+
+  it('with the flag, books the inbox item\'s purchase in the address\'s box and tells the approver', async () => {
+    const singapore = { vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' }
+    const { supabase } = inboxItem({ supplier: singapore, totals: { total: 1250, vatAmount: 250 } })
+    const outcome = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { ...software, inbox_item_id: 'item-1', confirm_foreign_seller_vat: true },
+      api,
+    )
+    expect(accounts(outcome)).toContain('4531')
+    expect(accounts(outcome)).not.toContain('2641')
+    expect(outcome.ok && outcome.dryRun && outcome.preview.underlag).toMatchObject({
+      document_id: 'doc-9',
+      foreign_seller_vat: { could_be_swedish_vat: false, address_country: 'SG' },
+    })
   })
 
   it('keeps a box the caller named, and refuses a category that says neither goods nor service', async () => {

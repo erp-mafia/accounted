@@ -265,6 +265,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
       enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
       enqueue({ data: settingsRow })
       enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      enqueue({ data: [] }) // the seller-VAT check: no inbox item matched to the row
       if (accountOverride) {
         enqueue({ data: { account_number: accountOverride, account_class: 4, is_active: true } })
       }
@@ -294,6 +295,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [] }) // the seller-VAT check: no inbox item matched to the row
     enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
     enqueue({ data: [{ id: TX_ID }] }) // transactions update
     const loadChart = vi.fn(async () => new Map([['5420', { default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: null }]]))
