@@ -294,10 +294,10 @@ describe('getSuggestedTemplates: rules that matched vs templates used lately', (
 
   it('finds the catalog template for a rule that only names an account', async () => {
     const out = await getSuggestedTemplates(tx, 'aktiebolag', [
-      { ...base, merchant_pattern: '^telia', debit_account: '6211' },
+      { ...base, merchant_pattern: '^telia', debit_account: '6212' },
     ] as never)
     expect(out[0]?.source).toBe('rule')
-    expect(out[0]?.debit_account).toBe('6211')
+    expect(out[0]?.debit_account).toBe('6212')
   })
 
   it('offers a template a rule points at but did not match as recent, below a keyword match', async () => {

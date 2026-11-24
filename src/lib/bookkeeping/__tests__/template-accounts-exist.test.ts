@@ -3,6 +3,7 @@ import { BOOKING_TEMPLATES, getTemplateById } from '@/lib/bookkeeping/booking-te
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { DEFAULT_ACCOUNTS_BY_CATEGORY } from '@/lib/bokslut/assets/asset-service'
 import { getFormSeededAccount } from '@/lib/bookkeeping/form-accounts'
+import { SE_PURCHASE_CATEGORY_ACCOUNTS } from '@/lib/bookkeeping/bas-data/purchase-category-accounts'
 
 /**
  * Every account a booking template names must exist in BAS 2026.
@@ -102,6 +103,16 @@ describe('BOOKING_TEMPLATES reference only real BAS accounts', () => {
       `These templates book onto BAS 2026 free accounts ("(Fritt konto ...)"), which have ` +
         `no prescribed meaning:\n  ${free.join('\n  ')}`,
     ).toEqual([])
+  })
+
+  // BAS 2026 splits telephony: 6211 Fast telefoni, 6212 Mobiltelefon. The
+  // mobile subscription template debited 6211, so every mobile plan it
+  // proposed or booked landed on the landline account, while the Inkorg's
+  // purchase category for a mobile plan named 6212. The two must agree.
+  it('telecom_mobile debits the BAS mobile account, the one the mobile purchase category names', () => {
+    const template = getTemplateById('telecom_mobile')
+    expect(template?.debit_account).toBe(SE_PURCHASE_CATEGORY_ACCOUNTS['expense.telecom.mobile'][0])
+    expect(getBASReference(template!.debit_account)?.account_name).toBe('Mobiltelefon')
   })
 
   // The capitalizing template and the fixed-asset module must agree on where

@@ -28,7 +28,7 @@ describe('proposalFromTemplate', () => {
   it('books a catalog template as the template, keeping its legs and VAT', () => {
     const p = proposalFromTemplate(mobile, 'catalog', 0.3)
     expect(p.booking).toEqual({ kind: 'template', template_id: 'telecom_mobile', category: mobile.fallback_category })
-    expect(p).toMatchObject({ name_sv: 'Mobilabonnemang', debit_account: '6211', credit_account: '1930', vat_treatment: 'standard_25', source: 'catalog', confidence: 0.3 })
+    expect(p).toMatchObject({ name_sv: 'Mobilabonnemang', debit_account: '6212', credit_account: '1930', vat_treatment: 'standard_25', source: 'catalog', confidence: 0.3 })
   })
 })
 
@@ -212,7 +212,7 @@ describe('the basis box of a reverse charge in the review', () => {
 
   it('turns a catalog template into a reverse charge on its business account when a box is picked', () => {
     const p = withReverseChargeKind(proposalFromTemplate(mobile, 'catalog'), 'eu_services', -100)
-    expect(p.booking).toEqual({ kind: 'account', account: '6211', vat_treatment: 'reverse_charge', category: mobile.fallback_category, reverse_charge_kind: 'eu_services' })
+    expect(p.booking).toEqual({ kind: 'account', account: '6212', vat_treatment: 'reverse_charge', category: mobile.fallback_category, reverse_charge_kind: 'eu_services' })
   })
 
   it('carries the box a catalog template books when the person sets another account on it', () => {

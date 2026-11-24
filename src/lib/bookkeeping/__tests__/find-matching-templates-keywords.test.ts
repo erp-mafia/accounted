@@ -128,3 +128,28 @@ describe('a provider name proposes only the thing the template books', () => {
     expect(ids('Preliminary tax Skatteverket')).toContain('personnel_preliminary_tax')
   })
 })
+
+// BAS 2026: 6211 Fast telefoni, 6212 Mobiltelefon. The mobile subscription
+// template books 6212, so a landline, VoIP or switchboard bill must not match
+// it: "telefon" alone sits inside "fast telefoni" and "IP-telefoni".
+describe('a landline bill is not a mobile subscription', () => {
+  const ids = (description: string, mcc_code: number | null = null) =>
+    findMatchingTemplates(makeTransaction({ description, merchant_name: null, amount: -399, mcc_code })).map((m) => m.template.id)
+
+  it.each([
+    'Telia fast telefoni faktura',
+    'IP-telefoni Telavox',
+    'Telavox VoIP',
+    'Telefonväxel november',
+    'Telenor växel',
+  ])('the mobile template does not match "%s"', (description) => {
+    expect(ids(description)).not.toContain('telecom_mobile')
+    expect(ids(description, 4814)).not.toContain('telecom_mobile')
+  })
+
+  it.each(['Hallon mobilabonnemang', 'Tele2 mobil', 'Comviq'])('a mobile bill still matches it: "%s"', (description) => {
+    const match = findMatchingTemplates(makeTransaction({ description, merchant_name: null, amount: -199, mcc_code: null }))[0]
+    expect(match?.template.id).toBe('telecom_mobile')
+    expect(match?.template.debit_account).toBe('6212')
+  })
+})
