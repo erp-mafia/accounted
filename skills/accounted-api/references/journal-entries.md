@@ -710,7 +710,7 @@ Per Bokföringslagen 5 kap 5 §, posted entries cannot be modified. This endpoin
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - The new lines must balance. JOURNAL_ENTRY_NOT_BALANCED if not.
-- The original's entry_date and fiscal_period_id are inherited. If the original's period has been locked since posting, the call returns PERIOD_LOCKED.
+- The original's entry_date and fiscal_period_id are inherited. When the original's fiscal year is locked or closed, or its date is on or before the company lock date, the storno and the corrected entry are both dated in the first open, unlocked period instead (today when today lies in it), their descriptions name the original voucher and date, and the original stays as booked; a dry run returns that entry_date. An opening balance, year-end or VAT settlement entry keeps its date and returns PERIOD_LOCKED; NO_OPEN_PERIOD_FOR_DATE when the next fiscal year does not exist yet.
 - Three voucher numbers are advanced in this call: the original (already burned), the reversal, and the corrected. The series stays unbroken.
 - A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.
 - Lines that are the original with debit and credit swapped return MEANINGLESS_CORRECTION (400, details.reason negates_original): the storno already reverses the original. To only cancel an entry use /reverse; pass sides_swapped=true only when the original itself was booked with the sides swapped.

@@ -67,6 +67,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           // correctEntry finds its period and refuses a closed or locked one
           // (crm#1368).
           ...(validation.data.entry_date ? { newEntryDate: validation.data.entry_date } : {}),
+          // A locked or closed original: the storno (and, without a date of
+          // its own, the rättelse) is dated in the first open period.
+          inFirstOpenPeriodWhenLocked: true,
         },
       },
     })

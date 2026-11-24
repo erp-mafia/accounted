@@ -31,7 +31,7 @@ const ENTRY_ID = '33333333-3333-4333-8333-333333333333'
 
 const CONNECTOR: ActorContext = { type: 'api_key', id: 'key-1', label: 'Claude (Anthropic)' }
 
-/** A reversal staged up to its insert: the original, its period and owner checks, staging's period check. */
+/** A reversal staged up to its insert: the original, its storno target, period and owner checks, staging's period check. */
 function stageReversal() {
   const mock = createQueuedMockSupabase()
   mock.enqueue({
@@ -55,6 +55,7 @@ function stageReversal() {
     },
     error: null,
   })
+  mock.enqueue({ data: [], error: null }) // no posted storno of it yet
   mock.enqueue({ data: { name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }, error: null })
   mock.enqueue({ data: { bookkeeping_locked_through: null }, error: null })
   mock.enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })

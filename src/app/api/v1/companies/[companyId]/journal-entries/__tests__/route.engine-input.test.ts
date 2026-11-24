@@ -51,7 +51,11 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
 vi.mock('@/lib/api/v1/owns-fiscal-period', () => ({ ownsFiscalPeriod: vi.fn().mockResolvedValue(true) }))
 vi.mock('@/lib/api/v1/check-period-lock', () => ({ checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }) }))
 vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
-  assertStornoTarget: vi.fn(async (_sb: unknown, _c: unknown, original: { entry_date: string }, date?: string) => date ?? original.entry_date),
+  assertStornoTarget: vi.fn(async (_sb: unknown, _c: unknown, original: { entry_date: string; fiscal_period_id: string }, date?: string) => ({
+    date: date ?? original.entry_date,
+    fiscal_period_id: original.fiscal_period_id,
+    moved: false,
+  })),
 }))
 vi.mock('@/lib/core/bookkeeping/correction-chain', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/core/bookkeeping/correction-chain')>()),

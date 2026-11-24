@@ -59,11 +59,17 @@ function makeSupabase(tables: Record<string, Row[] | Row | null>) {
         return b
       })
     }
+    // The storno target's read for a posted storno of the entry finds none.
+    let stornoRead = false
+    b.eq = vi.fn((column: string) => {
+      if (column === 'reverses_id') stornoRead = true
+      return b
+    })
     const value = tables[table]
     const list = Array.isArray(value) ? value : value ? [value] : []
     b.single = vi.fn(async () => ({ data: Array.isArray(value) ? value[0] ?? null : value ?? null, error: null }))
     b.maybeSingle = b.single
-    b.then = (resolve: (v: unknown) => void) => resolve({ data: list, error: null })
+    b.then = (resolve: (v: unknown) => void) => resolve({ data: stornoRead ? [] : list, error: null })
     return b
   })
   const rpc = vi.fn(async (fn: string) => {

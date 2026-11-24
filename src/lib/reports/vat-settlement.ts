@@ -5,6 +5,7 @@ import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
 import { accountRutaFor } from '@/lib/bookkeeping/import-vat-base'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { firstBookableDate, type BookableFiscalPeriod } from '@/lib/core/bookkeeping/period-status'
 import {
   calculatePeriodDates,
   formatPeriodLabel,
@@ -189,18 +190,9 @@ export function vatSettlementBookingStatus(
   return 'none'
 }
 
-interface BookableFiscalPeriod {
-  period_start: string
-  period_end: string
-  is_closed: boolean | null
-  locked_at: string | null
-}
-
 /**
  * The first date on or after the period's last day that a verifikat can be
- * posted on, by the same two layers the DB triggers enforce (company lock
- * date, then the fiscal period's is_closed / locked_at; see
- * resolvePeriodLockForDate). A momsredovisning for a period whose year is
+ * posted on (firstBookableDate). A momsredovisning for a period whose year is
  * already closed belongs on the first open day after it: it only moves 26xx
  * balances carried into the new year onto 2650/1650.
  *
@@ -212,20 +204,8 @@ export function firstBookableSettlementDate(
   lockedThrough: string | null,
   fiscalPeriods: BookableFiscalPeriod[],
 ): { entry_date: string; entry_date_reason: VatSettlementDateReason | null } {
-  let date = periodEnd
-  let reason: VatSettlementDateReason | null = null
-  if (lockedThrough && date <= lockedThrough) {
-    date = addDaysIso(lockedThrough, 1)
-    reason = 'company_lock_date'
-  }
-  const ordered = [...fiscalPeriods].sort((a, b) => a.period_start.localeCompare(b.period_start))
-  for (const fp of ordered) {
-    if (fp.period_start > date || fp.period_end < date) continue
-    if (!fp.is_closed && !fp.locked_at) break
-    reason ??= fp.is_closed ? 'period_closed' : 'period_locked'
-    date = addDaysIso(fp.period_end, 1)
-  }
-  return { entry_date: date, entry_date_reason: reason }
+  const first = firstBookableDate(periodEnd, lockedThrough, fiscalPeriods)
+  return { entry_date: first.date, entry_date_reason: first.reason }
 }
 
 async function resolveSettlementEntryDate(

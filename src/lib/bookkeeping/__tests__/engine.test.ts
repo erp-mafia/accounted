@@ -46,8 +46,8 @@ function createMockChain(overrides: Record<string, unknown> = {}) {
 // its own tests (lib/core/bookkeeping/__tests__/storno-target.test.ts) and is
 // a pass-through here; the reverseEntry tests below that refuse override it.
 const mockAssertStornoTarget = vi.fn(
-  async (_supabase: unknown, _companyId: string, original: { entry_date: string }, date?: string) =>
-    date ?? original.entry_date,
+  async (_supabase: unknown, _companyId: string, original: { entry_date: string; fiscal_period_id: string }, date?: string) =>
+    ({ date: date ?? original.entry_date, fiscal_period_id: original.fiscal_period_id, moved: false }),
 )
 vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
   assertStornoTarget: (...args: Parameters<typeof mockAssertStornoTarget>) => mockAssertStornoTarget(...args),

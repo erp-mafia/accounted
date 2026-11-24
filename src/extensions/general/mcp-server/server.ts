@@ -554,7 +554,7 @@ import {
   OPENING_BALANCE_EXISTS_CODE,
 } from '@/lib/import/opening-balance/existing'
 import { assertNoOpeningBalance } from '@/lib/import/opening-balance/existing'
-import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
+import { assertStornoTarget, movedCorrectionDescription } from '@/lib/core/bookkeeping/storno-target'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import {
   checkVoucherGapExplanation,
@@ -27851,7 +27851,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_correct_entry',
     keywords: ['rättelse', 'rätta verifikat', 'verifikation', 'ändra verifikat'],
     title: 'Correct Posted Entry (Rättelse)',
-    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645; lines accept dimensions bags. Account drives ruta. HIGH risk.',
+    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in its period (first open one if locked), never in-place edit. Use for partial fixes like 2641 → 2614/2645; lines accept dimensions bags. Account drives ruta. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -28010,14 +28010,16 @@ export const tools: McpTool[] = [
       if (original.status !== 'posted') {
         throw new Error(`Only posted entries can be corrected. Current status: ${original.status}.`)
       }
-      // The storno lands on the original's date in the original's year, so
-      // that year must take it: the engine's own check (assertStornoTarget,
-      // which correctEntry runs again at commit). Its typed refusals carry the
-      // registry's answer: TARGET_PERIOD_LOCKED (unlock first) or
-      // TARGET_PERIOD_CLOSED, which says what to do with a closed year. The
-      // old hand-rolled check told the agent to unlock a closed year, which
-      // unlock refuses (crm#1290).
-      await assertStornoTarget(supabase, companyId, original)
+      // The storno lands on the original's date in the original's year, or,
+      // when that date takes no write, in the first open, unlocked period
+      // after it: the engine's own check (assertStornoTarget, which
+      // correctEntry runs again at commit with the same option). Its typed
+      // refusals carry the registry's answer: TARGET_PERIOD_LOCKED or
+      // TARGET_PERIOD_CLOSED for an entry type whose date is fixed,
+      // NO_OPEN_PERIOD_FOR_DATE when the next year is not created yet.
+      const stornoTarget = await assertStornoTarget(supabase, companyId, original, undefined, {
+        inFirstOpenPeriodWhenLocked: true,
+      })
 
       // Importmoms keeps its ruta 50 base in the corrected lines (#94): the
       // rule correctEntry runs at commit, refused here before staging.
@@ -28083,7 +28085,12 @@ export const tools: McpTool[] = [
             })),
           },
           correction: {
-            description: description || `Rättelse: ${original.description}`,
+            description: stornoTarget.moved
+              ? movedCorrectionDescription(original, description)
+              : description || `Rättelse: ${original.description}`,
+            // Moved out of a locked year: the storno and the corrected
+            // verifikat are both dated here, in the first open period.
+            ...(stornoTarget.moved ? { entry_date: stornoTarget.date } : {}),
             total_debit: balance.totalDebit,
             total_credit: balance.totalCredit,
             line_count: lines.length,
@@ -28103,14 +28110,18 @@ export const tools: McpTool[] = [
           },
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
           ...(ownedBy ? { owned_by: ownedBy, warnings: [ownedBy.hint_sv] } : {}),
-          will: 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
+          will: stornoTarget.moved
+            ? `post a storno that mirrors the original and a new corrected entry, both dated ${stornoTarget.date} in the first open period and naming the original; the original stays as booked in its locked period (BFL 5 kap 5§)`
+            : 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
         },
         actor,
         next: {
-          description: 'After commit, the original is marked reversed and a corrected verifikation lands in its place. Confirm both with gnubok_query_journal.',
+          description: stornoTarget.moved
+            ? 'After commit, the storno and the corrected verifikation are posted in the first open period, linked to the original by reverses_id and correction_of_id. Confirm both with gnubok_query_journal.'
+            : 'After commit, the original is marked reversed and a corrected verifikation lands in its place. Confirm both with gnubok_query_journal.',
           tool: 'gnubok_query_journal',
         },
-        dateForPeriodCheck: original.entry_date,
+        dateForPeriodCheck: stornoTarget.date,
       })
     },
   },
@@ -28209,7 +28220,7 @@ export const tools: McpTool[] = [
       // numbered and booked there), which must be open and after the company
       // lock date. The engine's own check, run before approval: an outside
       // date used to stage and post a storno dated in another year.
-      const stornoDate = await assertStornoTarget(supabase, companyId, original, reversalDate)
+      const stornoDate = (await assertStornoTarget(supabase, companyId, original, reversalDate)).date
 
       // Chain-depth guard at staging time (mirrors gnubok_correct_entry): a
       // storno on an entry already deep in a rättelse chain is almost always

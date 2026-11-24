@@ -234,7 +234,7 @@ export const journalEntriesStrikeLines = defineOperation({
     name: 'gnubok_correct_entry_lines',
     title: 'Correct Voucher Lines (Inline Rättelse)',
     description:
-      'Stage an inline rättelse: strike lines of a posted verifikat and add balanced replacement lines in the same verifikat, originals kept in the rättelse log (BFL 5 kap 5 §). Open, unlocked periods, SEK only. Locked period: gnubok_correct_entry.',
+      'Stage an inline rättelse: strike lines of a posted verifikat and add balanced replacement lines in the same verifikat, originals kept in the rättelse log (BFL 5 kap 5 §). Open, unlocked periods, SEK only. Locked: gnubok_correct_entry (first open period).',
     keywords: ['rättelse', 'stryk rad', 'ändra verifikat', 'fel konto', 'rätta konto', 'radrättelse'],
     stage: { pendingType: 'correct_entry_lines_inline', title: () => 'Rättelse av rader i verifikat' },
   },

@@ -35,6 +35,7 @@ import { postingPort } from '@/lib/posting/port'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { DATE_FIXED_SOURCE_TYPES } from '@/lib/core/bookkeeping/date-fixed-source-types'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { refuseCorrectedImportVatWithoutBase, type ImportVatShapeLine } from '@/lib/bookkeeping/import-vat-base'
@@ -60,8 +61,6 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 /** Entry types whose lines keep their dedicated flows (same list as the RPC). */
 const LINE_RATTELSE_EXCLUDED_SOURCES = ['storno', 'year_end', 'vat_settlement'] as const
-/** Entry types whose date carries structural meaning (same list as the RPC). */
-const DATE_FIXED_SOURCES = ['opening_balance', 'year_end', 'vat_settlement'] as const
 
 const STORNO_HINT = 'använd rättelseverifikat (storno).'
 
@@ -249,7 +248,7 @@ async function previewMetadataCorrection(
   if (entry.source_type === 'storno') {
     return refused('Stornoverifikat kan inte rättas: rätta eller återför originalverifikatet i stället.')
   }
-  if (dateMoves && (DATE_FIXED_SOURCES as readonly string[]).includes(entry.source_type)) {
+  if (dateMoves && DATE_FIXED_SOURCE_TYPES.includes(entry.source_type)) {
     return refused('Datumet på den här verifikationstypen kan inte ändras.', { source_type: entry.source_type })
   }
 

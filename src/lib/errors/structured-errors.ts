@@ -512,8 +512,9 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   ENTRY_ALREADY_REVERSED: {
     httpStatus: 409,
     message_sv:
-      'Verifikationen har redan stornats av en annan användare. Ladda om sidan och försök igen.',
-    message_en: 'Entry was already reversed by a concurrent operation.',
+      'Verifikationen har redan stornats. Ladda om sidan och försök igen.',
+    message_en:
+      'Entry was already reversed: by a concurrent operation, or by a storno posted in a later open period (a posted storno links to it through reverses_id).',
   },
   MIGRATED_DEDUCTION_HELD_BY_REQUEST: {
     httpStatus: 409,
@@ -835,12 +836,13 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   },
   JOURNAL_RATTELSE_PERIOD_LOCKED: {
     httpStatus: 409,
-    message_sv: 'Perioden är stängd eller låst: använd rättelseverifikat (storno).',
+    message_sv:
+      'Perioden är stängd eller låst: använd rättelseverifikat (storno). Stornot och det rättade verifikatet bokförs i första öppna period.',
     message_en:
-      'Inline rättelse is only allowed in an open, unlocked period after the company lock date. Past a lock or close, storno is the only lawful correction (BFL 5 kap 5 §).',
+      'Inline rättelse is only allowed in an open, unlocked period after the company lock date. Past a lock or close, storno is the only lawful correction (BFL 5 kap 5 §): the storno and the corrected verifikat are dated in the first open, unlocked period and name the original.',
     remediation: {
       description:
-        'Correct the verifikat with storno (gnubok_correct_entry, POST /journal-entries/{id}/correct). Unlock the period only if the user explicitly asks for it.',
+        'Correct the verifikat with storno (gnubok_correct_entry, POST /journal-entries/{id}/correct): it books the storno and the corrected verifikat in the first open, unlocked period, naming the original, and leaves the original as booked. Unlock the period only if the user explicitly asks for it.',
       tool: 'gnubok_correct_entry',
     },
     thrown_message_sv: true,

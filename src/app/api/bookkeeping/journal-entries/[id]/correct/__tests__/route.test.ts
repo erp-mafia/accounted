@@ -263,8 +263,10 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     expect(status).toBe(200)
     expect(body.data.reversal).toEqual(reversal)
     expect(body.data.corrected).toEqual(corrected)
+    // A locked or closed original is corrected in the first open period.
     expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines, {
       description: undefined,
+      inFirstOpenPeriodWhenLocked: true,
     })
   })
 
@@ -310,6 +312,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     expect(status).toBe(200)
     expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines, {
       description: 'Rättelse: Skulder till närstående personer, kortfristig del',
+      inFirstOpenPeriodWhenLocked: true,
     })
   })
 
@@ -413,6 +416,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
       expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', swapped, {
         description: undefined,
         sidesSwapped: true,
+        inFirstOpenPeriodWhenLocked: true,
       })
     })
 
@@ -432,6 +436,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
       expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines, {
         description: undefined,
         newEntryDate: '2026-07-27',
+        inFirstOpenPeriodWhenLocked: true,
       })
     })
 

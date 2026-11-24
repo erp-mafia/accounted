@@ -878,7 +878,7 @@ export function getErrorMessage(
       }
 
       if (structured.code === 'ENTRY_ALREADY_REVERSED') {
-        return 'Verifikationen har redan stornats av en annan användare. Ladda om sidan och försök igen.'
+        return 'Verifikationen har redan stornats. Ladda om sidan och försök igen.'
       }
 
       if (structured.code === 'CURRENCY_REVALUATION_ALREADY_EXISTS') {

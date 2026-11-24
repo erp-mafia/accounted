@@ -338,7 +338,8 @@
           ],
           {
             "allowDeepChain": true,
-            "description": "Rättelse: inventarie"
+            "description": "Rättelse: inventarie",
+            "inFirstOpenPeriodWhenLocked": true
           }
         ]
       ]
@@ -386,7 +387,8 @@
             }
           ],
           {
-            "allowDeepChain": false
+            "allowDeepChain": false,
+            "inFirstOpenPeriodWhenLocked": true
           }
         ]
       ]

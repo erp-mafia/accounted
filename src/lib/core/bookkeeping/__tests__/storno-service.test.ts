@@ -6,6 +6,7 @@ import {
   BookkeepingDatabaseError,
   CorrectionBankAccountChangedError,
   CorrectionChainTooDeepError,
+  EntryAlreadyReversedError,
   ImportVatWithoutBaseError,
   MeaninglessCorrectionError,
   TargetPeriodClosedError,
@@ -56,13 +57,27 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 }))
 
 // The storno target check has its own tests (storno-target.test.ts); here it
-// passes, and the locked-year test below makes it refuse.
+// passes, and the locked-year tests below make it refuse or move the storno.
+// Neither it nor the standing-storno read consumes a queued result; the
+// reference texts are the real ones.
 const mockAssertStornoTarget = vi.fn(
-  async (_supabase: unknown, _companyId: string, original: { entry_date: string }, date?: string) =>
-    date ?? original.entry_date,
+  async (
+    _supabase: unknown,
+    _companyId: string,
+    original: { entry_date: string; fiscal_period_id: string },
+    date?: string,
+    _options?: unknown,
+  ): Promise<{ date: string; fiscal_period_id: string; moved: boolean }> => ({
+    date: date ?? original.entry_date,
+    fiscal_period_id: original.fiscal_period_id,
+    moved: false,
+  }),
 )
-vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
+const mockIsStandingStorno = vi.fn(async (..._args: unknown[]) => true)
+vi.mock('@/lib/core/bookkeeping/storno-target', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/core/bookkeeping/storno-target')>()),
   assertStornoTarget: (...args: Parameters<typeof mockAssertStornoTarget>) => mockAssertStornoTarget(...args),
+  isStandingStorno: (...args: unknown[]) => mockIsStandingStorno(...args),
 }))
 
 // Where a dated rättelse lands (crm#1368): only called when a caller gives
@@ -246,13 +261,155 @@ describe('correctEntry', () => {
       correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines),
     ).rejects.toBe(refusal)
 
+    // Without inFirstOpenPeriodWhenLocked the storno is never moved.
     expect(mockAssertStornoTarget).toHaveBeenCalledWith(
       supabase,
       'company-1',
       expect.objectContaining({ id: 'orig-1', fiscal_period_id: 'fp-1' }),
+      undefined,
+      undefined,
     )
     expect(commitStornoOrCorrectionDraft).not.toHaveBeenCalled()
     expect(inserts.filter((i) => i.table === 'journal_entries')).toEqual([])
+  })
+
+  // The person's doors (inFirstOpenPeriodWhenLocked): a verifikat in a locked
+  // or closed year is corrected by a storno and a corrected verifikat dated
+  // in the first open period, naming the original, and nothing is written to
+  // the original or its year.
+  describe('an original whose own date is locked (moved storno)', () => {
+    const MOVED = { date: '2026-11-24', fiscal_period_id: 'fp-2026', moved: true }
+
+    function setupMovedResults() {
+      const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1', fiscal_period_id: 'fp-2026' })
+      const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1', fiscal_period_id: 'fp-2026' })
+      results = [
+        // 0: fetch original (.single())
+        { data: { ...originalEntry, voucher_number: 12, entry_date: '2025-03-15' }, error: null },
+        // 1: the corrected verifikat's year, its date checked inside it
+        { data: { name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }, error: null },
+        // 2: fetch accounts for corrected lines
+        { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null },
+        // 3: insert reversal entry (.single())
+        { data: reversalEntry, error: null },
+        // 4: insert reversal lines
+        { data: null, error: null },
+        // 5: post reversal
+        { data: null, error: null },
+        // 6: insert corrected entry (.single())
+        { data: correctedEntry, error: null },
+        // 7: insert corrected lines
+        { data: null, error: null },
+        // 8: post corrected
+        { data: null, error: null },
+        // 9: fetch final reversal
+        { data: { ...reversalEntry, lines: [] }, error: null },
+        // 10: fetch final corrected
+        { data: { ...correctedEntry, lines: correctedLines }, error: null },
+      ]
+    }
+
+    it('dates both new verifikat in the first open period, names the original, and writes nothing to it', async () => {
+      setupMovedResults()
+      mockAssertStornoTarget.mockResolvedValueOnce(MOVED)
+      const supabase = makeClient()
+
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+        inFirstOpenPeriodWhenLocked: true,
+      })
+
+      expect(mockAssertStornoTarget).toHaveBeenCalledWith(
+        supabase,
+        'company-1',
+        expect.objectContaining({ id: 'orig-1' }),
+        undefined,
+        { inFirstOpenPeriodWhenLocked: true },
+      )
+      const headers = inserts
+        .filter((i) => i.table === 'journal_entries')
+        .map((i) => i.payload as Record<string, unknown>)
+      expect(headers).toEqual([
+        expect.objectContaining({
+          source_type: 'storno',
+          reverses_id: 'orig-1',
+          fiscal_period_id: 'fp-2026',
+          entry_date: '2026-11-24',
+          description: 'Storno av verifikat A12 (2025-03-15): Test purchase',
+        }),
+        expect.objectContaining({
+          source_type: 'correction',
+          correction_of_id: 'orig-1',
+          fiscal_period_id: 'fp-2026',
+          entry_date: '2026-11-24',
+          description: 'Rättelse av verifikat A12 (2025-03-15): Test purchase',
+        }),
+      ])
+      expect(mockIsStandingStorno).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1', 'reversal-1')
+      // No compare-and-set on the original, no relink out of its year.
+      expect(mockRelinkPaymentRows).not.toHaveBeenCalled()
+      expect(supabase.rpc).not.toHaveBeenCalledWith('relink_documents_to_correction', expect.anything())
+      expect(vi.mocked(supabase.from).mock.calls.map(([table]) => table)).not.toContain('transactions')
+      expect(resultIdx).toBe(11)
+      expect(result.reversal.id).toBe('reversal-1')
+      expect(result.corrected.id).toBe('corrected-1')
+      expect(result).not.toHaveProperty('transactionRelinkError')
+      expect(result).not.toHaveProperty('documentRelinkError')
+    })
+
+    it('keeps the person\'s own text and puts the reference after it', async () => {
+      setupMovedResults()
+      mockAssertStornoTarget.mockResolvedValueOnce(MOVED)
+      const supabase = makeClient()
+
+      await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+        inFirstOpenPeriodWhenLocked: true,
+        description: 'Kontorsmaterial, rätt konto',
+      })
+
+      const corrected = inserts
+        .filter((i) => i.table === 'journal_entries')
+        .map((i) => i.payload as Record<string, unknown>)[1]
+      expect(corrected.description).toBe('Kontorsmaterial, rätt konto (rättelse av verifikat A12 (2025-03-15))')
+    })
+
+    it('cancels its storno and posts no rättelse when another storno stands for the original', async () => {
+      setupMovedResults()
+      mockAssertStornoTarget.mockResolvedValueOnce(MOVED)
+      mockIsStandingStorno.mockResolvedValueOnce(false)
+      const supabase = makeClient()
+
+      await expect(
+        correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+          inFirstOpenPeriodWhenLocked: true,
+        }),
+      ).rejects.toBeInstanceOf(EntryAlreadyReversedError)
+
+      expect(cancelOrphanedEntry).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'reversal-1')
+      expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(1)
+    })
+
+    it('refuses the same lines again: the original still stands in its year', async () => {
+      setupMovedResults()
+      mockAssertStornoTarget.mockResolvedValueOnce(MOVED)
+      const supabase = makeClient()
+
+      const err = await correctEntry(
+        supabase as never,
+        'company-1',
+        'user-1',
+        'orig-1',
+        originalEntry.lines!.map((l) => ({
+          account_number: l.account_number,
+          debit_amount: l.debit_amount,
+          credit_amount: l.credit_amount,
+        })),
+        { inFirstOpenPeriodWhenLocked: true },
+      ).catch((e) => e)
+
+      expect(err).toBeInstanceOf(MeaninglessCorrectionError)
+      expect(err.reason).toBe('identical_to_original')
+      expect(inserts).toEqual([])
+    })
   })
 
   // A line booked before the non-negative CHECK (debit -0.25) used to be

@@ -1066,6 +1066,9 @@ export type BookkeepingOperation =
   | 'create_reversal_entry'
   | 'create_reversal_lines'
   | 'post_reversal_entry'
+  // Where a storno lands (lib/core/bookkeeping/storno-target.ts).
+  | 'load_stornos_of_original'
+  | 'load_open_periods'
   | 'replace_opening_balance'
   | 'create_corrected_entry'
   | 'create_corrected_lines'
