@@ -31,6 +31,7 @@ import {
   type VoucherVatCodeAccountRow,
 } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
+import { swedishVatNumberAbroad } from '@/lib/vat/seller-country'
 
 /**
  * The omvänd-skattskyldighet purchases an utlägg books without custom lines:
@@ -132,7 +133,10 @@ export function expenseVatCasesForReceipt(receipt: {
  * with the currency: SEK moms is Swedish, VAT in another currency is foreign
  * and booked as cost. SEK moms beside a foreign VAT number, or foreign-currency
  * VAT beside a Swedish one (a Swedish seller billing in euro, or the buyer's
- * own number read as the seller's), is asked. So is a receipt without VAT, or
+ * own number read as the seller's), is asked. So is SEK moms beside a Swedish
+ * VAT number and an address abroad (lib/vat/seller-country.ts
+ * swedishVatNumberAbroad): whether that seller is established in Sweden for
+ * the sale decides whose VAT it is. So is a receipt without VAT, or
  * whose VAT was not read: it may be a Swedish purchase without moms, a meal
  * abroad or a service under omvänd skattskyldighet, and neither the currency
  * nor the amount tells them apart.
@@ -141,10 +145,14 @@ export function vatCaseFromReceipt(receipt: {
   currency: string
   vatAmount: number | null | undefined
   sellerVatNumber?: string | null
+  sellerAddress?: string | null
 }): ExpenseVatCase | null {
   if (receipt.vatAmount == null || !(receipt.vatAmount > 0)) return null
   const country = vatNumberCountry(receipt.sellerVatNumber)
-  if (receipt.currency.toUpperCase() === 'SEK') return country !== null && country !== 'SE' ? null : 'domestic'
+  if (receipt.currency.toUpperCase() === 'SEK') {
+    if (country !== null && country !== 'SE') return null
+    return swedishVatNumberAbroad({ vatNumber: receipt.sellerVatNumber, address: receipt.sellerAddress }) ? null : 'domestic'
+  }
   return country === 'SE' ? null : 'abroad'
 }
 

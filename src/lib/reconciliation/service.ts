@@ -454,6 +454,11 @@ export interface GetAccountStatusOptions {
   today?: string
   windowFrom?: string | null
   windowTo?: string | null
+  /**
+   * Bank accounts: read bank.balance_check at the end of this day instead of
+   * the bank's own day for its last balance (a sign-off's through_date).
+   */
+  balanceCheckOn?: string | null
 }
 
 /**
@@ -493,13 +498,16 @@ export async function getAccountStatus(
       to: options.windowTo ?? defaultWindow(today).to,
     }
     const account = data as CashAccountRow
-    // The bank's balance against the books on the bank's own day, beside the
-    // movement bridge (lib/reconciliation/bank-balance-check.ts). Read for one
+    // The bank's balance against the books on the bank's own day (or on
+    // balanceCheckOn), beside the movement bridge (lib/reconciliation/bank-balance-check.ts). Read for one
     // account only: the rail stays one status read per account. A failed read
     // costs this block, never the status.
     const [bank, balanceCheck] = await Promise.all([
       bankStatus(supabase, companyId, account, window, today),
-      checkBankBalance(supabase, companyId, account).catch((err) => {
+      (options.balanceCheckOn
+        ? checkBankBalance(supabase, companyId, account, { on: options.balanceCheckOn })
+        : checkBankBalance(supabase, companyId, account)
+      ).catch((err) => {
         log.warn('bank balance check failed', {
           companyId,
           cashAccountId: account.id,

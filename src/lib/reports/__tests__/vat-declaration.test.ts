@@ -1476,9 +1476,10 @@ describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
     expect(result.rutor.ruta48).toBe(7048.45)
   })
 
-  it('falls back to the calendar year when the fiscal period cannot be resolved', async () => {
+  it('falls back to the calendar year when the fiscal period cannot be resolved and none is recorded', async () => {
     results = [
-      { data: null, error: null }, // fiscal_periods lookup → not found
+      { data: null, error: null }, // fiscal_periods lookup by id → not found
+      { data: [], error: null }, // the company's räkenskapsår → none recorded
     ]
     seedLedger([])
 
@@ -1510,7 +1511,7 @@ describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
 
   it('falls back to the calendar year for yearly without a fiscalPeriodId when no fiscal period exists', async () => {
     results = [
-      { data: null, error: null }, // no fiscal period ending in 2026
+      { data: null, error: null }, // no räkenskapsår recorded at all
     ]
     seedLedger([])
 

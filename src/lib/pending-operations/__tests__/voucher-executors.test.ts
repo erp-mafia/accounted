@@ -74,6 +74,7 @@ import { commitPendingOperation } from '../commit'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import { TargetPeriodClosedError } from '@/lib/bookkeeping/errors'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -1342,7 +1343,8 @@ describe('commitPendingOperation: correct_entry', () => {
         expect.objectContaining({ account_number: '2645' }),
         expect.objectContaining({ account_number: '2614' }),
       ]),
-      { allowDeepChain: false }
+      // A locked original is corrected in the first open period.
+      { allowDeepChain: false, inFirstOpenPeriodWhenLocked: true }
     )
     // A row staged without a description keeps correctEntry's default text.
     expect(vi.mocked(correctEntry).mock.calls[0][5]?.description).toBeUndefined()
@@ -1379,6 +1381,7 @@ describe('commitPendingOperation: correct_entry', () => {
     expect(vi.mocked(correctEntry).mock.calls[0][5]).toEqual({
       allowDeepChain: false,
       description: 'Förbrukningsinventarier, rätt leverantör',
+      inFirstOpenPeriodWhenLocked: true,
     })
   })
 
@@ -1414,6 +1417,7 @@ describe('commitPendingOperation: correct_entry', () => {
       allowDeepChain: false,
       description: undefined,
       sidesSwapped: true,
+      inFirstOpenPeriodWhenLocked: true,
     })
   })
 
@@ -1475,18 +1479,69 @@ describe('commitPendingOperation: correct_entry', () => {
     expect(correctEntry).not.toHaveBeenCalled()
   })
 
-  it('returns 409 with omprövning hint when the period is closed', async () => {
+  // A closed or locked year is no longer refused here: correctEntry books
+  // the storno and the corrected verifikat in the first open period, or
+  // refuses with a typed error before anything is written.
+  it('hands an original in a closed year to correctEntry, to be corrected in the first open period', async () => {
+    vi.mocked(correctEntry).mockResolvedValueOnce({
+      reversal: makeJournalEntry({ id: 'je-storno', voucher_number: 3, fiscal_period_id: 'fp-2' }),
+      corrected: makeJournalEntry({ id: 'je-corrected', voucher_number: 4, fiscal_period_id: 'fp-2' }),
+    })
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({
-      data: {
-        id: 'je-original',
-        status: 'posted',
-        fiscal_period_id: 'fp-1',
-        fiscal_periods: { is_closed: true },
+    enqueue({ data: { id: 'je-original', status: 'posted' }, error: null }) // executor's pre-flight fetch
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'correct_entry',
+      params: {
+        entry_id: 'je-original',
+        lines: [
+          { account_number: '5410', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
       },
-      error: null,
-    }) // executor's pre-flight fetch
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(vi.mocked(correctEntry).mock.calls[0][5]).toMatchObject({ inFirstOpenPeriodWhenLocked: true })
+  })
+
+  it('says in the answer when the pair landed in the first open period', async () => {
+    vi.mocked(correctEntry).mockResolvedValueOnce({
+      reversal: makeJournalEntry({ id: 'je-storno', voucher_number: 3, entry_date: '2026-11-24' }),
+      corrected: makeJournalEntry({ id: 'je-corrected', voucher_number: 4, entry_date: '2026-11-24' }),
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'je-original', status: 'posted', entry_date: '2025-11-15' }, error: null }) // pre-flight
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'correct_entry',
+      params: {
+        entry_id: 'je-original',
+        lines: [
+          { account_number: '5410', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ moved_to_first_open_period: true, entry_date: '2026-11-24' })
+    expect(String((result.data as { note_sv?: string }).note_sv)).toContain('första öppna period')
+  })
+
+  it('rejects the operation when correctEntry refuses (an entry type whose date cannot move)', async () => {
+    vi.mocked(correctEntry).mockRejectedValueOnce(new TargetPeriodClosedError('2025-03-15'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'je-original', status: 'posted' }, error: null }) // executor's pre-flight fetch
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
     const op = makePendingOp({
@@ -1502,10 +1557,9 @@ describe('commitPendingOperation: correct_entry', () => {
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(result.status).toBe('rejected')
-    expect(result.http_status).toBe(409)
-    expect(result.error).toMatch(/omprövning/i)
-    expect(correctEntry).not.toHaveBeenCalled()
+    expect(result.status).toBe('failed')
+    expect(result.operation_status).toBe('rejected')
+    expect(result.error).toMatch(/closed/)
   })
 
   it('returns 400 when required fields are missing', async () => {

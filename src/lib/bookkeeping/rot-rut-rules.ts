@@ -79,6 +79,13 @@ export const COMBINED_MAX = 75000
 export const GRON_TEKNIK_MAX = 50000
 
 /**
+ * Skatteverket, "Grön teknik: företag": where the grön teknik Begaran file is
+ * uploaded and signed. Linked from the payout dialog and the MCP file tool.
+ */
+export const GRON_TEKNIK_SERVICE_URL =
+  'https://www.skatteverket.se/foretag/skatterochavdrag/gronteknik.4.676f4884175c97df4192a42.html'
+
+/**
  * Every kind an invoice line can carry: the runtime twin of DeductionType
  * (Zod enums, pickers). Listed in the order the UI offers them.
  */
@@ -508,6 +515,18 @@ function lineVatAmount(vatRate: number | null | undefined, lineTotal: number): n
 }
 
 /**
+ * The most a grön teknik begäran may ask for one installation type: the
+ * type's rate of its price incl. moms, with the öre dropped from the price
+ * and from the result ("Uppgifter om belopp ska anges i hela krontal så att
+ * öretal faller bort", SFS 2020:1066 5 §). The invoice credits no more than
+ * this and the claim (gron-teknik-claim.ts) asks no more, so the 1513
+ * fordran and the begäran agree to the krona.
+ */
+export function gronTeknikClaimCeiling(percent: number, priceInclVat: number): number {
+  return truncateToWholeKronor(percent * truncateToWholeKronor(priceInclVat))
+}
+
+/**
  * The deduction each line carries, as the invoice stores, prints and books
  * it (invoice_items.deduction_amount, and the 1513 lines of the verifikat;
  * the header deduction_total is their sum). Aligned with `items`.
@@ -548,12 +567,12 @@ export function computeLineDeductions(
     if (key.startsWith('gron_teknik:')) {
       const percent = deductionPercent('gron_teknik', items[indexes[0]].work_type)
       if (percent !== null) {
-        const cost = Math.round(indexes.reduce((total, i) => {
+        const cost = indexes.reduce((total, i) => {
           const item = items[i]
           const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
           return total + lineTotal + lineVatAmount(item.vat_rate, lineTotal)
-        }, 0))
-        claim = Math.min(claim, truncateToWholeKronor(percent * cost))
+        }, 0)
+        claim = Math.min(claim, gronTeknikClaimCeiling(percent, cost))
       }
     }
     let excess = roundOre(sum - claim)

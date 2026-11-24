@@ -297,6 +297,16 @@ describe('planOneClick: a Swedish VAT number beside an address abroad', () => {
     expect([plan.ask, plan.reason]).toEqual(['editor', 'swedish_vat_number_abroad'])
   })
 
+  it('reads an address that ends with UK and a phone number', () => {
+    const reading = doc({
+      supplier: { ...supplier, address: '10 Example Street, London EC1A 1BB, UK\nTel +44 20 7946 0000' },
+      totals: { subtotal: 120, vatAmount: 30, total: 150 },
+    })
+    const plan = planOneClick(input({ reading }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'swedish_vat_number_abroad'])
+    expect(pairs(plan).map(([account]) => account)).not.toContain('2641')
+  })
+
   it('asks where the seller is for a document without a charge', () => {
     const plan = planOneClick(input({ reading: doc({ supplier, totals: { vatAmount: 0, total: 150 } }) }))
     expect([plan.ask, plan.reason]).toEqual(['seller_country', 'seller_country_unknown'])

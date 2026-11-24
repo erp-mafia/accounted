@@ -65,9 +65,10 @@ describe('QuickReviewDialog: the booking the person set', () => {
     // replaced it the moment the review opened.
     // A review opened in the read's reverse-charge box (accounted#37) holds
     // a proposal with its own source: the pick does not take it over either,
-    // nor a clearing proposal (the till's record says the money is already booked).
+    // nor a clearing proposal (the till's record says the money is already booked),
+    // nor a learned pair opened in its own box because nothing confirms it.
     expect(DIALOG_SRC).toMatch(
-      /autoApply=\{!isTemplateBooking && !isPersonChoice\(proposal\) && !docRead && !boxDispute && proposal\.source !== 'clearing'\}/,
+      /autoApply=\{!isTemplateBooking && !isPersonChoice\(proposal\) && !docRead && !boxDispute && !inOwnBox && proposal\.source !== 'clearing'\}/,
     )
     expect(DIALOG_SRC).not.toMatch(/autoApply=\{!isTemplateBooking\}/)
   })

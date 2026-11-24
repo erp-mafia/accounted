@@ -810,8 +810,9 @@ export interface CompanySettings {
   // reads absence and worked days from. 'previous_month' is the common
   // Swedish setup (innevarande månads lön, föregående månads avvikelser).
   salary_deviation_period: 'same_month' | 'previous_month'
-  // Semesterår basis (migration 20260713122000): 'calendar' (Jan to Dec, the
-  // default) or 'statutory_apr_mar' (Semesterlagen 3 §). Cannot change while
+  // Semesterår basis (migration 20260713122000): 'statutory_apr_mar'
+  // (Semesterlagen 3 §, a new company's default since 20261124191700) or
+  // 'calendar' (Jan to Dec, under a kollektivavtal). Cannot change while
   // open vacation-ledger rows exist.
   salary_vacation_year_basis: 'calendar' | 'statutory_apr_mar'
   // Calculation conventions (migration 20260919120100): jsonb validated by

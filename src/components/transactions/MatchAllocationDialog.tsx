@@ -83,6 +83,11 @@ import {
   SUPPLIER_DEBT_DESCRIPTION_MAX,
   isSupplierDebtAccount,
 } from '@/lib/bookkeeping/supplier-debt-lines'
+import {
+  CUSTOMER_RECEIVABLE_DEFAULT_ACCOUNT,
+  CUSTOMER_RECEIVABLE_DESCRIPTION_MAX,
+  isCustomerReceivableAccount,
+} from '@/lib/bookkeeping/customer-receivable-lines'
 
 /** Pause after the last keystroke before the search goes to the database. */
 const SEARCH_DEBOUNCE_MS = 250
@@ -206,9 +211,11 @@ type FeeDraft = {
 }
 
 /**
- * A supplier debt row as typed (crm#1954): the part of a supplier payment
- * that pays invoices registered in the bookkeeping kept before, booked on a
- * 244x account (lib/bookkeeping/supplier-debt-lines.ts).
+ * A row from before as typed: the part of the payment that pays invoices
+ * from the bookkeeping kept before. On a supplier payment a supplier debt on
+ * a 244x account (crm#1954, lib/bookkeeping/supplier-debt-lines.ts), on an
+ * incoming payment a customer receivable on a 151x account
+ * (lib/bookkeeping/customer-receivable-lines.ts).
  */
 type DebtDraft = FeeDraft
 
@@ -319,8 +326,9 @@ export default function MatchAllocationDialog({
   // the bank charged a fee on top of. Class 6 accounts of the active chart.
   const [fees, setFees] = useState<FeeDraft[]>([])
   const feeKey = useRef(0)
-  // Supplier debt rows (crm#1954): a supplier payment that also pays invoices
-  // registered before the company kept its books here. 244x accounts.
+  // Rows from before: a payment that also pays invoices from before the
+  // company kept its books here. A supplier payment's supplier debt (crm#1954)
+  // on 244x, an incoming payment's customer receivable on 151x.
   const [debts, setDebts] = useState<DebtDraft[]>([])
   const debtKey = useRef(0)
   const [voucherPreview, setVoucherPreview] = useState<VoucherPreview | null>(null)
@@ -340,7 +348,12 @@ export default function MatchAllocationDialog({
   const pickerListId = useId()
   const { accounts, isLoading: accountsLoading } = useAccounts()
   const feeAccounts = useMemo(() => accounts.filter((a) => isPayoutFeeAccount(a.account_number)), [accounts])
-  const debtAccounts = useMemo(() => accounts.filter((a) => isSupplierDebtAccount(a.account_number)), [accounts])
+  // The side's account group, default account and text length for the rows from before.
+  const incoming = kind === 'customer_invoice'
+  const isDebtAccount = incoming ? isCustomerReceivableAccount : isSupplierDebtAccount
+  const debtDefaultAccount = incoming ? CUSTOMER_RECEIVABLE_DEFAULT_ACCOUNT : SUPPLIER_DEBT_DEFAULT_ACCOUNT
+  const debtDescriptionMax = incoming ? CUSTOMER_RECEIVABLE_DESCRIPTION_MAX : SUPPLIER_DEBT_DESCRIPTION_MAX
+  const debtAccounts = useMemo(() => accounts.filter((a) => isDebtAccount(a.account_number)), [accounts, isDebtAccount])
 
   useEffect(() => {
     const handle = setTimeout(() => setAppliedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
@@ -538,7 +551,7 @@ export default function MatchAllocationDialog({
   }, [drafts])
 
   // The fee rows: a customer's payout is the invoices less the fees, a
-  // supplier payment the invoices plus the fees, plus the supplier debt from
+  // supplier payment the invoices plus the fees; either plus the rows from
   // before it also pays. The tally below compares that net with the row.
   const feeTotal = useMemo(() => sumOre(fees.map((f) => parseAmount(f.amount))), [fees])
   const debtTotal = useMemo(() => sumOre(debts.map((d) => parseAmount(d.amount))), [debts])
@@ -549,7 +562,7 @@ export default function MatchAllocationDialog({
     fees.every((f) => feeAccountOk(f.account) && parseAmount(f.amount) > 0) &&
     (fees.length === 0 || payoutFeesWithinInvoices(allocated, feeTotal))
   const debtAccountOk = (account: string) =>
-    isSupplierDebtAccount(account) && (accountsLoading || debtAccounts.some((a) => a.account_number === account))
+    isDebtAccount(account) && (accountsLoading || debtAccounts.some((a) => a.account_number === account))
   const debtsValid = debts.every((d) => debtAccountOk(d.account) && parseAmount(d.amount) > 0)
   const extraRowsValid = feesValid && debtsValid
   const hasExtraRows = fees.length + debts.length > 0
@@ -577,22 +590,32 @@ export default function MatchAllocationDialog({
     feeGap < (kind === 'customer_invoice' ? owedTotal : allocated)
   // A supplier payment's rest may instead pay invoices registered before the
   // company kept its books here (crm#1954): the choice is offered side by side
-  // with the fee, and alone when the rest is too large to be a fee.
-  const offerDebt = kind === 'supplier_invoice' && roomForExtraRow && feeGap >= ORE_ROUNDING_SETTLEMENT_MAX
+  // with the fee, and alone when the rest is too large to be a fee. An
+  // incoming payment larger than its invoices (a Bankgirot deposit that also
+  // pays invoices issued in the bookkeeping kept before) may book its rest on
+  // the customer receivable from before: what the row carries beyond every
+  // picked invoice paid in full, the fees and the receivable rows already
+  // there. The opposite direction of the customer's fee gap, so the two
+  // offers never stand together.
+  const debtGap = incoming ? roundOre(txAmountAbs + feeTotal - owedTotal - debtTotal) : feeGap
+  const offerDebt = roomForExtraRow && debtGap >= ORE_ROUNDING_SETTLEMENT_MAX
+
+  // A customer's fee or receivable row is the gap only once every invoice is
+  // allocated what it owed.
+  function allocateWhatEachInvoiceOwes() {
+    setDrafts((prev) => {
+      const next: Record<string, AllocationDraft> = {}
+      for (const [id, draft] of Object.entries(prev)) {
+        const owed = owedInRowCurrency(draft.candidate, txCurrency)
+        next[id] = owed === null ? draft : { ...draft, amount: formatAmountInput(owed) }
+      }
+      return next
+    })
+  }
 
   function addFeeRow() {
     if (!offerFee) return
-    if (kind === 'customer_invoice') {
-      // The fee is the gap only once every invoice is allocated what it owed.
-      setDrafts((prev) => {
-        const next: Record<string, AllocationDraft> = {}
-        for (const [id, draft] of Object.entries(prev)) {
-          const owed = owedInRowCurrency(draft.candidate, txCurrency)
-          next[id] = owed === null ? draft : { ...draft, amount: formatAmountInput(owed) }
-        }
-        return next
-      })
-    }
+    if (kind === 'customer_invoice') allocateWhatEachInvoiceOwes()
     setFees((prev) => [
       ...prev,
       { key: feeKey.current++, account: PAYMENT_FEE_ACCOUNT, amount: formatAmountInput(feeGap), description: '' },
@@ -601,9 +624,10 @@ export default function MatchAllocationDialog({
 
   function addDebtRow() {
     if (!offerDebt) return
+    if (incoming) allocateWhatEachInvoiceOwes()
     setDebts((prev) => [
       ...prev,
-      { key: debtKey.current++, account: SUPPLIER_DEBT_DEFAULT_ACCOUNT, amount: formatAmountInput(feeGap), description: '' },
+      { key: debtKey.current++, account: debtDefaultAccount, amount: formatAmountInput(debtGap), description: '' },
     ])
   }
 
@@ -868,7 +892,7 @@ export default function MatchAllocationDialog({
         : {}),
       ...(debts.length > 0
         ? {
-            supplier_debts: debts.map((d) => ({
+            [incoming ? 'customer_receivables' : 'supplier_debts']: debts.map((d) => ({
               account: d.account,
               amount: parseAmount(d.amount),
               ...(d.description.trim() ? { description: d.description.trim() } : {}),
@@ -884,7 +908,7 @@ export default function MatchAllocationDialog({
           }
         : {}),
     }
-  }, [drafts, fees, debts, explaining, explainingAcknowledged])
+  }, [drafts, fees, debts, incoming, explaining, explainingAcknowledged])
 
   // Fee or debt rows: the verifikat the confirm would post, from the route's
   // dry run (the bank leg on the row's own account), once the row balances.
@@ -1607,10 +1631,10 @@ export default function MatchAllocationDialog({
               </div>
             )}
 
-            {/* Supplier debt rows (crm#1954): the part of the payment that
-                pays invoices registered in the bookkeeping kept before,
-                debited to a 244x account without VAT, in the fee rows'
-                columns. */}
+            {/* Rows from before: the part of the payment that pays invoices
+                from the bookkeeping kept before, without VAT, in the fee
+                rows' columns. A supplier debt debited to 244x (crm#1954), a
+                customer receivable credited to 151x. */}
             {debts.length > 0 && (
               <div data-testid="debt-rows">
                 <ul>
@@ -1623,29 +1647,29 @@ export default function MatchAllocationDialog({
                         <div className={FEE_GRID_CLASS}>
                           <div className="min-w-0">
                             <label htmlFor={accountId} className="sr-only">
-                              {t('debt_account_aria', { n })}
+                              {incoming ? t('receivable_account_aria', { n }) : t('debt_account_aria', { n })}
                             </label>
                             <AccountCombobox
                               id={accountId}
                               value={debt.account}
                               accounts={debtAccounts}
                               onChange={(value) => updateDebt(debt.key, { account: value.trim() })}
-                              placeholder={SUPPLIER_DEBT_DEFAULT_ACCOUNT}
+                              placeholder={debtDefaultAccount}
                             />
                           </div>
                           <Input
                             value={debt.description}
                             onChange={(e) => updateDebt(debt.key, { description: e.target.value })}
-                            placeholder={t('debt_description_placeholder')}
-                            maxLength={SUPPLIER_DEBT_DESCRIPTION_MAX}
-                            aria-label={t('debt_description_aria', { n })}
+                            placeholder={incoming ? t('receivable_description_placeholder') : t('debt_description_placeholder')}
+                            maxLength={debtDescriptionMax}
+                            aria-label={incoming ? t('receivable_description_aria', { n }) : t('debt_description_aria', { n })}
                           />
                           <Input
                             type="text"
                             inputMode="decimal"
                             value={debt.amount}
                             onChange={(e) => updateDebt(debt.key, { amount: e.target.value })}
-                            aria-label={t('debt_amount_aria', { n })}
+                            aria-label={incoming ? t('receivable_amount_aria', { n }) : t('debt_amount_aria', { n })}
                             className="text-right tabular-nums"
                           />
                           <Button
@@ -1653,20 +1677,24 @@ export default function MatchAllocationDialog({
                             size="icon"
                             variant="ghost"
                             onClick={() => removeDebt(debt.key)}
-                            aria-label={t('debt_remove_aria', { n })}
+                            aria-label={incoming ? t('receivable_remove_aria', { n }) : t('debt_remove_aria', { n })}
                             className="text-muted-foreground"
                           >
                             <XMarkIcon className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                         {accountInvalid && (
-                          <p className="mt-1 text-[12px] leading-4 text-destructive">{t('debt_account_invalid')}</p>
+                          <p className="mt-1 text-[12px] leading-4 text-destructive">
+                            {incoming ? t('receivable_account_invalid') : t('debt_account_invalid')}
+                          </p>
                         )}
                       </li>
                     )
                   })}
                 </ul>
-                <p className="mt-1 text-[12px] leading-4 text-muted-foreground">{t('debt_note')}</p>
+                <p className="mt-1 text-[12px] leading-4 text-muted-foreground">
+                  {incoming ? t('receivable_note') : t('debt_note')}
+                </p>
               </div>
             )}
 
@@ -1693,7 +1721,7 @@ export default function MatchAllocationDialog({
                 )}
                 {debts.length > 0 && (
                   <div className={cn(TOTAL_GRID_CLASS, 'min-h-9')}>
-                    <span className="text-muted-foreground">{t('debts_label')}</span>
+                    <span className="text-muted-foreground">{incoming ? t('receivables_label') : t('debts_label')}</span>
                     <span className="text-right">+{formatCurrency(debtTotal, transaction.currency)}</span>
                     <span />
                   </div>
@@ -1738,11 +1766,21 @@ export default function MatchAllocationDialog({
                 <AttnLine>{t('undershoot_warning', { amount: formatCurrency(leftover, transaction.currency) })}</AttnLine>
               ) : null}
               {/* Offered once the invoices and the row are a krona or more
-                  apart in the fee's direction, prefilled with that gap. A
-                  supplier payment's rest is a choice (crm#1954): a bank fee
-                  (while it is smaller than the invoices) or a supplier debt
-                  from the bookkeeping kept before. */}
-              {offerDebt ? (
+                  apart, prefilled with that gap. A supplier payment's rest is
+                  a choice (crm#1954): a bank fee (while it is smaller than
+                  the invoices) or a supplier debt from the bookkeeping kept
+                  before. An incoming payment's rest beyond its invoices is a
+                  customer receivable from the bookkeeping kept before. */}
+              {offerDebt && incoming ? (
+                <AttnLine tone="info">
+                  {t('remainder_offer_customer', { amount: formatCurrency(debtGap, txCurrency) })}
+                  <div className="mt-1.5 flex flex-wrap gap-2 print:hidden">
+                    <Button type="button" variant="outline" onClick={addDebtRow}>
+                      {t('remainder_as_customer_receivable', { account: CUSTOMER_RECEIVABLE_DEFAULT_ACCOUNT })}
+                    </Button>
+                  </div>
+                </AttnLine>
+              ) : offerDebt ? (
                 <AttnLine tone="info">
                   {t('remainder_offer_supplier', { amount: formatCurrency(feeGap, txCurrency) })}
                   <div className="mt-1.5 flex flex-wrap gap-2 print:hidden">

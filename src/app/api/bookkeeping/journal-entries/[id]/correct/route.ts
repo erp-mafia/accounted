@@ -9,6 +9,7 @@ import { CorrectJournalEntryAppSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
+import { correctionLanding } from '@/lib/vat/moved-correction-vat'
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal-entry.correct',
@@ -23,10 +24,25 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // about. A verifikat that is not there is correctEntry's refusal below.
     const { data: original } = await supabase
       .from('journal_entries')
-      .select('entry_date, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
+      .select('id, entry_date, fiscal_period_id, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
       .eq('id', id)
       .eq('company_id', companyId)
       .maybeSingle()
+
+    // Where the pair lands: a locked or closed original is corrected in the
+    // first open period, and a pair that then changes VAT is told which
+    // momsperiod the error belongs to (lib/vat/moved-correction-vat.ts). A
+    // refusal here is correctEntry's to give below, with its own message.
+    let landing: Awaited<ReturnType<typeof correctionLanding>> | null = null
+    if (original) {
+      landing = await correctionLanding(supabase, companyId, original, validation.data.lines, validation.data.entry_date).catch(
+        () => {
+          // Refused or unread: correctEntry runs the same check and answers.
+          return null
+        },
+      )
+    }
+    const stornoDate = landing?.target.moved ? landing.target.date : original?.entry_date
 
     // The corrected lines are typed: the booking-time VAT and revenue
     // warnings apply. A rättelse mirrors its original on purpose, so the
@@ -35,14 +51,18 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       supabase,
       companyId,
       {
-        entry_date: validation.data.entry_date ?? '',
+        entry_date: validation.data.entry_date ?? (landing?.target.moved ? landing.target.date : ''),
         description: validation.data.description ?? '',
         lines: validation.data.lines,
-        replaces: original ? { entry_date: original.entry_date, lines: original.lines ?? [] } : null,
+        replaces: original && stornoDate ? { entry_date: stornoDate, lines: original.lines ?? [] } : null,
         opening_balance: original?.source_type === 'opening_balance',
       },
       log,
-      { acknowledged: validation.data.acknowledged_warnings, checkDuplicates: false },
+      {
+        acknowledged: validation.data.acknowledged_warnings,
+        checkDuplicates: false,
+        ...(landing?.vatWarning ? { extra: [landing.vatWarning] } : {}),
+      },
     )
     if (!voucherGuard.ok) {
       return errorResponseFromCode(voucherGuard.code, log, { requestId, details: voucherGuard.details })
@@ -67,6 +87,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           // correctEntry finds its period and refuses a closed or locked one
           // (crm#1368).
           ...(validation.data.entry_date ? { newEntryDate: validation.data.entry_date } : {}),
+          // A locked or closed original: the storno (and, without a date of
+          // its own, the rättelse) is dated in the first open period.
+          inFirstOpenPeriodWhenLocked: true,
         },
       },
     })

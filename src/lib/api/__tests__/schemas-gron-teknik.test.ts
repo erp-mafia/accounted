@@ -12,8 +12,9 @@ import { DEDUCTION_LINE_ERRORS } from '@/lib/bookkeeping/rot-rut-rules'
  * The wire schemas every invoice write door shares (dashboard create/edit,
  * v1 POST/PATCH, the MCP update executor): deduction_type accepts
  * gron_teknik, refuses unknown kinds, and carries the grön teknik
- * completeness rules with field paths the editor can point at. The HUS
- * payout file stays ROT/RUT only.
+ * completeness rules with field paths the editor can point at. The payout
+ * file takes every kind: the HUS file for ROT/RUT, the Begaran file for
+ * grön teknik.
  */
 
 const UUID = '00000000-0000-4000-8000-000000000001'
@@ -102,10 +103,11 @@ describe('CreateInvoiceSchema: grön teknik', () => {
   })
 })
 
-describe('RotRutPayoutFileSchema: the HUS file stays ROT/RUT', () => {
-  it('refuses gron_teknik and keeps rot and rut', () => {
+describe('RotRutPayoutFileSchema: one file per kind', () => {
+  it('takes rot, rut and gron_teknik and refuses anything else', () => {
     const body = (deduction_type: string) => ({ deduction_type, invoice_ids: [UUID] })
-    expect(RotRutPayoutFileSchema.safeParse(body('gron_teknik')).success).toBe(false)
+    expect(RotRutPayoutFileSchema.safeParse(body('gron_teknik')).success).toBe(true)
+    expect(RotRutPayoutFileSchema.safeParse(body('green')).success).toBe(false)
     expect(RotRutPayoutFileSchema.safeParse(body('rot')).success).toBe(true)
     expect(RotRutPayoutFileSchema.safeParse(body('rut')).success).toBe(true)
   })

@@ -471,6 +471,7 @@ export const transactionsMatchBatch = defineOperation({
       'The allocation amounts must sum to |amount| of the transaction: BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX otherwise.',
       'fees books a payment service\'s fee on the row: a payout net of Stripe\'s or a card acquirer\'s fee (customer invoices: allocations - fees = |amount|) or a bank\'s charge added to a payment (supplier invoices: allocations + fees = |amount|). Each invoice is allocated what it owed. At most 5 rows, each a debit on an active BAS class 6 account (6570 Bankkostnader, 6040 Kontokortsavgifter) with no VAT, since a payment service is exempt (ML 10 kap. 33 §): BATCH_FEE_ACCOUNT_INVALID otherwise. The fees must be smaller than the invoices (BATCH_FEE_TOO_LARGE). A platform\'s commission is a taxable service, not a fee row: book it from the platform\'s invoice.',
       'supplier_debts books the part of a supplier payment that pays invoices registered before the company kept its books here (a SIE import carries the 2440 balance, not the invoices): a debit on an active 244x account (2440 Leverantörsskulder), no VAT, since the moms was booked with the invoice. Supplier invoices only (BATCH_DEBT_SUPPLIER_ONLY); allocations + fees + supplier_debts = |amount|. Not a fee: it may be larger than the invoices. At most 5 fee and debt rows together (BATCH_DEBT_INVALID); another account returns BATCH_DEBT_ACCOUNT_INVALID.',
+      'customer_receivables is the customer side: the part of an incoming payment (a Bankgirot deposit that also pays invoices issued in the bookkeeping kept before, which a SIE import carries only as the 1510 balance) booked as a credit on an active 151x account (1510 Kundfordringar), no VAT. Customer invoices only (BATCH_RECEIVABLE_CUSTOMER_ONLY); allocations - fees + customer_receivables = |amount|. It may be larger than the invoices. At most 5 fee and receivable rows together (BATCH_RECEIVABLE_INVALID); another account returns BATCH_RECEIVABLE_ACCOUNT_INVALID. total_debts in the answer is these rows together.',
       'A row that posted vouchers already explain (each invoice marked paid by hand) returns 409 BATCH_TX_POSSIBLE_DUPLICATE with the vouchers: link the row to them instead. force=true needs expected_journal_entry_ids naming exactly that set.',
       'Kontantmetoden: unbooked SEK customer invoices paid in full book their revenue and moms here (all or none, BATCH_CASH_LINES_MIXED). One unbooked supplier invoice allocated the whole row (no fees) is booked as match-supplier-invoice books it: cost and moms at payment, its lines in the dry run. Others return 400 BATCH_CASH_METHOD_UNBOOKED_INVOICE.',
       'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 2440; registration_journal_entry_ids names them and the dry run shows them as registration_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, SI_BOOK_NO_FISCAL_PERIOD, SI_ACCRUED_COST_PERIOD_LOCKED, SI_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.registration_first, before anything is booked.',
@@ -507,7 +508,7 @@ export const transactionsMatchBatch = defineOperation({
     leftover: z.number(),
     /** The fee rows together; absent without fees. */
     total_fees: z.number().optional(),
-    /** The supplier debt rows together; absent without them. */
+    /** The rows from before together (supplier_debts or customer_receivables); absent without them. */
     total_debts: z.number().optional(),
     /** Supplier invoice id to the registration verifikat booked first (defer_invoice_booking). */
     registration_journal_entry_ids: z.record(z.string(), z.string().uuid()).optional(),
@@ -541,6 +542,9 @@ export const transactionsMatchBatch = defineOperation({
     'BATCH_DEBT_INVALID',
     'BATCH_DEBT_ACCOUNT_INVALID',
     'BATCH_DEBT_SUPPLIER_ONLY',
+    'BATCH_RECEIVABLE_INVALID',
+    'BATCH_RECEIVABLE_ACCOUNT_INVALID',
+    'BATCH_RECEIVABLE_CUSTOMER_ONLY',
     'BATCH_PERIOD_LOCKED',
     'BATCH_RPC_FAILED',
     'BATCH_NO_FISCAL_PERIOD',
@@ -563,7 +567,7 @@ export const transactionsMatchBatch = defineOperation({
     visibility: 'default',
     keywords: ['klumpbetalning', 'fördela betalning', 'matcha betalningar'],
     description:
-      'Stage 1 SEK bank tx against N customer OR N supplier invoices in one verifikat. fees: payment fees (customer: invoices - fees = tx; supplier: + fees). supplier_debts: old 244x debt with no invoice (+). preview.expected_lines = what posts.',
+      'Stage 1 SEK bank tx vs N customer OR N supplier invoices, one verifikat. fees: customer -, supplier +. supplier_debts/customer_receivables: old 244x/151x balance (+). preview.expected_lines = what posts.',
     stage: {
       pendingType: 'match_batch_allocate',
       title: (input, preview) => {

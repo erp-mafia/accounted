@@ -1045,3 +1045,152 @@ describe('POST /api/transactions/[id]/match-batch with supplier debt rows', () =
     expect(mockSupabase.rpc.mock.calls[0][1]).not.toHaveProperty('p_debt_lines')
   })
 })
+
+// The customer side of the supplier debt rows: a Bankgirot deposit pays an
+// invoice issued here and one issued in the bookkeeping kept before (only in
+// the 1510 balance an SIE import brought). The rest is a credit on 1510.
+describe('POST /api/transactions/[id]/match-batch with customer receivable rows', () => {
+  const allocations = [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 3000 }]
+  const customer_receivables = [{ account: '1510', amount: 1250, description: 'Faktura 9001' }]
+  const post = (body: unknown, query = '') =>
+    POST(
+      createMockRequest(`/api/transactions/${TX_UUID}/match-batch${query}`, { method: 'POST', body }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+  const invoiceDocs = { data: [{ id: INV_UUID, document_type: 'invoice' }], error: null }
+  const depositRow = (cashAccountId: string | null) => ({
+    data: { id: TX_UUID, description: 'BG INSÄTTNING', merchant_name: 'Summa insättningar', amount: 4250, currency: 'SEK', date: '2026-11-24', journal_entry_id: null, cash_account_id: cashAccountId },
+    error: null,
+  })
+  const customerInvoices = {
+    data: [{ id: INV_UUID, currency: 'SEK', exchange_rate: null, remaining_amount: 3000, total: 3000 }],
+    error: null,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
+    mockDetectExplaining.mockResolvedValue(null)
+  })
+
+  it('401 without a session', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    expect((await post({ allocations, customer_receivables })).status).toBe(401)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('400 for receivable rows on a supplier batch, an account outside 151x, a zero amount or a sixth extra row', async () => {
+    const supplier = [{ kind: 'supplier_invoice', supplier_invoice_id: SI_UUID, amount: 1000 }]
+    expect((await post({ allocations: supplier, customer_receivables: [{ account: '1510', amount: 50 }] })).status).toBe(400)
+    expect((await post({ allocations, customer_receivables: [{ account: '1930', amount: 50 }] })).status).toBe(400)
+    expect((await post({ allocations, customer_receivables: [{ account: '1510', amount: 0 }] })).status).toBe(400)
+    const fees = Array.from({ length: 3 }, () => ({ account: '6570', amount: 1 }))
+    const threeRows = Array.from({ length: 3 }, () => ({ account: '1510', amount: 1 }))
+    expect((await post({ allocations, fees, customer_receivables: threeRows })).status).toBe(400)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('404 BATCH_TX_NOT_FOUND on a dry run for a row outside the company', async () => {
+    enqueue(invoiceDocs)
+    enqueue({ data: null, error: null }) // transactions
+    const response = await post({ allocations, customer_receivables }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('BATCH_TX_NOT_FOUND')
+  })
+
+  it('dry run: the invoice and the old receivable credited, the bank debited for the deposit, nothing written', async () => {
+    enqueue(invoiceDocs)
+    enqueue(depositRow('ca-1'))
+    enqueue(customerInvoices)
+    enqueue({ data: [{ account_number: '1510' }], error: null }) // chart_of_accounts: 1510 is active
+    enqueue({ data: { ledger_account: '1931', currency: 'SEK' }, error: null }) // cash_accounts
+    const response = await post({ allocations, customer_receivables }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{
+      data: {
+        total_allocated: number
+        total_debts: number
+        expected_description: string
+        expected_lines: Array<{ account_number: string; description: string; debit: number; credit: number }>
+        expected_lines_balanced: boolean
+      }
+    }>(response)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({
+      total_allocated: 3000,
+      total_debts: 1250,
+      expected_description: 'Samlingsinbetalning 2026-11-24',
+      expected_lines_balanced: true,
+    })
+    expect(body.data.expected_lines.map((l) => `${l.account_number} D${l.debit} K${l.credit}`)).toEqual([
+      '1510 D0 K3000',
+      '1510 D0 K1250',
+      '1931 D4250 K0',
+    ])
+    expect(body.data.expected_lines[1]!.description).toBe('Faktura 9001')
+    expect(findCalls('chart_of_accounts', 'in')).toEqual([['account_number', ['1510']]])
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
+  it('dry run refuses a receivable account the chart does not have active: BATCH_RECEIVABLE_ACCOUNT_INVALID', async () => {
+    enqueue(invoiceDocs)
+    enqueue(depositRow(null))
+    enqueue(customerInvoices)
+    enqueue({ data: [], error: null }) // chart_of_accounts: 1518 is not active
+    const response = await post({ allocations, customer_receivables: [{ account: '1518', amount: 1250 }] }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { account: string } } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_RECEIVABLE_ACCOUNT_INVALID')
+    expect(body.error.details).toEqual({ account: '1518' })
+  })
+
+  it('dry run: a deposit the invoice and the receivable rows do not meet is BATCH_AMOUNT_BELOW_TX, naming the rows', async () => {
+    enqueue(invoiceDocs)
+    enqueue(depositRow(null))
+    enqueue(customerInvoices)
+    const response = await post({ allocations, customer_receivables: [{ account: '1510', amount: 500 }] }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, number> } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_AMOUNT_BELOW_TX')
+    expect(body.error.details).toEqual({ total_allocated: 3000, total_debts: 500, transaction_amount: 4250 })
+  })
+
+  it('200 books through the RPC with the receivable rows as p_debt_lines, and answers total_debts', async () => {
+    enqueue(invoiceDocs)
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-recv-1',
+        voucher_series: 'A',
+        voucher_number: 41,
+        tx_id: TX_UUID,
+        allocations: [],
+        total_allocated: 3000,
+        total_fees: 0,
+        total_debts: 1250,
+        leftover: 0,
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'je-recv-1', company_id: 'company-1', status: 'posted', lines: [] }, error: null }) // engine door reload
+    const response = await post({
+      allocations,
+      customer_receivables: [{ account: '1510', amount: 1250, description: '  Faktura 9001 ' }],
+    })
+    const { status, body } = await parseJsonResponse<{ data: { journal_entry_id: string; total_debts: number } }>(response)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ journal_entry_id: 'je-recv-1', total_debts: 1250 })
+    expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'match_batch_allocate',
+      expect.objectContaining({
+        p_tx_id: TX_UUID,
+        p_allocations: allocations,
+        p_debt_lines: [{ account: '1510', amount: 1250, description: 'Faktura 9001' }],
+      }),
+    )
+    expect(mockSupabase.rpc.mock.calls[0][1]).not.toHaveProperty('p_fee_lines')
+  })
+})

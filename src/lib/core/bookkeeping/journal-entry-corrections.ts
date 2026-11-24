@@ -35,6 +35,8 @@ import { postingPort } from '@/lib/posting/port'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { DATE_FIXED_SOURCE_TYPES } from '@/lib/core/bookkeeping/date-fixed-source-types'
+import { standingStornoOf } from '@/lib/core/bookkeeping/storno-target'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { refuseCorrectedImportVatWithoutBase, type ImportVatShapeLine } from '@/lib/bookkeeping/import-vat-base'
@@ -60,8 +62,6 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 /** Entry types whose lines keep their dedicated flows (same list as the RPC). */
 const LINE_RATTELSE_EXCLUDED_SOURCES = ['storno', 'year_end', 'vat_settlement'] as const
-/** Entry types whose date carries structural meaning (same list as the RPC). */
-const DATE_FIXED_SOURCES = ['opening_balance', 'year_end', 'vat_settlement'] as const
 
 const STORNO_HINT = 'använd rättelseverifikat (storno).'
 
@@ -151,7 +151,33 @@ async function loadPostedEntry(
   if (entry.status !== 'posted') {
     return { ok: false, code: 'CANNOT_CORRECT_NON_POSTED', details: { current_status: entry.status } }
   }
+  const stornoed = await stornoedRefusal(ctx, entryId)
+  if (stornoed) return stornoed
   return { ok: true, entry }
+}
+
+/**
+ * A verifikat corrected by a storno in a later open period stays 'posted'
+ * in its own year (storno-target.ts), so its status alone lets an inline
+ * rättelse through once that year is unlocked or reopened: its lines would
+ * change under the storno that already reverses them. Refused here, on the
+ * preview and the commit alike; the RPCs check status only (a database guard
+ * is a follow-up). Fails closed when the read fails.
+ */
+async function stornoedRefusal(ctx: OperationContext, entryId: string): Promise<Failure | null> {
+  let storno: { id: string } | null
+  try {
+    storno = await standingStornoOf(ctx.supabase, ctx.companyId, entryId)
+  } catch (err) {
+    ctx.log.error('failed to read the stornos of a verifikat for rättelse', toError(err), { entryId })
+    return { ok: false, code: 'JOURNAL_RATTELSE_FAILED' }
+  }
+  return storno
+    ? refused(
+        'Verifikationen är redan rättad med storno i en senare period. Rätta det rättade verifikatet i stället.',
+        { rule: 'stornoed_in_later_period', storno_id: storno.id },
+      )
+    : null
 }
 
 /** Open, unlocked period and entry date after the company lock date (the RPCs' envelope). */
@@ -218,6 +244,8 @@ export async function correctJournalEntryMetadata(
   options: { dryRun?: boolean } = {},
 ): Promise<OperationOutcome<Record<string, unknown>>> {
   if (options.dryRun) return previewMetadataCorrection(ctx, entryId, input)
+  const stornoed = await stornoedRefusal(ctx, entryId)
+  if (stornoed) return stornoed
 
   // The log row records WHO beside the user: the commit actor of this
   // request (a person in the app, an API key, an OAuth client, ...).
@@ -249,7 +277,7 @@ async function previewMetadataCorrection(
   if (entry.source_type === 'storno') {
     return refused('Stornoverifikat kan inte rättas: rätta eller återför originalverifikatet i stället.')
   }
-  if (dateMoves && (DATE_FIXED_SOURCES as readonly string[]).includes(entry.source_type)) {
+  if (dateMoves && DATE_FIXED_SOURCE_TYPES.includes(entry.source_type)) {
     return refused('Datumet på den här verifikationstypen kan inte ändras.', { source_type: entry.source_type })
   }
 
@@ -297,6 +325,8 @@ export async function strikeJournalEntryLines(
   options: { dryRun?: boolean } = {},
 ): Promise<OperationOutcome<Record<string, unknown>>> {
   if (options.dryRun) return previewLineRattelse(ctx, entryId, input)
+  const stornoed = await stornoedRefusal(ctx, entryId)
+  if (stornoed) return stornoed
 
   // The RPC knows no momsrutor: the importmoms rule (#94) runs here, on the
   // verifikat as the rättelse leaves it. An entry this read cannot see is the
@@ -713,6 +743,10 @@ async function previewRedate(
     lines: FullLineRow[] | null
   }
   if (original.status !== 'posted') return bookkeepingFailure(new CannotCorrectNonPostedError(original.status))
+  // Its storno in a later open period already took it out (storno-target.ts):
+  // the redate's own storno would be refused at commit.
+  const stornoed = await stornoedRefusal(ctx, entryId)
+  if (stornoed) return stornoed
   if (input.new_entry_date === original.entry_date) {
     return bookkeepingFailure(new MeaninglessCorrectionError('no_date_change'))
   }

@@ -7,7 +7,8 @@ import {
   k3ContentsNotice,
 } from './build-data'
 import { cashFlowOmissionRule, resolveCashFlowOmission } from './cash-flow-omission'
-import { cashFlowStatementRequirement, isEntityType } from '@/lib/company/entity-type'
+import { cashFlowStatementRequirement, isEntityType, keepsShareRegister } from '@/lib/company/entity-type'
+import { isReliableFrameworkSource } from '@/lib/company/accounting-framework'
 import type { K3BuildContext } from './build-data'
 import {
   evaluateDisclosures,
@@ -275,9 +276,17 @@ export async function buildCanonicalAnnualReport(
   // The jämförelseår's manual figure lives on that period's narrative row;
   // without it a SIE-migrated company with no employees rows would count
   // as 0 last year and dodge the two-year ÅRL 1:3 § test.
-  const previousMedelantalOverride = report.previous_period
-    ? await getMedelantalOverride(supabase, companyId, report.previous_period.id)
-    : null
+  // The aktiebok against the share count the aktiekapital note prints, for a
+  // form that keeps one (bolaget/reconcile.ts, the share register's check).
+  const entityType = report.company.entity_type
+  const [previousMedelantalOverride, shareRegister] = await Promise.all([
+    report.previous_period ? getMedelantalOverride(supabase, companyId, report.previous_period.id) : null,
+    isEntityType(entityType) && keepsShareRegister(entityType)
+      ? import('@/lib/bolaget/share-register').then(({ loadShareCapitalReconciliation }) =>
+          loadShareCapitalReconciliation(supabase, companyId),
+        )
+      : null,
+  ])
   const metrics = reportMetrics(
     report,
     (employeesResult.data ?? []) as EmployeeRow[],
@@ -318,6 +327,7 @@ export async function buildCanonicalAnnualReport(
     eligibility,
     stage: options.stage ?? 'draft',
     todayIso: options.todayIso,
+    shareRegister,
   })
 
   let ixbrl = null
@@ -356,6 +366,8 @@ export async function buildCanonicalAnnualReport(
     fiscal_period_id: fiscalPeriodId,
     entity_type: report.company.entity_type,
     report,
+    framework_source: built.frameworkSource ?? null,
+    framework_confirmed: isReliableFrameworkSource(built.frameworkSource),
     profile,
     disclosures,
     eligibility,

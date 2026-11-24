@@ -222,7 +222,7 @@ import {
   getArticleVatRateAdoptionSet,
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
-import { DEDUCTION_INVOICE_ONLY_ERROR, DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { DEDUCTION_INVOICE_ONLY_ERROR, DEDUCTION_TYPES, isDeductionType, validateDeductionLines, GRON_TEKNIK_SERVICE_URL, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { MAX_INVOICE_ATTACHMENTS, linkInvoiceAttachments } from '@/lib/invoices/invoice-attachments'
@@ -249,7 +249,7 @@ import { dimensionFilterPartialView } from '@/lib/reports/dimension-filter'
 // gate. The MCP surface imports it instead of mirroring it: a hand-rolled copy
 // here is exactly how the reverse-charge check drifted into an unreachable
 // `ruta48 === 0` test.
-import { resolveAgentWorklist } from '@/lib/receipt-hunt/agent-worklist'
+import { resolveAgentWorklist, verifikatNextStepKinds, type NextStepKind, type VerifikatErrandRow } from '@/lib/receipt-hunt/agent-worklist'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { expandParty } from '@/lib/parties/party-api'
@@ -554,7 +554,8 @@ import {
   OPENING_BALANCE_EXISTS_CODE,
 } from '@/lib/import/opening-balance/existing'
 import { assertNoOpeningBalance } from '@/lib/import/opening-balance/existing'
-import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
+import { assertStornoTarget, movedCorrectionDescription } from '@/lib/core/bookkeeping/storno-target'
+import { correctionLanding } from '@/lib/vat/moved-correction-vat'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import {
   checkVoucherGapExplanation,
@@ -603,7 +604,12 @@ import {
   type MatchableInvoice,
 } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
-import { listRotRutCandidates, createRotRutPayoutRequest, archiveRotRutPayoutFile } from '@/lib/invoices/rot-rut-service'
+import {
+  listRotRutCandidates,
+  listGronTeknikCandidates,
+  createRotRutPayoutRequest,
+  archiveRotRutPayoutFile,
+} from '@/lib/invoices/rot-rut-service'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { getPayoutRecognition } from '@/lib/invoices/rot-rut-payout-recognition'
 import { twoStepPayoutShape } from '@/lib/invoices/rot-rut-link-voucher'
@@ -9713,14 +9719,29 @@ export const tools: McpTool[] = [
         ok: boolean
         code?: string
         total_count?: number
-        verifikat?: unknown[]
+        verifikat?: VerifikatErrandRow[]
       } | null
       if (!result?.ok) {
         throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
       }
 
-      const rows = result.verifikat ?? []
+      const page = result.verifikat ?? []
       const total = result.total_count ?? 0
+      // Each row's errand, as Kvittojakten's worklist reads it (nextStepKind):
+      // own_transfer is a transfer between the company's own accounts, whose
+      // underlag is the bank statement, and gnubok_vat_close_check leaves
+      // those out of its count; stripe needs Stripe's report. A failed read
+      // lists the rows without it (null) rather than not at all.
+      let kinds: Map<string, NextStepKind> | null = null
+      try {
+        kinds = await verifikatNextStepKinds(supabase, companyId, page)
+      } catch (err) {
+        log.warn('list_verifikat_without_documents: next_step_kind unavailable', {
+          companyId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      const rows = page.map((row) => ({ ...row, next_step_kind: kinds?.get(row.journal_entry_id) ?? null }))
       // Waivers are respected here, so an agent acting on these rows needs the
       // tool that writes one: without its name one guessed six names in nine
       // seconds (feedback seq 706722). A response field also reaches callers
@@ -23900,12 +23921,12 @@ export const tools: McpTool[] = [
     keywords: ['rotavdrag', 'rutavdrag', 'husarbete', 'utbetalningsfil'],
     title: 'Generate Rot/Rut Payout File',
     description:
-      'Begäran om utbetalning for rot/rut (Skatteverket husavdrag) from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns app_url for the user.',
+      'Begäran om utbetalning for rot, rut or grön teknik from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns app_url for the user.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        deduction_type: { type: 'string', enum: ['rot', 'rut'] },
+        deduction_type: { type: 'string', enum: ['rot', 'rut', 'gron_teknik'] },
         list_only: {
           type: 'boolean',
           description: 'Only list eligible + blocked invoices, generate nothing (default false)',
@@ -23939,7 +23960,7 @@ export const tools: McpTool[] = [
         file_document_id: { type: ['string', 'null'] },
         download_url: { type: ['string', 'null'] },
         requested_total: { type: 'number' },
-        other_type_counts: { type: 'object', description: 'Grön teknik invoices, counted not listed' },
+        other_type_counts: { type: 'object', description: 'Invoices of the other kind, counted not listed' },
         arenden: { type: 'array', items: { type: 'object' } },
         warnings: { type: 'array', items: { type: 'string' } },
         upload_url: { type: 'string' },
@@ -23951,17 +23972,16 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     }),
     async execute(args, companyId, userId, supabase) {
-      const type = args.deduction_type as 'rot' | 'rut'
-      if (type !== 'rot' && type !== 'rut') {
-        throw new Error(
-          args.deduction_type === 'gron_teknik'
-            ? 'deduction_type must be rot or rut: grön teknik has no begäran file yet. The payout is requested in Skatteverket\'s e-tjänst for grön teknik; the invoice page shows what to enter.'
-            : 'deduction_type must be rot or rut',
-        )
+      const type = args.deduction_type as 'rot' | 'rut' | 'gron_teknik'
+      if (type !== 'rot' && type !== 'rut' && type !== 'gron_teknik') {
+        throw new Error('deduction_type must be rot, rut or gron_teknik')
       }
-      const uploadUrl = 'https://www7.skatteverket.se/portal/rotrut/begar-utbetalning/fil'
+      const uploadUrl = type === 'gron_teknik' ? GRON_TEKNIK_SERVICE_URL : 'https://www7.skatteverket.se/portal/rotrut/begar-utbetalning/fil'
 
-      const candidates = await listRotRutCandidates(supabase, companyId, type)
+      const candidates =
+        type === 'gron_teknik'
+          ? await listGronTeknikCandidates(supabase, companyId)
+          : await listRotRutCandidates(supabase, companyId, type)
       if (!candidates.ok) throw new Error('Failed to list rot/rut candidates')
 
       if (args.list_only === true) {
@@ -27847,7 +27867,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_correct_entry',
     keywords: ['rättelse', 'rätta verifikat', 'verifikation', 'ändra verifikat'],
     title: 'Correct Posted Entry (Rättelse)',
-    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645; lines accept dimensions bags. Account drives ruta. HIGH risk.',
+    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in its period (locked: first open period). Use for partial fixes like 2641 → 2614/2645; lines accept dimensions bags. Account drives ruta. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -28006,14 +28026,16 @@ export const tools: McpTool[] = [
       if (original.status !== 'posted') {
         throw new Error(`Only posted entries can be corrected. Current status: ${original.status}.`)
       }
-      // The storno lands on the original's date in the original's year, so
-      // that year must take it: the engine's own check (assertStornoTarget,
-      // which correctEntry runs again at commit). Its typed refusals carry the
-      // registry's answer: TARGET_PERIOD_LOCKED (unlock first) or
-      // TARGET_PERIOD_CLOSED, which says what to do with a closed year. The
-      // old hand-rolled check told the agent to unlock a closed year, which
-      // unlock refuses (crm#1290).
-      await assertStornoTarget(supabase, companyId, original)
+      // The storno lands on the original's date in the original's year, or,
+      // when that date takes no write, in the first open, unlocked period
+      // after it: the engine's own check (assertStornoTarget, which
+      // correctEntry runs again at commit with the same option). Its typed
+      // refusals carry the registry's answer: TARGET_PERIOD_LOCKED or
+      // TARGET_PERIOD_CLOSED for an entry type whose date is fixed,
+      // NO_OPEN_PERIOD_FOR_DATE when the next year is not created yet.
+      // A pair moved out of a locked period that changes VAT also says which
+      // momsperiod the error belongs to (lib/vat/moved-correction-vat.ts).
+      const { target: stornoTarget, vatWarning } = await correctionLanding(supabase, companyId, original, lines)
 
       // Importmoms keeps its ruta 50 base in the corrected lines (#94): the
       // rule correctEntry runs at commit, refused here before staging.
@@ -28079,7 +28101,12 @@ export const tools: McpTool[] = [
             })),
           },
           correction: {
-            description: description || `Rättelse: ${original.description}`,
+            description: stornoTarget.moved
+              ? movedCorrectionDescription(original, description)
+              : description || `Rättelse: ${original.description}`,
+            // Moved out of a locked year: the storno and the corrected
+            // verifikat are both dated here, in the first open period.
+            ...(stornoTarget.moved ? { entry_date: stornoTarget.date } : {}),
             total_debit: balance.totalDebit,
             total_credit: balance.totalCredit,
             line_count: lines.length,
@@ -28098,15 +28125,22 @@ export const tools: McpTool[] = [
             })),
           },
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
-          ...(ownedBy ? { owned_by: ownedBy, warnings: [ownedBy.hint_sv] } : {}),
-          will: 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
+          ...(ownedBy ? { owned_by: ownedBy } : {}),
+          ...(ownedBy || vatWarning
+            ? { warnings: [ownedBy?.hint_sv, vatWarning?.message_sv].filter((w): w is string => !!w) }
+            : {}),
+          will: stornoTarget.moved
+            ? `post a storno that mirrors the original and a new corrected entry, both dated ${stornoTarget.date} in the first open period and naming the original; the original stays as booked in its locked period (BFL 5 kap 5§)`
+            : 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
         },
         actor,
         next: {
-          description: 'After commit, the original is marked reversed and a corrected verifikation lands in its place. Confirm both with gnubok_query_journal.',
+          description: stornoTarget.moved
+            ? 'After commit, the storno and the corrected verifikation are posted in the first open period, linked to the original by reverses_id and correction_of_id. Confirm both with gnubok_query_journal.'
+            : 'After commit, the original is marked reversed and a corrected verifikation lands in its place. Confirm both with gnubok_query_journal.',
           tool: 'gnubok_query_journal',
         },
-        dateForPeriodCheck: original.entry_date,
+        dateForPeriodCheck: stornoTarget.date,
       })
     },
   },
@@ -28205,7 +28239,7 @@ export const tools: McpTool[] = [
       // numbered and booked there), which must be open and after the company
       // lock date. The engine's own check, run before approval: an outside
       // date used to stage and post a storno dated in another year.
-      const stornoDate = await assertStornoTarget(supabase, companyId, original, reversalDate)
+      const stornoDate = (await assertStornoTarget(supabase, companyId, original, reversalDate)).date
 
       // Chain-depth guard at staging time (mirrors gnubok_correct_entry): a
       // storno on an entry already deep in a rättelse chain is almost always
@@ -28862,6 +28896,8 @@ export const tools: McpTool[] = [
         schema_version: model.schema_version,
         generated_at: model.generated_at,
         report: model.report,
+        framework_source: model.framework_source,
+        framework_confirmed: model.framework_confirmed,
         profile: model.profile,
         disclosures: model.disclosures,
         eligibility: model.eligibility,

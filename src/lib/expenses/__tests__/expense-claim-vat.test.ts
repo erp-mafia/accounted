@@ -52,6 +52,14 @@ describe('vatCaseFromReceipt (crm#1028: never guess the moms)', () => {
     expect(answer('usd', 25, 'se 5566778899 01')).toBeNull()
     expect(answer('EUR', 25, '12-3456789')).toBe('abroad')
   })
+
+  it('does not call SEK moms Swedish when the Swedish VAT number sits beside an address abroad', () => {
+    // A business established abroad can hold a Swedish VAT number; whether it
+    // is established here for the sale decides whose VAT it is, and the
+    // receipt does not tell (ML 2023:200 16 kap. 4 §).
+    expect(vatCaseFromReceipt({ currency: 'SEK', vatAmount: 30, sellerVatNumber: 'SE502012345601', sellerAddress: '1 Example Road\nSingapore 123456' })).toBeNull()
+    expect(vatCaseFromReceipt({ currency: 'SEK', vatAmount: 30, sellerVatNumber: 'SE556677889901', sellerAddress: 'Storgatan 1, 111 22 Stockholm' })).toBe('domestic')
+  })
 })
 
 describe('expenseVatCasesForReceipt: what the dialog offers (crm#1028 review)', () => {

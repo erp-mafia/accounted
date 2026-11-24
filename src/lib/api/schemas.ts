@@ -48,6 +48,7 @@ import {
   payoutFeesWithinInvoices,
 } from '@/lib/bookkeeping/payout-fee-lines'
 import { SUPPLIER_DEBT_DESCRIPTION_MAX, isSupplierDebtAccount } from '@/lib/bookkeeping/supplier-debt-lines'
+import { CUSTOMER_RECEIVABLE_DESCRIPTION_MAX, isCustomerReceivableAccount } from '@/lib/bookkeeping/customer-receivable-lines'
 import {
   isAccruedCostAccount,
   pastPeriodDeferralSuggestion,
@@ -86,7 +87,6 @@ import {
   ARTICLE_HOUSEWORK_TYPE_VALUES,
   DEDUCTION_LINE_ERRORS,
   DEDUCTION_TYPES,
-  HUS_DEDUCTION_TYPES,
   deductionLineIssues,
   normalizeHouseworkType,
   type DeductionType,
@@ -1099,9 +1099,8 @@ export type InvoicePreviewInput = z.infer<typeof InvoicePreviewSchema>
 // ============================================================
 
 export const RotRutPayoutFileSchema = z.object({
-  // The HUS file: ROT and RUT only. Grön teknik is requested in its own
-  // e-tjänst with its own schema, so gron_teknik is a 400 here.
-  deduction_type: z.enum(HUS_DEDUCTION_TYPES),
+  // rot and rut make the HUS file, gron_teknik the grön teknik Begaran file.
+  deduction_type: z.enum(DEDUCTION_TYPES),
   invoice_ids: z.array(uuid).min(1).max(500),
   // NamnPaBegaran: the XSD caps it at 16 chars; omitted → generated.
   name: z.string().min(1).max(16).optional(),
@@ -3489,6 +3488,28 @@ export const MatchBatchSchema = z
         }),
       )
       .optional(),
+    // The customer side of supplier_debts: a customer invoice the row also
+    // pays that was issued before the company kept its books here, so it is
+    // only in the 1510 balance (lib/bookkeeping/customer-receivable-lines.ts):
+    // a credit on a 151x account, no VAT. Customer batches only; not a fee,
+    // so it may exceed the invoices.
+    customer_receivables: z
+      .array(
+        z.object({
+          account: z
+            .string()
+            .refine(isCustomerReceivableAccount, 'Receivable account must be a customer receivable account 1510 to 1519, e.g. 1510'),
+          amount: z.number().refine((amount) => amount > 0, 'Receivable amount must be greater than 0'),
+          description: z
+            .string()
+            .refine(
+              (text) => text.length <= CUSTOMER_RECEIVABLE_DESCRIPTION_MAX,
+              `At most ${CUSTOMER_RECEIVABLE_DESCRIPTION_MAX} characters`,
+            )
+            .optional(),
+        }),
+      )
+      .optional(),
   })
   .superRefine((data, ctx) => {
     if (data.force && !(data.expected_journal_entry_ids?.length)) {
@@ -3515,13 +3536,21 @@ export const MatchBatchSchema = z
         message: 'supplier_debts go with supplier_invoice allocations only (an outgoing payment)',
       })
     }
-    // At most five extra rows on the verifikat, fees and debts together, as the RPC.
-    const debtRows = data.supplier_debts?.length ?? 0
-    if ((data.fees?.length ?? 0) + debtRows > MAX_PAYOUT_FEES) {
+    if (data.customer_receivables?.length && data.allocations.some((a) => a.kind !== 'customer_invoice')) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: [debtRows > 0 ? 'supplier_debts' : 'fees'],
-        message: `At most ${MAX_PAYOUT_FEES} fee and debt rows together`,
+        path: ['customer_receivables'],
+        message: 'customer_receivables go with customer_invoice allocations only (an incoming payment)',
+      })
+    }
+    // At most five extra rows on the verifikat, fees and the rows from before together, as the RPC.
+    const debtRows = data.supplier_debts?.length ?? 0
+    const receivableRows = data.customer_receivables?.length ?? 0
+    if ((data.fees?.length ?? 0) + debtRows + receivableRows > MAX_PAYOUT_FEES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [debtRows > 0 ? 'supplier_debts' : receivableRows > 0 ? 'customer_receivables' : 'fees'],
+        message: `At most ${MAX_PAYOUT_FEES} fee, debt and receivable rows together`,
       })
     }
     // Reject mixed customer + supplier in a single batch: semantically a
@@ -4313,9 +4342,10 @@ export const UpdateSettingsSchema = z.object({
   // Avvikelseperiod (migration 20260918120000): which month's absence and
   // worked days a new run reads. Snapshotted onto each run at creation.
   salary_deviation_period: z.enum(['same_month', 'previous_month']).optional(),
-  // Vacation year basis (payroll gap-closure 3.1): sammanfallande calendar
-  // year (default) or the statutory Apr 1 - Mar 31 split. The settings route
-  // blocks changing this while open vacation-ledger rows exist.
+  // Vacation year basis (payroll gap-closure 3.1): the statutory Apr 1 - Mar
+  // 31 split (a new company's default) or the sammanfallande calendar year.
+  // The settings route blocks changing this while open vacation-ledger rows
+  // exist.
   salary_vacation_year_basis: z.enum(['calendar', 'statutory_apr_mar']).optional(),
 }).refine(
   (data) => (

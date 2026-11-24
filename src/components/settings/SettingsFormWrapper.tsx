@@ -19,6 +19,8 @@ interface SettingsFormWrapperProps {
   onSave?: (formData: FormData) => SaveResult
   /** Asked before this form's save reopens filed momsperioder (see SaveSettingsOptions). */
   confirmReopeningFiledVat?: SaveSettingsOptions['confirmReopeningFiledVat']
+  /** The save waits for something in the form, such as a required confirmation. */
+  saveDisabled?: boolean
   className?: string
 }
 
@@ -27,7 +29,13 @@ interface SettingsFormWrapperProps {
  * affordance is a sticky bar that fades in only when the form is dirty
  * (Fönster concept): a quiet page until you actually change something.
  */
-export function SettingsFormWrapper({ children, onSave, confirmReopeningFiledVat, className }: SettingsFormWrapperProps) {
+export function SettingsFormWrapper({
+  children,
+  onSave,
+  confirmReopeningFiledVat,
+  saveDisabled = false,
+  className,
+}: SettingsFormWrapperProps) {
   const t = useTranslations('settings_company')
   const saveSettings = useSaveSettings()
   const { canWrite } = useCanWrite()
@@ -91,7 +99,13 @@ export function SettingsFormWrapper({ children, onSave, confirmReopeningFiledVat
       {/* Saves company settings: a read-only member's rows are locked. */}
       <SettingsViewerScope>{children}</SettingsViewerScope>
 
-      <SettingsSaveBar visible={barVisible} saving={isSaving} saved={saved} canWrite={canWrite} />
+      <SettingsSaveBar
+        visible={barVisible}
+        saving={isSaving}
+        saved={saved}
+        canWrite={canWrite}
+        disabled={saveDisabled}
+      />
     </form>
   )
 }

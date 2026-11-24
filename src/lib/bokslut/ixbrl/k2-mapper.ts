@@ -659,6 +659,16 @@ export interface K2MappingOptions {
    * being left out of that year's equity.
    */
   currentIsPriorYear?: boolean
+  /**
+   * The current year has no closing entry yet: its result still sits on the
+   * result accounts. Årets resultat is then derived for the current year as
+   * for a comparison year, so a preview before the close shows a balance
+   * sheet that ties, with the result as the books stand. No notice is added:
+   * the result says so (`currentYearDerived`) and the caller decides what it
+   * may be used for (the årsredovisning's AR-YEAR-NOT-CLOSED, the iXBRL
+   * preflight's ACC-2099).
+   */
+  currentYearOpen?: boolean
 }
 
 /**
@@ -787,6 +797,12 @@ export interface K2MappingResult {
   warnings: string[]
   /** Accounts with balances that no mapping covered (should be none). */
   unmappedAccounts: Array<{ account: string; name: string; balance: number }>
+  /**
+   * With `currentYearOpen`: the current year's Årets resultat was derived
+   * from the income statement (exact amounts), because its result is not
+   * closed into equity yet. Absent otherwise.
+   */
+  currentYearDerived?: { result: number; carriedIn: number }
 }
 
 function netBalance(row: TrialBalanceRowLike, orientation: 'debit' | 'credit'): number {
@@ -990,7 +1006,9 @@ function sumConcepts(
  * closing entry books 2099). See TrialBalancePair.
  *
  * The current year must be closed in the books: an unbooked result is
- * reported, never filled in. The comparison year is not the user's to close
+ * reported, never filled in. Only a year the caller marks as still open
+ * (currentYearOpen: no closing entry yet) has it derived for a preview, and
+ * the result names it (currentYearDerived). The comparison year is not the user's to close
  * now, so when it never was, its Årets resultat is derived from its own
  * income statement (deriveUnclosedYearResult) and a notice says so.
  *
@@ -1039,8 +1057,9 @@ export function mapTrialBalancesToK2(
   )
   const resultAccount = resultMapping?.ranges[0]?.start ?? ''
   const unclosedYearNotices: string[] = []
+  let currentYearDerived: UnclosedYearDerivation | null = null
   const finishedYears: Array<['current' | 'previous', TrialBalanceRowLike[]]> = []
-  if (options.currentIsPriorYear) finishedYears.push(['current', current.full])
+  if (options.currentIsPriorYear || options.currentYearOpen) finishedYears.push(['current', current.full])
   if (previous) finishedYears.push(['previous', previous.full])
   for (const [field, fullRows] of finishedYears) {
     if (!resultMapping) continue
@@ -1051,7 +1070,11 @@ export function mapTrialBalancesToK2(
       [field]: derivation.result,
     }
     adjustConcept(brExact, BALANSERAT_RESULTAT, field, derivation.carriedIn)
-    unclosedYearNotices.push(unclosedYearNotice(derivation, resultAccount))
+    if (field === 'current' && options.currentYearOpen && !options.currentIsPriorYear) {
+      currentYearDerived = derivation
+    } else {
+      unclosedYearNotices.push(unclosedYearNotice(derivation, resultAccount))
+    }
   }
 
   for (const mapping of brMappings) {
@@ -1171,7 +1194,15 @@ export function mapTrialBalancesToK2(
     }
   }
 
-  return { legalForm, rr, br, totals, warnings, unmappedAccounts }
+  return {
+    legalForm,
+    rr,
+    br,
+    totals,
+    warnings,
+    unmappedAccounts,
+    ...(currentYearDerived ? { currentYearDerived } : {}),
+  }
 }
 
 function adjustConcept(

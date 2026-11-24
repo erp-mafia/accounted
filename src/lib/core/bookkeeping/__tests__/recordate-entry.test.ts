@@ -59,7 +59,11 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 
 // The storno target check has its own tests (storno-target.test.ts).
 vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
-  assertStornoTarget: vi.fn(async (_s: unknown, _c: string, original: { entry_date: string }, date?: string) => date ?? original.entry_date),
+  assertStornoTarget: vi.fn(async (_s: unknown, _c: string, original: { entry_date: string; fiscal_period_id: string }, date?: string) => ({
+    date: date ?? original.entry_date,
+    fiscal_period_id: original.fiscal_period_id,
+    moved: false,
+  })),
 }))
 
 import { recordateEntry } from '../storno-service'

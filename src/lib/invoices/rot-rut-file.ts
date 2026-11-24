@@ -19,9 +19,9 @@ import {
  * entry, the upload + signature (e-legitimation) stays with the user.
  *
  * ROT and RUT only. Skattereduktion för grön teknik is requested in its own
- * e-tjänst ("Grön teknik: företag") with its own schema, so a grön teknik
- * line never enters this file: evaluateInvoiceForFile refuses it with a
- * pointer (lib/invoices/gron-teknik-claim.ts evaluates those invoices).
+ * e-tjänst ("Grön teknik: företag") with its own file (gron-teknik-file.ts),
+ * so a grön teknik line never enters this file: evaluateInvoiceForFile
+ * refuses it with a pointer.
  *
  * Schema:
  *   root:  http://xmls.skatteverket.se/se/skatteverket/ht/begaran/6.0
@@ -104,6 +104,7 @@ export type RotRutBlockerCode =
   | 'MISSING_PERSONNUMMER'
   | 'PERSONNUMMER_UNREADABLE'
   | 'MISSING_EXCHANGE_RATE'
+  | 'FOREIGN_CURRENCY'
   | 'MISSING_WORK_TYPE'
   | 'INVALID_WORK_TYPE'
   | 'MISSING_HOURS'
@@ -260,6 +261,15 @@ export function readClaimPayment(invoice: Invoice, today?: string): ClaimStep<st
   return { ok: true, value: paidDate }
 }
 
+/**
+ * The FakturaNr a begäran file states for an invoice: both schemas take at
+ * most 20 characters. The beslut import matches Skatteverket's fakturanummer
+ * against this, not the full invoice number.
+ */
+export function fileFakturaNr(invoiceNumber: string | number | null | undefined): string | null {
+  return invoiceNumber ? String(invoiceNumber).slice(0, 20) : null
+}
+
 /** The buyer (Kopare) as the 12-digit personnummer a claim reports. */
 export function readClaimBuyer(invoice: Invoice): ClaimStep<string> {
   if (!invoice.deduction_personnummer_encrypted) {
@@ -328,7 +338,7 @@ export function readClaimProperty(lines: InvoiceItem[], missingMessage: string):
 
 /** Pointer for a grön teknik invoice met on a HUS surface. */
 const GRON_TEKNIK_ELSEWHERE =
-  'Fakturans skattereduktion är grön teknik: den begärs i Skatteverkets e-tjänst för grön teknik, inte med en ROT- eller RUT-fil.'
+  'Fakturans skattereduktion är grön teknik: den begärs med en fil för grön teknik, inte med en ROT- eller RUT-fil.'
 
 /**
  * Evaluate one invoice against the file rules for `type`. Returns either an
@@ -383,7 +393,7 @@ export function evaluateInvoiceForFile(
   if (gronTeknikLines.length > 0) {
     return block(
       'MIXED_DEDUCTION_TYPES',
-      'Fakturan blandar ROT/RUT-rader med grön teknik. Grön teknik begärs i Skatteverkets e-tjänst för grön teknik: dela upp i separata fakturor.',
+      'Fakturan blandar ROT/RUT-rader med grön teknik. Grön teknik begärs med en egen fil: dela upp i separata fakturor.',
     )
   }
 
@@ -534,7 +544,7 @@ export function evaluateInvoiceForFile(
         begart_belopp: begartBelopp,
       },
       kopare,
-      fakturaNr: invoice.invoice_number ? String(invoice.invoice_number).slice(0, 20) : null,
+      fakturaNr: fileFakturaNr(invoice.invoice_number),
       property,
       work,
     },

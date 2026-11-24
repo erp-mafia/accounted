@@ -57,7 +57,9 @@ describe('report query counts', () => {
     // anläggningstillgångar note of every year once
     // (arsredovisning_narratives): the note opens with what the years before
     // it stated.
-    expect(db.total()).toBe(47)
+    // 49: an aktiebolag's aktiebok against the share count the aktiekapital
+    // note prints (share_register_events, company_settings).
+    expect(db.total()).toBe(49)
   })
 
   it('one SIE export reads the previous year as sums per account, whatever its size', async () => {

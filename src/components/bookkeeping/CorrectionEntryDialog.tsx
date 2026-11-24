@@ -81,8 +81,14 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   const [lines, setLines] = useState<CorrectionLine[]>([])
   const [description, setDescription] = useState('')
   // The rättelse's own date (crm#1368). Prefilled with the original's; the
-  // storno always stays on the original's date.
+  // storno stays on the original's date.
   const [entryDate, setEntryDate] = useState('')
+  // The original's own date takes no write (its year locked or closed, or on
+  // or before the lock date): the server books the storno and, without a
+  // date of its own, the rättelse in the first open period. Read when the
+  // dialog opens, best-effort: unknown keeps the ordinary hint.
+  const [originalLock, setOriginalLock] = useState<'locked' | 'closed' | null>(null)
+  const originalLocked = originalLock !== null
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Non-null when the server refused with CORRECTION_CHAIN_TOO_DEEP: holds the
   // reported chain depth and opens the bypass confirm ("Rätta ändå").
@@ -128,6 +134,30 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
       void loadCatalog()
     }
   }, [open, entry.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Whether the original's date is locked: then the date field starts empty
+  // (the first open period's day) unless the person already typed one.
+  useEffect(() => {
+    setOriginalLock(null)
+    const prefill = entry.entry_date?.slice(0, 10) || ''
+    if (!open || !prefill) return
+    let cancelled = false
+    void fetch(`/api/bookkeeping/fiscal-periods/period-status?date=${encodeURIComponent(prefill)}`)
+      .then(async (res) => {
+        if (!res.ok) return
+        const { data } = await res.json()
+        if (cancelled || (data?.status !== 'locked' && data?.status !== 'closed')) return
+        setOriginalLock(data.status)
+        setEntryDate((current) => (current === prefill ? '' : current))
+      })
+      .catch(() => {
+        // Best-effort: unread, the ordinary hint stays and the server still
+        // dates the storno and the rättelse where the books take them.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, entry.id, entry.entry_date])
 
   async function loadCatalog() {
     setCatalogStatus('loading')
@@ -369,7 +399,8 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </p>
         </div>
 
-        {/* The rättelse's date: the storno keeps the original's (crm#1368). */}
+        {/* The rättelse's date: the storno keeps the original's (crm#1368), or
+            both go to the first open period when the original's is locked. */}
         <div className="space-y-1">
           <Label htmlFor="correction-entry-date">{t('correction_date_label')}</Label>
           <Input
@@ -380,8 +411,15 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             className="w-44"
           />
           <p className="text-xs text-muted-foreground">
-            {t('correction_date_hint', { date: formatDate(entry.entry_date) })}
+            {originalLocked
+              ? t('correction_date_hint_locked', { voucher: formatVoucher(entry), date: formatDate(entry.entry_date) })
+              : t('correction_date_hint', { date: formatDate(entry.entry_date) })}
           </p>
+          {/* A closed year: the open year's result takes the correction, which
+              is not always the right home for it (K3 10.12, K2 2.12). */}
+          {originalLock === 'closed' && (
+            <p className="text-xs text-muted-foreground">{t('correction_closed_year_note')}</p>
+          )}
         </div>
 
         {/* Corrected lines (editable) */}
@@ -474,7 +512,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </Button>
           <Button
             onClick={() => handleSubmit()}
-            disabled={!isBalanced || !hasValidLines || entryDate.length === 0 || isSubmitting}
+            disabled={!isBalanced || !hasValidLines || (entryDate.length === 0 && !originalLocked) || isSubmitting}
           >
             {isSubmitting ? 'Skapar...' : 'Skapa ändringsverifikation'}
           </Button>

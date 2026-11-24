@@ -124,7 +124,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     // is typed, never assumed to be 0.
     setVatInput(vat != null && vat > 0 ? formatAmountInput(vat) : vat === 0 ? '0' : '')
     // Prefilled only from VAT the receipt shows; otherwise the user answers.
-    setVatCase(vatCaseFromReceipt({ currency, vatAmount: vat, sellerVatNumber: data?.supplier?.vatNumber }))
+    setVatCase(vatCaseFromReceipt({ currency, vatAmount: vat, sellerVatNumber: data?.supplier?.vatNumber, sellerAddress: data?.supplier?.address }))
     setExpenseAccount('')
     accountPicked.current = false
     setEmployeeId('')

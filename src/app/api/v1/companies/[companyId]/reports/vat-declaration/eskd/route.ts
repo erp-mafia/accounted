@@ -19,10 +19,17 @@ export const GET = v1ReportFileHandler({
   pitfalls: [
     'A missing or invalid org number on the company settings answers 400 VAT_ESKD_ORG_NUMBER_INVALID: the file would be rejected at upload.',
     'fiscal_period_id is for yearly (helårsmoms) with a broken räkenskapsår; it is ignored for monthly and quarterly.',
+    'For yearly, year is the year the räkenskapsår ends; a year no recorded räkenskapsår ends in answers 404 VAT_REPORT_FISCAL_YEAR_NOT_FOUND, naming the räkenskapsår that exist.',
     'Refused while an SIE import is unfinished.',
   ],
   contentType: 'application/xml',
-  errorCodes: ['VAT_ESKD_SETTINGS_MISSING', 'VAT_ESKD_ORG_NUMBER_INVALID', 'FISCAL_PERIOD_NOT_FOUND', 'VAT_REPORT_GENERATION_FAILED'],
+  errorCodes: [
+    'VAT_ESKD_SETTINGS_MISSING',
+    'VAT_ESKD_ORG_NUMBER_INVALID',
+    'FISCAL_PERIOD_NOT_FOUND',
+    'VAT_REPORT_FISCAL_YEAR_NOT_FOUND',
+    'VAT_REPORT_GENERATION_FAILED',
+  ],
   query: VatPeriodInputSchema,
   build: (ctx, input) => getVatEskdFile(ctx, input),
 })

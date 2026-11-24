@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { remainingSavedDays, sumDays } from '@/lib/salary/vacation-category'
-import { getVacationYearBasis } from '@/lib/salary/vacation-ledger'
+import { computeEntitledDays, getVacationYearBasis } from '@/lib/salary/vacation-ledger'
 import { getVacationYearBounds, getVacationYearStart } from '@/lib/salary/vacation-year'
 import { paidDaysAsDaysOff, paidDaysPerDayOff, storedPaidDaysPerDayOff } from '@/lib/salary/vacation-net-days'
 import {
@@ -463,13 +463,14 @@ export async function generateBookedVacationSpec(
       daysSaved = sumDays(remainingSavedDays(ledger.saved_days ?? {}, ledger.saved_days_taken ?? {}))
     } else {
       daysTaken = accruals?.totalDaysTaken || 0
-      daysEntitled = emp.vacation_days_per_year
+      // The year's paid days per Semesterlagen 7 §, as the ledger derives them.
+      daysEntitled = computeEntitledDays(basis, vacationYearStart, emp.vacation_days_per_year, emp.employment_start)
       // With an opening row, remaining days start from the imported balance
       // rather than the full annual entitlement (the previous system already
       // consumed part of the year).
       daysRemaining = opening
         ? opening.paidDaysRemaining - daysTaken
-        : emp.vacation_days_per_year - daysTaken
+        : daysEntitled - daysTaken
       daysSaved = emp.vacation_days_saved + (opening?.savedDays || 0)
     }
 

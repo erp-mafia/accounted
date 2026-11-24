@@ -27,8 +27,8 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({ backfillStandardBASAccoun
 // The storno's own date and open-year check (storno-target.ts) has its own
 // tests; here it passes and keeps the original's date.
 vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
-  assertStornoTarget: vi.fn(async (_s: unknown, _c: unknown, original: { entry_date: string }, date?: string) =>
-    date ?? original.entry_date),
+  assertStornoTarget: vi.fn(async (_s: unknown, _c: unknown, original: { entry_date: string; fiscal_period_id: string }, date?: string) =>
+    ({ date: date ?? original.entry_date, fiscal_period_id: original.fiscal_period_id, moved: false })),
 }))
 vi.mock('@/lib/invoices/migrated-deduction-reversal', () => ({
   assertMigratedDeductionReversible: assertReversible,

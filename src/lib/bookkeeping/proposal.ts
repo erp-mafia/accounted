@@ -155,6 +155,15 @@ export interface BookingProposal {
    * proposal's one click away.
    */
   read_reverse_charge_kind?: ReverseChargeKind
+  /**
+   * A learned counterpart of one pair that books reverse charge in the box it
+   * replays by default (ruta 21, an EU service), which neither its cost
+   * account nor the company's posted bookings of the counterparty confirm
+   * (lib/transactions/reverse-charge-box-evidence.ts). Ruta 22 is a seller
+   * outside the EU, and the pair never learned where the seller is, so it is
+   * never booked without a review.
+   */
+  reverse_charge_box_unconfirmed?: boolean
   /** Source 'clearing': the record behind it. Never booked without a review. */
   clearing?: ClearingEvidence
   /**
@@ -700,7 +709,11 @@ export function clearingReasonSv(e: ClearingEvidence): string {
 export function whyTextSv(p: BookingProposal): string {
   const why = sourceWhySv(p)
   const box = reverseChargeBoxDispute(p)
-  if (!box) return why
+  if (!box) {
+    return p.reverse_charge_box_unconfirmed
+      ? `${why}, men motpartens ruta för omvänd skattskyldighet är inte inlärd: förslaget bokför ruta 21 (tjänst från en säljare i ett annat EU-land), ruta 22 gäller en säljare utanför EU. Se fakturan`
+      : why
+  }
   if (box.proposal === 'swedish_vat') {
     return `${why}, men assistentens läsning säger att säljaren finns utomlands: omvänd skattskyldighet i ruta ${reverseChargeBoxNumber(box.read)}, inte svensk moms. Svensk moms gäller bara om fakturan visar svensk moms och säljarens svenska momsregistreringsnummer`
   }

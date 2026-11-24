@@ -69,6 +69,13 @@ export interface VacationLiabilityDaysInput {
 export interface VacationLiabilityDays {
   /** Owed days of the vacation year containing the date (see the header). */
   current_year_days: number
+  /**
+   * That year's paid days earned by the date, before the days taken
+   * (current_year_days is this less the days taken, never below 0): the whole
+   * entitlement on the statutory basis, the earned share under the calendar
+   * basis. Absent on rows frozen before it was recorded.
+   */
+  current_year_earned_days?: number
   saved_days: number
   /** Statutory basis only: days earned so far toward the next semesterår. */
   earning_days: number
@@ -109,11 +116,11 @@ function employedDays(
 export function vacationLiabilityDays(input: VacationLiabilityDaysInput): VacationLiabilityDays {
   const bounds = getVacationYearBounds(input.yearStart)
   const lastDay = addDays(bounds.end, -1)
-  let currentYearDays: number
+  let currentYearEarned: number
   let earningDays = 0
 
   if (input.basis === 'statutory_apr_mar') {
-    currentYearDays = Math.max(0, input.entitledDays - input.takenDays)
+    currentYearEarned = input.entitledDays
     if (input.asOfDate >= lastDay) {
       // The intjänandeår is over: next year's entitlement, rounded up (7 §).
       earningDays = computeEntitledDays('statutory_apr_mar', bounds.end, input.vacationDaysPerYear, input.employmentStart)
@@ -125,15 +132,16 @@ export function vacationLiabilityDays(input: VacationLiabilityDaysInput): Vacati
   } else {
     const { elapsed, total } = employedDays(bounds.start, bounds.end, input.employmentStart, input.employmentEnd, input.asOfDate)
     const share = input.asOfDate >= lastDay ? 1 : total > 0 ? Math.min(1, elapsed / total) : 0
-    currentYearDays = Math.max(0, input.entitledDays * share - input.takenDays)
+    currentYearEarned = input.entitledDays * share
   }
 
-  const current = roundPaidDays(currentYearDays)
+  const current = roundPaidDays(Math.max(0, currentYearEarned - input.takenDays))
   const earning = roundPaidDays(earningDays)
   const saved = roundPaidDays(Math.max(0, input.savedDays))
   const unclosed = roundPaidDays(Math.max(0, input.unclosedYearDays ?? 0))
   return {
     current_year_days: current,
+    current_year_earned_days: roundPaidDays(Math.max(0, currentYearEarned)),
     saved_days: saved,
     earning_days: earning,
     unclosed_year_days: unclosed,

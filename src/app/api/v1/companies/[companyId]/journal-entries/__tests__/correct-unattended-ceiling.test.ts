@@ -30,6 +30,15 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'active' }), isMembershipDormant: () => false }
 })
 vi.mock('@/lib/api/v1/check-period-lock', () => ({ checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }) }))
+// Where the storno lands (storno-target.test.ts): the original's own date here.
+vi.mock('@/lib/core/bookkeeping/storno-target', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/core/bookkeeping/storno-target')>()),
+  assertStornoTarget: vi.fn(async (_s: unknown, _c: unknown, original: { entry_date: string; fiscal_period_id: string }) => ({
+    date: original.entry_date,
+    fiscal_period_id: original.fiscal_period_id,
+    moved: false,
+  })),
+}))
 vi.mock('@/lib/core/bookkeeping/correction-chain', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/core/bookkeeping/correction-chain')>()),
   correctionChainDepth: vi.fn().mockResolvedValue({ depth: 0, rootVoucher: null }),

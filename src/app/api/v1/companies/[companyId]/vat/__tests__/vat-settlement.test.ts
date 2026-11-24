@@ -50,6 +50,14 @@ import { proposalFingerprint, vatSettlementSourceId } from '@/lib/reports/vat-se
 import { GET as getProposal } from '../../reports/vat-declaration/settlement-proposal/route'
 import { POST as bookSettlement } from '../settlement/route'
 import { isIdempotencyClaim } from '@/tests/helpers'
+import { codedRefusal } from '@/lib/errors/refusal'
+
+/** As resolvePeriodDates throws it (lib/reports/vat-declaration.ts). */
+const NO_HELARSMOMS_2025 = codedRefusal(
+  'VAT_REPORT_FISCAL_YEAR_NOT_FOUND',
+  "No räkenskapsår ends in 2025, so there is no helårsmoms period 2025. The company's räkenskapsår: 2025-07-17..2026-12-31 (year 2026).",
+  { description: "Pass year = the year one of the company's räkenskapsår ends.", tool: 'gnubok_list_fiscal_periods' },
+)
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -218,6 +226,17 @@ describe('GET /reports/vat-declaration/settlement-proposal', () => {
     expect(body.data.fingerprint).toBe(proposalFingerprint(proposal() as never))
     expect(buildProposalMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'quarterly', 2026, 1, { fiscalPeriodId: undefined })
   })
+
+  it('404 VAT_REPORT_FISCAL_YEAR_NOT_FOUND for a yearly year no räkenskapsår ends in, naming the years', async () => {
+    buildProposalMock.mockRejectedValue(NO_HELARSMOMS_2025)
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
+    const res = await read('?period_type=yearly&year=2025&period=1')
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('VAT_REPORT_FISCAL_YEAR_NOT_FOUND')
+    expect(body.error.message_en).toContain('2025-07-17..2026-12-31 (year 2026)')
+    expect(body.error.recovery_hint).toContain('Pass year')
+  })
 })
 
 describe('POST /vat/settlement', () => {
@@ -278,6 +297,15 @@ describe('POST /vat/settlement', () => {
     )
     mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
     expect((await book(Q1)).status).toBe(409)
+  })
+
+  it('404 VAT_REPORT_FISCAL_YEAR_NOT_FOUND for a yearly year no räkenskapsår ends in, writing nothing', async () => {
+    buildProposalMock.mockRejectedValue(NO_HELARSMOMS_2025)
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
+    const res = await book({ period_type: 'yearly', year: 2025, period: 1 })
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('VAT_REPORT_FISCAL_YEAR_NOT_FOUND')
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 
   it('400 VAT_SETTLEMENT_EMPTY for a period with nothing to clear', async () => {
