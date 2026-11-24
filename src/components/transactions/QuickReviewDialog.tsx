@@ -161,7 +161,15 @@ export default function QuickReviewDialog({
   const [inReadBox] = useState(() =>
     boxDispute ? inReverseChargeBox(initialProposal, boxDispute.read, transaction?.amount ?? 0, entityType) : null,
   )
-  const openedProposal = inReadBox ?? initialProposal
+  // A learned pair whose reverse-charge box nothing confirms
+  // (reverse_charge_box_unconfirmed): it opens as an account booking in the
+  // box it books, so the box is shown and can be picked; the learned pair
+  // itself has no box to pick.
+  const [inOwnBox] = useState(() => {
+    const box = !boxDispute && initialProposal.reverse_charge_box_unconfirmed ? reverseChargeBoxesOf(initialProposal)[0] : undefined
+    return box ? inReverseChargeBox(initialProposal, box, transaction?.amount ?? 0, entityType) : null
+  })
+  const openedProposal = inReadBox ?? inOwnBox ?? initialProposal
   // The one thing this dialog edits. An account or VAT the person changes
   // turns it into an account booking; everything below (header, preview,
   // confirm) reads this and nothing else.
@@ -1063,8 +1071,9 @@ export default function QuickReviewDialog({
               // proposal opened in the read's box is not one nobody chose,
               // and neither is a clearing: the till's record says the money
               // is already booked, so a read that books it as revenue only
-              // offers its pick.
-              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead && !boxDispute && proposal.source !== 'clearing'}
+              // offers its pick. Nor is a learned pair opened in its own box,
+              // which was a learned booking before it opened.
+              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead && !boxDispute && !inOwnBox && proposal.source !== 'clearing'}
               onProposal={setAiProposal}
               onTake={takeAssistantPick}
             />

@@ -19,7 +19,7 @@ const OFF = { enabled: false }
 
 describe('DIRECT_BOOKING_POLICY_VERSION', () => {
   it('spells the thresholds into the recorded policy version', () => {
-    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.4;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
+    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.5;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
   })
 
   /**
@@ -34,7 +34,7 @@ describe('DIRECT_BOOKING_POLICY_VERSION', () => {
     expect({
       revision: DIRECT_BOOKING_POLICY_REVISION,
       sha256: createHash('sha256').update(source).digest('hex'),
-    }).toEqual({ revision: 4, sha256: 'dd335070aa3f9310c59f1576281857222613e6d246b9d1e64b57945d91327771' })
+    }).toEqual({ revision: 5, sha256: '20381962a9ada8307687f9834b407339bd639d3ca3bf2e8a24c243ac2977b564' })
   })
 
   it('a booking review rule match asks first, whatever the switch, the rule or the evidence (accounted#130 step 2)', () => {
