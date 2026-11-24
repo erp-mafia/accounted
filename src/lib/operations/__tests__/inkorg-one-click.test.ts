@@ -271,6 +271,44 @@ describe('planOneClick: where the seller is, when nothing says', () => {
   })
 })
 
+// A Swedish VAT number beside an address abroad: whether the seller is
+// established here for the sale decides who owes the VAT (ML 2023:200
+// 16 kap. 4 och 9 §§), and the document cannot tell. One click asks.
+describe('planOneClick: a Swedish VAT number beside an address abroad', () => {
+  const supplier = { name: 'Example Cloud Pte. Ltd.', vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' }
+
+  it('opens the editor for a charge, never deducting it as Swedish input VAT', () => {
+    const reading = doc({ supplier, totals: { subtotal: 120, vatAmount: 30, total: 150 } })
+    const plan = planOneClick(input({ reading }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'swedish_vat_number_abroad'])
+    expect(plan.vat).toEqual({ kind: 'none' })
+    expect(pairs(plan).map(([account]) => account)).not.toContain('2641')
+  })
+
+  it('says why in a foreign currency too', () => {
+    const reading = doc({ supplier, invoice: { currency: 'USD' }, totals: { subtotal: 52.24, vatAmount: 13.06, total: 65.3 } })
+    const plan = planOneClick(input({ reading, bank: { ...BANK, amountSek: -620 } }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'swedish_vat_number_abroad'])
+  })
+
+  it('reads a Peppol delivery\'s address, which ends with the country code', () => {
+    const reading = doc({ supplier: { ...supplier, address: 'Hauptstr. 1, 10117 Berlin, DE' }, totals: { subtotal: 120, vatAmount: 30, total: 150 } })
+    const plan = planOneClick(input({ reading }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'swedish_vat_number_abroad'])
+  })
+
+  it('asks where the seller is for a document without a charge', () => {
+    const plan = planOneClick(input({ reading: doc({ supplier, totals: { vatAmount: 0, total: 150 } }) }))
+    expect([plan.ask, plan.reason]).toEqual(['seller_country', 'seller_country_unknown'])
+  })
+
+  it('books with the person\'s answer', () => {
+    const plan = planOneClick(input({ reading: doc({ supplier, totals: { vatAmount: 0, total: 150 } }), sellerRegionAnswer: 'non_eu' }))
+    expect(plan.ask).toBeNull()
+    expect(plan.vat).toMatchObject({ kind: 'reverse_charge', rcKind: 'non_eu_services' })
+  })
+})
+
 describe('planOneClick: the category and the account', () => {
   it('asks for a category when there is none, with nothing proposed', () => {
     const plan = planOneClick(input({ category: null }))

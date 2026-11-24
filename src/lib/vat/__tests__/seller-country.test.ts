@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countryFromAddress, looksForeign, sellerCountry, supplierTypeForRegion } from '../seller-country'
+import { countryFromAddress, looksForeign, sellerCountry, supplierTypeForRegion, swedishVatNumberAbroad } from '../seller-country'
 
 describe('sellerCountry', () => {
   it('reads the VAT number\'s prefix first', () => {
@@ -39,6 +39,65 @@ describe('sellerCountry', () => {
   it('answers nothing when nothing names a country', () => {
     expect(sellerCountry({ address: 'Box 12' })).toEqual({ country: null, region: null, source: null })
     expect(sellerCountry(null)).toEqual({ country: null, region: null, source: null })
+  })
+})
+
+// A Swedish VAT number does not make a seller Swedish when the document's
+// address names another country: a business established abroad can register
+// for VAT here, and whether it is established here for the sale (ML 2023:200
+// 16 kap. 4 §) decides who owes the VAT (16 kap. 9 §). The person says.
+describe('a Swedish VAT number beside an address abroad', () => {
+  const singapore = { vatNumber: 'SE502012345601', address: '1 Example Road\nSingapore 123456\nSingapore' }
+
+  it('decides no country', () => {
+    expect(sellerCountry(singapore)).toEqual({ country: null, region: null, source: null })
+    expect(sellerCountry({ ...singapore, iban: 'SE45 5000 0000 0583 9825 7466' })).toEqual({ country: null, region: null, source: null })
+  })
+
+  it('names the address\'s country', () => {
+    expect(swedishVatNumberAbroad(singapore)).toBe('SG')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: 'One Microsoft Place, Dublin 18, Ireland' })).toBe('IE')
+  })
+
+  it('leaves a Swedish VAT number with a Swedish address, or none, Swedish', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm, Sverige' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901' })).toBeNull()
+    expect(sellerCountry({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm' })).toEqual({ country: 'SE', region: 'se', source: 'vat_number' })
+  })
+
+  it('reads the country code a Peppol delivery ends the address with', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: 'Hauptstr. 1, 10117 Berlin, DE' })).toBe('DE')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm' })).toBeNull()
+  })
+
+  it('takes no country inside a Swedish address: a person, a street, or a country after Sweden', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'c/o Israel Andersson, Storgatan 1, 111 22 Stockholm' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Danmark 1, 755 91 Uppsala' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Mässans gata 1, 411 19 Göteborg, Sweden. Offices in Oslo, Norway' })).toBeNull()
+    expect(sellerCountry({ vatNumber: 'SE556677889901', address: 'c/o Israel Andersson, Storgatan 1, 111 22 Stockholm' })).toEqual({
+      country: 'SE',
+      region: 'se',
+      source: 'vat_number',
+    })
+  })
+
+  it('lets a postcode follow the country, letters in it included', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: 'Example Strasse 2, Berlin, Germany 10117' })).toBe('DE')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '10 Example Road, London, United Kingdom SW1A 1AA' })).toBe('GB')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Street, Dublin, Ireland D02 X285' })).toBe('IE')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: 'Voorbeeldstraat 1, Amsterdam, Netherlands 1011 AB.' })).toBe('NL')
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE502012345601', address: '1 Example Way\nCupertino, CA\nUSA 95014-2083' })).toBe('US')
+  })
+
+  it('takes no prose after a country for a postcode', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Storgatan 1, 111 22 Stockholm, Norge AB' })).toBeNull()
+    expect(swedishVatNumberAbroad({ vatNumber: 'SE556677889901', address: 'Kina 5 12345 Ankeby' })).toBeNull()
+  })
+
+  it('is about a Swedish number only: another state\'s number keeps its country', () => {
+    expect(swedishVatNumberAbroad({ vatNumber: 'IE3668997OH', address: 'San Francisco, CA 94107' })).toBeNull()
+    expect(sellerCountry({ vatNumber: 'IE3668997OH', address: 'San Francisco, CA 94107' })).toMatchObject({ country: 'IE', source: 'vat_number' })
   })
 })
 
