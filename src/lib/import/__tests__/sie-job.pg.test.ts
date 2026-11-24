@@ -515,6 +515,37 @@ describe('SIE database execution protocol', () => {
     expect((await client.query("SELECT count(*)::int n FROM journal_entry_lines l JOIN journal_entries j ON j.id=l.journal_entry_id WHERE j.company_id=$1 AND l.dimensions->>'20'='X'",[company])).rows[0].n).toBe(2)
     await rejects(()=>client.query('DELETE FROM sie_imports WHERE id=$1',[job]),/cannot be deleted/)
   })
+  it('turns dimensions on for a file that brings values, never for one that only declares dimensions', async () => {
+    await client.query('RESET ROLE')
+    await client.query('INSERT INTO company_settings(company_id,user_id) VALUES($1,$2)',[company,actor])
+    await client.query('SET LOCAL ROLE service_role')
+    const enabled = async () => (await client.query('SELECT dimensions_enabled FROM company_settings WHERE company_id=$1',[company])).rows[0].dimensions_enabled
+    const apply = (chunkNo: number, kind: string, payload: unknown[]) =>
+      client.query('SELECT apply_sie_import_metadata($1,$2,$3,$4,$5,$6,$7)',[company,job,worker,attempt,chunkNo,kind,JSON.stringify(payload)])
+    // #DIM alone: the dimensions are registered, the switch stays off.
+    await apply(1_000_000,'dimensions',[{sie_dim_no:1,name:'Kostnadsställe',parent_sie_dim_no:null},{sie_dim_no:20,name:'Avdelning',parent_sie_dim_no:null}])
+    expect((await client.query('SELECT sie_dim_no FROM dimensions WHERE company_id=$1 ORDER BY sie_dim_no',[company])).rows.map(r => r.sie_dim_no)).toEqual([1,6,20])
+    expect(await enabled()).toBe(false)
+    // A values step that carries nothing changes nothing.
+    await apply(1_010_000,'dimension_values',[])
+    expect(await enabled()).toBe(false)
+    // A value arrives: now there is something to pick.
+    await apply(1_010_001,'dimension_values',[{sie_dim_no:20,code:'A1',name:'Avdelning ett'}])
+    expect(await enabled()).toBe(true)
+  })
+  it('turns dimensions on for a file whose values the register already holds', async () => {
+    await client.query('RESET ROLE')
+    await client.query('INSERT INTO company_settings(company_id,user_id) VALUES($1,$2)',[company,actor])
+    await client.query('SELECT public.ensure_company_dimensions($1)',[company])
+    await client.query(`INSERT INTO dimension_values(company_id,dimension_id,code,name)
+      SELECT $1,d.id,'P1','Projekt ett' FROM dimensions d WHERE d.company_id=$1 AND d.sie_dim_no=6`,[company])
+    await client.query('SET LOCAL ROLE service_role')
+    const applied = await client.query('SELECT apply_sie_import_metadata($1,$2,$3,$4,$5,$6,$7) result',
+      [company,job,worker,attempt,1_010_000,'dimension_values',JSON.stringify([{sie_dim_no:6,code:'P1',name:'Projekt ett'}])])
+    // Nothing new to register, and still something to pick.
+    expect(applied.rows[0].result).toEqual({created:0})
+    expect((await client.query('SELECT dimensions_enabled FROM company_settings WHERE company_id=$1',[company])).rows[0].dimensions_enabled).toBe(true)
+  })
   it('checkpoints account-name changes and restores them on undo', async () => {
     await prepare([[voucher(0)]])
     await chunk(0)
