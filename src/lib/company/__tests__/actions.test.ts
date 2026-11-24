@@ -24,8 +24,7 @@ vi.mock('@/lib/tax/deadline-generator', () => ({
   toDeadlineSettings: vi.fn((settings: Record<string, unknown>) => settings),
 }))
 
-// Keep the real CompanyContextError so instanceof checks in switchCompany
-// see the same class the tests throw.
+// The rest of the module stays real; only the active-company write is mocked.
 vi.mock('@/lib/company/context', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/company/context')>()),
   setActiveCompany: vi.fn().mockResolvedValue(undefined),
@@ -44,8 +43,8 @@ vi.mock('@/lib/parties/scb/client', () => ({
 }))
 
 import { createClient } from '@/lib/supabase/server'
-import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
-import { createCompanyFromOnboarding, switchCompany } from '../actions'
+import { setActiveCompany } from '@/lib/company/context'
+import { createCompanyFromOnboarding } from '../actions'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockSetActiveCompany = vi.mocked(setActiveCompany)
@@ -113,62 +112,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   deadlineMocks.regenerate.mockResolvedValue({ created: 1, deleted: 0 })
   scbMocks.configured = false
-})
-
-describe('switchCompany', () => {
-  it('returns {} when the switch persists', async () => {
-    const { supabase } = buildSupabase({ user: { id: 'user-1' } })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
-    const result = await switchCompany('company-2')
-
-    expect(result).toEqual({})
-    expect(mockSetActiveCompany).toHaveBeenCalledWith(supabase, 'user-1', 'company-2')
-  })
-
-  it('returns Unauthorized when there is no user', async () => {
-    const { supabase } = buildSupabase({ user: null })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
-    const result = await switchCompany('company-2')
-
-    expect(result).toEqual({ error: 'Unauthorized' })
-    expect(mockSetActiveCompany).not.toHaveBeenCalled()
-  })
-
-  it('maps a membership failure to the not_member code', async () => {
-    const { supabase } = buildSupabase({ user: { id: 'user-1' } })
-    mockCreateClient.mockResolvedValue(supabase as never)
-    mockSetActiveCompany.mockRejectedValueOnce(
-      new CompanyContextError('User is not a member of this company', 'not_member'),
-    )
-
-    const result = await switchCompany('company-2')
-
-    expect(result).toEqual({ error: 'not_member' })
-  })
-
-  it('maps a failed user_preferences write to persist_failed, not a permissions error (#701)', async () => {
-    const { supabase } = buildSupabase({ user: { id: 'user-1' } })
-    mockCreateClient.mockResolvedValue(supabase as never)
-    mockSetActiveCompany.mockRejectedValueOnce(
-      new CompanyContextError('Failed to persist active company: timeout', 'persist_failed'),
-    )
-
-    const result = await switchCompany('company-2')
-
-    expect(result).toEqual({ error: 'persist_failed' })
-  })
-
-  it('maps unexpected errors to persist_failed rather than claiming missing access', async () => {
-    const { supabase } = buildSupabase({ user: { id: 'user-1' } })
-    mockCreateClient.mockResolvedValue(supabase as never)
-    mockSetActiveCompany.mockRejectedValueOnce(new Error('cookies unavailable'))
-
-    const result = await switchCompany('company-2')
-
-    expect(result).toEqual({ error: 'persist_failed' })
-  })
 })
 
 describe('createCompanyFromOnboarding: org_number validation', () => {

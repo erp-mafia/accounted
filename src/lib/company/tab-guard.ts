@@ -52,11 +52,11 @@ export const guardStore: {
   /** Raises the blocking dialog when a mutation is refused. */
   notifyBlocked: (() => void) | null
   /**
-   * True while performCompanySwitch awaits the sanctioned switchCompany
-   * server action: the ONE server action that must pass from a mismatched
-   * tab, because it IS both dialog exits ("switch back") and the deliberate
-   * user-driven re-switch. Action ids are opaque per-build hashes, so the
-   * sanctioned call is identified by this flag rather than by id.
+   * True while performCompanySwitch awaits its POST to COMPANY_SWITCH_PATH:
+   * the ONE mutation that must pass from a mismatched tab, because it IS
+   * both dialog exits ("switch back") and the deliberate user-driven
+   * re-switch. The flag and the path together let exactly that request
+   * through.
    */
   companySwitchInFlight: boolean
   /**
@@ -78,7 +78,14 @@ export const guardStore: {
   selfSwitchTargetId: null,
 }
 
-/** Flagged by performCompanySwitch around the sanctioned switch action. */
+/**
+ * The route every company switch persists through (app/api/company/switch).
+ * Named here so the guard and the switch client agree on the one request
+ * the guard lets through.
+ */
+export const COMPANY_SWITCH_PATH = '/api/company/switch'
+
+/** Flagged by performCompanySwitch around the sanctioned switch request. */
 export function markCompanySwitchInFlight(inFlight: boolean): void {
   guardStore.companySwitchInFlight = inFlight
 }
@@ -181,13 +188,14 @@ export function resolveObservedCompanyName(
  * Whether a fetch about to leave this tab must be blocked. Guards mutating
  * same-origin requests on two shapes:
  *
- *   - /api paths: the fetch-based mutation surface.
+ *   - /api paths: the fetch-based mutation surface. The one sanctioned
+ *     exception is the company switch itself (POST COMPANY_SWITCH_PATH while
+ *     companySwitchInFlight): it is both dialog exits and the deliberate
+ *     re-switch from a stale tab, so blocking it would deadlock the guard's
+ *     own resolution.
  *   - server-action POSTs (isServerAction: the request carries the
  *     `next-action` header; they POST to page routes through the same
- *     patched window.fetch). The one sanctioned exception is the company
- *     switch itself (companySwitchInFlight): it is both dialog exits and the
- *     deliberate re-switch from a stale tab, so blocking it would deadlock
- *     the guard's own resolution.
+ *     patched window.fetch). None is sanctioned.
  *
  * Browser-direct Supabase calls go to another origin and are outside this
  * seam; their write sites call guardBrowserWrite() instead.
@@ -200,7 +208,7 @@ export function shouldBlockMutation(opts: {
   observedCompanyId: string | null | undefined
   /** The request carries the next-action header (a server action POST). */
   isServerAction?: boolean
-  /** The sanctioned company-switch action is in flight; let it through. */
+  /** The sanctioned company switch is in flight; let its request through. */
   companySwitchInFlight?: boolean
 }): boolean {
   const method = (opts.method ?? 'GET').toUpperCase()
@@ -214,7 +222,8 @@ export function shouldBlockMutation(opts: {
     return false
   }
   if (parsed.origin !== opts.pageOrigin) return false
-  if (opts.isServerAction) return !opts.companySwitchInFlight
+  if (opts.isServerAction) return true
+  if (opts.companySwitchInFlight && parsed.pathname === COMPANY_SWITCH_PATH) return false
   return parsed.pathname === '/api' || parsed.pathname.startsWith('/api/')
 }
 

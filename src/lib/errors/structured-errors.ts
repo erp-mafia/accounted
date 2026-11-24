@@ -8832,6 +8832,25 @@ const COMPANY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Migreringen kunde inte startas om. Inga ändringar har sparats.',
     message_en: 'The migration reset failed. No changes were saved.',
   },
+  // POST /api/company/switch (the browser session's active company). The
+  // switch client maps these to the company switcher's own messages
+  // (lib/company/switch-client.ts).
+  COMPANY_SWITCH_NOT_MEMBER: {
+    httpStatus: 403,
+    message_sv: 'Du har inte tillgång till detta företag.',
+    message_en: 'You are not a member of this company.',
+  },
+  COMPANY_SWITCH_LOCKED: {
+    httpStatus: 403,
+    message_sv: 'Företaget är pausat för ditt konto. Be ägaren uppgradera till betald plan.',
+    message_en: 'The company is paused for your account until the owner upgrades to a paid plan.',
+  },
+  COMPANY_SWITCH_PERSIST_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Företagsbytet kunde inte sparas. Försök igen.',
+    message_en: 'The active company could not be saved.',
+    retryable: true,
+  },
 }
 
 const API_KEY: Record<string, StructuredErrorEntry> = {

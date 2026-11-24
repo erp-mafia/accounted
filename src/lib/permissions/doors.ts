@@ -624,6 +624,9 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     '/api/settings/oauth-clients': OUTSIDE.personal,
 
     // ── The company, its members and settings ──────────────────────────
+    // The person's own active company (user_preferences); the route checks
+    // the membership and the seat gate of the company switched to.
+    'POST /api/company/switch': OUTSIDE.personal,
     '/api/company/:id/delete': SETTINGS,
     '/api/company/:id/migration-reset': SETTINGS,
     'PATCH /api/company/current': SETTINGS,

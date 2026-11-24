@@ -41,12 +41,14 @@ import {
  * changed is refused with a synthetic 409 before it leaves the tab (covers
  * autosaves and other background writes racing the dialog). Two shapes:
  *
- *   - /api requests get the canonical JSON error envelope.
+ *   - /api requests get the canonical JSON error envelope. The sanctioned
+ *     company switch (POST /api/company/switch while
+ *     guardStore.companySwitchInFlight) passes through: it is both dialog
+ *     exits.
  *   - server-action POSTs (identified by the `next-action` header; verified
  *     to pass through the patched window.fetch on next@16.2.12) get a
  *     text/plain 409, which the flight client surfaces as the thrown action
- *     error. The sanctioned company-switch action passes through
- *     (guardStore.companySwitchInFlight): it is both dialog exits.
+ *     error.
  *
  * Browser-direct Supabase calls go to the Supabase origin and stay outside
  * this seam; their write sites call guardBrowserWrite() (lib/company/
