@@ -2094,7 +2094,16 @@ export async function bulkBookMatchedInboxItems(
       continue
     }
     if (vat_treatment === 'reverse_charge' && category.startsWith('expense_')) {
-      const box = reverseChargeBoxFor(await inboxItemSellerRegion(supabase, companyId, item), category, [inboxItemReading(item)])
+      // Goods: every underlag the booking anchors on the row, as the single door reads them (the row's own
+      // document, the items matched to it). A Swedish VAT number abroad on any of them leaves the goods unboxed.
+      const rowSellers = isReverseChargeGoods(category)
+        ? await rowUnderlagSellers(supabase, companyId, item.matched_transaction_id as string)
+        : []
+      if (rowSellers === 'unread') {
+        skipped.push({ item_id: itemId, reason: 'error', detail: 'Bankradens underlag kunde inte läsas, så momsrutan kan inte avgöras. Försök igen.' })
+        continue
+      }
+      const box = reverseChargeBoxFor(await inboxItemSellerRegion(supabase, companyId, item), category, [inboxItemReading(item), ...rowSellers])
       if (!box.ok) {
         skipped.push({ item_id: itemId, reason: 'reverse_charge_box_unknown', detail: box.messageSv })
         continue
@@ -2243,8 +2252,8 @@ type UnderlagReading =
 async function categorizeUnderlagDocuments(
   supabase: SupabaseClient,
   companyId: string,
-  transaction: Transaction,
-  input: CategorizeInput,
+  transaction: Pick<Transaction, 'id' | 'document_id'>,
+  input: Pick<CategorizeInput, 'vat_treatment' | 'inbox_item_id'>,
   dryRun: boolean,
 ): Promise<{ documents: Array<{ id: string; reading: UnderlagReading }>; readError: unknown }> {
   const reverseCharge = input.vat_treatment === 'reverse_charge'
@@ -2289,6 +2298,35 @@ async function categorizeUnderlagDocuments(
     add(one.document_id, one.extracted_data)
   }
   return { documents, readError }
+}
+
+/**
+ * What every underlag on a bank row reads about its seller, as the single door
+ * reads them for a reverse charge (categorizeUnderlagDocuments): the row's own
+ * document and the inbox items matched to it. 'unread' when a read failed.
+ */
+async function rowUnderlagSellers(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionId: string,
+): Promise<Array<SellerIdentity | null> | 'unread'> {
+  const { data: row, error } = await supabase
+    .from('transactions')
+    .select('id, document_id')
+    .eq('id', transactionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return 'unread'
+  if (!row) return []
+  const { documents, readError } = await categorizeUnderlagDocuments(
+    supabase,
+    companyId,
+    row as Pick<Transaction, 'id' | 'document_id'>,
+    { vat_treatment: 'reverse_charge' },
+    false,
+  )
+  if (readError) return 'unread'
+  return documents.map((one) => one.reading?.supplier ?? null)
 }
 
 /**
