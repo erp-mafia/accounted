@@ -135,7 +135,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           year,
           period,
         ),
-      { log: ctx.log, requestId: ctx.requestId, reportName: 'vat-declaration' },
+      {
+        log: ctx.log,
+        requestId: ctx.requestId,
+        reportName: 'vat-declaration',
+        // A yearly `year` no räkenskapsår ends in has no helårsmoms period.
+        refusals: ['VAT_REPORT_FISCAL_YEAR_NOT_FOUND'],
+      },
     )
     if (!gen.ok) return gen.response
 
