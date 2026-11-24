@@ -34,10 +34,13 @@ const SignoffBankBalance = z
     bank_balance: z.number().nullable(),
     booked_balance: z.number().nullable(),
     difference: z.number().nullable(),
+    unbooked: z.object({ count: z.number(), total: z.number() }).nullable(),
+    before_history: z.object({ history_start: z.string(), difference: z.number() }).nullable(),
+    rest: z.number().nullable(),
   })
   .nullable()
   .describe(
-    "Bank accounts only: the bank's own balance against the booked balance on the account at the end of through_date. bank_balance is what the bank reported for that day, else the balance after its last row through it; null when the feed has none.",
+    "Bank accounts only: the bank's own balance against the booked balance on the account at the end of through_date. bank_balance is what the bank reported for that day, else the balance after its last row through it; null when the feed has none. unbooked, before_history and rest split the difference as bank.balance_check does (before_history is usually an opening balance that never reached the books). Null for an account kept in another currency than the books.",
   )
 
 const SignoffWarning = z

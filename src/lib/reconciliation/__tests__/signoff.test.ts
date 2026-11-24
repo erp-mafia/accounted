@@ -501,7 +501,15 @@ describe('signOffAccount: the bank balance on the through-date', () => {
     if (!result || result.dry_run) throw new Error('expected a sign-off')
     expect(result.warning?.code).toBe('BANK_BALANCE_DIFFERS')
     expect(result.warning?.message).toMatch(/^Bankens saldo per 2026-10-31 är 12\s345\skr, men 1930 visar 12\s000\skr samma dag: en skillnad på 345\skr\./)
-    expect(result.bank_balance).toEqual({ as_of: '2026-10-31', bank_balance: 12345, booked_balance: 12000, difference: 345 })
+    expect(result.bank_balance).toEqual({
+      as_of: '2026-10-31',
+      bank_balance: 12345,
+      booked_balance: 12000,
+      difference: 345,
+      unbooked: { count: 0, total: 0 },
+      before_history: null,
+      rest: 345,
+    })
     // The bridge still decides; the stored row carries no bank balance.
     expect(insertMock).toHaveBeenCalledWith(
       supabase,
@@ -518,7 +526,15 @@ describe('signOffAccount: the bank balance on the through-date', () => {
     const result = await sign(supabase)
     if (!result || result.dry_run) throw new Error('expected a sign-off')
     expect(bookedOnDayMock).toHaveBeenCalledWith(supabase, COMPANY, '1930', '2026-10-31')
-    expect(result.bank_balance).toEqual({ as_of: '2026-10-31', bank_balance: null, booked_balance: 12000, difference: null })
+    expect(result.bank_balance).toEqual({
+      as_of: '2026-10-31',
+      bank_balance: null,
+      booked_balance: 12000,
+      difference: null,
+      unbooked: null,
+      before_history: null,
+      rest: null,
+    })
     expect(result.warning).toEqual({
       code: 'NO_BANK_BALANCE',
       message: expect.stringMatching(/^Det finns inget saldo från banken per 2026-10-31 att jämföra 1930 med \(bokfört samma dag: 12\s000\skr\)\./),
@@ -526,13 +542,38 @@ describe('signOffAccount: the bank balance on the through-date', () => {
     expect(insertMock).toHaveBeenCalledTimes(1)
   })
 
-  it('warns without a booked balance for an account in another currency, or when the check failed', async () => {
+  it('names the parts of the difference: rows without a verifikat, and what lies before the bank\'s first row', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(
+      bankStatus({
+        balance_check: {
+          ...check(62345, 12000),
+          unbooked: { count: 2, total: 345 },
+          before_history: { history_start: '2026-10-13', bank_balance: 50000, booked_balance: 0, difference: 50000 },
+          rest: 0,
+        },
+        balance_check_refusal: null,
+      }),
+    )
+    const result = await sign(supabase, true)
+    if (!result || !result.dry_run) throw new Error('expected a preview')
+    expect(result.would_sign.bank_balance).toMatchObject({
+      unbooked: { count: 2, total: 345 },
+      before_history: { history_start: '2026-10-13', difference: 50000 },
+      rest: 0,
+    })
+    expect(result.would_sign.warning?.message).toMatch(
+      /2 banktransaktioner utan verifikation står för 345\skr\. Av skillnaden ligger 50\s000\skr före bankens första transaktion 2026-10-13, oftast ett ingående saldo som aldrig bokfördes\. Signeringen stoppas inte av det/,
+    )
+  })
+
+  it('claims nothing for an account in another currency than the books, and warns when the check failed', async () => {
     const { supabase } = createQueuedMockSupabase()
     statusMock.mockResolvedValue(bankStatus({ balance_check: null, balance_check_refusal: 'FOREIGN_CURRENCY_ACCOUNT' }, { currency: 'EUR' }))
     const foreign = await sign(supabase, true)
-    expect(foreign).toMatchObject({
-      would_sign: { bank_balance: { bank_balance: null, booked_balance: null }, warning: { code: 'NO_BANK_BALANCE' } },
-    })
+    expect(foreign).toMatchObject({ would_sign: { bank_balance: null, warning: null } })
+    statusMock.mockResolvedValue(bankStatus({ balance_check: null, balance_check_refusal: 'NO_FISCAL_PERIOD' }))
+    expect(await sign(supabase, true)).toMatchObject({ would_sign: { bank_balance: null, warning: null } })
     statusMock.mockResolvedValue(bankStatus({ balance_check: null, balance_check_refusal: null }))
     const failed = await sign(supabase, true)
     expect(failed).toMatchObject({ would_sign: { warning: { code: 'NO_BANK_BALANCE' } } })

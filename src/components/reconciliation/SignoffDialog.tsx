@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre, parseAmountInput } from '@/lib/money'
 import type { SignoffBankBalance, SignoffWarningCode } from '@/lib/reconciliation/signoff'
@@ -158,6 +159,27 @@ export function SignoffDialog({
   const effectiveUnexplained =
     stated != null && ledgerBalance != null ? roundOre(ledgerBalance - stated) : previewUnexplained
   const bank = !previewing && preview && preview.kind !== 'blocked' ? (preview.bank ?? null) : null
+  // The parts of a difference, named as on the account page; they sum to it.
+  const bankParts =
+    bank?.warning === 'BANK_BALANCE_DIFFERS'
+      ? [
+          bank.balance.unbooked && bank.balance.unbooked.count > 0
+            ? t('balance_check_part_unbooked', {
+                count: bank.balance.unbooked.count,
+                amount: formatCurrency(bank.balance.unbooked.total, currency),
+              })
+            : null,
+          bank.balance.before_history && Math.abs(bank.balance.before_history.difference) >= 0.005
+            ? t('balance_check_part_before', {
+                date: formatDate(bank.balance.before_history.history_start),
+                amount: formatCurrency(bank.balance.before_history.difference, currency),
+              })
+            : null,
+          bank.balance.rest != null && Math.abs(bank.balance.rest) >= 0.005
+            ? t('balance_check_part_rest', { amount: formatCurrency(bank.balance.rest, currency) })
+            : null,
+        ].filter((part): part is string => part !== null)
+      : []
   const needsForce =
     preview?.kind === 'ok' && stated == null
       ? false
@@ -243,6 +265,12 @@ export function SignoffDialog({
                           account: accountNumber,
                         })}
               </p>
+              {bankParts.length > 0 && (
+                <div className="flex items-center gap-1">
+                  <span>{t('balance_check_parts', { parts: bankParts.join(' · ') })}</span>
+                  <InfoTooltip content={t('balance_check_help', { account: accountNumber })} iconClassName="h-3 w-3" />
+                </div>
+              )}
               {bank.warning !== null && <p className="text-muted-foreground">{t('signoff_bank_balance_hint')}</p>}
             </div>
           )}

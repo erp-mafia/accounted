@@ -3252,9 +3252,9 @@ Response `200`:
   data: {
     dry_run: boolean,
     signoff?: { id: string, handle?: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null },
-    bank_balance?: { as_of: string, bank_balance: number | null, booked_balance: number | null, difference: number | null } | null,
+    bank_balance?: { as_of: string, bank_balance: number | null, booked_balance: number | null, difference: number | null, unbooked: { count: number, total: number } | null, before_history: { history_start: string, difference: number } | null, rest: number | null } | null,
     warning?: { code: "BANK_BALANCE_DIFFERS" | "NO_BANK_BALANCE", message: string } | null,
-    would_sign?: { account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, is_reconciled: boolean, forced: boolean, previous_through_date: string | null, bank_balance: { as_of: string, bank_balance: number | null, booked_balance: number | null, difference: number | null } | null, warning: { code: "BANK_BALANCE_DIFFERS" | "NO_BANK_BALANCE", message: string } | null }
+    would_sign?: { account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, is_reconciled: boolean, forced: boolean, previous_through_date: string | null, bank_balance: { as_of: string, bank_balance: number | null, booked_balance: number | null, difference: number | null, unbooked: { count: number, total: number } | null, before_history: { history_start: string, difference: number } | null, rest: number | null } | null, warning: { code: "BANK_BALANCE_DIFFERS" | "NO_BANK_BALANCE", message: string } | null }
   },
   meta: {
     request_id: string,

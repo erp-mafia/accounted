@@ -73,6 +73,16 @@ export interface SignoffBankBalance {
   booked_balance: number | null
   /** bank_balance - booked_balance; null when either is unknown. */
   difference: number | null
+  /** Bank rows through as_of without a verifikat (BankBalanceCheck.unbooked); null without a comparison. */
+  unbooked: { count: number; total: number } | null
+  /**
+   * The part of the difference from before the bank's first row
+   * (BankBalanceCheck.before_history): usually an opening balance that never
+   * reached the books. Null without a comparison or a first row.
+   */
+  before_history: { history_start: string; difference: number } | null
+  /** The rest of the difference (BankBalanceCheck.rest); null without a comparison. */
+  rest: number | null
 }
 
 export class ReconciliationSignoffError extends Error {
@@ -171,10 +181,12 @@ async function fiscalPeriodStartFor(
 
 /**
  * The bank's balance against the books at the end of the through-date, from
- * the status read with balanceCheckOn. Without a balance from the bank the
- * booked side still comes along, so the signer can hold it against the
- * statement; not for an account kept in another currency than the ledger,
- * whose booked balance is in the ledger's.
+ * the status read with balanceCheckOn, with the check's parts of the
+ * difference. Without a balance from the bank the booked side still comes
+ * along, so the signer can hold it against the statement. None for an
+ * account kept in another currency than the ledger, or a date outside every
+ * fiscal year: the books hold no balance to compare the bank's with there,
+ * while the bank may well have one, so nothing is claimed either way.
  */
 async function bankBalanceAt(
   supabase: SupabaseClient,
@@ -194,10 +206,17 @@ async function bankBalanceAt(
       bank_balance: check.bank_balance,
       booked_balance: check.booked_balance,
       difference: check.difference,
+      unbooked: check.unbooked,
+      before_history: check.before_history
+        ? { history_start: check.before_history.history_start, difference: check.before_history.difference }
+        : null,
+      rest: check.rest,
     }
   }
+  const refusal = bank?.balance_check_refusal ?? null
+  if (refusal === 'FOREIGN_CURRENCY_ACCOUNT' || refusal === 'NO_FISCAL_PERIOD') return null
   let booked: number | null = null
-  if (bank?.balance_check_refusal === 'NO_BANK_BALANCE') {
+  if (refusal === 'NO_BANK_BALANCE') {
     booked = await bookedBalanceOnDay(supabase, companyId, status.account_number, throughDate).catch((err) => {
       log.warn('booked balance for sign-off failed', {
         companyId,
@@ -207,7 +226,15 @@ async function bankBalanceAt(
       return null
     })
   }
-  return { as_of: throughDate, bank_balance: null, booked_balance: booked, difference: null }
+  return {
+    as_of: throughDate,
+    bank_balance: null,
+    booked_balance: booked,
+    difference: null,
+    unbooked: null,
+    before_history: null,
+    rest: null,
+  }
 }
 
 function bankBalanceWarning(
@@ -216,13 +243,22 @@ function bankBalanceWarning(
   currency: string,
 ): SignoffWarning | null {
   if (!comparison) return null
-  const { as_of: date, bank_balance: bank, booked_balance: booked, difference } = comparison
+  const { as_of: date, bank_balance: bank, booked_balance: booked, difference, unbooked, before_history: before } = comparison
   const money = (amount: number) => formatCurrency(amount, currency)
   if (bank !== null && booked !== null && difference !== null) {
     if (Math.abs(difference) < 0.005) return null
+    // The parts the user can act on, as the account page names them.
+    const unbookedPart =
+      unbooked && unbooked.count > 0
+        ? ` ${unbooked.count === 1 ? '1 banktransaktion' : `${unbooked.count} banktransaktioner`} utan verifikation står för ${money(unbooked.total)}.`
+        : ''
+    const beforePart =
+      before && Math.abs(before.difference) >= 0.005
+        ? ` Av skillnaden ligger ${money(before.difference)} före bankens första transaktion ${before.history_start}, oftast ett ingående saldo som aldrig bokfördes.`
+        : ''
     return {
       code: 'BANK_BALANCE_DIFFERS',
-      message: `Bankens saldo per ${date} är ${money(bank)}, men ${accountNumber} visar ${money(booked)} samma dag: en skillnad på ${money(difference)}. Signeringen stoppas inte av det; kontrollera skillnaden mot kontoutdraget.`,
+      message: `Bankens saldo per ${date} är ${money(bank)}, men ${accountNumber} visar ${money(booked)} samma dag: en skillnad på ${money(difference)}.${unbookedPart}${beforePart} Signeringen stoppas inte av det; kontrollera skillnaden mot kontoutdraget.`,
     }
   }
   return {
