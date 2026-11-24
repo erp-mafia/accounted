@@ -1206,6 +1206,7 @@ Response `200`:
     matched_payments: number,
     suggested_payments: number,
     ready_rows: number,
+    booked_rows: number,
     no_row: number,
     ambiguous: number,
     outcomes: { date: string, amount: number, bankgiro: string | null, payments: number, status: "matched" | "no_row" | "ambiguous", transaction_id: string | null, suggested: number }[]
@@ -1239,6 +1240,7 @@ Example response `200`:
     "matched_payments": 3,
     "suggested_payments": 3,
     "ready_rows": 1,
+    "booked_rows": 0,
     "no_row": 1,
     "ambiguous": 0,
     "outcomes": [

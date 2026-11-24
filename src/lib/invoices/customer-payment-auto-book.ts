@@ -26,13 +26,16 @@
  * Both book as the system actor, so the verifikat says Accounted booked it,
  * and reversing it opens the invoice and the bank row again (the reversal
  * hooks, lib/bookkeeping/payment-sync.ts). Inside a request made with a key
- * the key stays the actor, so its unattended ceiling still caps the booking.
+ * the key stays the actor, so its unattended ceiling still caps the booking:
+ * bookCustomerBankMatch prices its payment, and the split prices every
+ * verifikat of its dry run before the batch posts any.
  * A reference found only in the free text, an amount with a name, or any
  * other reading of the matcher stays a suggestion.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { actorUnattendedCeiling, debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { createLogger } from '@/lib/logger'
 import type { OperationContext } from '@/lib/operations/types'
 import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
@@ -225,6 +228,18 @@ export async function autoBookSplitDeposit(
       if (entry?.entry_date && entry.lines) postings.push({ entry_date: entry.entry_date, lines: entry.lines })
     }
     if (postings.length === 0) return { ok: false, code: 'AUTO_BOOK_DRY_RUN_MISSING' }
+    // A key's unattended ceiling, on every verifikat the batch posts, before
+    // the first: the batch RPC drafts and commits inside one database call,
+    // which a key otherwise reaches only through a priced operation
+    // (unattended-ceiling.ts).
+    if (actorUnattendedCeiling() !== null) {
+      for (const posting of postings) {
+        const overCeiling = unattendedCeilingRefusal(debitTotal(posting.lines))
+        if (overCeiling) {
+          return { ok: false, code: overCeiling.code, details: { attempted: overCeiling.attempted, limit: overCeiling.limit } }
+        }
+      }
+    }
     for (const posting of postings) {
       try {
         const filed = await filedPeriodVoucherWarning(ctx.supabase, ctx.companyId, posting, 'bank_row')

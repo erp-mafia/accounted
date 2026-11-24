@@ -234,6 +234,29 @@ describe('autoBookSplitDeposit', () => {
     expect(mockBatch).toHaveBeenCalledTimes(1)
   })
 
+  it('books nothing above a key\'s unattended ceiling, priced on the dry run', async () => {
+    mockBatch.mockResolvedValueOnce({ ok: true, dryRun: true, preview })
+
+    const result = await runWithActor({ type: 'api_key', label: 'key', userId: 'user-1', unattendedCommitLimit: 1000 }, () =>
+      autoBookSplitDeposit(ctx, { id: 'tx-1' }, allocations),
+    )
+
+    expect(result).toEqual({ ok: false, code: 'UNATTENDED_COMMIT_LIMIT_EXCEEDED', details: { attempted: 1400, limit: 1000 } })
+    expect(mockBatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('books within a key\'s unattended ceiling', async () => {
+    mockBatch
+      .mockResolvedValueOnce({ ok: true, dryRun: true, preview })
+      .mockResolvedValueOnce({ ok: true, data: { journal_entry_id: 'je-split' } })
+
+    const result = await runWithActor({ type: 'api_key', label: 'key', userId: 'user-1', unattendedCommitLimit: 5000 }, () =>
+      autoBookSplitDeposit(ctx, { id: 'tx-1' }, allocations),
+    )
+
+    expect(result).toEqual({ ok: true, journalEntryId: 'je-split' })
+  })
+
   it('books nothing when the dry run refuses', async () => {
     mockBatch.mockResolvedValueOnce({ ok: false, code: 'BATCH_TX_POSSIBLE_DUPLICATE' })
 
