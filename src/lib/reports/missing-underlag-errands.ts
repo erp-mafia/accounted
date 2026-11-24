@@ -23,6 +23,12 @@ export interface MissingUnderlagErrands {
   /** The module that owns the code behind the answer (lib/modules/manifest.ts). */
   readonly module: ModuleId
   /**
+   * The most rows to classify in one question: the receipt hunt's own
+   * window. Each read of verifikat_without_documents computes the whole set,
+   * so a caller pages up to this many rows and no further.
+   */
+  readonly maxRows: number
+  /**
    * The errand of each verifikat_without_documents row, by journal_entry_id.
    * Throws on a failed read: never an errand that was not read.
    */

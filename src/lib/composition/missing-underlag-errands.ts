@@ -8,9 +8,10 @@
  * the arguments the ledger passes.
  */
 import type { MissingUnderlagErrands } from '@/lib/reports/missing-underlag-errands'
-import { verifikatNextStepKinds } from '@/lib/receipt-hunt/agent-worklist'
+import { VERIFIKAT_WINDOW, verifikatNextStepKinds } from '@/lib/receipt-hunt/agent-worklist'
 
 export const MISSING_UNDERLAG_ERRANDS: MissingUnderlagErrands = Object.freeze<MissingUnderlagErrands>({
   module: 'inbox',
+  maxRows: VERIFIKAT_WINDOW,
   kinds: (...args) => verifikatNextStepKinds(...args),
 })

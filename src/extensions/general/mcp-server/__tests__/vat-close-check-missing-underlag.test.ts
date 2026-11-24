@@ -231,6 +231,34 @@ describe('gnubok_vat_close_check: missing-underlag comes from the shared RPC pre
     expect(blocker.message).toBe('1 verifikat över 4000 kr saknar underlag')
   })
 
+  // Every read of the RPC computes the whole set: the check reads at most the
+  // receipt hunt's window (500 rows, 5 pages) and takes the count from the
+  // RPC's own total, never paging on to the end.
+  it('reads at most 500 rows over a large period, counts on the RPC total and says the split covers those rows', async () => {
+    const total = 750
+    const all = Array.from({ length: total }, (_, i) => verifikat(`je-${i}`, 'Kortköp Kontorsgiganten'))
+    const pages: Record<number, unknown> = {}
+    for (let offset = 0; offset < total; offset += 100) {
+      pages[offset] = { ok: true, total_count: total, verifikat: all.slice(offset, offset + 100) }
+    }
+    const { supabase, rpc } = mockSupabase(pages, {
+      journal_entry_lines: [line('je-0', 1, '1940', 5000), line('je-0', 2, '1930', 0, 5000)],
+    })
+
+    const result = await computeVatCloseCheck(PERIOD, COMPANY_ID, supabase)
+
+    const underlagCalls = rpc.mock.calls.filter(([fn]) => fn === 'verifikat_without_documents')
+    expect(underlagCalls.map(([, params]) => (params as { p_offset: number }).p_offset)).toEqual([0, 100, 200, 300, 400])
+    const blocker = result.blockers.find((b) => b.kind === 'missing_high_value_receipts')!
+    // 750 in the period, less the one transfer found among the 500 read.
+    expect(blocker.count).toBe(749)
+    expect(blocker.message).toBe(
+      '749 verifikat över 4000 kr saknar underlag. 1 verifikat till räknas inte, överföringar mellan egna konton: ' +
+        'kontoutdraget är underlaget. Uppdelningen gäller de 500 senaste av 750: bland resten kan fler vara ' +
+        'överföringar mellan egna konton eller från Stripe',
+    )
+  })
+
   it('reports no blocker when the RPC counts nothing in the period', async () => {
     const { supabase } = mockSupabase({ 0: { ok: true, total_count: 0, verifikat: [] } })
 

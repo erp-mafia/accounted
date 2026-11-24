@@ -960,8 +960,17 @@ const MISSING_UNDERLAG_MIN_GROSS_SEK = 4000
 const MISSING_UNDERLAG_PAGE = 100
 
 interface MissingUnderlagInPeriod {
-  /** Verifikat that lack their underlag: the blocker's count. */
+  /**
+   * Verifikat that lack their underlag: the blocker's count. The RPC's
+   * total, less the transfers between own accounts among the rows read.
+   */
   count: number
+  /**
+   * How many rows were read and split by errand: the most recent
+   * MISSING_UNDERLAG_ERRANDS.maxRows. Below `count` plus `ownTransfer` when
+   * the period holds more; the split then covers only these.
+   */
+  classified: number
   /**
    * Of `count`, those booked from the Stripe feed (errand stripe): their
    * underlag is Stripe's report or fee invoice, downloaded from Stripe, not a
@@ -1015,6 +1024,11 @@ interface MissingUnderlagInPeriod {
  * from Stripe rather than searching mail. What lacks an attached document
  * stays the RPC's decision. When the errands cannot be read, every row is
  * counted, as before the split.
+ *
+ * Bounded: every read of the RPC computes the whole set, so the count is the
+ * RPC's own total, read once, and only the most recent maxRows rows (the
+ * receipt hunt's window) are read and split. Past that the message says the
+ * split covers those rows.
  */
 async function missingUnderlagInPeriod(
   supabase: SupabaseClient,
@@ -1023,7 +1037,8 @@ async function missingUnderlagInPeriod(
   end: string
 ): Promise<MissingUnderlagInPeriod> {
   const rows: VerifikatErrandRow[] = []
-  for (let offset = 0; ; offset += MISSING_UNDERLAG_PAGE) {
+  let total = 0
+  for (let offset = 0; offset < MISSING_UNDERLAG_ERRANDS.maxRows; offset += MISSING_UNDERLAG_PAGE) {
     const { data, error } = await supabase.rpc('verifikat_without_documents', {
       p_company_id: companyId,
       p_since: start,
@@ -1042,11 +1057,15 @@ async function missingUnderlagInPeriod(
     if (!result?.ok) {
       throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
     }
+    if (offset === 0) total = result.total_count ?? 0
     const page = result.verifikat ?? []
     rows.push(...page)
-    if (page.length < MISSING_UNDERLAG_PAGE || rows.length >= (result.total_count ?? 0)) break
+    if (page.length < MISSING_UNDERLAG_PAGE || rows.length >= total) break
   }
-  if (rows.length === 0) return { count: 0, stripe: 0, ownTransfer: 0 }
+  const classified = Math.min(rows.length, MISSING_UNDERLAG_ERRANDS.maxRows)
+  rows.length = classified
+  total = Math.max(total, classified)
+  if (classified === 0) return { count: 0, classified: 0, stripe: 0, ownTransfer: 0 }
 
   let stripe = 0
   let ownTransfer = 0
@@ -1063,7 +1082,7 @@ async function missingUnderlagInPeriod(
       error: err instanceof Error ? err.message : String(err),
     })
   }
-  return { count: rows.length - ownTransfer, stripe, ownTransfer }
+  return { count: total - ownTransfer, classified, stripe, ownTransfer }
 }
 
 /**
@@ -1410,7 +1429,8 @@ export async function computeVatCloseCheck(
     })
   }
   if (missingUnderlag.count > 0) {
-    const { count, stripe, ownTransfer } = missingUnderlag
+    const { count, classified, stripe, ownTransfer } = missingUnderlag
+    const total = count + ownTransfer
     blockers.push({
       kind: 'missing_high_value_receipts',
       severity: 'medium',
@@ -1423,6 +1443,9 @@ export async function computeVatCloseCheck(
           : '') +
         (ownTransfer > 0
           ? `. ${ownTransfer} verifikat till räknas inte, överföringar mellan egna konton: kontoutdraget är underlaget`
+          : '') +
+        (classified < total
+          ? `. Uppdelningen gäller de ${classified} senaste av ${total}: bland resten kan fler vara överföringar mellan egna konton eller från Stripe`
           : ''),
       hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, until=${end}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}): next_step_kind säger vad varje verifikat behöver (stripe hämtas i Stripe, own_transfer räknas inte här). Para ihop via gnubok_list_unmatched_documents.`,
     })

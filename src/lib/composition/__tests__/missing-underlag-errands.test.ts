@@ -12,6 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 const leaves = vi.hoisted(() => ({ verifikatNextStepKinds: vi.fn() }))
 vi.mock('@/lib/receipt-hunt/agent-worklist', () => ({
   verifikatNextStepKinds: leaves.verifikatNextStepKinds,
+  VERIFIKAT_WINDOW: 500,
 }))
 
 import { MISSING_UNDERLAG_ERRANDS } from '../missing-underlag-errands'
@@ -34,6 +35,10 @@ describe('MISSING_UNDERLAG_ERRANDS', () => {
       .filter((edge) => edge.from === 'composition/missing-underlag-errands.ts')
       .map((edge) => edge.to)
     expect(imported).toEqual([LEAF])
+  })
+
+  it("caps the rows to classify at the receipt hunt's own window", () => {
+    expect(MISSING_UNDERLAG_ERRANDS.maxRows).toBe(500)
   })
 
   it('kinds: verifikatNextStepKinds with the same arguments, its result untouched', async () => {

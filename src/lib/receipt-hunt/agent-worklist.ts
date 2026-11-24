@@ -117,9 +117,10 @@ const VERIFIKAT_PAGE = 100
  * over. Fixed, never derived from `offset`: a window that grew with the page
  * would re-rank, and page two would repeat or skip items of page one. It used
  * to be one RPC page, so a second round of the hunt could only re-request the
- * same top 100 (agent feedback seq 957595).
+ * same top 100 (agent feedback seq 957595). Also the most verifikat the VAT
+ * close check classifies (MissingUnderlagErrands.maxRows).
  */
-const VERIFIKAT_WINDOW = 500
+export const VERIFIKAT_WINDOW = 500
 
 /**
  * How far back an invoice settled by bankgiro, plusgiro or OCR is worth
