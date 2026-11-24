@@ -367,6 +367,26 @@ describe('procentregeln: a hire during a sammanfallande calendar year (Semesterl
     })
   })
 
+  it('an employee of the whole previous year whose payslips for it are not in Accounted: mid-year the running year\'s pay values the days, the year end the payout\'s day value', () => {
+    const veteran = { ...hire, id: 'emp-veteran', employment_start: '2020-01-01' }
+    const midYear = procentregelnLiabilityValue({ employee: veteran, basis: 'calendar', asOfDate: '2026-09-30', payslips: payslips(2026, 1, 9, 35000) })
+    expect(midYear).toEqual({ basis: 'calendar', perDay: null, earningSek: 37800 })
+    const days = calendarDays('2026-09-30', 0, '2020-01-01')
+    const sek = procentregelnLiabilitySek(days, midYear, ESTIMATE)
+    expect(sek.dayValue).toBe(roundOre(37800 / days.current_year_earned_days!))
+    // 12 % of the nine months' pay, within an öre, and no longer called an estimate.
+    expect(Math.abs(sek.liability - 37800)).toBeLessThanOrEqual(0.05)
+    expect(sek.fromEarningYear).toBe(true)
+    // The year end has the whole year: the payout's day value, the same 2 016.
+    const yearEnd = procentregelnLiabilityValue({ employee: veteran, basis: 'calendar', asOfDate: '2026-12-31', payslips: payslips(2026, 1, 12, 35000) })
+    expect(procentregelnLiabilitySek(calendarDays('2026-12-31', 0, '2020-01-01'), yearEnd, ESTIMATE)).toEqual({
+      dayValue: 2016,
+      valuedDays: 25,
+      liability: 50400,
+      fromEarningYear: true,
+    })
+  })
+
   it('days of an earlier year not closed yet keep the estimate beside the running year\'s value', () => {
     const days = { current_year_days: 10, current_year_earned_days: 10, saved_days: 0, earning_days: 0, unclosed_year_days: 3, total_days: 13 }
     const value = { basis: 'calendar' as const, perDay: null, earningSek: 20000 }

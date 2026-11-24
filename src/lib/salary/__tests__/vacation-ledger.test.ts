@@ -556,6 +556,9 @@ describe('computeEntitledDays: the paid days of a semesterÃ¥r (Semesterlagen 7 Â
     expect(computeEntitledDays('calendar', '2026-01-01', 25, '2026-06-01')).toBe(15)
     // A leap year divides by 366: 184/366 x 25 = 12.57.
     expect(computeEntitledDays('calendar', '2028-01-01', 25, '2028-07-01')).toBe(13)
+    // The rounding is always up: one day employed earns a paid day, 364 of 365 earn all 25.
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2026-12-31')).toBe(1)
+    expect(computeEntitledDays('calendar', '2026-01-01', 25, '2026-01-02')).toBe(25)
     // Hired after the year: nothing earned in it.
     expect(computeEntitledDays('calendar', '2026-01-01', 25, '2027-02-01')).toBe(0)
   })
