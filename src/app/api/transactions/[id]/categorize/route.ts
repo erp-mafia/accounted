@@ -38,7 +38,10 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
 
     const { in_bulk: inBulk, confirm_filed_vat_period: confirmedFiledVat, ...booking } = validation.data
-    const coreOptions = { onBooked: 'update_flags' as const, ...(inBulk ? { withoutReview: true } : {}) }
+    // A selection (in_bulk) is booked without a review, and the box the
+    // person chose for it is compared with a cost account's own ruta 20-24
+    // as a named box is; a single row's review shows the account's box.
+    const coreOptions = { onBooked: 'update_flags' as const, ...(inBulk ? { withoutReview: true, reverseChargeBoxChosen: true } : {}) }
 
     // Asked on every send, so a booking confirmed past it is known as one. A
     // private marking carries no moms and is never asked. One of a selection

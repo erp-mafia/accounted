@@ -1024,6 +1024,65 @@ describe('POST batch-categorize reverse-charge basis pair', () => {
     const mapping = createTxJE.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
     expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4531', '4598'])
   })
+
+  // The utlägg's rule (reverseChargeAccountConflict), per item as on
+  // :categorize: a named box that the cost account's own momskod contradicts,
+  // and an account that declares the import basis itself, take no reverse charge.
+  it('refuses an item whose cost account reports another box, and books nothing for it', async () => {
+    const txRow = (id: string) => ({
+      data: {
+        id, company_id: COMPANY_ID, date: '2026-05-12', amount: -1000, currency: 'SEK',
+        merchant_name: 'SAAS', cash_account_id: null, journal_entry_id: null,
+      },
+      error: null,
+    })
+    const { supabase, payloads } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [txRow(TX_A), txRow(TX_B)],
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      chart_of_accounts: [
+        // TX_A: the company's momskoder (5420 reports ruta 21 itself).
+        { data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.25 }], error: null },
+        // TX_B: the override's chart row (the momskoder are read once per batch).
+        { data: { account_number: '4545', account_class: 4, is_active: true }, error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`, {
+        items: [
+          {
+            transaction_id: TX_A,
+            categorization: { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services' },
+          },
+          {
+            transaction_id: TX_B,
+            categorization: {
+              is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services', account_override: '4545',
+            },
+          },
+        ],
+      }),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0]).toMatchObject({
+      ok: false,
+      error: {
+        code: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT',
+        message: expect.stringContaining('Konto 5420 redovisar själv ruta 21, men reverse_charge_kind anger ruta 22'),
+        details: { reason: 'other_kind', account_number: '5420', account_box: 'ruta21', requested_box: 'ruta22' },
+      },
+    })
+    expect(body.data.results[1]).toMatchObject({
+      ok: false,
+      error: { code: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT', details: { reason: 'other_box', account_number: '4545', account_box: 'ruta50' } },
+    })
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(payloads('transactions', 'update')).toEqual([])
+  })
 })
 
 describe('POST batch-categorize double-booking guards (parity with :categorize and the dashboard route)', () => {
