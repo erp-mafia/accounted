@@ -61,6 +61,7 @@ npx vitest run <dir>     # Tests in one directory
 npm run test:pg          # pg-real tests against real Postgres
 npm run test:sim         # Moms, AGI, INK2 and årsredovisning against the simulated company
 npm run check:guards     # Ratchet guards; each failure prints its fix
+npm run law:refs -- "ML 17 kap 24 §"  # What in the repo cites a provision (any spelling); no argument lists the laws
 npm run check:types      # Typecheck ratchet. `npm test` does NOT typecheck: run this before the build
 npm run setup:extensions # Regenerate extension registry from extensions.config.json
 npm run skills:generate  # Regenerate agent_atom_registry seed after editing an atom SKILL.md
