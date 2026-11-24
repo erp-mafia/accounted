@@ -132,6 +132,8 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     // The commit executor keeps one VatTreatment; the box travels as a kind.
     expect(params.vat_treatment).toBe('reverse_charge')
     expect(params.reverse_charge_kind).toBe('non_eu_services')
+    // Named by the caller: the approval holds it against the account again.
+    expect(params.reverse_charge_box_param).toBe('vat_treatment')
 
     const rows = lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
     expect(rows).toEqual(expect.arrayContaining([
@@ -179,6 +181,8 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     const { params, lines, result } = await stage({ vat_treatment: 'reverse_charge' }, undefined, [], usSeller)
 
     expect(params.reverse_charge_kind).toBe('non_eu_services')
+    // Read off the underlag, not named: no statement for the approval to hold.
+    expect(params.reverse_charge_box_param).toBeUndefined()
     expect(lines.find((l) => l.account_number === '4531')?.debit_amount).toBe(250)
     expect(lines.map((l) => l.account_number)).not.toContain('4535')
     expect(result.preview.reverse_charge).toMatchObject({ kind: 'non_eu_services', kind_source: 'underlag', ruta: 'ruta22' })

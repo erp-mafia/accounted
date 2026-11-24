@@ -97,6 +97,7 @@ async function approve(
   accountOverride: string | undefined,
   kind: ReverseChargeKind | undefined,
   momskoder: Record<string, ChartVatCode> = {},
+  reverseChargeBoxParam?: 'vat_treatment',
 ) {
   const { supabase, enqueue } = queued(accountOverride)
   enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
@@ -108,6 +109,7 @@ async function approve(
     reverseChargeKind: kind,
     accountOverride,
     loadChart: async () => new Map(Object.entries(momskoder)),
+    ...(reverseChargeBoxParam ? { reverseChargeBoxParam } : {}),
   })
   const posted = mockCreateJE.mock.calls[0]?.[4] as
     | { debit_account: string; vat_lines: Array<{ account_number: string }> }
@@ -195,6 +197,20 @@ describe('categorize: reverse charge on a cost account that reports a box itself
     expect(configured).toMatchObject({ ok: false, details: { reason: 'other_kind', account_box: 'ruta21' } })
     // The box it reports itself is accepted.
     expect(await viaApi('4531', 'non_eu_services')).toMatchObject({ ok: true })
+  })
+
+  it('holds a box named at staging against the account at approval, and not one read off the underlag', async () => {
+    // Staged on 6541 as a service from outside the EU (ruta 22, booked by the
+    // pair); the company then set 6541 to report ruta 21 itself.
+    const changed: Record<string, ChartVatCode> = {
+      '6541': { default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.25 },
+    }
+    const named = await approve('6541', 'non_eu_services', changed, 'vat_treatment')
+    expect(named.posted).toBeNull()
+    expect(named.result).toMatchObject({ status: 400, errorCode: 'TX_CATEGORIZE_REVERSE_CHARGE_ACCOUNT' })
+    expect(named.result.error).toMatch(/Konto 6541 redovisar själv ruta 21, men vat_treatment anger ruta 22/)
+    // The box the underlag gave is no statement: the account's own box decides, as at staging.
+    expect((await approve('6541', 'non_eu_services', changed)).posted).toEqual(['6541', '2645', '2614'])
   })
 
   it('tells a caller only no box on an account that reports ruta 23 or 24, which no door can name', async () => {

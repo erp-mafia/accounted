@@ -9994,6 +9994,9 @@ export const tools: McpTool[] = [
           category,
           vat_treatment: vatTreatment ?? null,
           ...(stagedKind ? { reverse_charge_kind: stagedKind } : {}),
+          // The caller named the box (not read off the underlag): the
+          // approval holds it against the cost account's own box again.
+          ...(reverseChargeKind ? { reverse_charge_box_param: 'vat_treatment' } : {}),
           vat_amount: vatAmount ?? null,
           account_override: accountOverride ?? null,
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0

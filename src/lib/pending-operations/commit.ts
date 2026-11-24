@@ -61,6 +61,7 @@ import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeepi
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
+import { isReverseChargeBoxParam } from '@/lib/vat/reverse-charge-box'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -798,10 +799,25 @@ async function commitCategorizeTransaction(
     }
   }
 
+  // Whether the caller named that box at staging (the door's parameter) or
+  // it was read off the underlag: a named box is held against the cost
+  // account's own ruta 20-24 at approval too. A present but unknown value is
+  // drift, as for the kind.
+  const rawReverseChargeBoxParam = params.reverse_charge_box_param
+  if (rawReverseChargeBoxParam != null && !isReverseChargeBoxParam(rawReverseChargeBoxParam)) {
+    return {
+      error:
+        'Ogiltig reverse_charge_box_param i den stagade operationen. ' +
+        'Avvisa operationen och stagea om kategoriseringen.',
+      status: 400,
+    }
+  }
+
   return categorizeMatchedTransaction(supabase, userId, companyId, txId, {
     category,
     vatTreatment,
     reverseChargeKind: rawReverseChargeKind ?? undefined,
+    ...(rawReverseChargeBoxParam ? { reverseChargeBoxParam: rawReverseChargeBoxParam } : {}),
     vatAmount,
     notes,
     allowDuplicate: params.allow_duplicate === true,

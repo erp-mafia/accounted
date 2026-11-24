@@ -1710,6 +1710,15 @@ export interface CategorizeMatchedTransactionOpts {
   proposalId?: string
   /** A bulk door: the person books without seeing this booking's review (CategorizeOptions.withoutReview). */
   withoutReview?: boolean
+  /**
+   * The door parameter the staging caller named reverseChargeKind with (the
+   * staged reverse_charge_box_param). The approval then holds that box
+   * against a cost account that reports another ruta 20-24 itself, as the
+   * staging did, so a momskod changed in between is refused instead of
+   * booking another box than the approver saw. Absent for a box read off
+   * the underlag: the account's own box decides, as at staging.
+   */
+  reverseChargeBoxParam?: ReverseChargeBoxParam
 }
 
 /** The staged categorize_transaction as the service's input. */
@@ -1783,6 +1792,9 @@ function matchedTransactionOptions(
     invoiceMatchIntercept: false,
     ...(opts.withoutReview ? { withoutReview: true } : {}),
     ...(opts.expectedDuplicateJournalEntryId ? { forceVia: 'pending_approval' } : {}),
+    // Only with the named kind: the param also reads a missing box off the
+    // underlag, and an approval never reads a box anew.
+    ...(opts.reverseChargeBoxParam && opts.reverseChargeKind ? { reverseChargeBoxParam: opts.reverseChargeBoxParam } : {}),
   }
 }
 

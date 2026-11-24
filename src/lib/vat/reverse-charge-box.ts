@@ -105,6 +105,11 @@ export function reverseChargeBoxFor(region: SellerRegion | null, category: Trans
 /** How a door names the box parameter: v1 takes reverse_charge_kind, the MCP tool vat_treatment variants. */
 export type ReverseChargeBoxParam = 'reverse_charge_kind' | 'vat_treatment'
 
+/** A staged reverse_charge_box_param read back at approval. */
+export function isReverseChargeBoxParam(value: unknown): value is ReverseChargeBoxParam {
+  return value === 'reverse_charge_kind' || value === 'vat_treatment'
+}
+
 const ASK_REASON: Record<ReverseChargeBoxRefusal, { sv: string; en: string }> = {
   seller_country_unknown: {
     sv: 'inget underlag till transaktionen visar säljarens land',
