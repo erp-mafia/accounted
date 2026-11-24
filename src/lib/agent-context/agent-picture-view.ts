@@ -13,7 +13,7 @@
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
-import type { PictureAgent, PictureAgents, PictureChecks, PictureCounts, PictureSourceGroup, PictureWaiting } from './agent-picture'
+import type { PictureAgent, PictureAgents, PictureCheckLine, PictureChecks, PictureCounts, PictureSourceGroup, PictureWaiting } from './agent-picture'
 
 // ---------------------------------------------------------------- times
 
@@ -149,6 +149,25 @@ const NAMED_WHEN_AGREEING = ['bank_balance_vs_bank', 'skattekonto_vs_skatteverke
 const BANK_FEED = 'bank_feed'
 /** Names the sentence lists before it says how many more there are. */
 const NAMES_SHOWN = 3
+/** The one typed reason that says a check's source could not be read (lib/unexplained CheckRefusalCode). */
+const SOURCE_FAILED = 'SOURCE_FAILED'
+
+/**
+ * Whether a check does not apply to the company: it did not run and gave a
+ * typed reason for it that is not a failed read (the company uses the cash
+ * method, is not registered for VAT, has nothing connected to compare
+ * with). Such a result is an answer, not a check that could not be read: a
+ * result without a reason, or with a failed source, is the one that could
+ * not be read.
+ */
+export function checkDoesNotApply(line: Pick<PictureCheckLine, 'status' | 'reason_code'>): boolean {
+  return line.status === 'unknown' && line.reason_code !== null && line.reason_code !== SOURCE_FAILED
+}
+
+/** The check lines as the Kontroller view lists them: in the order they were read, the checks that do not apply last. */
+export function orderedCheckLines<T extends Pick<PictureCheckLine, 'status' | 'reason_code'>>(lines: readonly T[]): T[] {
+  return [...lines.filter((line) => !checkDoesNotApply(line)), ...lines.filter(checkDoesNotApply)]
+}
 
 export type ChecksSummary =
   /** The checks could not be read at all. */
@@ -157,19 +176,24 @@ export type ChecksSummary =
   | { kind: 'none' }
   /** Something needs a look: how many results, which checks (by id, the first few), how many more checks, and how many results agree. */
   | { kind: 'attention'; count: number; names: string[]; more: number; agrees: number }
-  /** Nothing needs a look: the checks worth naming with the time each holds at, how many more results agree, how many could not run. */
+  /** Nothing needs a look: the checks worth naming with the time each holds at, how many more results agree, how many could not be read. */
   | { kind: 'agrees'; named: Array<{ check_id: string; as_of: string | null }>; more: number; agrees: number; unknown: number }
-  /** Nothing agrees and nothing needs a look: only results that could not run. */
+  /** Nothing agrees and nothing needs a look: only results that could not be read. */
   | { kind: 'unknown'; count: number }
 
 /**
  * What the Kontroller row says, from the check lines as they were read. It
  * counts the checks' own results and names them; it never decides whether a
- * difference matters.
+ * difference matters. Three kinds of result are counted: the ones that
+ * agree, the ones that need a look, and the ones that could not be read. A
+ * check that does not apply to the company (checkDoesNotApply) is none of
+ * them: it is listed in the view with its reason and left out of the count.
  */
 export function summarizeChecks(checks: PictureChecks | null): ChecksSummary {
   if (!checks) return { kind: 'unreadable' }
   const { counts, lines } = checks
+  // The queue's own total holds every result that did not run. The listed ones that do not apply are taken out; a result past the list has no reason here and stays counted.
+  const unread = Math.max(0, counts.unknown - lines.filter(checkDoesNotApply).length)
 
   if (counts.attention > 0) {
     const ids = [...new Set(lines.filter((line) => line.status === 'attention').map((line) => line.check_id))]
@@ -191,10 +215,10 @@ export function summarizeChecks(checks: PictureChecks | null): ChecksSummary {
     }
     // The feed's line is said with the bank's when the bank is named.
     if (feed && named.some((entry) => entry.check_id === 'bank_balance_vs_bank')) covered += 1
-    return { kind: 'agrees', named, more: Math.max(0, counts.agrees - covered), agrees: counts.agrees, unknown: counts.unknown }
+    return { kind: 'agrees', named, more: Math.max(0, counts.agrees - covered), agrees: counts.agrees, unknown: unread }
   }
 
-  return counts.unknown > 0 ? { kind: 'unknown', count: counts.unknown } : { kind: 'none' }
+  return unread > 0 ? { kind: 'unknown', count: unread } : { kind: 'none' }
 }
 
 // ---------------------------------------------------------------- agents

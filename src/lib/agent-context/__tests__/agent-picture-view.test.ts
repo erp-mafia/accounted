@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
 import {
   agentGroupOf,
   agentName,
+  checkDoesNotApply,
   countParts,
   groupAgents,
   instantWords,
@@ -9,6 +12,7 @@ import {
   latestDelivery,
   memoryDots,
   offersClients,
+  orderedCheckLines,
   otherConnections,
   startsWithBrand,
   summarizeChecks,
@@ -248,6 +252,78 @@ describe('summarizeChecks', () => {
 
   it('says only that results could not run when nothing agrees and nothing needs a look', () => {
     expect(summarizeChecks(checks([line('receivables_vs_ledger', 'unknown'), line('payables_vs_ledger', 'unknown')]))).toEqual({ kind: 'unknown', count: 2 })
+  })
+})
+
+describe('a check that does not apply to the company', () => {
+  /** The queue's results for a company whose bank and skattekonto agree, with what its form of bookkeeping adds. */
+  const withBank = (rest: PictureCheckLine[]): PictureChecks =>
+    checks([
+      line('bank_balance_vs_bank', 'agrees', { subject: 'Företagskonto' }),
+      line('skattekonto_vs_skatteverket', 'agrees'),
+      ...rest,
+    ])
+  const receivables = (status: PictureCheckLine['status'], reason_code: string | null = null): PictureCheckLine => line('receivables_vs_ledger', status, { reason_code })
+  const payables = (status: PictureCheckLine['status'], reason_code: string | null = null): PictureCheckLine => line('payables_vs_ledger', status, { reason_code })
+  const vat = (status: PictureCheckLine['status'], reason_code: string | null = null): PictureCheckLine => line('vat_declared_not_settled', status, { reason_code })
+
+  it('counts every check of an aktiebolag on the invoice method: all of them apply', () => {
+    const summary = summarizeChecks(withBank([receivables('agrees'), payables('agrees'), vat('agrees')]))
+    expect(summary).toMatchObject({ kind: 'agrees', agrees: 5, unknown: 0 })
+  })
+
+  it('does not count the receivables and the payables of a company on the cash method as checks that could not be read', () => {
+    const cash = withBank([receivables('unknown', 'CASH_METHOD'), payables('unknown', 'CASH_METHOD'), vat('agrees')])
+    // The queue's own total still holds the two results that did not run.
+    expect(cash.counts.unknown).toBe(2)
+    expect(summarizeChecks(cash)).toMatchObject({ kind: 'agrees', agrees: 3, unknown: 0 })
+  })
+
+  it('does not count the VAT check of a company that is not registered for VAT', () => {
+    const noVat = withBank([receivables('agrees'), payables('agrees'), vat('unknown', 'NOT_VAT_REGISTERED')])
+    expect(summarizeChecks(noVat)).toMatchObject({ kind: 'agrees', agrees: 4, unknown: 0 })
+  })
+
+  it('says there are no checks to show when not one check applies, instead of that they could not be read', () => {
+    const none = checks([receivables('unknown', 'CASH_METHOD'), payables('unknown', 'CASH_METHOD'), vat('unknown', 'NOT_VAT_REGISTERED'), line('skattekonto_vs_skatteverket', 'unknown', { reason_code: 'SKATTEKONTO_NOT_CONNECTED' })])
+    expect(summarizeChecks(none)).toEqual({ kind: 'none' })
+  })
+
+  it('still counts a check without a reason, one whose source failed, and one past the listed results', () => {
+    expect(summarizeChecks(withBank([receivables('unknown'), payables('unknown', 'SOURCE_FAILED'), vat('unknown', 'NOT_VAT_REGISTERED')]))).toMatchObject({ kind: 'agrees', unknown: 2 })
+    expect(summarizeChecks(checks([receivables('unknown'), vat('unknown', 'NOT_VAT_REGISTERED')]))).toEqual({ kind: 'unknown', count: 1 })
+    // A result the queue counted and did not list has no reason here: it is counted.
+    expect(summarizeChecks(checks([vat('unknown', 'NOT_VAT_REGISTERED')], { counts: { agrees: 0, attention: 0, unknown: 3 }, truncated: 2 }))).toEqual({ kind: 'unknown', count: 2 })
+  })
+
+  it('leaves what needs a look as it is', () => {
+    const summary = summarizeChecks(withBank([receivables('attention'), payables('unknown', 'CASH_METHOD')]))
+    expect(summary).toMatchObject({ kind: 'attention', count: 1, names: ['receivables_vs_ledger'], agrees: 2 })
+  })
+
+  it('tells a check that does not apply from one that could not be read', () => {
+    expect(checkDoesNotApply(receivables('unknown', 'CASH_METHOD'))).toBe(true)
+    expect(checkDoesNotApply(vat('unknown', 'NOT_VAT_REGISTERED'))).toBe(true)
+    expect(checkDoesNotApply(receivables('unknown'))).toBe(false)
+    expect(checkDoesNotApply(receivables('unknown', 'SOURCE_FAILED'))).toBe(false)
+    expect(checkDoesNotApply(receivables('agrees'))).toBe(false)
+    expect(checkDoesNotApply(receivables('attention'))).toBe(false)
+  })
+
+  it('lists the checks that do not apply last, the others in the order they were read', () => {
+    const listed = orderedCheckLines([receivables('unknown', 'CASH_METHOD'), line('bank_feed', 'attention'), vat('unknown'), payables('unknown', 'CASH_METHOD'), line('bank_balance_vs_bank', 'agrees')])
+    expect(listed.map((l) => l.check_id)).toEqual(['bank_feed', 'vat_declared_not_settled', 'bank_balance_vs_bank', 'receivables_vs_ledger', 'payables_vs_ledger'])
+  })
+
+  it('gives every reason in words that fit every legal form: the company, never the limited company', () => {
+    const reasons: Record<string, string> = sv.wiki.picture.reasons
+    for (const sentence of Object.values(reasons)) expect(sentence.toLowerCase()).not.toContain('bolag')
+    expect(reasons.CASH_METHOD).toBe('Företaget använder kontantmetoden, så öppna fakturor finns inte i bokföringen förrän i bokslutet.')
+    expect(reasons.NOT_VAT_REGISTERED).toBe('Företaget är inte momsregistrerat.')
+    expect(reasons.ACCOUNT_ROLE_UNAVAILABLE).toBe('Kontot som kontrollen behöver finns inte för företaget.')
+    const english: Record<string, string> = en.wiki.picture.reasons
+    expect(english.CASH_METHOD).toContain('The company')
+    expect(Object.keys(english).sort()).toEqual(Object.keys(reasons).sort())
   })
 })
 

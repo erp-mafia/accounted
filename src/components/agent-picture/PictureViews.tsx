@@ -12,8 +12,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/components/ui/slide-over'
 import { StatusGlyph, type StatusTone } from '@/components/ui/status-glyph'
 import { RawText } from '@/components/wiki/wiki-parts'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import type { PictureActivity, PictureAgentCard, PictureCheckLine, PictureChecks, PictureCheckStatus } from '@/lib/agent-context/agent-picture'
+import { checkDoesNotApply, orderedCheckLines } from '@/lib/agent-context/agent-picture-view'
 import { PICTURE_ROWS, isPictureRow, type PictureRow } from '@/lib/agent-context/wiki-views'
 import { AgentPanel, type AgentPanelCalls } from './AgentPanel'
 import type { PictureWords } from './agent-card-text'
@@ -189,7 +190,8 @@ function ChecksView({ checks, when }: { checks: PictureChecks | null; when: (ins
     <>
       <div className="text-[13px] text-foreground/80">{t('picture.checks_intro')}</div>
       <ul>
-        {checks.lines.map((line) => (
+        {/* A check that does not apply to the company is listed last, with its reason. */}
+        {orderedCheckLines(checks.lines).map((line) => (
           <CheckRow key={line.id} line={line} when={when} />
         ))}
         {checks.queue_unavailable && (
@@ -232,7 +234,8 @@ function CheckRow({ line, when }: { line: PictureCheckLine; when: (instant: stri
     <li className="flex items-start gap-2.5 border-b-hairline py-2.5 last:border-b-0">
       <StatusGlyph tone={TONE[line.status]} className="mt-0.5 shrink-0" />
       <div className="min-w-0 flex-1">
-        <div className="break-words text-[13px] text-strong">
+        {/* A check that does not apply is said in the secondary ink: it is an answer, not something to do. */}
+        <div className={cn('break-words text-[13px]', checkDoesNotApply(line) ? 'text-foreground/80' : 'text-strong')}>
           {name}
           {subject ? <span data-ph-mask="">{`: ${subject}`}</span> : null}
         </div>

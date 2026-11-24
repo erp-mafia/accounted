@@ -679,16 +679,16 @@
       "check_unknown": "Kunde inte kontrolleras nu",
       "check_open": "Öppna",
       "reasons": {
-        "CASH_METHOD": "Bolaget använder kontantmetoden, så öppna fakturor finns inte i bokföringen förrän i bokslutet.",
+        "CASH_METHOD": "Företaget använder kontantmetoden, så öppna fakturor finns inte i bokföringen förrän i bokslutet.",
         "NO_FISCAL_PERIOD": "Inget räkenskapsår omfattar dagens datum.",
-        "ACCOUNT_ROLE_UNAVAILABLE": "Kontot som kontrollen behöver finns inte för bolaget.",
+        "ACCOUNT_ROLE_UNAVAILABLE": "Kontot som kontrollen behöver finns inte för företaget.",
         "FX_RATE_MISSING": "Fakturor i utländsk valuta saknar valutakurs.",
         "NO_BANK_BALANCE": "Banken har inte rapporterat något saldo för kontot.",
         "FOREIGN_CURRENCY_ACCOUNT": "Kontot förs i en annan valuta än bokföringen.",
         "SHARED_LEDGER_ACCOUNT": "Flera bankkonton bokförs på samma konto.",
         "SKATTEKONTO_NOT_CONNECTED": "Skatteverket är inte kopplat.",
         "NO_SKATTEVERKET_BALANCE": "Skatteverkets saldo har inte hämtats än.",
-        "NOT_VAT_REGISTERED": "Bolaget är inte momsregistrerat.",
+        "NOT_VAT_REGISTERED": "Företaget är inte momsregistrerat.",
         "NO_DECLARED_PERIODS": "Ingen momsperiod är markerad som deklarerad.",
         "SOURCE_FAILED": "Underlaget gick inte att läsa just nu."
       }
