@@ -220,7 +220,7 @@ describe('/api/settings/peppol', () => {
     expect((await response.json()).error.code).toBe('PEPPOL_SANDBOX_NOT_ALLOWED')
   })
 
-  it('POST refuses receiving without an access grant, and without the receiving flag', async () => {
+  it('POST refuses receiving without Peppol access', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
     enqueue({ data: { is_sandbox: false }, error: null })
@@ -228,14 +228,27 @@ describe('/api/settings/peppol', () => {
     const locked = await post()
     expect(locked.status).toBe(403)
     expect((await locked.json()).error.code).toBe('PEPPOL_ACCESS_REQUIRED')
-
-    reset(); service.reset()
-    enqueue({ data: { is_sandbox: false }, error: null })
-    service.enqueue({ data: { ...enabledAccess, receive_enabled: false }, error: null })
-    const sendOnly = await post()
-    expect(sendOnly.status).toBe(403)
-    expect((await sendOnly.json()).error.code).toBe('PEPPOL_RECEIVING_NOT_ENABLED')
     expect(transport.registerRecipient).not.toHaveBeenCalled()
+  })
+
+  it('POST lets a send-only company choose receiving itself: records the choice, then publishes', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    enqueue({ data: { is_sandbox: false }, error: null })
+    service.enqueue({ data: { ...enabledAccess, receive_enabled: false }, error: null }) // send-only access
+    enqueue({ data: companySettings, error: null })                     // company settings
+    service.enqueue({ data: null, error: null })                        // record the receiving choice
+    service.enqueue({ data: [], error: null })                          // existing registrations
+    service.enqueue({ data: { id: 'reg-1' }, error: null })             // insert pending
+    service.enqueue({ data: registeredRow, error: null })               // finalize
+
+    const response = await post()
+    expect(response.status).toBe(201)
+    expect(transport.registerRecipient).toHaveBeenCalledTimes(1)
+    const choice = service.calls.find((c) => c.table === 'peppol_access' && c.method === 'update')
+    expect(choice?.args[0]).toEqual({ receive_enabled: true })
+    expect(service.calls.filter((c) => c.table === 'peppol_access' && c.method === 'eq').map((c) => c.args))
+      .toEqual(expect.arrayContaining([['company_id', 'company-1'], ['status', 'enabled']]))
   })
 
   it('POST registers the company and returns the minimized registration', async () => {

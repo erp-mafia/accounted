@@ -142,19 +142,32 @@ describe('requestPeppolAccess / setPeppolAccess', () => {
     reset()
   })
 
-  it('creates a request, is idempotent on a second ask, and refuses when already enabled', async () => {
+  it('creates a request with the receiving choice, is idempotent on a second ask, and refuses when already enabled', async () => {
     enqueue({ data: null, error: null })
     enqueue({ data: row({ status: 'requested', enabled_at: null }), error: null })
-    const first = await requestPeppolAccess({ service, companyId: 'company-1', userId: 'user-1', note: 'offentlig sektor' })
+    const first = await requestPeppolAccess({ service, companyId: 'company-1', userId: 'user-1', note: 'offentlig sektor', wantsReceiving: true })
     expect(first).toMatchObject({ ok: true, created: true })
     const upsert = calls.find((c) => c.method === 'upsert')?.args[0] as Record<string, unknown>
-    expect(upsert).toMatchObject({ company_id: 'company-1', status: 'requested', requested_by: 'user-1', request_note: 'offentlig sektor' })
+    expect(upsert).toMatchObject({
+      company_id: 'company-1',
+      status: 'requested',
+      requested_by: 'user-1',
+      request_note: 'offentlig sektor',
+      receive_enabled: true,
+    })
 
     enqueue({ data: row({ status: 'requested', enabled_at: null }), error: null })
-    expect(await requestPeppolAccess({ service, companyId: 'company-1', userId: 'user-1', note: null })).toMatchObject({ ok: true, created: false })
+    expect(await requestPeppolAccess({ service, companyId: 'company-1', userId: 'user-1', note: null, wantsReceiving: false })).toMatchObject({ ok: true, created: false })
 
     enqueue({ data: row(), error: null })
-    expect(await requestPeppolAccess({ service, companyId: 'company-1', userId: 'user-1', note: null })).toEqual({ ok: false, code: 'PEPPOL_ACCESS_ALREADY_ENABLED' })
+    expect(await requestPeppolAccess({ service, companyId: 'company-1', userId: 'user-1', note: null, wantsReceiving: false })).toEqual({ ok: false, code: 'PEPPOL_ACCESS_ALREADY_ENABLED' })
+  })
+
+  it('keeps a row the operators disabled disabled: asking again goes through support', async () => {
+    enqueue({ data: row({ status: 'disabled', disabled_at: '2026-11-14T10:00:00.000Z' }), error: null })
+    expect(await requestPeppolAccess({ service, companyId: 'company-1', userId: 'user-1', note: null, wantsReceiving: false }))
+      .toEqual({ ok: false, code: 'PEPPOL_ACCESS_DISABLED' })
+    expect(calls.some((c) => c.method === 'upsert')).toBe(false)
   })
 
   it('grants with a cap and receiving flag, and disables without touching the cap', async () => {

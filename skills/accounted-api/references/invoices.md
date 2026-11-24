@@ -1580,7 +1580,7 @@ Response `200` (`application/pdf`).
 **Check whether a customer invoice can be sent over Peppol, to which participant, and what is missing.**
 `scope:invoices:read · risk:low · idempotent`
 
-Runs every gate the Peppol send applies, as reads, and lists each failing one: the access point is configured, the company is not the demo company, the operators granted Peppol access and sends remain, the invoice is a plain invoice in draft/sent/overdue, a draft can be issued (payee account), and the BIS Billing 3 document builds (EN 16931 + Sweden CIUS preflight). Answers the sender and recipient participant ids (0007 + org number). The recipient's registration in the Peppol network is not looked up here: the send does that on commit.
+Runs every gate the Peppol send applies, as reads, and lists each failing one: the access point is configured, the company is not the demo company, the company has Peppol access and sends remain, the invoice is a plain invoice in draft/sent/overdue, a draft can be issued (payee account), and the BIS Billing 3 document builds (EN 16931 + Sweden CIUS preflight). Answers the sender and recipient participant ids (0007 + org number). The recipient's registration in the Peppol network is not looked up here: the send does that on commit.
 
 **Use when:** Before POST /invoices/{id}/send-peppol, to fix what is missing (a buyer reference, a Bankgiro, the org number) instead of learning it from a refused send.
 **Do not use for:** Downloading the UBL XML (the dashboard export) or reading past transmissions (GET /invoices/{id}/peppol/deliveries).
@@ -1957,7 +1957,7 @@ Builds the BIS Billing 3 UBL document, stages it as a delivery (retained with th
 **Do not use for:** Emailing the invoice (POST /invoices/{id}/send), recording one delivered another way (:mark-sent), credit notes, quotes or proformas.
 
 **Pitfalls:**
-- Needs the company's Peppol access grant: 403 PEPPOL_ACCESS_REQUIRED until the operators enable it (POST /peppol/access-request), 409 PEPPOL_SEND_LIMIT_REACHED once the sending cap is used.
+- Needs the company's Peppol access: 403 PEPPOL_ACCESS_REQUIRED until it is switched on (POST /peppol/access-request; immediate for a company on a paid plan), 409 PEPPOL_SEND_LIMIT_REACHED once the monthly sending cap is used.
 - A buyer not registered in Peppol answers 422 PEPPOL_RECIPIENT_NOT_REACHABLE and nothing is transmitted; a failed lookup answers 502 PEPPOL_LOOKUP_FAILED and is safe to retry.
 - 422 PEPPOL_SUBMISSION_REJECTED is the access point's verdict on the document and ends the delivery (failed): fix what the reason names and send again, which stages a new delivery; once issued, a correction of the invoice itself is a credit note plus a new invoice.
 - 502 PEPPOL_SUBMISSION_FAILED and 409 PEPPOL_SEND_PRECONDITION_FAILED leave the delivery resendable: retry later or fix the Peppol settings.

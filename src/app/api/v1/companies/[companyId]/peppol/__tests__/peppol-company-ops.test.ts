@@ -6,9 +6,10 @@
  *   POST /api/v1/companies/:companyId/peppol/access-request  (peppol.request-access)
  *
  * The rules are the service's (lib/invoices/peppol-settings-service.ts):
- * owner/admin for registering, the operators' grant and receiving slot, the
- * personnummer refusal, the access point contacted on commit only, and the
- * operator mail sent on commit only.
+ * owner/admin for registering, access before receiving, the personnummer
+ * refusal, the access point contacted on commit only, and the plan rule
+ * (lib/invoices/peppol-plan-rule.ts) applied on commit only: a paying company
+ * has Peppol at once, one on the seeded trial is told it needs a paid plan.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerPeppolTransport, type PeppolTransport } from '@/lib/invoices/peppol-transport'
@@ -40,7 +41,6 @@ const sendEmailMock = vi.fn()
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({ sendEmail: (...a: unknown[]) => sendEmailMock(...a), isConfigured: () => true }),
 }))
-vi.mock('@/lib/support', () => ({ getSupportRecipientEmail: () => 'support@example.test' }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as registrationGet, POST as registrationPost } from '../registration/route'
@@ -283,11 +283,13 @@ describe('POST /api/v1/companies/:companyId/peppol/registration', () => {
     expect((await res.json()).error.code).toBe('PEPPOL_ACCESS_REQUIRED')
   })
 
-  it('403 PEPPOL_RECEIVING_NOT_ENABLED with a sending grant but no receiving slot', async () => {
-    mockServiceClient.mockReturnValue(ownerClient({ peppol_access: { data: { ...GRANT, receive_enabled: false }, error: null } }))
+  it('a send-only company chooses receiving itself: the choice is recorded and the id published', async () => {
+    const client = ownerClient({ peppol_access: { data: { ...GRANT, receive_enabled: false }, error: null } })
+    mockServiceClient.mockReturnValue(client)
     const res = await post()
-    expect(res.status).toBe(403)
-    expect((await res.json()).error.code).toBe('PEPPOL_RECEIVING_NOT_ENABLED')
+    expect(res.status).toBe(201)
+    expect(client.calls).toContainEqual({ table: 'peppol_access', method: 'update', args: [{ receive_enabled: true }] })
+    expect(transport.registerRecipient).toHaveBeenCalledTimes(1)
   })
 
   it('422 PEPPOL_REGISTRATION_PERSONAL_NUMBER for a personnummer, on the dry run already', async () => {
@@ -353,7 +355,13 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
   const post = (body: unknown = {}, query = '') =>
     accessRequestPost(request(`${BASE}/access-request${query}`, { method: 'POST', body: JSON.stringify(body) }), params)
 
-  const requestedRow = { company_id: COMPANY_ID, status: 'requested', max_sends: null, receive_enabled: false, requested_at: '2026-09-26T10:00:00.000Z' }
+  const requestedRow = { company_id: COMPANY_ID, status: 'requested', max_sends: null, receive_enabled: true, requested_at: '2026-09-26T10:00:00.000Z' }
+  const RULE_ROW = { company_id: COMPANY_ID, status: 'requested', max_sends: null, receive_enabled: true, request_note: null, enabled_at: null }
+  const ENABLED_ROW = { ...requestedRow, status: 'enabled', max_sends: 10, enabled_at: '2026-09-26T10:00:01.000Z', enabled_by: 'automatic: paid plan' }
+  const PARTICIPANT = { company_id: COMPANY_ID, ...SETTINGS.data, entity_type: 'aktiebolag' }
+  const STRIPE_GRANT = { company_id: COMPANY_ID, team_id: null, expires_at: null, source: 'stripe' }
+  // The seeded 30-day trial: unexpired, but it does not open Peppol.
+  const TRIAL_GRANT = { company_id: COMPANY_ID, team_id: null, expires_at: '2999-01-01T00:00:00.000Z', source: 'trial' }
 
   it('401 when the API key is rejected', async () => {
     mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
@@ -404,11 +412,13 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
     }
   })
 
-  it('a dry run records nothing and mails nobody', async () => {
+  it('a dry run records nothing, mails nobody and says whether Peppol would switch on', async () => {
     const client = makeClient({
       company_members: role('member'),
       company_settings: SETTINGS,
       peppol_access: { data: null, error: null },
+      companies: { data: [{ id: COMPANY_ID, team_id: null }], error: null },
+      capability_grants: { data: [TRIAL_GRANT], error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ wants_receiving: true }, '?dry_run=true')
@@ -416,42 +426,94 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
     expect((await res.json()).data.preview).toMatchObject({
       current_status: 'none',
       would_create_request: true,
-      note: '[vill ta emot e-fakturor]',
+      wants_receiving: true,
+      switches_on_now: false,
+      plan_required: true,
     })
     expect(sendEmailMock).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
   })
 
-  it('records the request, mails the operators once and answers 201', async () => {
+  it('switches Peppol on at once for a paying company, receiving as it chose, and mails nobody', async () => {
+    const client = makeClient({
+      company_members: role('member'),
+      company_settings: [SETTINGS, SETTINGS, { data: [PARTICIPANT], error: null }],
+      peppol_access: [
+        { data: null, error: null },                  // no row yet
+        { data: requestedRow, error: null },          // upsert
+        { data: [RULE_ROW], error: null },            // the plan rule reads the open row
+        { data: [{ company_id: COMPANY_ID }], error: null }, // switched on
+        { data: ENABLED_ROW, error: null },           // summary
+      ],
+      companies: { data: [{ id: COMPANY_ID, team_id: null }], error: null },
+      capability_grants: { data: [STRIPE_GRANT], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ wants_receiving: true, note: 'Vi fakturerar kommuner.' })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data).toMatchObject({
+      created: true,
+      plan_required: false,
+      access: { status: 'enabled', send_enabled: true, receive_enabled: true, max_sends: 10 },
+    })
+    expect(client.calls).toContainEqual(expect.objectContaining({ table: 'peppol_access', method: 'upsert' }))
+    const enable = client.calls.find((c) => c.table === 'peppol_access' && c.method === 'update')
+    expect(enable?.args[0]).toMatchObject({ status: 'enabled', enabled_by: 'automatic: paid plan', max_sends: 10, receive_enabled: true })
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the request of a company on the seeded trial and mails the person who asked', async () => {
     const client = makeClient({
       company_members: role('member'),
       company_settings: SETTINGS,
       peppol_access: [
         { data: null, error: null },                  // no row yet
         { data: requestedRow, error: null },          // upsert
+        { data: [RULE_ROW], error: null },            // the plan rule reads the open row
         { data: requestedRow, error: null },          // summary
       ],
+      companies: { data: [{ id: COMPANY_ID, team_id: null }], error: null },
+      capability_grants: { data: [TRIAL_GRANT], error: null },
+      profiles: { data: { email: 'member@example.test' }, error: null },
     })
     mockServiceClient.mockReturnValue(client)
-    const res = await post({ wants_receiving: true, note: 'Vi fakturerar kommuner.' })
+    const res = await post({ wants_receiving: true })
     expect(res.status).toBe(201)
-    const body = await res.json()
-    expect(body.data).toMatchObject({ created: true, access: { status: 'requested', send_enabled: false } })
-    expect(client.calls).toContainEqual(expect.objectContaining({ table: 'peppol_access', method: 'upsert' }))
+    expect((await res.json()).data).toMatchObject({ created: true, plan_required: true, access: { status: 'requested', send_enabled: false } })
+    expect(client.calls.some((c) => c.table === 'peppol_access' && c.method === 'update')).toBe(false)
     expect(sendEmailMock).toHaveBeenCalledTimes(1)
-    expect(sendEmailMock.mock.calls[0][0]).toMatchObject({ to: 'support@example.test' })
-    expect(sendEmailMock.mock.calls[0][0].text).toContain('--receive')
+    expect(sendEmailMock.mock.calls[0][0]).toMatchObject({ to: 'member@example.test', subject: 'Peppol kräver ett betalt abonnemang' })
   })
 
   it('answers 200 without a second mail when a request is already open', async () => {
     mockServiceClient.mockReturnValue(makeClient({
       company_members: role('member'),
       company_settings: SETTINGS,
-      peppol_access: { data: requestedRow, error: null },
+      peppol_access: [
+        { data: requestedRow, error: null },          // the open request
+        { data: [RULE_ROW], error: null },            // the plan rule reads it
+        { data: requestedRow, error: null },          // summary
+      ],
+      companies: { data: [{ id: COMPANY_ID, team_id: null }], error: null },
+      capability_grants: { data: [], error: null },
     }))
     const res = await post()
     expect(res.status).toBe(200)
-    expect((await res.json()).data.created).toBe(false)
+    expect((await res.json()).data).toMatchObject({ created: false, plan_required: true })
     expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('403 PEPPOL_ACCESS_DISABLED for a company the operators switched off, recording nothing', async () => {
+    const client = makeClient({
+      company_members: role('member'),
+      company_settings: SETTINGS,
+      peppol_access: { data: { ...requestedRow, status: 'disabled', disabled_at: '2026-11-14T10:00:00.000Z' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.code).toBe('PEPPOL_ACCESS_DISABLED')
+    expect(wrote(client)).toBe(false)
   })
 })

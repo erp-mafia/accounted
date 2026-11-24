@@ -14,7 +14,16 @@ import { isSelfHosted } from '@/lib/env/public-flags'
  * remedy is a connector key or the instance's own upstream credentials.
  * Copy mirrors CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_SV.
  */
-export function UpgradeNote({ children, className }: { children?: React.ReactNode; className?: string }) {
+export function UpgradeNote({
+  children,
+  className,
+  linkLabel = 'Uppgradera',
+}: {
+  children?: React.ReactNode
+  className?: string
+  /** The link's text in the page's language; the Swedish default predates translated callers. */
+  linkLabel?: string
+}) {
   const frame = (content: React.ReactNode) => (
     <div
       className={cn(
@@ -38,7 +47,7 @@ export function UpgradeNote({ children, className }: { children?: React.ReactNod
     <>
       {children ?? 'Den här funktionen kräver ett abonnemang.'}{' '}
       <Link href="/settings/billing" className="underline underline-offset-2 text-foreground">
-        Uppgradera
+        {linkLabel}
       </Link>
     </>,
   )

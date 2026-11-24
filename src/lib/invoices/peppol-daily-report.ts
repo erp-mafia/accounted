@@ -7,8 +7,9 @@
  * learns whether it reached the buyer. Until it does, a person checks every
  * send in Qvalia's dashboard, and this report is the list to check against:
  * each send of the day with its Qvalia integration id, anything that failed,
- * each company's sends this month against its monthly cap, and new access
- * requests with whether the company pays.
+ * each company's sends this month against its monthly cap, the companies the
+ * plan rule switched on or paused (peppol-plan-rule.ts), and new requests
+ * still waiting, with whether the company pays.
  *
  * It goes out every day, an empty day included, so a missing report is itself
  * a signal. Recipients come from PEPPOL_DAILY_REPORT_RECIPIENTS (comma
@@ -20,9 +21,9 @@ import { getBranding } from '@/lib/branding/service'
 import { getEmailService } from '@/lib/email/service'
 import { escapeHtml } from '@/lib/email/user-text'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { statusGrantsAccess } from '@/lib/stripe/subscription-sync'
 import { formatCurrency } from '@/lib/utils'
 import { peppolSendPeriodStart } from './peppol-access'
+import { PEPPOL_PLAN_RULE_ACTOR, peppolPaidCompanyIds } from './peppol-plan-rule'
 
 export const QVALIA_DASHBOARD_URL = 'https://app.qvalia.com/#/login'
 
@@ -54,6 +55,10 @@ export interface PeppolDailyReport {
   sends: DeliveryRow[]
   failures: DeliveryRow[]
   month: Array<{ companyId: string; sent: number; max: number | null }>
+  /** Switched on by the plan rule in the last 24 hours. */
+  switchedOn: string[]
+  /** Paused in the last 24 hours: the plan ended. */
+  paused: string[]
   newRequests: Array<{ companyId: string; requestedAt: string; paying: boolean }>
   openRequests: number
   inbound: number
@@ -139,10 +144,18 @@ export async function buildPeppolDailyReport(service: SupabaseClient, now: Date 
         .range(from, to),
     'month sends without a submission time'),
   ]
-  const access = await allRows<{ company_id: string; status: string; max_sends: number | null; requested_at: string | null }>(({ from, to }) =>
+  const access = await allRows<{
+    company_id: string
+    status: string
+    max_sends: number | null
+    requested_at: string | null
+    enabled_at: string | null
+    enabled_by: string | null
+    disabled_at: string | null
+  }>(({ from, to }) =>
     service
       .from('peppol_access')
-      .select('company_id, status, max_sends, requested_at')
+      .select('company_id, status, max_sends, requested_at, enabled_at, enabled_by, disabled_at')
       .in('status', ['enabled', 'requested'])
       .order('company_id', { ascending: true })
       .range(from, to),
@@ -160,25 +173,33 @@ export async function buildPeppolDailyReport(service: SupabaseClient, now: Date 
     .map((row) => ({ companyId: row.company_id, sent: sentThisMonth.get(row.company_id) ?? 0, max: row.max_sends }))
     .sort((a, b) => b.sent - a.sent)
 
+  const switchedOn = access
+    .filter((row) => row.status === 'enabled' && row.enabled_by === PEPPOL_PLAN_RULE_ACTOR && row.enabled_at !== null && row.enabled_at >= since)
+    .map((row) => row.company_id)
+  // A paused row is `requested` again with the pause stamped in disabled_at.
+  const paused = access
+    .filter((row) => row.status === 'requested' && row.disabled_at !== null && row.disabled_at >= since)
+    .map((row) => row.company_id)
+
   const requested = access.filter((row) => row.status === 'requested')
   const fresh = requested.filter((row) => row.requested_at !== null && row.requested_at >= since)
-  const subscriptions = fresh.length === 0
-    ? []
-    : await rows<{ company_id: string; status: string | null }>(
-      service.from('company_subscriptions').select('company_id, status').in('company_id', fresh.map((row) => row.company_id)),
-      'subscriptions',
-    )
-  const subscriptionStatus = new Map(subscriptions.map((row) => [row.company_id, row.status]))
+  const paying = fresh.length === 0
+    ? new Set<string>()
+    : await peppolPaidCompanyIds(service, fresh.map((row) => row.company_id)).catch((err: unknown) => {
+      throw new Error(`peppol daily report: paid plans: ${err instanceof Error ? err.message : String(err)}`)
+    })
   const newRequests = fresh.map((row) => ({
     companyId: row.company_id,
     requestedAt: row.requested_at as string,
-    paying: statusGrantsAccess(subscriptionStatus.get(row.company_id)),
+    paying: paying.has(row.company_id),
   }))
 
   const companyIds = [...new Set([
     ...sends.map((row) => row.company_id),
     ...failures.map((row) => row.company_id),
     ...month.map((row) => row.companyId),
+    ...switchedOn,
+    ...paused,
     ...newRequests.map((row) => row.companyId),
   ])]
   const names = new Map<string, string>()
@@ -190,7 +211,7 @@ export async function buildPeppolDailyReport(service: SupabaseClient, now: Date 
     for (const row of settings) if (row.company_name) names.set(row.company_id, row.company_name)
   }
 
-  return { since, until, sends, failures, month, newRequests, openRequests: requested.length, inbound: inbound ?? 0, names }
+  return { since, until, sends, failures, month, switchedOn, paused, newRequests, openRequests: requested.length, inbound: inbound ?? 0, names }
 }
 
 function stockholm(iso: string, options: Intl.DateTimeFormatOptions): string {
@@ -233,9 +254,19 @@ export function renderPeppolDailyReport(report: PeppolDailyReport): { subject: s
       empty: 'Inga sändningar denna månad.',
     },
     {
-      heading: `Nya förfrågningar om Peppol (${report.newRequests.length}, totalt ${report.openRequests} öppna)`,
-      lines: report.newRequests.map((row) => `${names.get(row.companyId) ?? row.companyId}: ${row.paying ? 'betalar eller har kort registrerat' : 'betalar inte'} (${row.companyId})`),
-      empty: 'Inga nya förfrågningar.',
+      heading: `Påslagna automatiskt senaste dygnet (${report.switchedOn.length})`,
+      lines: report.switchedOn.map((companyId) => `${names.get(companyId) ?? companyId} (${companyId})`),
+      empty: 'Inga.',
+    },
+    {
+      heading: `Pausade senaste dygnet, abonnemanget slutade (${report.paused.length})`,
+      lines: report.paused.map((companyId) => `${names.get(companyId) ?? companyId} (${companyId})`),
+      empty: 'Inga.',
+    },
+    {
+      heading: `Nya förfrågningar som väntar (${report.newRequests.length}, totalt ${report.openRequests} öppna)`,
+      lines: report.newRequests.map((row) => `${names.get(row.companyId) ?? row.companyId}: ${row.paying ? 'betalar, slås på inom tio minuter' : 'betalar inte, väntar på ett betalt abonnemang'} (${row.companyId})`),
+      empty: 'Inga nya förfrågningar som väntar.',
     },
   ]
 

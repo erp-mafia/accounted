@@ -3862,6 +3862,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Peppol är redan aktiverat för bolaget.',
     message_en: 'Peppol is already enabled for the company.',
   },
+  PEPPOL_ACCESS_DISABLED: {
+    httpStatus: 403,
+    message_sv: 'Peppol är avstängt för bolaget. Hör av dig till support om du vill ha det igen.',
+    message_en: 'Peppol is switched off for the company. Contact support if you want it back.',
+  },
   PEPPOL_REGISTRATION_CAP_REACHED: {
     httpStatus: 409,
     message_sv: 'Alla platser för Peppol-mottagning är upptagna just nu. Hör av dig till support så öppnar vi fler. Att skicka e-fakturor fungerar ändå.',

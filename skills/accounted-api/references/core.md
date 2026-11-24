@@ -573,18 +573,19 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/peppol/access-request`
 
-**Ask the operators to switch on Peppol for the company (sending, optionally receiving).**
+**Switch on Peppol for the company (sending, and receiving when chosen); needs a paid plan.**
 `scope:companies:write · risk:medium · idempotent · dry-run`
 
-Peppol is locked per company until the operators grant it (every transmission is billed per document and every receiving id uses a contracted slot). This records the request and notifies the operators by e-mail; they enable it with a sending cap and, when wants_receiving is true, a receiving slot. Idempotent: a second request keeps the first. Dry-runnable.
+Peppol is part of the paid plans. For a company on a paid plan (or a trial with a card on file) this switches Peppol on at once: sending, capped per calendar month, and receiving when wants_receiving is true. A company without a paid plan keeps its request, the answer says plan_required=true, the person who asked is mailed where to choose a plan, and Peppol is switched on by itself within minutes of the company starting to pay. Idempotent: a second request keeps the first. Dry-runnable.
 
 **Use when:** GET /invoices/{id}/peppol or GET /peppol/registration reports PEPPOL_ACCESS_REQUIRED and the user wants Peppol.
 **Do not use for:** Registering the participant id once access is granted (POST /peppol/registration).
 
 **Pitfalls:**
-- A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; ask support for a higher cap or a receiving slot instead.
+- A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; receiving is switched on with POST /peppol/registration, a higher cap through support.
+- A company whose Peppol the operators switched off answers 403 PEPPOL_ACCESS_DISABLED: getting it back goes through support.
 - A company that cannot be a Peppol participant answers 422 with the code GET /peppol/registration reports in participant.code (PEPPOL_REGISTRATION_PERSONAL_NUMBER for a sole trader identified by personnummer); nothing is recorded.
-- Nothing is enabled immediately: poll GET /peppol/registration for access.status=enabled.
+- plan_required=true means nothing was switched on: tell the user Peppol needs a paid plan (Inställningar > Abonnemang); it switches on by itself once they pay.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -610,7 +611,8 @@ Response `200`:
 {
   data: {
     access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null },
-    created: boolean
+    created: boolean,
+    plan_required: boolean
   },
   meta: {
     request_id: string,
@@ -629,14 +631,15 @@ Example response `200`:
 {
   "data": {
     "access": {
-      "status": "requested",
-      "send_enabled": false,
-      "receive_enabled": false,
-      "max_sends": null,
+      "status": "enabled",
+      "send_enabled": true,
+      "receive_enabled": true,
+      "max_sends": 10,
       "sent_count": 0,
-      "remaining_sends": null
+      "remaining_sends": 10
     },
-    "created": true
+    "created": true,
+    "plan_required": false
   },
   "meta": {
     "request_id": "req_…",
@@ -652,7 +655,7 @@ Example response `200`:
 **Read the company's Peppol receiving status: access grant, eligibility and registration.**
 `scope:companies:read · risk:low · idempotent`
 
-Whether this environment has an access point and whether it supports receiving, the company's Peppol access grant (sending cap, receiving slot), whether the company can be registered at all (a 10-digit organisation number that is not a personnummer, a company name), and the registration of its participant id (0007 + org number) with its status and last error.
+Whether this environment has an access point and whether it supports receiving, the company's Peppol access (sending cap, whether receiving is chosen), whether it needs a paid plan first (plan_required), whether the company can be registered at all (a 10-digit organisation number that is not a personnummer, a company name), and the registration of its participant id (0007 + org number) with its status and last error.
 
 **Use when:** Before POST /peppol/registration, or to explain why the company does not receive e-invoices.
 **Do not use for:** Sending (GET /invoices/{id}/peppol checks an invoice) or reading received e-invoices (they arrive in the invoice inbox).
@@ -660,6 +663,7 @@ Whether this environment has an access point and whether it supports receiving, 
 **Pitfalls:**
 - participant.ok=false with PEPPOL_REGISTRATION_PERSONAL_NUMBER means a sole trader identified by personnummer: it cannot be published in the Peppol directory.
 - registration.can_retry says whether registering again can help; a permanent verdict (e.g. CONNECTOR_PEPPOL_PARTICIPANT_TAKEN) needs support.
+- plan_required=true: the company has no Peppol yet and no paid plan. Peppol is switched on by itself within minutes of the company choosing a plan (or adding a card to its trial).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -672,6 +676,7 @@ Response `200`:
     transport: { available: boolean, provider: string | null, reason: string | null },
     receiving_supported: boolean,
     access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null },
+    plan_required: boolean,
     participant: { ok: boolean, code: string | null },
     registration: { registration_id: string, provider: string, participant_scheme: string, participant_identifier: string, status: "pending" | "registered" | "failed" | "deregistered", registered_at: string | null, deregistered_at: string | null, last_error_code: string | null, stale_pending: boolean, can_retry: boolean, updated_at: string } | null
   },
@@ -701,10 +706,11 @@ Example response `200`:
       "status": "enabled",
       "send_enabled": true,
       "receive_enabled": true,
-      "max_sends": 50,
+      "max_sends": 10,
       "sent_count": 3,
-      "remaining_sends": 47
+      "remaining_sends": 7
     },
+    "plan_required": false,
     "participant": {
       "ok": true,
       "code": null
@@ -737,13 +743,13 @@ Example response `200`:
 **Register the company as a Peppol participant so it can receive e-invoices.**
 `scope:companies:write · risk:high · idempotent · dry-run`
 
-Publishes the company's participant id (scheme 0007 + organisation number) with a business card (name, country, city, VAT number) at the access point, for BIS Billing 3 invoices and credit notes. Received e-invoices then arrive in the invoice inbox. Needs the operators' receiving grant. A pending attempt older than five minutes is retired and retried. Owner/admin only. The dry run checks everything as reads and contacts no network.
+Publishes the company's participant id (scheme 0007 + organisation number) with a business card (name, country, city, VAT number) at the access point, for BIS Billing 3 invoices and credit notes. Received e-invoices then arrive in the invoice inbox. Needs Peppol access; receiving is the company's own choice and this records it. A pending attempt older than five minutes is retired and retried. Owner/admin only. The dry run checks everything as reads and contacts no network.
 
-**Use when:** The company wants suppliers to send it e-invoices over Peppol and GET /peppol/registration shows receive_enabled.
+**Use when:** The company wants suppliers to send it e-invoices over Peppol and GET /peppol/registration shows access.status=enabled.
 **Do not use for:** Sending e-invoices (that needs no registration of the buyer side here) or asking for access (POST /peppol/access-request).
 
 **Pitfalls:**
-- Without the grant: 403 PEPPOL_ACCESS_REQUIRED; with sending but no receiving slot: 403 PEPPOL_RECEIVING_NOT_ENABLED.
+- Without Peppol access: 403 PEPPOL_ACCESS_REQUIRED (POST /peppol/access-request first).
 - A personnummer-based sole trader answers 422 PEPPOL_REGISTRATION_PERSONAL_NUMBER: it would publish personal data in the directory.
 - 502 PEPPOL_REGISTRATION_FAILED is operational and retryable; 422 PEPPOL_REGISTRATION_REJECTED is a verdict on the identifier (details.code says which), do not retry it.
 - 409 PEPPOL_REGISTRATION_CAP_REACHED: every contracted receiving slot is taken; sending still works.
