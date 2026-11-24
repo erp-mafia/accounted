@@ -1338,7 +1338,8 @@ function SIEImportWizard({
         <ImportReviewStep preview={effectivePreview} mappings={effectiveMappings} onlyUsedAccounts={leavesOutUnused}
           onExecute={handleExecuteImport} onBack={goBack} isLoading={isLoading}
           theaterModel={theaterModel} error={error}
-          blocked={Boolean(duplicateImportId) && existingYearMode === 'append' && (!appendPlan || appendPlan.refusal !== null)} />
+          blocked={Boolean(duplicateImportId) && existingYearMode === 'append' && (!appendPlan || appendPlan.refusal !== null)}
+          replacingImportId={duplicateImportId && existingYearMode === 'replace' ? duplicateImportId : null} />
       )}
       {step === 'result' && importResult && (
         <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo}

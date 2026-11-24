@@ -36,6 +36,7 @@ import ImportTheater from '@/components/import/ImportTheater'
 import {
   defaultImportOpeningBalancesOn,
   defaultOpeningBalanceSeries,
+  standingOpeningBalanceVoucherCount,
 } from '@/lib/import/opening-balance-defaults'
 import type { ImportPreview, AccountMapping } from '@/lib/import/types'
 import type { TheaterModel } from '@/lib/import/theater-model'
@@ -61,6 +62,9 @@ interface ImportReviewStepProps {
   onlyUsedAccounts?: boolean
   /** An append whose plan refuses it, or is still being read (issue #108): nothing to submit. */
   blocked?: boolean
+  /** The import this one replaces ("Ersätt tidigare import"): its IB
+   *  voucher is stornoed before this import books, so it does not count. */
+  replacingImportId?: string | null
 }
 
 export interface ImportExecuteOptions {
@@ -88,6 +92,7 @@ export default function ImportReviewStep({
   error = null,
   onlyUsedAccounts = false,
   blocked = false,
+  replacingImportId = null,
 }: ImportReviewStepProps) {
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
@@ -99,9 +104,9 @@ export default function ImportReviewStep({
   const tStep = useTranslations('import.sie_review')
   const tCommon = useTranslations('common')
   const tNotice = useTranslations('import_notices')
-  const [options, setOptions] = useState<ImportExecuteOptions>({
+  // importOpeningBalances is derived below: its default follows the mode.
+  const [options, setOptions] = useState<Omit<ImportExecuteOptions, 'importOpeningBalances'>>({
     createFiscalPeriod: true,
-    importOpeningBalances: true,
     importTransactions: true,
     updateAccountNames: true,
     voucherSeries: 'B',
@@ -111,10 +116,13 @@ export default function ImportReviewStep({
   const [defaultSeries, setDefaultSeries] = useState<string | null>(null)
   const [existingSeries, setExistingSeries] = useState<Set<string>>(new Set())
   const [seriesLoaded, setSeriesLoaded] = useState(false)
-  // Posted opening-balance vouchers already booked in the file's fiscal year.
-  // Non-zero means a re-import: the IB toggle then defaults OFF (issue #1882;
-  // a field report accumulated five IB vouchers from repeated test imports).
-  const [existingIbCount, setExistingIbCount] = useState(0)
+  // Posted opening-balance vouchers in the file's fiscal year, with the
+  // import that booked each.
+  const [ibVouchers, setIbVouchers] = useState<{ import_batch_id: string | null }[]>([])
+  // The user's own flip of the IB toggle, held for the mode it was made in:
+  // switching between adding to and replacing the earlier import shows that
+  // mode's default again.
+  const [ibChoice, setIbChoice] = useState<{ replacingImportId: string | null; on: boolean } | null>(null)
   // Another organisation's file starts only after an explicit yes.
   const orgMismatch = preview.orgNumberMismatch === true
   const [orgConfirmed, setOrgConfirmed] = useState(false)
@@ -128,50 +136,23 @@ export default function ImportReviewStep({
 
     let cancelled = false
     ;(async () => {
-      // Smart IB-toggle default (issue #1882): a posted opening-balance
-      // voucher already booked inside the file's fiscal year means this is
-      // a re-import, and importing IB again would create a duplicate
-      // "Ingående balanser" verifikat.
-      const ibCountQuery =
-        preview.fiscalYearStart && preview.fiscalYearEnd
-          ? supabase
-              .from('journal_entries')
-              .select('id', { count: 'exact', head: true })
-              .eq('company_id', company.id)
-              .eq('source_type', 'opening_balance')
-              .eq('status', 'posted')
-              .gte('entry_date', preview.fiscalYearStart)
-              .lte('entry_date', preview.fiscalYearEnd)
-          : Promise.resolve({ count: 0, error: null })
-
-      const [
-        { data: sequencesData, error: sequencesError },
-        { count: ibCount, error: ibCountError },
-      ] = await Promise.all([
-        supabase
-          .from('voucher_sequences')
-          .select('voucher_series')
-          .eq('company_id', company.id),
-        ibCountQuery,
-      ])
+      const { data: sequencesData, error: sequencesError } = await supabase
+        .from('voucher_sequences')
+        .select('voucher_series')
+        .eq('company_id', company.id)
 
       if (cancelled) return
 
       if (sequencesError) {
         console.error('Failed to load voucher sequences', sequencesError)
       }
-      if (ibCountError) {
-        console.error('Failed to check for existing opening-balance vouchers', ibCountError)
-      }
 
       // From the session-cached settings row (lib/reference-data).
       const companyDefault = companyDefaultVoucherSeries
       const sequences = new Set<string>((sequencesData || []).map((row) => row.voucher_series))
-      const existingIb = ibCountError ? 0 : (ibCount ?? 0)
 
       setDefaultSeries(companyDefault)
       setExistingSeries(sequences)
-      setExistingIbCount(existingIb)
 
       const initial = companyDefault || (sequences.has('B') ? 'B' : Array.from(sequences).sort()[0]) || 'A'
       setOptions((prev) => ({
@@ -186,10 +167,6 @@ export default function ImportReviewStep({
           ...(preview.voucherSeriesInFile ?? []),
           initial,
         ]),
-        importOpeningBalances: defaultImportOpeningBalancesOn({
-          hasOpeningBalances: preview.openingBalanceTotal > 0,
-          existingIbEntryCount: existingIb,
-        }),
       }))
       setSeriesLoaded(true)
     })()
@@ -197,7 +174,47 @@ export default function ImportReviewStep({
     return () => {
       cancelled = true
     }
-  }, [company?.id, companyDefaultVoucherSeries, preview.fiscalYearStart, preview.fiscalYearEnd, preview.openingBalanceTotal])
+  }, [company?.id, companyDefaultVoucherSeries])
+
+  // Smart IB-toggle default (issue #1882): a posted opening-balance voucher
+  // inside the file's fiscal year that still stands when this import books
+  // means a re-import, and importing IB again would create a duplicate
+  // "Ingående balanser" verifikat. A replace stornos the replaced import's
+  // own IB voucher first, so that one does not count.
+  useEffect(() => {
+    if (!company?.id || !preview.fiscalYearStart || !preview.fiscalYearEnd) return
+    const supabase = createClient()
+
+    let cancelled = false
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('journal_entries')
+        .select('import_batch_id')
+        .eq('company_id', company.id)
+        .eq('source_type', 'opening_balance')
+        .eq('status', 'posted')
+        .gte('entry_date', preview.fiscalYearStart)
+        .lte('entry_date', preview.fiscalYearEnd)
+      if (cancelled) return
+      if (error) {
+        console.error('Failed to check for existing opening-balance vouchers', error)
+        return
+      }
+      setIbVouchers(data ?? [])
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id, preview.fiscalYearStart, preview.fiscalYearEnd])
+
+  const existingIbCount = standingOpeningBalanceVoucherCount(ibVouchers, replacingImportId)
+  const importOpeningBalances = ibChoice && ibChoice.replacingImportId === replacingImportId
+    ? ibChoice.on
+    : defaultImportOpeningBalancesOn({
+        hasOpeningBalances: preview.openingBalanceTotal > 0,
+        existingIbEntryCount: existingIbCount,
+      })
 
   // Block browser close/refresh during import
   useUnsavedChanges(isLoading)
@@ -215,12 +232,13 @@ export default function ImportReviewStep({
   }, [isLoading])
 
   const handleExecute = () => {
-    onExecute(orgMismatch ? { ...options, confirmOrgNumberMismatch: orgConfirmed } : options)
+    const executeOptions = { ...options, importOpeningBalances }
+    onExecute(orgMismatch ? { ...executeOptions, confirmOrgNumberMismatch: orgConfirmed } : executeOptions)
   }
 
-  const updateOption = <K extends keyof ImportExecuteOptions>(
+  const updateOption = <K extends keyof typeof options>(
     key: K,
-    value: ImportExecuteOptions[K]
+    value: (typeof options)[K]
   ) => {
     setOptions((prev) => ({ ...prev, [key]: value }))
   }
@@ -397,14 +415,14 @@ export default function ImportReviewStep({
             </div>
             <Switch
               id="import-opening-balances"
-              checked={options.importOpeningBalances}
-              onCheckedChange={(checked) => updateOption('importOpeningBalances', checked)}
+              checked={importOpeningBalances}
+              onCheckedChange={(checked) => setIbChoice({ replacingImportId, on: checked })}
               disabled={!hasOpeningBalances}
             />
           </div>
 
           {/* Voucher series for the opening-balance voucher (issue #1882) */}
-          {options.importOpeningBalances && hasOpeningBalances && (
+          {importOpeningBalances && hasOpeningBalances && (
             <div className="space-y-2">
               <Label htmlFor="opening-balance-series" className="font-medium">
                 {t('ib_series_label')}
