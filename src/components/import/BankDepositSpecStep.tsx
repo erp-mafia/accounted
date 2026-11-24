@@ -108,6 +108,7 @@ export default function BankDepositSpecStep({ file, onNewImport }: BankDepositSp
                   <CheckCircleIcon className="h-4 w-4 flex-shrink-0 text-success" />
                   {t('bgmax_result', { payments: summary.matched_payments, rows: summary.matched_deposits })}
                 </div>
+                {summary.booked_rows > 0 && <p>{t('bgmax_result_booked', { count: summary.booked_rows })}</p>}
                 {summary.ready_rows > 0 && <p>{t('bgmax_result_ready', { count: summary.ready_rows })}</p>}
               </>
             ) : summary.matched_deposits > 0 ? (

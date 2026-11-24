@@ -89,6 +89,7 @@ export async function attachDepositSpecificationFile(
     noRow: summary.no_row,
     ambiguous: summary.ambiguous,
     ready: summary.ready_rows,
+    booked: summary.booked_rows,
   })
   return { ok: true, data: result }
 }

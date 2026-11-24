@@ -4282,6 +4282,11 @@ export const UpdateSettingsSchema = z.object({
   // every suggestion opens its review. Dashboard only (owner/admin): no
   // settings operation writes it, so a key cannot turn its own review off.
   direct_booking_enabled: z.boolean().optional(),
+  // An incoming payment that names one open customer invoice by its OCR or
+  // invoice number books against it on arrival, without a person (crm#2226).
+  // Dashboard only (owner/admin), like the switch above: no settings
+  // operation writes it.
+  auto_book_customer_payments: z.boolean().optional(),
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness (trips created via API/MCP work regardless).
   mileage_enabled: z.boolean().optional(),

@@ -263,6 +263,7 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     ai_flow_enabled: c.ai_flow_enabled,
     dimensions_enabled: c.dimensions_enabled,
     direct_booking_enabled: c.direct_booking_enabled,
+    auto_book_customer_payments: c.auto_book_customer_payments,
     mileage_enabled: c.mileage_enabled,
     sales_orders_enabled: c.sales_orders_enabled,
     quotes_enabled: c.quotes_enabled,

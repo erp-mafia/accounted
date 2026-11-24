@@ -68,6 +68,7 @@ export const importsDepositSpecification = defineOperation({
           matched_payments: 3,
           suggested_payments: 3,
           ready_rows: 1,
+          booked_rows: 0,
           no_row: 1,
           ambiguous: 0,
           outcomes: [
@@ -104,6 +105,9 @@ export const importsDepositSpecification = defineOperation({
     matched_payments: z.number(),
     suggested_payments: z.number().describe('Payments that got an open customer invoice suggested.'),
     ready_rows: z.number().describe('Bank rows whose payments all resolved: ready to match in one go.'),
+    booked_rows: z
+      .number()
+      .describe('Bank rows booked against their invoices on upload: every payment named its invoice by OCR and the company books such payments automatically.'),
     no_row: z.number().describe('Deposits with no stored bank row yet.'),
     ambiguous: z.number().describe('Deposits that fit two or more bank rows equally well.'),
     outcomes: z.array(outcome).describe('One per deposit, in the file\'s order.'),

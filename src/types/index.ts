@@ -624,6 +624,12 @@ export interface CompanySettings {
    * opens a review (lib/transactions/direct-booking.ts, accounted#130).
    */
   direct_booking_enabled?: boolean
+  /**
+   * An incoming payment that names one open customer invoice by its OCR or
+   * invoice number is booked against it on arrival, without a person
+   * (default off; lib/invoices/customer-payment-auto-book.ts).
+   */
+  auto_book_customer_payments?: boolean
 
   // Invoice settings
   invoice_prefix: string | null
@@ -4810,6 +4816,12 @@ export interface IngestResult {
    * only skipping them as duplicates. Optional: only that feed produces it.
    */
   enriched_updated?: number
+  /**
+   * Income rows booked against their customer invoice on arrival, without a
+   * person (company_settings.auto_book_customer_payments; a deposit's split
+   * counts once). Counted in auto_matched_invoices too. Omitted when none.
+   */
+  auto_booked_payments?: number
   /**
    * Bank-feed rows set aside because their currency is not the bank account's
    * (IngestOptions.bankRoute), counted per currency code. Not imported, not

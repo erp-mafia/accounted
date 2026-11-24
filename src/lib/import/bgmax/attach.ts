@@ -49,7 +49,15 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  autoBookCustomerPayment,
+  autoBookSplitDeposit,
+  exactReferenceSplitAllocations,
+  invoiceNamedExactly,
+  readCustomerPaymentAutoBook,
+} from '@/lib/invoices/customer-payment-auto-book'
 import { loadInvoiceMatchPool } from '@/lib/invoices/invoice-matching'
+import { createLogger } from '@/lib/logger'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { amountToOre } from '@/lib/transactions/external-id'
 import { giroKey, readGiroCounterparty, type GiroRegister, type GiroRow } from '@/lib/transactions/giro-counterparty'
@@ -370,6 +378,12 @@ export interface AttachSummary {
   suggested_payments: number
   /** Rows whose payments all resolved: ready for one batch allocation, or one single match (applied only). */
   ready_rows: number
+  /**
+   * Rows booked against their invoices on upload, every payment naming its
+   * invoice by OCR, where the company switched auto_book_customer_payments
+   * on (applied only). Not counted in ready_rows.
+   */
+  booked_rows: number
   no_row: number
   ambiguous: number
   outcomes: DepositOutcome[]
@@ -469,10 +483,15 @@ export async function attachBgMaxDeposits(supabase: SupabaseClient, input: Attac
   const matches = matchDepositsToRows(deposits, rows, register, accounts)
 
   const pool = apply && matches.some((m) => m.status === 'matched') ? await loadInvoiceMatchPool(supabase, companyId) : null
+  // A payment that names its invoice by OCR books on upload where the company
+  // asked for it (lib/invoices/customer-payment-auto-book.ts).
+  const autoBook = pool ? await readCustomerPaymentAutoBook(supabase, companyId) : false
+  const bookCtx = { supabase, companyId, userId, log: createLogger('import/deposit-specification', { companyId }) }
   // An invoice is offered to one payment of the file, never two.
   const claimed = new Set<string>()
   const outcomes: DepositOutcome[] = []
   let readyRows = 0
+  let bookedRows = 0
 
   for (let index = 0; index < deposits.length; index++) {
     const deposit = deposits[index]!
@@ -506,7 +525,9 @@ export async function attachBgMaxDeposits(supabase: SupabaseClient, input: Attac
       }
     }
     if (complete) {
-      readyRows++
+      const allocations = autoBook && pool && suggestions ? exactReferenceSplitAllocations(parts, suggestions, pool.invoices) : null
+      if (allocations && (await autoBookSplitDeposit(bookCtx, row, allocations)).ok) bookedRows++
+      else readyRows++
       continue
     }
 
@@ -515,6 +536,13 @@ export async function attachBgMaxDeposits(supabase: SupabaseClient, input: Attac
     // or voucher suggestion the row already carries stands.
     const only = suggestions?.length === 1 ? suggestions[0] : null
     if (!only?.suggested_invoice_id || amountToOre(parts[0]!.amount) !== amountToOre(row.amount)) continue
+    if (autoBook && pool && open && invoiceNamedExactly(parts[0]!.reference, parts[0]!.currency, pool.invoices)?.id === only.suggested_invoice_id) {
+      const booked = await autoBookCustomerPayment(bookCtx, row, { id: only.suggested_invoice_id })
+      if (booked.ok) {
+        bookedRows++
+        continue
+      }
+    }
     if (row.potential_invoice_id === only.suggested_invoice_id) {
       readyRows++ // the same file again: the hint is already there
       continue
@@ -543,6 +571,7 @@ export async function attachBgMaxDeposits(supabase: SupabaseClient, input: Attac
     matched_payments: matched.reduce((n, o) => n + o.payments, 0),
     suggested_payments: outcomes.reduce((n, o) => n + o.suggested, 0),
     ready_rows: readyRows,
+    booked_rows: bookedRows,
     no_row: outcomes.filter((o) => o.status === 'no_row').length,
     ambiguous: outcomes.filter((o) => o.status === 'ambiguous').length,
     outcomes,

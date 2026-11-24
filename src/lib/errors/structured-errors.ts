@@ -1579,6 +1579,18 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_link_transaction_to_journal_entry',
     },
   },
+  // An incoming payment matched to its invoice without a person
+  // (lib/invoices/customer-payment-auto-book.ts) whose verifikat would move a
+  // ruta of a momsdeklaration already filed: the row keeps its suggestion and
+  // a person books it, or picks another way.
+  MATCH_INVOICE_UNATTENDED_FILED_VAT_PERIOD: {
+    httpStatus: 409,
+    message_sv:
+      'Bokningen skulle ändra underlaget för en momsdeklaration som redan är inlämnad, så den bokfördes inte automatiskt. Bekräfta matchningen själv om den ska bokföras.',
+    message_en:
+      'The booking would change the figures behind a VAT return already filed, so it was not booked automatically. Confirm the match by hand if it should be booked.',
+    retryable: false,
+  },
   MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH: {
     httpStatus: 409,
     message_sv:
