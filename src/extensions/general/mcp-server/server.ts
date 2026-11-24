@@ -249,7 +249,7 @@ import { dimensionFilterPartialView } from '@/lib/reports/dimension-filter'
 // gate. The MCP surface imports it instead of mirroring it: a hand-rolled copy
 // here is exactly how the reverse-charge check drifted into an unreachable
 // `ruta48 === 0` test.
-import { resolveAgentWorklist } from '@/lib/receipt-hunt/agent-worklist'
+import { resolveAgentWorklist, verifikatNextStepKinds, type NextStepKind, type VerifikatErrandRow } from '@/lib/receipt-hunt/agent-worklist'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { expandParty } from '@/lib/parties/party-api'
@@ -9718,14 +9718,29 @@ export const tools: McpTool[] = [
         ok: boolean
         code?: string
         total_count?: number
-        verifikat?: unknown[]
+        verifikat?: VerifikatErrandRow[]
       } | null
       if (!result?.ok) {
         throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
       }
 
-      const rows = result.verifikat ?? []
+      const page = result.verifikat ?? []
       const total = result.total_count ?? 0
+      // Each row's errand, as Kvittojakten's worklist reads it (nextStepKind):
+      // own_transfer is a transfer between the company's own accounts, whose
+      // underlag is the bank statement, and gnubok_vat_close_check leaves
+      // those out of its count; stripe needs Stripe's report. A failed read
+      // lists the rows without it (null) rather than not at all.
+      let kinds: Map<string, NextStepKind> | null = null
+      try {
+        kinds = await verifikatNextStepKinds(supabase, companyId, page)
+      } catch (err) {
+        log.warn('list_verifikat_without_documents: next_step_kind unavailable', {
+          companyId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      const rows = page.map((row) => ({ ...row, next_step_kind: kinds?.get(row.journal_entry_id) ?? null }))
       // Waivers are respected here, so an agent acting on these rows needs the
       // tool that writes one: without its name one guessed six names in nine
       // seconds (feedback seq 706722). A response field also reaches callers

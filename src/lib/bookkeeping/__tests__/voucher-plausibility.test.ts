@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { booksPurchase, checkVoucherPlausibility, type PlausibilityLine } from '../voucher-plausibility'
+import { booksPurchase, checkVoucherPlausibility, movesOnlyBetweenOwnAccounts, type PlausibilityLine } from '../voucher-plausibility'
 
 const D = (account_number: string, amount: number): PlausibilityLine => ({ account_number, debit_amount: amount, credit_amount: 0 })
 const C = (account_number: string, amount: number): PlausibilityLine => ({ account_number, debit_amount: 0, credit_amount: amount })
@@ -129,5 +129,33 @@ describe('booksPurchase', () => {
     expect(booksPurchase([D('5420', 900), D('6570', 15), C('1930', 915)])).toBe(true)
     expect(booksPurchase([D('2440', 5000), D('7960', 40), C('1930', 5040)])).toBe(true)
     expect(booksPurchase([D('6540', 400), D('2645', 100), C('2614', 100), C('1943', 400)])).toBe(true)
+  })
+})
+
+/**
+ * A transfer between the company's own accounts: the bank statement is its
+ * underlag on both ends, so Kvittojakten and the VAT close check do not ask
+ * for one.
+ */
+describe('movesOnlyBetweenOwnAccounts', () => {
+  it('finds a move from one 19xx account to another, with the fee or exchange difference the move leaves', () => {
+    expect(movesOnlyBetweenOwnAccounts([D('1940', 80000), C('1930', 80000)])).toBe(true)
+    expect(movesOnlyBetweenOwnAccounts([D('1910', 3000), C('1930', 3000)])).toBe(true)
+    expect(movesOnlyBetweenOwnAccounts([D('1941', 1000), C('1942', 990), C('1942', 5), C('3960', 10), D('6570', 5)])).toBe(true)
+    expect(movesOnlyBetweenOwnAccounts([D('1930', 9800), C('1943', 9950), D('6570', 50), D('7960', 100)])).toBe(true)
+  })
+
+  it('finds none where money leaves or enters the company, or only one account moves', () => {
+    // A share issue, a Stripe payout from the Stripe balance (1686), a card bill, the skattekonto.
+    expect(movesOnlyBetweenOwnAccounts([D('1931', 100000), C('2082', 100000)])).toBe(false)
+    expect(movesOnlyBetweenOwnAccounts([D('1930', 5000), C('1686', 5000)])).toBe(false)
+    expect(movesOnlyBetweenOwnAccounts([D('2890', 7000), C('1930', 7000)])).toBe(false)
+    expect(movesOnlyBetweenOwnAccounts([D('1630', 30000), C('1930', 30000)])).toBe(false)
+    // A sale, a purchase, a cashback on two accounts, interest, a bank charge on its own.
+    expect(movesOnlyBetweenOwnAccounts([D('1930', 5000), C('2611', 1000), C('3001', 4000)])).toBe(false)
+    expect(movesOnlyBetweenOwnAccounts([D('5420', 900), D('6570', 15), C('1930', 915)])).toBe(false)
+    expect(movesOnlyBetweenOwnAccounts([D('1942', 300), D('1943', 400), C('8311', 700)])).toBe(false)
+    expect(movesOnlyBetweenOwnAccounts([D('1930', 50), C('8310', 50)])).toBe(false)
+    expect(movesOnlyBetweenOwnAccounts([D('6570', 99), C('1930', 99)])).toBe(false)
   })
 })
