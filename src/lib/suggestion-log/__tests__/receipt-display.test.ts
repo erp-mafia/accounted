@@ -482,6 +482,30 @@ describe('evidenceLevel', () => {
     }
   })
 
+  it("maps the company's own earlier booking to likely, and names it on the proposal row", () => {
+    expect(evidenceLevel(accepted('precedent', 'review'))?.level).toBe('likely')
+    expect(evidenceLevel(accepted('precedent'))?.level).toBe('likely')
+
+    const precedent = {
+      source: 'precedent',
+      source_id: 'precedent:5420',
+      rank: 0,
+      proposal: { booking: { kind: 'account', account: '5420', vat_treatment: 'standard_25', category: 'expense_software' }, debit_account: '5420', credit_account: '1930', vat_treatment: 'standard_25' },
+      confidence: 0.6,
+      model: null,
+      prompt_sha256: null,
+      matches_final: true,
+    }
+    const row = bankRow({ suggestions: [precedent], acted_on: 0, final: { journal_entry_id: JE, booking: null, account: '5420', vat_treatment: 'standard_25', lines: [] } })
+    const r = buildDecisionReceipt(row, ctx())
+    const sv = rowMap(bookingWhy(data({ receipts: [r] }), opts()))
+    expect(sv.proposal).toBe('Samma som förra gången · konto 5420')
+    expect(sv.grounds).toBe('Trolig · så bokfördes motparten förra gången')
+    const en = rowMap(bookingWhy(data({ receipts: [r] }), opts('en')))
+    expect(en.proposal).toBe('Same as last time · account 5420')
+    expect(en.grounds).toBe('Likely · how this counterpart was booked last time')
+  })
+
   it('maps a rule to strong unless the recorded band asked for a review', () => {
     expect(evidenceLevel(accepted('rule'))?.level).toBe('strong')
     expect(evidenceLevel(accepted('rule', 'direct'))?.level).toBe('strong')

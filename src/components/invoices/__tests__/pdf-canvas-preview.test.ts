@@ -15,6 +15,7 @@ const CANVAS = read('../PdfCanvasPreview.tsx')
 const PANE = read('../editor/EditorPreviewPane.tsx')
 const HOOK = read('../editor/use-editor-previews.ts')
 const CARD = read('../../settings/InvoicePreviewCard.tsx')
+const DOCUMENT = read('../../bookkeeping/DocumentPreview.tsx')
 
 /** The sources the app's page policy allows for fetch(), XHR and sockets. */
 function connectSources(): string[] {
@@ -84,5 +85,27 @@ describe('invoice PDF previews', () => {
     expect(CARD).toContain('setPdfBlob(blob)')
     expect(CARD).toContain('blobUrl && !drawsInPage && (')
     expect(CARD).toContain('type="application/pdf"')
+  })
+})
+
+describe('stored document PDFs (DocumentPreview)', () => {
+  it('draws every page in the page where the <object> shows nothing or only page 1', () => {
+    // Chrome on Android left the Inkorg document and a sent invoice's file an
+    // empty white sheet; an iPhone showed the first page only.
+    expect(DOCUMENT).toContain('const drawsInPage = useDrawsPdfInPage()')
+    expect(DOCUMENT).toContain('if (drawsInPage) return <DrawnPdf')
+    expect(DOCUMENT).toContain('fit="width"')
+    // The bytes are handed over as a Blob, read from the file's own address.
+    expect(DOCUMENT).toContain('readPdfForDrawing(url, controller.signal)')
+    expect(DOCUMENT).toContain('file={current.file}')
+  })
+
+  it('shows the surface\'s link when the file cannot be read or drawn, never an empty frame', () => {
+    expect(DOCUMENT).toContain('if (!current.file) return <div className={className}>{fallback}</div>')
+    expect(DOCUMENT).toMatch(/<PdfCanvasPreview[^>]*fallback=\{fallback\}/)
+  })
+
+  it('keeps the browser viewer, an <object>, everywhere it draws the PDF', () => {
+    expect(DOCUMENT).toContain('<object data={src} type="application/pdf"')
   })
 })

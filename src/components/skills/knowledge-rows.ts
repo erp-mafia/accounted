@@ -2,7 +2,7 @@ import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { catalogueKnowledge } from '@/lib/agent-skills/knowledge-list'
 import { rulesSegment } from './data'
 
-/** One knowledge item as a row of the catalogue (a CatalogItem of the knowledge kind). */
+/** One knowledge item as a row of the catalogue (the catalogue's item shape, for the knowledge kind). */
 export interface KnowledgeRow {
   key: string
   kind: 'rules'

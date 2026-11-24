@@ -394,6 +394,10 @@ export async function buildArsredovisningReport(
     balanceSheet: balanceSheetMapping,
     overrides: equityMovementOverridesFrom(narrative?.equity_movement_overrides),
     placement: k3Presentation && narrative?.equity_statement_separate ? 'separate_statement' : 'management_report',
+    // A K2 report names the rows as the K2 taxonomy does, as its iXBRL
+    // document must (build-input.ts); the report says so itself, so a
+    // version locked before those labels keeps the ones it was signed with.
+    rowLabels: accountingFramework === 'k2' ? 'k2' : undefined,
   })
   const memberDisclosures = isForening ? memberDisclosuresFrom(narrative) : null
   const proposedDividend = narrative?.proposed_dividend ?? 0
@@ -643,6 +647,9 @@ export async function buildArsredovisningReport(
         'Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.',
       kontrollbalans_required: overrides.kontrollbalans_required ?? false,
       flerarsoversikt,
+      // The year's choice to state the flerårsöversikt in tkr. Only present
+      // when on: an absent key keeps the content hash of every other report.
+      ...(narrative?.flerarsoversikt_tkr === true ? { flerarsoversikt_tkr: true } : {}),
       egen_kapital_changes,
       resultatdisposition:
         overrides.resultatdisposition ??

@@ -27,6 +27,7 @@
  * are not on main yet, and core must not import a module that does not exist.
  */
 
+import { equityMovementLabel, type EquityMovementKind } from '@/lib/bokslut/arsredovisning/equity-kinds'
 import { roundOre } from '@/lib/money'
 import { KASSAFLODESANALYS_LAYOUT } from '@/lib/reports/kassaflodesanalys-layout'
 import type {
@@ -127,26 +128,12 @@ function whole(amount: number): number {
   return rounded === 0 ? 0 : rounded
 }
 
-/** Row labels of the specification's movement kinds (K3 6.3 a-e). */
-const KIND_LABELS: Record<string, string> = {
-  rattelse_av_fel: 'Effekt av rättelse av fel',
-  andrad_redovisningsprincip: 'Effekt av ändrad redovisningsprincip',
-  resultatdisposition: 'Disposition enligt stämmans beslut',
-  utdelning: 'Utdelning',
-  aktieagartillskott: 'Erhållna tillskott',
-  aterbetalt_tillskott: 'Återbetalda tillskott',
-  nyemission: 'Nyemission',
-  andra_vardeoverforingar: 'Andra värdeöverföringar till ägare',
-  fondemission: 'Fondemission',
-  omforing: 'Omföring mellan poster i eget kapital',
-  uppskrivning: 'Uppskrivning av anläggningstillgångar',
-  verkligt_varde: 'Förändring av verkligt värde',
-  ovriga_direkt_mot_eget_kapital: 'Övriga poster redovisade direkt mot eget kapital',
-  ovrigt: 'Övriga förändringar',
-  arets_resultat: 'Årets resultat',
-}
-
-const kindLabel = (kind: string): string => KIND_LABELS[kind] ?? kind
+/**
+ * The row label of a movement kind: the one the report prints for the
+ * year's regelverk (equity-kinds.ts), so the PDF and the iXBRL document
+ * cannot name a row differently.
+ */
+const kindLabel = (kind: string, framework: 'k2' | 'k3'): string => equityMovementLabel(kind as EquityMovementKind, framework)
 
 function specificationPosts(year: EquitySpecificationYearLike, br: ConceptAmounts, field: 'current' | 'previous'): K3EquityPost[] {
   return year.posts.map((post) => ({
@@ -165,10 +152,14 @@ function specificationPosts(year: EquitySpecificationYearLike, br: ConceptAmount
   }))
 }
 
-export function k3EquityFromSpecification(spec: EquitySpecificationLike, br: ConceptAmounts): K3EquityInput {
+export function k3EquityFromSpecification(
+  spec: EquitySpecificationLike,
+  br: ConceptAmounts,
+  framework: 'k2' | 'k3' = 'k3',
+): K3EquityInput {
   return {
     source: 'ledger',
-    kinds: spec.kinds.map((kind) => ({ kind, label: kindLabel(kind) })),
+    kinds: spec.kinds.map((kind) => ({ kind, label: kindLabel(kind, framework) })),
     posts: specificationPosts(spec.current, br, 'current'),
     placement: spec.placement === 'separate_statement' ? 'separate_statement' : 'management_report',
     previous: spec.previous ? specificationPosts(spec.previous, br, 'previous') : null,
@@ -183,7 +174,7 @@ export function k3EquityFromSpecification(spec: EquitySpecificationLike, br: Con
  * a reading of balances, not of the year's verifikat, so preflight refuses
  * to file it.
  */
-export function k3EquityFromClosingBalances(br: ConceptAmounts): K3EquityInput {
+export function k3EquityFromClosingBalances(br: ConceptAmounts, framework: 'k2' | 'k3' = 'k3'): K3EquityInput {
   const ib = (concept: string) => br[concept]?.previous ?? 0
   const ub = (concept: string) => br[concept]?.current ?? 0
   const carried = ib('AretsResultatEgetKapital')
@@ -211,17 +202,22 @@ export function k3EquityFromClosingBalances(br: ConceptAmounts): K3EquityInput {
   const kinds = ['resultatdisposition', 'utdelning', 'nyemission', 'ovrigt', 'arets_resultat']
   return {
     source: 'closing_balances',
-    kinds: kinds.map((kind) => ({ kind, label: kindLabel(kind) })),
+    kinds: kinds.map((kind) => ({ kind, label: kindLabel(kind, framework) })),
     posts,
     placement: 'management_report',
     previous: null,
   }
 }
 
-/** The equity input for a report: its specification when it has one, else the fallback. */
-export function k3EquityInput(report: unknown, br: ConceptAmounts): K3EquityInput {
+/**
+ * The equity input for a report: its specification when it has one, else
+ * the fallback. The K2 document reads the same input, with the K2 row labels.
+ */
+export function k3EquityInput(report: unknown, br: ConceptAmounts, framework: 'k2' | 'k3' = 'k3'): K3EquityInput {
   const spec = (report as { equity_specification?: unknown } | null)?.equity_specification
-  return isEquitySpecification(spec) ? k3EquityFromSpecification(spec, br) : k3EquityFromClosingBalances(br)
+  return isEquitySpecification(spec)
+    ? k3EquityFromSpecification(spec, br, framework)
+    : k3EquityFromClosingBalances(br, framework)
 }
 
 // ---- 3. kassaflödesanalys ---------------------------------------------------

@@ -14,6 +14,7 @@ import {
 } from '@/components/reports/report-view-shared'
 import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount } from '@/lib/utils'
+import { NET_RESULT_LABEL } from '@/lib/reports/income-definitions'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
@@ -138,7 +139,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
       {/* Net result */}
       <Card>
         <CardContent className="flex items-baseline justify-between">
-          <span className="text-sm font-medium">Årets resultat</span>
+          <span className="text-sm font-medium">{NET_RESULT_LABEL}</span>
           <span className={`font-display text-xl tabular-nums ${data.net_result >= 0 ? 'text-success' : 'text-destructive'}`}>
             {formatAmount(data.net_result)} kr
           </span>

@@ -170,12 +170,70 @@ describe('generateBalanceSheet', () => {
     expect(report.asset_sections).toHaveLength(1) // Only 1930
     // Class 3-8 accounts are not included as balance sheet rows, but their
     // net result (credit - debit = 40000 + 500 - 8000 = 32500) appears as
-    // "Årets resultat" in equity so the balance sheet can balance.
+    // the computed result in Eget kapital so the balance sheet can balance,
+    // even with no 20xx account to open the section.
     expect(report.equity_liability_sections).toHaveLength(1)
-    expect(report.equity_liability_sections[0].title).toBe('Årets resultat')
+    expect(report.equity_liability_sections[0].title).toBe('Eget kapital')
+    expect(report.equity_liability_sections[0].rows).toEqual([
+      { account_number: '', account_name: 'Beräknat resultat', amount: 32500 },
+    ])
     expect(report.equity_liability_sections[0].subtotal).toBe(32500)
     expect(report.total_assets).toBe(50000)
     expect(report.total_equity_liabilities).toBe(32500)
+  })
+
+  it('puts a loss inside Eget kapital and its subtotal, before the liabilities', async () => {
+    // Share capital 50 000, a year's loss of 30 000: equity is 20 000.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '1930', account_name: 'Företagskonto', account_class: 1, closing_debit: 35000, closing_credit: 0 }),
+        makeRow({ account_number: '2081', account_name: 'Aktiekapital', account_class: 2, closing_credit: 50000, closing_debit: 0 }),
+        makeRow({ account_number: '2440', account_name: 'Leverantörsskulder', account_class: 2, closing_credit: 15000, closing_debit: 0 }),
+        makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 10000, closing_debit: 0 }),
+        makeRow({ account_number: '5420', account_name: 'Programvaror', account_class: 5, closing_debit: 40000, closing_credit: 0 }),
+      ],
+      totalDebit: 75000,
+      totalCredit: 75000,
+      isBalanced: true,
+    })
+
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-1')
+
+    expect(report.equity_liability_sections.map((s) => s.title)).toEqual(['Eget kapital', 'Kortfristiga skulder'])
+    const equity = report.equity_liability_sections[0]
+    expect(equity.rows).toEqual([
+      { account_number: '2081', account_name: 'Aktiekapital', amount: 50000 },
+      { account_number: '', account_name: 'Beräknat resultat', amount: -30000 },
+    ])
+    expect(equity.subtotal).toBe(20000)
+    expect(report.total_assets).toBe(35000)
+    expect(report.total_equity_liabilities).toBe(35000)
+    expect(report.imbalance_diagnosis).toBeUndefined()
+  })
+
+  it('puts a profit inside Eget kapital and its subtotal, grand total unchanged', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '1930', account_name: 'Företagskonto', account_class: 1, closing_debit: 87500.55, closing_credit: 0 }),
+        makeRow({ account_number: '2081', account_name: 'Aktiekapital', account_class: 2, closing_credit: 25000, closing_debit: 0 }),
+        makeRow({ account_number: '2091', account_name: 'Balanserad vinst eller förlust', account_class: 2, closing_credit: 10000, closing_debit: 0 }),
+        makeRow({ account_number: '2440', account_name: 'Leverantörsskulder', account_class: 2, closing_credit: 12500, closing_debit: 0 }),
+        makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 60000.55, closing_debit: 0 }),
+        makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 20000, closing_credit: 0 }),
+      ],
+      totalDebit: 107500.55,
+      totalCredit: 107500.55,
+      isBalanced: true,
+    })
+
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-1')
+
+    expect(report.equity_liability_sections.find((s) => s.title === 'Årets resultat')).toBeUndefined()
+    const equity = report.equity_liability_sections.find((s) => s.title === 'Eget kapital')!
+    expect(equity.rows.at(-1)).toEqual({ account_number: '', account_name: 'Beräknat resultat', amount: 40000.55 })
+    expect(equity.subtotal).toBe(75000.55)
+    expect(report.total_equity_liabilities).toBe(87500.55)
+    expect(report.total_equity_liabilities).toBe(report.total_assets)
   })
 
   it('does not double-count arets resultat when a resultatavslut on 2099 has its counter-line outside class 3-8 (issue #1333)', async () => {

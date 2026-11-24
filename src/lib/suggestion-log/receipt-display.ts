@@ -282,7 +282,7 @@ function summaryText(how: How, who: Who, whoText: string, r: ReceiptLike | null,
 
 // ── Grounds ─────────────────────────────────────────────────────────
 
-const LIKELY_SOURCES = new Set<string>(['assistant', 'extraction', 'catalog', 'recent', 'clearing'])
+const LIKELY_SOURCES = new Set<string>(['assistant', 'extraction', 'catalog', 'recent', 'clearing', 'precedent'])
 
 /**
  * The grounds of a decision as an evidence level, from what the receipt
@@ -293,7 +293,8 @@ const LIKELY_SOURCES = new Set<string>(['assistant', 'extraction', 'catalog', 'r
  *     review), or the counterpart's history was settled (band 'direct');
  *   - likely: a reading or a guess (the assistant, a document reading, a
  *     catalog keyword, a template used lately, the till's record of money
- *     already booked on a clearing account), or a band of 'review';
+ *     already booked on a clearing account, the company's own earlier
+ *     booking of the counterparty), or a band of 'review';
  *   - exact: reserved for an exact match such as an OCR reference. No booking
  *     door records one as a suggestion yet, so nothing returns it today.
  * Null when the receipt cannot tell: an agent's own choice, or counterpart
@@ -326,7 +327,7 @@ const VIA_KEYS: Record<string, string> = {
   migration: 'via_import',
 }
 
-const KNOWN_SOURCES = new Set<string>(['rule', 'counterparty_template', 'assistant', 'catalog', 'recent', 'extraction', 'clearing'])
+const KNOWN_SOURCES = new Set<string>(['rule', 'counterparty_template', 'assistant', 'catalog', 'recent', 'extraction', 'clearing', 'precedent'])
 
 /** InboxFields keys (inbox-classify.ts) a receipt can name as changed. */
 const KNOWN_FIELDS = new Set<string>([

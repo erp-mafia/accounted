@@ -11,6 +11,7 @@ import type {
   FinancialStatementSummaryRow,
 } from './financial-statement-pdf-template'
 import type { BalanceSheetReport, IncomeStatementReport } from '@/types'
+import { NET_RESULT_LABEL } from './income-definitions'
 
 // K2/K3 uppställningsform (ÅRL bilaga 2, kostnadsslagsindelad) splits class 8
 // into three named blocks with subtotals:
@@ -130,12 +131,16 @@ export function buildIncomeStatementPdfModel(report: IncomeStatementReport): Inc
     })
   }
 
-  // K2/K3 uppställningsform (ÅRL bilaga 2) summary structure:
+  // Summary, in ÅRL bilaga 2 order:
   //   Rörelseresultat
   //   Resultat efter finansiella poster (only if finansiella poster present)
   //   Bokslutsdispositioner (only if present)
-  //   Skatt på årets resultat (always, so the reader can verify the tax calc)
-  //   Årets resultat
+  //   Skatt på årets resultat (only if present)
+  //   Resultat före bokslutstransaktioner
+  // The report leaves out every source_type 'year_end' entry, so 88xx and
+  // 89xx appear only when booked outside the year-end close (a manual or
+  // imported verifikat), and the bottom line is not the årsredovisning's
+  // Årets resultat.
   const summary: FinancialStatementSummaryRow[] = [
     { label: 'Rörelseresultat', amount: operatingResult },
   ]
@@ -151,8 +156,10 @@ export function buildIncomeStatementPdfModel(report: IncomeStatementReport): Inc
   if (bokslutsdispositionerSections.length > 0) {
     summary.push({ label: 'Bokslutsdispositioner', amount: totalBokslutsdispositioner })
   }
-  summary.push({ label: 'Skatt på årets resultat', amount: totalSkatt })
-  summary.push({ label: 'Årets resultat', amount: report.net_result, emphasis: true })
+  if (skattSections.length > 0) {
+    summary.push({ label: 'Skatt på årets resultat', amount: totalSkatt })
+  }
+  summary.push({ label: NET_RESULT_LABEL, amount: report.net_result, emphasis: true })
 
   return { groups, summary }
 }

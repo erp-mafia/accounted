@@ -6,6 +6,7 @@ import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accoun
 import { excludeYearEndChain, fetchYearEndEntryIds } from './trial-balance'
 
 export interface MonthlyBreakdownMonth {
+  /** "Jan" to "Dec"; "Jul 2025" when the months span calendar years. */
   label: string
   income: number
   expenses: number
@@ -33,7 +34,7 @@ export interface MonthlyBucket {
 /**
  * Pure assembly of the monthly breakdown from pre-summed buckets: month
  * range initialization, bucket fill, natural "YYYY-MM" sort, and Swedish
- * month labels. Extracted from generateMonthlyBreakdown so callers that
+ * month labels, with the year when the months span calendar years. Extracted from generateMonthlyBreakdown so callers that
  * already hold per-month sums (e.g. the KPI route's single-round-trip
  * aggregate path) can reuse the assembly without re-scanning lines.
  *
@@ -77,12 +78,19 @@ export function assembleMonthlyBreakdown(
   const months: MonthlyBreakdownMonth[] = []
   const sortedKeys = Array.from(monthMap.keys()).sort()
 
+  // Months spanning more than one calendar year carry the year in the label
+  // ("Jul 2025"): a broken or extended räkenskapsår (up to 18 months) would
+  // otherwise print "Jul" for two different years.
+  const spansYears =
+    sortedKeys.length > 0 &&
+    monthMap.get(sortedKeys[0])!.year !== monthMap.get(sortedKeys[sortedKeys.length - 1])!.year
+
   for (const key of sortedKeys) {
     const data = monthMap.get(key)!
     const income = roundOre(data.income)
     const expenses = roundOre(data.expenses)
     months.push({
-      label: MONTH_LABELS[data.month],
+      label: spansYears ? `${MONTH_LABELS[data.month]} ${data.year}` : MONTH_LABELS[data.month],
       income,
       expenses,
       net: roundOre(income - expenses),

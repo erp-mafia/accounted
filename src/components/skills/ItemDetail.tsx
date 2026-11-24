@@ -21,6 +21,7 @@ import { SHOWN_FLOWS } from './catalog-setup'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { formatDateLong } from '@/lib/utils'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
+import { stripFrontMatter } from '@/lib/agent-skills/front-matter'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { handoffRoute, pinCompany, startInAi, type ClaudeTarget, type StartOutcome } from './run'
 import { ClaudeStart } from './ClaudeStart'
@@ -39,19 +40,13 @@ import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
 import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, simulatedConnection, type CommunityMeta } from './data'
+import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readBody, readCatalog, readOptions, rulesSegment, simulatedClient, simulatedConnection, type CommunityMeta } from './data'
 import styles from './skills.module.css'
 
 // The Markdown parser loads with the first pack that is opened, not with the list.
 const Markdown = dynamic(() => import('@/components/agent/MarkdownMessage'))
 // Skriv själv, loaded when own knowledge or an analysis is edited.
 const CreateItem = dynamic(() => import('./CreateItem').then((m) => m.CreateItem))
-
-async function readBody(url: string): Promise<string> {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error('Item body request failed')
-  return ((await response.json()).data as { body: string }).body
-}
 
 type Item = {
   kind: ItemKind
@@ -346,7 +341,8 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
                   )}
                   {(!isPack || showBody) && (
                     <div id="item-body" className={styles.mdBody} data-ph-mask={item.community ? '' : undefined}>
-                      {body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
+                      {/* Shown from after the file's front matter; the copy control beside the label copies the whole text. */}
+                      {body.data ? <Markdown text={stripFrontMatter(body.data)} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
                     </div>
                   )}
                 </Field>}

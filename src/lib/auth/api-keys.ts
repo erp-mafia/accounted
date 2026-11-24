@@ -280,6 +280,21 @@ export function credentialActor(key: CredentialFacts): {
   return { type: 'api_key', label: key.apiKeyName ?? 'Unnamed API key', ...person, ...ceiling }
 }
 
+/**
+ * Whether a key's company allowlist lets the key into a company, as
+ * `allowedCompanyIds` below is read: no list (a key without api_key_companies
+ * rows) reaches every company its user is a live member of, a list only the
+ * companies on it. Membership is the caller's own check: the allowlist can
+ * only narrow reach. Ids compare without case, since a caller may spell a
+ * UUID in upper case. A list that is present and empty reaches nothing, as
+ * validateApiKey refuses such a key.
+ */
+export function allowlistReachesCompany(allowedCompanyIds: readonly string[] | null | undefined, companyId: string): boolean {
+  if (allowedCompanyIds === null || allowedCompanyIds === undefined) return true
+  const wanted = companyId.toLowerCase()
+  return allowedCompanyIds.some((id) => id.toLowerCase() === wanted)
+}
+
 export async function validateApiKey(
   key: string
 ): Promise<

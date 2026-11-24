@@ -514,7 +514,9 @@ async function reconcilePeriod(
     else if (firstDigit(r.account_number) === '2') class2ByNumber -= net
     else otherByNumber -= net
   }
-  const syntheticResult = bs.equity_liability_sections.find((s) => s.title === 'Årets resultat')?.subtotal ?? 0
+  // The computed result is the one row without an account number, inside Eget kapital.
+  const syntheticResult =
+    bs.equity_liability_sections.flatMap((s) => s.rows).find((r) => r.account_number === '')?.amount ?? 0
   const bsAssetDiff = r2(bs.total_assets - assetsByNumber)
   const bsEqLiabDiff = r2(bs.total_equity_liabilities - (class2ByNumber + otherByNumber))
   if (off(bsAssetDiff) || off(bsEqLiabDiff)) {
@@ -630,8 +632,8 @@ async function reconcilePeriod(
       return s
     }, 0),
   )
-  const equitySection = bs.equity_liability_sections.find((s) => s.title === 'Eget kapital')?.subtotal ?? 0
-  const equityEnd = r2(equitySection + syntheticResult)
+  // The Eget kapital subtotal already includes the computed result.
+  const equityEnd = r2(bs.equity_liability_sections.find((s) => s.title === 'Eget kapital')?.subtotal ?? 0)
   const byEntry = new Map<string, Line[]>()
   for (const l of lines) {
     const list = byEntry.get(l.e)

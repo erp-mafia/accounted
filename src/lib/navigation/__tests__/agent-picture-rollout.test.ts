@@ -14,8 +14,12 @@ afterEach(() => {
 
 const COMPANY = 'aaaaaaaa-0000-4000-8000-000000000001'
 
-/** A company with the Agenter page and Arkiv's reading on, so every row of the area has its other gates open. */
-function shell(companyId: string): NavGateContext {
+/**
+ * A company with the Agenter page and Arkiv's reading on, so every row of the
+ * area has its other gates open. `agentConnection`: the installation has the
+ * MCP server extension.
+ */
+function shell(companyId: string, agentConnection = true): NavGateContext {
   return {
     entityType: 'aktiebolag',
     surface: { hidden: [], notForLegalForm: [] },
@@ -29,14 +33,14 @@ function shell(companyId: string): NavGateContext {
     ...navRollouts(companyId),
     arkivBrainEnabled: true,
     agentsEnabled: true,
-    mcpExtensionEnabled: true,
+    mcpExtensionEnabled: agentConnection,
     capabilities: ['ai'],
     hiddenNavHrefs: new Set(),
   }
 }
 
-function agentsMenu(companyId: string) {
-  const ctx = shell(companyId)
+function agentsMenu(companyId: string, agentConnection = true) {
+  const ctx = shell(companyId, agentConnection)
   const area = gateAreas(NAV_V3_AREAS, (item) => passesNavGates(item, ctx)).find((a) => a.id === 'agents')!
   return { create: areaCreate(area)?.href, groups: area.groups.map((g) => [g.labelKey ?? null, g.items.map((item) => item.href)]), rows: areaItems(area).map((item) => item.href) }
 }
@@ -70,7 +74,7 @@ describe('the Agenter area', () => {
     })
   })
 
-  it('is Koppla en agent, Kontext, Bokföringsregler and Chatt where the picture is on, with no group label', () => {
+  it('is Koppla en agent, Kontext and Bokföringsregler with no group label where the picture is on, then Chatt while the chat is on', () => {
     vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
     expect(agentsMenu(COMPANY)).toEqual({
       create: '/settings/api',
@@ -82,9 +86,48 @@ describe('the Agenter area', () => {
     })
   })
 
-  it('keeps Chatt out where the chat is switched off, with or without the picture', () => {
-    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+  it('keeps Chatt by the chat switch alone where the picture is on', () => {
     vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
-    expect(agentsMenu(COMPANY).rows).toEqual(['/wiki', '/rules'])
+    // Unset and on: the row is there.
+    for (const chat of [undefined, 'true']) {
+      if (chat !== undefined) vi.stubEnv('ASSISTANT_CHAT_ENABLED', chat)
+      expect(agentsMenu(COMPANY).rows, String(chat)).toEqual(['/wiki', '/rules', '/chat'])
+    }
+    // Switched off with no company keeping the chat: the row goes, and the group with it.
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+    expect(agentsMenu(COMPANY)).toEqual({
+      create: '/settings/api',
+      groups: [[null, ['/wiki', '/rules']]],
+      rows: ['/wiki', '/rules'],
+    })
+  })
+
+  it('has the picture\'s row only where the installation has the agent connection, as Koppla en agent does', () => {
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
+    expect(agentsMenu(COMPANY, true)).toMatchObject({ create: '/settings/api', rows: ['/wiki', '/rules', '/chat'] })
+    // Without it there is nothing to connect and no picture of what a connected agent gets: Bokföringsregler stays.
+    const without = agentsMenu(COMPANY, false)
+    expect(without.create).toBeUndefined()
+    expect(without.rows).toEqual(['/rules', '/chat'])
+    expect(without.groups).toEqual([
+      [null, ['/rules']],
+      [null, ['/chat']],
+    ])
+  })
+
+  it('keeps the row for every company while some company keeps the chat, with the picture on or off', () => {
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+    vi.stubEnv('ASSISTANT_CHAT_COMPANY_IDS', 'another-company')
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
+    expect(agentsMenu(COMPANY).rows).toEqual(['/wiki', '/rules', '/chat'])
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', 'another-company')
+    expect(agentsMenu(COMPANY).rows).toContain('/chat')
+  })
+
+  it('keeps Chatt by the chat switch alone for a company outside the switch', () => {
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', 'another-company')
+    expect(agentsMenu(COMPANY).rows).toContain('/chat')
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+    expect(agentsMenu(COMPANY).rows).toEqual(['/rules', '/skills', '/wiki', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory'])
   })
 })

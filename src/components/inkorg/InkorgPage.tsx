@@ -13,7 +13,7 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { removalCanBePutBack } from '@/lib/documents/inbox-item-state'
 import { cn } from '@/lib/utils'
-import { INKORG_FOCUS_FIRST, INKORG_FOCUS_QUERY, INKORG_HREF, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
+import { INKORG_FOCUS_FIRST, INKORG_FOCUS_QUERY, INKORG_HREF, INKORG_VIEW_QUERY } from '@/lib/inkorg/flag'
 import { TO_BOOK_PATH, TO_BOOK_RETURN_PARAM, toBookReturnPath } from '@/lib/bookkeeping/to-book'
 import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
 import { ALL_STARTABLE, offersRemoval, type InkorgStartable } from '@/lib/inkorg/decision'
@@ -142,7 +142,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   const canWrite = !companyContext || (companyContext.role !== null && companyContext.role !== 'viewer')
   const { items, doorsUsed, mailProvider: listedMailProvider, itemsState, purchases, purchasesState, refresh } = useInkorgData(companyId)
 
-  const [view, setView] = useState<InkorgView>(() => parseViewKey(searchParams.get('view')))
+  const [view, setView] = useState<InkorgView>(() => parseViewKey(searchParams.get(INKORG_VIEW_QUERY)))
   const [focusId, setFocusId] = useState<string | null>(null)
   const [motionState, setMotionState] = useState<FocusMotion>({ direction: 0, completed: false })
   const [revision, setRevision] = useState(0)
@@ -329,8 +329,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     setEditingPortal(false)
     // The view in the address, so a reload or a shared link opens it; no navigation, no server render.
     const url = new URL(window.location.href)
-    if (next.kind === 'need') url.searchParams.delete('view')
-    else url.searchParams.set('view', viewKey(next))
+    if (next.kind === 'need') url.searchParams.delete(INKORG_VIEW_QUERY)
+    else url.searchParams.set(INKORG_VIEW_QUERY, viewKey(next))
     window.history.replaceState(null, '', url)
   }, [])
 
@@ -710,12 +710,6 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
             <p className="mt-2">{t('help_missing')}</p>
             <p className="mt-2">{t('help_portals')}</p>
             <p className="mt-2">{t('help_expected')}</p>
-            <p className="mt-2">
-              {t('help_legacy')}{' '}
-              <Link href={LEGACY_INBOX_HREF} className={QUIET_LINK_CLASS}>
-                {t('help_legacy_link')}
-              </Link>
-            </p>
           </HelpPopover>
         }
       />

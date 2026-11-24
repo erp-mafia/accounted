@@ -342,10 +342,13 @@ describe('the tree', () => {
     const hidden = areaItems(agents).filter((item) => item.hiddenWithAgentPicture).map((item) => item.href)
     expect(hidden).toEqual(['/rules', '/skills', '/wiki', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills'])
     // Each hidden page still resolves to the area: it is reachable by its address.
-    for (const href of ['/skills', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills']) {
+    for (const href of ['/skills', '/wiki?view=map', '/wiki?view=facts', '/wiki?view=memory', '/wiki?view=skills', '/chat', '/chat/new']) {
       const [path, query = ''] = href.split('?')
       expect(resolveNavPlace(path, query)?.area, href).toBe('agents')
     }
+    // The Chatt row is one row with one gate, the chat's own switch: the picture does not hide it.
+    const chat = areaItems(agents).filter((item) => item.href === '/chat')
+    expect(chat.map((item) => [!!item.requiresAssistantChat, !!item.hiddenWithAgentPicture, !!item.requiresAgentPicture])).toEqual([[true, false, false]])
   })
 
   it('lists the page a create button opens only where the area owns it without a row', () => {

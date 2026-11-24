@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { ChevronRightIcon } from '@/components/icons'
@@ -8,9 +8,11 @@ import { LoadError } from '@/components/ui/empty-state'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn } from '@/lib/utils'
-import { flowLayout, isReadingNow, type FlowCard, type FlowLayout } from '@/lib/agent-context/agent-picture-lines'
+import { agentCardState } from '@/lib/agent-context/agent-cards'
+import { flowLayout, hitTest, type FlowCard, type FlowLayout } from '@/lib/agent-context/agent-picture-lines'
 import {
   agentName,
   countParts,
@@ -19,6 +21,8 @@ import {
   isFresh,
   latestDelivery,
   memoryDots,
+  offersClients,
+  otherConnections,
   summarizeChecks,
   DOTS_PER_ROW,
   type AgentGroupId,
@@ -27,13 +31,17 @@ import {
 import type {
   AgentPicture as AgentPictureData,
   PictureActivity,
-  PictureAgent,
+  PictureAgentCard,
   PictureCompany,
   PictureLinkState,
   PictureSource,
 } from '@/lib/agent-context/agent-picture'
 import type { ConnectionKind } from '@/lib/settings/mcp-connections'
-import { PictureViews, type PictureContext, type PictureView } from './PictureViews'
+import { withoutPictureRow } from '@/lib/agent-context/wiki-views'
+import { PictureViews, isPictureView, type PictureAgentView, type PictureContext, type PictureView } from './PictureViews'
+import { WaitingLine } from './WaitingLine'
+import { agentCardDetail, shortDay, type CardWords } from './agent-card-text'
+import { cardInk } from './picture-card-ink'
 import { AgentMark, LogoTile, SourceMark } from './picture-marks'
 
 export type { PictureContext } from './PictureViews'
@@ -42,6 +50,11 @@ type LoadState = { state: 'loading' } | { state: 'ok'; data: AgentPictureData } 
 
 /** How often the agents' activity is asked for again while the tab is visible. */
 const ACTIVITY_INTERVAL_MS = 30_000
+
+/** How long a closed view can still cover the page: its closing animation, with room to spare. */
+const CLOSING_MS = 400
+/** A press that reopens a view is also heard by the view that is leaving, which then asks to close: within this long, that is not a close. */
+const REOPEN_GRACE_MS = 150
 
 /** Where a connection is made and managed. */
 const CONNECT_AGENT_HREF = '/settings/api'
@@ -87,24 +100,122 @@ const reducedMotionNow = () => window.matchMedia(REDUCED_MOTION).matches
 const reducedMotionOnServer = () => false
 
 /**
+ * Takes the row the address names, and its item, out of the address (with
+ * `keepRow`, the item alone), so a reload does not open it again. Through
+ * the History API, which Next keeps in step with useSearchParams: the page
+ * is not loaded again.
+ */
+function forgetInAddress(options?: { keepRow?: boolean }): void {
+  const here = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  const next = withoutPictureRow(here, options)
+  if (next !== here) window.history.replaceState(null, '', next)
+}
+
+/**
  * One picture of what a connected agent gets: what is connected on the left,
  * the company in the middle, the agents on the right, and a line from every
- * card to the company's card (GET /api/wiki/picture). Every card leads to
- * where its connection is managed; every row of the company's card opens its
- * own view. While the tab is visible the agents' activity and the memory's
- * count are asked for again every 30 seconds (GET
- * /api/wiki/picture/activity): a connection that just made a call says so,
- * gets a ring and a moving line, and a newly remembered thing gets its dot.
+ * card to the company's card (GET /api/wiki/picture). A source's card leads
+ * to where its connection is managed; every row of the company's card opens
+ * its own view, and an agent's card opens what the agent did for the company
+ * in the same side panel (AgentPanel). The agents are one card per product:
+ * the connections the screen names by the same kind share a card
+ * (lib/agent-context/agent-cards.ts). The connections the person may not
+ * list (other people's) are one card that says how many they are and
+ * nothing else, and opens nothing; while there are any, or while it is not
+ * known whether there are, no client is offered as not connected.
+ * While the tab is visible the agents' activity and the memory's count are
+ * asked for again every 30 seconds (GET /api/wiki/picture/activity): a card
+ * whose connection just made a call says so, gets a ring and a moving line,
+ * a card says what it did for the company today, and a newly remembered
+ * thing gets its dot.
  *
  * `context` is the briefing as the page that hosts the picture loads it: the
- * Kontext row draws the context graph from it.
+ * Kontext row draws the context graph from it. The page reads it when it is
+ * first wanted: `onContextWanted` is told when the Kontext row's view is
+ * open.
+ *
+ * `row` is the row the address names (lib/agent-context/wiki-views.ts): the
+ * picture opens with that row's view open, and opens it when the address
+ * comes to name it while the picture is shown. `item` is the knowledge item
+ * the address names, whose folder the Kunskap view opens on. `agent` is the
+ * agent card the address names, by its id: its panel opens once the picture
+ * has that card. Closing takes all three out of the address; a row or a card
+ * opened by a press is not written to it.
  */
-export function AgentPicture({ context }: { context: PictureContext }) {
+export function AgentPicture({
+  context,
+  row = null,
+  item = null,
+  agent = null,
+  onContextWanted,
+}: {
+  context: PictureContext
+  row?: PictureView | null
+  item?: string | null
+  agent?: string | null
+  onContextWanted?: () => void
+}) {
   const t = useTranslations('wiki')
   const locale = useLocale() as ErrorLocale
   const [load, setLoad] = useState<LoadState>({ state: 'loading' })
   const [activity, setActivity] = useState<PictureActivity | null>(null)
-  const [view, setView] = useState<PictureView | null>(null)
+  const [view, setView] = useState<PictureView | null>(row)
+  // The row the address named at the last render: a change to another row opens that one.
+  const [namedRow, setNamedRow] = useState(row)
+  if (row !== namedRow) {
+    setNamedRow(row)
+    if (row) setView(row)
+  }
+  // The Kontext row's view shows the briefing: the page is told when that view is open, however it was opened.
+  useEffect(() => {
+    if (view === 'context') onContextWanted?.()
+  }, [view, onContextWanted])
+  // The agent card whose panel is open, by its id: the one the address names, and one it comes to name.
+  const [agentCard, setAgentCard] = useState<string | null>(agent)
+  const [namedAgent, setNamedAgent] = useState(agent)
+  if (agent !== namedAgent) {
+    setNamedAgent(agent)
+    if (agent) setAgentCard(agent)
+  }
+
+  // A view that is closing still covers the page for the length of its
+  // animation and takes every press, so a press on another row would be
+  // lost. While one is closing, a press is placed by where it landed: on a
+  // row of the company's card it opens that row's view, on an agent's card
+  // that card's panel.
+  const closingUntil = useRef(0)
+  const reopenedAt = useRef(0)
+  const closeView = useCallback(() => {
+    if (performance.now() - reopenedAt.current < REOPEN_GRACE_MS) return
+    closingUntil.current = performance.now() + CLOSING_MS
+    setAgentCard(null)
+    setView(null)
+    forgetInAddress()
+  }, [])
+  useEffect(() => {
+    const onPress = (event: PointerEvent) => {
+      if (performance.now() > closingUntil.current) return
+      // A press on the view that is leaving is not a press on what is under it.
+      if (event.target instanceof Element && event.target.closest('[role="dialog"]')) return
+      const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-picture-row]')).map((el) => ({
+        id: el.dataset.pictureRow ?? '',
+        rect: el.getBoundingClientRect(),
+      }))
+      const row = hitTest(rows, event.clientX, event.clientY)
+      const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-picture-agent]')).map((el) => ({
+        id: el.dataset.pictureAgent ?? '',
+        rect: el.getBoundingClientRect(),
+      }))
+      const card = isPictureView(row) ? null : hitTest(cards, event.clientX, event.clientY)
+      if (!isPictureView(row) && !card) return
+      closingUntil.current = 0
+      reopenedAt.current = performance.now()
+      if (isPictureView(row)) setView(row)
+      else setAgentCard(card)
+    }
+    window.addEventListener('pointerdown', onPress, true)
+    return () => window.removeEventListener('pointerdown', onPress, true)
+  }, [])
 
   // One read per attempt. Every state change happens in the answer's callback.
   const [attempt, setAttempt] = useState(0)
@@ -167,7 +278,19 @@ export function AgentPicture({ context }: { context: PictureContext }) {
   if (load.state === 'failed') {
     return <LoadError title={t('picture.load_failed_title')} description={load.description} onRetry={retry} />
   }
-  return <PictureFigure picture={load.data} activity={activity} view={view} onView={setView} context={context} />
+  return (
+    <PictureFigure
+      picture={load.data}
+      activity={activity}
+      view={view}
+      item={item}
+      agentCard={agentCard}
+      onOpen={setView}
+      onOpenAgent={setAgentCard}
+      onClose={closeView}
+      context={context}
+    />
+  )
 }
 
 /** The canvas: between two hairlines, on the dotted ground, as wide as the page. */
@@ -203,12 +326,25 @@ function PictureSkeleton() {
   )
 }
 
+/**
+ * A card's detail line, always one line: `lead` gives way with an ellipsis
+ * when the card is narrow; `tail` (a masked number, a time) is kept whole
+ * for as long as there is room for it, and is never broken over two lines.
+ * `under` is a second line of its own (how many connections an agent's card
+ * stands for).
+ */
+interface CardDetail {
+  lead: string
+  tail?: string
+  under?: string
+}
+
 interface AgentCard {
   id: string
   kind: ConnectionKind
   group: AgentGroupId
   name: string
-  detail: string
+  detail: CardDetail
   state: PictureLinkState
   /** A call in the last minute. */
   active: boolean
@@ -220,13 +356,23 @@ function PictureFigure({
   picture,
   activity,
   view,
-  onView,
+  item,
+  agentCard,
+  onOpen,
+  onOpenAgent,
+  onClose,
   context,
 }: {
   picture: AgentPictureData
   activity: PictureActivity | null
   view: PictureView | null
-  onView: (view: PictureView | null) => void
+  /** The knowledge item the address names. */
+  item: string | null
+  /** The agent card whose panel is open, by its id. */
+  agentCard: string | null
+  onOpen: (view: PictureView) => void
+  onOpenAgent: (card: string) => void
+  onClose: () => void
   context: PictureContext
 }) {
   const t = useTranslations('wiki')
@@ -251,61 +397,55 @@ function PictureFigure({
   }
 
   const sourceName = (source: PictureSource) => source.name ?? t(`picture.sources.${source.key}`)
-  const sourceDetail = (source: PictureSource): string => {
-    if (source.state === 'not_connected') return t('picture.not_connected')
-    if (source.state === 'unknown') return t('picture.state_unknown')
-    if (source.state === 'needs_attention') return t('picture.needs_attention')
+  const sourceDetail = (source: PictureSource): CardDetail => {
+    if (source.state === 'not_connected') return { lead: t('picture.not_connected') }
+    if (source.state === 'unknown') return { lead: t('picture.state_unknown') }
+    if (source.state === 'needs_attention') return { lead: t('picture.needs_attention') }
     const delivered = source.last_delivered_at ? when(source.last_delivered_at) : null
-    const parts: Array<string | null> = (() => {
-      switch (source.key) {
-        case 'bank':
-          return [[source.detail, source.tail ? `••${source.tail}` : null].filter(Boolean).join(' ') || null, delivered]
-        case 'skatteverket':
-          return delivered ? [t('picture.detail_skattekonto'), delivered] : [t('picture.connected')]
-        case 'bolagsverket':
-          return [t('picture.detail_register'), delivered]
-        case 'inbox':
-          return [source.count === null ? source.detail : t('picture.inbox_count', { count: source.count })]
-        case 'whatsapp':
-        case 'pos':
-          return [source.detail ?? t('picture.connected')]
-        default:
-          return [t('picture.connected'), delivered]
+    const after = (text: string | null) => (text ? ` · ${text}` : undefined)
+    switch (source.key) {
+      case 'bank': {
+        // The account's name gives way first; its masked number and the time stay whole.
+        const rest = [source.tail ? `••${source.tail}` : null, delivered].filter(Boolean).join(' · ')
+        if (!source.detail) return { lead: rest || t('picture.connected') }
+        return { lead: source.detail, tail: rest ? ` ${rest}` : undefined }
       }
-    })()
-    return parts.filter(Boolean).join(' · ')
+      case 'skatteverket':
+        return delivered ? { lead: t('picture.detail_skattekonto'), tail: after(delivered) } : { lead: t('picture.connected') }
+      case 'bolagsverket':
+        return { lead: t('picture.detail_register'), tail: after(delivered) }
+      case 'inbox':
+        return { lead: (source.count === null ? source.detail : t('picture.inbox_count', { count: source.count })) ?? t('picture.connected') }
+      case 'whatsapp':
+      case 'pos':
+        return { lead: source.detail ?? t('picture.connected') }
+      default:
+        return { lead: t('picture.connected'), tail: after(delivered) }
+    }
   }
 
-  /** A connection's name, as the API settings page names its row. */
-  const nameOf = (agent: Pick<PictureAgent, 'kind' | 'name' | 'service_account'>): string => {
+  /** A card's name, as the API settings page names a connection's row. */
+  const nameOf = (agent: Pick<PictureAgentCard, 'kind' | 'name' | 'service_account'>): string => {
     const name = agentName(agent)
     return 'text' in name ? name.text : tKeys(name.message)
   }
 
+  const words: CardWords = {
+    time: (instant) => timeOf(new Date(instant)),
+    when,
+    day: (instant) => shortDay(instant, new Date(), locale, t('picture.today')),
+  }
   const agentCards: AgentCard[] = (picture.agents?.list ?? []).map((agent) => {
-    // The newest answer of the log wins over the one the picture came with.
-    const seen = activity ? activity.actors[agent.id] : undefined
-    const calls = activity ? (seen?.calls_today ?? 0) : agent.calls_today
-    const lastCall = activity ? (seen?.last_call_at ?? null) : agent.last_call_at
-    const active = activity ? isReadingNow(lastCall, activity.now) : false
-    const last = lastCall ?? agent.last_used_at
-    const detail = active
-      ? t('picture.reading_now')
-      : activity && calls > 0 && lastCall
-        ? activity.capped
-          ? t('picture.calls_today_capped', { count: calls, time: timeOf(new Date(lastCall)) })
-          : t('picture.calls_today', { count: calls, time: timeOf(new Date(lastCall)) })
-        : last
-          ? t('picture.last_used', { when: when(last) })
-          : t('picture.never_used')
+    // The newest answer of the log wins over the one the picture came with (agentCardState).
+    const state = agentCardState(agent, activity)
     return {
       id: agent.id,
       kind: agent.kind,
       group: 'clients',
       name: nameOf(agent),
-      detail,
+      detail: agentCardDetail(state, t, words),
       state: 'connected',
-      active,
+      active: state.active,
       maskName: agent.kind === 'key' || agent.service_account !== null,
     }
   })
@@ -315,13 +455,15 @@ function PictureFigure({
     appName,
   )
   const cardsOf = (id: AgentGroupId) => grouped.find((group) => group.id === id)?.agents.map((agent) => ({ ...agent.card, group: id })) ?? []
-  const offered: AgentCard[] = picture.agents
+  // The connections the person may not list: how many, or that it is not known.
+  const others = otherConnections(picture.agents)
+  const offered: AgentCard[] = offersClients(picture.agents)
     ? OFFERED_CLIENTS.filter((kind) => !agentCards.some((card) => card.kind === kind)).map((kind) => ({
         id: `offer:${kind}`,
         kind,
         group: 'clients',
         name: nameOf({ kind, name: null, service_account: null }),
-        detail: t('picture.not_connected'),
+        detail: { lead: t('picture.not_connected') },
         state: 'not_connected',
         active: false,
         maskName: false,
@@ -334,6 +476,23 @@ function PictureFigure({
     { id: 'keys' as const, label: t('picture.groups.keys'), cards: cardsOf('keys') },
   ].filter((group) => group.cards.length > 0)
   const more = picture.agents?.more ?? 0
+
+  // What the open card's panel is given. A card the picture does not list (an id the address made up) opens nothing.
+  const openCard = agentCard ? (picture.agents?.list.find((card) => card.id === agentCard) ?? null) : null
+  const openState = openCard ? agentCardState(openCard, activity) : null
+  const agentView: PictureAgentView | null =
+    openCard && openState
+      ? {
+          card: openCard,
+          name: nameOf(openCard),
+          maskName: openCard.kind === 'key' || openCard.service_account !== null,
+          calls:
+            activity && openState.calls > 0 && openState.last_call_at
+              ? { count: openState.calls, last_call_at: openState.last_call_at, capped: openState.capped }
+              : null,
+          activity,
+        }
+      : null
 
   const memoryFacts = activity ? (activity.memory_facts ?? picture.company.memory_facts) : picture.company.memory_facts
   const updated = latestDelivery(picture.sources)
@@ -349,6 +508,7 @@ function PictureFigure({
     ...picture.sources.flatMap((group) => group.items.map((item) => `${item.id}:${item.state}`)),
     ...agentGroups.flatMap((group) => group.cards.map((card) => `${card.id}:${card.state}:${card.active}`)),
     picture.agents ? more : 'unknown',
+    others.kind === 'count' ? `others:${others.count}` : `others:${others.kind}`,
     memoryFacts ?? 'unknown',
   ].join('|')
   useEffect(() => {
@@ -446,7 +606,7 @@ function PictureFigure({
             memoryFacts={memoryFacts}
             updated={updated ? when(updated) : null}
             when={when}
-            onOpen={onView}
+            onOpen={onOpen}
           />
 
           <div ref={outRef} className="relative z-10 flex min-w-0 flex-col gap-3">
@@ -460,7 +620,7 @@ function PictureFigure({
                   ring={null}
                   mark={<AgentMark kind="mcp" />}
                   name={t('picture.agents_unknown')}
-                  detail={t('picture.state_unknown')}
+                  detail={{ lead: t('picture.state_unknown') }}
                   maskName={false}
                 />
               </CardGroup>
@@ -473,6 +633,8 @@ function PictureFigure({
                     flowId={card.id}
                     side="out"
                     href={CONNECT_AGENT_HREF}
+                    // A connected agent's card opens its panel; one that is offered leads to where it is connected.
+                    onPress={card.state === 'connected' ? () => onOpenAgent(card.id) : undefined}
                     state={card.state}
                     active={card.active}
                     ring={card.active ? 'live' : null}
@@ -485,6 +647,22 @@ function PictureFigure({
                 ))}
               </CardGroup>
             ))}
+            {others.kind !== 'none' && (
+              // Other people's connections: a number and no way in. No name, no key, no link.
+              <div className={BOX_CLASS}>
+                <PictureCard
+                  flowId="others"
+                  side="out"
+                  state={others.kind === 'count' ? 'connected' : 'unknown'}
+                  ring={null}
+                  mark={<AgentMark kind="mcp" />}
+                  name={others.kind === 'count' ? t('picture.agents_others', { count: others.count }) : t('picture.agents_unknown')}
+                  detail={{ lead: others.kind === 'count' ? t('picture.agents_others_by', { count: others.count }) : t('picture.state_unknown') }}
+                  wrapDetail
+                  maskName={false}
+                />
+              </div>
+            )}
             {more > 0 && (
               <Link href={CONNECT_AGENT_HREF} className="px-3.5 text-xs font-medium text-foreground/80 underline-offset-2 hover:underline">
                 {t('picture.agents_more', { count: more })}
@@ -496,12 +674,16 @@ function PictureFigure({
 
       <PictureViews
         view={view}
-        onClose={() => onView(null)}
+        agent={agentView}
+        onClose={onClose}
         companyName={picture.company.name}
         context={context}
         checks={picture.company.checks}
-        industry={picture.company.knowledge.industry}
+        activeKnowledge={picture.company.knowledge.active}
+        knowledgeItem={item}
+        onKnowledgeItemClose={() => forgetInAddress({ keepRow: true })}
         when={when}
+        time={words.time}
       />
     </>
   )
@@ -519,61 +701,98 @@ function CardGroup({ label, children }: { label: string; children: ReactNode }) 
 
 /**
  * One card: a source or an agent. The whole card is the link to where it is
- * managed. A card that is not connected is flat with a hairline, faded, its
- * mark greyed, and says Koppla. A ring says something is happening: blue for
- * a connection that just made a call, ochre for a source that just
- * delivered. The data attributes are what the lines are measured from.
+ * managed (`href`); with `onPress` it is instead a button that opens what is
+ * behind it in place, and with neither it is not a control at all. A card
+ * that is not connected is flat with a hairline, its text in the quiet ink
+ * (cardInk: never an opacity on text), its mark greyed, and says Koppla. A
+ * ring says something is happening: blue for a connection that just made a
+ * call, ochre for a source that just delivered. The data attributes are what
+ * the lines are measured from, and what a press is placed by while a view is
+ * closing.
  */
 function PictureCard({
   flowId,
   side,
   href,
+  onPress,
   state,
   active = false,
   ring,
   mark,
   name,
   detail,
+  wrapDetail = false,
   maskName,
 }: {
   flowId: string
   side: 'in' | 'out'
-  href: string
+  href?: string
+  onPress?: () => void
   state: PictureLinkState
   active?: boolean
   ring: 'live' | 'fresh' | null
   mark: ReactNode
   name: string
-  detail: string
+  detail: CardDetail
+  /** The detail is a sentence that goes onto a second line when the card is narrow, instead of being cut. */
+  wrapDetail?: boolean
   maskName: boolean
 }) {
   const t = useTranslations('wiki')
   const off = state === 'not_connected'
-  return (
-    <Link
-      href={href}
-      data-flow-id={flowId}
-      data-flow-side={side}
-      data-flow-connected={state === 'connected' ? 'true' : 'false'}
-      data-flow-active={active ? 'true' : 'false'}
-      style={ring === 'live' ? LIVE_RING : ring === 'fresh' ? FRESH_RING : undefined}
-      className={cn(
-        'flex min-h-13 items-center gap-2.5 rounded-lg px-2.5 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/70',
-        off ? 'border border-border transition-colors duration-150 hover:bg-secondary/60' : 'bg-control shadow-raised transition-shadow duration-150 hover:shadow-raised-hover',
-      )}
-    >
+  const ink = cardInk(state)
+  const control = onPress !== undefined || href !== undefined
+  const flow = {
+    'data-flow-id': flowId,
+    'data-flow-side': side,
+    'data-flow-connected': state === 'connected' ? 'true' : 'false',
+    'data-flow-active': active ? 'true' : 'false',
+    style: ring === 'live' ? LIVE_RING : ring === 'fresh' ? FRESH_RING : undefined,
+    className: cn(
+      'flex min-h-13 items-center gap-2.5 rounded-lg px-2.5 py-2',
+      off ? 'border border-border' : 'bg-control shadow-raised',
+      // Only a card that leads somewhere answers the pointer and takes focus.
+      control && 'outline-none focus-visible:ring-2 focus-visible:ring-ring/70',
+      control && (off ? 'transition-colors duration-150 hover:bg-secondary/60' : 'transition-shadow duration-150 hover:shadow-raised-hover'),
+      onPress && 'w-full text-left',
+    ),
+  }
+  const body = (
+    <>
       {mark}
-      <span className={cn('flex min-w-0 flex-1 flex-col', off && 'opacity-60')}>
-        <span className="truncate text-[13px] font-medium text-strong" {...(maskName ? { 'data-ph-mask': '' } : {})}>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className={cn('truncate text-[13px] font-medium', ink.name)} {...(maskName ? { 'data-ph-mask': '' } : {})}>
           {name}
         </span>
-        <span className={cn('break-words text-xs tabular-nums', state === 'needs_attention' ? 'text-attn' : 'text-muted-foreground')} data-ph-mask="">
-          {detail}
+        <span className={cn('flex min-w-0 text-xs tabular-nums', ink.detail)} data-ph-mask="">
+          {/* Both may shrink, the lead far more readily: it gives way to an ellipsis before the tail loses a character. */}
+          <span className={cn('min-w-0', !wrapDetail && 'flex-[0_9999_auto] truncate')}>{detail.lead}</span>
+          {detail.tail && <span className="min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-pre">{detail.tail}</span>}
         </span>
+        {detail.under && (
+          <span className="truncate text-xs tabular-nums text-muted-foreground" data-ph-mask="">
+            {detail.under}
+          </span>
+        )}
       </span>
       {off && <span className="shrink-0 text-xs font-medium text-strong">{t('picture.connect')}</span>}
-    </Link>
+    </>
   )
+  if (onPress) {
+    return (
+      <button type="button" data-picture-agent={flowId} onClick={onPress} {...flow}>
+        {body}
+      </button>
+    )
+  }
+  if (href !== undefined) {
+    return (
+      <Link href={href} {...flow}>
+        {body}
+      </Link>
+    )
+  }
+  return <div {...flow}>{body}</div>
 }
 
 function initialsOf(name: string): string {
@@ -587,8 +806,10 @@ function initialsOf(name: string): string {
 
 /**
  * The company's card in its shell. The shell's label row carries the host's
- * brand; the card inside has the company's initials and name, when it was
- * last updated, and four rows that are buttons, each opening its own view.
+ * brand; the card inside has the company's initials and name, what waits on
+ * the company's people (WaitingLine, which says it waits on the reader only
+ * for someone who may act on it), when it was last updated, and four rows
+ * that are buttons, each opening its own view.
  * The sentences are built from the numbers and the check results as they
  * were read; a part that could not be read says so.
  */
@@ -611,6 +832,8 @@ function CompanyCard({
   onOpen: (view: PictureView) => void
 }) {
   const t = useTranslations('wiki')
+  // Answering a question and approving a proposal both need more than read access.
+  const { canWrite } = useCanWrite()
   const name = company.name ?? t('picture.company')
 
   const counted = countParts(company.counts)
@@ -683,6 +906,7 @@ function CompanyCard({
             <span className="truncate text-[13px] font-medium leading-4 text-strong" data-ph-mask="">
               {name}
             </span>
+            <WaitingLine waiting={company.waiting} canAnswer={canWrite} canApprove={canWrite} />
             {updated && <span className="text-xs tabular-nums text-muted-foreground">{t('picture.updated', { when: updated })}</span>}
           </span>
         </div>
@@ -690,6 +914,7 @@ function CompanyCard({
           <button
             key={row.view}
             type="button"
+            data-picture-row={row.view}
             onClick={() => onOpen(row.view)}
             className="relative -mx-2 flex w-[calc(100%+1rem)] flex-col gap-0.5 rounded-lg py-2 pl-2 pr-8 text-left outline-none transition-colors duration-150 hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring/70"
           >

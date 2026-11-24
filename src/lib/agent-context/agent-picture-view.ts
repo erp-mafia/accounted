@@ -1,7 +1,8 @@
 /**
  * What the agent picture says, worked out from the picture's data: which
- * counts to name, the sentence about the checks, the memory's dots, when the
- * company was last updated, how the agents are named and grouped.
+ * counts to name, what waits on the company's people, the sentence about the
+ * checks, the memory's dots, when the company was last updated, how the
+ * agents are named and grouped.
  *
  * Nothing here judges the books: the checks' own results are counted and
  * named, never weighed. Words stay with the screen: these helpers answer
@@ -12,7 +13,7 @@
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
-import type { PictureAgent, PictureChecks, PictureCounts, PictureSourceGroup } from './agent-picture'
+import type { PictureAgent, PictureAgents, PictureCheckLine, PictureChecks, PictureCounts, PictureSourceGroup, PictureSourceKey, PictureWaiting } from './agent-picture'
 
 // ---------------------------------------------------------------- times
 
@@ -34,11 +35,22 @@ export function isFresh(lastDeliveredAt: string | null | undefined, now: string 
   return isWithin(lastDeliveredAt, now, FRESH_SECONDS)
 }
 
-/** The newest time any connected source delivered: when the company was last updated. Null when no time is known. */
+/**
+ * The sources that are the signed-in person's own and not the company's: a
+ * phone link belongs to a person. What such a source delivered says nothing
+ * about the company.
+ */
+const PERSONAL_SOURCES: readonly PictureSourceKey[] = ['whatsapp']
+
+/**
+ * The newest time any of the company's connected sources delivered: when
+ * the company was last updated. A source that is the person's own
+ * (PERSONAL_SOURCES) is left out. Null when no time is known.
+ */
 export function latestDelivery(groups: readonly PictureSourceGroup[]): string | null {
   let latest: string | null = null
   for (const item of groups.flatMap((group) => group.items)) {
-    if (item.state !== 'connected' || !item.last_delivered_at) continue
+    if (item.state !== 'connected' || !item.last_delivered_at || PERSONAL_SOURCES.includes(item.key)) continue
     const at = Date.parse(item.last_delivered_at)
     if (Number.isNaN(at)) continue
     if (latest === null || at > Date.parse(latest)) latest = item.last_delivered_at
@@ -68,6 +80,23 @@ export function instantWords(instant: string, now: Date): InstantWords | null {
   return { today: day === todayIsoStockholm(now), hasTime: !bare, date }
 }
 
+/** A day in few words: today, a day of the year that holds `now`, or a day of another year. */
+export type DayWords = { kind: 'today' } | { kind: 'day'; date: Date } | { kind: 'year'; date: Date }
+
+/**
+ * How an instant's day is said where there is room for few words: today, a
+ * day of the same Swedish calendar year (said by its day and month), or a
+ * day of another year (said by the year alone). Null for something that is
+ * no date.
+ */
+export function dayWords(instant: string, now: Date): DayWords | null {
+  const words = instantWords(instant, now)
+  if (!words) return null
+  if (words.today) return { kind: 'today' }
+  const yearOf = (date: Date) => todayIsoStockholm(date).slice(0, 4)
+  return { kind: yearOf(words.date) === yearOf(now) ? 'day' : 'year', date: words.date }
+}
+
 // ---------------------------------------------------------------- counts
 
 export type CountKind = keyof PictureCounts
@@ -85,6 +114,42 @@ export function countParts(counts: PictureCounts): { parts: Array<{ kind: CountK
     return count !== null && count > 0 ? [{ kind, count }] : []
   })
   return { parts, unknown: COUNT_ORDER.every((kind) => counts[kind] === null) }
+}
+
+// ---------------------------------------------------------------- what waits
+
+/** What the company card's waiting line names: the questions and the proposals, or the one of them that waits. */
+export type WaitingLine = { kind: 'both'; questions: number; proposals: number } | { kind: 'questions'; count: number } | { kind: 'proposals'; count: number }
+
+/**
+ * The line under the company's name: what waits on the company's people.
+ * Null (no line) when nothing waits, and when it was not counted.
+ */
+export function waitingLine(waiting: PictureWaiting | null | undefined): WaitingLine | null {
+  if (!waiting) return null
+  const questions = Math.max(0, waiting.questions)
+  const proposals = Math.max(0, waiting.proposals)
+  if (questions > 0 && proposals > 0) return { kind: 'both', questions, proposals }
+  if (questions > 0) return { kind: 'questions', count: questions }
+  return proposals > 0 ? { kind: 'proposals', count: proposals } : null
+}
+
+/** What the signed-in person may do with what waits: answer a question, approve a proposal. */
+export interface WaitingAbilities {
+  canAnswer: boolean
+  canApprove: boolean
+}
+
+/**
+ * Whether the line says that what it names waits on the person reading it:
+ * only when they can act on every part it names (answer its questions,
+ * approve its proposals). For anyone else the line says what waits and
+ * nothing of whom it waits on.
+ */
+export function waitsOnReader(line: WaitingLine, abilities: WaitingAbilities): boolean {
+  if (line.kind === 'questions') return abilities.canAnswer
+  if (line.kind === 'proposals') return abilities.canApprove
+  return abilities.canAnswer && abilities.canApprove
 }
 
 // ---------------------------------------------------------------- memory dots
@@ -113,6 +178,25 @@ const NAMED_WHEN_AGREEING = ['bank_balance_vs_bank', 'skattekonto_vs_skatteverke
 const BANK_FEED = 'bank_feed'
 /** Names the sentence lists before it says how many more there are. */
 const NAMES_SHOWN = 3
+/** The one typed reason that says a check's source could not be read (lib/unexplained CheckRefusalCode). */
+const SOURCE_FAILED = 'SOURCE_FAILED'
+
+/**
+ * Whether a check does not apply to the company: it did not run and gave a
+ * typed reason for it that is not a failed read (the company uses the cash
+ * method, is not registered for VAT, has nothing connected to compare
+ * with). Such a result is an answer, not a check that could not be read: a
+ * result without a reason, or with a failed source, is the one that could
+ * not be read.
+ */
+export function checkDoesNotApply(line: Pick<PictureCheckLine, 'status' | 'reason_code'>): boolean {
+  return line.status === 'unknown' && line.reason_code !== null && line.reason_code !== SOURCE_FAILED
+}
+
+/** The check lines as the Kontroller view lists them: in the order they were read, the checks that do not apply last. */
+export function orderedCheckLines<T extends Pick<PictureCheckLine, 'status' | 'reason_code'>>(lines: readonly T[]): T[] {
+  return [...lines.filter((line) => !checkDoesNotApply(line)), ...lines.filter(checkDoesNotApply)]
+}
 
 export type ChecksSummary =
   /** The checks could not be read at all. */
@@ -121,19 +205,24 @@ export type ChecksSummary =
   | { kind: 'none' }
   /** Something needs a look: how many results, which checks (by id, the first few), how many more checks, and how many results agree. */
   | { kind: 'attention'; count: number; names: string[]; more: number; agrees: number }
-  /** Nothing needs a look: the checks worth naming with the time each holds at, how many more results agree, how many could not run. */
+  /** Nothing needs a look: the checks worth naming with the time each holds at, how many more results agree, how many could not be read. */
   | { kind: 'agrees'; named: Array<{ check_id: string; as_of: string | null }>; more: number; agrees: number; unknown: number }
-  /** Nothing agrees and nothing needs a look: only results that could not run. */
+  /** Nothing agrees and nothing needs a look: only results that could not be read. */
   | { kind: 'unknown'; count: number }
 
 /**
  * What the Kontroller row says, from the check lines as they were read. It
  * counts the checks' own results and names them; it never decides whether a
- * difference matters.
+ * difference matters. Three kinds of result are counted: the ones that
+ * agree, the ones that need a look, and the ones that could not be read. A
+ * check that does not apply to the company (checkDoesNotApply) is none of
+ * them: it is listed in the view with its reason and left out of the count.
  */
 export function summarizeChecks(checks: PictureChecks | null): ChecksSummary {
   if (!checks) return { kind: 'unreadable' }
   const { counts, lines } = checks
+  // The queue's own total holds every result that did not run. The listed ones that do not apply are taken out; a result past the list has no reason here and stays counted.
+  const unread = Math.max(0, counts.unknown - lines.filter(checkDoesNotApply).length)
 
   if (counts.attention > 0) {
     const ids = [...new Set(lines.filter((line) => line.status === 'attention').map((line) => line.check_id))]
@@ -155,10 +244,10 @@ export function summarizeChecks(checks: PictureChecks | null): ChecksSummary {
     }
     // The feed's line is said with the bank's when the bank is named.
     if (feed && named.some((entry) => entry.check_id === 'bank_balance_vs_bank')) covered += 1
-    return { kind: 'agrees', named, more: Math.max(0, counts.agrees - covered), agrees: counts.agrees, unknown: counts.unknown }
+    return { kind: 'agrees', named, more: Math.max(0, counts.agrees - covered), agrees: counts.agrees, unknown: unread }
   }
 
-  return counts.unknown > 0 ? { kind: 'unknown', count: counts.unknown } : { kind: 'none' }
+  return unread > 0 ? { kind: 'unknown', count: unread } : { kind: 'none' }
 }
 
 // ---------------------------------------------------------------- agents
@@ -212,6 +301,30 @@ const GROUP_ORDER: readonly AgentGroupId[] = ['clients', 'brand', 'service_accou
 export function agentGroupOf(agent: Pick<PictureAgent, 'kind' | 'service_account'>, brandName: string): AgentGroupId {
   if (agent.service_account) return startsWithBrand(agent.service_account, brandName) ? 'brand' : 'service_accounts'
   return agent.kind === 'key' ? 'keys' : 'clients'
+}
+
+/**
+ * What the agents column says about the connections the person may not
+ * list: nothing when there are none, how many when there are some, and that
+ * it is not known when they could not be counted.
+ */
+export type OtherConnections = { kind: 'none' } | { kind: 'count'; count: number } | { kind: 'unknown' }
+
+export function otherConnections(agents: Pick<PictureAgents, 'others'> | null | undefined): OtherConnections {
+  // Without the connections at all, the column says so in its own card.
+  if (!agents) return { kind: 'none' }
+  if (agents.others === null) return { kind: 'unknown' }
+  return agents.others > 0 ? { kind: 'count', count: agents.others } : { kind: 'none' }
+}
+
+/**
+ * Whether the clients the person has not connected are offered as "not
+ * connected": only when it is known that nobody else's connection reaches
+ * the company. With other people's connections, or without knowing, nothing
+ * is called not connected.
+ */
+export function offersClients(agents: Pick<PictureAgents, 'others'> | null | undefined): boolean {
+  return !!agents && agents.others === 0
 }
 
 /** The agents by group, in the column's order; a group with nobody in it is left out. */

@@ -184,6 +184,12 @@ export interface ArsredovisningData {
     /** Har kontrollbalansräkning upprättats? */
     kontrollbalans_required: boolean
     flerarsoversikt: FlerarsoversiktRow[]
+    /** The year states the flerårsöversikt's amounts in thousands of kronor
+     *  (arsredovisning_narratives.flerarsoversikt_tkr). The rows above stay
+     *  whole kronor: the PDF and the iXBRL document round them with
+     *  roundThousands. Present only when true, so the content hash of every
+     *  other report is unchanged. */
+    flerarsoversikt_tkr?: boolean
     /** The equity posts at year end (kept for versions saved before the
      *  specification; a new report prints `equity_specification`). */
     egen_kapital_changes: EgenKapitalRow[]

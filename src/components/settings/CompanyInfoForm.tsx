@@ -34,8 +34,10 @@ export function CompanyInfoForm({ settings, companyOrgNumber, onWrongCompany }: 
   // Säte belongs to a legal person; a form whose org number is the owner's
   // personnummer (enskild firma) has none.
   const hasRegisteredOffice = !isPersonnummerForm
+  // No label: the top bar already names the page Företagsuppgifter, and this
+  // is the group that name is about.
   return (
-    <SettingsGroup label={t('company_info_heading')}>
+    <SettingsGroup>
       <SettingsRow
         label={t('company_name_label')}
         htmlFor="company_name"

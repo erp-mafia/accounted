@@ -125,6 +125,13 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
       'period-1',
       { entityType: 'aktiebolag' },
     )
+    // The signed-in member's wizard lists each employee's figures.
+    expect(mockBuildAccrualsProposal).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'period-1',
+      { employeeDetail: true },
+    )
   })
 
   it('threads entity_type enskild_firma to the detector', async () => {

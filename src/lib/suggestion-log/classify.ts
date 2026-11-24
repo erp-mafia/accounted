@@ -25,7 +25,7 @@ import type { EntityType, LinePatternEntry, VatTreatment } from '@/types'
 
 export type DecisionOutcome = 'accepted' | 'changed' | 'manual' | 'dismissed'
 
-export type SuggestionLogSource = 'assistant' | 'rule' | 'catalog' | 'counterparty_template' | 'recent' | 'clearing'
+export type SuggestionLogSource = 'assistant' | 'rule' | 'catalog' | 'counterparty_template' | 'recent' | 'clearing' | 'precedent'
 
 export interface LoggedSuggestion {
   source: SuggestionLogSource
@@ -69,6 +69,8 @@ export interface SuggestionEvidence {
   rule_import_unconfirmed?: true
   has_underlag?: boolean
   read_reverse_charge_kind?: string
+  /** Set only when true: a read on a row where an auto-learned mapping row no longer read would have proposed. */
+  replaces_learned_rule?: true
 }
 
 /** The stored read as the log keeps it: the reasoning only as a hash. */
@@ -105,6 +107,7 @@ const SOURCE: Record<ProposalSource, SuggestionLogSource | null> = {
   assistant: 'assistant',
   manual: null,
   clearing: 'clearing',
+  precedent: 'precedent',
 }
 
 function sameBooking(a: ProposalBooking, b: ProposalBooking): boolean {
@@ -129,23 +132,7 @@ export function matchesFinal(p: BookingProposal, final: BankLineFinal, entityTyp
   return final.vat_treatment == null || offered.vat == null || offered.vat === final.vat_treatment
 }
 
-/**
- * The business account of posted lines: the one account that is neither a
- * cash ledger (19xx), VAT (26xx) nor the row's own settlement ledger (a
- * company card's 2890, settlementLedgers). Null when the lines carry none or
- * several.
- */
-export function businessAccountOfLines(
-  lines: BankLineFinal['lines'],
-  settlementLedgers: readonly string[] = [],
-): string | null {
-  const accounts = new Set(
-    lines
-      .map((l) => l.account)
-      .filter((a) => !a.startsWith('19') && !a.startsWith('26') && !settlementLedgers.includes(a)),
-  )
-  return accounts.size === 1 ? [...accounts][0] : null
-}
+export { businessAccountOfLines } from './business-account'
 
 function evidenceOf(p: BookingProposal): SuggestionEvidence | undefined {
   const evidence: SuggestionEvidence = {
@@ -157,6 +144,7 @@ function evidenceOf(p: BookingProposal): SuggestionEvidence | undefined {
     ...(p.rule_import_unconfirmed ? { rule_import_unconfirmed: true as const } : {}),
     ...(p.has_underlag !== undefined ? { has_underlag: p.has_underlag } : {}),
     ...(p.read_reverse_charge_kind ? { read_reverse_charge_kind: p.read_reverse_charge_kind } : {}),
+    ...(p.replaces_learned_rule ? { replaces_learned_rule: true as const } : {}),
   }
   return Object.keys(evidence).length > 0 ? evidence : undefined
 }

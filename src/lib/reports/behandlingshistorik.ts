@@ -2963,6 +2963,7 @@ const DECISION_SOURCE_LABELS: Record<DecisionCandidate['source'], string> = {
   catalog: 'mall',
   counterparty_template: 'motpartsmall',
   recent: 'tidigare bokning',
+  precedent: 'samma som förra gången',
   extraction: 'dokumentläsning',
   pending_operation: 'agentförslag',
 }

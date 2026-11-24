@@ -42,7 +42,7 @@ import { itemHue, seedOf, type ItemKind } from './hues'
 import { cn } from '@/lib/utils'
 import { StrataField } from './StrataField'
 import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, type CommunityMeta, type SkillSummary } from './data'
+import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, ownItemHref, type CommunityMeta, type SkillSummary } from './data'
 import { knowledgeRows } from './knowledge-rows'
 import styles from './skills.module.css'
 
@@ -53,7 +53,7 @@ const CATEGORIES_SHOWN = 8
 
 /** A category's picture, by the industry or company-form pack it stands for. */
 type Source = 'accounted' | 'community' | 'own'
-export interface CatalogItem {
+interface Item {
   key: string
   kind: ItemKind
   title: string
@@ -71,10 +71,7 @@ export interface CatalogItem {
   status?: { presence: Presence; text: string }
   /** What a flow works with, as the small marks on its card. */
   connections?: readonly AgentConnection[]
-  /** A quiet word after the name ("För din bransch"). */
-  tag?: string
 }
-type Item = CatalogItem
 
 /**
  * Agentinstruktioner as a catalogue, laid out like Claude's Customize page:
@@ -163,7 +160,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   const ownItems: Item[] = own.map((s) => {
     const k = s.itemKind ?? 'workflow'
     // A draft your AI saved waits for you: say so on the card, not only on its page.
-    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: k === 'workflow' ? `${hrefBase}/${agentSegment(s.slug)}` : `${hrefBase}/egen.${s.slug.slice(4)}`, source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
+    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: ownItemHref(hrefBase, s.slug, k), source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
       ...(s.draft ? { status: { presence: 'busy' as const, text: t('draft_tag') } } : {}) }
   })
   // Accounted's own analyses: examples of what an analysis is, next to the community's.
@@ -350,7 +347,7 @@ function CreateButtons({ client, canWrite, onCreate, onWrite }: { client: AiClie
 }
 
 /** A search with no hits: one line where the first row would be, with the way back. */
-export function NoHits({ onClear }: { onClear: () => void }) {
+function NoHits({ onClear }: { onClear: () => void }) {
   const t = useTranslations('skills_registry')
   const tCommon = useTranslations('common')
   return (
@@ -366,37 +363,29 @@ export function NoHits({ onClear }: { onClear: () => void }) {
  * row each over a hairline, the name and what it does on one line, what it
  * works with, where it comes from and where it stands. The name opens the
  * item's page.
- *
- * `compact`: the name and its one line alone, with no column heads, for a
- * narrow place (a drawer).
  */
-export function CatalogList({ kind, items, compact = false }: { kind: ItemKind; items: Item[]; compact?: boolean }) {
+function CatalogList({ kind, items }: { kind: ItemKind; items: Item[] }) {
   const t = useTranslations('skills_registry')
   const { appName } = useBranding()
   return (
     <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
       <table className="w-full table-fixed border-collapse text-sm">
-        {!compact && (
-          <thead>
-            <tr>
-              <th className={TH_CLASS}>{t(`col_name_${kind}`)}</th>
-              <th className={cn(TH_CLASS, 'hidden w-[22%] md:table-cell')}>{t(kind === 'workflow' ? 'col_connections' : 'col_usage')}</th>
-              <th className={cn(TH_CLASS, 'hidden w-[14%] sm:table-cell')}>{t('col_source')}</th>
-              <th className={cn(TH_CLASS, 'w-[30%] sm:w-[18%]')}>{t('col_status')}</th>
-            </tr>
-          </thead>
-        )}
+        <thead>
+          <tr>
+            <th className={TH_CLASS}>{t(`col_name_${kind}`)}</th>
+            <th className={cn(TH_CLASS, 'hidden w-[22%] md:table-cell')}>{t(kind === 'workflow' ? 'col_connections' : 'col_usage')}</th>
+            <th className={cn(TH_CLASS, 'hidden w-[14%] sm:table-cell')}>{t('col_source')}</th>
+            <th className={cn(TH_CLASS, 'w-[30%] sm:w-[18%]')}>{t('col_status')}</th>
+          </tr>
+        </thead>
         <tbody className="stagger-enter">
           {items.map((item) => (
             <tr key={item.key} className="group relative hover:bg-secondary/35">
               <td className={cn(TD_CLASS, 'truncate py-0 align-middle')}>
                 {/* The link covers the row, so a click anywhere on it opens the item. */}
                 <Link href={item.href} className="font-medium text-strong after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/70" data-ph-mask={item.source === 'own' ? '' : undefined}>{item.title}</Link>
-                {item.tag && <span className="ml-2 text-xs text-muted-foreground">{item.tag}</span>}
                 {item.desc && <span className="text-muted-foreground" data-ph-mask={item.source === 'own' ? '' : undefined}> · {item.desc}</span>}
               </td>
-              {!compact && (
-                <>
               <td className={cn(TD_CLASS, 'hidden truncate py-0 align-middle text-muted-foreground md:table-cell')}>
                 {item.connections && item.connections.length > 0
                   ? <span className="flex items-center gap-2"><SourceMarks connections={item.connections} /><span className="truncate">{item.connections.map((c) => t(`conn_${c}`)).join(', ')}</span></span>
@@ -412,8 +401,6 @@ export function CatalogList({ kind, items, compact = false }: { kind: ItemKind; 
                   ? <span className={styles.status} data-presence={item.status.presence}>{item.status.text}</span>
                   : <span className="text-muted-foreground">{t('open_hint')}</span>}
               </td>
-                </>
-              )}
             </tr>
           ))}
         </tbody>

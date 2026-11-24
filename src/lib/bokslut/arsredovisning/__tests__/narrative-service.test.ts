@@ -176,9 +176,11 @@ describe('getNarrative', () => {
   })
 })
 
-// fixed_asset_note_rows is the newest column: the code is live before its
-// migration has run, so the service must keep working without it.
-describe('a database without the newest column', () => {
+// fixed_asset_note_rows and, after it, flerarsoversikt_tkr are newer than the
+// base columns: the code is live before a column's migration has run, so the
+// service must keep working without them (the second one alone:
+// narrative-flerarsoversikt-tkr.test.ts).
+describe('a database without the newer columns', () => {
   const missingColumn = Object.assign(new Error('column arsredovisning_narratives.fixed_asset_note_rows does not exist'), {
     name: 'PostgrestError',
     code: '42703',
@@ -186,50 +188,79 @@ describe('a database without the newest column', () => {
     hint: null,
   })
 
-  /** The columns each read or write asked for, in order: the first names the newest column, the retry does not. */
+  /** The columns each read or write asked for, in order: the first names every column, each retry one fewer. */
   const selectedColumns = (calls: { method: string; args: unknown[] }[]) =>
     calls.filter((call) => call.method === 'select').map((call) => String(call.args[0]))
 
   it('reads the narrative with the columns before it', async () => {
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    // Without fixed_asset_note_rows the database lacks the column after it
+    // too (migrations run in order): one retry per column left out.
+    enqueue({ error: missingColumn })
     enqueue({ error: missingColumn })
     enqueue({ data: narrativeRow })
     const result = await getNarrative(supabase as unknown as SupabaseClient, 'company-1', 'period-1')
     expect(result).toEqual(narrativeRow)
-    const [first, retry] = selectedColumns(calls)
+    const [first, second, last] = selectedColumns(calls)
     expect(first).toContain('fixed_asset_note_rows')
-    expect(retry).not.toContain('fixed_asset_note_rows')
-    // The retry asks for everything else the first read asked for.
-    expect(retry).toBe(first.replace(', fixed_asset_note_rows', ''))
+    expect(second).toBe(first.replace(', flerarsoversikt_tkr', ''))
+    expect(last).not.toContain('fixed_asset_note_rows')
+    // The last read asks for everything else the first read asked for.
+    expect(last).toBe(first.replace(', fixed_asset_note_rows, flerarsoversikt_tkr', ''))
   })
 
   it('saves the other fields with the columns before it', async () => {
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ error: missingColumn })
     enqueue({ error: missingColumn })
     enqueue({ data: narrativeRow })
     const result = await upsertNarrative(supabase as unknown as SupabaseClient, 'company-1', 'user-1', 'period-1', {
       description: 'Bolaget bedriver konsultverksamhet.',
     })
     expect(result).toEqual(narrativeRow)
-    const [first, retry] = selectedColumns(calls)
+    const [first, , last] = selectedColumns(calls)
     expect(first).toContain('fixed_asset_note_rows')
-    expect(retry).not.toContain('fixed_asset_note_rows')
-    // Both attempts write the same row: the fallback changes what is read back, not what is saved.
+    expect(last).not.toContain('fixed_asset_note_rows')
+    // Every attempt writes the same row: the fallback changes what is read back, not what is saved.
     const writes = calls.filter((call) => call.method === 'upsert').map((call) => call.args[0])
-    expect(writes).toHaveLength(2)
+    expect(writes).toHaveLength(3)
     expect(writes[1]).toEqual(writes[0])
+    expect(writes[2]).toEqual(writes[0])
   })
 
   it('fails a save of the stated rows themselves instead of losing them', async () => {
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
-    enqueue({ error: Object.assign(new Error("Could not find the 'fixed_asset_note_rows' column"), { name: 'PostgrestError', code: 'PGRST204' }) })
+    const unknownColumn = Object.assign(new Error("Could not find the 'fixed_asset_note_rows' column"), { name: 'PostgrestError', code: 'PGRST204' })
+    enqueue({ error: unknownColumn })
+    enqueue({ error: unknownColumn })
     enqueue({ data: narrativeRow })
+    const stated = { ByggnaderMark: { 'cost.omrakningsdifferenser': 100_000 } }
     const err = await upsertNarrative(supabase as unknown as SupabaseClient, 'company-1', 'user-1', 'period-1', {
-      fixed_asset_note_rows: { ByggnaderMark: { 'cost.omrakningsdifferenser': 100_000 } },
+      fixed_asset_note_rows: stated,
     }).catch((e: unknown) => e)
     expect(err).toMatchObject({ code: 'PGRST204' })
-    // One attempt only: no retry without the column.
-    expect(calls.filter((call) => call.method === 'upsert')).toHaveLength(1)
+    // Tried again without the column after it, never without the rows.
+    const writes = calls.filter((call) => call.method === 'upsert').map((call) => call.args[0])
+    expect(writes).toHaveLength(2)
+    for (const write of writes) expect(write).toMatchObject({ fixed_asset_note_rows: stated })
+  })
+
+  it('saves the stated rows on a database that only lacks the column after them', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ error: Object.assign(new Error('column arsredovisning_narratives.flerarsoversikt_tkr does not exist'), { name: 'PostgrestError', code: '42703' }) })
+    enqueue({ data: narrativeRow })
+    const stated = { ByggnaderMark: { 'cost.omrakningsdifferenser': 100_000 } }
+    const result = await upsertNarrative(supabase as unknown as SupabaseClient, 'company-1', 'user-1', 'period-1', {
+      fixed_asset_note_rows: stated,
+      flerarsoversikt_tkr: false,
+    })
+    expect(result).toEqual(narrativeRow)
+    const [first, retry] = calls.filter((call) => call.method === 'upsert').map((call) => call.args[0] as Record<string, unknown>)
+    expect(first).toMatchObject({ fixed_asset_note_rows: stated, flerarsoversikt_tkr: false })
+    expect(retry).toMatchObject({ fixed_asset_note_rows: stated })
+    expect(retry).not.toHaveProperty('flerarsoversikt_tkr')
+    // The rows are still read back.
+    expect(selectedColumns(calls)[1]).toContain('fixed_asset_note_rows')
   })
 
   it('has no stated rows of earlier years to read', async () => {

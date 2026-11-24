@@ -22,6 +22,7 @@ import {
 } from '@/lib/agent-context/context-window'
 import { ContextGraph } from '@/components/context-graph/ContextGraph'
 import { AgentPicture } from '@/components/agent-picture/AgentPicture'
+import { readsBriefingAtLoad, type PictureRow } from '@/lib/agent-context/wiki-views'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ContextBar, RawText, ScopeStack, Swatch, type ScopeLevel } from './wiki-parts'
 
@@ -51,13 +52,31 @@ const FACT_KINDS = new Set(['fact', 'preference', 'pattern', 'correction'])
  *
  * `picture`: the company has the agent picture switched on. The view is
  * then the picture alone (components/agent-picture): no window bar and no
- * list of sections. The briefing is still loaded here, once, and handed to
- * the picture, whose Kontext row draws the context graph from it.
+ * list of sections. The briefing is loaded here, once, and handed to the
+ * picture, whose Kontext row draws the context graph from it: it is read
+ * when that row is first opened, or as the page loads when the address
+ * names the row (readsBriefingAtLoad), and not before. `row`, `item` and
+ * `agent` are the row of the picture, the knowledge item and the agent card
+ * the address names, which the picture opens.
  */
-export function ContextView({ picture = false }: { picture?: boolean }) {
+export function ContextView({
+  picture = false,
+  row = null,
+  item = null,
+  agent = null,
+}: {
+  picture?: boolean
+  row?: PictureRow | null
+  item?: string | null
+  agent?: string | null
+}) {
   const t = useTranslations('wiki')
   const locale = useLocale() as ErrorLocale
   const [load, setLoad] = useState<LoadState>({ state: 'loading' })
+  // Whether the briefing has been asked for: at load without the picture, and with it once the Kontext row is opened or named.
+  const [wanted, setWanted] = useState(() => readsBriefingAtLoad(picture, row))
+  if (!wanted && readsBriefingAtLoad(picture, row)) setWanted(true)
+  const wantContext = useCallback(() => setWanted(true), [])
 
   const fetchContext = useCallback(async () => {
     setLoad({ state: 'loading' })
@@ -77,24 +96,30 @@ export function ContextView({ picture = false }: { picture?: boolean }) {
   }, [locale, t])
 
   useEffect(() => {
-    void fetchContext()
-  }, [fetchContext])
+    if (wanted) void fetchContext()
+  }, [wanted, fetchContext])
 
-  // An installation without the agent connection has no picture either.
-  if (load.state === 'unavailable') return <EmptyState title={load.sentence} />
   if (picture) {
     return (
       <AgentPicture
+        row={row}
+        item={item}
+        agent={agent}
+        onContextWanted={wantContext}
         context={
           load.state === 'ok'
             ? { state: 'ok', text: load.data.text }
             : load.state === 'failed'
               ? { state: 'failed', description: load.description, onRetry: () => void fetchContext() }
-              : { state: 'loading' }
+              : load.state === 'unavailable'
+                ? { state: 'unavailable', sentence: load.sentence }
+                : { state: 'loading' }
         }
       />
     )
   }
+  // An installation without the agent connection has no briefing to show.
+  if (load.state === 'unavailable') return <EmptyState title={load.sentence} />
   if (load.state === 'loading') return <ContextSkeleton />
   if (load.state === 'failed') return <LoadError title={t('load_failed_title')} description={load.description} onRetry={() => void fetchContext()} />
   return <ContextWindowView window={load.data.window} text={load.data.text} />

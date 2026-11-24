@@ -267,7 +267,7 @@ describe('MCP tools/call unknown-parameter guard', () => {
   })
 
   it('names since for a lower bound and nothing for an upper bound on a since-only list', async () => {
-    const error = await expectValidationError('gnubok_receipt_hunt_worklist', {
+    const error = await expectValidationError('gnubok_list_transactions_without_documents', {
       date_from: '2026-01-01',
       until: '2026-06-30',
     })

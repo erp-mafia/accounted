@@ -1,9 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getSuggestedTemplates, buildCounterpartySuggestion, rowProposal } from './category-suggestions'
+import { getSuggestedTemplates, buildCounterpartySuggestion, matchedRuleProposals, rowProposal } from './category-suggestions'
 import {
   bindTemplateToSettlementAccount,
   contradictsLearnedDirection,
   findCounterpartyTemplatesBatch,
+  findSwitchedOffCounterpartyRules,
   type CounterpartyTemplateMatch,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
@@ -21,6 +22,9 @@ import { readDirectBookingSettings } from './direct-booking-settings'
 import { proposeClearings } from './clearing-proposals'
 import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
 import { markBlockedProposals } from '@/lib/booking-review/proposals'
+import { isAutoLearnedMappingRule, mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
+import { isBookingPrecedentEnabled } from '@/lib/env/booking-precedent-switch'
+import { loadBookingPrecedents, precedentProposal, type PrecedentBooking } from './booking-precedent'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
 /**
@@ -44,6 +48,21 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * of it counts the revenue twice (leadWithClearing); it never books from
  * the row.
  *
+ * For a company in BOOKING_PRECEDENT_COMPANY_IDS, a row no counterparty rule
+ * matches and no rule of the company's own proposes for leads with how the
+ * company last booked that counterparty (source 'precedent',
+ * ./booking-precedent.ts): first in the list, ahead of the assistant, the
+ * catalog and a system default, and always into a review. A counterparty
+ * rule the company switched off silences it, as it silences the rule; a
+ * payment to Skatteverket never gets one; a clearing proposal still leads
+ * above it. Every other company's list is what it was.
+ *
+ * For a company whose auto-learned mapping rows are not read
+ * (lib/bookkeeping/mapping-engine.ts readsAutoLearnedMappingRules), such a
+ * row proposes nothing. Where one would have proposed, the assistant's
+ * proposal carries replaces_learned_rule and never books without a review:
+ * the row is not booked by one click on a read where a rule stood before.
+ *
  * Last, a booking review rule (lib/booking-review, accounted#130 step 2)
  * marks every proposal it matches review_blocked: it keeps its place, and
  * never books without a person's review (reviewReason 'booking_blocked').
@@ -56,6 +75,16 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * contest or box-dispute rules.
  */
 export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.6'
+
+/**
+ * The revision the proposals of this company come from: the common one, or
+ * with a suffix for a company in BOOKING_PRECEDENT_COMPANY_IDS, whose rows
+ * are proposed for by other rules (a precedent source, no auto-learned
+ * mapping rows). Bump the suffix when those rules change.
+ */
+export function bankProposalRulesRevision(companyId: string): string {
+  return isBookingPrecedentEnabled(companyId) ? `${BANK_PROPOSAL_RULES_REVISION}+precedent.1` : BANK_PROPOSAL_RULES_REVISION
+}
 
 const log = createLogger('transactions/propose')
 
@@ -87,7 +116,8 @@ export async function proposeForTransactions(
   // Every read below depends only on the company and the rows, so they run
   // in one round; the proposals are then put together in the same order as
   // before. The suggestions in Transaktioner wait on this.
-  const [companyRules, globalRules, direct_booking, settingsRead, counterpartyMatches, storedReads, clearings, blockRules] = await Promise.all([
+  const precedentOn = isBookingPrecedentEnabled(companyId)
+  const [companyRules, globalRules, direct_booking, settingsRead, counterpartyMatches, storedReads, clearings, blockRules, switchedOffRules] = await Promise.all([
     supabase
       .from('mapping_rules')
       .select('*')
@@ -118,16 +148,37 @@ export async function proposeForTransactions(
       () => new Map<string, BookingProposal>(),
     ),
     loadActiveBookingReviewRules(supabase, companyId),
+    // The rows a switched-off counterparty rule would match, read only where
+    // precedents are proposed. A failed read answers null: no precedent is
+    // then offered at all, since none can be told from a silenced one.
+    precedentOn
+      ? findSwitchedOffCounterpartyRules(supabase, companyId, transactions).catch((err: unknown) => {
+          log.warn('switched-off counterparty rules read failed; no precedent is proposed', {
+            companyId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return null
+        })
+      : Promise.resolve(null),
   ])
-  const mappingRules = [
+  const storedRules = [
     ...((companyRules.data ?? []) as MappingRule[]),
     ...((globalRules.data ?? []) as MappingRule[]),
   ]
+  // Without the company's auto-learned rows where they are not read
+  // (lib/bookkeeping/mapping-engine.ts readsAutoLearnedMappingRules).
+  const mappingRules = mappingRulesRead(companyId, storedRules)
+  const unreadRules = mappingRules.length === storedRules.length ? [] : storedRules.filter(isAutoLearnedMappingRule)
 
   const entityType = (settingsRead.data?.entity_type as EntityType) || undefined
 
+  // The rows an auto-learned rule that is no longer read would have proposed
+  // for: the assistant's read may take the row there, but only into a review
+  // (replaces_learned_rule below).
+  const unreadRuleRows = new Set<string>()
   for (const tx of transactions) {
     proposals[tx.id] = await getSuggestedTemplates(tx, entityType, mappingRules)
+    if (unreadRules.length > 0 && matchedRuleProposals(tx, entityType, unreadRules).length > 0) unreadRuleRows.add(tx.id)
   }
 
   // Inject counterparty template matches as top suggestions. A learned
@@ -219,6 +270,33 @@ export async function proposeForTransactions(
     ]
   }
 
+  // How the company last booked the counterparty, for the rows no
+  // counterparty rule matches (active or switched off) and no rule of the
+  // company's own proposes for: first on the row, never a rule. One read for
+  // all of them; best effort, like the reads.
+  if (precedentOn && switchedOffRules) {
+    const open = transactions.filter(
+      (tx) =>
+        !counterpartyMatches.has(tx.id) &&
+        !switchedOffRules.has(tx.id) &&
+        !(proposals[tx.id] ?? []).some((p) => p.source === 'rule' && p.rule_own),
+    )
+    const precedents =
+      open.length > 0
+        ? await loadBookingPrecedents(supabase, companyId, open).catch((err: unknown) => {
+            log.warn('booking precedents read failed; the list stands without them', {
+              companyId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            return new Map<string, PrecedentBooking[]>()
+          })
+        : new Map<string, PrecedentBooking[]>()
+    for (const tx of open) {
+      const precedent = precedentProposal(tx, precedents.get(tx.id) ?? [], entityType)
+      if (precedent) proposals[tx.id] = [precedent, ...(proposals[tx.id] ?? [])]
+    }
+  }
+
   // The assistant's stored reads (the ten-minute cron, or an earlier
   // open): a fresh one with an account joins the row's proposals, and the
   // read itself goes along so the review opens with it.
@@ -229,7 +307,12 @@ export async function proposeForTransactions(
       if (!read || !ASSISTANT_READS.isFresh(read, tx)) continue
       assistant_reads[tx.id] = read
       const s = ASSISTANT_READS.proposal(read, tx, entityType)
-      if (s) proposals[tx.id] = mergeAssistantSuggestion(proposals[tx.id] ?? [], s)
+      if (s) {
+        proposals[tx.id] = mergeAssistantSuggestion(
+          proposals[tx.id] ?? [],
+          unreadRuleRows.has(tx.id) ? { ...s, replaces_learned_rule: true } : s,
+        )
+      }
       const cpMatch = counterpartyMatches.get(tx.id)
       if (cpMatch) proposals[tx.id] = contestCounterpart(proposals[tx.id] ?? [], cpMatch, read)
       proposals[tx.id] = disputeReverseChargeBox(proposals[tx.id] ?? [], read)
@@ -264,14 +347,15 @@ export function leadWithClearing(list: BookingProposal[], clearing: BookingPropo
 }
 
 /**
- * Where the assistant's suggestion sits among the row's others: a rule and
- * a counterpart come first, then the assistant when it is at least likely,
- * then the catalog's keyword matches, then an unsure assistant last.
+ * Where the assistant's suggestion sits among the row's others: a rule, a
+ * counterpart and the company's own earlier booking come first, then the
+ * assistant when it is at least likely, then the catalog's keyword matches,
+ * then an unsure assistant last.
  */
 export function mergeAssistantSuggestion(list: BookingProposal[], s: BookingProposal): BookingProposal[] {
   const rest = list.filter((x) => x.source !== 'assistant')
   if (s.confidence < ASSISTANT_LIKELY) return [...rest, s]
-  const firstCatalog = rest.findIndex((x) => x.source !== 'rule' && x.source !== 'counterparty')
+  const firstCatalog = rest.findIndex((x) => x.source !== 'rule' && x.source !== 'counterparty' && x.source !== 'precedent')
   if (firstCatalog === -1) return [...rest, s]
   return [...rest.slice(0, firstCatalog), s, ...rest.slice(firstCatalog)]
 }

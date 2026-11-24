@@ -41,6 +41,7 @@ import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { isSkatteverketPayment } from './skatteverket-payment'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { TRANSACTION_FALLBACK_DESCRIPTION } from '@/types'
 import type {
   CategorizationTemplate,
   CategorizationTemplateSource,
@@ -186,8 +187,15 @@ export function normalizeCounterpartyName(raw: string): string {
  * suppliers (PostHog PH 118). The phrases are the catalog matcher's list
  * (stripBankNoise in ./booking-templates), not a second one; the persisted
  * key (normalizeCounterpartyName) is untouched.
+ *
+ * Nor does the title a row is stored with when the bank sent no text at all
+ * (TRANSACTION_FALLBACK_DESCRIPTION, "Okänd transaktion"): every such row
+ * carries it, whoever was paid, so one booking of it was proposed for all
+ * of them. A template already learned under it (its key is the same text)
+ * is skipped by the matcher like any other key that names no one.
  */
 export function namesCounterparty(raw: string): boolean {
+  if (raw.trim().toLowerCase() === TRANSACTION_FALLBACK_DESCRIPTION.toLowerCase()) return false
   return /\p{L}/u.test(stripBankMethodPhrases(raw.toLowerCase()))
 }
 
@@ -436,9 +444,59 @@ export async function findCounterpartyTemplatesBatch(
   companyId: string,
   transactions: Transaction[]
 ): Promise<Map<string, CounterpartyTemplateMatch>> {
-  const result = new Map<string, CounterpartyTemplateMatch>()
-
   const allTemplates = await fetchActiveTemplates(supabase, companyId)
+  const result = matchCounterpartyTemplates(allTemplates, transactions)
+  if (allTemplates.length === 0) return result
+
+  // Every consumer of a match applies its learned bags (the proposals and
+  // their Bokför, the mapping engine, suggestions), so the codes the
+  // registry no longer accepts are dropped here, once, for the matched
+  // templates only.
+  const matched = [...new Map([...result.values()].map((m) => [m.template.id, m.template])).values()]
+  const pruned = new Map(
+    (await pruneLearnedTemplateDimensions(supabase, companyId, matched)).map((t) => [t.id, t]),
+  )
+  for (const [txId, match] of result) {
+    const template = pruned.get(match.template.id)
+    if (template && template !== match.template) result.set(txId, { ...match, template })
+  }
+
+  return result
+}
+
+/**
+ * The bank rows a counterparty rule the company has switched off (paused, or
+ * removed: is_active false) would match, by the tiers an active rule is
+ * matched by. The row's proposals take nothing from such a rule; a reader
+ * that would otherwise propose from the counterparty's history asks here, so
+ * a switched-off rule silences that proposal too.
+ */
+export async function findSwitchedOffCounterpartyRules(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactions: Transaction[],
+): Promise<Set<string>> {
+  const switchedOff = await fetchAllRows<CategorizationTemplate>(({ from, to }) =>
+    supabase
+      .from('categorization_templates')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('is_active', false)
+      .order('id')
+      .range(from, to),
+  )
+  return new Set(matchCounterpartyTemplates(switchedOff, transactions).keys())
+}
+
+/**
+ * The four match tiers over templates already read: no query, no pruning of
+ * learned bags. A row that matches none has no entry.
+ */
+function matchCounterpartyTemplates(
+  allTemplates: CategorizationTemplate[],
+  transactions: Transaction[],
+): Map<string, CounterpartyTemplateMatch> {
+  const result = new Map<string, CounterpartyTemplateMatch>()
 
   if (allTemplates.length === 0) return result
 
@@ -618,19 +676,6 @@ export async function findCounterpartyTemplatesBatch(
         confidence: Math.round(Number(bestMatch.confidence) * similarity * 100) / 100,
       })
     }
-  }
-
-  // Every consumer of a match applies its learned bags (the proposals and
-  // their Bokför, the mapping engine, suggestions), so the codes the
-  // registry no longer accepts are dropped here, once, for the matched
-  // templates only.
-  const matched = [...new Map([...result.values()].map((m) => [m.template.id, m.template])).values()]
-  const pruned = new Map(
-    (await pruneLearnedTemplateDimensions(supabase, companyId, matched)).map((t) => [t.id, t]),
-  )
-  for (const [txId, match] of result) {
-    const template = pruned.get(match.template.id)
-    if (template && template !== match.template) result.set(txId, { ...match, template })
   }
 
   return result

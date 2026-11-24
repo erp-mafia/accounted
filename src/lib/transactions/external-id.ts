@@ -18,6 +18,7 @@
  */
 
 import { daysBetweenIso } from '@/lib/dates/iso'
+import { TRANSACTION_FALLBACK_DESCRIPTION } from '@/types'
 
 /**
  * Normalize a monetary amount to integer öre (hundredths) for stable,
@@ -37,9 +38,11 @@ export function amountToOre(amount: number | string): number {
 
 /**
  * Swedish-first placeholder for transactions a bank/import source gives no
- * usable title. Centralized so every import path and the tests agree.
+ * usable title. Centralized so every import path and the tests agree; the
+ * text is defined beside the Transaction type, where the ledger's
+ * counterparty matcher reads it too.
  */
-export const FALLBACK_DESCRIPTION = 'Okänd transaktion'
+export const FALLBACK_DESCRIPTION = TRANSACTION_FALLBACK_DESCRIPTION
 
 /**
  * Normalize an imported transaction title for storage and display.
