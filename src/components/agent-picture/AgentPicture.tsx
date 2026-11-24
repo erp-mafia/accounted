@@ -39,7 +39,7 @@ import type { ConnectionKind } from '@/lib/settings/mcp-connections'
 import { withoutPictureRow } from '@/lib/agent-context/wiki-views'
 import { PictureViews, isPictureView, type PictureAgentView, type PictureContext, type PictureView } from './PictureViews'
 import { WaitingLine } from './WaitingLine'
-import { agentCardDetail, type PictureWords } from './agent-card-text'
+import { agentCardDetail, shortDay, type CardWords } from './agent-card-text'
 import { AgentMark, LogoTile, SourceMark } from './picture-marks'
 
 export type { PictureContext } from './PictureViews'
@@ -320,10 +320,13 @@ function PictureSkeleton() {
  * A card's detail line, always one line: `lead` gives way with an ellipsis
  * when the card is narrow; `tail` (a masked number, a time) is kept whole
  * for as long as there is room for it, and is never broken over two lines.
+ * `under` is a second line of its own (how many connections an agent's card
+ * stands for).
  */
 interface CardDetail {
   lead: string
   tail?: string
+  under?: string
 }
 
 interface AgentCard {
@@ -417,7 +420,11 @@ function PictureFigure({
     return 'text' in name ? name.text : tKeys(name.message)
   }
 
-  const words: PictureWords = { time: (instant) => timeOf(new Date(instant)), when }
+  const words: CardWords = {
+    time: (instant) => timeOf(new Date(instant)),
+    when,
+    day: (instant) => shortDay(instant, new Date(), locale, t('picture.today')),
+  }
   const agentCards: AgentCard[] = (picture.agents?.list ?? []).map((agent) => {
     // The newest answer of the log wins over the one the picture came with (agentCardState).
     const state = agentCardState(agent, activity)
@@ -750,6 +757,11 @@ function PictureCard({
           <span className={cn('min-w-0', !wrapDetail && 'flex-[0_9999_auto] truncate')}>{detail.lead}</span>
           {detail.tail && <span className="min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-pre">{detail.tail}</span>}
         </span>
+        {detail.under && (
+          <span className="truncate text-xs tabular-nums text-muted-foreground" data-ph-mask="">
+            {detail.under}
+          </span>
+        )}
       </span>
       {off && <span className="shrink-0 text-xs font-medium text-strong">{t('picture.connect')}</span>}
     </>

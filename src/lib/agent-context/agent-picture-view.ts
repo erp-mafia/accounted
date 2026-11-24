@@ -69,6 +69,23 @@ export function instantWords(instant: string, now: Date): InstantWords | null {
   return { today: day === todayIsoStockholm(now), hasTime: !bare, date }
 }
 
+/** A day in few words: today, a day of the year that holds `now`, or a day of another year. */
+export type DayWords = { kind: 'today' } | { kind: 'day'; date: Date } | { kind: 'year'; date: Date }
+
+/**
+ * How an instant's day is said where there is room for few words: today, a
+ * day of the same Swedish calendar year (said by its day and month), or a
+ * day of another year (said by the year alone). Null for something that is
+ * no date.
+ */
+export function dayWords(instant: string, now: Date): DayWords | null {
+  const words = instantWords(instant, now)
+  if (!words) return null
+  if (words.today) return { kind: 'today' }
+  const yearOf = (date: Date) => todayIsoStockholm(date).slice(0, 4)
+  return { kind: yearOf(words.date) === yearOf(now) ? 'day' : 'year', date: words.date }
+}
+
 // ---------------------------------------------------------------- counts
 
 export type CountKind = keyof PictureCounts
