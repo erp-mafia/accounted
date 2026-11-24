@@ -150,7 +150,6 @@ describe('a cancel the bank does not confirm', () => {
   it.each([
     ['submitted (its signing abandoned)', waitingOrder('o1', 1, { status: 'submitted' }), undefined, NOT_CONFIRMED],
     ['awaiting a signature nobody finished', waitingOrder('o1', 1, { status: 'awaiting_signature' }), 'awaiting_signature', NOT_CONFIRMED],
-    ['submitted, the cancel wanting a signature', waitingOrder('o1', 1, { status: 'submitted' }), undefined, NEEDS_SIGNING],
   ] as const)('the bank still reports it unsigned, the order %s: says it is not paid without a signature, and changes nothing', async (_name, order, signing, answer) => {
     const outcome = await cancelAnswered(order, answer, signing, { state: RCVD })
 
@@ -376,6 +375,98 @@ describe('a cancel the bank refuses with an error', () => {
 
     expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
     expect(provider.getPaymentState).not.toHaveBeenCalled()
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+})
+
+// A bank that wants the cancel of a payment nobody signed signed first
+// answers needs_authorisation (Swedbank: ACTC with a link to authorise the
+// cancel). That signing is not offered here, the online bank does not show the
+// unsigned payment, and the bank cancels nothing by itself: the order was told
+// to wait for the status sync and cancel again, for weeks, with no way out.
+describe('an unsigned payment whose cancel the bank wants signed', () => {
+  const NEEDS_SIGNING: PaymentCancelResult = { outcome: 'needs_authorisation', providerStatus: 'ACTC' }
+  const RCVD: ProviderPaymentState = { providerStatus: 'RCVD', status: 'submitted', messages: [] }
+  const stopped = (minutes: number): Partial<CancelSigning> => ({ status: 'created', signing_started_at: minutesAgo(minutes), signed_at: null })
+  const events = () => db.findCalls('payment_order_events', 'insert').flatMap((args) => args[0] as Array<Record<string, unknown>>)
+
+  it('is the unsigned refusal, releasable once its last BankID is long over, and changes nothing yet', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+    const outcome = await cancelAnswered(order, NEEDS_SIGNING, stopped(60 * 24 * 4), { state: RCVD })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED',
+      details: { payment_order_id: 'o1', provider_status: 'RCVD', releasable: true, answer: 'needs_authorisation' },
+    })
+    expect(provider.getPaymentState).toHaveBeenCalledWith(expect.anything(), 'pay-1', 'swedish-giro')
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
+  it('is releasable on the claim time alone for an order never put in a signing', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted', batch_id: null })
+    const outcome = await cancelAnswered(order, NEEDS_SIGNING, undefined, { state: RCVD })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED', details: { releasable: true } })
+  })
+
+  it('releases it on request: the bank asked again, cancelled here with its status, the payment id kept, the answer on the event', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+    const outcome = await cancelAnswered(order, NEEDS_SIGNING, stopped(60 * 24 * 4), { state: RCVD, releaseUnsigned: true })
+
+    expect(outcome).toEqual({ ok: true, data: { cancelled: true, status: 'cancelled', released_unsigned: true } })
+    expect(provider.cancelPayment).toHaveBeenCalledTimes(1)
+    expect(db.findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'cancelled', cancelled_by: USER, provider_status: 'RCVD' })
+    expect(db.findCall('payment_orders', 'update')?.[0]).not.toHaveProperty('provider_payment_id')
+    expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['status', 'submitted'])
+    expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['provider_payment_id', 'pay-1'])
+    expect(events()).toContainEqual(
+      expect.objectContaining({
+        event_type: 'cancelled',
+        from_status: 'submitted',
+        to_status: 'cancelled',
+        detail: { provider_payment_id: 'pay-1', reason: 'UNSIGNED_AT_BANK_NOT_CANCELLABLE', released_unsigned: true, answer: 'needs_authorisation' },
+      }),
+    )
+  })
+
+  it('is releasable for a payment the bank reports pending (PDNG) as well', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+    const outcome = await cancelAnswered(order, NEEDS_SIGNING, stopped(120), { state: { providerStatus: 'PDNG', status: 'submitted', messages: [] } })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED', details: { provider_status: 'PDNG', releasable: true } })
+  })
+
+  it.each([
+    ['its last BankID started minutes ago', waitingOrder('o1', 1, { status: 'submitted' }), stopped(5)],
+    ['its BankID is still open', waitingOrder('o1', 1, { status: 'awaiting_signature' }), { status: 'awaiting_signature', signing_started_at: minutesAgo(120), signed_at: null }],
+    ['its signing is open although the order says submitted', waitingOrder('o1', 1, { status: 'submitted' }), { status: 'awaiting_signature', signing_started_at: minutesAgo(120), signed_at: null }],
+    ['its signing cannot be read', waitingOrder('o1', 1, { status: 'submitted' }), undefined],
+  ] as const)('says try again, not releasable, and never releases when %s', async (_name, order, signing) => {
+    const outcome = await cancelAnswered(order, NEEDS_SIGNING, signing as Partial<CancelSigning>, { state: RCVD, releaseUnsigned: true })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED', details: { releasable: false } })
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
+  it.each([
+    ['its BankID finished here while the bank still answers RCVD', waitingOrder('o1', 1, { status: 'awaiting_signature' }), { status: 'signed', signing_started_at: minutesAgo(120), signed_at: minutesAgo(119) }],
+    ['it carries a signature', waitingOrder('o1', 1, { status: 'submitted', signed_at: minutesAgo(119) }), stopped(120)],
+    ['its signing cannot be read', waitingOrder('o1', 1, { status: 'awaiting_signature' }), undefined],
+    ['it is accepted', waitingOrder('o1', 1, { status: 'accepted' }), stopped(120)],
+    ['it waits for a second signer', waitingOrder('o1', 1, { status: 'awaiting_second_signer' }), { status: 'awaiting_second_signer', signing_started_at: minutesAgo(120), signed_at: minutesAgo(119) }],
+  ] as const)('keeps the bank\'s answer, and never releases, when %s', async (_name, order, signing) => {
+    const outcome = await cancelAnswered(order, NEEDS_SIGNING, signing as Partial<CancelSigning> | undefined, { state: RCVD, releaseUnsigned: true })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_NEEDS_SIGNING' })
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
+  it('leaves "not cancelled" as it was: the status sync\'s, never released', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+    const outcome = await cancelAnswered(order, { outcome: 'not_cancelled', providerStatus: null }, stopped(60 * 24 * 4), { state: RCVD, releaseUnsigned: true })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_PENDING_UNSIGNED' })
     expect(db.findCall('payment_orders', 'update')).toBeUndefined()
   })
 })

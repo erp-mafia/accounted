@@ -178,7 +178,8 @@ export interface BankSigningCapabilities {
  * cancelled). Every other answer leaves the payment where it was, as far as
  * anyone knows:
  *   - needs_authorisation: the bank wants the cancel signed, which is not
- *     offered here (the person cancels in the online bank);
+ *     offered here (the person cancels in the online bank; a payment the
+ *     bank reports unsigned is released here instead, isReleasableUnsigned);
  *   - too_late: the bank does not allow a cancel now: executed already, past
  *     its cut-off, or (with `unsigned`) not signed while a signing of it is
  *     still open at the bank (crm#1282);
