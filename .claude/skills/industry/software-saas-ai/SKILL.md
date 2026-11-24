@@ -79,7 +79,7 @@ Verifierat mot BAS 2025 officiell kontoplan (bas.se/kontoplaner). Avvikelser fr�
 | **5410** | Förbrukningsinventarier | Datorer under halvt PBB, periferi |
 | **6230** | Datakommunikation | Fiber, internet |
 | **6540** | IT-tjänster | Löpande SaaS-verktyg, hosting under brytpunkt för aktivering |
-| **6570** | Bankkostnader | Stripe-, Adyen-, Paddle-avgifter. Ej moms (finansiell tjänst, ML 10 kap 33 §) |
+| **6570** | Bankkostnader | Stripes kortavgift, Adyen-, Paddle-avgifter. Ej moms (finansiell tjänst, ML 10 kap 33 §). Stripes Billing, Radar och Tax är momspliktiga med omvänd moms: 4535, 2614/2645 |
 | **7630/7631/7632** | Personalrepresentation (avdragsgill/ej avdragsgill) | Teamoffsites, kickoff |
 | **7699** | Övriga personalkostnader | Personaloptionskostnad K3 26.5a vid kontantreglerade. BAS 2025 har inget standardkonto för aktierelaterade ersättningar; använd 7690-gruppen + tilläggsupplysning |
 
@@ -153,7 +153,7 @@ Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2025.1/409
 | GitHub Inc | USA | 4531 | 2614 | 2645 |
 | Vercel Inc | USA | 4531 | 2614 | 2645 |
 
-VIES-validering av EU-leverantörers VAT-nummer ska göras periodiskt och dokumenteras (screenshot/timestamp). Stripe, Adyen, Paddle: betalningstjänst undantagen från moms (ML 10 kap 33 §, finansiell tjänst). Avgift bokas brutto på 6570 utan momsberäkning.
+VIES-validering av EU-leverantörers VAT-nummer ska göras periodiskt och dokumenteras (screenshot/timestamp). Stripes kortavgift, Adyen, Paddle: betalningstjänst undantagen från moms (ML 10 kap 33 §, finansiell tjänst). Avgift bokas brutto på 6570 utan momsberäkning. Stripes Billing, Radar och Tax är momspliktiga med omvänd moms: 4535, 2614/2645.
 
 **Periodisering API-kostnader.** Matcha mot intäkt månadsvis. Vid betydande månads-end-cutoff: upplupna kostnader 2990 baserat på dashboard-rapporter (AWS Cost Explorer, OpenAI Usage). Verifikatet ska referera till underliggande rapport, faktura kommer 3-10 dagar in i nästa månad.
 

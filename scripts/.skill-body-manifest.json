@@ -60,7 +60,7 @@
     "version": 2
   },
   "horizontal/swedish-daily-bookkeeping/payment-providers": {
-    "hash": "b483da422251994a098eab2c7a82f43ea3329fd6470a548aff29ea4f3deaf8a4",
+    "hash": "7037f78858f35687ca041d340e13eea090658d6600045af2f25ff609588d5672",
     "version": 2
   },
   "horizontal/swedish-daily-bookkeeping/skattekonto-and-owner": {
@@ -476,7 +476,7 @@
     "version": 4
   },
   "vertical/e-handel": {
-    "hash": "6cd6debdf2e0d310a4c72b833a2cb4cfb4241785ccfacf08003766aeec2ab39f",
+    "hash": "50a370433f02371fde476c4e777b4e50a75474671a59223d2a6b9f40cceda3d8",
     "version": 5
   },
   "vertical/e-handel/dac7-rapportering": {
@@ -504,11 +504,11 @@
     "version": 3
   },
   "vertical/e-handel/payment-providers": {
-    "hash": "418fe01b53c7cdddc0c09003916192f608afa3d0afe386d1e152b479a52e6bc0",
+    "hash": "670db26463c3729d721c92a75cf9b65fa8175e809e5f0baef1d493cebe081141",
     "version": 5
   },
   "vertical/e-handel/skv-stallningstaganden-katalog": {
-    "hash": "799a8bbdc1f6e50228ff761f57b26410ecd9cf93d30d503e64536f7e006cb3fd",
+    "hash": "b3e3eb9e789bd8525ed4af45896d70c8d79b8c207d4efb729d039b9d3734b498",
     "version": 3
   },
   "vertical/e-handel/vouchers-presentkort": {
@@ -560,7 +560,7 @@
     "version": 1
   },
   "vertical/software-saas-ai": {
-    "hash": "8b12d7a8d2d2f0d0aabe66db5aeab15936db96fe4d71b50178e8a0872531b389",
+    "hash": "dd8a7b99b20e4c87e388b2899fe91442513837b0e8f48c285132a13ec5008065",
     "version": 5
   },
   "vertical/vard-halsa": {

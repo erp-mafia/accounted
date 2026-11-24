@@ -20,7 +20,7 @@ VALUES
     $gb$Payment Providers, Card Acquiring and Payouts: Reference: reference for Swedish Daily Bookkeeping$gb$,
     '{}'::text[],
     $gb${}$gb$::jsonb,
-    8140,
+    8350,
     '.claude/skills/swedish-daily-bookkeeping/references/payment-providers.md',
     $gb$# Payment Providers, Card Acquiring and Payouts: Reference
 
@@ -181,9 +181,9 @@ Facts. Restaurant, 12 % VAT on food. Day's card sales 30 Sept: **11 200 SEK incl
 
 **ML 10 kap 33 § (2023:200)**: "Från skatteplikt undantas tillhandahållanden av bank- och finansieringstjänster samt sådana tillhandahållanden som utgör värdepappershandel eller liknande verksamhet." The paragraph expressly excludes **notariatverksamhet, inkassotjänster, administrativa tjänster avseende factoring och uthyrning av förvaringsutrymmen** from the concept.
 
-The EU basis is **article 135.1 d** of the VAT Directive 2006/112/EC (transactions concerning payments and transfers). The exemption covers a payment service where the supplier itself carries out the transfer of funds (**CJEU C-2/95 SDC** p. 53, 66; **C-607/14 Bookit** p. 38-42); mere technical or administrative handling is taxable (**Bookit** p. 53; **C-130/15 NEC**; **C-5/17 DPAS**; **C-42/18 Cardpoint**). Skatteverket's **ställningstagande 2020-01-13 (dnr 8-5507)**, which replaced its 2017 ställningstagande *Betaltjänster och förmedling av sådana tjänster*, draws the same line: exempt when the provider "själv ser till att medel överförs", taxable when it only forwards payment instructions.
+The EU basis is **article 135.1 d** of the VAT Directive 2006/112/EC (transactions concerning payments and transfers). The exemption covers a service that, viewed broadly, forms a distinct whole fulfilling the specific, essential functions of a payment or transfer: it has the effect of transferring funds and changes the legal and financial situation between payer and payee (**CJEU C-2/95 SDC** p. 53, 66; **C-607/14 Bookit** p. 38-40). The test is whether the service causes the actual or potential transfer of ownership of the funds, or in effect fulfils the specific, essential functions of such a transfer (**Bookit** p. 41). The supplier need not be a bank, and need not debit or credit an account itself (**SDC** p. 32, 38; **Bookit** p. 36, 42). Mere physical, technical or administrative handling is taxable (**SDC** p. 66; **Bookit** p. 40, 53; **C-5/17 DPAS** p. 36, 38; **C-130/15 NEC**; **C-42/18 Cardpoint**). Money passing through the provider's own account is not enough on its own: a provider that asks the banks to collect from the payer and pay on to the payee, keeping its fee, does not itself carry out the transfers and supplies a taxable administrative service (**DPAS** p. 39-41). Skatteverket's **ställningstagande 2020-01-13 (dnr 8-5507)**, which replaced its 2017 ställningstagande *Betaltjänster och förmedling av sådana tjänster*, draws the same line: exempt when the provider "själv ser till att medel överförs", taxable when it only forwards payment instructions.
 
-Case law: **HFD 2014 ref. 73**: a card payment provider that received the funds, held them and paid the merchant net of a percentage fee supplied an exempt service. **HFD 2019 ref. 45**: Klarna's checkout service, including its per-claim fee, was held taxable.
+Case law applying the test: **HFD 2014 ref. 73**: a card payment provider that received the funds, held them and paid the merchant net of a percentage fee supplied an exempt service. **HFD 2019 ref. 45**: Klarna's checkout service, including its per-claim fee, was held taxable.
 
 **So:** moving the money is exempt. Selling software, hardware, data, access or marketing around the money movement is **not**.
 
@@ -427,7 +427,7 @@ Do not guess. Ask when:
 - **Bokföringslag (1999:1078)**: 5 kap 2 § (bokföringstidpunkt), 4 § (sidoordnad bokföring), 6 § (verifikation, gemensam verifikation)
 - **Skatteförfarandelag (2011:1244)**: 39 kap 4-5 §§ (kassaregister)
 - **Directive 2006/112/EC**: art. 135(1)(d)
-- **CJEU**: C-2/95 SDC (p. 53, 66); C-607/14 Bookit (p. 38-42, 53); C-130/15 NEC; C-5/17 DPAS; C-42/18 Cardpoint
+- **CJEU**: C-2/95 SDC (p. 32, 38, 53, 66); C-607/14 Bookit (p. 36, 38-42, 53); C-5/17 DPAS (p. 36, 38-41); C-130/15 NEC; C-42/18 Cardpoint
 - **HFD**: 2014 ref. 73 (card payment provider, exempt); 2019 ref. 45 (Klarna checkout, taxable)
 - **Skatteverket**: *Fylla i momsdeklarationen* (ruta 21/22/24 conditions); ställningstagande 2020-01-13, dnr 8-5507 (betaltjänster; replaced the 2017 ställningstagande *Betaltjänster och förmedling av sådana tjänster*); *Tänk på att redovisa dricks om inte arbetsgivaren gjort det* (2024); *Moms på drickspengar*, rättslig vägledning
 - **BAS 2026 kontoplan** (bas.se, `BAS_kontoplan_2026_v2.xlsx`) and **Kontoplansförändringar 2026**: 1580 removed, 1686 added; 7833-7835 removed, 7830 renamed; class 4 restructured to separate Handelsvaror from Råvaror och förnödenheter
@@ -633,7 +633,7 @@ Tabellen avser BAS 2025 v.1.0 (bas.se/kontoplaner/bas-2025). **Genomgående namn
 
 ### 5.2 Plattformspayouts (Stripe/Klarna/Adyen) bokförda netto
 **Fel:** Daglig payout om 87 600 SEK (efter 2 400 SEK Stripe-avgift på 90 000 brutto) bokförs i sin helhet som 3001 + 2611 → omsättning och utgående moms underskattas, Stripe-avgiften och marketplace-provisioner från Amazon/CDON syns inte i resultaträkningen som kostnad.
-**Rätt:** Brutto-redovisning krävs. Stegvis: (a) vid orderbekräftelse/leverans bokas brutto försäljning 3001 (eller 3106 för OSS) + utgående moms 2611/2670 mot fordran **1686** per provider; (b) avgiften bokas separat som kostnad på **6040** (kontokortsavgifter, Stripe/Adyen/Klarna) eller **6050** (marketplace-provisioner Amazon/CDON/Fyndiq/eBay): Stripes kortavgift är en momsfri betaltjänst (10 kap. 33 § ML; dnr 8-5507; HFD 2014 ref. 73) utan omvänd moms och utan ruta, medan Stripes programvara (Billing, Radar, Tax) är momspliktig med omvänd moms (rutorna 21, 30 och 48); för övriga providers (Klarna SE → ingen RC, Adyen NL) tillämpas reverse charge på den momspliktiga komponenten enligt dnr 8-5507; (c) faktisk bankpayout bokas mot 1580 → 1930; (d) FX-differens på fordringskontot vid settlement bokas på 3960/7960. Kortinlösen är momsfri men närliggande tekniska tjänster är momspliktiga (dnr 8-5507): uppdelning krävs ofta. Vid fakturaspecifikation från providern följ deras momsklassificering per komponent.
+**Rätt:** Brutto-redovisning krävs. Stegvis: (a) vid orderbekräftelse/leverans bokas brutto försäljning 3001 (eller 3106 för OSS) + utgående moms 2611/2670 mot fordran **1686** per provider; (b) avgiften bokas separat som kostnad på **6040** (kontokortsavgifter, Stripe/Adyen/Klarna) eller **6050** (marketplace-provisioner Amazon/CDON/Fyndiq/eBay): Stripes kortavgift är en momsfri betaltjänst (10 kap. 33 § ML; dnr 8-5507; HFD 2014 ref. 73) utan omvänd moms och utan ruta, medan Stripes programvara (Billing, Radar, Tax) är momspliktig med omvänd moms (rutorna 21, 30 och 48); för övriga providers (Klarna SE → ingen RC, Adyen NL) tillämpas reverse charge på den momspliktiga komponenten enligt dnr 8-5507; (c) faktisk bankpayout bokas mot 1580 → 1930; (d) FX-differens på fordringskontot vid settlement bokas på 3960/7960. Kortinlösen är momsfri när inlösaren själv ser till att medlen överförs (dnr 8-5507), medan ren teknisk hantering är momspliktig (EU-domstolen C-607/14 Bookit p. 53): uppdelning krävs ofta. Vid fakturaspecifikation från providern följ deras momsklassificering per komponent.
 **Lagstöd:** Bruttoprincip 1 kap. ML 2023:200; BFL 5 kap. 6 §; dnr 8-5507 (2020-01-13); HFD 2014 ref. 73.
 
 ### 5.3 Dropshipping från tredjeland direkt till EU-konsument utan korrekt kedjeanalys
@@ -694,7 +694,7 @@ $gb$,
     $gb$Payment Provider: bokföringsmappning per aktör: reference for E-handel & näthandel (SNI 47.91 / 47.99)$gb$,
     '{}'::text[],
     $gb${"areas":["lopande"]}$gb$::jsonb,
-    1915,
+    2071,
     '.claude/skills/industry/e-handel/references/payment-providers.md',
     $gb$---
 areas: [lopande]
@@ -709,17 +709,17 @@ Per provider: jurisdiktion, reverse charge-status, faktureringsmodell, payout-cy
 ## Stripe
 
 **Faktureringsentitet (EEA)**: Stripe Technology Europe Ltd, Dublin, Irland.
-**Reverse charge**: NEJ på kortavgiften (processing fee): den är en momsfri betaltjänst (10 kap. 33 § ML), så ingen omvänd moms och ingen ruta i momsdeklarationen. JA på Stripes programvarutjänster (Billing, Radar, Tax, abonnemang): momspliktiga B2B-tjänster från IE till SE (6 kap. 33 § ML, huvudregeln), konto 4535 + 2614/2645, rutorna 21, 30 och 48.
+**Reverse charge**: NEJ på kortavgiften (processing fee): den är en momsfri betaltjänst (10 kap. 33 § ML), så ingen omvänd moms och ingen ruta i momsdeklarationen. JA på Stripes programvarutjänster (Billing, Radar, Tax): momspliktiga B2B-tjänster från IE till SE (6 kap. 33 § ML, huvudregeln), konto 4535 + 2614/2645, rutorna 21, 30 och 48.
 **Faktureringsmodell**: Avgifter debiteras netto från payout. Månatlig faktura med specifikation laddas ner från Dashboard → Documents.
 **Payout-cykel**: T+2 för SEK, T+7 för EUR/USD (default; konfigurerbart per konto).
 **BAS-konton**:
 - 1581: Fordringar Stripe (clearingunderkonto till 1580)
 - 6040: Kontokortsavgifter (transaktionsavgifter, momsfria, ingen RC)
-- 4535: Inköp av tjänster från annat EU-land 25 % (reverse charge på Billing, Radar, Tax och abonnemang, inte på kortavgiften)
+- 4535: Inköp av tjänster från annat EU-land 25 % (reverse charge på Billing, Radar och Tax, inte på kortavgiften)
 - 2614 + 2645: utgående/ingående RC-moms på de momspliktiga programvarutjänsterna
 - 3960/7960: FX vid USD/EUR-payout
 **Fee-struktur (EEA-kort, default 2025)**: 1,4 % + 1,80 SEK; non-EEA: 2,9 % + 1,80 SEK; valutaväxling +2 %; Klarna via Stripe +1,99 %.
-**Momsbedömning per komponent**: kortavgiften (processing fee) är momsfri. Undantaget i 10 kap. 33 § ML (art. 135.1 d i direktiv 2006/112/EG) omfattar en betaltjänst där leverantören själv ser till att medel överförs (EU-domstolen C-2/95 SDC p. 53 och 66, C-607/14 Bookit p. 38-42; Skatteverkets ställningstagande 2020-01-13, dnr 8-5507), och en kortbetalningsleverantör som tog emot medlen, höll dem och betalade ut till handlaren med avdrag för en procentuell avgift tillhandahöll en undantagen tjänst (HFD 2014 ref. 73). En undantagen avgift ger ingen omvänd betalningsskyldighet och hamnar inte i någon ruta: 16 kap. ML gäller bara skattepliktiga tillhandahållanden. Ren teknisk eller administrativ hantering är däremot momspliktig (C-607/14 Bookit p. 53, C-130/15 NEC, C-5/17 DPAS, C-42/18 Cardpoint): Stripes programvarutjänster (Billing, Radar, Tax, abonnemang) bokförs med omvänd moms enligt ovan.
+**Momsbedömning per komponent**: kortavgiften (processing fee) är momsfri. Undantaget i 10 kap. 33 § ML (art. 135.1 d i direktiv 2006/112/EG) omfattar en betaltjänst där leverantören själv ser till att medel överförs (EU-domstolen C-2/95 SDC p. 53 och 66, C-607/14 Bookit p. 38-42; Skatteverkets ställningstagande 2020-01-13, dnr 8-5507). Avgörande är om tjänsten medför att äganderätten till medlen faktiskt eller potentiellt överförs, eller i praktiken fullgör en överförings specifika och väsentliga funktioner (Bookit p. 40-41). Med den prövningen fann HFD att en kortbetalningsleverantör som tog emot medlen, höll dem och betalade ut till handlaren med avdrag för en procentuell avgift tillhandahöll en undantagen tjänst (HFD 2014 ref. 73). Att pengarna passerar leverantörens eget konto räcker däremot inte ensamt: en leverantör som ber bankerna dra beloppet från betalaren och betala vidare, och behåller sin avgift, utför inte själv överföringarna och tillhandahåller en momspliktig administrativ tjänst (C-5/17 DPAS p. 39-41). En undantagen avgift ger ingen omvänd betalningsskyldighet och hamnar inte i någon ruta: 16 kap. ML gäller bara skattepliktiga tillhandahållanden. Ren teknisk eller administrativ hantering är däremot momspliktig (C-607/14 Bookit p. 53, C-5/17 DPAS p. 36 och 38, C-130/15 NEC, C-42/18 Cardpoint): Stripes programvarutjänster (Billing, Radar, Tax) bokförs med omvänd moms enligt ovan.
 
 ## Klarna
 
@@ -734,7 +734,7 @@ Per provider: jurisdiktion, reverse charge-status, faktureringsmodell, payout-cy
 - 6062: Kreditfees, ej-godkända faktorerade fakturor
 - 2611: Svensk utgående moms (Klarna är svensk entitet, ingen RC)
 **Fee-struktur**: Pay Now ~1,49 % + 2,50 SEK; Pay Later (faktura/delbetalning) 2,49-3,29 % + 2,50 SEK; Financing varierar.
-**Momsbedömning**: Klarnas kreditbedömning är momsfri finansiell tjänst (3 kap. 9 § ML 2023:200), transaktionsdelen är momspliktig teknisk tjänst. Klarnas faktura ska specificera. **Varning**: Klarna Inc (US) och Klarna AB-dotterbolag i andra länder fakturerar med RC: verifiera entiteten per faktura, inte per varumärke.
+**Momsbedömning**: Klarnas kreditbedömning är momsfri finansiell tjänst (10 kap. 33 § ML 2023:200), transaktionsdelen är momspliktig teknisk tjänst. Klarnas faktura ska specificera. **Varning**: Klarna Inc (US) och Klarna AB-dotterbolag i andra länder fakturerar med RC: verifiera entiteten per faktura, inte per varumärke.
 
 ## Adyen
 
@@ -742,14 +742,14 @@ Per provider: jurisdiktion, reverse charge-status, faktureringsmodell, payout-cy
 **Reverse charge**: JA. Konto 4535 + 2614/2645.
 **Faktureringsmodell**: Månatlig invoice; transaktionsavgifter kan debiteras antingen netto från payout eller separat.
 **Payout-cykel**: Konfigurerbart: veckovis vanligast, dagligt möjligt med tillägg.
-**BAS-konton**: Som Stripe.
+**BAS-konton**: fordringskonto som för Stripe; 6040 för avgifterna; 4535 + 2614/2645 för den momspliktiga delen enligt anmärkningen nedan; 3960/7960 för FX.
 **Fee-struktur**: 0,11 EUR processing fee + interchange + scheme fee + payment method fee (transparent pricing).
 **Anmärkning**: Adyens fakturaspecifikation är tydligare än Stripes: uppdelningen mellan processing fee (RC-momspliktigt) och interchange (RC-momsfritt) ska följas per komponent.
 
 ## PayPal
 
 **Faktureringsentitet (EEA)**: PayPal (Europe) S.à r.l. et Cie, S.C.A., Luxemburg (banklicensierad).
-**Reverse charge**: NEJ för rena betalningstjänster (banklicens → momsfri finansiell tjänst enligt 3 kap. 9 § ML). JA för icke-finansiella tilläggstjänster.
+**Reverse charge**: NEJ för rena betalningstjänster (banklicens → momsfri finansiell tjänst enligt 10 kap. 33 § ML). JA för icke-finansiella tilläggstjänster.
 **Faktureringsmodell**: Avgifter debiteras netto från transaktionen direkt. Månatlig statement.
 **Payout-cykel**: Manuell utbetalning från PayPal-konto till bank, eller veckovis automatisk om aktiverat.
 **BAS-konton**:
@@ -906,7 +906,7 @@ Komplett katalog över relevanta avgöranden 2018-2025. Paragrafnyckel från GML
 | Förmedling i annans namn | 6 kap. 7 § | 5 kap. 4 § |
 | Kedjetransaktioner | 5 kap. 2 e § | 6 kap. 14-17 § |
 | Reverse charge huvudregeln | 5 kap. 5 § | 6 kap. 33 § |
-| Momsfria finansiella tjänster | 3 kap. 9 § | 10 kap. 16 § |
+| Momsfria finansiella tjänster | 3 kap. 9 § | 10 kap. 33 § |
 | Undantag IOSS-import | 3 kap. 30 c § | 10 kap. 65 § |
 | Periodisk sammanställning | 35 kap. SFL (oförändrat) | 35 kap. SFL |
 | Förenkling trepartshandel | 3 kap. 30 b § | 10 kap. (art. 141 direktivet) |
@@ -1266,7 +1266,7 @@ Verifierat mot BAS 2025 officiell kontoplan (bas.se/kontoplaner). Avvikelser fr�
 | **5410** | Förbrukningsinventarier | Datorer under halvt PBB, periferi |
 | **6230** | Datakommunikation | Fiber, internet |
 | **6540** | IT-tjänster | Löpande SaaS-verktyg, hosting under brytpunkt för aktivering |
-| **6570** | Bankkostnader | Stripe-, Adyen-, Paddle-avgifter. Ej moms (finansiell tjänst, ML 10 kap 33 §) |
+| **6570** | Bankkostnader | Stripes kortavgift, Adyen-, Paddle-avgifter. Ej moms (finansiell tjänst, ML 10 kap 33 §). Stripes Billing, Radar och Tax är momspliktiga med omvänd moms: 4535, 2614/2645 |
 | **7630/7631/7632** | Personalrepresentation (avdragsgill/ej avdragsgill) | Teamoffsites, kickoff |
 | **7699** | Övriga personalkostnader | Personaloptionskostnad K3 26.5a vid kontantreglerade. BAS 2025 har inget standardkonto för aktierelaterade ersättningar; använd 7690-gruppen + tilläggsupplysning |
 
@@ -1340,7 +1340,7 @@ Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2025.1/409
 | GitHub Inc | USA | 4531 | 2614 | 2645 |
 | Vercel Inc | USA | 4531 | 2614 | 2645 |
 
-VIES-validering av EU-leverantörers VAT-nummer ska göras periodiskt och dokumenteras (screenshot/timestamp). Stripe, Adyen, Paddle: betalningstjänst undantagen från moms (ML 10 kap 33 §, finansiell tjänst). Avgift bokas brutto på 6570 utan momsberäkning.
+VIES-validering av EU-leverantörers VAT-nummer ska göras periodiskt och dokumenteras (screenshot/timestamp). Stripes kortavgift, Adyen, Paddle: betalningstjänst undantagen från moms (ML 10 kap 33 §, finansiell tjänst). Avgift bokas brutto på 6570 utan momsberäkning. Stripes Billing, Radar och Tax är momspliktiga med omvänd moms: 4535, 2614/2645.
 
 **Periodisering API-kostnader.** Matcha mot intäkt månadsvis. Vid betydande månads-end-cutoff: upplupna kostnader 2990 baserat på dashboard-rapporter (AWS Cost Explorer, OpenAI Usage). Verifikatet ska referera till underliggande rapport, faktura kommer 3-10 dagar in i nästa månad.
 

@@ -84,7 +84,7 @@ Komplett katalog över relevanta avgöranden 2018-2025. Paragrafnyckel från GML
 | Förmedling i annans namn | 6 kap. 7 § | 5 kap. 4 § |
 | Kedjetransaktioner | 5 kap. 2 e § | 6 kap. 14-17 § |
 | Reverse charge huvudregeln | 5 kap. 5 § | 6 kap. 33 § |
-| Momsfria finansiella tjänster | 3 kap. 9 § | 10 kap. 16 § |
+| Momsfria finansiella tjänster | 3 kap. 9 § | 10 kap. 33 § |
 | Undantag IOSS-import | 3 kap. 30 c § | 10 kap. 65 § |
 | Periodisk sammanställning | 35 kap. SFL (oförändrat) | 35 kap. SFL |
 | Förenkling trepartshandel | 3 kap. 30 b § | 10 kap. (art. 141 direktivet) |
