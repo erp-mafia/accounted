@@ -153,6 +153,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
 
   // ── Company and byrå ───────────────────────────────────────────────
   'PATCH /api/company/current': uiOnly('switches the browser session\'s active company; the API addresses companies per request'),
+  'POST /api/company/switch': uiOnly('switches the browser session\'s active company; the API addresses companies per request'),
   'POST /api/company/:id/delete': uiOnly('destructive owner-only company archive'),
   'POST /api/company/:id/migration-reset': uiOnly('destructive owner-only migration reset'),
   'POST /api/company/check-org-number': uiOnly('read-only onboarding check for a company the user already has, a POST so the org number stays out of the URL'),

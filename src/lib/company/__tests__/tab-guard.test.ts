@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
+  COMPANY_SWITCH_PATH,
   decodeStorageValue,
   encodeStorageValue,
   guardBrowserWrite,
@@ -127,7 +128,40 @@ describe('shouldBlockMutation', () => {
     ).toBe(true)
   })
 
-  it('lets the sanctioned company-switch action through while in flight', () => {
+  it('lets the sanctioned company switch through while in flight, and nothing else', () => {
+    expect(
+      shouldBlockMutation({
+        ...mismatch,
+        method: 'POST',
+        url: COMPANY_SWITCH_PATH,
+        companySwitchInFlight: true,
+      }),
+    ).toBe(false)
+    expect(
+      shouldBlockMutation({
+        ...mismatch,
+        method: 'POST',
+        url: `${ORIGIN}${COMPANY_SWITCH_PATH}`,
+        companySwitchInFlight: true,
+      }),
+    ).toBe(false)
+    // Without the flag the switch route is an ordinary /api mutation.
+    expect(
+      shouldBlockMutation({ ...mismatch, method: 'POST', url: COMPANY_SWITCH_PATH }),
+    ).toBe(true)
+    // The flag opens only the switch route: another write racing the switch
+    // stays blocked.
+    expect(
+      shouldBlockMutation({
+        ...mismatch,
+        method: 'POST',
+        url: '/api/invoices',
+        companySwitchInFlight: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('never lets a server action through, even while the switch is in flight', () => {
     expect(
       shouldBlockMutation({
         ...mismatch,
@@ -136,7 +170,7 @@ describe('shouldBlockMutation', () => {
         isServerAction: true,
         companySwitchInFlight: true,
       }),
-    ).toBe(false)
+    ).toBe(true)
   })
 
   it('never blocks a server action while tab and active company agree', () => {
