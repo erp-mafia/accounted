@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import Link from 'next/link'
 import {
   ArrowDownTrayIcon,
   ArrowTopRightOnSquareIcon,
@@ -25,7 +24,6 @@ import {
 } from '@/components/ui/dialog'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { EmptyState, LoadError } from '@/components/ui/empty-state'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile, saveBlobToDisk } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
@@ -36,7 +34,7 @@ import {
 } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
-import { DEDUCTION_TYPE_LABEL_KEYS, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { DEDUCTION_TYPE_LABEL_KEYS, GRON_TEKNIK_SERVICE_URL, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 import { stockholmYearMonth } from '@/lib/dates/iso'
 
 type RequestStatus =
@@ -65,7 +63,7 @@ interface Candidate {
     betalt_belopp: number
   }>
   ovrig_kostnad?: number
-  /** Grön teknik only: the property the e-tjänst asks for. */
+  /** Grön teknik only: the property its ärenden carry. */
   property?: { fastighet?: string; lagenhetsNr?: string; brfOrgNr?: string }
   warnings?: string[]
 }
@@ -112,10 +110,6 @@ interface RotRutPayoutDialogProps {
 const MAX_CASES_PER_FILE = 100
 const SKATTEVERKET_SERVICE_URL =
   'https://www.skatteverket.se/foretag/etjansterochblanketter/allaetjanster/tjanster/rotochrutforetag.4.361dc8c15312eff6fdfca4.html'
-// Skatteverket, "Grön teknik: företag": where the payout is requested until
-// Accounted generates the Begaran GRON_TEKNIK file.
-const SKATTEVERKET_GRON_TEKNIK_URL =
-  'https://www.skatteverket.se/foretag/skatterochavdrag/gronteknik.4.676f4884175c97df4192a42.html'
 
 const STATUS_VARIANT: Record<
   RequestStatus,
@@ -141,8 +135,8 @@ export default function RotRutPayoutDialog({
   const { toast } = useToast()
   const loadSequence = useRef(0)
   const [type, setType] = useState<DeductionType>(initialType)
-  // Grön teknik has no file yet: its list shows what Skatteverkets e-tjänst
-  // asks for, with no selection, no file button and no file history.
+  // Grön teknik rows also show the figures of each ärende (one per
+  // installation type), and its file is uploaded in its own e-tjänst.
   const isGronTeknik = type === 'gron_teknik'
   const [eligible, setEligible] = useState<Candidate[]>([])
   const [blocked, setBlocked] = useState<BlockedCandidate[]>([])
@@ -207,6 +201,8 @@ export default function RotRutPayoutDialog({
         setOtherTypeCounts(eligibleBody.data.other_type_counts ?? {})
         setRequests(requestsBody.data)
         setSelectedYear(focused ? focused.betalnings_datum.slice(0, 4) : (years[0] ?? ''))
+        // Opened from an invoice's "Skapa begäran": that invoice is selected.
+        if (focused) setSelectedIds(new Set([focused.invoice_id]))
         setLoadError(null)
       } catch (error) {
         if (sequence !== loadSequence.current) return
@@ -228,7 +224,7 @@ export default function RotRutPayoutDialog({
   }, [load, open, type])
 
   // Scroll the focused row into view once it renders (it starts expanded).
-  const scrollFocusedRow = useCallback((element: HTMLDetailsElement | null) => {
+  const scrollFocusedRow = useCallback((element: HTMLElement | null) => {
     element?.scrollIntoView({ block: 'nearest' })
   }, [])
 
@@ -265,8 +261,36 @@ export default function RotRutPayoutDialog({
   const selectedTotal = visibleCandidates
     .filter((candidate) => selectedIds.has(candidate.invoice_id))
     .reduce((sum, candidate) => sum + Number(candidate.begart_belopp), 0)
-  // Grön teknik lists without selection: the year's whole requestable sum.
-  const visibleTotal = visibleCandidates.reduce((sum, candidate) => sum + Number(candidate.begart_belopp), 0)
+  // A file holds at most MAX_CASES_PER_FILE ärenden. A ROT/RUT invoice is one
+  // ärende; a grön teknik invoice is one per installation type.
+  const arendenByInvoice = useMemo(
+    () =>
+      new Map(
+        eligible.map((candidate) => [
+          candidate.invoice_id,
+          isGronTeknik ? Math.max(1, candidate.installations?.length ?? 1) : 1,
+        ]),
+      ),
+    [eligible, isGronTeknik],
+  )
+  const arendenIn = (ids: Iterable<string>) => {
+    let sum = 0
+    for (const id of ids) sum += arendenByInvoice.get(id) ?? 1
+    return sum
+  }
+  const selectedArenden = arendenIn(selectedIds)
+  // "Välj alla": the visible invoices, in list order, that fit in one file.
+  const firstFileIds = useMemo(() => {
+    const ids: string[] = []
+    let sum = 0
+    for (const candidate of visibleCandidates) {
+      const arenden = arendenByInvoice.get(candidate.invoice_id) ?? 1
+      if (sum + arenden > MAX_CASES_PER_FILE) break
+      ids.push(candidate.invoice_id)
+      sum += arenden
+    }
+    return ids
+  }, [visibleCandidates, arendenByInvoice])
 
   function changeType(nextType: DeductionType) {
     setType(nextType)
@@ -281,7 +305,7 @@ export default function RotRutPayoutDialog({
     setSelectedIds((current) => {
       const next = new Set(current)
       if (checked) {
-        if (next.size >= MAX_CASES_PER_FILE) return current
+        if (arendenIn(current) + (arendenByInvoice.get(invoiceId) ?? 1) > MAX_CASES_PER_FILE) return current
         next.add(invoiceId)
       } else {
         next.delete(invoiceId)
@@ -291,11 +315,8 @@ export default function RotRutPayoutDialog({
   }
 
   function selectAllVisible() {
-    const visibleIds = visibleCandidates
-      .slice(0, MAX_CASES_PER_FILE)
-      .map((candidate) => candidate.invoice_id)
-    const allSelected = visibleIds.every((id) => selectedIds.has(id))
-    setSelectedIds(allSelected ? new Set() : new Set(visibleIds))
+    const allSelected = firstFileIds.every((id) => selectedIds.has(id))
+    setSelectedIds(allSelected ? new Set() : new Set(firstFileIds))
   }
 
   async function generateFile() {
@@ -448,22 +469,15 @@ export default function RotRutPayoutDialog({
                     {isGronTeknik ? t('gron_teknik_eligible_title') : t('rot_rut_eligible_title')}
                   </h2>
                   <p className="text-xs text-muted-foreground">
-                    {isGronTeknik
-                      ? t('gron_teknik_total', {
-                          count: visibleCandidates.length,
-                          amount: formatCurrency(visibleTotal, 'SEK'),
-                        })
-                      : t('rot_rut_selected_count', {
-                          selected: selectedIds.size,
-                          amount: formatCurrency(selectedTotal),
-                        })}
+                    {t('rot_rut_selected_count', {
+                      selected: selectedIds.size,
+                      amount: formatCurrency(selectedTotal),
+                    })}
                   </p>
                 </div>
-                {!isGronTeknik && visibleCandidates.length > 0 && (
+                {visibleCandidates.length > 0 && (
                   <Button type="button" variant="ghost" onClick={selectAllVisible}>
-                    {visibleCandidates
-                      .slice(0, MAX_CASES_PER_FILE)
-                      .every((candidate) => selectedIds.has(candidate.invoice_id))
+                    {firstFileIds.every((id) => selectedIds.has(id))
                       ? t('rot_rut_clear_selection')
                       : t('rot_rut_select_all')}
                   </Button>
@@ -497,84 +511,16 @@ export default function RotRutPayoutDialog({
                     </div>
                   }
                 />
-              ) : isGronTeknik ? (
-                // No file and no selection yet: each row opens what the
-                // e-tjänst asks for, one line per installation type (each
-                // is its own ärende at Skatteverket).
-                <div className="max-h-64 divide-y overflow-y-auto">
-                  {visibleCandidates.map((candidate) => (
-                    <details
-                      key={candidate.invoice_id}
-                      className="group px-3 py-2.5"
-                      open={candidate.invoice_id === focusInvoiceId || undefined}
-                      ref={candidate.invoice_id === focusInvoiceId ? scrollFocusedRow : undefined}
-                    >
-                      <summary className="flex min-h-10 cursor-pointer list-none items-center gap-3">
-                        <ChevronRightIcon
-                          aria-hidden
-                          className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90"
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium">
-                            {candidate.invoice_number ?? '-'} · {candidate.customer_name ?? '-'}
-                          </span>
-                          <span className="block text-xs text-muted-foreground">
-                            {t('rot_rut_paid_at', { date: formatDate(candidate.betalnings_datum) })}
-                            {' · ****'}{candidate.personnummer_last4}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-sm tabular-nums">
-                          {formatCurrency(Number(candidate.begart_belopp), 'SEK')}
-                        </span>
-                      </summary>
-                      <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                        {candidate.property && (
-                          <li>
-                            {candidate.property.fastighet
-                              ? t('gron_teknik_property_line', { property: candidate.property.fastighet })
-                              : t('gron_teknik_brf_line', {
-                                  apartment: candidate.property.lagenhetsNr ?? '-',
-                                  org: formatOrgNumberDisplay(candidate.property.brfOrgNr),
-                                })}
-                          </li>
-                        )}
-                        {(candidate.installations ?? []).map((installation) => (
-                          <li key={installation.work_type} className="tabular-nums">
-                            {t('gron_teknik_installation_line', {
-                              label: installation.label,
-                              hours: installation.antal_timmar,
-                              cost: formatCurrency(installation.kostnad, 'SEK'),
-                              paid: formatCurrency(installation.betalt_belopp, 'SEK'),
-                              requested: formatCurrency(installation.begart_belopp, 'SEK'),
-                            })}
-                          </li>
-                        ))}
-                        <li className="tabular-nums">
-                          {t('gron_teknik_other_cost_line', {
-                            amount: formatCurrency(candidate.ovrig_kostnad ?? 0, 'SEK'),
-                          })}
-                        </li>
-                        {(candidate.warnings ?? []).map((warning) => (
-                          <li key={warning}>{warning}</li>
-                        ))}
-                        <li>
-                          {/* The buyer's full personnummer is shown on the
-                              invoice, never in this list. */}
-                          <Link href={`/invoices/${candidate.invoice_id}`} className={QUIET_LINK_CLASS}>
-                            {t('gron_teknik_open_invoice')}
-                          </Link>
-                        </li>
-                      </ul>
-                    </details>
-                  ))}
-                </div>
               ) : (
                 <div className="max-h-64 divide-y overflow-y-auto">
                   {visibleCandidates.map((candidate) => {
                     const checkboxId = `rot-rut-${candidate.invoice_id}`
                     const checked = selectedIds.has(candidate.invoice_id)
-                    const atLimit = selectedIds.size >= MAX_CASES_PER_FILE && !checked
-                    return (
+                    const atLimit =
+                      !checked &&
+                      selectedArenden + (arendenByInvoice.get(candidate.invoice_id) ?? 1) > MAX_CASES_PER_FILE
+                    const focused = candidate.invoice_id === focusInvoiceId
+                    const row = (
                       <label
                         key={candidate.invoice_id}
                         htmlFor={checkboxId}
@@ -602,41 +548,80 @@ export default function RotRutPayoutDialog({
                         </span>
                       </label>
                     )
+                    if (!isGronTeknik) return row
+                    // Grön teknik: the row, then what its ärenden in the
+                    // file say, one line per installation type.
+                    return (
+                      <div key={candidate.invoice_id} ref={focused ? scrollFocusedRow : undefined}>
+                        {row}
+                        <details className="group px-3 pb-2.5 pl-10" open={focused || undefined}>
+                          <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 text-xs text-muted-foreground">
+                            <ChevronRightIcon
+                              aria-hidden
+                              className="h-3.5 w-3.5 shrink-0 transition-transform duration-150 group-open:rotate-90"
+                            />
+                            {t('gron_teknik_show_arenden')}
+                          </summary>
+                          <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
+                            {candidate.property && (
+                              <li>
+                                {candidate.property.fastighet
+                                  ? t('gron_teknik_property_line', { property: candidate.property.fastighet })
+                                  : t('gron_teknik_brf_line', {
+                                      apartment: candidate.property.lagenhetsNr ?? '-',
+                                      org: formatOrgNumberDisplay(candidate.property.brfOrgNr),
+                                    })}
+                              </li>
+                            )}
+                            {(candidate.installations ?? []).map((installation) => (
+                              <li key={installation.work_type} className="tabular-nums">
+                                {t('gron_teknik_installation_line', {
+                                  label: installation.label,
+                                  hours: installation.antal_timmar,
+                                  cost: formatCurrency(installation.kostnad, 'SEK'),
+                                  paid: formatCurrency(installation.betalt_belopp, 'SEK'),
+                                  requested: formatCurrency(installation.begart_belopp, 'SEK'),
+                                })}
+                              </li>
+                            ))}
+                            <li className="tabular-nums">
+                              {t('gron_teknik_other_cost_line', {
+                                amount: formatCurrency(candidate.ovrig_kostnad ?? 0, 'SEK'),
+                              })}
+                            </li>
+                            {(candidate.warnings ?? []).map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      </div>
+                    )
                   })}
                 </div>
               )}
 
-              {!isGronTeknik && visibleCandidates.length > MAX_CASES_PER_FILE && (
+              {firstFileIds.length < visibleCandidates.length && (
                 <div className="flex items-start gap-2 rounded-lg p-3 text-xs text-muted-foreground bg-control shadow-raised">
                   <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-attn" />
                   <span>{t('rot_rut_max_cases_help', { count: MAX_CASES_PER_FILE })}</span>
                 </div>
               )}
 
-              {isGronTeknik ? (
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">{t('gron_teknik_manual_note')}</p>
-                  <Button asChild type="button" variant="outline" className="w-full sm:w-auto">
-                    <a href={SKATTEVERKET_GRON_TEKNIK_URL} target="_blank" rel="noopener noreferrer">
-                      {t('gron_teknik_skatteverket_link')}
-                      <ArrowTopRightOnSquareIcon className="ml-2 h-3.5 w-3.5" />
-                    </a>
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    onClick={generateFile}
-                    disabled={!canWrite || selectedIds.size === 0}
-                    loading={generating}
-                    title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                  >
-                    {!generating && <DocumentArrowDownIcon className="h-4 w-4" />}
-                    {t(generating ? 'rot_rut_generating_file' : 'rot_rut_generate_file')}
-                  </Button>
-                </div>
-              )}
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                {isGronTeknik && (
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">{t('gron_teknik_file_note')}</p>
+                )}
+                <Button
+                  type="button"
+                  onClick={generateFile}
+                  disabled={!canWrite || selectedIds.size === 0}
+                  loading={generating}
+                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+                >
+                  {!generating && <DocumentArrowDownIcon className="h-4 w-4" />}
+                  {t(generating ? 'rot_rut_generating_file' : 'rot_rut_generate_file')}
+                </Button>
+              </div>
             </section>
 
             {blocked.length > 0 && (
@@ -672,94 +657,98 @@ export default function RotRutPayoutDialog({
               </details>
             )}
 
-            {!isGronTeknik && (
-              <section className="space-y-3 border-t pt-5" aria-labelledby="rot-rut-history-title">
-                <div>
-                  <h2 id="rot-rut-history-title" className="text-sm">
-                    {t('rot_rut_history_title')}
-                  </h2>
-                  <p className="text-xs text-muted-foreground">{t('rot_rut_upload_help')}</p>
-                </div>
-                {requests.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">{t('rot_rut_history_empty')}</p>
-                ) : (
-                  <div className="space-y-2">
-                    {requests.map((request) => {
-                      const isUpdating = updatingId === request.id
-                      const isDownloading = downloadingId === request.id
-                      return (
-                        <div key={request.id} className="rounded-lg p-3 bg-control shadow-raised">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="truncate text-sm font-medium">{request.name}</span>
-                                {(() => {
-                                  const variant = STATUS_VARIANT[request.status]
-                                  const label = t(`rot_rut_status_${request.status}`)
-                                  return variant === 'muted' ? (
-                                    <span className="text-xs text-muted-foreground">{label}</span>
-                                  ) : (
-                                    <Badge variant={variant} className="font-normal">
-                                      {label}
-                                    </Badge>
-                                  )
-                                })()}
-                              </div>
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                {t('rot_rut_history_meta', {
-                                  date: formatDate(request.created_at),
-                                  count: request.items.length,
-                                  amount: formatCurrency(Number(request.requested_total)),
-                                })}
-                              </p>
+            <section className="space-y-3 border-t pt-5" aria-labelledby="rot-rut-history-title">
+              <div>
+                <h2 id="rot-rut-history-title" className="text-sm">
+                  {t('rot_rut_history_title')}
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  {isGronTeknik ? t('gron_teknik_upload_help') : t('rot_rut_upload_help')}
+                </p>
+              </div>
+              {requests.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t('rot_rut_history_empty')}</p>
+              ) : (
+                <div className="space-y-2">
+                  {requests.map((request) => {
+                    const isUpdating = updatingId === request.id
+                    const isDownloading = downloadingId === request.id
+                    return (
+                      <div key={request.id} className="rounded-lg p-3 bg-control shadow-raised">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="truncate text-sm font-medium">{request.name}</span>
+                              {(() => {
+                                const variant = STATUS_VARIANT[request.status]
+                                const label = t(`rot_rut_status_${request.status}`)
+                                return variant === 'muted' ? (
+                                  <span className="text-xs text-muted-foreground">{label}</span>
+                                ) : (
+                                  <Badge variant={variant} className="font-normal">
+                                    {label}
+                                  </Badge>
+                                )
+                              })()}
                             </div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {request.file_document_id && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {t('rot_rut_history_meta', {
+                                date: formatDate(request.created_at),
+                                count: request.items.length,
+                                amount: formatCurrency(Number(request.requested_total)),
+                              })}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {request.file_document_id && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                loading={isDownloading}
+                                onClick={() => void downloadArchivedFile(request)}
+                              >
+                                {!isDownloading && <ArrowDownTrayIcon className="h-3.5 w-3.5" />}
+                                {t('rot_rut_download_again')}
+                              </Button>
+                            )}
+                            {request.status === 'generated' && canWrite && (
+                              <>
                                 <Button
                                   type="button"
-                                  variant="ghost"
-                                  loading={isDownloading}
-                                  onClick={() => void downloadArchivedFile(request)}
+                                  variant="outline"
+                                  disabled={isUpdating}
+                                  onClick={() => void updateRequest(request.id, 'cancelled')}
                                 >
-                                  {!isDownloading && <ArrowDownTrayIcon className="h-3.5 w-3.5" />}
-                                  {t('rot_rut_download_again')}
+                                  {t('rot_rut_cancel_request')}
                                 </Button>
-                              )}
-                              {request.status === 'generated' && canWrite && (
-                                <>
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    disabled={isUpdating}
-                                    onClick={() => void updateRequest(request.id, 'cancelled')}
-                                  >
-                                    {t('rot_rut_cancel_request')}
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    loading={isUpdating}
-                                    onClick={() => void updateRequest(request.id, 'submitted')}
-                                  >
-                                    {!isUpdating && <CheckCircleIcon className="h-3.5 w-3.5" />}
-                                    {t('rot_rut_mark_uploaded')}
-                                  </Button>
-                                </>
-                              )}
-                            </div>
+                                <Button
+                                  type="button"
+                                  loading={isUpdating}
+                                  onClick={() => void updateRequest(request.id, 'submitted')}
+                                >
+                                  {!isUpdating && <CheckCircleIcon className="h-3.5 w-3.5" />}
+                                  {t('rot_rut_mark_uploaded')}
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </div>
-                      )
-                    })}
-                  </div>
-                )}
-                <Button asChild type="button" variant="outline" className="w-full sm:w-auto">
-                  <a href={SKATTEVERKET_SERVICE_URL} target="_blank" rel="noopener noreferrer">
-                    {t('rot_rut_skatteverket_link')}
-                    <ArrowTopRightOnSquareIcon className="ml-2 h-3.5 w-3.5" />
-                  </a>
-                </Button>
-              </section>
-            )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <Button asChild type="button" variant="outline" className="w-full sm:w-auto">
+                <a
+                  href={isGronTeknik ? GRON_TEKNIK_SERVICE_URL : SKATTEVERKET_SERVICE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {isGronTeknik ? t('gron_teknik_skatteverket_link') : t('rot_rut_skatteverket_link')}
+                  <ArrowTopRightOnSquareIcon className="ml-2 h-3.5 w-3.5" />
+                </a>
+              </Button>
+            </section>
           </div>
         )}
       </DialogContent>

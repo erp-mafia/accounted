@@ -81,7 +81,7 @@ describe('HUS file: a grön teknik invoice never enters it', () => {
       expect(result.ok).toBe(false)
       if (result.ok) continue
       expect(result.blocker.code).toBe('NO_DEDUCTION_OF_TYPE')
-      expect(result.blocker.message).toContain('e-tjänst för grön teknik')
+      expect(result.blocker.message).toContain('fil för grön teknik')
     }
   })
 

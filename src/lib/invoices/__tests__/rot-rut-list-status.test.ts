@@ -117,18 +117,16 @@ describe('parseRotRutListFilter', () => {
   })
 })
 
-describe('grön teknik: requested in the e-tjänst, never "Att begära"', () => {
+describe('grön teknik: requested with its own begäran file, like ROT and RUT', () => {
   const gronLines = [{ deduction_type: 'gron_teknik' }, { deduction_type: null }]
 
-  it('reads a paid grön teknik invoice without a begäran row as etjanst, not claimable', () => {
-    expect(rotRutListStateOf(invoice({ requests: [], deduction_lines: gronLines }))).toBe('etjanst')
+  it('reads a paid grön teknik invoice without a begäran row as claimable', () => {
+    expect(rotRutListStateOf(invoice({ requests: [], deduction_lines: gronLines }))).toBe('claimable')
   })
 
-  it('keeps it out of the Att begära filter and every other filter but all', () => {
+  it('puts it in the Att begära filter', () => {
     const gron = invoice({ requests: [], deduction_lines: gronLines })
-    expect(ROT_RUT_LIST_FILTERS.filter((f) => matchesRotRutListFilter(gron, f))).toEqual(['all'])
-    expect(ROT_RUT_LIST_FILTERS).not.toContain('etjanst')
-    expect(parseRotRutListFilter('etjanst')).toBeNull()
+    expect(ROT_RUT_LIST_FILTERS.filter((f) => matchesRotRutListFilter(gron, f))).toEqual(['all', 'claimable'])
   })
 
   it('says nothing before the customer has paid', () => {
@@ -145,8 +143,6 @@ describe('grön teknik: requested in the e-tjänst, never "Att begära"', () => 
     expect(rotRutListStateOf(invoice({ requests: [], deduction_lines: [{ deduction_type: 'rot' }] }))).toBe('claimable')
     expect(rotRutListStateOf(invoice({ requests: [], deduction_lines: [{ deduction_type: 'rut' }] }))).toBe('claimable')
     expect(rotRutListStateOf(invoice({ requests: [] }))).toBe('claimable')
-    // A mix (refused at creation) is not grön teknik only: the ROT part is
-    // still to request with a file.
     expect(
       rotRutListStateOf(
         invoice({ requests: [], deduction_lines: [{ deduction_type: 'rot' }, { deduction_type: 'gron_teknik' }] }),
