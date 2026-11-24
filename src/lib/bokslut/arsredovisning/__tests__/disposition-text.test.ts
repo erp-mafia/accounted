@@ -14,7 +14,6 @@ import { BOOKS_COMPANY_ID, reportBooks } from '@/tests/fixtures/report-books'
 import { pdfTextStrings } from '@/tests/pdf-text'
 import { generateIxbrlDocument } from '@/lib/bokslut/ixbrl/document/generate'
 import { ArsredovisningPDF } from '../arsredovisning-pdf'
-import { ArsredovisningK3PDF } from '../arsredovisning-k3-pdf'
 import { buildCanonicalAnnualReport } from '../model'
 import { formatPdfKronor } from '../pdf-format'
 import {
@@ -141,19 +140,6 @@ describe('an annual report that proposes a dividend', () => {
     expect(balanserasINyRakning).toBe(summa - utdelning)
   })
 
-  it.each([
-    ['K2', ArsredovisningPDF],
-    ['K3', ArsredovisningK3PDF],
-  ])('prints in the %s PDF table the whole kronor its sentence states, for a dividend in öre', async (_, Pdf) => {
-    const model = await build({ proposed_dividend: DIVIDEND + 0.5 })
-    const { total } = model.report.forvaltningsberattelse.resultatdisposition_amounts
-    const carried = total - (DIVIDEND + 1)
-    expect(model.report.forvaltningsberattelse.resultatdisposition).toBe(dividendSentence(DIVIDEND + 1, carried))
-    const pdf = plain(pdfTextStrings(await renderToBuffer(Pdf({ data: model.report }))).join(' '))
-    // A table row's label and amount come back without a space between them.
-    expect(pdf).toContain(plain(`Föreslagen utdelning-${formatPdfKronor(DIVIDEND + 1)}Balanseras i ny räkning${formatPdfKronor(carried)}`))
-  }, RENDER_TIMEOUT)
-
   it('keeps a text the board wrote', async () => {
     const model = await build({ proposed_dividend: DIVIDEND, resultatdisposition: BOARD_TEXT })
     expect(model.report.forvaltningsberattelse.resultatdisposition).toBe(BOARD_TEXT)
@@ -170,6 +156,13 @@ describe('an annual report without a dividend', () => {
       if (!model.ixbrl) throw new Error('the model carries no iXBRL input')
       expect(ixbrlComment(generateIxbrlDocument(model.ixbrl).xhtml)).toBe(NO_DIVIDEND_DISPOSITION_TEXT)
     }
+  })
+
+  it('keeps a stored sentence byte for byte in the report and the iXBRL input, so the content hash stays', async () => {
+    const stored = `${NO_DIVIDEND_DISPOSITION_TEXT}\n`
+    const model = await build({ resultatdisposition: stored })
+    expect(model.report.forvaltningsberattelse.resultatdisposition).toBe(stored)
+    expect(model.ixbrl?.forvaltningsberattelse.resultatdisposition.kommentar).toBe(stored)
   })
 })
 

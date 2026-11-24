@@ -41,11 +41,7 @@ import { arsredovisningDatering } from '@/lib/bokslut/arsredovisning/datering'
 import { signatureDate } from '@/lib/bokslut/arsredovisning/signature-pages'
 import { effectiveDisclosureTexts } from '@/lib/bokslut/arsredovisning/register-disclosures'
 import { k2EquityTableInput } from '@/lib/bokslut/arsredovisning/equity-specification'
-import {
-  defaultDispositionText,
-  isGeneratedDispositionText,
-  statedDividend,
-} from '@/lib/bokslut/arsredovisning/disposition-text'
+import { dispositionText, statedDividend } from '@/lib/bokslut/arsredovisning/disposition-text'
 import {
   AGM_DATE_MISSING_WARNING,
   AGM_DECISION_MISSING_WARNING,
@@ -242,12 +238,12 @@ export async function buildIxbrlInput(
   }
   // The report's own sentence states the dividend this document states, also
   // for a live draft filed with another dividend (the route's utdelning). A
-  // sentence the board wrote stays as written.
-  const statedText = pdfData.forvaltningsberattelse.resultatdisposition
-  const kommentar =
-    isGeneratedDispositionText(statedText)
-      ? defaultDispositionText({ proposed_dividend: proposedDividend, total: dispSumma })
-      : statedText
+  // sentence the board wrote, or a stored one that already says it, stays as
+  // written, so the content hash stays.
+  const kommentar = dispositionText(pdfData.forvaltningsberattelse.resultatdisposition, {
+    proposed_dividend: proposedDividend,
+    total: dispSumma,
+  })
   const resultatdisposition: Resultatdisposition = {
     balanseratResultat: dispBalanserat,
     overkursfond: dispOverkursfond,

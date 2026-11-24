@@ -7,7 +7,7 @@
  * the proposal covers the sum of fritt eget kapital (punkt 5.8), so the
  * carried-forward amount is that sum less the dividend.
  *
- * The report, the PDF, the iXBRL and the editor all read the sentence from
+ * The report, the iXBRL and the editor all read the sentence from
  * here, its wording from the meetings (bolaget/meetings/disposition-sentence.ts,
  * which the årsstämma template reads too): the editor saves no text of its
  * own while its text is this sentence, so the sentence keeps following the
@@ -29,20 +29,10 @@ export interface DispositionTextAmounts {
   total: number
 }
 
-/**
- * The dividend and the carried-forward amount the sentence and the PDF table
- * state: the dividend in whole kronor as the iXBRL table tags it, and the
- * total less it, so the two rows add up to the total as printed.
- */
-export function statedDisposition(amounts: DispositionTextAmounts): { dividend: number; carriedForward: number } {
-  const dividend = statedDividend(amounts.proposed_dividend)
-  return { dividend, carriedForward: amounts.total - dividend }
-}
-
 export function defaultDispositionText(amounts: DispositionTextAmounts): string {
-  const { dividend, carriedForward } = statedDisposition(amounts)
+  const dividend = statedDividend(amounts.proposed_dividend)
   if (!(dividend > 0)) return NO_DIVIDEND_DISPOSITION_TEXT
-  return dividendDispositionSentence(formatPdfKronor(dividend), formatPdfKronor(carriedForward))
+  return dividendDispositionSentence(formatPdfKronor(dividend), formatPdfKronor(amounts.total - dividend))
 }
 
 /**

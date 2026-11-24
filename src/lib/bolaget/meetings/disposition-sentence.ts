@@ -15,9 +15,9 @@ export const NO_DIVIDEND_DISPOSITION_TEXT = 'Styrelsen föreslår att årets res
 
 /**
  * The dividend the iXBRL table states (ixbrl/build-input.ts): whole kronor
- * (BFNAR 2016:10 punkt 3.9), never below zero. The sentence and the PDF table
- * state the same amount, and what is carried forward is the total less it, so
- * they never differ by a rounded krona.
+ * (BFNAR 2016:10 punkt 3.9), never below zero. The sentence states the same
+ * amount, and what is carried forward is the total less it, so the two never
+ * differ by a rounded krona.
  */
 export function statedDividend(proposedDividend: number): number {
   return Math.max(0, Math.round(proposedDividend))

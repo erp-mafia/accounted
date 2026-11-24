@@ -1,7 +1,6 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
-import { statedDisposition } from './disposition-text'
 import { roundThousands } from '@/lib/bokslut/ixbrl/thousand-kronor'
 import { pdfTextDeep } from '@/lib/pdf/number-text'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
@@ -287,9 +286,6 @@ export function ArsredovisningK3PDF({
   // the figures the iXBRL document tags (roundThousands), so the two agree.
   const overviewTkr = data.forvaltningsberattelse.flerarsoversikt_tkr === true
   const overviewAmount = (kronor: number) => fmt(overviewTkr ? roundThousands(kronor) : kronor)
-  // The disposition table states the whole kronor the sentence above it and
-  // the iXBRL table state: the dividend rounded once, the rest carried forward.
-  const stated = statedDisposition(data.forvaltningsberattelse.resultatdisposition_amounts)
   const agmDispositionDecision =
     data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
       ? `Årsstämman beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
@@ -375,8 +371,8 @@ export function ArsredovisningK3PDF({
           ['Fri överkursfond', data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve],
           ['Årets resultat', data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result],
           ['Summa till årsstämmans förfogande', data.forvaltningsberattelse.resultatdisposition_amounts.total],
-          ['Föreslagen utdelning', -stated.dividend],
-          ['Balanseras i ny räkning', stated.carriedForward],
+          ['Föreslagen utdelning', -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend],
+          ['Balanseras i ny räkning', data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward],
         ].map(([label, amount], index) => (
           <View
             key={String(label)}
