@@ -18,6 +18,23 @@ describe('readBeslutFile', () => {
     expect(readBeslutFile(JSON.stringify(FILE))).toEqual(FILE)
   })
 
+  it("reads Skatteverket's own schema example, where a beslut has no ärenden", () => {
+    // The examples block of Skatteverket's Beslut.json schema (skattered/begaran/V1), verbatim.
+    const example = {
+      version: '1',
+      utforare: '165519991234',
+      beslut: [
+        { namn: 'Mitt beslut', referensnummer: '20180000001', arenden: [] },
+        {
+          namn: 'Mitt andra beslut',
+          referensnummer: '20180000002-01',
+          arenden: [{ personnummer: '191212121212', fakturanummer: '99', godkantBelopp: 0 }],
+        },
+      ],
+    }
+    expect(readBeslutFile(JSON.stringify(example))).toEqual(example)
+  })
+
   it('returns null for text that is not JSON', () => {
     expect(readBeslutFile('Fakturanr;Belopp\n1001;1500')).toBeNull()
     expect(readBeslutFile('')).toBeNull()
