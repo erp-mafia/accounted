@@ -11,7 +11,8 @@ import type { Invoice, InvoiceItem } from '@/types'
 /**
  * The /api/rot-rut routes with grön teknik (crm#209, #3135): the eligible
  * list serves a grön teknik list and counts other kinds, the request history
- * accepts the gron_teknik filter, and the HUS file refuses gron_teknik.
+ * accepts the gron_teknik filter, and the payout file makes the grön teknik
+ * Begaran file for gron_teknik while the HUS file still refuses its invoices.
  */
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
@@ -154,17 +155,79 @@ describe('GET /api/rot-rut/eligible?type=gron_teknik', () => {
   })
 })
 
-describe('POST /api/rot-rut/payout-file refuses grön teknik', () => {
-  it('returns 400 for deduction_type gron_teknik without touching invoices', async () => {
-    const response = await payoutFilePOST(
-      createMockRequest('/api/rot-rut/payout-file', {
-        method: 'POST',
-        body: { deduction_type: 'gron_teknik', invoice_ids: [GRON_ID] },
-      }),
-      NO_PARAMS,
-    )
+describe('POST /api/rot-rut/payout-file with grön teknik', () => {
+  const post = (body: Record<string, unknown>) =>
+    payoutFilePOST(createMockRequest('/api/rot-rut/payout-file', { method: 'POST', body }), NO_PARAMS)
+
+  it('returns 401 when not authenticated', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    const response = await post({ deduction_type: 'gron_teknik', invoice_ids: [GRON_ID] })
+    expect(response.status).toBe(401)
+  })
+
+  it('returns 400 for a deduction type that has no file, without touching invoices', async () => {
+    const response = await post({ deduction_type: 'green', invoice_ids: [GRON_ID] })
     expect(response.status).toBe(400)
     expect(findCalls('invoices', 'select')).toHaveLength(0)
+  })
+
+  it('returns 404 when an invoice is not the company\'s', async () => {
+    enqueue({ data: [] }) // invoices fetch
+    const response = await post({ deduction_type: 'gron_teknik', invoice_ids: [GRON_ID] })
+    expect(response.status).toBe(404)
+  })
+
+  it('returns 400 when the company has no usable org number for Utforare', async () => {
+    enqueue({ data: [gronInvoice()] }) // invoices fetch
+    enqueue({ data: { org_number: null, entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: { org_number: '', entity_type: 'aktiebolag' } }) // companies
+    const response = await post({ deduction_type: 'gron_teknik', invoice_ids: [GRON_ID] })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ROT_RUT_COMPANY_ORG_NUMBER_INVALID')
+    expect(findCalls('rot_rut_payout_requests', 'insert')).toHaveLength(0)
+  })
+
+  it('generates the grön teknik file and records one begäran item per invoice', async () => {
+    const twoTypes = paid(
+      GRON_ID,
+      [
+        gronItem(),
+        gronItem({
+          id: 'item-solar',
+          sort_order: 1,
+          work_type: 'INSTALLATION_SOLCELLER',
+          unit_price: 40000,
+          line_total: 40000,
+          vat_amount: 10000,
+          deduction_amount: 7500,
+          labor_hours: 30,
+        }),
+      ],
+      17500,
+    )
+    enqueue({ data: [twoTypes] }) // invoices fetch
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: { id: 'request-1', deduction_type: 'gron_teknik', status: 'generated' } }) // request insert
+    enqueue({ data: null }) // items insert
+    const response = await post({ deduction_type: 'gron_teknik', invoice_ids: [GRON_ID] })
+    const { status, body } = await parseJsonResponse<{
+      data: { xml: string; file_name: string; arenden: Array<{ work_type: string }> }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.file_name).toMatch(/^gron_teknik_begaran_\d{4}-\d{2}-\d{2}\.xml$/)
+    expect(body.data.xml).toContain('<TypAvBegaran>GRON_TEKNIK</TypAvBegaran>')
+    expect(body.data.xml).toContain('<Utforare>165566778899</Utforare>')
+    expect(body.data.arenden.map((a) => a.work_type)).toEqual(['INSTALLATION_SOLCELLER', 'INSTALLATION_LADDPUNKT'])
+    expect(findCalls('rot_rut_payout_requests', 'insert')[0][0]).toMatchObject({
+      deduction_type: 'gron_teknik',
+      name: expect.stringMatching(/^GT \d{4}-\d{2}-\d{2}$/),
+      requested_total: 17500,
+    })
+    expect(findCalls('rot_rut_payout_request_items', 'insert')[0][0]).toEqual([
+      { request_id: 'request-1', invoice_id: GRON_ID, requested_amount: 17500 },
+    ])
   })
 
   it('blocks a grön teknik invoice id sent as ROT with a pointer to the e-tjänst', async () => {
@@ -181,7 +244,7 @@ describe('POST /api/rot-rut/payout-file refuses grön teknik', () => {
     }>(response)
     expect(status).toBe(400)
     expect(body.error.details?.blockers?.[0]).toMatchObject({ code: 'NO_DEDUCTION_OF_TYPE' })
-    expect(body.error.details?.blockers?.[0].message).toContain('e-tjänst för grön teknik')
+    expect(body.error.details?.blockers?.[0].message).toContain('fil för grön teknik')
   })
 })
 

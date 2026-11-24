@@ -44,6 +44,8 @@ import {
   toSekOrThrow,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { isUnsettledSupplierInvoiceStatus } from '@/lib/supplier-invoices/lifecycle'
+import { reverseChargeAccountRefusal } from '@/lib/supplier-invoices/create'
+import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -54,6 +56,7 @@ interface InvoiceRow {
   default_dimensions?: Record<string, string> | null
   currency?: string | null
   exchange_rate?: number | string | null
+  reverse_charge?: boolean | null
 }
 
 interface ItemRow {
@@ -201,7 +204,7 @@ export async function moveSupplierInvoiceItemAccount(
 
   const { data: invoice } = await supabase
     .from('supplier_invoices')
-    .select('id, status, registration_journal_entry_id, default_dimensions, currency, exchange_rate')
+    .select('id, status, registration_journal_entry_id, default_dimensions, currency, exchange_rate, reverse_charge')
     .eq('id', supplierInvoiceId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -237,6 +240,22 @@ export async function moveSupplierInvoiceItemAccount(
       }
     }
     return { ok: true, data: { changed: false } }
+  }
+
+  // A reverse-charge line cannot move to an account that declares the
+  // purchase in a box of its own: the basis pair would declare it twice. The
+  // same refusal as at registration (reverseChargeAccountRefusal).
+  const accountRefusal = reverseChargeAccountRefusal(
+    inv.reverse_charge === true,
+    [{ account_number: accountNumber }],
+    inv.reverse_charge === true ? await fetchChartVatTreatments(supabase, companyId) : null,
+  )
+  if (accountRefusal) {
+    return {
+      ok: false,
+      code: accountRefusal.code,
+      details: { ...accountRefusal.details, field: 'account_number', supplier_invoice_item_id: itemId },
+    }
   }
 
   const entryId = inv.registration_journal_entry_id

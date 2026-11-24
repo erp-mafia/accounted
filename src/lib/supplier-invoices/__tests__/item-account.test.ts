@@ -341,3 +341,87 @@ describe('moveSupplierInvoiceItemAccount on a foreign-currency invoice', () => {
     })
   })
 })
+
+// A reverse-charge line moved to an account that declares the purchase in a
+// box of its own (import ruta 50, trepartshandel ruta 37, the 4598 offset)
+// would keep the basis pair beside it: declared twice. Refused before the
+// item or the verifikat is touched, as at registration.
+describe('moveSupplierInvoiceItemAccount on a reverse-charge invoice', () => {
+  const ctx = (supabase: unknown) => ({
+    supabase: supabase as never,
+    companyId: 'company-1',
+    userId: 'user-1',
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+  })
+  const rcInvoice = { id: 'inv-1', status: 'registered', registration_journal_entry_id: 'je-1', currency: 'SEK', reverse_charge: true }
+  const rcItem = { id: 'a', account_number: '6540', line_total: 1000, description: 'Tjänst', dimensions: {} }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it.each([
+    ['4545', 'other_box', 'ruta50'],
+    ['4512', 'other_box', 'ruta37'],
+    ['4598', 'basis_offset', undefined],
+  ])('refuses %s (%s) and writes nothing', async (account, reason, box) => {
+    const { supabase, calls } = createTableMockSupabase({
+      supplier_invoices: { data: rcInvoice },
+      supplier_invoice_items: { data: rcItem },
+      chart_of_accounts: { data: [] },
+    })
+
+    const result = await moveSupplierInvoiceItemAccount(ctx(supabase), 'inv-1', 'a', account)
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SI_REVERSE_CHARGE_ACCOUNT',
+      details: {
+        field: 'account_number',
+        account_number: account,
+        reason,
+        ...(box ? { account_box: box } : {}),
+        supplier_invoice_item_id: 'a',
+      },
+    })
+    expect(calls.filter((c) => ['insert', 'update', 'upsert', 'delete'].includes(c.method))).toEqual([])
+    expect(strikeLines).not.toHaveBeenCalled()
+  })
+
+  it('refuses a cost account whose momskod in the kontoplan is import, in a dry run too', async () => {
+    const { supabase } = createTableMockSupabase({
+      supplier_invoices: { data: rcInvoice },
+      supplier_invoice_items: { data: rcItem },
+      chart_of_accounts: { data: [{ account_number: '4010', default_vat_treatment: 'import_goods', default_vat_rate: 0.25 }] },
+    })
+
+    const result = await moveSupplierInvoiceItemAccount(ctx(supabase), 'inv-1', 'a', '4010', { dryRun: true })
+
+    expect(result).toMatchObject({ ok: false, code: 'SI_REVERSE_CHARGE_ACCOUNT', details: { reason: 'other_box', account_box: 'ruta50' } })
+  })
+
+  it('moves the line to an ordinary cost account as before', async () => {
+    const { supabase } = createTableMockSupabase({
+      supplier_invoices: { data: { ...rcInvoice, registration_journal_entry_id: null } },
+      supplier_invoice_items: [{ data: rcItem }, { data: [{ id: 'a' }] }],
+      chart_of_accounts: { data: [] },
+    })
+
+    expect(await moveSupplierInvoiceItemAccount(ctx(supabase), 'inv-1', 'a', '6550')).toEqual({
+      ok: true,
+      data: { changed: true, corrected: false },
+    })
+  })
+
+  it('leaves an invoice without reverse charge alone: 4545 is then only an account', async () => {
+    const { supabase } = createTableMockSupabase({
+      supplier_invoices: { data: { ...rcInvoice, reverse_charge: false, registration_journal_entry_id: null } },
+      supplier_invoice_items: [{ data: rcItem }, { data: [{ id: 'a' }] }],
+    })
+
+    expect(await moveSupplierInvoiceItemAccount(ctx(supabase), 'inv-1', 'a', '4545')).toEqual({
+      ok: true,
+      data: { changed: true, corrected: false },
+    })
+  })
+})

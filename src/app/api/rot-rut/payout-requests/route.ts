@@ -29,8 +29,8 @@ export const GET = withRouteContext('rot_rut.requests.list', async (request, ctx
     .order('created_at', { ascending: false })
     .limit(100)
 
-  // gron_teknik is a valid filter (the column allows it); it lists nothing
-  // until the grön teknik file records begäran rows.
+  // Any deduction kind filters: rot and rut (HUS file), gron_teknik (its
+  // own Begaran file).
   if (isDeductionType(typeFilter)) {
     query = query.eq('deduction_type', typeFilter)
   }
