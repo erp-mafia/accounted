@@ -41,6 +41,7 @@ import { arsredovisningDatering } from '@/lib/bokslut/arsredovisning/datering'
 import { signatureDate } from '@/lib/bokslut/arsredovisning/signature-pages'
 import { effectiveDisclosureTexts } from '@/lib/bokslut/arsredovisning/register-disclosures'
 import { k2EquityTableInput } from '@/lib/bokslut/arsredovisning/equity-specification'
+import { dispositionText, statedDividend } from '@/lib/bokslut/arsredovisning/disposition-text'
 import {
   AGM_DATE_MISSING_WARNING,
   AGM_DECISION_MISSING_WARNING,
@@ -220,11 +221,8 @@ export async function buildIxbrlInput(
   // same context: the disposition row must carry the identical value
   // (TA §2.7.3), so fri överkursfond (2097) is its own row tagged with the
   // separate Overkursfond concept instead of being folded into balanserat.
-  const proposedDividend = Math.max(
-    0,
-    Math.round(
-      options.proposedDividend ?? pdfData.forvaltningsberattelse.proposed_dividend,
-    ),
+  const proposedDividend = statedDividend(
+    options.proposedDividend ?? pdfData.forvaltningsberattelse.proposed_dividend,
   )
   const dispositionAmounts = pdfData.forvaltningsberattelse.resultatdisposition_amounts
   const dispBalanserat = dispositionAmounts.retained_earnings
@@ -238,6 +236,14 @@ export async function buildIxbrlInput(
       `Föreslagen utdelning (${proposedDividend} kr) överstiger fritt eget kapital (${dispSumma} kr).`,
     )
   }
+  // The report's own sentence states the dividend this document states, also
+  // for a live draft filed with another dividend (the route's utdelning). A
+  // sentence the board wrote, or a stored one that already says it, stays as
+  // written, so the content hash stays.
+  const kommentar = dispositionText(pdfData.forvaltningsberattelse.resultatdisposition, {
+    proposed_dividend: proposedDividend,
+    total: dispSumma,
+  })
   const resultatdisposition: Resultatdisposition = {
     balanseratResultat: dispBalanserat,
     overkursfond: dispOverkursfond,
@@ -245,7 +251,7 @@ export async function buildIxbrlInput(
     summa: dispSumma,
     utdelning: proposedDividend,
     balanserasINyRakning: dispSumma - proposedDividend,
-    kommentar: pdfData.forvaltningsberattelse.resultatdisposition || null,
+    kommentar: kommentar || null,
   }
 
   // ---- underskrifter ---------------------------------------------------------

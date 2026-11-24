@@ -75,6 +75,7 @@ import {
   deadlineAfterYearEnd,
 } from '@/lib/tax/annual-report-deadlines'
 import { parseAmountInput } from '@/lib/money'
+import { defaultDispositionText, isGeneratedDispositionText } from '@/lib/bokslut/arsredovisning/disposition-text'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -106,6 +107,15 @@ function sameNoteOverrides(a: Record<string, string>, b: Record<string, string>)
   return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key])
 }
 
+/**
+ * The disposition sentence the report prints for the dividend in the field
+ * when the board writes none (disposition-text.ts). An empty or unreadable
+ * amount reads as no dividend; the save refuses an unreadable one anyway.
+ */
+function dispositionDefaultFor(dividendInput: string, distributable: number): string {
+  return defaultDispositionText({ proposed_dividend: parseAmountInput(dividendInput) ?? 0, total: distributable })
+}
+
 export default function ArsredovisningPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -130,6 +140,7 @@ export default function ArsredovisningPage() {
   const { periods: fiscalPeriods, isLoading: periodsLoading } = useFiscalPeriods()
 
   const [data, setData] = useState<ArsredovisningData | null>(null)
+  const distributableEquity = data?.forvaltningsberattelse.resultatdisposition_amounts.total ?? 0
   const [signatures, setSignatures] = useState<SignatureRequest[]>([])
   // The signer roster could not be read: said in the roster, not shown as
   // an empty one.
@@ -578,7 +589,10 @@ export default function ArsredovisningPage() {
           body: JSON.stringify({
             description,
             important_events: importantEvents,
-            resultatdisposition,
+            // The generated sentence is not stored as the board's text:
+            // stored, it would keep stating this dividend after the
+            // dividend changes. Null lets the report write it per amount.
+            resultatdisposition: isGeneratedDispositionText(resultatdisposition) ? null : resultatdisposition,
             proposed_dividend: proposedDividendParsed,
             agm_date: agmDate || null,
             agm_disposition_outcome: agmDispositionOutcome || null,
@@ -1221,7 +1235,16 @@ export default function ArsredovisningPage() {
                   id="ar-dividend"
                   inputMode="decimal"
                   value={proposedDividend}
-                  onChange={(event) => setProposedDividend(event.target.value)}
+                  onChange={(event) => {
+                    const next = event.target.value
+                    // A text that is still the generated sentence follows
+                    // the dividend, so it never says the result is carried
+                    // forward beside a dividend. A text the board wrote stays.
+                    if (isGeneratedDispositionText(resultatdisposition)) {
+                      setResultatdisposition(dispositionDefaultFor(next, distributableEquity))
+                    }
+                    setProposedDividend(next)
+                  }}
                   placeholder="0"
                   className="max-w-[220px] tabular-nums"
                 />
