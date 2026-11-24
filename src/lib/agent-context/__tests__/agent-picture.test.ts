@@ -45,12 +45,11 @@ function fakeSupabase(tables: Record<string, Handler>) {
 const filtered = (call: Call, method: string, column: string, value?: unknown) =>
   call.ops.some((op) => op.method === method && op.args[0] === column && (value === undefined || op.args[1] === value))
 
-const { listUnexplainedMock, dataStatusMock, inboxAddressMock, knowledgeOptionsMock, skillRowsMock, enabled } = vi.hoisted(() => ({
+const { listUnexplainedMock, dataStatusMock, inboxAddressMock, mailboxAvailabilityMock, enabled } = vi.hoisted(() => ({
   listUnexplainedMock: vi.fn(),
   dataStatusMock: vi.fn(),
   inboxAddressMock: vi.fn(),
-  knowledgeOptionsMock: vi.fn(),
-  skillRowsMock: vi.fn(),
+  mailboxAvailabilityMock: vi.fn(),
   enabled: new Set<string>(),
 }))
 
@@ -69,14 +68,12 @@ vi.mock('@/lib/reports/data-status', () => ({
 vi.mock('@/lib/documents/inbox-address', () => ({
   resolveInboxAddress: (...args: unknown[]) => inboxAddressMock(...args),
 }))
-vi.mock('@/lib/agent-skills/knowledge-choices', () => ({
-  loadKnowledgeOptions: (...args: unknown[]) => knowledgeOptionsMock(...args),
-}))
-vi.mock('@/lib/agent-skills/company-skills', () => ({
-  loadCompanySkillRows: (...args: unknown[]) => skillRowsMock(...args),
+vi.mock('@/lib/digital-mailboxes/providers', () => ({
+  digitalMailboxAvailability: (...args: unknown[]) => mailboxAvailabilityMock(...args),
 }))
 
-import { limitNotConnected, loadAgentActivity, loadAgentCards, loadAgentPicture, type PictureSource, type PictureSourceGroup } from '../agent-picture'
+import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
+import { limitNotConnected, loadAgentActivity, loadAgentCards, loadAgentPicture, type AgentPicturePorts, type PictureSource, type PictureSourceGroup } from '../agent-picture'
 
 const ALL_EXTENSIONS = ['enable-banking', 'skatteverket', 'tic', 'invoice-inbox', 'whatsapp-inbox', 'mail', 'stripe', 'shopify', 'woocommerce', 'zettle']
 
@@ -98,10 +95,13 @@ function tables(over: Record<string, Handler> = {}): Record<string, Handler> {
         },
       ],
     },
-    companies: (call) =>
-      call.ops.some((op) => op.method === 'select' && op.args[0] === 'name')
-        ? { data: { name: 'Exempelbolaget AB' } }
-        : { data: { tic_snapshot_fetched_at: '2026-02-14T10:00:00.000Z' } },
+    companies: (call) => {
+      const columns = call.ops.find((op) => op.method === 'select')?.args[0]
+      if (columns === 'name') return { data: { name: 'Exempelbolaget AB' } }
+      // The company's legal form, and the team it belongs to (none here).
+      if (typeof columns === 'string' && (columns.includes('entity_type') || columns.includes('team_id'))) return { data: { entity_type: 'aktiebolag', team_id: null } }
+      return { data: { tic_snapshot_fetched_at: '2026-02-14T10:00:00.000Z' } }
+    },
     invoice_inbox_items: (call) =>
       call.ops.some((op) => op.method === 'select' && (op.args[1] as { head?: boolean } | undefined)?.head)
         ? { count: 86 }
@@ -121,6 +121,8 @@ function tables(over: Record<string, Handler> = {}): Record<string, Handler> {
     suppliers: { count: 64 },
     agent_memory: { count: 23 },
     agent_profiles: { data: { vertical_atoms: ['vertical/retired', 'vertical/konsult-it'], modifier_atoms: null } },
+    agent_atom_registry: { data: REGISTRY },
+    company_skills: { data: [] },
     fiscal_periods: { data: [{ id: 'period-1' }] },
     api_keys: (call) =>
       filtered(call, 'eq', 'company_id')
@@ -191,16 +193,23 @@ const OK_QUEUE = {
   ],
 }
 
-const option = (id: string, tier: string) => ({ id, tier, title: id, summary: '', version: 1, reviewed_at: null })
-/** Five of the product's own items, one the community shared and one the company wrote. */
-const KNOWLEDGE = [
-  option('horizontal/swedish-vat', 'horizontal'),
-  option('horizontal/swedish-payroll', 'horizontal'),
-  option('modifier/holding-ab', 'modifier'),
-  option('vertical/konsult-it', 'vertical'),
-  option('vertical/e-handel', 'vertical'),
-  option('community/shared', 'community'),
-  option('own/0d6f6f0e-0000-4000-8000-000000000001', 'own'),
+interface RegistryRow {
+  id: string
+  tier: string
+  title: string
+  description: string
+  version: number
+  reviewed_at: string | null
+}
+const registryRow = (id: string, tier: string): RegistryRow => ({ id, tier, title: id, description: '', version: 1, reviewed_at: null })
+/** The registry: five of the product's own items and one the community shared. */
+const REGISTRY: RegistryRow[] = [
+  registryRow('horizontal/swedish-vat', 'horizontal'),
+  registryRow('horizontal/swedish-payroll', 'horizontal'),
+  registryRow('modifier/holding-ab', 'modifier'),
+  registryRow('vertical/konsult-it', 'vertical'),
+  registryRow('vertical/e-handel', 'vertical'),
+  registryRow('community/shared', 'community'),
 ]
 
 const FEED_OK = { bank: { feed_status: 'active', last_sync_at: '2026-03-02T05:12:00.000Z', stale: false, reconciled_through: null } }
@@ -223,8 +232,7 @@ beforeEach(() => {
   listUnexplainedMock.mockResolvedValue(OK_QUEUE)
   dataStatusMock.mockResolvedValue(FEED_OK)
   inboxAddressMock.mockResolvedValue('exempel-ab12@inbox.example')
-  knowledgeOptionsMock.mockResolvedValue(KNOWLEDGE)
-  skillRowsMock.mockResolvedValue([])
+  mailboxAvailabilityMock.mockReturnValue({ kivra: { receive: true, send: false }, billo: { receive: true, send: false } })
   skatteverket.mockResolvedValue({ state: 'connected', last_sync_at: '2026-03-01T21:14:00.000Z' })
 })
 
@@ -377,6 +385,25 @@ describe('loadAgentPicture: sources', () => {
     expect(off.map((item) => item.key).sort()).toEqual(['stripe', 'whatsapp'])
   })
 
+  it('offers a cash register only where the installation has a connector for one', async () => {
+    const withConnector: AgentPicturePorts = { ...ports(), posConnector: () => true }
+    const offered = await loadAgentPicture(fakeSupabase(tables({ whatsapp_phone_links: { data: null } })).client, COMPANY, USER, withConnector, NOW)
+    expect(sourceOf(offered, 'pos')).toMatchObject({ state: 'not_connected', href: '/settings/pos' })
+
+    // Without a connector there is nothing to connect it through: no card says "not connected".
+    const withoutConnector: AgentPicturePorts = { ...ports(), posConnector: () => false }
+    const neither: AgentPicturePorts[] = [withoutConnector, ports()]
+    for (const given of neither) {
+      const picture = await loadAgentPicture(fakeSupabase(tables({ whatsapp_phone_links: { data: null } })).client, COMPANY, USER, given, NOW)
+      expect(sourceOf(picture, 'pos')).toBeUndefined()
+    }
+
+    // A venue that is connected shows either way.
+    const pos_connections = { data: [{ venue_name: 'Butiken', provider_name: 'Kassa', health: 'ok' }] }
+    const connected = await loadAgentPicture(fakeSupabase(tables({ pos_connections })).client, COMPANY, USER, withoutConnector, NOW)
+    expect(sourceOf(connected, 'pos')).toMatchObject({ state: 'connected', detail: 'Butiken (Kassa)' })
+  })
+
   it('leaves out a source whose extension is not built in', async () => {
     enabled.delete('stripe')
     enabled.delete('skatteverket')
@@ -388,9 +415,78 @@ describe('loadAgentPicture: sources', () => {
     expect(skatteverket).not.toHaveBeenCalled()
   })
 
-  it('leaves out a sales source whose read failed instead of calling it not connected', async () => {
-    const picture = await loadAgentPicture(fakeSupabase(tables({ stripe_connections: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
-    expect(sourceOf(picture, 'stripe')).toBeUndefined()
+  /** Every source's own read, failed: none may then read as not connected, and none may go missing. */
+  const BROKEN: Record<string, Handler> = {
+    whatsapp_phone_links: { error: { message: 'boom' } },
+    digital_mailbox_connections: { error: { message: 'boom' } },
+    mail_connections: { error: { message: 'boom' } },
+    stripe_connections: { error: { message: 'boom' } },
+    pos_connections: { error: { message: 'boom' } },
+    shopify_connections: { error: { message: 'boom' } },
+    woocommerce_connections: { error: { message: 'boom' } },
+    zettle_connections: { error: { message: 'boom' } },
+  }
+  const READ_FAILED: Array<PictureSource['key']> = ['whatsapp', 'kivra', 'billo', 'gmail', 'stripe', 'pos', 'shopify', 'woocommerce', 'zettle']
+
+  it('shows a source whose status could not be read as unknown: not as not connected, and not left out', async () => {
+    enabled.add('mail')
+    const withConnector: AgentPicturePorts = { ...ports(), posConnector: () => true }
+    const picture = await loadAgentPicture(fakeSupabase(tables(BROKEN)).client, COMPANY, USER, withConnector, NOW)
+    for (const key of READ_FAILED) expect(sourceOf(picture, key), key).toMatchObject({ key, state: 'unknown', detail: null, last_delivered_at: null })
+    // Nothing is offered to connect while it is not known what is connected.
+    expect(picture.sources.flatMap((g) => g.items).filter((item) => item.state === 'not_connected')).toEqual([])
+    // The sources whose reads answered are as they were.
+    expect(sourceOf(picture, 'bank:cash-1')).toMatchObject({ state: 'connected' })
+    expect(sourceOf(picture, 'inbox')).toMatchObject({ state: 'connected' })
+  })
+
+  it('shows each of them as unknown when its read alone fails, and the others as they are', async () => {
+    const stripe = await loadAgentPicture(fakeSupabase(tables({ stripe_connections: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(stripe, 'stripe')).toMatchObject({ state: 'unknown', href: '/import?mode=stripe' })
+    expect(sourceOf(stripe, 'kivra')).toMatchObject({ state: 'connected' })
+
+    const whatsapp = await loadAgentPicture(fakeSupabase(tables({ whatsapp_phone_links: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(whatsapp, 'whatsapp')).toMatchObject({ state: 'unknown', detail: null })
+  })
+
+  it('shows Kivra and Billo as unknown only where the company is offered to receive through them', async () => {
+    const broken = { digital_mailbox_connections: { error: { message: 'boom' } } }
+    mailboxAvailabilityMock.mockReturnValue({ kivra: { receive: true, send: false }, billo: { receive: false, send: false } })
+    const one = await loadAgentPicture(fakeSupabase(tables(broken)).client, COMPANY, USER, ports(), NOW)
+    expect(mailboxAvailabilityMock).toHaveBeenCalledWith(COMPANY)
+    expect(sourceOf(one, 'kivra')).toMatchObject({ state: 'unknown' })
+    expect(sourceOf(one, 'billo')).toBeUndefined()
+
+    // A read that answers reads no availability: the connections say what there is.
+    mailboxAvailabilityMock.mockClear()
+    await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(mailboxAvailabilityMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps a source that answered nothing as it was: no mail and no venue is no card, and a cash register without a connector is not read as unknown', async () => {
+    enabled.add('mail')
+    const none = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(none, 'gmail')).toBeUndefined()
+    expect(sourceOf(none, 'pos')).toBeUndefined()
+    const failedWithoutConnector = await loadAgentPicture(fakeSupabase(tables({ pos_connections: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(failedWithoutConnector, 'pos')).toBeUndefined()
+  })
+
+  it('tells an inbox that could not be read from a company without one', async () => {
+    // The address's own reader answers nothing for both.
+    inboxAddressMock.mockResolvedValue(null)
+    const without = fakeSupabase(tables({ company_inboxes: { data: [] } }))
+    expect(sourceOf(await loadAgentPicture(without.client, COMPANY, USER, ports(), NOW), 'inbox')).toMatchObject({ state: 'not_connected' })
+    const asked = without.calls.find((c) => c.table === 'company_inboxes')!
+    expect(filtered(asked, 'eq', 'company_id', COMPANY)).toBe(true)
+    expect(filtered(asked, 'eq', 'status', 'active')).toBe(true)
+
+    const unreadable = await loadAgentPicture(fakeSupabase(tables({ company_inboxes: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(unreadable, 'inbox')).toMatchObject({ state: 'unknown' })
+
+    // The company has an inbox, and its address was not read.
+    const addressFailed = await loadAgentPicture(fakeSupabase(tables({ company_inboxes: { data: [{ id: 'inbox-1' }] } })).client, COMPANY, USER, ports(), NOW)
+    expect(sourceOf(addressFailed, 'inbox')).toMatchObject({ state: 'unknown' })
   })
 })
 
@@ -459,10 +555,8 @@ describe('loadAgentPicture: the company', () => {
   it('counts the knowledge items the agent gets today: the general ones and the ones the profile names', async () => {
     const { client, calls } = fakeSupabase(tables())
     const picture = await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
-    expect(knowledgeOptionsMock).toHaveBeenCalledWith(client, COMPANY)
-    expect(skillRowsMock).toHaveBeenCalledWith(client, COMPANY)
     // Both general items, and the one industry item of the profile that is in the list (a retired one is not).
-    // The company form item, the other industry and what the community or the company wrote are not active.
+    // The company form item, the other industry and what the community shared are not active.
     expect(picture.company.knowledge).toEqual({
       items: 3,
       active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'vertical/konsult-it'],
@@ -471,9 +565,9 @@ describe('loadAgentPicture: the company', () => {
   })
 
   it('counts a company-form item the profile names and an item the company installed', async () => {
-    skillRowsMock.mockResolvedValue([{ id: 'install-1', atom_id: 'vertical/e-handel' }, { id: 'own-1', atom_id: null }])
+    const company_skills = { data: [{ atom_id: 'vertical/e-handel' }] }
     const agent_profiles = { data: { vertical_atoms: null, modifier_atoms: ['modifier/holding-ab'] } }
-    const picture = await loadAgentPicture(fakeSupabase(tables({ agent_profiles })).client, COMPANY, USER, ports(), NOW)
+    const picture = await loadAgentPicture(fakeSupabase(tables({ agent_profiles, company_skills })).client, COMPANY, USER, ports(), NOW)
     expect(picture.company.knowledge).toEqual({
       items: 4,
       active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'modifier/holding-ab', 'vertical/e-handel'],
@@ -485,14 +579,74 @@ describe('loadAgentPicture: the company', () => {
     expect(picture.company.knowledge).toEqual({ items: 2, active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll'] })
   })
 
-  it('says unknown, and guesses nothing, when the profile or the list cannot be read', async () => {
-    const noProfile = await loadAgentPicture(fakeSupabase(tables({ agent_profiles: { error: { message: 'boom' } } })).client, COMPANY, USER, ports(), NOW)
-    expect(noProfile.company.knowledge).toEqual({ items: null, active: null })
+  it('leaves out an item written for another legal form, as the catalogue does', async () => {
+    // The holding item is aktiebolag law: an enskild firma whose profile names it does not get it.
+    const companies: Handler = (call) => {
+      const columns = call.ops.find((op) => op.method === 'select')?.args[0]
+      return columns === 'name' ? { data: { name: 'X' } } : { data: { entity_type: 'enskild_firma', team_id: null, tic_snapshot_fetched_at: null } }
+    }
+    const agent_profiles = { data: { vertical_atoms: null, modifier_atoms: ['modifier/holding-ab'] } }
+    const picture = await loadAgentPicture(fakeSupabase(tables({ companies, agent_profiles })).client, COMPANY, USER, ports(), NOW)
+    expect(picture.company.knowledge).toEqual({ items: 2, active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll'] })
+  })
 
-    knowledgeOptionsMock.mockRejectedValue(new Error('boom'))
-    const noList = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
-    expect(noList.company.knowledge).toEqual({ items: null, active: null })
-    expect(noList.company.counts.vouchers).toBe(4912)
+  it('reads the company\'s own items once, and of each only which item it points at', async () => {
+    const { client, calls } = fakeSupabase(tables())
+    await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
+    const own = calls.filter((c) => c.table === 'company_skills')
+    expect(own).toHaveLength(1)
+    // No item's text, and no column the count does not read.
+    expect(own[0].ops.find((op) => op.method === 'select')!.args[0]).toBe('atom_id')
+    expect(filtered(own[0], 'eq', 'company_id', COMPANY)).toBe(true)
+    expect(own[0].ops.find((op) => op.method === 'not')!.args).toEqual(['atom_id', 'is', null])
+    // The registry once, by which item and of which kind.
+    const registry = calls.filter((c) => c.table === 'agent_atom_registry')
+    expect(registry).toHaveLength(1)
+    expect(registry[0].ops.find((op) => op.method === 'select')!.args[0]).toBe('id, tier')
+    // The company's own row once for the count: its legal form and its team in one read.
+    const companyReads = calls.filter((c) => c.table === 'companies' && c.ops.some((op) => op.method === 'select' && typeof op.args[0] === 'string' && op.args[0].includes('entity_type')))
+    expect(companyReads).toHaveLength(1)
+    expect(companyReads[0].ops.find((op) => op.method === 'select')!.args[0]).toBe('entity_type, team_id')
+    expect(filtered(companyReads[0], 'eq', 'id', COMPANY)).toBe(true)
+  })
+
+  it('counts an item the company\'s team installed, read by the team the company\'s own row names', async () => {
+    const companies: Handler = (call) => {
+      const columns = call.ops.find((op) => op.method === 'select')?.args[0]
+      return columns === 'name' ? { data: { name: 'X' } } : { data: { entity_type: 'aktiebolag', team_id: 'team-1', tic_snapshot_fetched_at: null } }
+    }
+    const company_skills: Handler = (call) => (filtered(call, 'eq', 'team_id', 'team-1') ? { data: [{ atom_id: 'vertical/e-handel' }] } : { data: [] })
+    const { client, calls } = fakeSupabase(tables({ companies, company_skills, agent_profiles: { data: null } }))
+    const picture = await loadAgentPicture(client, COMPANY, USER, ports(), NOW)
+    expect(picture.company.knowledge).toEqual({ items: 3, active: ['horizontal/swedish-vat', 'horizontal/swedish-payroll', 'vertical/e-handel'] })
+    const reads = calls.filter((c) => c.table === 'company_skills')
+    expect(reads).toHaveLength(2)
+    for (const read of reads) expect(read.ops.find((op) => op.method === 'select')!.args[0]).toBe('atom_id')
+  })
+
+  it('reads the registry by the filters the catalogue\'s own list is read by', async () => {
+    const filters = (call: Call) => call.ops.filter((op) => op.method !== 'select' && op.method !== 'order' && op.method !== 'range')
+    const catalogue = fakeSupabase(tables())
+    await loadKnowledgeOptions(catalogue.client, COMPANY)
+    const picture = fakeSupabase(tables())
+    await loadAgentPicture(picture.client, COMPANY, USER, ports(), NOW)
+    const ofCatalogue = catalogue.calls.find((c) => c.table === 'agent_atom_registry')!
+    const ofPicture = picture.calls.find((c) => c.table === 'agent_atom_registry')!
+    expect(filters(ofPicture).length).toBeGreaterThan(0)
+    expect(filters(ofPicture)).toEqual(filters(ofCatalogue))
+  })
+
+  it('says unknown, and guesses nothing, when the profile, the list or the installed items cannot be read', async () => {
+    const brokenReads: Array<Record<string, Handler>> = [
+      { agent_profiles: { error: { message: 'boom' } } },
+      { agent_atom_registry: { error: { message: 'boom' } } },
+      { company_skills: { error: { message: 'boom' } } },
+    ]
+    for (const broken of brokenReads) {
+      const picture = await loadAgentPicture(fakeSupabase(tables(broken)).client, COMPANY, USER, ports(), NOW)
+      expect(picture.company.knowledge).toEqual({ items: null, active: null })
+      expect(picture.company.counts.vouchers).toBe(4912)
+    }
   })
 })
 
@@ -821,6 +975,26 @@ describe('loadAgentPicture: agents', () => {
     expect(lists.ops.find((op) => op.method === 'in')!.args).toEqual(['api_key_id', ['open', 'listed', 'other']])
   })
 
+  it('hands out no last use for a connection made in another company, and keeps it for one made here', async () => {
+    const used = '2026-03-01T15:00:00.000Z'
+    const api_keys: Handler = (call) =>
+      filtered(call, 'eq', 'company_id') ? { data: [keyRow('here', { last_used_at: used })] } : { data: [keyRow('away', { client: 'chatgpt', company_id: 'company-2', last_used_at: used })] }
+    // This company's own log holds a call of neither.
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    const connections = picture.agents!.list.flatMap((card) => card.connections)
+    expect(connections.find((c) => c.id === 'here')).toMatchObject({ last_used_at: used })
+    expect(connections.find((c) => c.id === 'here')).not.toHaveProperty('elsewhere')
+    // The key's own last use may be the other company's: it does not leave the server.
+    expect(connections.find((c) => c.id === 'away')).toMatchObject({ last_used_at: null, last_call_at: null, elsewhere: true })
+    // The time is in the answer once: for the connection made here.
+    expect(JSON.stringify(picture.agents).split(used)).toHaveLength(2)
+
+    // A call in this company's own log is this company's to show.
+    const event_log = { data: [{ created_at: '2026-02-27T10:00:00.000Z', actor_id: 'away' }] }
+    const called = await loadAgentPicture(fakeSupabase(tables({ api_keys, event_log })).client, COMPANY, USER, ports(), NOW)
+    expect(called.agents!.list.flatMap((card) => card.connections).find((c) => c.id === 'away')).toMatchObject({ last_used_at: null, last_call_at: '2026-02-27T10:00:00.000Z', elsewhere: true })
+  })
+
   it('leaves out connections homed elsewhere when their company lists cannot be read', async () => {
     const api_keys: Handler = (call) => (filtered(call, 'eq', 'company_id') ? { data: [] } : { data: [keyRow('open', { company_id: 'company-2' })] })
     service = fakeSupabase({ api_key_companies: { error: { message: 'boom' } } })
@@ -865,6 +1039,180 @@ describe('loadAgentPicture: agents', () => {
     expect(picture.agents).toBeNull()
     expect(picture.company.name).toBe('Exempelbolaget AB')
     expect(sourceOf(picture, 'bank:cash-1')).toBeDefined()
+  })
+})
+
+/** A key as the key table holds it, for the tests that answer a read by its filters. */
+interface StoredKey {
+  id: string
+  name: string
+  client: string | null
+  last_used_at: string | null
+  created_at: string
+  user_id: string
+  service_account_id: string | null
+  company_id: string | null
+  revoked_at: string | null
+}
+const stored = (id: string, over: Partial<StoredKey> = {}): StoredKey => ({
+  id,
+  name: OAUTH_KEY_NAME,
+  client: 'claude',
+  last_used_at: null,
+  created_at: '2026-01-01T00:00:00.000Z',
+  user_id: USER,
+  service_account_id: null,
+  company_id: COMPANY,
+  revoked_at: null,
+  ...over,
+})
+/** Whether a stored key passes the filters of one read: eq, in, is and not-is, as the loader writes them. */
+function passes(row: StoredKey, ops: Call['ops']): boolean {
+  const value = (column: unknown): unknown => (typeof column === 'string' && Object.hasOwn(row, column) ? row[column as keyof StoredKey] : undefined)
+  return ops.every((op) => {
+    const [column, first, second] = op.args
+    if (op.method === 'eq' || op.method === 'is') return value(column) === first
+    if (op.method === 'in') return Array.isArray(first) && first.includes(value(column))
+    if (op.method === 'not') return first === 'is' ? value(column) !== second : true
+    return true
+  })
+}
+type Role = 'owner' | 'member' | 'viewer'
+/** The key table through the person's own access: an owner reads the company's keys and their own, anyone else only their own. */
+const keysAs = (db: readonly StoredKey[], role: Role): Handler => (call) => ({
+  data: db.filter((row) => (role === 'owner' ? row.company_id === COMPANY || row.user_id === USER : row.user_id === USER)).filter((row) => passes(row, call.ops)),
+})
+/** The key table through the service role: every key that passes the read's filters. */
+const everyKey = (db: readonly StoredKey[]): Handler => (call) => ({ data: db.filter((row) => passes(row, call.ops)) })
+interface Membership {
+  user_id: string
+  company_id: string
+}
+const membersOf = (rows: readonly Membership[]): Handler => (call) => {
+  const company = call.ops.find((op) => op.method === 'eq' && op.args[0] === 'company_id')?.args[1]
+  return { data: rows.filter((row) => row.company_id === company) }
+}
+interface KeyCompany {
+  api_key_id: string
+  company_id: string
+}
+const companyLists = (rows: readonly KeyCompany[]): Handler => (call) => {
+  const wanted = call.ops.find((op) => op.method === 'in' && op.args[0] === 'api_key_id')?.args[1]
+  return { data: rows.filter((row) => Array.isArray(wanted) && wanted.includes(row.api_key_id)) }
+}
+
+describe('loadAgentPicture: the connections the person may not list', () => {
+  // A colleague and a firm's consultant are members here; the stranger is not.
+  const MEMBERS: Membership[] = [
+    { user_id: USER, company_id: COMPANY },
+    { user_id: 'colleague', company_id: COMPANY },
+    { user_id: 'consultant', company_id: COMPANY },
+    { user_id: 'consultant', company_id: 'firm' },
+    { user_id: 'stranger', company_id: 'elsewhere' },
+  ]
+  const OTHERS: StoredKey[] = [
+    stored('colleague-here', { user_id: 'colleague' }),
+    stored('colleague-revoked', { user_id: 'colleague', revoked_at: '2026-02-01T00:00:00.000Z' }),
+    // Made in the firm's own company: no company list reaches every company the consultant is a member of.
+    stored('consultant-open', { user_id: 'consultant', company_id: 'firm' }),
+    stored('consultant-listed-here', { user_id: 'consultant', company_id: 'firm' }),
+    stored('consultant-listed-away', { user_id: 'consultant', company_id: 'firm' }),
+    // A service account's key reaches its own company alone.
+    stored('account-here', { name: 'nyckel', client: null, user_id: 'colleague', service_account_id: 'sa-1' }),
+    stored('account-of-the-firm', { name: 'nyckel', client: null, user_id: 'consultant', service_account_id: 'sa-9', company_id: 'firm' }),
+    // Another company's keys, of someone who is no member here.
+    stored('stranger-open', { user_id: 'stranger', company_id: 'elsewhere' }),
+    stored('stranger-listed-here', { user_id: 'stranger', company_id: 'elsewhere' }),
+  ]
+  const LISTS: KeyCompany[] = [
+    { api_key_id: 'consultant-listed-here', company_id: COMPANY },
+    { api_key_id: 'consultant-listed-here', company_id: 'firm' },
+    { api_key_id: 'consultant-listed-away', company_id: 'firm' },
+    { api_key_id: 'stranger-listed-here', company_id: COMPANY },
+  ]
+
+  async function pictureAs(role: Role, own: readonly StoredKey[]) {
+    const db: StoredKey[] = [...own, ...OTHERS]
+    service = fakeSupabase({
+      company_members: membersOf(MEMBERS),
+      api_keys: everyKey(db),
+      api_key_companies: companyLists(LISTS),
+      service_accounts: { data: [{ id: 'sa-1', name: 'Lönesystemet' }] },
+      profiles: { data: [{ id: 'colleague', full_name: 'Anna Ek', email: 'anna@example.com' }] },
+    })
+    const picture = await loadAgentPicture(fakeSupabase(tables({ api_keys: keysAs(db, role), event_log: { data: [] } })).client, COMPANY, USER, ports(), NOW)
+    return picture
+  }
+  const listedIds = (picture: Awaited<ReturnType<typeof pictureAs>>): string[] =>
+    picture.agents!.list.flatMap((card) => card.connections.map((connection) => connection.id)).sort()
+
+  it('counts for an owner the connections made in another company that reach this one', async () => {
+    const picture = await pictureAs('owner', [stored('mine')])
+    // The owner lists every key homed in the company.
+    expect(listedIds(picture)).toEqual(['account-here', 'colleague-here', 'mine'])
+    // The consultant's sign-in without a company list, and the one whose list names this company.
+    expect(picture.agents!.others).toBe(2)
+  })
+
+  it('counts for a member with keys of their own every other connection that reaches the company', async () => {
+    const picture = await pictureAs('member', [stored('mine'), stored('mine-elsewhere', { company_id: 'firm' })])
+    expect(listedIds(picture)).toEqual(['mine', 'mine-elsewhere'])
+    // The colleague's, the service account's and the consultant's two: not the member's own, listed or not.
+    expect(picture.agents!.others).toBe(4)
+  })
+
+  it('counts them for a read-only member who has no connection, instead of answering nothing', async () => {
+    const picture = await pictureAs('viewer', [])
+    expect(picture.agents!.list).toEqual([])
+    expect(picture.agents!.others).toBe(4)
+  })
+
+  it('never counts a revoked key, a key whose list names other companies, another company\'s service account or a stranger\'s key', async () => {
+    const picture = await pictureAs('viewer', [])
+    const reads = service.calls.filter((c) => c.table === 'api_keys')
+    // Two reads of key ids: the company's service-account keys, and the keys of the company's members.
+    expect(reads).toHaveLength(2)
+    for (const read of reads) {
+      expect(read.ops.find((op) => op.method === 'select')!.args[0]).toBe('id')
+      expect(read.ops.find((op) => op.method === 'is' && op.args[0] === 'revoked_at')!.args).toEqual(['revoked_at', null])
+    }
+    const ofAccounts = reads.find((c) => c.ops.some((op) => op.method === 'not'))!
+    expect(filtered(ofAccounts, 'eq', 'company_id', COMPANY)).toBe(true)
+    const ofMembers = reads.find((c) => c.ops.some((op) => op.method === 'in'))!
+    expect(ofMembers.ops.find((op) => op.method === 'in')!.args).toEqual(['user_id', [USER, 'colleague', 'consultant']])
+    expect(ofMembers.ops.find((op) => op.method === 'is' && op.args[0] === 'service_account_id')!.args).toEqual(['service_account_id', null])
+    expect(filtered(service.calls.find((c) => c.table === 'company_members')!, 'eq', 'company_id', COMPANY)).toBe(true)
+    // The company lists are asked for the members' keys alone: the stranger's is not among them.
+    const lists = service.calls.find((c) => c.table === 'api_key_companies')!
+    expect(lists.ops.find((op) => op.method === 'in')!.args).toEqual(['api_key_id', ['colleague-here', 'consultant-open', 'consultant-listed-here', 'consultant-listed-away']])
+    expect(picture.agents!.others).toBe(4)
+  })
+
+  it('hands out the number and nothing else about another person\'s connection', async () => {
+    const picture = await pictureAs('member', [stored('mine')])
+    const answer = JSON.stringify(picture)
+    for (const key of OTHERS) expect(answer).not.toContain(key.id)
+    for (const word of ['colleague', 'consultant', 'stranger', 'Anna Ek', 'Lönesystemet', 'sa-1']) expect(answer).not.toContain(word)
+    expect(Object.keys(picture.agents!).sort()).toEqual(['activity', 'list', 'more', 'others'])
+  })
+
+  it('answers zero when nobody else has a connection, and unknown when the count cannot be read', async () => {
+    service = fakeSupabase({ company_members: membersOf(MEMBERS), api_keys: everyKey([stored('mine')]), api_key_companies: companyLists([]) })
+    const alone = await loadAgentPicture(fakeSupabase(tables({ api_keys: keysAs([stored('mine')], 'owner') })).client, COMPANY, USER, ports(), NOW)
+    expect(alone.agents!.others).toBe(0)
+
+    const brokenReads: Array<Record<string, Handler>> = [
+      { company_members: { error: { message: 'boom' } }, api_keys: everyKey(OTHERS), api_key_companies: companyLists(LISTS) },
+      { company_members: membersOf(MEMBERS), api_keys: { error: { message: 'boom' } }, api_key_companies: companyLists(LISTS) },
+      { company_members: membersOf(MEMBERS), api_keys: everyKey(OTHERS), api_key_companies: { error: { message: 'boom' } } },
+    ]
+    for (const broken of brokenReads) {
+      service = fakeSupabase(broken)
+      const picture = await loadAgentPicture(fakeSupabase(tables()).client, COMPANY, USER, ports(), NOW)
+      expect(picture.agents!.others).toBeNull()
+      // The connections the person may list are still answered.
+      expect(picture.agents!.list.map((card) => card.id)).toEqual(['claude', 'key:key-manual'])
+    }
   })
 })
 
@@ -962,6 +1310,8 @@ describe('loadAgentPicture: the whole answer', () => {
       if (call.table === 'companies') expect(filtered(call, 'eq', 'id', COMPANY)).toBe(true)
       else if (call.table === 'whatsapp_phone_links') expect(filtered(call, 'eq', 'user_id', USER)).toBe(true)
       else if (call.table === 'api_keys') expect(byCompany || filtered(call, 'eq', 'user_id', USER)).toBe(true)
+      // The knowledge registry is the same for every company.
+      else if (call.table === 'agent_atom_registry') expect(byCompany).toBe(false)
       else expect(byCompany, `${call.table} is read without the company filter`).toBe(true)
     }
   })

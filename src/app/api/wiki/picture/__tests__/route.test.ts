@@ -49,6 +49,11 @@ vi.mock('@/lib/worklist/categories', () => ({
   countPendingOperations: (...args: unknown[]) => countPendingOperationsMock(...args),
 }))
 
+const isPosConnectConfiguredMock = vi.fn()
+vi.mock('@/lib/pos-sales/connect-client', () => ({
+  isPosConnectConfigured: (...args: unknown[]) => isPosConnectConfiguredMock(...args),
+}))
+
 import { GET } from '../route'
 
 const COMPANY = 'company-1'
@@ -71,6 +76,7 @@ interface Ports {
   ledgerRead: <T>(read: () => Promise<T>) => Promise<T>
   skatteverket: () => Promise<{ state: string; last_sync_at: string | null }>
   waiting: () => Promise<{ questions: number; proposals: number }>
+  posConnector: () => boolean
 }
 const portsOfLastCall = () => loadAgentPictureMock.mock.calls.at(-1)![3] as Ports
 
@@ -86,6 +92,7 @@ describe('GET /api/wiki/picture', () => {
     readReportedSkattekontoSaldoMock.mockResolvedValue({ saldo: 100, fetched_at: '2026-03-01T21:14:00.000Z' })
     countOpenQuestionsMock.mockResolvedValue(2)
     countPendingOperationsMock.mockResolvedValue(3)
+    isPosConnectConfiguredMock.mockReturnValue(true)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -166,6 +173,13 @@ describe('GET /api/wiki/picture', () => {
     countOpenQuestionsMock.mockResolvedValue(0)
     await call()
     await expect(portsOfLastCall().waiting()).resolves.toEqual({ questions: 0, proposals: 3 })
+  })
+
+  it('says whether the installation has a cash register connector, from the connector\'s own configuration', async () => {
+    await call()
+    expect(portsOfLastCall().posConnector()).toBe(true)
+    isPosConnectConfiguredMock.mockReturnValue(false)
+    expect(portsOfLastCall().posConnector()).toBe(false)
   })
 
   it('answers a loader that throws with the canonical 500 envelope', async () => {

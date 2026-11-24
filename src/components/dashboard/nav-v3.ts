@@ -420,9 +420,21 @@ export const NAV_V3_AREAS: NavV3Area[] = [
         // is these two rows, with no group label: the picture (Kontext) and
         // Bokföringsregler. The rows the picture replaces hide there; what
         // they open is reached from the picture or by its address. Chatt,
-        // below, follows the chat's own switch and stays.
+        // below, follows the chat's own switch and stays. The picture is what
+        // a connected agent gets, so its row needs what Koppla en agent
+        // needs: the MCP server extension. Without it the area is
+        // Bokföringsregler, and /wiki leads there (wikiPlace).
         items: [
-          { href: '/wiki', module: 'agent', labelKey: 'v3_context', icon: RectangleGroupIcon, newBadge: true, match: ['/agent-knowledge'], requiresAgentPicture: true },
+          {
+            href: '/wiki',
+            module: 'agent',
+            labelKey: 'v3_context',
+            icon: RectangleGroupIcon,
+            newBadge: true,
+            match: ['/agent-knowledge'],
+            requiresAgentPicture: true,
+            requiresMcpExtension: true,
+          },
           { href: '/rules', module: 'transactions', labelKey: 'v2_rules', icon: AdjustmentsHorizontalIcon, requiresAgentPicture: true },
         ],
       },

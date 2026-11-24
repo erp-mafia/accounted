@@ -1,10 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { credentialActor } from '@/lib/auth/api-keys'
+import { allowlistReachesCompany, credentialActor } from '@/lib/auth/api-keys'
 import { partnerClientNames, partnerSlugOf } from '@/lib/auth/oauth-partner-clients'
 import { cashAccountBankName, cashAccountLogoUrl, type CashAccountWithBank } from '@/lib/cash-accounts/labels'
 import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
 import { stockholmWallTimeToUtc, todayIsoStockholm } from '@/lib/dates/iso'
 import { listConnections } from '@/lib/digital-mailboxes/connections'
+import { digitalMailboxAvailability } from '@/lib/digital-mailboxes/providers'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { isCompanyQuestionsEnabled } from '@/lib/env/company-questions-switch'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -14,9 +15,10 @@ import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { connectionKind, type ConnectionKind } from '@/lib/settings/mcp-connections'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createServiceClient } from '@/lib/supabase/server'
-import { loadCompanySkillRows } from '@/lib/agent-skills/company-skills'
-import { loadKnowledgeOptions } from '@/lib/agent-skills/knowledge-choices'
+import { chunk } from '@/lib/utils'
+import { packFitsForm, type KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { catalogueKnowledge, chosenKnowledge, isActiveKnowledge } from '@/lib/agent-skills/knowledge-list'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { agentCards, tallyWork, type CardConnection, type StagerRef } from './agent-cards'
 
 const log = createLogger('agent-picture')
@@ -40,8 +42,10 @@ const log = createLogger('agent-picture')
  * Every read filters on the company. The exceptions are named where they
  * are made: the company's own row (by id), the signed-in person's WhatsApp
  * link and own connections (by user), the names of the people whose
- * connections the person may list (by their ids), and the knowledge
- * catalogue, whose registry is the same for every company.
+ * connections the person may list (by their ids), the count of the
+ * connections the person may not list (by the company's members), the
+ * knowledge registry, which is the same for every company, and the items
+ * the company's team installed (by the team the company's own row names).
  */
 
 /** A source or connection as the picture draws it. */
@@ -222,6 +226,14 @@ export interface PictureAgent {
   is_own: boolean
   /** Whose a colleague's connection is (full name, else e-mail); null for the person's own, for a service account's, and when the name could not be read. */
   owner_name: string | null
+  /**
+   * True for a connection made in another company that reaches this one;
+   * absent for one made here. Such a key is used in its other companies
+   * too, so when the key was last used is not this company's to say:
+   * `last_used_at` is null, and what it did here is read from this
+   * company's own calls alone.
+   */
+  elsewhere?: true
 }
 
 /**
@@ -248,6 +260,12 @@ export interface PictureAgents {
   list: PictureAgentCard[]
   /** Cards past the listed ones. */
   more: number
+  /**
+   * Live connections that reach the company and that the person may not
+   * list: other people's, and service accounts' the person cannot read. A
+   * number and nothing else about them. null when they could not be counted.
+   */
+  others: number | null
   /** null when the tool call log could not be read: the counts above are then 0 and mean nothing. */
   activity: PictureActivity | null
 }
@@ -272,12 +290,16 @@ export interface AgentPicturePorts {
   skatteverket?: () => Promise<{ state: 'connected' | 'not_connected' | 'unknown'; last_sync_at: string | null }>
   /** What waits on the company's people, from the counters Hem and the menu read. */
   waiting?: () => Promise<PictureWaiting>
+  /** Whether the installation has a cash register connector. Without one, or without this reader, a cash register is not offered. */
+  posConnector?: () => boolean
 }
 
 /** A part's deadline. The reads behind it keep running; their answer is just no longer waited for. */
 const PART_DEADLINE_MS = 2500
 /** The checks read the reports, so they get longer. */
 const CHECKS_DEADLINE_MS = 6000
+/** The count of the connections the person may not list: shorter than a part's, so a slow count never costs the listed connections. */
+const OTHERS_DEADLINE_MS = 2000
 
 /** Cards listed in the agents column; the rest are a number. */
 const MAX_AGENTS = 6
@@ -418,10 +440,22 @@ async function bolagsverketSource(supabase: SupabaseClient, companyId: string): 
   return ENABLED_EXTENSION_IDS.has('tic') ? source('bolagsverket', 'not_connected') : null
 }
 
-/** The inbox address, how many documents came through it this calendar year and when the last one did. */
+/**
+ * The inbox address, how many documents came through it this calendar year
+ * and when the last one did. The address's own reader answers nothing both
+ * for a company without an inbox and for a read that failed, so without an
+ * address the company's inbox is asked for: not connected only when the
+ * company has none. Throws when that cannot be read, or when the company has
+ * an inbox whose address could not be read.
+ */
 async function inboxSource(supabase: SupabaseClient, companyId: string, now: Date): Promise<PictureSource> {
   const address = await resolveInboxAddress(supabase, companyId)
-  if (!address) return source('inbox', 'not_connected')
+  if (!address) {
+    const { data, error } = await supabase.from('company_inboxes').select('id').eq('company_id', companyId).eq('status', 'active').limit(1)
+    if (error) failed('inbox', error)
+    if (((data ?? []) as unknown[]).length > 0) failed('inbox address', { message: 'the company has an inbox whose address was not read' })
+    return source('inbox', 'not_connected')
+  }
   const yearStart = stockholmWallTimeToUtc(`${todayIsoStockholm(now).slice(0, 4)}-01-01`, '00:00').toISOString()
   const [count, last] = await Promise.all([
     headCount(
@@ -461,6 +495,12 @@ async function whatsappSource(supabase: SupabaseClient, userId: string): Promise
   return source('whatsapp', 'connected', { detail: row.phone_masked, last_delivered_at: row.last_message_at })
 }
 
+/** Kivra and Billo as unknown, each where the company is offered to receive through it: what stands in when their connections could not be read. */
+function unreadMailboxSources(companyId: string): PictureSource[] {
+  const offered = digitalMailboxAvailability(companyId)
+  return (['kivra', 'billo'] as const).filter((provider) => offered[provider].receive).map((provider) => source(provider, 'unknown'))
+}
+
 /** Kivra and Billo, where the company receives through them. */
 async function mailboxSources(supabase: SupabaseClient, companyId: string): Promise<PictureSource[]> {
   const connections = await listConnections(supabase, companyId)
@@ -477,8 +517,13 @@ async function gmailSource(supabase: SupabaseClient, companyId: string): Promise
   return source('gmail', rows.some((r) => r.status === 'active') ? 'connected' : 'needs_attention')
 }
 
-/** The connected cash register venues, labelled as the connections page labels them. */
-async function posSource(supabase: SupabaseClient, companyId: string): Promise<PictureSource> {
+/**
+ * The connected cash register venues, labelled as the connections page
+ * labels them. With none connected the cash register is offered only where
+ * the installation has a connector to connect it through (`offered`);
+ * elsewhere there is no card.
+ */
+async function posSource(supabase: SupabaseClient, companyId: string, offered: boolean): Promise<PictureSource | null> {
   const { data, error } = await supabase
     .from('pos_connections')
     .select('venue_name, provider_name, health')
@@ -486,7 +531,7 @@ async function posSource(supabase: SupabaseClient, companyId: string): Promise<P
     .eq('status', 'active')
   if (error) failed('cash register connections', error)
   const venues = (data ?? []) as Array<{ venue_name: string; provider_name: string; health: string }>
-  if (venues.length === 0) return source('pos', 'not_connected')
+  if (venues.length === 0) return offered ? source('pos', 'not_connected') : null
   return source('pos', venues.some((v) => v.health === 'action_required') ? 'needs_attention' : 'connected', {
     detail: venues.length === 1 ? `${venues[0].venue_name} (${venues[0].provider_name})` : venues.map((v) => v.venue_name).join(', '),
   })
@@ -538,6 +583,9 @@ async function loadSources(
   const has = (id: string) => ENABLED_EXTENSION_IDS.has(id)
   const part = <T>(name: string, read: () => Promise<T>) => within(name, companyId, PART_DEADLINE_MS, read)
   const none = Promise.resolve(null)
+  const posConnector = ports.posConnector?.() ?? false
+  // A read that failed or ran out of time is null: its source is then unknown, never not connected and never left out.
+  const orUnknown = (key: PictureSourceKey, answer: PictureSource | null): PictureSource => answer ?? source(key, 'unknown')
 
   const [bank, skatteverket, bolagsverket, inbox, whatsapp, mailboxes, gmail, stripe, pos, shopify, woocommerce, zettle] = await Promise.all([
     part('bank', () => bankSources(supabase, companyId)),
@@ -547,9 +595,10 @@ async function loadSources(
     has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? part('inbox', () => inboxSource(supabase, companyId, now)) : none,
     has('whatsapp-inbox') ? part('whatsapp', () => whatsappSource(supabase, userId)) : none,
     part('mailboxes', () => mailboxSources(supabase, companyId)),
-    has('mail') ? part('gmail', () => gmailSource(supabase, companyId)) : none,
+    // No connected mailbox and no venue is an answer of its own (no card), so those two are wrapped: null is then a failed read alone.
+    has('mail') ? part('gmail', async () => ({ item: await gmailSource(supabase, companyId) })) : none,
     has('stripe') ? part('stripe', () => stripeSource(supabase, companyId)) : none,
-    part('pos', () => posSource(supabase, companyId)),
+    part('pos', async () => ({ item: await posSource(supabase, companyId, posConnector) })),
     has('shopify') ? part('shopify', () => shopifySource(supabase, companyId)) : none,
     has('woocommerce') ? part('woocommerce', () => woocommerceSource(supabase, companyId)) : none,
     has('zettle') ? part('zettle', () => zettleSource(supabase, companyId)) : none,
@@ -571,13 +620,23 @@ async function loadSources(
     {
       id: 'documents',
       items: present([
-        has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? { ...(inbox ?? source('inbox', 'unknown')), href: inboxLink } : null,
-        whatsapp,
-        ...(mailboxes ?? []),
-        gmail,
+        has('invoice-inbox') && process.env.RESEND_INBOUND_DOMAIN ? { ...orUnknown('inbox', inbox), href: inboxLink } : null,
+        has('whatsapp-inbox') ? orUnknown('whatsapp', whatsapp) : null,
+        ...(mailboxes ?? unreadMailboxSources(companyId)),
+        has('mail') ? (gmail ? gmail.item : source('gmail', 'unknown')) : null,
       ]),
     },
-    { id: 'sales', items: present([stripe, pos, shopify, woocommerce, zettle]) },
+    {
+      id: 'sales',
+      items: present([
+        has('stripe') ? orUnknown('stripe', stripe) : null,
+        // Without a connector there is no cash register to have read.
+        pos ? pos.item : posConnector ? source('pos', 'unknown') : null,
+        has('shopify') ? orUnknown('shopify', shopify) : null,
+        has('woocommerce') ? orUnknown('woocommerce', woocommerce) : null,
+        has('zettle') ? orUnknown('zettle', zettle) : null,
+      ]),
+    },
   ])
 }
 
@@ -612,27 +671,62 @@ async function loadMemoryFacts(supabase: SupabaseClient, companyId: string): Pro
 }
 
 /**
+ * The items the company installed, its own rows and its team's: only which
+ * item each row points at, which is all the count reads of them. The
+ * company's rows are read by the company; the team's by the team its own row
+ * names. Throws when a read fails.
+ */
+async function installedItems(supabase: SupabaseClient, companyId: string, teamId: string | null): Promise<Array<{ atom_id: string | null }>> {
+  const [own, team] = await Promise.all([
+    fetchAllRows<{ atom_id: string | null }>(({ from, to }) =>
+      supabase.from('company_skills').select('atom_id').eq('company_id', companyId).not('atom_id', 'is', null).order('id').range(from, to),
+    ),
+    teamId
+      ? fetchAllRows<{ atom_id: string | null }>(({ from, to }) =>
+          supabase.from('company_skills').select('atom_id').eq('team_id', teamId).not('atom_id', 'is', null).order('id').range(from, to),
+        )
+      : Promise.resolve([]),
+  ])
+  return [...team, ...own]
+}
+
+/**
  * The knowledge items the company's agent gets today: the items of the
  * catalogue's knowledge list that are active for the company, by the
  * catalogue's own rule (lib/agent-skills/knowledge-list.ts: a general item
  * always, an industry or company-form item when the profile names it or the
- * company installed it). The registry behind the list is the same for every
- * company, so that read has no company filter.
+ * company installed it).
  *
- * Throws when the profile cannot be read: which items are active is then not
- * known, and nothing is guessed.
+ * Read once, and only what the count needs: which items the registry holds
+ * and of which kind (the catalogue's own list: live, exposed, top level and
+ * written for the company's legal form, as loadKnowledgeOptions reads it),
+ * which items the profile names, and which the company installed. No item's
+ * text is read. The registry is the same for every company, so that read
+ * has no company filter; the company's own row is read by its id.
+ *
+ * Throws when a read fails: which items are active is then not known, and
+ * nothing is guessed.
  */
 async function loadKnowledge(supabase: SupabaseClient, companyId: string): Promise<{ items: number; active: string[] }> {
-  const [options, profile, installed] = await Promise.all([
-    loadKnowledgeOptions(supabase, companyId),
+  const [company, registry, profile] = await Promise.all([
+    supabase.from('companies').select('entity_type, team_id').eq('id', companyId).maybeSingle(),
+    supabase.from('agent_atom_registry').select('id, tier').eq('is_active', true).eq('mcp_exposed', true).is('parent_atom_id', null).order('tier').order('id'),
     supabase.from('agent_profiles').select('vertical_atoms, modifier_atoms').eq('company_id', companyId).maybeSingle(),
-    loadCompanySkillRows(supabase, companyId),
   ])
+  if (company.error) failed('company', company.error)
+  if (registry.error) failed('knowledge registry', registry.error)
   if (profile.error) failed('agent profile', profile.error)
+  const own = company.data as { entity_type: string | null; team_id: string | null } | null
+  const [entityType, installed] = await Promise.all([
+    // The form the row carries, read by the form's own rule; it reads the row itself only when the row here names none.
+    resolveCompanyEntityType(supabase, companyId, own?.entity_type),
+    installedItems(supabase, companyId, own?.team_id ?? null),
+  ])
+  const list = ((registry.data ?? []) as Array<{ id: string; tier: KnowledgeOption['tier'] }>).filter((item) => packFitsForm(item.id, entityType))
   const chosen = chosenKnowledge(profile.data as { vertical_atoms: string[] | null; modifier_atoms: string[] | null } | null, installed)
-  const active = catalogueKnowledge(options)
-    .filter((option) => isActiveKnowledge(option.tier, option.id, chosen))
-    .map((option) => option.id)
+  const active = catalogueKnowledge(list)
+    .filter((item) => isActiveKnowledge(item.tier, item.id, chosen))
+    .map((item) => item.id)
   return { items: active.length, active }
 }
 
@@ -943,8 +1037,63 @@ async function loadConnectionKeys(supabase: SupabaseClient, companyId: string, u
   for (const row of (data ?? []) as Array<{ api_key_id: string; company_id: string }>) {
     lists.set(row.api_key_id, [...(lists.get(row.api_key_id) ?? []), row.company_id])
   }
-  return [...here, ...elsewhere.filter((key) => !lists.has(key.id) || lists.get(key.id)!.includes(companyId))]
+  return [...here, ...elsewhere.filter((key) => allowlistReachesCompany(lists.get(key.id), companyId))]
 }
+
+/** Ids per read of a list keyed by ids. */
+const ID_CHUNK = 150
+
+/**
+ * How many live connections reach the company beyond the ones the person
+ * may list (`listed`, by key id): other people's sign-ins and keys, and the
+ * service-account keys the person cannot read. The answer is a number and
+ * nothing else: no name, no owner, no key leaves this function.
+ *
+ * Read with the service role, since the person's own access shows only
+ * their own connections, or for an owner or admin the ones homed in the
+ * company. Each read is keyed by the company: its members, the live keys of
+ * those members, its service accounts' live keys, and the company lists of
+ * the members' keys. Only key ids are read.
+ *
+ * A person's key reaches the company when its user is a member of it and the
+ * key's company list lets it in (lib/auth/api-keys.ts
+ * allowlistReachesCompany, the rule the listed connections are read by). A
+ * service account's key reaches its own company alone. Live is not revoked,
+ * as for the listed connections.
+ *
+ * Throws when a read fails.
+ */
+async function countOtherConnections(companyId: string, listed: ReadonlySet<string>): Promise<number> {
+  const service = createServiceClient()
+  const [members, accountKeys] = await Promise.all([
+    service.from('company_members').select('user_id').eq('company_id', companyId),
+    service.from('api_keys').select('id').eq('company_id', companyId).not('service_account_id', 'is', null).is('revoked_at', null),
+  ])
+  if (members.error) failed('company members', members.error)
+  if (accountKeys.error) failed('service account connections', accountKeys.error)
+  const ofAccounts = ((accountKeys.data ?? []) as Array<{ id: string }>).filter((key) => !listed.has(key.id)).length
+  const memberIds = [...new Set(((members.data ?? []) as Array<{ user_id: string }>).map((row) => row.user_id))]
+
+  // The members' own keys, wherever they were made: the filter is the company's members.
+  const candidates: string[] = []
+  for (const ids of chunk(memberIds, ID_CHUNK)) {
+    const rows = await fetchAllRows<{ id: string }>(({ from, to }) =>
+      service.from('api_keys').select('id').in('user_id', ids).is('service_account_id', null).is('revoked_at', null).order('id', { ascending: true }).range(from, to),
+    )
+    for (const row of rows) if (!listed.has(row.id)) candidates.push(row.id)
+  }
+  if (candidates.length === 0) return ofAccounts
+
+  const lists = new Map<string, string[]>()
+  for (const ids of chunk(candidates, ID_CHUNK)) {
+    const rows = await fetchAllRows<{ api_key_id: string; company_id: string }>(({ from, to }) =>
+      service.from('api_key_companies').select('api_key_id, company_id').in('api_key_id', ids).order('api_key_id', { ascending: true }).order('company_id', { ascending: true }).range(from, to),
+    )
+    for (const row of rows) lists.set(row.api_key_id, [...(lists.get(row.api_key_id) ?? []), row.company_id])
+  }
+  return ofAccounts + candidates.filter((id) => allowlistReachesCompany(lists.get(id), companyId)).length
+}
+
 
 /**
  * The names of the company's service accounts that hold a listed key, read
@@ -989,18 +1138,18 @@ async function ownerNames(companyId: string, userIds: readonly string[]): Promis
 type ReadConnection = PictureAgent & CardConnection
 
 /**
- * The company's connections as the person may list them, the ones that
- * worked last first, each with the calls `toolCalls` holds for it (the log
- * is read beside the reads here). Throws when the connections cannot be
- * read.
+ * The company's connections as the person may list them (`keyRows`,
+ * loadConnectionKeys), the ones that worked last first, each with the calls
+ * `toolCalls` holds for it (the log is read beside the reads here). Throws
+ * when the connections cannot be read.
  */
 async function readConnections(
-  supabase: SupabaseClient,
   companyId: string,
   userId: string,
+  keyRows: Promise<KeyRow[]>,
   toolCalls: Promise<Omit<PictureActivity, 'memory_facts' | 'work'> | null>,
 ): Promise<ReadConnection[]> {
-  const keys = await loadConnectionKeys(supabase, companyId, userId)
+  const keys = await keyRows
 
   const partnerSlugs = keys.map((key) => partnerSlugOf(key.client)).filter((slug): slug is string => slug !== null)
   const accountIds = [...new Set(keys.map((key) => key.service_account_id).filter((id): id is string => id !== null))]
@@ -1031,6 +1180,8 @@ async function readConnections(
         ? partnerName !== null
         : !key.client?.startsWith('registered:')
     const seen = activity?.actors[key.id]
+    // Made in another company: the key's own last use may be that company's, so it is not handed out.
+    const elsewhere = key.company_id !== companyId
     return {
       id: key.id,
       kind,
@@ -1039,12 +1190,13 @@ async function readConnections(
       service_account: key.service_account_id ? (accountNames.get(key.service_account_id) ?? key.name) : null,
       service_account_id: key.service_account_id,
       label: labelKnown ? actor.label : null,
-      last_used_at: key.last_used_at,
+      last_used_at: elsewhere ? null : key.last_used_at,
       calls_today: seen?.calls_today ?? 0,
       last_call_at: seen?.last_call_at ?? null,
       connected_at: key.created_at,
       is_own: key.user_id === userId,
       owner_name: key.user_id === userId || key.service_account_id ? null : (owners.get(key.user_id) ?? null),
+      ...(elsewhere ? { elsewhere: true as const } : {}),
     }
   })
   // The ones that worked last come first.
@@ -1064,7 +1216,7 @@ function shownConnection({ service_account_id: _accountId, label: _label, ...con
  * cannot be read.
  */
 export async function loadAgentCards(supabase: SupabaseClient, companyId: string, userId: string): Promise<PictureAgentCard[]> {
-  const connections = await readConnections(supabase, companyId, userId, Promise.resolve(null))
+  const connections = await readConnections(companyId, userId, loadConnectionKeys(supabase, companyId, userId), Promise.resolve(null))
   return agentCards(connections).map((card): PictureAgentCard => ({ ...card, connections: card.connections.map(shownConnection) }))
 }
 
@@ -1076,14 +1228,18 @@ async function loadAgents(supabase: SupabaseClient, companyId: string, userId: s
     log.warn('tool call log unavailable', { companyId, reason: err instanceof Error ? err.message : String(err) })
     return null
   })
-  const [connections, calls, work] = await Promise.all([
-    readConnections(supabase, companyId, userId, toolCalls),
+  // The connections the person may list, read once: the cards are made of them, and the count of the others leaves them out.
+  const keys = loadConnectionKeys(supabase, companyId, userId)
+  const [connections, calls, work, others] = await Promise.all([
+    readConnections(companyId, userId, keys, toolCalls),
     toolCalls,
     workTodayOrUnknown(supabase, companyId, now),
+    // Unknown (null) when it fails or runs out of time: the listed connections are still answered.
+    within('other connections', companyId, OTHERS_DEADLINE_MS, async () => countOtherConnections(companyId, new Set((await keys).map((key) => key.id)))),
   ])
   // One card per product (agent-cards.ts), in the order of each card's newest connection.
   const cards = agentCards(connections).map((card): PictureAgentCard => ({ ...card, connections: card.connections.map(shownConnection) }))
-  return { list: cards.slice(0, MAX_AGENTS), more: Math.max(0, cards.length - MAX_AGENTS), activity: calls && { ...calls, work } }
+  return { list: cards.slice(0, MAX_AGENTS), more: Math.max(0, cards.length - MAX_AGENTS), others, activity: calls && { ...calls, work } }
 }
 
 // ---------------------------------------------------------------- the picture

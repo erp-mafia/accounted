@@ -18,6 +18,10 @@ vi.mock('@/components/wiki/WikiViews', () => ({ WikiViews: () => null }))
 const COMPANY = 'aaaaaaaa-0000-4000-8000-000000000001'
 vi.mock('../../request-context', () => ({ getDashboardCompanyId: async () => COMPANY }))
 
+// The extensions the installation is built with: the agent connection is the MCP server extension.
+const { enabled } = vi.hoisted(() => ({ enabled: new Set<string>() }))
+vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({ ENABLED_EXTENSION_IDS: enabled }))
+
 const { default: WikiPage } = await import('../page')
 const { PageHeader } = await import('@/components/ui/page-header')
 const { WikiViews } = await import('@/components/wiki/WikiViews')
@@ -38,6 +42,8 @@ async function page(view?: string | string[]) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  enabled.clear()
+  enabled.add('mcp-server')
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -71,6 +77,30 @@ describe('/wiki with the agent picture on', () => {
     // The picture's rows open the same there.
     expect(await page('memory')).toEqual({ title: 'view_context', help: 'picture.help', views: { facts: true, picture: true } })
     await expect(page('map')).rejects.toThrow('NEXT_REDIRECT:/rules')
+  })
+})
+
+describe('/wiki with the agent picture on, on an installation without the agent connection', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
+    enabled.delete('mcp-server')
+  })
+
+  it.each([undefined, 'context', 'checks', 'memory', 'knowledge', 'skills', 'map', 'nonsense'])('leads to Bokföringsregler instead of a page that says the connection does not exist, for view=%s', async (view) => {
+    await expect(page(view)).rejects.toThrow('NEXT_REDIRECT:/rules')
+    expect(redirect).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps Fakta its own view where Arkiv reads the documents', async () => {
+    vi.stubEnv('ARKIV_BRAIN_COMPANY_IDS', COMPANY)
+    expect(await page('facts')).toEqual({ title: 'view_facts', help: 'help', views: { facts: true, picture: true } })
+    expect(redirect).not.toHaveBeenCalled()
+  })
+
+  it('shows the picture again with the connection', async () => {
+    enabled.add('mcp-server')
+    expect(await page()).toEqual({ title: 'view_context', help: 'picture.help', views: { facts: false, picture: true } })
+    expect(redirect).not.toHaveBeenCalled()
   })
 })
 

@@ -12,9 +12,12 @@ import {
   pictureHrefOfView,
   pictureRowHref,
   pictureRowOf,
+  readsBriefingAtLoad,
+  wikiDestination,
   wikiPlace,
   wikiViewHref,
   withoutPictureRow,
+  type WikiCompany,
 } from '../wiki-views'
 
 describe('wiki views', () => {
@@ -128,6 +131,29 @@ describe('what /wiki shows for an address', () => {
     expect(wikiPlace({ view: 'map' }, without)).toEqual({ show: 'view', view: 'map' })
   })
 
+  it('leads every address of the picture to Bokföringsregler on an installation without the agent connection', () => {
+    const noConnection = { picture: true, facts: false, agentConnection: false }
+    // The bare address, each row of the picture, an item, an unknown view: none ends on a page that says the connection does not exist.
+    for (const view of [undefined, null, 'context', 'checks', 'memory', 'knowledge', 'skills', 'map', 'nonsense']) {
+      expect(wikiPlace({ view }, noConnection), String(view)).toEqual({ show: 'redirect', href: '/rules' })
+    }
+    expect(wikiPlace({ view: 'knowledge', item: 'horizontal.swedish-vat' }, noConnection)).toEqual({ show: 'redirect', href: '/rules' })
+    // Fakta is a view of its own where the company has it, with or without the connection.
+    expect(wikiPlace({ view: 'facts' }, { picture: true, facts: true, agentConnection: false })).toEqual({ show: 'view', view: 'facts' })
+  })
+
+  it('shows the picture where the installation has the agent connection, said or not', () => {
+    expect(wikiPlace({}, { picture: true, facts: false, agentConnection: true })).toEqual({ show: 'picture', row: null, item: null })
+    expect(wikiPlace({ view: 'memory' }, { picture: true, facts: false, agentConnection: true })).toEqual({ show: 'picture', row: 'memory', item: null })
+    expect(wikiPlace({ view: 'memory' }, { picture: true, facts: false })).toEqual({ show: 'picture', row: 'memory', item: null })
+  })
+
+  it('leaves a company without the picture as it was on an installation without the agent connection', () => {
+    for (const view of [...WIKI_VIEWS, 'nonsense', null]) {
+      expect(wikiPlace({ view }, { picture: false, facts: false, agentConnection: false })).toEqual(wikiPlace({ view }, { picture: false, facts: false }))
+    }
+  })
+
   it('never leads a company without the picture anywhere else', () => {
     for (const view of [...WIKI_VIEWS, ...PICTURE_ROWS, 'nonsense', null, undefined]) {
       for (const facts of [false, true]) expect(wikiPlace({ view }, { picture: false, facts }).show, String(view)).toBe('view')
@@ -237,5 +263,78 @@ describe('closing a row takes it out of the address', () => {
 
   it('leaves an address that names no row as it is, so nothing is written for a row opened from the card', () => {
     for (const address of ['/wiki', '/wiki#x', '/wiki?ctx=byra']) expect(withoutPictureRow(address)).toBe(address)
+  })
+})
+
+describe('when the page reads the briefing', () => {
+  it('reads it as the page loads without the picture: the context view is the briefing', () => {
+    expect(readsBriefingAtLoad(false, null)).toBe(true)
+    expect(readsBriefingAtLoad(false, 'memory')).toBe(true)
+  })
+
+  it('does not read it as the picture loads: only the Kontext row\'s view shows it', () => {
+    expect(readsBriefingAtLoad(true, null)).toBe(false)
+    expect(readsBriefingAtLoad(true, undefined)).toBe(false)
+    for (const row of PICTURE_ROWS.filter((name) => name !== 'context')) expect(readsBriefingAtLoad(true, row)).toBe(false)
+  })
+
+  it('reads it at load when the address names the Kontext row', () => {
+    expect(readsBriefingAtLoad(true, 'context')).toBe(true)
+  })
+})
+
+describe('where an address into the wiki ends', () => {
+  const withPicture: WikiCompany = { picture: true, facts: false, agentConnection: true }
+  const noConnection: WikiCompany = { picture: true, facts: false, agentConnection: false }
+  const noPicture: WikiCompany = { picture: false, facts: false, agentConnection: true }
+  /** Every address a page forwards into the wiki with, and a few it never would. */
+  const ADDRESSES: string[] = [
+    '/wiki',
+    '/wiki?view=context',
+    '/wiki?view=checks',
+    '/wiki?view=memory',
+    '/wiki?view=knowledge',
+    '/wiki?view=knowledge&item=horizontal.swedish-vat',
+    '/wiki?view=skills',
+    '/wiki?view=facts',
+    '/wiki?view=map',
+    '/wiki?view=nonsense',
+    '/wiki?agent=claude',
+  ]
+
+  it('is the address itself where /wiki shows a page for it', () => {
+    for (const address of ADDRESSES.filter((a) => a !== '/wiki?view=map')) expect(wikiDestination(address, withPicture), address).toBe(address)
+    for (const address of ADDRESSES) expect(wikiDestination(address, noPicture), address).toBe(address)
+  })
+
+  it('is the place /wiki leads on to where it shows none: the map with the picture, everything of the picture without the agent connection', () => {
+    expect(wikiDestination('/wiki?view=map', withPicture)).toBe('/rules')
+    for (const address of ADDRESSES) expect(wikiDestination(address, noConnection), address).toBe('/rules')
+  })
+
+  it('keeps Fakta where the company has it, with or without the agent connection', () => {
+    expect(wikiDestination('/wiki?view=facts', { picture: true, facts: true, agentConnection: false })).toBe('/wiki?view=facts')
+    expect(wikiDestination('/wiki?view=facts', { picture: true, facts: true, agentConnection: true })).toBe('/wiki?view=facts')
+  })
+
+  it('leaves an address that is not the wiki\'s as it is', () => {
+    for (const address of ['/rules', '/skills', '/skills/ny', '/wiki/customer/11111111-1111-4111-8111-111111111111', '/wikipedia?view=map']) {
+      expect(wikiDestination(address, noConnection), address).toBe(address)
+    }
+  })
+
+  it('says for every address what /wiki itself answers: the two cannot disagree', () => {
+    const companies: WikiCompany[] = []
+    for (const picture of [true, false]) for (const facts of [true, false]) for (const agentConnection of [true, false]) companies.push({ picture, facts, agentConnection })
+    for (const company of companies) {
+      for (const address of ADDRESSES) {
+        const query = new URLSearchParams(address.split('?')[1] ?? '')
+        const place = wikiPlace({ view: query.get('view'), item: query.get('item') }, company)
+        expect(wikiDestination(address, company), `${address} ${JSON.stringify(company)}`).toBe(place.show === 'redirect' ? place.href : address)
+        // Where it ends, /wiki shows a page: nothing is left to forward.
+        const end = wikiDestination(address, company)
+        expect(wikiDestination(end, company)).toBe(end)
+      }
+    }
   })
 })

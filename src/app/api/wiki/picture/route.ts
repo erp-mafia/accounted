@@ -4,6 +4,7 @@ import { loadAgentPicture } from '@/lib/agent-context/agent-picture'
 import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
+import { isPosConnectConfigured } from '@/lib/pos-sales/connect-client'
 import { countOpenQuestions } from '@/lib/questions/app-answer'
 import { readSkatteverketConnection } from '@/lib/skatteverket/connection-state'
 import { readReportedSkattekontoSaldo } from '@/lib/skatteverket/skattekonto-ocr'
@@ -27,7 +28,8 @@ import { countPendingOperations } from '@/lib/worklist/categories'
 // What waits on the company's people is counted by the counters Hem and the
 // menu read (the open questions, none for a company without the question
 // list, and the proposals that wait for approval), so the picture says the
-// same numbers.
+// same numbers. A cash register is offered only where the installation has
+// the connector it is connected through.
 export const GET = withRouteContext('wiki.picture.get', async (_request, ctx) => {
   const { supabase, companyId, user, log, requestId } = ctx
   if (!isAgentPictureEnabled(companyId)) return errorResponseFromCode('NOT_FOUND', log, { requestId })
@@ -46,6 +48,7 @@ export const GET = withRouteContext('wiki.picture.get', async (_request, ctx) =>
       const [questions, proposals] = await Promise.all([countOpenQuestions(supabase, companyId), countPendingOperations(supabase, companyId)])
       return { questions, proposals }
     },
+    posConnector: () => isPosConnectConfigured(),
   })
   return NextResponse.json({ data: picture })
 })

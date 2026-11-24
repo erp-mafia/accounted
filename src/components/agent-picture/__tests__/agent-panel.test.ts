@@ -244,6 +244,15 @@ describe('the panel of an agent card', () => {
     expect(textOf(part.match(/<li[^>]*>([\s\S]*?)<\/li>/)![1])).toBe('Ansluten 2026-01-04 Aldrig använd')
   })
 
+  it('says nothing of the use of a connection made in another company unless this company\'s own log holds a call', () => {
+    // Such a key is used in its other companies too: when the key was last used is not handed out.
+    const card: PictureAgentCard = { ...CARD, connections: [connection('c4', { elsewhere: true }), connection('c5', { elsewhere: true })] }
+    const activity: PictureActivity = { now: '2026-03-02T09:00:00.000Z', day: '2026-03-02', actors: { c5: { calls_today: 0, last_call_at: '2026-02-20T07:00:00.000Z' } }, capped: false, memory_facts: 0, work: null }
+    const part = partOf(render({ work: ok(work()), card, activity }), 'Anslutningar')
+    const rows = [...part.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((m) => textOf(m[1]))
+    expect(rows).toEqual(['Ansluten av dig 2026-01-04', 'Ansluten av dig 2026-01-04 Senast använd 2026-02-20'])
+  })
+
   it('shows the connections and the calls while the questions and proposals are on their way, and when they cannot be read', () => {
     const loading = render({ work: { state: 'loading' }, calls })
     expect(partsOf(loading)).toEqual(['Läst', 'Anslutningar'])

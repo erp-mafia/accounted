@@ -7,6 +7,12 @@
  * picture took over lead to it, each in one step and never in a circle.
  * Without it every address answers as it did: the same page, or the same
  * one step to the same place.
+ *
+ * The walk states the installation itself: with the agent connection (the
+ * MCP server extension) unless a case takes it away, never by what the
+ * generated extension list of the machine happens to hold. Without the
+ * connection there is no picture to show, and every address the picture
+ * took over ends on Bokföringsregler, still in one step.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -32,6 +38,10 @@ vi.mock('@/components/skills/InstructionDetail', () => ({ InstructionDetail: () 
 vi.mock('@/components/rules/RulesList', () => ({ default: () => null }))
 vi.mock('@/components/rules/BookingBlocks', () => ({ default: () => null }))
 vi.mock('@/lib/agent-context/profile-line', () => ({ readProfileFacts: async () => ({ method: null, vatPeriod: null, series: [] }), profileLine: () => null }))
+
+// The extensions the installation is built with, as the pages read them.
+const { extensions } = vi.hoisted(() => ({ extensions: new Set<string>() }))
+vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({ ENABLED_EXTENSION_IDS: extensions }))
 
 const COMPANY = 'aaaaaaaa-0000-4000-8000-000000000001'
 vi.mock('../request-context', () => ({
@@ -102,8 +112,15 @@ function agentsPage(on: boolean) {
   vi.stubEnv('AGENTS_PAGE_COMPANY_IDS', on ? COMPANY : 'another-company')
 }
 
+/** The installation: with or without the agent connection (the MCP server extension). */
+function agentConnection(on: boolean) {
+  extensions.clear()
+  if (on) extensions.add('mcp-server')
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  agentConnection(true)
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -155,6 +172,73 @@ describe.each([
     for (const address of EVERY) {
       const { steps } = await walk(address)
       expect(steps.length, address).toBeLessThanOrEqual(1)
+    }
+  })
+})
+
+describe.each([
+  ['the Agenter page open', true],
+  ['the Agenter page closed', false],
+])('with the agent picture on, without the agent connection, and %s', (_name, agents) => {
+  beforeEach(() => {
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', COMPANY)
+    agentsPage(agents)
+    agentConnection(false)
+  })
+
+  it('leads /wiki and every address that names a row of the picture to Bokföringsregler, in one step', async () => {
+    for (const address of [...WIKI, '/wiki?view=map']) expect(await walk(address), address).toEqual({ end: '/rules', steps: ['/rules'] })
+  })
+
+  it('leads each address that forwards into the picture to Bokföringsregler itself, in one step and not by way of /wiki', async () => {
+    for (const address of ['/skills', '/skills/kunskap.horizontal.swedish-vat', ...FORWARDS]) {
+      expect(await walk(address), address).toEqual({ end: '/rules', steps: ['/rules'] })
+    }
+  })
+
+  it('keeps /rules a page, an own item\'s pages open, and the other ids under /skills by the Agenter page switch alone', async () => {
+    expect(await walk('/rules')).toEqual({ end: '/rules', steps: [] })
+    expect(await walk('/skills/ny')).toEqual({ end: '/skills/ny', steps: [] })
+    expect(await walk('/skills/bookkeep')).toEqual(agents ? { end: '/skills/bookkeep', steps: [] } : { end: 'not found', steps: [] })
+  })
+
+  it('never goes in a circle, never takes a second step and never ends on /wiki, from any address', async () => {
+    for (const address of EVERY) {
+      const { end, steps } = await walk(address)
+      expect(steps.length, address).toBeLessThanOrEqual(1)
+      expect(end.startsWith('/wiki'), `${address} ends on ${end}`).toBe(false)
+      for (const step of steps) expect(step.startsWith('/wiki'), `${address} goes by way of ${step}`).toBe(false)
+    }
+  })
+
+  it('keeps Fakta a page of its own where Arkiv reads the documents: it needs no agent connection', async () => {
+    vi.stubEnv('ARKIV_BRAIN_COMPANY_IDS', COMPANY)
+    expect(await walk('/wiki?view=facts')).toEqual({ end: '/wiki?view=facts', steps: [] })
+    expect(await walk('/agent-knowledge?view=facts')).toEqual({ end: '/wiki?view=facts', steps: ['/wiki?view=facts'] })
+    // Every other address still ends on Bokföringsregler, in one step.
+    for (const address of ['/wiki', '/wiki?view=memory', '/skills', '/agent-knowledge', '/settings/assistant?view=memory']) {
+      expect(await walk(address), address).toEqual({ end: '/rules', steps: ['/rules'] })
+    }
+  })
+})
+
+describe('with the agent picture off, the agent connection changes nothing', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENT_PICTURE_COMPANY_IDS', 'another-company')
+  })
+
+  it.each([
+    ['open', true],
+    ['closed', false],
+  ])('answers every address the same in both installations, in one step at most (Agenter page %s)', async (_name, agents) => {
+    agentsPage(agents)
+    for (const address of EVERY) {
+      agentConnection(true)
+      const withConnection = await walk(address)
+      agentConnection(false)
+      const withoutConnection = await walk(address)
+      expect(withoutConnection, address).toEqual(withConnection)
+      expect(withoutConnection.steps.length, address).toBeLessThanOrEqual(1)
     }
   })
 })

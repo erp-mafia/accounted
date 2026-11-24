@@ -54,6 +54,17 @@ export function pictureRowOf(view: string | null | undefined): PictureRow | null
   return view && Object.hasOwn(ROW_OF_VIEW, view) ? ROW_OF_VIEW[view] : null
 }
 
+/**
+ * Whether the page reads the briefing (GET /api/wiki/context) as it loads.
+ * Without the picture the context view is the briefing, so it does. With
+ * the picture only the Kontext row's view shows the briefing: it is read at
+ * load when the address names that row, and otherwise when the row is first
+ * opened.
+ */
+export function readsBriefingAtLoad(picture: boolean, row: PictureRow | null | undefined): boolean {
+  return !picture || row === 'context'
+}
+
 /** The query parameter that names one knowledge item of the Kunskap row. */
 export const PICTURE_ITEM_PARAM = 'item'
 
@@ -113,6 +124,19 @@ export function pictureHrefOfView(view: WikiView): string {
   return wikiViewHref(view)
 }
 
+/**
+ * What decides where an address of the wiki ends, for one company: whether
+ * it has the agent picture, whether it has Fakta, and whether the
+ * installation has the agent connection (the MCP server extension; taken as
+ * there when not given). lib/agent-context/wiki-company.ts reads it on the
+ * server.
+ */
+export interface WikiCompany {
+  picture: boolean
+  facts: boolean
+  agentConnection?: boolean
+}
+
 /** What /wiki shows for an address: one of its views, the picture with the row and the item the address names, or another page. */
 export type WikiPlace =
   | { show: 'view'; view: WikiView }
@@ -121,7 +145,9 @@ export type WikiPlace =
 
 /**
  * What /wiki shows for `view` and `item`, for a company with or without the
- * agent picture (`picture`) and with or without Fakta (`facts`).
+ * agent picture (`picture`) and with or without Fakta (`facts`), on an
+ * installation with or without the agent connection (`agentConnection`,
+ * the MCP server extension; taken as there when not given).
  *
  * Without the picture it is the wiki view the address names: a `view` the
  * wiki does not know, the picture's own row names among them, lands on the
@@ -131,14 +157,39 @@ export type WikiPlace =
  * that row, and `item` one folder of the Kunskap row. The map leads to
  * Bokföringsregler, and Fakta (where the company has it) stays a view of
  * its own.
+ *
+ * With the picture on an installation without the agent connection there is
+ * no picture to show (it is what a connected agent gets): every address
+ * that would show it leads to Bokföringsregler, the other row of the
+ * Agenter menu there, so neither the address nor a redirect into it ends on
+ * a page that only says the connection does not exist.
  */
-export function wikiPlace(address: { view?: string | null; item?: string | null }, company: { picture: boolean; facts: boolean }): WikiPlace {
+export function wikiPlace(address: { view?: string | null; item?: string | null }, company: WikiCompany): WikiPlace {
   const parsed = parseWikiView(address.view)
   const view = parsed === 'facts' && !company.facts ? 'context' : parsed
   if (!company.picture || view === 'facts') return { show: 'view', view }
-  if (view === 'map') return { show: 'redirect', href: PICTURE_PROFILE_HREF }
+  if (view === 'map' || company.agentConnection === false) return { show: 'redirect', href: PICTURE_PROFILE_HREF }
   const row = pictureRowOf(address.view)
   return { show: 'picture', row, item: row === 'knowledge' && address.item ? address.item : null }
+}
+
+/** The wiki's own path. */
+const WIKI_PATH = '/wiki'
+
+/**
+ * Where an address ends for a company: the address itself when it is not
+ * /wiki's, or when /wiki shows a page for it; the place /wiki leads on to
+ * otherwise. It asks wikiPlace, the function /wiki itself asks, so a page
+ * that forwards into the wiki and names this place forwards once: /wiki has
+ * nothing left to forward, and the two cannot disagree.
+ */
+export function wikiDestination(href: string, company: WikiCompany): string {
+  const hashAt = href.indexOf('#')
+  const [path, search = ''] = (hashAt < 0 ? href : href.slice(0, hashAt)).split('?')
+  if (path !== WIKI_PATH) return href
+  const query = new URLSearchParams(search)
+  const place = wikiPlace({ view: query.get('view'), item: query.get(PICTURE_ITEM_PARAM) }, company)
+  return place.show === 'redirect' ? place.href : href
 }
 
 /**

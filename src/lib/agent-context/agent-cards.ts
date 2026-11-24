@@ -175,7 +175,10 @@ export const AGENT_RESOLVED_DAYS = 30
 /**
  * What a card's line says, the first that holds: a call in the last minute,
  * what it did for the company today (questions asked, proposals prepared),
- * the calls it made today, when it was last used, or that it never was.
+ * the calls it made today, when it was last used, or that it never was. A
+ * card with a connection made in another company (`elsewhere`) and no use
+ * here that is known says only that it is connected: whether such a key was
+ * ever used is not this company's to say.
  */
 export type AgentCardLine =
   | { kind: 'reading' }
@@ -183,6 +186,7 @@ export type AgentCardLine =
   | { kind: 'calls'; count: number; last_call_at: string; capped: boolean }
   | { kind: 'last_used'; at: string }
   | { kind: 'never_used' }
+  | { kind: 'connected' }
 
 export interface AgentCardState {
   line: AgentCardLine
@@ -225,7 +229,7 @@ export function agentCardState(card: Pick<PictureAgentCard, 'connections' | 'lab
   const lastCall = newest(seen.map((connection) => connection.last_call_at))
   const active = activity ? isReadingNow(lastCall, activity.now) : false
   const capped = activity?.capped ?? false
-  // A connection's last call when the log holds one, else when its key was last used.
+  // A connection's last call when the log holds one, else when its key was last used (not known of a connection made in another company).
   const lastUsed = newest(seen.map((connection) => connection.last_call_at ?? connection.last_used_at))
   const work = cardWork(card, activity?.work)
 
@@ -234,7 +238,7 @@ export function agentCardState(card: Pick<PictureAgentCard, 'connections' | 'lab
   else if (work.questions > 0 || work.proposals > 0) line = { kind: 'work', questions: work.questions, proposals: work.proposals }
   else if (activity && calls > 0 && lastCall) line = { kind: 'calls', count: calls, last_call_at: lastCall, capped }
   else if (lastUsed) line = { kind: 'last_used', at: lastUsed }
-  else line = { kind: 'never_used' }
+  else line = card.connections.some((connection) => connection.elsewhere) ? { kind: 'connected' } : { kind: 'never_used' }
 
   return { line, active, calls, last_call_at: lastCall, capped, connections: card.connections.length }
 }

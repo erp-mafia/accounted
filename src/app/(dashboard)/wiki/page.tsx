@@ -4,8 +4,7 @@ import { getTranslations } from 'next-intl/server'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { WikiViews } from '@/components/wiki/WikiViews'
-import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
-import { isAgentPictureEnabled } from '@/lib/env/agent-picture-switch'
+import { wikiCompany } from '@/lib/agent-context/wiki-company'
 import { wikiPlace } from '@/lib/agent-context/wiki-views'
 import { getDashboardCompanyId } from '../request-context'
 
@@ -24,13 +23,20 @@ import { getDashboardCompanyId } from '../request-context'
  * picture's own title, and the map leads to Bokföringsregler, where its
  * lines are. The switch is read here, on the server: the browser gets a
  * boolean.
+ *
+ * On an installation without the agent connection (the MCP server
+ * extension) there is no picture to show, and the menu has no Kontext row
+ * (nav-v3.ts): an address that would show the picture leads to
+ * Bokföringsregler instead (wikiPlace). The pages that forward into /wiki
+ * ask the same function about the same company (wikiCompany,
+ * wikiDestination), so each of them names the final place itself.
  */
 export default async function WikiPage({ searchParams }: { searchParams: Promise<{ view?: string | string[] }> }) {
   const companyId = await getDashboardCompanyId()
-  const facts = !!companyId && isArkivBrainEnabled(companyId)
-  const picture = isAgentPictureEnabled(companyId)
+  const company = wikiCompany(companyId)
+  const { facts, picture } = company
   const raw = (await searchParams).view
-  const place = wikiPlace({ view: Array.isArray(raw) ? raw[0] : raw }, { picture, facts })
+  const place = wikiPlace({ view: Array.isArray(raw) ? raw[0] : raw }, company)
   if (place.show === 'redirect') redirect(place.href)
   const t = await getTranslations('wiki')
   // The top bar names the view, as the menu does: Kontext and Minne are rows
