@@ -15,7 +15,14 @@
  *   - iPhone/iPad: the universal link with the current page as the redirect,
  *     so the BankID app hands the person back to this very page, which
  *     re-polls on return. The bankid:/// scheme has no association with the
- *     Safari tab and would open the return in a new one.
+ *     Safari tab and would open the return in a new one. The redirect is the
+ *     page with a fragment of its own for this order (#bankid-...), as
+ *     BankID's return URL guide says (developers.bankid.com/how-to-guides/
+ *     return-url: the exact URL of the tab, a nonce in the fragment). Safari
+ *     then comes back to the tab as a jump within the page, which keeps its
+ *     polling; the page's own URL as it was made Safari reload the tab, which
+ *     dropped the polling. The fragment is a mark, not a credential: nothing
+ *     reads it except a page that wants to know it is a BankID return.
  *   - Android: the universal link with redirect=null. The BankID app returns
  *     through the task stack; a real redirect URL would spawn a new tab or
  *     Chrome instance instead (components/auth/BankIdAuth.tsx learned this).
@@ -50,6 +57,37 @@ export function detectBankIdDevice(userAgent: string | null = typeof navigator =
 export function bankIdAutostartHref(token: string, device: BankIdDevice = detectBankIdDevice()): string {
   const autostart = `autostarttoken=${encodeURIComponent(token)}`
   if (!device.mobile || !device.appLink) return `bankid:///?${autostart}&redirect=null`
-  const redirect = device.ios && device.pageUrl ? encodeURIComponent(device.pageUrl) : 'null'
+  const redirect = device.ios && device.pageUrl ? encodeURIComponent(bankIdReturnUrl(device.pageUrl, token)) : 'null'
   return `https://app.bankid.com/?${autostart}&redirect=${redirect}`
+}
+
+const RETURN_FRAGMENT_PREFIX = '#bankid-'
+
+/**
+ * The page the BankID app returns to on an iPhone: the page without its
+ * fragment, plus a fragment for this order. One per order, because a return
+ * URL equal to the tab's current one (a second attempt from a tab that already
+ * came back once) is the reload again. Derived from the token so a render
+ * gives the same link every time, and hashed so the token, which starts the
+ * order, stays out of the browser history.
+ */
+export function bankIdReturnUrl(pageUrl: string, token: string): string {
+  const fragment = pageUrl.indexOf('#')
+  const page = fragment === -1 ? pageUrl : pageUrl.slice(0, fragment)
+  return `${page}${RETURN_FRAGMENT_PREFIX}${fnv1a(token).toString(36)}`
+}
+
+/** True when a page was opened by the BankID app's return (`location.hash`). */
+export function isBankIdReturn(hash: string): boolean {
+  return hash.startsWith(RETURN_FRAGMENT_PREFIX)
+}
+
+/** 32-bit FNV-1a: a short value that differs per token and does not reveal it. */
+function fnv1a(value: string): number {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return hash >>> 0
 }
