@@ -495,8 +495,12 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         return { ...base, failure: { code: poll.failure_code, text: poll.failure_text } }
       }
       if (poll.state === 'valid') {
-        if (state.secondConsent) {
-          // Svea's second round is through: the chosen accounts are confirmed and the first sync runs next.
+        // Svea's second round is through: the chosen accounts are confirmed
+        // and the first sync runs next. The server's word that the row is
+        // already live counts too: Svea's second consent signs on the bank's
+        // own page, so the person comes back into a resumed flow that never
+        // saw the first round, and there is no account left to choose.
+        if (state.secondConsent || poll.status === 'active') {
           return { ...base, failure: null, confirmed: true }
         }
         const accounts = poll.accounts ?? []

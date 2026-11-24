@@ -34,6 +34,7 @@ import {
   isByraManaged,
   reminderKindDue,
   runBankSwitchReminderCron,
+  uncoveredMailDue,
   sendBankSwitchMail,
   sendByraNudge,
   SWITCH_REMINDER_RUN_BUDGET_MS,
@@ -111,6 +112,27 @@ describe('reminderKindDue', () => {
     expect(reminderKindDue(5, new Set(['reminder_14']))).toBe('reminder_7')
     expect(reminderKindDue(5, new Set(['reminder_7']))).toBeNull()
     expect(reminderKindDue(1, new Set(['reminder_14', 'reminder_7', 'reminder_3', 'reminder_1']))).toBeNull()
+  })
+
+  it('counts a mail that went inside a threshold as that threshold\'s reminder', () => {
+    // The announcement went with 5 days left: it covers the 7-day reminder.
+    expect(reminderKindDue(4, new Set(['announcement']), 5)).toBeNull()
+    expect(reminderKindDue(3, new Set(['announcement']), 5)).toBe('reminder_3')
+    // The 3-day reminder went with 3 days left; the next is the last day's.
+    expect(reminderKindDue(2, new Set(['announcement', 'reminder_3']), 3)).toBeNull()
+    expect(reminderKindDue(1, new Set(['announcement', 'reminder_3']), 3)).toBe('reminder_1')
+    expect(reminderKindDue(0, new Set(['announcement', 'reminder_3', 'reminder_1']), 1)).toBeNull()
+    // An announcement 20 days out covers nothing inside 14 days.
+    expect(reminderKindDue(14, new Set(['announcement']), 20)).toBe('reminder_14')
+  })
+})
+
+describe('uncoveredMailDue', () => {
+  it('is the one announcement, until the deadline day, and nothing after it went or after the deadline', () => {
+    expect(uncoveredMailDue(5, new Set())).toBe('announcement')
+    expect(uncoveredMailDue(0, new Set())).toBe('announcement')
+    expect(uncoveredMailDue(3, new Set(['announcement']))).toBeNull()
+    expect(uncoveredMailDue(-1, new Set())).toBeNull()
   })
 })
 
@@ -323,7 +345,7 @@ describe('runBankSwitchReminderCron', () => {
     mocks.states.mockResolvedValue(new Map([['co-1', state()], ['co-2', state({ state: 'done', pending: [] })]]))
     const { service, payloads } = stub()
     const result = await runBankSwitchReminderCron(service, log, { now: NOW, env })
-    expect(result.sent).toEqual({ announcement: 1, reminder: 0, sunset: 0 })
+    expect(result.sent).toEqual({ announcement: 1, reminder: 0, sunset: 0, uncovered: 0 })
     expect(mocks.sendEmail).toHaveBeenCalledTimes(1)
     expect(payloads('bank_switch_notifications', 'insert')).toEqual([{ company_id: 'co-1', kind: 'announcement', recipient_count: 2 }])
   })
@@ -360,7 +382,7 @@ describe('runBankSwitchReminderCron', () => {
     mocks.states.mockResolvedValue(new Map([['co-1', state({ days_left: -2, passed: true })]]))
     ;({ service } = stub({ bank_switch_notifications: sendLog({ data: [{ company_id: 'co-1', kind: 'announcement' }, { company_id: 'co-1', kind: 'reminder_7' }] }) }))
     const result = await runBankSwitchReminderCron(service, log, { now: NOW, env })
-    expect(result.sent).toEqual({ announcement: 0, reminder: 0, sunset: 1 })
+    expect(result.sent).toEqual({ announcement: 0, reminder: 0, sunset: 1, uncovered: 0 })
     expect((mocks.sendEmail.mock.calls[0][0] as { subject: string }).subject).toMatch(/Från i dag hämtar den gamla kopplingen inga transaktioner/)
   })
 
@@ -374,7 +396,7 @@ describe('runBankSwitchReminderCron', () => {
     const everyReminder = ['announcement', 'reminder_14', 'reminder_7', 'reminder_3', 'reminder_1'].map((kind) => ({ company_id: 'co-1', kind }))
     let { service, payloads } = stub({ bank_switch_notifications: sendLog({ data: everyReminder }) })
     const day = await runBankSwitchReminderCron(service, log, { now: NOW, env })
-    expect(day.sent).toEqual({ announcement: 0, reminder: 0, sunset: 2 })
+    expect(day.sent).toEqual({ announcement: 0, reminder: 0, sunset: 2, uncovered: 0 })
     expect(payloads('bank_switch_notifications', 'insert')).toEqual([
       { company_id: 'co-1', kind: 'sunset', recipient_count: 2 },
       { company_id: 'co-2', kind: 'sunset', recipient_count: 2 },
@@ -387,9 +409,62 @@ describe('runBankSwitchReminderCron', () => {
     mocks.states.mockResolvedValue(new Map([['co-1', state({ days_left: -2, passed: true })], ['co-2', state({ days_left: -2, passed: true })]]))
     ;({ service, payloads } = stub({ bank_switch_notifications: sendLog({ data: [...everyReminder, { company_id: 'co-1', kind: 'sunset' }, { company_id: 'co-2', kind: 'sunset' }] }) }))
     const after = await runBankSwitchReminderCron(service, log, { now: NOW, env })
-    expect(after.sent).toEqual({ announcement: 0, reminder: 0, sunset: 0 })
+    expect(after.sent).toEqual({ announcement: 0, reminder: 0, sunset: 0, uncovered: 0 })
     expect(after.skipped.already).toBe(2)
     expect(mocks.sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('sends a campaign that starts 5 days out 4 mails in all: the announcement covers the 7-day reminder', async () => {
+    // DEADLINE is 2026-11-09: the mails start on the 4th (5 days left) and the feed stops on the 10th.
+    const logged: Array<{ company_id: string; kind: string; sent_at: string }> = []
+    const kinds: Array<string | null> = []
+    for (const daysLeft of [5, 4, 3, 2, 1, 0, -1]) {
+      const day = new Date(Date.UTC(2026, 10, 9 - daysLeft, 6, 30))
+      mocks.states.mockResolvedValue(new Map([['co-1', state({ days_left: daysLeft, passed: daysLeft < 0 })]]))
+      const { service, payloads } = stub({ bank_switch_notifications: sendLog({ data: [...logged] }) })
+      await runBankSwitchReminderCron(service, log, { now: day, env })
+      const inserted = payloads('bank_switch_notifications', 'insert') as Array<{ kind: string }>
+      kinds.push(inserted[0]?.kind ?? null)
+      for (const row of inserted) logged.push({ company_id: 'co-1', kind: row.kind, sent_at: day.toISOString() })
+    }
+    expect(kinds).toEqual(['announcement', null, 'reminder_3', null, 'reminder_1', null, 'sunset'])
+  })
+
+  it('mails a company whose banks the new provider does not reach once, before the deadline, to the bank file import', async () => {
+    const uncovered = state({ state: 'uncovered', pending: [], uncovered: [{ connection_id: 'w-1', bank_name: 'Wise' }], days_left: 5 })
+    mocks.states.mockResolvedValue(new Map([['co-1', uncovered]]))
+    let { service, payloads } = stub()
+    const first = await runBankSwitchReminderCron(service, log, { now: NOW, env })
+    expect(first.sent).toEqual({ announcement: 0, reminder: 0, sunset: 0, uncovered: 1 })
+    expect(payloads('bank_switch_notifications', 'insert')).toEqual([{ company_id: 'co-1', kind: 'announcement', recipient_count: 2 }])
+    const mail = mocks.sendEmail.mock.calls[0][0] as { subject: string; text: string }
+    expect(mail.subject).toBe('Kopplingen till Wise slutar hämta transaktioner 9 nov. 2026 - Exempelbolaget AB')
+    expect(mail.text).toMatch(/importera det under Importera, Bankfil/)
+    expect(mail.text).toContain('Importera bankfil: https://app.gnubok.se/import?mode=bank')
+    expect(mail.text).not.toMatch(/Byt till ny koppling/)
+
+    // Told once: no reminder, and nothing on or after the day the feed stops.
+    mocks.sendEmail.mockClear()
+    for (const days of [3, 1, 0, -1]) {
+      mocks.states.mockResolvedValue(new Map([['co-1', { ...uncovered, days_left: days, passed: days < 0 }]]))
+      ;({ service, payloads } = stub({ bank_switch_notifications: sendLog({ data: [{ company_id: 'co-1', kind: 'announcement' }] }) }))
+      const later = await runBankSwitchReminderCron(service, log, { now: NOW, env })
+      expect(later.sent.uncovered).toBe(0)
+    }
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+    mocks.states.mockResolvedValue(new Map([['co-2', { ...uncovered, days_left: -1, passed: true }]]))
+    ;({ service } = stub())
+    expect((await runBankSwitchReminderCron(service, log, { now: NOW, env })).sent.uncovered).toBe(0)
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('names the banks the new provider does not reach in the switch mail of a company that also banks there', async () => {
+    mocks.states.mockResolvedValue(new Map([['co-1', state({ uncovered: [{ connection_id: 'p-1', bank_name: 'PayPal' }] })]]))
+    const { service } = stub()
+    await runBankSwitchReminderCron(service, log, { now: NOW, env })
+    const mail = mocks.sendEmail.mock.calls[0][0] as { text: string }
+    expect(mail.text).toMatch(/Byt bankkoppling: /)
+    expect(mail.text).toContain('PayPal nås inte av den nya leverantören: efter 9 nov. 2026 importerar du kontoutdrag därifrån som fil under Importera, Bankfil.')
   })
 
   it('counts companies without recipients and failed sends without stopping the run', async () => {

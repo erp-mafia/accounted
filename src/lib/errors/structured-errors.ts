@@ -5802,6 +5802,19 @@ const BANK_SYNC: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_connect_bank',
     },
   },
+  // Enable Banking takes no new connection, renewal or reuse once the switch
+  // campaign is on (lib/bank-feed/switch-campaign.ts enableBankingClosedToNew):
+  // a consent signed there would end with the feed on the deadline. The
+  // route's own sentence names where the bank goes instead.
+  ENABLE_BANKING_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Den gamla bankkopplingen tar inte emot nya kopplingar.',
+    message_en: 'The old bank connection (Enable Banking) takes no new connection or renewal any more. A bank the new provider reaches is connected through its own flow (BankID, switch_url from gnubok_connect_bank); one it does not reach is imported as bank statement files.',
+    remediation: {
+      description: 'Give the user the switch_url or connect_url from gnubok_connect_bank; only they can sign the new consent with BankID.',
+      tool: 'gnubok_connect_bank',
+    },
+  },
   // The Enable Banking to Open Payments switch campaign (lib/bank-feed/switch-campaign.ts).
   BANK_SWITCH_CAMPAIGN_OFF: {
     httpStatus: 409,

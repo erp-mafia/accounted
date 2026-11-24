@@ -10,7 +10,8 @@ export const maxDuration = 300
  * admitted company stands in the Enable Banking to Open Payments switch, and
  * when OPENPAYMENTS_SWITCH_DEADLINE and OPENPAYMENTS_SWITCH_MAILS=true are
  * both set, the announcement once per pending company and the reminders at
- * 14, 7, 3 and 1 days (lib/bank-feed/switch-notifications.ts). A truthful
+ * 14, 7, 3 and 1 days, and one mail to a company whose banks the new
+ * provider does not reach (lib/bank-feed/switch-notifications.ts). A truthful
  * count-only answer while the campaign is off or the mails are not.
  */
 export const GET = withServiceCronContext('cron.open_payments_switch_reminders', async (_request, ctx) => {

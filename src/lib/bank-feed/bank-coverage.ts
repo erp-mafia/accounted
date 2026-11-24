@@ -9,20 +9,18 @@
 
 /**
  * Banks Open Payments does not reach at all, as substrings of the Enable
- * Banking bank name (lower-cased). Checked BEFORE the name match against the
- * Open Payments list: "Nordea First Card" would otherwise match "Nordea".
- * The SQL counter (bank_switch_progress) takes this same list as its
- * argument, so it is defined once.
+ * Banking bank name (lower-cased): none of them is in its bank list for any
+ * country, as a bank or as an affiliate. Checked BEFORE the name match
+ * against the Open Payments list: "Nordea First Card" would otherwise match
+ * "Nordea". The SQL counter (bank_switch_progress) takes this same list as
+ * its argument, so it is defined once.
  *
- * Svea is on it (crm#1424): its named-account consent is accepted, but a
- * consent in the { access: { accounts } } shape grants no transactions, and
- * every read answers 401 "Account(s) need to be defined in the consent
- * request to access details". Until a Svea consent reads transactions, its
- * rows keep Enable Banking and the new flow points there. Svea comes off the
- * list once a pilot company (door.ts reachesUncoveredBanks) has read
- * transactions through Open Payments.
+ * Svea Bank is not on it: Open Payments serves it under SVEASESS although its
+ * catalogue leaves it out (Connect answers a static entry, signing on the
+ * bank's own page), and its two consents (one listing the accounts, one
+ * naming the chosen ones) both sign there.
  */
-export const UNCOVERED_BANK_NEEDLES: readonly string[] = ['wise', 'paypal', 'norwegian', 'first card', 'juni', 'svea']
+export const UNCOVERED_BANK_NEEDLES: readonly string[] = ['wise', 'paypal', 'norwegian', 'first card', 'juni', 'wamo', 'pleo']
 
 /** Whether Open Payments reaches this bank (every bank not on the uncovered list counts as covered). */
 export function bankCoveredByOpenPayments(bankName: string | null | undefined): boolean {

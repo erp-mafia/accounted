@@ -7,13 +7,23 @@
  *   - The daily cron (runBankSwitchReminderCron) sends every pending company
  *     the announcement once, then one reminder per threshold (14, 7, 3 and 1
  *     days before the deadline; a run that missed a day sends the reminder
- *     of the threshold it is now inside, never two in one day). On the
+ *     of the threshold it is now inside, never two in one day). A mail that
+ *     went inside a threshold covers it: the announcement of a campaign that
+ *     starts 5 days out stands for the 7-day reminder, so the next mail is
+ *     the 3-day one (4 mails in all for such a campaign, the sunset mail
+ *     included, instead of 5 in 7 days). On the
  *     first run after the deadline day, the day the Enable Banking feed
  *     stops (switch-campaign.ts enableBankingSunset), one final mail,
  *     `sunset`, says that from today the old connection fetches nothing:
  *     once per company, whatever reminders went before, and nothing after
  *     it. The deadline day itself keeps its "i dag är sista dagen" reminder,
  *     since the feed still runs that day.
+ *   - A company whose only Enable Banking rows are at banks the new provider
+ *     does not reach (state 'uncovered') gets one mail before the deadline:
+ *     its feed ends then and the bank statement is imported as a file. It is
+ *     logged as `announcement` (the company has been told; nothing else is
+ *     ever due for it). A pending company that also banks there gets the
+ *     same line in its switch mails.
  *   - A byrå nudges one client (sendByraNudge): the announcement mail to the
  *     client's own owners and admins, at most once per 7 days per client.
  *   - Nothing is sent unless BOTH the campaign is on and
@@ -35,8 +45,10 @@ import { resolveCompanyAdminEmails } from '@/lib/notifications/member-email'
 import { chunk } from '@/lib/utils'
 import type { BankFeedEnv } from './door'
 import {
+  BANK_FILE_IMPORT_PATH,
   bankSwitchProgressTotals,
   switchCampaign,
+  switchDaysLeft,
   switchLinkFor,
   switchMailsEnabled,
   SWITCH_REMINDER_DAYS,
@@ -59,15 +71,21 @@ export interface BankSwitchSendResult {
 }
 
 /**
- * Which reminder a pending company is due, given the days left and the mails
- * it already got: the smallest threshold the day is inside whose reminder
- * never went. Null when none is due (more than 14 days left, or every
- * reminder up to the current threshold has gone).
+ * Which reminder a pending company is due, given the days left, the mails it
+ * already got and the days that were left when its latest announcement or
+ * reminder went (null when none went, or the day is not known): the smallest
+ * threshold the day is inside, unless its reminder went or a later mail
+ * already went inside that threshold. Null when none is due (more than 14
+ * days left, or the current threshold is covered).
  */
-export function reminderKindDue(daysLeft: number, sent: ReadonlySet<string>): BankSwitchMailKind | null {
+export function reminderKindDue(daysLeft: number, sent: ReadonlySet<string>, lastMailDaysLeft: number | null = null): BankSwitchMailKind | null {
   const due = SWITCH_REMINDER_DAYS.filter((threshold) => daysLeft <= threshold)
   if (due.length === 0) return null
-  const kind = `reminder_${Math.min(...due)}` as BankSwitchMailKind
+  const threshold = Math.min(...due)
+  // The announcement of a short campaign (or a reminder a missed day caught
+  // up with) already went inside this threshold: it said the same thing.
+  if (lastMailDaysLeft !== null && lastMailDaysLeft <= threshold) return null
+  const kind = `reminder_${threshold}` as BankSwitchMailKind
   return sent.has(kind) ? null : kind
 }
 
@@ -79,9 +97,19 @@ export function reminderKindDue(daysLeft: number, sent: ReadonlySet<string>): Ba
  * of the threshold the day is inside (reminderKindDue), the deadline day
  * included. Null when nothing is due.
  */
-export function campaignMailDue(daysLeft: number, sent: ReadonlySet<string>): BankSwitchMailKind | null {
+export function campaignMailDue(daysLeft: number, sent: ReadonlySet<string>, lastMailDaysLeft: number | null = null): BankSwitchMailKind | null {
   if (daysLeft < 0) return sent.has('sunset') ? null : 'sunset'
-  return sent.has('announcement') ? reminderKindDue(daysLeft, sent) : 'announcement'
+  return sent.has('announcement') ? reminderKindDue(daysLeft, sent, lastMailDaysLeft) : 'announcement'
+}
+
+/**
+ * Which mail a company whose banks the new provider does not reach is due:
+ * the one announcement that its feed ends on the deadline and the file
+ * import follows, until the deadline day. Null once it went, and after the
+ * deadline (the Kopplingar row and the notice line say it from then on).
+ */
+export function uncoveredMailDue(daysLeft: number, sent: ReadonlySet<string>): BankSwitchMailKind | null {
+  return daysLeft >= 0 && !sent.has('announcement') ? 'announcement' : null
 }
 
 /** Whether the company belongs to a byrå team: the mail then says the client's own BankID signs the switch. */
@@ -137,12 +165,24 @@ export async function sendBankSwitchMail(
       isByraManaged(service, companyId),
       service.from('company_settings').select('company_name').eq('company_id', companyId).maybeSingle(),
     ])
+    // A company with nothing to switch is told about the banks the new
+    // provider does not reach, and led to the file import.
+    const uncoveredOnly = state.pending.length === 0
+    const base = getBaseUrlForBrand(sender.brand)
+    const uncoveredBankNames = state.uncovered.map((u) => u.bank_name).filter(Boolean)
     const data = {
-      kind: kind === 'sunset' ? ('sunset' as const) : kind === 'announcement' || kind === 'byra_nudge' ? ('announcement' as const) : ('reminder' as const),
-      bankNames: state.pending.map((p) => p.bank_name).filter(Boolean),
+      kind: uncoveredOnly
+        ? ('uncovered' as const)
+        : kind === 'sunset'
+          ? ('sunset' as const)
+          : kind === 'announcement' || kind === 'byra_nudge'
+            ? ('announcement' as const)
+            : ('reminder' as const),
+      bankNames: uncoveredOnly ? uncoveredBankNames : state.pending.map((p) => p.bank_name).filter(Boolean),
+      uncoveredBankNames: uncoveredOnly ? [] : uncoveredBankNames,
       deadline: state.deadline,
       daysLeft: state.days_left,
-      switchUrl: switchLinkFor(state, getBaseUrlForBrand(sender.brand)),
+      switchUrl: uncoveredOnly ? `${base}${BANK_FILE_IMPORT_PATH}` : switchLinkFor(state, base),
       companyName: ((settings.data as { company_name?: string | null } | null)?.company_name ?? '').trim(),
       byraManaged,
     }
@@ -173,7 +213,9 @@ export async function sendBankSwitchMail(
     }
     if (answer.outcome === 'sent') return { outcome: 'sent', recipients: recipients.length }
 
-    if (answer.outcome === 'refused' || UNLOGGED_WHEN_UNCLEAR.has(kind)) {
+    // The one mail to a company with nothing to switch has nothing after it either.
+    const unloggedWhenUnclear = UNLOGGED_WHEN_UNCLEAR.has(kind) || uncoveredOnly
+    if (answer.outcome === 'refused' || unloggedWhenUnclear) {
       // Nothing went out (refused), or the mail is one a later run must send
       // again rather than miss: the row comes off.
       const { error: removeError } = await service
@@ -186,7 +228,7 @@ export async function sendBankSwitchMail(
     }
     if (answer.outcome === 'refused') {
       log?.warn('bank switch mail not sent', { companyId, kind, reason: answer.reason })
-    } else if (UNLOGGED_WHEN_UNCLEAR.has(kind)) {
+    } else if (unloggedWhenUnclear) {
       log?.error('bank switch mail got no clear answer twice; the next run sends it again, so it may arrive twice', { companyId, kind, reason: answer.reason })
     } else {
       log?.error('bank switch mail got no clear answer twice; it stays logged as sent so it never goes twice, and a later mail of the campaign follows', { companyId, kind, reason: answer.reason })
@@ -284,7 +326,8 @@ export interface BankSwitchCronResult {
   deadline: string | null
   days_left: number | null
   companies: { pending: number; uncovered: number; done: number }
-  sent: { announcement: number; reminder: number; sunset: number }
+  /** `uncovered`: the one mail to a company whose banks the new provider does not reach. */
+  sent: { announcement: number; reminder: number; sunset: number; uncovered: number }
   skipped: { no_recipient: number; not_configured: number; already: number }
   failed: number
   /** Pending companies the time budget did not reach; tomorrow's run sends what is then due. */
@@ -296,15 +339,30 @@ export interface BankSwitchCronResult {
 /** Max company ids per PostgREST .in() filter. */
 const IN_CLAUSE_CHUNK = 150
 
-async function sentKindsByCompany(service: SupabaseClient, companyIds: readonly string[]): Promise<Map<string, Set<string>>> {
-  const result = new Map<string, Set<string>>()
+interface SentMails {
+  kinds: Set<string>
+  /** Days left to the deadline when the latest announcement or reminder went; null when none did. */
+  lastDaysLeft: number | null
+}
+
+/** The mails each company already got, and how many days were left when its latest announcement or reminder went. */
+async function sentMailsByCompany(service: SupabaseClient, companyIds: readonly string[], deadline: string): Promise<Map<string, SentMails>> {
+  const result = new Map<string, SentMails>()
   for (const ids of chunk(companyIds, IN_CLAUSE_CHUNK)) {
-    const { data, error } = await service.from('bank_switch_notifications').select('company_id, kind').in('company_id', ids)
+    const { data, error } = await service.from('bank_switch_notifications').select('company_id, kind, sent_at').in('company_id', ids)
     if (error) throw error
-    for (const row of (data ?? []) as Array<{ company_id: string; kind: string }>) {
-      const set = result.get(row.company_id)
-      if (set) set.add(row.kind)
-      else result.set(row.company_id, new Set([row.kind]))
+    for (const row of (data ?? []) as Array<{ company_id: string; kind: string; sent_at?: string | null }>) {
+      let entry = result.get(row.company_id)
+      if (!entry) {
+        entry = { kinds: new Set(), lastDaysLeft: null }
+        result.set(row.company_id, entry)
+      }
+      entry.kinds.add(row.kind)
+      const sentAt = row.sent_at ? new Date(row.sent_at) : null
+      if ((row.kind === 'announcement' || row.kind.startsWith('reminder_')) && sentAt && !Number.isNaN(sentAt.getTime())) {
+        const daysLeft = switchDaysLeft(deadline, sentAt)
+        entry.lastDaysLeft = entry.lastDaysLeft === null ? daysLeft : Math.min(entry.lastDaysLeft, daysLeft)
+      }
     }
   }
   return result
@@ -334,7 +392,7 @@ export async function runBankSwitchReminderCron(
     deadline: campaign.deadline,
     days_left: null,
     companies: { pending: 0, uncovered: 0, done: 0 },
-    sent: { announcement: 0, reminder: 0, sunset: 0 },
+    sent: { announcement: 0, reminder: 0, sunset: 0, uncovered: 0 },
     skipped: { no_recipient: 0, not_configured: 0, already: 0 },
     failed: 0,
     not_reached: 0,
@@ -343,12 +401,17 @@ export async function runBankSwitchReminderCron(
   if (!campaign.on) return result
 
   const states = await switchStatesForCompanies(service, null, { now, env: options.env })
+  // The pending companies first, then the ones whose banks the new provider
+  // does not reach: a run short of time reaches the switch mails first.
   const pending: Array<[string, CompanySwitchState]> = []
+  const uncovered: Array<[string, CompanySwitchState]> = []
   for (const [companyId, state] of states) {
     result.companies[state.state]++
     if (state.state === 'pending') {
       pending.push([companyId, state])
       result.days_left = state.days_left
+    } else if (state.state === 'uncovered') {
+      uncovered.push([companyId, state])
     }
   }
   try {
@@ -356,12 +419,13 @@ export async function runBankSwitchReminderCron(
   } catch (error) {
     log.warn('bank switch progress totals unavailable', { message: error instanceof Error ? error.message : String(error) })
   }
-  if (!result.mails || pending.length === 0) return result
+  const toMail = [...pending, ...uncovered]
+  if (!result.mails || toMail.length === 0) return result
 
-  const sentByCompany = await sentKindsByCompany(service, pending.map(([id]) => id))
-  for (const [index, [companyId, state]] of pending.entries()) {
+  const sentByCompany = await sentMailsByCompany(service, toMail.map(([id]) => id), campaign.deadline)
+  for (const [index, [companyId, state]] of toMail.entries()) {
     if (Date.now() >= deadlineMs) {
-      result.not_reached = pending.length - index
+      result.not_reached = toMail.length - index
       // Their mail waits a day: tomorrow's run sends what is due then.
       log.error('bank switch reminders ran out of time before every company was reached', {
         notReached: result.not_reached,
@@ -369,15 +433,17 @@ export async function runBankSwitchReminderCron(
       })
       break
     }
-    const sent = sentByCompany.get(companyId) ?? new Set<string>()
-    const kind = campaignMailDue(state.days_left, sent)
+    const sent = sentByCompany.get(companyId) ?? { kinds: new Set<string>(), lastDaysLeft: null }
+    const kind =
+      state.state === 'uncovered' ? uncoveredMailDue(state.days_left, sent.kinds) : campaignMailDue(state.days_left, sent.kinds, sent.lastDaysLeft)
     if (!kind) {
       result.skipped.already++
       continue
     }
     const outcome = await sendBankSwitchMail(service, { companyId, kind, state, log })
     if (outcome.outcome === 'sent') {
-      if (kind === 'announcement') result.sent.announcement++
+      if (state.state === 'uncovered') result.sent.uncovered++
+      else if (kind === 'announcement') result.sent.announcement++
       else if (kind === 'sunset') result.sent.sunset++
       else result.sent.reminder++
     } else if (outcome.outcome === 'no_recipient') result.skipped.no_recipient++

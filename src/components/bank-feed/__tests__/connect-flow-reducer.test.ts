@@ -224,6 +224,23 @@ describe('a bank that signs on its own page', () => {
     expect(valid.step).toBe('accounts')
   })
 
+  it("Svea: a return from the bank's page after the second consent runs the first sync instead of asking for the accounts again", () => {
+    // The browser left for Svea's page to sign the consent naming the chosen
+    // accounts, so the flow that comes back never saw the first round. The
+    // server has already saved the selection and made the row live.
+    const back = openFlow('resume', { connectionId: 'c-1', returned: { result: 'ok', code: null } })
+    expect(back.secondConsent).toBe(false)
+    const valid = flowReducer(back, { type: 'polled', poll: poll({ state: 'valid', method: 'redirect', status: 'active' }) })
+    expect(valid.confirmed).toBe(true)
+    expect(valid.step).toBe('bankid')
+    expect(pollingActive(valid)).toBe(false)
+    const live = flowReducer(valid, { type: 'activated', connection: view({ bank_name: 'Svea Bank', bic: 'SVEASESS' }), sync: { imported: 12 }, syncPending: false })
+    expect(live.step).toBe('done')
+    expect(live.connection?.bank_name).toBe('Svea Bank')
+    // A live connection is never removed by closing the flow.
+    expect(removesConnectionOnClose(live)).toBe(false)
+  })
+
   it('a redirect return whose consent lists no account still ends the wait at the accounts step, which says so (crm#1445)', () => {
     const back = openFlow('resume', { connectionId: 'c-1', returned: { result: 'ok', code: null } })
     const valid = flowReducer(back, { type: 'polled', poll: poll({ state: 'valid', method: 'redirect', accounts: [] }) })

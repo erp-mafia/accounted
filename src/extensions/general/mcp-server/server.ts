@@ -7431,7 +7431,7 @@ export const tools: McpTool[] = [
       // says, since the feed stopped for everyone at once.
       const sunset = enableBankingRows.length > 0 && enableBankingSunset()
       const sunsetNote = sunset
-        ? ' ENABLE BANKING HAS ENDED: every connection with sunset=true fetches nothing any more and gnubok_sync_bank refuses it (ENABLE_BANKING_SUNSET); do not ask the user to renew it. The person switches from its switch_url (BankID, about two minutes, the history is kept), or imports bank statements as files where the new provider does not reach the bank (Wise, PayPal, Bank Norwegian, Nordea First Card, Juni).'
+        ? ' ENABLE BANKING HAS ENDED: every connection with sunset=true fetches nothing any more and gnubok_sync_bank refuses it (ENABLE_BANKING_SUNSET); do not ask the user to renew it. The person switches from its switch_url (BankID, about two minutes, the history is kept), or imports bank statements as files where the new provider does not reach the bank (Wise, PayPal, Juni, Wamo, Pleo, Bank Norwegian, Nordea First Card).'
         : ''
       const openPaymentsNote = door.ok
         ? ' The link opens Koppla banken in Accounted (Open Payments): the person signs with BankID (consent up to 180 days, the bank may clamp it), then CONFIRMS WHICH ACCOUNTS to sync; paying through the bank needs a one-time know-your-customer form offered after the consent. A person without an Accounted login (the firmatecknare holds the bank access): gnubok_bank_feed_connect_link stages a 7-day signatory link instead.' +

@@ -4162,7 +4162,10 @@
     "eb_connect_open": "Connect a bank through the earlier connection",
     "eb_only_uncovered": "Only the banks that {button} under {group} does not reach yet are listed here. SEB, Swedbank, Handelsbanken, Nordea and most other banks are connected there.",
     "eb_bank_elsewhere_one": "{bank} is connected with {button} under {group} above.",
-    "eb_bank_elsewhere_many": "More matching banks are connected with {button} under {group} above."
+    "eb_bank_elsewhere_many": "More matching banks are connected with {button} under {group} above.",
+    "eb_closed_to_new": "The earlier connection takes no new banks or renewals. Connect the bank with {button} under {group} above, or import bank statements as files if the new connection does not reach the bank.",
+    "eb_closed_to_new_file": "The earlier connection takes no new banks or renewals. Import bank statements as files instead.",
+    "eb_closed_to_new_import": "Import a bank file"
   },
   "settings_skattekonto_account": {
     "group_label": "The tax account in the books",
@@ -11763,9 +11766,9 @@
     "bank_switch_stopped_one_unnamed": "An old bank connection has ended and fetches no transactions. Switch to the new connection to continue.",
     "bank_switch_stopped_many": "{count} old bank connections have ended and fetch no transactions. Switch to the new connections to continue.",
     "bank_switch_action": "Switch to the new connection",
-    "bank_uncovered_one": "The new provider does not reach {bank}: import bank statements as files.",
-    "bank_uncovered_one_unnamed": "The new provider does not reach one of the banks: import bank statements as files.",
-    "bank_uncovered_many": "The new provider does not reach {count} banks: import bank statements as files.",
+    "bank_uncovered_one": "The connection to {bank} fetches nothing after {deadline, date, long}, and the new provider does not reach the bank: import bank statements as files from then on.",
+    "bank_uncovered_one_unnamed": "A bank connection fetches nothing after {deadline, date, long}, and the new provider does not reach the bank: import bank statements as files from then on.",
+    "bank_uncovered_many": "{count} bank connections fetch nothing after {deadline, date, long}, and the new provider does not reach those banks: import bank statements as files from then on.",
     "bank_uncovered_stopped_one": "The old bank connection to {bank} has ended, and the new provider does not reach the bank yet: import bank statements as files.",
     "bank_uncovered_stopped_one_unnamed": "An old bank connection has ended, and the new provider does not reach the bank yet: import bank statements as files.",
     "bank_uncovered_stopped_many": "{count} old bank connections have ended, and the new provider does not reach those banks yet: import bank statements as files.",
@@ -17520,7 +17523,8 @@
     "disconnect_failed_title": "Could not disconnect",
     "switch_by": "Switch by {date}",
     "switch_stopped": "Fetching has stopped: switch to the new connection",
-    "switch_stopped_uncovered": "Fetching has stopped: the new provider does not reach this bank yet, import bank statements as files (SIE or CSV)",
+    "switch_stopped_uncovered": "Fetching has stopped: the new provider does not reach this bank yet, import bank statements as files (CSV or camt)",
+    "switch_uncovered_by": "Fetched through {date}, then you import bank statements as files",
     "switch_replaced": "Fetching has stopped: replaced by the new connection",
     "import_statements": "Import bank statements"
   },

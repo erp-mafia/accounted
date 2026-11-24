@@ -307,12 +307,15 @@ export function bankSwitchUncoveredNotice(state: CompanySwitchState): Notice | n
   const one = state.uncovered.length === 1 ? state.uncovered[0] : null
   const bankName = one ? one.bank_name || null : null
   const stopped = state.passed ? '_stopped' : ''
+  // Before the deadline the line names the day the feed ends.
+  const deadline = state.passed ? {} : { deadline: deadlineParam(state.deadline) }
+  const params: Record<string, string | number> = one ? (bankName ? { bank: bankName, ...deadline } : deadline) : { count: state.uncovered.length, ...deadline }
   return {
     id: `bank_switch_uncovered:${boundedDiscriminator(state.uncovered.map((u) => u.connection_id))}${state.passed ? ':stopped' : ''}`,
     category: 'bank_switch_uncovered',
     severity: 'warning',
     messageKey: one ? (bankName ? `bank_uncovered${stopped}_one` : `bank_uncovered${stopped}_one_unnamed`) : `bank_uncovered${stopped}_many`,
-    messageParams: one ? (bankName ? { bank: bankName } : undefined) : { count: state.uncovered.length },
+    messageParams: Object.keys(params).length > 0 ? params : undefined,
     actionKey: 'bank_uncovered_action',
     actionHref: '/import',
   }

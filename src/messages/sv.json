@@ -4162,7 +4162,10 @@
     "eb_connect_open": "Anslut en bank via den tidigare kopplingen",
     "eb_only_uncovered": "Här finns bara de banker som {button} under {group} inte når än. SEB, Swedbank, Handelsbanken, Nordea och de flesta andra banker kopplar du där.",
     "eb_bank_elsewhere_one": "{bank} kopplar du med {button} under {group} ovan.",
-    "eb_bank_elsewhere_many": "Fler banker som matchar kopplar du med {button} under {group} ovan."
+    "eb_bank_elsewhere_many": "Fler banker som matchar kopplar du med {button} under {group} ovan.",
+    "eb_closed_to_new": "Den tidigare kopplingen tar inte emot nya banker eller förnyelser. Koppla banken med {button} under {group} ovan, eller importera kontoutdrag som fil om den nya kopplingen inte når banken.",
+    "eb_closed_to_new_file": "Den tidigare kopplingen tar inte emot nya banker eller förnyelser. Importera kontoutdrag som fil i stället.",
+    "eb_closed_to_new_import": "Importera bankfil"
   },
   "settings_skattekonto_account": {
     "group_label": "Skattekontot i bokföringen",
@@ -11763,9 +11766,9 @@
     "bank_switch_stopped_one_unnamed": "En gammal bankkoppling har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.",
     "bank_switch_stopped_many": "{count} gamla bankkopplingar har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.",
     "bank_switch_action": "Byt till ny koppling",
-    "bank_uncovered_one": "Banken {bank} nås inte av den nya leverantören: importera kontoutdrag som fil.",
-    "bank_uncovered_one_unnamed": "En av bankerna nås inte av den nya leverantören: importera kontoutdrag som fil.",
-    "bank_uncovered_many": "{count} banker nås inte av den nya leverantören: importera kontoutdrag som fil.",
+    "bank_uncovered_one": "Kopplingen till {bank} hämtar inget efter {deadline, date, long}, och den nya leverantören når inte banken: importera sedan kontoutdrag som fil.",
+    "bank_uncovered_one_unnamed": "En bankkoppling hämtar inget efter {deadline, date, long}, och den nya leverantören når inte banken: importera sedan kontoutdrag som fil.",
+    "bank_uncovered_many": "{count} bankkopplingar hämtar inget efter {deadline, date, long}, och den nya leverantören når inte bankerna: importera sedan kontoutdrag som fil.",
     "bank_uncovered_stopped_one": "Den gamla bankkopplingen till {bank} har upphört, och banken nås inte än genom den nya leverantören: importera kontoutdrag som fil.",
     "bank_uncovered_stopped_one_unnamed": "En gammal bankkoppling har upphört, och banken nås inte än genom den nya leverantören: importera kontoutdrag som fil.",
     "bank_uncovered_stopped_many": "{count} gamla bankkopplingar har upphört, och bankerna nås inte än genom den nya leverantören: importera kontoutdrag som fil.",
@@ -17520,7 +17523,8 @@
     "disconnect_failed_title": "Kunde inte koppla bort",
     "switch_by": "Byt senast {date}",
     "switch_stopped": "Hämtningen har stoppats: byt till ny koppling",
-    "switch_stopped_uncovered": "Hämtningen har stoppats: banken nås inte än genom den nya leverantören, importera kontoutdrag som fil (SIE eller CSV)",
+    "switch_stopped_uncovered": "Hämtningen har stoppats: banken nås inte än genom den nya leverantören, importera kontoutdrag som fil (CSV eller camt)",
+    "switch_uncovered_by": "Hämtas till och med {date}, sedan importerar du kontoutdrag som fil",
     "switch_replaced": "Hämtningen har stoppats: ersatt av den nya kopplingen",
     "import_statements": "Importera kontoutdrag"
   },

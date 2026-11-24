@@ -26,7 +26,7 @@ import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-re
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { useOpenPaymentsConnections } from '@/components/bank-feed/use-open-payments-connections'
 import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-campaign'
-import { SWITCH_DEEP_LINK_PARAM } from '@/lib/bank-feed/switch-link'
+import { BANK_FILE_IMPORT_PATH, SWITCH_DEEP_LINK_PARAM } from '@/lib/bank-feed/switch-link'
 import { bankCoveredByOpenPayments } from '@/lib/bank-feed/bank-coverage'
 import { useFormat } from '@/lib/hooks/use-format'
 import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
@@ -490,30 +490,34 @@ export function ConnectionsSettingsContent() {
           // no longer waits for already has its new connection: it says it
           // was replaced and offers neither. Before that, a bank the new
           // provider does not reach offers no switch either: it would end at
-          // the bank's refusal after the BankID.
+          // the bank's refusal after the BankID. While the campaign runs, its
+          // row says the feed ends on the deadline and offers the file import.
           const stoppedFeed = Boolean(switchDeadline) && switchPassed
           const pendingSwitch = pendingSwitchIds.has(connection.id)
           const uncovered = !bankCoveredByOpenPayments(connection.bank_name)
           const uncoveredStopped = stoppedFeed && uncovered
+          const uncoveredEnding = Boolean(switchDeadline) && !switchPassed && uncovered && connection.status === 'active'
           const replacedStopped = stoppedFeed && !uncoveredStopped && !pendingSwitch && connection.status === 'active'
           const state = uncoveredStopped
             ? t('switch_stopped_uncovered')
-            : replacedStopped
-              ? t('switch_replaced')
-              : stoppedFeed
-                ? t('switch_stopped')
-                : pendingSwitch && switchDeadline
-                  ? t('switch_by', { date: formatDateLong(switchDeadline) })
-                  : connection.status === 'error'
-                    ? t('sync_failed')
-                    : t('connected')
+            : uncoveredEnding && switchDeadline
+              ? t('switch_uncovered_by', { date: formatDateLong(switchDeadline) })
+              : replacedStopped
+                ? t('switch_replaced')
+                : stoppedFeed
+                  ? t('switch_stopped')
+                  : pendingSwitch && switchDeadline
+                    ? t('switch_by', { date: formatDateLong(switchDeadline) })
+                    : connection.status === 'error'
+                      ? t('sync_failed')
+                      : t('connected')
           // One button per row and the rest behind its menu, so the state,
           // the button and the menu share one line in the control column and
           // every bank row ends on the same edge. With no switch or import to
           // offer, Hantera is the button.
-          const primaryAction = uncoveredStopped ? (
+          const primaryAction = uncoveredStopped || uncoveredEnding ? (
             <Button asChild>
-              <Link href="/import?mode=bank"><ArrowUpTrayIcon className="h-4 w-4" />{t('import_statements')}</Link>
+              <Link href={BANK_FILE_IMPORT_PATH}><ArrowUpTrayIcon className="h-4 w-4" />{t('import_statements')}</Link>
             </Button>
           ) : replacedStopped || uncovered ? null : (
             <Button
@@ -536,7 +540,7 @@ export function ConnectionsSettingsContent() {
                 state,
                 href: '/settings/banking',
                 connected: true,
-                attention: pendingSwitch || (stoppedFeed && !replacedStopped) || connection.status === 'error',
+                attention: pendingSwitch || uncoveredEnding || (stoppedFeed && !replacedStopped) || connection.status === 'error',
                 actions: (
                   <>
                     {primaryAction ?? (
