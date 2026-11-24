@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
+import { statedDisposition } from './disposition-text'
 import { roundThousands } from '@/lib/bokslut/ixbrl/thousand-kronor'
 import { pdfTextDeep } from '@/lib/pdf/number-text'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
@@ -236,6 +237,9 @@ export function ArsredovisningPDF({
   // the figures the iXBRL document tags (roundThousands), so the two agree.
   const overviewTkr = data.forvaltningsberattelse.flerarsoversikt_tkr === true
   const overviewAmount = (kronor: number) => fmt(overviewTkr ? roundThousands(kronor) : kronor)
+  // The disposition table states the whole kronor the sentence above it and
+  // the iXBRL table state: the dividend rounded once, the rest carried forward.
+  const stated = statedDisposition(data.forvaltningsberattelse.resultatdisposition_amounts)
   // An ekonomisk förening adopts the statements at its ordinarie
   // föreningsstämma (EFL 6 kap. 9-10 §§), owns no share capital and must add
   // the ÅRL 6 kap. 3 § member disclosures to förvaltningsberättelsen.
@@ -361,8 +365,8 @@ export function ArsredovisningPDF({
               : [{ label: 'Fri överkursfond', amount: data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve, isTotal: false }]),
             { label: 'Årets resultat', amount: data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result, isTotal: false },
             { label: `Summa till ${meeting}s förfogande`, amount: data.forvaltningsberattelse.resultatdisposition_amounts.total, isTotal: true },
-            { label: isForening ? 'Föreslagen vinstutdelning' : 'Föreslagen utdelning', amount: -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend, isTotal: false },
-            { label: 'Balanseras i ny räkning', amount: data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward, isTotal: true },
+            { label: isForening ? 'Föreslagen vinstutdelning' : 'Föreslagen utdelning', amount: -stated.dividend, isTotal: false },
+            { label: 'Balanseras i ny räkning', amount: stated.carriedForward, isTotal: true },
           ] as const
         ).map(({ label, amount, isTotal }) => (
           <View

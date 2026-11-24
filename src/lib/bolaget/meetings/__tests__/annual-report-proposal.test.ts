@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { NO_DIVIDEND_DISPOSITION_TEXT } from '@/lib/bokslut/arsredovisning/disposition-text'
+import { NO_DIVIDEND_DISPOSITION_TEXT } from '../disposition-sentence'
 import { loadAnnualReportProposal } from '../template'
 
 const db = createQueuedMockSupabase()

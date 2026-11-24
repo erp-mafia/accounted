@@ -14,6 +14,7 @@ import { BOOKS_COMPANY_ID, reportBooks } from '@/tests/fixtures/report-books'
 import { pdfTextStrings } from '@/tests/pdf-text'
 import { generateIxbrlDocument } from '@/lib/bokslut/ixbrl/document/generate'
 import { ArsredovisningPDF } from '../arsredovisning-pdf'
+import { ArsredovisningK3PDF } from '../arsredovisning-k3-pdf'
 import { buildCanonicalAnnualReport } from '../model'
 import { formatPdfKronor } from '../pdf-format'
 import {
@@ -21,8 +22,8 @@ import {
   defaultDispositionText,
   dispositionText,
   isGeneratedDispositionText,
-  proposalTextWithoutAmounts,
 } from '../disposition-text'
+import { proposalTextWithoutAmounts } from '@/lib/bolaget/meetings/disposition-sentence'
 
 const OPTIONS = { generatedAt: '2026-02-01T10:00:00.000Z', todayIso: '2026-02-01' }
 const RENDER_TIMEOUT = 30_000
@@ -139,6 +140,19 @@ describe('an annual report that proposes a dividend', () => {
     expect(ixbrlComment(generateIxbrlDocument(model.ixbrl).xhtml)).toBe(plain(dividendSentence(utdelning, summa - utdelning)))
     expect(balanserasINyRakning).toBe(summa - utdelning)
   })
+
+  it.each([
+    ['K2', ArsredovisningPDF],
+    ['K3', ArsredovisningK3PDF],
+  ])('prints in the %s PDF table the whole kronor its sentence states, for a dividend in öre', async (_, Pdf) => {
+    const model = await build({ proposed_dividend: DIVIDEND + 0.5 })
+    const { total } = model.report.forvaltningsberattelse.resultatdisposition_amounts
+    const carried = total - (DIVIDEND + 1)
+    expect(model.report.forvaltningsberattelse.resultatdisposition).toBe(dividendSentence(DIVIDEND + 1, carried))
+    const pdf = plain(pdfTextStrings(await renderToBuffer(Pdf({ data: model.report }))).join(' '))
+    // A table row's label and amount come back without a space between them.
+    expect(pdf).toContain(plain(`Föreslagen utdelning-${formatPdfKronor(DIVIDEND + 1)}Balanseras i ny räkning${formatPdfKronor(carried)}`))
+  }, RENDER_TIMEOUT)
 
   it('keeps a text the board wrote', async () => {
     const model = await build({ proposed_dividend: DIVIDEND, resultatdisposition: BOARD_TEXT })

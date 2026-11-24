@@ -7,14 +7,21 @@
  * the proposal covers the sum of fritt eget kapital (punkt 5.8), so the
  * carried-forward amount is that sum less the dividend.
  *
- * The report, the iXBRL and the editor all read the sentence from here: the
- * editor saves no text of its own while its text is this sentence, so the
- * sentence keeps following the amounts when the dividend changes.
+ * The report, the PDF, the iXBRL and the editor all read the sentence from
+ * here, its wording from the meetings (bolaget/meetings/disposition-sentence.ts,
+ * which the årsstämma template reads too): the editor saves no text of its
+ * own while its text is this sentence, so the sentence keeps following the
+ * amounts when the dividend changes.
  */
+import {
+  NO_DIVIDEND_DISPOSITION_TEXT,
+  dividendDispositionSentence,
+  isGeneratedDispositionText,
+  statedDividend,
+} from '@/lib/bolaget/meetings/disposition-sentence'
 import { formatPdfKronor } from './pdf-format'
 
-/** The sentence when no dividend is proposed, as every report has printed it. */
-export const NO_DIVIDEND_DISPOSITION_TEXT = 'Styrelsen föreslår att årets resultat balanseras i ny räkning.'
+export { NO_DIVIDEND_DISPOSITION_TEXT, isGeneratedDispositionText, statedDividend }
 
 export interface DispositionTextAmounts {
   proposed_dividend: number
@@ -23,37 +30,19 @@ export interface DispositionTextAmounts {
 }
 
 /**
- * The dividend the iXBRL table states (build-input.ts): whole kronor, never
- * below zero. The sentence states the same amount, and what is carried
- * forward is the total less it, so the two never differ by a rounded krona.
+ * The dividend and the carried-forward amount the sentence and the PDF table
+ * state: the dividend in whole kronor as the iXBRL table tags it, and the
+ * total less it, so the two rows add up to the total as printed.
  */
-export function statedDividend(proposedDividend: number): number {
-  return Math.max(0, Math.round(proposedDividend))
+export function statedDisposition(amounts: DispositionTextAmounts): { dividend: number; carriedForward: number } {
+  const dividend = statedDividend(amounts.proposed_dividend)
+  return { dividend, carriedForward: amounts.total - dividend }
 }
 
 export function defaultDispositionText(amounts: DispositionTextAmounts): string {
-  const dividend = statedDividend(amounts.proposed_dividend)
+  const { dividend, carriedForward } = statedDisposition(amounts)
   if (!(dividend > 0)) return NO_DIVIDEND_DISPOSITION_TEXT
-  return (
-    `Styrelsen föreslår att vinstmedlen disponeras så att ${formatPdfKronor(dividend)} kr delas ut ` +
-    `och ${formatPdfKronor(amounts.total - dividend)} kr balanseras i ny räkning.`
-  )
-}
-
-/** The dividend sentence as defaultDispositionText writes it, for any amounts. */
-const DIVIDEND_SENTENCE =
-  /^Styrelsen föreslår att vinstmedlen disponeras så att \d[\d\s]* kr delas ut och -?\d[\d\s]* kr balanseras i ny räkning\.$/
-
-/**
- * Whether a text is a sentence this module writes, for whatever amounts: it
- * states amounts, not the board's words, so it is written again from the
- * amounts it stands beside. The editor used to save the sentence it showed as
- * if the user had typed it, and a report text copied back through the API
- * does the same.
- */
-export function isGeneratedDispositionText(text: string): boolean {
-  const trimmed = text.trim()
-  return trimmed === NO_DIVIDEND_DISPOSITION_TEXT || DIVIDEND_SENTENCE.test(trimmed)
+  return dividendDispositionSentence(formatPdfKronor(dividend), formatPdfKronor(carriedForward))
 }
 
 /**
@@ -66,15 +55,4 @@ export function dispositionText(stored: string | undefined, amounts: Disposition
   if (stored === undefined) return generated
   if (isGeneratedDispositionText(stored) && stored.trim() !== generated) return generated
   return stored
-}
-
-/**
- * For a reader without the report's amounts (the årsstämma template before
- * any version exists): the board's own text; else, without a dividend, the
- * sentence every report prints; else null, since the dividend sentence needs
- * the free equity only the report has.
- */
-export function proposalTextWithoutAmounts(stored: string | null | undefined, proposedDividend: number): string | null {
-  if (stored != null && !isGeneratedDispositionText(stored)) return stored
-  return statedDividend(proposedDividend) > 0 ? null : NO_DIVIDEND_DISPOSITION_TEXT
 }

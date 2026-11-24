@@ -16,7 +16,7 @@ import { loadShareRegisterData } from '../share-register'
 import { BOARD_MEMBER_ROLES, type CompanyRoleKind } from '../types'
 import { AUDITOR_ELECTION_ROLES, BOARD_ELECTION_ROLES, type DecisionPayloads } from './payloads'
 import { dividendPerShare, heldDuring } from './rules'
-import { proposalTextWithoutAmounts } from '@/lib/bokslut/arsredovisning/disposition-text'
+import { proposalTextWithoutAmounts } from './disposition-sentence'
 import type { DecisionKind, MeetingKind, MeetingOrgan } from './types'
 
 export interface DecisionDraft {
