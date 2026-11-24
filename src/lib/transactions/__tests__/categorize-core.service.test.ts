@@ -1090,6 +1090,32 @@ describe('categorizeTransaction: the reverse-charge box at an agent or API door'
     }
   })
 
+  it('leaves goods unboxed when any underlag matched to the row shows a Swedish VAT number abroad, in any order', async () => {
+    const reading = (supplier: Record<string, unknown>) => ({ supplier, totals: { total: 1250, vatAmount: 0 } })
+    const german = { document_id: 'doc-7', extracted_data: reading({ vatNumber: 'DE123456789' }) }
+    const abroad = { document_id: 'doc-8', extracted_data: reading(swedishNumberAbroad) }
+    const shapes = [
+      // No document on the row and no item named, as the agent door sends it: the items matched to the row, both orders.
+      { rowDocument: null, matched: [german, abroad] },
+      { rowDocument: null, matched: [abroad, german] },
+      // The row's own document names a German seller; an item matched to the row has the number.
+      { rowDocument: reading({ vatNumber: 'DE123456789' }), matched: [abroad] },
+    ]
+    for (const { rowDocument, matched } of shapes) {
+      const { supabase } = ledger({
+        ...(rowDocument
+          ? {
+              transactions: [{ data: row({ document_id: 'doc-1' }), error: null }],
+              document_attachments: { data: { id: 'doc-1', extracted_data: rowDocument }, error: null },
+            }
+          : {}),
+        invoice_inbox_items: { data: matched, error: null },
+      })
+      const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, category: 'expense_equipment' }, api)
+      expect(outcome).toMatchObject({ ok: false, details: { reason: 'goods_under_swedish_vat_number' } })
+    }
+  })
+
   // The underlag check reads the inbox item first and refuses on its own when that read fails; here only the box's
   // own read of the item (its reading and supplier card) fails.
   const itemUnreadForTheBox: TableMockResolver = (chain) =>

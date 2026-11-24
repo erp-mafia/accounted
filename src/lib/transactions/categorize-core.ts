@@ -1158,7 +1158,10 @@ export async function categorizeTransaction(
       txLog.error('inbox item unreadable for the reverse-charge box', { inboxItemId: input.inbox_item_id })
       return refuseFor('INTERNAL_ERROR')
     }
-    const box = reverseChargeBoxFor(documentRegion ?? item?.region ?? null, finalCategory, [documentSeller, item?.seller])
+    // Every underlag the booking anchors (the row's document, the named item's, the items matched to the row) and the
+    // named item's own reading: goods are left unboxed when any of them shows a Swedish VAT number abroad.
+    const sellers = [...underlagDocuments.map((one) => one.reading?.supplier), item?.seller]
+    const box = reverseChargeBoxFor(documentRegion ?? item?.region ?? null, finalCategory, sellers)
     if (box.ok) input = { ...input, reverse_charge_kind: box.kind }
     else boxUnknown = box.reason
   }
