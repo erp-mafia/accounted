@@ -6,6 +6,7 @@ import {
   rowNetFromInvoiceTotals,
   rowsAgainstInvoiceTotals,
   totalFirstFill,
+  vatGuidanceApplies,
 } from '../total-first'
 import { supplierInvoiceEditorAmounts } from '../editor-amounts'
 import { bookLimitedDeduction } from '../limited-deduction'
@@ -127,21 +128,46 @@ describe('invoiceTotalsCrosscheck', () => {
 })
 
 describe('isInputVatAccountRow', () => {
-  it('is a row on an ingående moms account (ruta 48) without a moms sats', () => {
+  it('is a row on the account a moms sats books ingående moms on, without a moms sats', () => {
     expect(isInputVatAccountRow({ account_number: '2641', vat_rate: 0 })).toBe(true)
-    expect(isInputVatAccountRow({ account_number: '2640', vat_rate: 0 })).toBe(true)
-    expect(isInputVatAccountRow({ account_number: '2645', vat_rate: 0 })).toBe(true)
     expect(isInputVatAccountRow({ account_number: '2641' })).toBe(true)
+  })
+
+  it('leaves the other ruta 48 accounts: a moms sats on the cost row would not book what they carry', () => {
+    // Reverse charge (beräknad ingående moms), frivillig skattskyldighet,
+    // uthyrning, blandad verksamhet, and the group account.
+    for (const account of ['2645', '2647', '2642', '2646', '2649', '2640']) {
+      expect(isInputVatAccountRow({ account_number: account, vat_rate: 0 })).toBe(false)
+    }
   })
 
   it('is no other row', () => {
     expect(isInputVatAccountRow({ account_number: '2641', vat_rate: 0.25 })).toBe(false)
     expect(isInputVatAccountRow({ account_number: '5615', vat_rate: 0 })).toBe(false)
-    // Utgående moms, the redovisningskonto and vilande moms report to no ruta 48.
     expect(isInputVatAccountRow({ account_number: '2611', vat_rate: 0 })).toBe(false)
     expect(isInputVatAccountRow({ account_number: '2650', vat_rate: 0 })).toBe(false)
     expect(isInputVatAccountRow({ account_number: '2648', vat_rate: 0 })).toBe(false)
     expect(isInputVatAccountRow({ account_number: '', vat_rate: 0 })).toBe(false)
+  })
+})
+
+describe('vatGuidanceApplies', () => {
+  const swedish = { vatRegistered: true, reverseCharge: false, selfBilled: false, supplierType: 'swedish_business' }
+
+  it('applies to Swedish moms the company deducts from the rows', () => {
+    expect(vatGuidanceApplies(swedish)).toBe(true)
+    // Before a supplier is chosen.
+    expect(vatGuidanceApplies({ ...swedish, supplierType: undefined })).toBe(true)
+  })
+
+  it('stays out where the invoice has no Swedish moms to deduct from its rows', () => {
+    expect(vatGuidanceApplies({ ...swedish, vatRegistered: false })).toBe(false)
+    expect(vatGuidanceApplies({ ...swedish, reverseCharge: true })).toBe(false)
+    // A foreign supplier's moms is never Swedish ingående moms.
+    expect(vatGuidanceApplies({ ...swedish, supplierType: 'eu_business' })).toBe(false)
+    expect(vatGuidanceApplies({ ...swedish, supplierType: 'non_eu_business' })).toBe(false)
+    // A self-billing invoice has no Begränsat momsavdrag.
+    expect(vatGuidanceApplies({ ...swedish, selfBilled: true })).toBe(false)
   })
 })
 
@@ -189,6 +215,15 @@ describe('a personbil lease invoice with a fee taken off after the moms', () => 
     ]
     expect(editorCrosscheck(supported)).toMatchObject({ totalMatches: true, vatMatches: true, rowsCarryNoVat: false })
     expect(supported.some(isInputVatAccountRow)).toBe(false)
+  })
+
+  it('booked with none of the moms deducted through Begränsat momsavdrag: everything matches', () => {
+    // The car used only in ringa omfattning in the business (13 kap. 21 §).
+    const nothingDeducted: EditorRow[] = [
+      { account_number: '5615', amount: 4000, vat_rate: 0.25, vat_deduction_share: 0 },
+      { account_number: '5615', amount: -100, vat_rate: 0 },
+    ]
+    expect(editorCrosscheck(nothingDeducted)).toMatchObject({ totalMatches: true, vatMatches: true, rowsCarryNoVat: false })
   })
 })
 

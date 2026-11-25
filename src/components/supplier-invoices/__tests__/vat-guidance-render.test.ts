@@ -1,8 +1,9 @@
 /**
  * The editor's moms guidance as a person reads it, rendered under both
  * catalogues: a missing key or a broken ICU argument fails here, and the
- * sentences say what they must (the invoice's moms, where it belongs, and the
- * control for moms that is not wholly deductible).
+ * sentences say what they must (the invoice's moms, where it belongs, the
+ * control for moms that is not wholly deductible, and that a moms row typed
+ * by hand is deducted and goes).
  */
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
@@ -18,12 +19,12 @@ describe('RowsCarryNoVatLine', () => {
 
   it('names the invoice moms, where it belongs and the control for a part that is not deductible', () => {
     expect(read(render('sv'))).toBe(
-      'Fakturan har 1 012,50 kr moms, raderna ingen. Sätt momssatsen på kostnadsraden. ' +
-        'Är inte hela momsen avdragsgill: välj Begränsat momsavdrag (%) på raden.',
+      'Fakturan har 1 012,50 kr moms, raderna ingen. Ange nettobeloppet och momssatsen på kostnadsraden. ' +
+        'Är inte hela momsen avdragsgill (leasing av personbil: hälften), välj Begränsat momsavdrag (%) på raden.',
     )
     expect(read(render('en'))).toBe(
-      'The invoice has 1 012,50 kr VAT, the rows none. Set the VAT rate on the cost row. ' +
-        'If not all of the VAT is deductible, use Limited VAT deduction (%) on the row.',
+      'The invoice has 1 012,50 kr VAT, the rows none. Enter the net amount and the VAT rate on the cost row. ' +
+        'If not all of the VAT is deductible (leasing a passenger car: half), use Limited VAT deduction (%) on the row.',
     )
   })
 
@@ -31,18 +32,20 @@ describe('RowsCarryNoVatLine', () => {
     expect(render('sv')).toContain('text-destructive')
   })
 
-  it('states a foreign invoice\'s moms in its own currency', () => {
+  it('states the moms of an invoice in another currency in that currency', () => {
     expect(read(render('sv', 'EUR'))).toContain('Fakturan har 1 012,50 € moms')
   })
 })
 
 describe('InputVatRowHint', () => {
-  it('says the row is not the invoice\'s moms and where the moms belongs', () => {
+  it('says the row is deducted but is not the invoice\'s moms, and that it goes', () => {
     expect(read(renderInLocale(createElement(InputVatRowHint), 'sv'))).toBe(
-      'Den här raden räknas inte som fakturans moms. Sätt momssatsen på kostnadsraden, så bokförs momsen därifrån.',
+      'Raden bokförs som ingående moms men räknas inte som fakturans moms. ' +
+        'Sätt momssatsen på kostnadsraden och ta bort den här raden.',
     )
     expect(read(renderInLocale(createElement(InputVatRowHint), 'en'))).toBe(
-      'This row does not count as the invoice\'s VAT. Set the VAT rate on the cost row and the VAT is booked from there.',
+      'This row is booked as input VAT but does not count as the invoice\'s VAT. ' +
+        'Set the VAT rate on the cost row and remove this row.',
     )
   })
 

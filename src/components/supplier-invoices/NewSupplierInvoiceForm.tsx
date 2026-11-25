@@ -37,6 +37,7 @@ import {
   rowNetFromInvoiceTotals,
   rowsAgainstInvoiceTotals,
   totalFirstFill,
+  vatGuidanceApplies,
 } from '@/lib/supplier-invoices/total-first'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -659,6 +660,17 @@ export default function NewSupplierInvoiceForm({
     suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
   )
 
+  // The guidance on the invoice's moms (the red line when the rows carry
+  // none, the caption under a moms row typed by hand) is about Swedish moms
+  // deducted from the rows: never for a foreign supplier, whose 0 % rows have
+  // the hint above.
+  const vatGuidance = vatGuidanceApplies({
+    vatRegistered,
+    reverseCharge: watchedReverseCharge,
+    selfBilled: watchedSelfBilled,
+    supplierType: suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
+  })
+
   // Auto-fill defaults when supplier is selected: but never overwrite a value
   // the AI already filled in for us.
   const [templateAccountNote, setTemplateAccountNote] = useState<{ account: string; counterparty: string } | null>(null)
@@ -1191,12 +1203,11 @@ export default function NewSupplierInvoiceForm({
     return limitedDeductionAvailable(index) && watchedItems?.[index]?.vat_deduction_share != null
   }
 
-  // A row on an ingående moms account at 0 % is moms typed by hand: it books
-  // as typed, and a caption under it says it is not the invoice's moms. Where
-  // the invoice's moms is booked, the case the Moms field covers.
+  // A row on the ingående moms account at 0 % is moms typed by hand: it books
+  // as typed, and a caption under it says it is not the invoice's moms.
   function inputVatRowHintVisible(index: number): boolean {
     const item = watchedItems?.[index]
-    return fakturaVatVisible && !!item && isInputVatAccountRow(item)
+    return vatGuidance && !!item && isInputVatAccountRow(item)
   }
 
   function toggleLimitedDeduction(index: number) {
@@ -1423,11 +1434,8 @@ export default function NewSupplierInvoiceForm({
     deductibleVat,
   })
   // Rows that carry no moms against an invoice that states some: the red
-  // line says where the moms belongs instead of "check the moms sats". It
-  // names Begränsat momsavdrag, which a self-billing invoice does not have:
-  // there the general line stays.
-  const vatOnNoRow = rowsCarryNoVat &&
-    limitedDeductionApplies({ reverse_charge: watchedReverseCharge, is_self_billed: watchedSelfBilled })
+  // line says where the moms belongs instead of "check the moms sats".
+  const vatOnNoRow = vatGuidance && rowsCarryNoVat
 
   // A Moms lower than the rows deduct is usually the deductible moms typed in
   // (crm#1954): offer to book the rest as cost on the rows, a personbil row
