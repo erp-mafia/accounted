@@ -28,6 +28,14 @@ vi.mock('@supabase/supabase-js', async () => {
   const actual = await vi.importActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js')
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
+// period-service writes a period decision's audit_log row with the service
+// role (lib/supabase/server), not the door's client. Both are the one
+// recorded client here, so the write assertions below see that row too.
+vi.mock('@/lib/supabase/server', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/supabase/server')>('@/lib/supabase/server')
+  const apiKeys = await import('@/lib/auth/api-keys')
+  return { ...actual, createServiceClient: () => apiKeys.createServiceClientNoCookies() }
+})
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as createPeriod } from '../route'
