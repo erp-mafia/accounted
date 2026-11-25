@@ -12154,7 +12154,7 @@
     "first_thing_connect_title": "Start here: connect the bank.",
     "first_thing_connect_why": "Without the bank there is nothing to book. One minute with BankID.",
     "first_thing_connect_action": "Connect the bank",
-    "first_thing_connect_upload": "or upload a document",
+    "first_thing_connect_file": "or import a bank statement",
     "first_thing_book_ai_title": "Start here: let {client} book the bank rows.",
     "first_thing_book_ai_why": "It proposes an account for each row. You approve.",
     "first_thing_book_ai_open": "Open in {client}",

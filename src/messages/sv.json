@@ -12154,7 +12154,7 @@
     "first_thing_connect_title": "Börja här: koppla banken.",
     "first_thing_connect_why": "Utan banken finns inget att bokföra. En minut med BankID.",
     "first_thing_connect_action": "Koppla banken",
-    "first_thing_connect_upload": "eller ladda upp ett underlag",
+    "first_thing_connect_file": "eller importera ett kontoutdrag",
     "first_thing_book_ai_title": "Börja här: låt {client} bokföra bankraderna.",
     "first_thing_book_ai_why": "Den föreslår ett konto per rad. Du godkänner.",
     "first_thing_book_ai_open": "Öppna i {client}",
