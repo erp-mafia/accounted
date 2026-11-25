@@ -127,7 +127,14 @@ export function fileOrgNumber(orgNumber10: string): string {
   return `16${orgNumber10}`
 }
 
-const EMAIL = /^[\wåäöÅÄÖ]+([-+.'_\wåäöÅÄÖ]+)*@[\wåäöÅÄÖ]+([-.][\wåäöÅÄÖ]+)*\.[\wåäöÅÄÖ]+([-.][\wåäöÅÄÖ]+)*$/
+/**
+ * The contact email's shape. The part before the @ is one letter, digit or _
+ * followed by any of those and - + . ': the same strings as
+ * `[\wåäöÅÄÖ]+([-+.'_\wåäöÅÄÖ]+)*`, written without a repetition inside a
+ * repetition, which could split a refused address in exponentially many ways
+ * and keep the check busy for minutes on a typo.
+ */
+const EMAIL = /^[\wåäöÅÄÖ][-+.'_\wåäöÅÄÖ]*@[\wåäöÅÄÖ]+([-.][\wåäöÅÄÖ]+)*\.[\wåäöÅÄÖ]+([-.][\wåäöÅÄÖ]+)*$/
 
 function textOk(value: string | null | undefined, max: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max
