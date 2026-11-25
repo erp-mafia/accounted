@@ -30,7 +30,7 @@ import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } fro
 import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
-import { ORE_ROUNDING_ACCOUNT, equalOre, roundOre, sumOre } from '@/lib/money'
+import { equalOre, roundOre, sumOre } from '@/lib/money'
 import { cashProRataUnsupportedReason, type CashProRataUnsupportedReason } from './booking-mode'
 import { getDisplayTotal } from './invoice-rounding'
 import type {
@@ -47,37 +47,45 @@ import type {
  * registration of an invoice (or its kreditfaktura) books what the invoice
  * asks for: 151x at the rounded "Att betala" and 3740 Öres- och
  * kronutjämning at the difference, no moms, as Fortnox and Spiris book it.
- * Absent, the lines carry the exact total (the kontantmetoden year-end carry,
- * a received självfaktura, a kreditfaktura of an invoice whose own issue
- * booked no öre). `company` is the company's setting, read by
- * getDisplayTotal only for a row without its own choice, exactly as the PDF
- * and "Att betala" read it.
+ *
+ *   { company }      an issued invoice: its own choice, else the company's
+ *                    setting, read by getDisplayTotal exactly as the PDF and
+ *                    "Att betala" read it;
+ *   { mirror: true } a kreditfaktura of an original whose issue booked its
+ *                    öre (creditMirrorsIssueOre): it rounds because the
+ *                    original did, whatever its own flag says today.
+ *
+ * Absent, the lines carry the exact total (the kontantmetoden year-end
+ * carry, a kreditfaktura of an original issued at the exact total). A
+ * received självfaktura is the buyer's document and is never rounded here.
  */
-export interface IssueOreRounding {
-  company: Pick<CompanySettings, 'ore_rounding'> | null
-}
+export type IssueOreRounding =
+  | { company: Pick<CompanySettings, 'ore_rounding'> | null }
+  | { mirror: true }
 
 /** The rounded total less the exact one (getDisplayTotal), signed; 0 when nothing is rounded or no rounding is asked for. */
 function issueRoundingDelta(
-  document: Pick<InvoiceCashLinesSource, 'total' | 'currency' | 'ore_rounding'>,
+  document: Pick<InvoiceCashLinesSource, 'total' | 'currency' | 'ore_rounding' | 'is_self_billed'>,
   oreRounding: IssueOreRounding | undefined,
 ): number {
-  if (!oreRounding) return 0
-  const { applies, roundingDelta } = getDisplayTotal(document, oreRounding.company)
+  if (!oreRounding || document.is_self_billed) return 0
+  const { applies, roundingDelta } =
+    'mirror' in oreRounding
+      ? getDisplayTotal({ ...document, ore_rounding: true }, null)
+      : getDisplayTotal(document, oreRounding.company)
   return applies ? roundOre(roundingDelta) : 0
 }
 
-/** The 3740 line of an issue verifikat's öresavrundning: credited when the total was rounded up, debited when down. */
+/**
+ * The 3740 line of an issue's öresavrundning: credited when the total was
+ * rounded up, debited when down. That is the customer side of oreRoundingLine
+ * with the delta as what the bank would move short of the claim.
+ */
 function issueRoundingLine(
   delta: number,
   dimensions: CreateJournalEntryLineInput['dimensions'],
 ): CreateJournalEntryLineInput {
-  return {
-    account_number: ORE_ROUNDING_ACCOUNT,
-    ...creditNatural(delta),
-    line_description: 'Öresavrundning',
-    dimensions,
-  }
+  return { ...oreRoundingLine(-delta, 'customer'), dimensions }
 }
 
 /**
@@ -926,6 +934,8 @@ export interface InvoiceCashLinesSource {
   deduction_total?: number | null
   /** The invoice's own öresavrundning choice; null follows the company setting (getDisplayTotal). */
   ore_rounding?: boolean | null
+  /** A received självfaktura: the buyer's document, booked as it states (no öresavrundning). */
+  is_self_billed?: boolean | null
 }
 
 /**

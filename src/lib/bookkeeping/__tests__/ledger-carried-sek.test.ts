@@ -141,6 +141,13 @@ describe('carriedSekOf', () => {
       expect(supabase.rpc).not.toHaveBeenCalled()
     })
 
+    it('reads a whole-krona remainder of a total with öre: a part payment can leave the issue öre on 1510 (crm#2283)', async () => {
+      // 999,75 issued at 1 000, 499,75 paid: 500,00 open, 1510 carries 500,25.
+      const supabase = client({ data: { ok: true, sek: 500.25 }, error: null })
+      const part = { id: 'inv-2', currency: 'SEK', total: 999.75, remaining_amount: 500, paid_amount: 499.75, journal_entry_id: 'je-2' }
+      expect(await carriedSekOf(supabase, 'c-1', 'customer', part)).toBe(500.25)
+    })
+
     it('reads the remainder after a part payment, and a numeric string', async () => {
       const supabase = client({ data: { ok: true, sek: 12176 }, error: null })
       expect(await carriedSekOf(supabase, 'c-1', 'customer', { ...invoice, remaining_amount: '12176.25' as never, paid_amount: 5000 })).toBe(12176)

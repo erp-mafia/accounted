@@ -168,10 +168,12 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   // when it books.
   const [mirrorsIssueOre, setMirrorsIssueOre] = useState(false)
   const originalId = invoice?.id
+  const originalCurrency = invoice?.currency
+  const originalTotal = invoice?.total
   useEffect(() => {
     if (!originalId || !company?.id || !books) return
     let cancelled = false
-    creditMirrorsIssueOre(supabase, company.id, originalId)
+    creditMirrorsIssueOre(supabase, company.id, { credited_invoice_id: originalId, currency: originalCurrency, total: originalTotal })
       .then((mirrors) => {
         if (!cancelled) setMirrorsIssueOre(mirrors)
       })
@@ -181,7 +183,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     return () => {
       cancelled = true
     }
-  }, [supabase, originalId, company?.id, books])
+  }, [supabase, originalId, originalCurrency, originalTotal, company?.id, books])
   // accounted#45: a deferred original that was never booked is booked first,
   // on its own date, then credited.
   const booksOriginalFirst = invoice ? creditBooksOriginalFirst(companySettings, invoice) : false

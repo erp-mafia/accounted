@@ -149,17 +149,9 @@ describe('refundCreditNote', () => {
 
   describe('a credit of 999,75 whose verifikat booked an öresavrundning (Cr 1510 1 000, Dr 3740 0,25)', () => {
     const ROUNDED: RefundCreditNoteRow = { ...CREDIT_NOTE, total: -999.75, vat_amount: -199.95 }
+    /** invoice_issue_receivable_sek's row for the credit note: what its verifikat put on 151x, beside its own facts. */
     const voucher = (receivableCredit: number) => ({
-      data: {
-        id: 'je-credit',
-        status: 'posted',
-        lines: [
-          { account_number: '3001', debit_amount: 799.8, credit_amount: 0 },
-          { account_number: '2611', debit_amount: 199.95, credit_amount: 0 },
-          ...(receivableCredit === 1000 ? [{ account_number: '3740', debit_amount: 0.25, credit_amount: 0 }] : []),
-          { account_number: '1510', debit_amount: 0, credit_amount: receivableCredit },
-        ],
-      },
+      data: [{ invoice_id: 'cn-1', sek: -receivableCredit, currency: 'SEK', total: -999.75, deduction_total: 0 }],
     })
 
     it('pays back all 1510 carries for it and records the 999,75 it settles', async () => {

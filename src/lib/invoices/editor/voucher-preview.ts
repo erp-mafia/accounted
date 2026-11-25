@@ -233,11 +233,10 @@ export function proposeCreditNoteSendLines(
         credited_invoice_id: fields.credited_invoice_id,
         items,
         default_dimensions: fields.default_dimensions,
-        // A mirror rounds as the original did (createCreditNoteJournalEntry).
-        ore_rounding: options.mirrorsIssueOre ? true : fields.ore_rounding,
+        ore_rounding: fields.ore_rounding,
       },
       entityType: options.entityType,
-      oreRounding: options.mirrorsIssueOre ? { company: null } : undefined,
+      oreRounding: options.mirrorsIssueOre ? { mirror: true } : undefined,
     })
   } catch {
     // A missing FX rate on a foreign original: the confirm says how it books instead.

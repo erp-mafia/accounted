@@ -140,12 +140,6 @@ export interface SetoffPlan {
     remainingAfter: number
     statusAfter: 'paid' | 'partially_paid'
     /**
-     * What the set-off clears off the customer invoice's remaining amount (the
-     * debt settled, its payment row): `amount`, or the whole remaining amount
-     * when the gap is öresavrundning.
-     */
-    applied: number
-    /**
      * What the set-off books on 3740: the öresavrundning it absorbs
      * (oreSettlementResidual of the remaining amount and `amount`) less the öre
      * the invoice's issue verifikat already booked (bookedOreRounding,
@@ -252,7 +246,6 @@ export function planSetoff(input: {
         remainingBefore: invoiceRemaining,
         remainingAfter: invoiceAfter,
         statusAfter: statusAfter(invoiceAfter),
-        applied,
         oreRounding,
       },
       supplierInvoice: {

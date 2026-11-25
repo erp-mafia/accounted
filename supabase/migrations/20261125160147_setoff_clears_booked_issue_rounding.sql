@@ -223,8 +223,11 @@ BEGIN
   -- (151x at the rounded Att betala, the öre on 3740), 151x is credited all it
   -- carries and 3740 takes only the set-off's own gap less that öre, the rule
   -- of the payment builders (bookedOreRounding). A ledger the function cannot
-  -- read, or one carrying just the remaining amount, books as before.
-  IF v_inv_applied = v_inv_remaining THEN
+  -- read, or one carrying just the remaining amount, books as before. Only a
+  -- total with öre can have had one (hasOreToRound): the total, not the
+  -- remainder, since a part payment can leave whole kronor open while 151x
+  -- still carries the öre. Any other invoice costs no ledger read.
+  IF v_inv_applied = v_inv_remaining AND v_inv.total <> round(v_inv.total) THEN
     v_carried := public.document_carried_sek(p_company_id, 'customer', p_invoice_id);
     IF COALESCE((v_carried ->> 'ok')::boolean, false) THEN
       v_issue_ore := public.ore_settlement_residual(v_inv_remaining, (v_carried ->> 'sek')::numeric);

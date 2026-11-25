@@ -142,6 +142,6 @@ export function planCreditNoteRefund(
     return { ok: false, code: 'CREDIT_NOTE_REFUND_NOTHING_OWED', details: { refunded, credit_used: creditUsed } }
   }
   const wholeCredit = roundOre(owed + creditOpen) === 0
-  const ledgerOwed = wholeCredit && issueOre !== 0 ? roundOre(owed + issueOre) : owed
+  const ledgerOwed = wholeCredit ? roundOre(owed + issueOre) : owed
   return { ok: true, owed, refunded, ledgerOwed }
 }

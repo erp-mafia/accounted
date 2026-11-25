@@ -288,21 +288,15 @@ export default function SendInvoiceDialog({
         const bookOnIssue = invoice.credited_invoice_id && originalResult.data
           ? creditNoteNeedsJournalEntry(method, originalResult.data)
           : issueBooksDocument(invoice, companySettings)
-        let bookedShare: number | null = null
-        if (
+        // Preview only, both: the credit decides again when it books.
+        const [bookedShare, mirrorsOre] = await Promise.all([
           bookOnIssue && method === 'cash' && originalResult.data &&
           (invoice.items ?? []).some((item) => !!item.deduction_type)
-        ) {
-          const state = await getDeductionShareBookedByPayout(
-            supabase, company.id, originalResult.data, invoice.invoice_date,
-          )
-          // Preview only: issueCreditNote decides again when it books.
-          bookedShare = state.ok ? state.bookedSek : null
-        }
-        // Preview only, as above: the credit decides again when it books.
-        const mirrorsOre = bookOnIssue && invoice.credited_invoice_id
-          ? await creditMirrorsIssueOre(supabase, company.id, invoice.credited_invoice_id)
-          : false
+            ? getDeductionShareBookedByPayout(supabase, company.id, originalResult.data, invoice.invoice_date)
+                .then((state) => (state.ok ? state.bookedSek : null))
+            : null,
+          bookOnIssue ? creditMirrorsIssueOre(supabase, company.id, invoice) : false,
+        ])
         if (cancelled) return
         setDeductionBookedSek(bookedShare)
         setCreditMirrorsOre(mirrorsOre)
@@ -341,15 +335,11 @@ export default function SendInvoiceDialog({
 
     // The whole row: the server books from all of it (item accounts and
     // dimensions, delivery_country), so the preview must read the same.
-    // The öresavrundning as the issue books it: never on a received
-    // självfaktura; a kreditfaktura only mirrors an original that booked it,
-    // and then rounds as the original did (createCreditNoteJournalEntry).
-    if (isCreditNote) {
-      return creditMirrorsOre
-        ? proposeSendLines({ invoice: { ...invoice, ore_rounding: true }, entityType, deductionBookedSek, oreRounding: { company: null } })
-        : proposeSendLines({ invoice, entityType, deductionBookedSek })
-    }
-    const oreRounding = invoice.is_self_billed ? undefined : { company: companySettings ?? null }
+    // The öresavrundning as the issue books it (IssueOreRounding): a
+    // kreditfaktura only mirrors an original that booked it.
+    const oreRounding = isCreditNote
+      ? creditMirrorsOre ? ({ mirror: true } as const) : undefined
+      : { company: companySettings ?? null }
     return proposeSendLines({ invoice, entityType, deductionBookedSek, oreRounding })
   }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, isCreditNote, creditMirrorsOre, companySettings])
 

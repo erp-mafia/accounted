@@ -70,10 +70,18 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
   const creditUsed = creditNoteCreditUsed(population)
   // Skatteverket's payouts on ROT/RUT deductions, as in generateARLedger.
   const settled = skatteverketSettledByInvoice(population)
-  // The öre each invoice's issue verifikat booked, as in generateARLedger.
-  let issueOre = new Map<string, number>()
+  // The öre each invoice's issue verifikat booked, as in generateARLedger,
+  // read beside the originals the credit notes credit.
+  const creditNoteIds = population.filter(isCreditNoteDocument).map((inv) => inv.id)
+  let issueOre: Map<string, number>
+  let creditedInvoiceOf: Map<string, string>
   try {
-    issueOre = await issueOreByInvoice(supabase, companyId, population)
+    ;[issueOre, creditedInvoiceOf] = await Promise.all([
+      issueOreByInvoice(supabase, companyId, population),
+      creditNoteIds.length > 0
+        ? fetchCreditedInvoiceIds(supabase, companyId, creditNoteIds)
+        : Promise.resolve(new Map<string, string>()),
+    ])
   } catch (error) {
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
@@ -95,12 +103,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     })
   )
   // Each credit note set against the invoice it credits, as in generateARLedger.
-  const creditNoteIds = population.filter(isCreditNoteDocument).map((inv) => inv.id)
-  const paired = netCreditedPairs(
-    population,
-    ownOutstanding,
-    creditNoteIds.length > 0 ? await fetchCreditedInvoiceIds(supabase, companyId, creditNoteIds) : new Map<string, string>()
-  )
+  const paired = netCreditedPairs(population, ownOutstanding, creditedInvoiceOf)
   const outstandingOf = paired.outstanding
   // A paid invoice is only read for a deduction Skatteverket has yet to pay
   // out: once it has, the invoice is not a receivable; a credited invoice

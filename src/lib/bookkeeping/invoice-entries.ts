@@ -4,6 +4,7 @@ import { findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { clearedSek, creditMirrorsIssueOre, statedSettlement } from './ledger-carried-sek'
 import { fxDifferenceLine } from './ore-rounding'
+import { hasOreToRound } from './invoice-rounding'
 import { dbError } from '@/lib/errors/db-error'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
@@ -30,18 +31,17 @@ import type {
 const log = createLogger('invoice-entries')
 
 /**
- * How an invoice's own verifikat books its öresavrundning (crm#2283,
- * IssueOreRounding in ./invoice-lines): a received självfaktura is the
- * buyer's document and is booked as it states; any other row reads the
- * company setting only when it has no choice of its own, as getAmountToPay
- * does for its "Att betala".
+ * How an invoice's issue verifikat books its öresavrundning (crm#2283,
+ * IssueOreRounding in ./invoice-lines): the company setting, read only for a
+ * row without a choice of its own, as getAmountToPay reads it for its "Att
+ * betala". (lib/invoices' companyOreRoundingFor reads the same, but
+ * bookkeeping does not import the invoicing block.)
  */
 async function issueOreRoundingOf(
   supabase: SupabaseClient,
   companyId: string,
-  invoice: Pick<Invoice, 'currency' | 'ore_rounding' | 'is_self_billed' | 'total'>,
-): Promise<IssueOreRounding | undefined> {
-  if (invoice.is_self_billed) return undefined
+  invoice: Pick<Invoice, 'currency' | 'ore_rounding' | 'total'>,
+): Promise<IssueOreRounding> {
   // Only a SEK total with öre can be rounded (getDisplayTotal); any other row
   // books the same lines whatever the setting says, so it costs no read.
   if (invoice.ore_rounding != null || !hasOreToRound(invoice)) return { company: null }
@@ -52,11 +52,6 @@ async function issueOreRoundingOf(
     .maybeSingle()
   if (error) throw dbError(error, 'company öresavrundning')
   return { company: (data as Pick<CompanySettings, 'ore_rounding'> | null) ?? null }
-}
-
-/** A SEK document whose total has öre: the only kind öresavrundning changes. */
-function hasOreToRound(document: Pick<Invoice, 'currency' | 'total'>): boolean {
-  return isKronorCurrency(document.currency) && !Number.isInteger(roundOre(Number(document.total) || 0))
 }
 
 // INVOICE_FX_RATE_MISSING, InvoiceFxRateMissingError, getRevenueAccount and
@@ -429,26 +424,22 @@ export async function createCreditNoteJournalEntry(
   /** See buildCreditNoteLines' options.deductionBookedSek. */
   options: { deductionBookedSek?: number | null } = {},
 ): Promise<JournalEntry | null> {
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
+  // A kreditfaktura mirrors the öresavrundning its original's issue booked
+  // (crm#2283), so the pair nets to zero on 1510 and 3740; an original issued
+  // at the exact total is credited at the exact total.
+  const [fiscalPeriodId, mirrorsIssueOre] = await Promise.all([
+    findFiscalPeriod(supabase, companyId, creditNote.invoice_date),
+    creditMirrorsIssueOre(supabase, companyId, creditNote),
+  ])
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for credit note date:', creditNote.invoice_date)
     return null
   }
 
-  // A kreditfaktura mirrors the öresavrundning its original's issue booked
-  // (crm#2283), so the pair nets to zero on 1510 and 3740; an original issued
-  // at the exact total is credited at the exact total. The mirror rounds
-  // because the original did, whatever the credit note's own flag or today's
-  // company setting says.
-  const mirrorsIssueOre = creditNote.credited_invoice_id && hasOreToRound(creditNote)
-    ? await creditMirrorsIssueOre(supabase, companyId, creditNote.credited_invoice_id)
-    : false
-  const lines = mirrorsIssueOre
-    ? buildCreditNoteLines({ ...creditNote, ore_rounding: true }, entityType, originalVoucherRef, {
-        ...options,
-        oreRounding: { company: null },
-      })
-    : buildCreditNoteLines(creditNote, entityType, originalVoucherRef, options)
+  const lines = buildCreditNoteLines(creditNote, entityType, originalVoucherRef, {
+    ...options,
+    oreRounding: mirrorsIssueOre ? { mirror: true } : undefined,
+  })
   // A credit of part of the share (the customer's, and what a payout booked)
   // takes back only that moms.
   const partOfShare = creditNoteDeductionSplit(creditNote, options.deductionBookedSek) !== null

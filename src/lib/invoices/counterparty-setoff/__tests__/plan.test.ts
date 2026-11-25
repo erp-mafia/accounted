@@ -63,7 +63,7 @@ describe('planSetoff', () => {
         amount: 1388,
         setoffDate: '2026-09-30',
         partyId: PARTY,
-        invoice: { id: 'inv-1', number: '2631', remainingBefore: 1388, remainingAfter: 0, statusAfter: 'paid', applied: 1388, oreRounding: 0 },
+        invoice: { id: 'inv-1', number: '2631', remainingBefore: 1388, remainingAfter: 0, statusAfter: 'paid', oreRounding: 0 },
         supplierInvoice: {
           id: 'si-1',
           number: 'SF-CE-202607',
@@ -119,7 +119,7 @@ describe('planSetoff', () => {
       setoffDate: TODAY,
       today: TODAY,
     })
-    expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', applied: 3136.18, oreRounding: 0.18 })
+    expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', oreRounding: 0.18 })
     expect(plan.ok && plan.plan.supplierInvoice.remainingAfter).toBe(876.13)
     expect(plan.ok && plan.plan.net).toEqual({ direction: 'we_pay', amount: 876.13 })
   })
@@ -132,16 +132,16 @@ describe('planSetoff', () => {
       setoffDate: TODAY,
       today: TODAY,
     })
-    expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', applied: 3135.82, oreRounding: -0.18 })
+    expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', oreRounding: -0.18 })
     expect(plan.ok && plan.plan.net).toEqual({ direction: 'we_pay', amount: 876.13 })
   })
 
   it('leaves a gap of a krona or more open, and sets off the exact remaining amount without rounding', () => {
     const base = { supplierInvoice: supplierInvoice(), setoffDate: TODAY, today: TODAY }
     const partial = planSetoff({ ...base, invoice: invoice(), amount: 1387 })
-    expect(partial.ok && partial.plan.invoice).toMatchObject({ remainingAfter: 1, statusAfter: 'partially_paid', applied: 1387, oreRounding: 0 })
+    expect(partial.ok && partial.plan.invoice).toMatchObject({ remainingAfter: 1, statusAfter: 'partially_paid', oreRounding: 0 })
     const exact = planSetoff({ ...base, invoice: invoice({ total: 3136.18, remaining: 3136.18 }) })
-    expect(exact.ok && exact.plan.invoice).toMatchObject({ remainingAfter: 0, applied: 3136.18, oreRounding: 0 })
+    expect(exact.ok && exact.plan.invoice).toMatchObject({ remainingAfter: 0, oreRounding: 0 })
     expect(exact.ok && exact.plan.amount).toBe(3136.18)
   })
 
@@ -156,38 +156,38 @@ describe('planSetoff', () => {
 
     it('set off for the rounded Att betala: 1510 cleared of all it carries, nothing on 3740', () => {
       const plan = planSetoff({ ...base, invoice: issued, amount: 1000 })
-      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', applied: 999.75, oreRounding: 0 })
+      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', oreRounding: 0 })
       expect(plan.ok && plan.plan.amount + plan.plan.invoice.oreRounding).toBe(1000)
       expect(plan.ok && plan.plan.net).toEqual({ direction: 'we_pay', amount: 3012.13 })
     })
 
     it('set off for the exact remaining amount: the issue öre comes back off 3740 (Dr 0,25)', () => {
       const plan = planSetoff({ ...base, invoice: issued, amount: 999.75 })
-      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, applied: 999.75, oreRounding: 0.25 })
+      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, oreRounding: 0.25 })
       expect(plan.ok && plan.plan.amount + plan.plan.invoice.oreRounding).toBe(1000)
     })
 
     it('set off short by öre: 3740 takes the gap and the issue öre together', () => {
       const plan = planSetoff({ ...base, invoice: issued, amount: 999 })
-      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, applied: 999.75, oreRounding: 1 })
+      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, oreRounding: 1 })
       expect(plan.ok && plan.plan.amount + plan.plan.invoice.oreRounding).toBe(1000)
     })
 
     it('a partial set-off clears its own kronor and leaves the öre to the settlement', () => {
       const plan = planSetoff({ ...base, invoice: issued, amount: 500 })
-      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 499.75, statusAfter: 'partially_paid', applied: 500, oreRounding: 0 })
+      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 499.75, statusAfter: 'partially_paid', oreRounding: 0 })
     })
 
     it('a part-paid invoice: the full set-off clears what is still carried', () => {
       const plan = planSetoff({ ...base, invoice: invoice({ total: 999.75, remaining: 499.75, paid: 500, carriedSek: 500 }), amount: 500 })
-      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, applied: 499.75, oreRounding: 0 })
+      expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, oreRounding: 0 })
       expect(plan.ok && plan.plan.amount + plan.plan.invoice.oreRounding).toBe(500)
     })
 
     it('an invoice whose issue verifikat booked no öre is unchanged', () => {
       const unbooked = invoice({ total: 999.75, remaining: 999.75, carriedSek: null })
       const plan = planSetoff({ ...base, invoice: unbooked, amount: 1000 })
-      expect(plan.ok && plan.plan.invoice).toMatchObject({ applied: 999.75, oreRounding: -0.25 })
+      expect(plan.ok && plan.plan.invoice).toMatchObject({ oreRounding: -0.25 })
       expect(plan.ok && plan.plan.amount + plan.plan.invoice.oreRounding).toBe(999.75)
     })
   })

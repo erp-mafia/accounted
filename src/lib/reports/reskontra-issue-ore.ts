@@ -18,9 +18,9 @@
  * in its total can have one, so only those are read.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
-import { invoiceCustomerShare } from '@/lib/bookkeeping/customer-share'
-import { fetchIssueReceivableSek, issueBookedOre } from '@/lib/bookkeeping/ledger-carried-sek'
+import { invoiceCustomerOutstanding } from '@/lib/bookkeeping/customer-share'
+import { hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
+import { fetchIssueBookedOre } from '@/lib/bookkeeping/ledger-carried-sek'
 import { roundOre } from '@/lib/money'
 
 /** The invoice fields the rule reads, as the reskontra population carries them. */
@@ -29,6 +29,7 @@ export interface IssueOreInvoice {
   currency: string | null
   total: number | string | null
   deduction_total: number | string | null
+  deduction_reclaimed_total?: number | string | null
   journal_entry_id: string | null
 }
 
@@ -38,17 +39,8 @@ export async function issueOreByInvoice(
   companyId: string,
   invoices: readonly IssueOreInvoice[],
 ): Promise<Map<string, number>> {
-  const candidates = invoices.filter(
-    (inv) => inv.journal_entry_id && isKronorCurrency(inv.currency) && !Number.isInteger(roundOre(Number(inv.total) || 0)),
-  )
-  const out = new Map<string, number>()
-  if (candidates.length === 0) return out
-  const issued = await fetchIssueReceivableSek(supabase, companyId, candidates.map((inv) => inv.id))
-  for (const inv of candidates) {
-    const ore = issueBookedOre(inv, issued.get(inv.id))
-    if (ore !== 0) out.set(inv.id, ore)
-  }
-  return out
+  const candidates = invoices.filter((inv) => inv.journal_entry_id && hasOreToRound(inv)).map((inv) => inv.id)
+  return candidates.length === 0 ? new Map() : fetchIssueBookedOre(supabase, companyId, candidates)
 }
 
 /**
@@ -66,9 +58,13 @@ export function withIssueOre(
 ): number {
   if (!ore) return receivable
   const total = Number(invoice.total) || 0
-  const share = invoiceCustomerShare({ total, deduction_total: Number(invoice.deduction_total) || 0 })
-  // What the customer still owes of its share: the open amount less
-  // Skatteverket's part of it.
-  const customerOpen = roundOre(outstanding - (total - share))
+  const customerOpen = invoiceCustomerOutstanding(
+    {
+      total,
+      deduction_total: Number(invoice.deduction_total) || 0,
+      deduction_reclaimed_total: Number(invoice.deduction_reclaimed_total) || 0,
+    },
+    roundOre(total - outstanding),
+  )
   return customerOpen === 0 ? receivable : roundOre(receivable - ore)
 }

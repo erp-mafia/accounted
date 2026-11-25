@@ -7,7 +7,8 @@ import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { invoicePaymentBusinessEvent } from '@/lib/bookkeeping/invoice-business-events'
-import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
+import { hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
+import { fetchIssueBookedOre } from '@/lib/bookkeeping/ledger-carried-sek'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -164,41 +165,6 @@ async function readCreditUsed(
   const rows = (data ?? []) as Array<{ amount: number | string | null; currency: string | null }>
   if (rows.some((row) => !isLedgerCurrency(row.currency))) return { ok: false, unreadable: true }
   return { ok: true, used: sumOre(rows.map((row) => Math.abs(Number(row.amount) || 0))) }
-}
-
-/**
- * The öresavrundning the credit note's own verifikat booked: its total
- * against what the verifikat credited 1510 (bookedOreRounding), 0 when it
- * booked none. Only a kronor credit with öre can carry one, so a whole-krona
- * credit costs no read; a verifikat no longer posted counts as none.
- */
-async function readCreditNoteIssueOre(
-  supabase: SupabaseClient,
-  companyId: string,
-  creditNote: RefundCreditNoteRow,
-): Promise<{ ok: true; ore: number } | { ok: false; error: unknown }> {
-  const total = roundOre(Number(creditNote.total) || 0)
-  if (!creditNote.journal_entry_id || !isLedgerCurrency(creditNote.currency) || Number.isInteger(total)) {
-    return { ok: true, ore: 0 }
-  }
-  const { data, error } = await supabase
-    .from('journal_entries')
-    .select('id, status, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
-    .eq('company_id', companyId)
-    .eq('id', creditNote.journal_entry_id)
-    .maybeSingle()
-  if (error) return { ok: false, error }
-  const entry = data as {
-    status: string
-    lines: Array<{ account_number: string; debit_amount: number | string | null; credit_amount: number | string | null }> | null
-  } | null
-  if (!entry || entry.status !== 'posted') return { ok: true, ore: 0 }
-  let receivable = 0
-  for (const line of entry.lines ?? []) {
-    if (line.account_number !== RECEIVABLE_ACCOUNT) continue
-    receivable += (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
-  }
-  return { ok: true, ore: bookedOreRounding(total, roundOre(receivable)) }
 }
 
 /**
@@ -363,28 +329,35 @@ export async function refundCreditNote(
   const futureDate = futurePaymentDateRefusal(refundDate)
   if (futureDate) return { ok: false, ...futureDate }
 
-  let original: { total: number; paid_amount: number | null } | null = null
-  if (creditNote.credited_invoice_id) {
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('id, total, paid_amount')
-      .eq('id', creditNote.credited_invoice_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (error) return { ok: false, code: 'DB_ERROR', error }
-    original = (data as { total: number; paid_amount: number | null } | null) ?? null
-  }
-
-  const creditUsed = await readCreditUsed(supabase, companyId, creditNote)
+  // Three independent reads: the original, the credit already used, and the
+  // öresavrundning the credit note's own verifikat booked (fetchIssueBookedOre,
+  // crm#2283; only a kronor credit with öre can carry one).
+  const [originalRead, creditUsed, issueOreRead] = await Promise.all([
+    creditNote.credited_invoice_id
+      ? supabase
+          .from('invoices')
+          .select('id, total, paid_amount')
+          .eq('id', creditNote.credited_invoice_id)
+          .eq('company_id', companyId)
+          .maybeSingle()
+      : { data: null, error: null },
+    readCreditUsed(supabase, companyId, creditNote),
+    hasOreToRound(creditNote)
+      ? fetchIssueBookedOre(supabase, companyId, [creditNote.id]).then(
+          (booked) => ({ ok: true as const, ore: booked.get(creditNote.id) ?? 0 }),
+          (error: unknown) => ({ ok: false as const, error }),
+        )
+      : { ok: true as const, ore: 0 },
+  ])
+  if (originalRead.error) return { ok: false, code: 'DB_ERROR', error: originalRead.error }
+  const original = (originalRead.data as { total: number; paid_amount: number | null } | null) ?? null
   if (!creditUsed.ok) {
     if ('error' in creditUsed) return { ok: false, code: 'DB_ERROR', error: creditUsed.error }
     return { ok: false, code: 'CREDIT_NOTE_REFUND_UNSUPPORTED', details: { reason: 'foreign_currency' } }
   }
+  if (!issueOreRead.ok) return { ok: false, code: 'DB_ERROR', error: issueOreRead.error }
 
-  const issueOre = await readCreditNoteIssueOre(supabase, companyId, creditNote)
-  if (!issueOre.ok) return { ok: false, code: 'DB_ERROR', error: issueOre.error }
-
-  const plan = planCreditNoteRefund(creditNote, original, creditUsed.used, issueOre.ore)
+  const plan = planCreditNoteRefund(creditNote, original, creditUsed.used, issueOreRead.ore)
   if (!plan.ok) return plan
 
   // The voucher takes off 1510 what it carries (ledgerOwed); the credit note
@@ -393,7 +366,7 @@ export async function refundCreditNote(
   const built = buildCreditNoteRefundLines(creditNote, plan.ledgerOwed, settlementAccountNumber, customLines)
   if (!built.ok) return built
   const { amount, description, lines } = built
-  const settled = issueOre.ore !== 0 && amount >= plan.ledgerOwed - ORE_TOLERANCE ? plan.owed : amount
+  const settled = amount >= plan.ledgerOwed - ORE_TOLERANCE ? plan.owed : amount
 
   if (!force) {
     const since = guardWindowStart(creditNote.invoice_date, refundDate)

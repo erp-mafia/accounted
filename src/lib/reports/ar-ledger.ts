@@ -154,14 +154,19 @@ export async function generateARLedger(
   // longer sits on 1513 (skatteverket-share.ts).
   const settled = skatteverketSettledByInvoice(invoices, isHistorical ? asOfDate : undefined)
   // The öresavrundning each invoice's issue verifikat put on 151x
-  // (reskontra-issue-ore.ts). A failed read leaves the figures as the
-  // invoices state them, off from 1510 by those öre only; `strict` throws.
-  let issueOre = new Map<string, number>()
-  try {
-    issueOre = await issueOreByInvoice(supabase, companyId, invoices)
-  } catch (err) {
-    if (options?.strict) throw err
-  }
+  // (reskontra-issue-ore.ts), read beside the originals the credit notes
+  // credit. A failed öre read leaves the figures as the invoices state them,
+  // off from 1510 by those öre only; `strict` throws.
+  const creditNoteIds = invoices.filter(isCreditNoteDocument).map((inv) => inv.id)
+  const [issueOre, creditedInvoiceOf] = await Promise.all([
+    issueOreByInvoice(supabase, companyId, invoices).catch((err: unknown) => {
+      if (options?.strict) throw err
+      return new Map<string, number>()
+    }),
+    creditNoteIds.length > 0
+      ? fetchCreditedInvoiceIds(supabase, companyId, creditNoteIds)
+      : Promise.resolve(new Map<string, string>()),
+  ])
 
   // Each row's open amount in its own currency, then each credit note set
   // against the invoice it credits (credited-pairs.ts): a fully credited
@@ -180,10 +185,6 @@ export async function generateARLedger(
       creditUsed.get(inv.id)
     ))
   }
-  const creditNoteIds = invoices.filter(isCreditNoteDocument).map((inv) => inv.id)
-  const creditedInvoiceOf = creditNoteIds.length > 0
-    ? await fetchCreditedInvoiceIds(supabase, companyId, creditNoteIds)
-    : new Map<string, string>()
   const paired = netCreditedPairs(invoices, ownOutstanding, creditedInvoiceOf)
 
   // Group by customer and calculate aging. An invoice without a customer
