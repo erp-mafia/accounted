@@ -12,7 +12,8 @@
  * public.cash_account_ledger_evidence (20261010210000) reads two kinds of
  * evidence per connected account and ledger account:
  *   transactions  how many of the account's unbooked bank rows have a posted
- *                 line there on the same date for the same signed amount;
+ *                 line there on the same date for the same signed amount, on
+ *                 a verifikat no bank row is linked to yet (20261125130000);
  *   balance       the day on which the bank's balance, rolled back, equals
  *                 the ledger account's balance to the ore.
  * This module turns those rows into suggestions. It never applies one: a

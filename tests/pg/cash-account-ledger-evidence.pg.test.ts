@@ -11,7 +11,8 @@ import {
 } from './fixtures'
 
 // pg-real coverage for 20261010210000_cash_account_ledger_evidence (crm#1066),
-// last replaced by 20261031110900 (the balance kind reads the ledger summaries):
+// replaced by 20261031110900 (the balance kind reads the ledger summaries) and
+// last by 20261125130000 (a verifikat a bank row is linked to is no evidence):
 // what the books say about which 19xx ledger account a connected bank account
 // belongs on. cash_account_ledger_evidence returns two kinds of row:
 // 'transactions' (unbooked bank rows matching a posted line by date and signed
@@ -236,6 +237,38 @@ describe('cash_account_ledger_evidence: bank rows against posted lines', () => {
     await bankRow(owner, account, -70, '2026-04-06')
 
     expect(of(await evidence(owner.companyId), account, 'transactions')).toEqual({ '1920': 1 })
+  })
+
+  it('leaves out a verifikat a bank row is already linked to, as the matcher does', async () => {
+    // An account that booked on 1931 for a while and was then moved to 1930
+    // on purpose. Each bank row arrived twice: one copy booked on 1931, the
+    // other still open. The open copies fit only verifikat that are taken, so
+    // they say nothing about where the account belongs.
+    const owner = await seedCompany()
+    const account = await connectedAccount(owner, '1931')
+    const days = ['2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08']
+    for (const [i, day] of days.entries()) {
+      const amount = -(120 + i)
+      const taken = await bankVoucher(owner, '1931', amount, day)
+      await bankRow(owner, account, amount, day, { journalEntryId: taken })
+      await bankRow(owner, account, amount, day)
+    }
+    // Taken through the 1:N door (transaction_voucher_links), where the
+    // booked row's own pointer stays empty.
+    const sliced = await bankVoucher(owner, '1931', -400, '2026-05-11')
+    const payer = await bankRow(owner, account, -400, '2026-05-11')
+    await getPool().query(
+      `INSERT INTO public.transaction_voucher_links (id, user_id, company_id, transaction_id, journal_entry_id, allocated_amount, role)
+       VALUES ($1, $2, $3, $4, $5, $6, 'bank_line')`,
+      [randomUUID(), owner.userId, owner.companyId, payer, sliced, -400],
+    )
+    await bankRow(owner, account, -400, '2026-05-11')
+    await getPool().query(`UPDATE public.cash_accounts SET ledger_account = '1930' WHERE id = $1`, [account])
+    // A verifikat nothing is linked to still counts.
+    await bankVoucher(owner, '1931', -90, '2026-05-12')
+    await bankRow(owner, account, -90, '2026-05-12')
+
+    expect(of(await evidence(owner.companyId), account, 'transactions')).toEqual({ '1931': 1 })
   })
 
   it('reads only enabled cash accounts a bank connection syncs onto', async () => {
