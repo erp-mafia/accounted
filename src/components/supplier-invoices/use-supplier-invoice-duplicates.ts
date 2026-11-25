@@ -1,11 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  duplicateLookupQuery,
-  type DuplicateLookupFields,
-  type SupplierInvoiceDuplicateLookup,
-} from '@/lib/supplier-invoices/duplicate-lookup'
+import { duplicateLookupQuery, type DuplicateLookupFields } from '@/lib/supplier-invoices/duplicate-lookup-query'
+import type { SupplierInvoiceDuplicateLookup } from '@/lib/supplier-invoices/duplicate-lookup'
 
 const DEBOUNCE_MS = 400
 /** The submit waits for the answer: never longer than this. */
@@ -33,8 +30,11 @@ async function fetchLookup(query: string): Promise<SupplierInvoiceDuplicateLooku
  *
  * `found` follows the fields, debounced, whoever fills them: typing and the
  * reading's prefill both go through the form values this is called with. It
- * is null until the answer to the fields as they are now is in, so an answer
- * to a number the person has typed past never shows.
+ * is null until the answer to the supplier, number and reference as they are
+ * now is in, so an answer to a number the person has typed past never shows.
+ * A changed date or amount only decides whether an invoice is the same
+ * document again: the answer before it names the same invoices and stays
+ * until the new one is in, so typing an amount does not blink the lines away.
  *
  * `check` answers for the submitted values without the debounce, sharing the
  * request with it: the submit asks it, so registering never runs ahead of a
@@ -42,20 +42,23 @@ async function fetchLookup(query: string): Promise<SupplierInvoiceDuplicateLooku
  */
 export function useSupplierInvoiceDuplicates(fields: DuplicateLookupFields) {
   const query = duplicateLookupQuery(fields)
-  const [answer, setAnswer] = useState<{ query: string; found: SupplierInvoiceDuplicateLookup } | null>(null)
+  const subject = subjectOf(fields)
+  const [answer, setAnswer] = useState<{ subject: string; found: SupplierInvoiceDuplicateLookup } | null>(null)
   const latestQuery = useRef(query)
   const asked = useRef<{ query: string; found: Promise<SupplierInvoiceDuplicateLookup | null> } | null>(null)
 
-  const lookUp = useCallback(async (wanted: string | null) => {
-    if (!wanted) return null
+  const lookUp = useCallback(async (wanted: string | null, wantedSubject: string | null) => {
+    if (!wanted || !wantedSubject) return null
     if (asked.current?.query !== wanted) asked.current = { query: wanted, found: fetchLookup(wanted) }
     const request = asked.current
     const found = await request.found
     if (!found) {
-      // Asked again next time.
+      // Asked again next time. An answer kept for another date or amount
+      // does not stand for these: no warning, as for any failed lookup.
       if (asked.current === request) asked.current = null
+      if (latestQuery.current === wanted) setAnswer(null)
     } else if (latestQuery.current === wanted) {
-      setAnswer({ query: wanted, found })
+      setAnswer({ subject: wantedSubject, found })
     }
     return found
   }, [])
@@ -63,11 +66,19 @@ export function useSupplierInvoiceDuplicates(fields: DuplicateLookupFields) {
   useEffect(() => {
     latestQuery.current = query
     if (!query) return
-    const timer = setTimeout(() => void lookUp(query), DEBOUNCE_MS)
+    const timer = setTimeout(() => void lookUp(query, subject), DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [query, lookUp])
+  }, [query, subject, lookUp])
 
-  const check = useCallback((forFields: DuplicateLookupFields) => lookUp(duplicateLookupQuery(forFields)), [lookUp])
+  const check = useCallback(
+    (forFields: DuplicateLookupFields) => lookUp(duplicateLookupQuery(forFields), subjectOf(forFields)),
+    [lookUp],
+  )
 
-  return { found: answer?.query === query ? answer.found : null, check }
+  return { found: answer && answer.subject === subject ? answer.found : null, check }
+}
+
+/** Which invoices an answer names: the query without the date and the amount. */
+function subjectOf(fields: DuplicateLookupFields): string | null {
+  return duplicateLookupQuery({ ...fields, total: null })
 }

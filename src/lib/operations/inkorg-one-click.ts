@@ -228,9 +228,9 @@ export interface OneClickInput {
   bookingReview?: { rules: BookingReviewRule[]; counterpartyKey: string; supplierKey?: string; amountSek: number | null }
   /**
    * The reading's payment reference is on one other live invoice of the
-   * matched supplier, under another number (referenceReuseNeedsAcknowledgement
-   * in lib/supplier-invoices/duplicate-lookup.ts), or that could not be read.
-   * Absent: it is not.
+   * matched supplier, under another number, or on one with the reading's date
+   * and total (needs_acknowledgement in lib/supplier-invoices/duplicate-lookup.ts),
+   * or that could not be read. Absent: it is not.
    */
   referenceToAcknowledge?: boolean
   /** Where the seller is, as the person answered; read only when the document names no country. */

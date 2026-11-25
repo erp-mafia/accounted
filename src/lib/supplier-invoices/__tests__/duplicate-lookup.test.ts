@@ -1,21 +1,21 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
-  duplicateLookupQuery,
   lookupSupplierInvoiceDuplicates,
+  readDuplicateNumberHolder,
   referenceReuseNeedsAcknowledgement,
-  registrationPassesReview,
-  type DuplicateLookupFields,
+  registeredInvoicePayment,
 } from '../duplicate-lookup'
+import { duplicateLookupQuery, registrationPassesReview, type DuplicateLookupFields } from '../duplicate-lookup-query'
 import { createSupplierInvoiceRowsDb, invoiceRow, voucherRow } from './supplier-invoice-rows-db'
 
 type Row = Record<string, unknown>
 
 function lookup(
-  tables: { supplier_invoices: Row[]; journal_entries?: Row[] },
-  input: { number?: string; reference?: string },
+  tables: { supplier_invoices: Row[]; journal_entries?: Row[]; payment_orders?: Row[]; supplier_payment_batch_items?: Row[] },
+  input: { number?: string; reference?: string; invoiceDate?: string; total?: number; currency?: string },
 ) {
-  const db = createSupplierInvoiceRowsDb({ journal_entries: [], ...tables })
+  const db = createSupplierInvoiceRowsDb({ journal_entries: [], payment_orders: [], supplier_payment_batch_items: [], ...tables })
   const found = lookupSupplierInvoiceDuplicates(db.supabase as unknown as SupabaseClient, 'company-1', {
     supplierId: 'supplier-1',
     ...input,
@@ -68,6 +68,35 @@ describe('duplicateLookupQuery', () => {
     expect(duplicateLookupQuery(fields({ payment_reference: 'enligt avtal' }))).toBeNull()
   })
 
+  it('sends the date, the amount to pay and the currency along with a reference: they tell the same document again', () => {
+    expect(
+      duplicateLookupQuery(
+        fields({ supplier_invoice_number: 'F-1', payment_reference: '12345678', invoice_date: '2026-11-05', total: 2185, currency: 'EUR' }),
+      ),
+    ).toBe('supplier_id=supplier-1&number=F-1&reference=12345678&invoice_date=2026-11-05&total=2185&currency=EUR')
+    expect(duplicateLookupQuery(fields({ payment_reference: '12345678', invoice_date: '2026-11-05', total: 4999.5 }))).toBe(
+      'supplier_id=supplier-1&reference=12345678&invoice_date=2026-11-05&total=4999.5&currency=SEK',
+    )
+  })
+
+  it('sends no date or amount in a currency no invoice is registered in: the route would refuse the whole lookup', () => {
+    expect(duplicateLookupQuery(fields({ payment_reference: '12345678', invoice_date: '2026-11-05', total: 2185, currency: 'PLN' }))).toBe(
+      'supplier_id=supplier-1&reference=12345678',
+    )
+  })
+
+  it('sends no date or amount without a reference, or before the date is a date', () => {
+    expect(duplicateLookupQuery(fields({ supplier_invoice_number: 'F-1', invoice_date: '2026-11-05', total: 2185 }))).toBe(
+      'supplier_id=supplier-1&number=F-1',
+    )
+    expect(duplicateLookupQuery(fields({ payment_reference: '12345678', invoice_date: '2026-11', total: 2185 }))).toBe(
+      'supplier_id=supplier-1&reference=12345678',
+    )
+    expect(duplicateLookupQuery(fields({ payment_reference: '12345678', invoice_date: '2026-11-05', total: null }))).toBe(
+      'supplier_id=supplier-1&reference=12345678',
+    )
+  })
+
   it.each(['owner', 'employee'] as const)('asks only the number when the %s paid: an utlägg has no reference to pay with', (payer) => {
     expect(duplicateLookupQuery(fields({ supplier_invoice_number: 'F-1', payment_reference: '12345678', payer }))).toBe(
       'supplier_id=supplier-1&number=F-1',
@@ -113,6 +142,7 @@ describe('lookupSupplierInvoiceDuplicates: the number', () => {
         ore_rounding: null,
         status: 'registered',
         voucher: { journal_entry_id: 'je-1', label: 'A71' },
+        payment: { state: 'unpaid' },
       },
       reference: null,
     })
@@ -185,8 +215,10 @@ describe('lookupSupplierInvoiceDuplicates: the payment reference', () => {
           ore_rounding: null,
           status: 'registered',
           voucher: { journal_entry_id: 'je-1', label: 'A71' },
+          payment: { state: 'unpaid' },
         },
         count: 1,
+        twin: null,
         needs_acknowledgement: true,
       },
     })
@@ -321,5 +353,278 @@ describe('lookupSupplierInvoiceDuplicates: whose invoices', () => {
         number: 'F-881',
       }),
     ).rejects.toMatchObject({ code: '57014' })
+  })
+})
+
+describe('registeredInvoicePayment', () => {
+  const TODAY = '2026-11-25'
+  const ORDER = { id: 'po-1', status: 'submitted', created_at: '2026-11-20T08:00:00Z', provider_status: null, provider_error_code: null }
+  const facts = (overrides: Record<string, unknown> = {}) => ({
+    status: 'registered',
+    is_credit_note: false,
+    bank_entered_at: null,
+    due_date: '2026-12-10',
+    remaining_amount: 2185,
+    paid_at: null,
+    paid_amount: 0,
+    open_payment: null,
+    ...overrides,
+  })
+
+  it('paid: the status says it, with the day it was paid when that is known', () => {
+    expect(registeredInvoicePayment(facts({ status: 'paid', paid_at: '2026-10-28T09:12:00Z', remaining_amount: 0 }), TODAY)).toEqual({
+      state: 'paid',
+      paid_at: '2026-10-28T09:12:00Z',
+    })
+    expect(registeredInvoicePayment(facts({ status: 'paid', remaining_amount: 0 }), TODAY)).toEqual({ state: 'paid', paid_at: null })
+  })
+
+  it('partly paid: how much has been paid', () => {
+    expect(registeredInvoicePayment(facts({ status: 'partially_paid', paid_amount: 1000, remaining_amount: 1185 }), TODAY)).toEqual({
+      state: 'partially_paid',
+      paid_amount: 1000,
+    })
+  })
+
+  it.each([
+    ['a bank payment at the bank', { payment_order: ORDER, batch: null }],
+    ['a bank payment waiting for its signature', { payment_order: { ...ORDER, status: 'approved' }, batch: null }],
+    ['a payment file', { payment_order: null, batch: { id: 'batch-1', created_at: '2026-11-20T08:00:00Z' } }],
+  ])('on its way in %s (the I betalning marker)', (_, open_payment) => {
+    expect(registeredInvoicePayment(facts({ open_payment }), TODAY)).toEqual({ state: 'in_payment' })
+  })
+
+  it('on its way while the "Inlagd i banken" tick holds, not once the invoice has fallen due unpaid', () => {
+    expect(registeredInvoicePayment(facts({ bank_entered_at: '2026-11-20T08:00:00Z' }), TODAY)).toEqual({ state: 'in_payment' })
+    expect(registeredInvoicePayment(facts({ bank_entered_at: '2026-11-01T08:00:00Z', due_date: '2026-11-10' }), TODAY)).toEqual({
+      state: 'unpaid',
+    })
+  })
+
+  it('a payment on its way is told before a part payment: what is left is being paid', () => {
+    expect(
+      registeredInvoicePayment(facts({ status: 'partially_paid', paid_amount: 1000, open_payment: { payment_order: ORDER, batch: null } }), TODAY),
+    ).toEqual({ state: 'in_payment' })
+  })
+
+  it.each(['registered', 'approved', 'overdue', 'disputed'])('not paid: a live %s invoice that nothing covers', (status) => {
+    expect(registeredInvoicePayment(facts({ status }), TODAY)).toEqual({ state: 'unpaid' })
+  })
+})
+
+describe('lookupSupplierInvoiceDuplicates: where the named invoice\'s payment stands', () => {
+  it('a paid invoice: paid, on the day it was, and no payment instruction is read', async () => {
+    const holder = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'paid', paid_at: '2026-10-28T09:12:00Z', paid_amount: 1250, remaining_amount: 0 })
+    const { db, found } = lookup({ supplier_invoices: [holder] }, { number: 'EX-1042' })
+
+    expect((await found).number?.payment).toEqual({ state: 'paid', paid_at: '2026-10-28T09:12:00Z' })
+    expect(db.tables()).not.toContain('payment_orders')
+    expect(db.tables()).not.toContain('supplier_payment_batch_items')
+  })
+
+  it('a part-paid invoice: what has been paid', async () => {
+    const holder = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'partially_paid', paid_amount: 500, remaining_amount: 750 })
+    const { found } = lookup({ supplier_invoices: [holder] }, { number: 'EX-1042' })
+
+    expect((await found).number?.payment).toEqual({ state: 'partially_paid', paid_amount: 500 })
+  })
+
+  it('an invoice an open bank payment or payment file covers: in a payment, read for the invoices the answer names', async () => {
+    const ordered = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'approved' })
+    const filed = invoiceRow({ supplier_invoice_number: 'EX-0990', payment_reference: '5550001' })
+    const { db, found } = lookup(
+      {
+        supplier_invoices: [ordered, filed],
+        payment_orders: [
+          { id: 'po-1', company_id: 'company-1', supplier_invoice_id: ordered.id, status: 'awaiting_signature', created_at: '2026-11-20T08:00:00Z', supplier_invoice_payment_id: null, provider_status: null, provider_error_code: null },
+        ],
+        supplier_payment_batch_items: [
+          { company_id: 'company-1', supplier_invoice_id: filed.id, batch: { id: 'batch-1', status: 'created', created_at: '2026-11-21T08:00:00Z' } },
+        ],
+      },
+      { number: 'EX-1042', reference: '5550001' },
+    )
+
+    const answer = await found
+    expect(answer.number?.payment).toEqual({ state: 'in_payment' })
+    expect(answer.reference?.invoice.payment).toEqual({ state: 'in_payment' })
+    expect(db.findCalls('payment_orders', 'in')[0]).toEqual(['supplier_invoice_id', [ordered.id, filed.id]])
+  })
+
+  it('a cancelled payment file or a failed bank payment covers nothing: not paid', async () => {
+    const holder = invoiceRow({ supplier_invoice_number: 'EX-1042' })
+    const { found } = lookup(
+      {
+        supplier_invoices: [holder],
+        payment_orders: [
+          { id: 'po-1', company_id: 'company-1', supplier_invoice_id: holder.id, status: 'failed', created_at: '2026-11-20T08:00:00Z', supplier_invoice_payment_id: null, provider_status: null, provider_error_code: null },
+        ],
+        supplier_payment_batch_items: [
+          { company_id: 'company-1', supplier_invoice_id: holder.id, batch: { id: 'batch-1', status: 'cancelled', created_at: '2026-11-21T08:00:00Z' } },
+        ],
+      },
+      { number: 'EX-1042' },
+    )
+
+    expect((await found).number?.payment).toEqual({ state: 'unpaid' })
+  })
+})
+
+describe('lookupSupplierInvoiceDuplicates: the same document again (a twin)', () => {
+  // A supplier with one OCR on every invoice and no invoice numbers, as an insurer's Betalningsunderlag.
+  const period = (invoice_date: string, overrides: Row = {}) =>
+    invoiceRow({ supplier_invoice_number: null, payment_reference: '5550001', invoice_date, total: 2185, ...overrides })
+
+  it('among three invoices on the reference, the one with the same date and amount asks, and is named', async () => {
+    const september = period('2026-09-05')
+    const october = period('2026-10-05', { status: 'paid', paid_at: '2026-10-28T09:12:00Z', paid_amount: 2185, remaining_amount: 0, registration_journal_entry_id: 'je-1' })
+    const november = period('2026-11-05')
+    const { found } = lookup(
+      { supplier_invoices: [september, october, november], journal_entries: [voucherRow({ voucher_number: 64 })] },
+      { reference: '5550001', invoiceDate: '2026-10-05', total: 2185, currency: 'SEK' },
+    )
+
+    const reuse = (await found).reference
+    expect(reuse).toMatchObject({ count: 3, needs_acknowledgement: true, invoice: { id: november.id } })
+    expect(reuse?.twin).toMatchObject({
+      id: october.id,
+      supplier_invoice_number: null,
+      arrival_number: october.arrival_number,
+      voucher: { label: 'A64' },
+      payment: { state: 'paid', paid_at: '2026-10-28T09:12:00Z' },
+    })
+  })
+
+  it('the next period\'s invoice on the reference is not asked about: another date', async () => {
+    const { found } = lookup(
+      { supplier_invoices: [period('2026-09-05'), period('2026-10-05'), period('2026-11-05')] },
+      { reference: '5550001', invoiceDate: '2026-12-05', total: 2185 },
+    )
+
+    expect((await found).reference).toMatchObject({ count: 3, twin: null, needs_acknowledgement: false })
+  })
+
+  it('the same date with another amount, or another currency, is not a twin', async () => {
+    const rows = [period('2026-09-05'), period('2026-10-05'), period('2026-11-05', { currency: 'EUR' })]
+    const otherAmount = lookup({ supplier_invoices: rows }, { reference: '5550001', invoiceDate: '2026-10-05', total: 2185.01 })
+    expect((await otherAmount.found).reference).toMatchObject({ twin: null, needs_acknowledgement: false })
+
+    const otherCurrency = lookup({ supplier_invoices: rows }, { reference: '5550001', invoiceDate: '2026-11-05', total: 2185, currency: 'SEK' })
+    expect((await otherCurrency.found).reference).toMatchObject({ twin: null, needs_acknowledgement: false })
+
+    const sameCurrency = lookup({ supplier_invoices: rows }, { reference: '5550001', invoiceDate: '2026-11-05', total: 2185, currency: 'eur' })
+    expect((await sameCurrency.found).reference?.twin?.id).toBe(rows[2].id)
+  })
+
+  it('compares the amount the list shows: öresavrundning applied', async () => {
+    const rounded = period('2026-10-05', { total: 2184.6, ore_rounding: true })
+    const twin = lookup({ supplier_invoices: [period('2026-09-05'), rounded] }, { reference: '5550001', invoiceDate: '2026-10-05', total: 2185 })
+    expect((await twin.found).reference?.twin?.id).toBe(rounded.id)
+
+    const exact = lookup({ supplier_invoices: [period('2026-09-05'), rounded] }, { reference: '5550001', invoiceDate: '2026-10-05', total: 2184.6 })
+    expect((await exact.found).reference?.twin).toBeNull()
+  })
+
+  it('credited and reversed invoices are no twin', async () => {
+    const { found } = lookup(
+      {
+        supplier_invoices: [
+          period('2026-09-05'),
+          period('2026-11-05'),
+          period('2026-10-05', { status: 'credited' }),
+          period('2026-10-05', { status: 'reversed' }),
+        ],
+      },
+      { reference: '5550001', invoiceDate: '2026-10-05', total: 2185 },
+    )
+
+    expect((await found).reference).toMatchObject({ count: 2, twin: null, needs_acknowledgement: false })
+  })
+
+  it('on the only other invoice the twin is named instead of the reuse', async () => {
+    const only = period('2026-10-05')
+    const { found } = lookup({ supplier_invoices: [only] }, { reference: '5550001', invoiceDate: '2026-10-05', total: 2185 })
+
+    expect((await found).reference).toMatchObject({ count: 1, needs_acknowledgement: true, twin: { id: only.id }, invoice: { id: only.id } })
+  })
+
+  it('finds a twin older than the newest candidates the reference read returns, on its own date', async () => {
+    // A supplier that has invoiced on the reference every day: 200 newer invoices fill the read.
+    const newer = Array.from({ length: 200 }, (_, i) =>
+      period(new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), { total: 999 }),
+    )
+    const older = period('2025-06-05', { status: 'paid', paid_at: '2025-06-20T10:00:00Z', remaining_amount: 0 })
+    const { db, found } = lookup({ supplier_invoices: [...newer, older] }, { reference: '5550001', invoiceDate: '2025-06-05', total: 2185 })
+
+    expect((await found).reference).toMatchObject({ count: 200, needs_acknowledgement: true, twin: { id: older.id, payment: { state: 'paid' } } })
+    expect(db.findCalls('supplier_invoices', 'eq')).toContainEqual(['invoice_date', '2025-06-05'])
+  })
+
+  it('asks no second read while the reference read holds every candidate', async () => {
+    const { db, found } = lookup(
+      { supplier_invoices: [period('2026-09-05'), period('2026-10-05')] },
+      { reference: '5550001', invoiceDate: '2026-12-05', total: 2185 },
+    )
+
+    expect((await found).reference?.twin).toBeNull()
+    expect(db.findCalls('supplier_invoices', 'eq').filter(([column]) => column === 'invoice_date')).toEqual([])
+  })
+
+  it('looks for no twin without both the date and the amount', async () => {
+    const rows = [period('2026-09-05'), period('2026-10-05')]
+    expect((await lookup({ supplier_invoices: rows }, { reference: '5550001', invoiceDate: '2026-10-05' }).found).reference?.twin).toBeNull()
+    expect((await lookup({ supplier_invoices: rows }, { reference: '5550001', total: 2185 }).found).reference?.twin).toBeNull()
+  })
+})
+
+describe('readDuplicateNumberHolder: what the 409 names', () => {
+  function read(tables: { supplier_invoices: Row[]; journal_entries?: Row[] }, number: string | null = 'EX-1042') {
+    const db = createSupplierInvoiceRowsDb({ journal_entries: [], ...tables })
+    return readDuplicateNumberHolder(db.supabase as unknown as SupabaseClient, 'company-1', 'supplier-1', number)
+  }
+
+  it('the invoice with the number: whether it is paid, what is left, and the verifikat it is on', async () => {
+    const holder = invoiceRow({
+      supplier_invoice_number: 'EX-1042',
+      status: 'paid',
+      paid_at: '2026-10-28T09:12:00Z',
+      remaining_amount: 0,
+      registration_journal_entry_id: 'je-1',
+    })
+
+    expect(await read({ supplier_invoices: [holder], journal_entries: [voucherRow()] })).toEqual({
+      id: holder.id,
+      supplier_invoice_number: 'EX-1042',
+      status: 'paid',
+      credit_note_id: null,
+      paid_at: '2026-10-28T09:12:00Z',
+      remaining_amount: 0,
+      voucher: { journal_entry_id: 'je-1', label: 'A71' },
+    })
+  })
+
+  it('names the live re-issue when a credited original carries the number too', async () => {
+    const original = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'credited' })
+    const reissue = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'approved', remaining_amount: 1250 })
+
+    expect(await read({ supplier_invoices: [original, reissue] })).toMatchObject({
+      id: reissue.id,
+      status: 'approved',
+      credit_note_id: null,
+      paid_at: null,
+      remaining_amount: 1250,
+    })
+  })
+
+  it('a credited one alone names its credit note, so the editor can offer to undo the crediting', async () => {
+    const holder = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'credited' })
+    const creditNote = invoiceRow({ supplier_invoice_number: 'KR-1', is_credit_note: true, credited_invoice_id: holder.id })
+
+    expect(await read({ supplier_invoices: [holder, creditNote] })).toMatchObject({ id: holder.id, credit_note_id: creditNote.id, voucher: null })
+  })
+
+  it('nothing without a number, or once the row is gone', async () => {
+    expect(await read({ supplier_invoices: [invoiceRow({ supplier_invoice_number: 'EX-1042' })] }, null)).toBeNull()
+    expect(await read({ supplier_invoices: [] })).toBeNull()
   })
 })

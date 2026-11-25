@@ -2237,12 +2237,17 @@ export const CreateSupplierInvoiceSchema = z.object({
 // (company_id, supplier_id, supplier_invoice_number), which excludes
 // credited/reversed invoices, so the advisory never warns on the re-issue
 // pattern the index was widened to allow. The payment reference is looked
-// for among the same live invoices; the number, the reference or both.
+// for among the same live invoices; the number, the reference or both. The
+// invoice date and the amount to pay (with its currency, SEK when omitted)
+// look for the same document again among the invoices with the reference.
 export const SupplierInvoiceExistsQuerySchema = z
   .object({
     supplier_id: uuid,
     number: z.string().min(1).max(200).optional(),
     reference: z.string().min(1).max(200).optional(),
+    invoice_date: isoDate.optional(),
+    total: z.coerce.number().finite().optional(),
+    currency: CurrencySchema.optional(),
   })
   .refine((query) => query.number !== undefined || query.reference !== undefined, {
     path: ['number'],
