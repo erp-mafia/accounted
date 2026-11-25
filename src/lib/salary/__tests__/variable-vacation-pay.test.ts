@@ -366,6 +366,35 @@ describe('semesterlön for rörliga lönedelar paid with the salary under a koll
     expect(result.owed).toMatchObject({ variablePay: 6000, owed: 720, paidWithSalary: 720, unpaid: 0 })
   })
 
+  it('a year a correction lowered below what was paid keeps the surplus: never set off against the next year', () => {
+    const runs = [
+      // 2025: bonus 10 000 paid with its semesterlön, then 5 000 of it clawed back.
+      run({ paymentDate: '2025-06-25', variablePay: 10000, paidWithSalary: 1200 }),
+      run({ paymentDate: '2025-09-25', variablePay: -5000 }),
+      run({ paymentDate: '2026-05-25', variablePay: 10000 }),
+    ]
+    // The 2026 semesterlön is 1 200 at the year end, in a final pay, and in the payout after it.
+    expect(unpaidVariableVacationPayAtYearEnd({ closingYearStart: '2026-01-01', rate: 0.12, runs }).unpaid).toBe(1200)
+    const finalPay = payslipVariableVacationPay({
+      paymentDate: '2026-12-25',
+      basis: 'calendar',
+      rate: 0.12,
+      runs,
+      finalSettlement: true,
+      thisRunVariablePay: 0,
+    })
+    expect(finalPay.owed.unpaid).toBe(1200)
+    const payout = payslipVariableVacationPay({
+      paymentDate: '2027-01-25',
+      basis: 'calendar',
+      rate: 0.12,
+      runs,
+      finalSettlement: false,
+      thisRunVariablePay: 0,
+    })
+    expect(payout.owed.unpaid).toBe(1200)
+  })
+
   it('lowers the year-end liability the same way', () => {
     const result = unpaidVariableVacationPayAtYearEnd({
       closingYearStart: '2026-01-01',

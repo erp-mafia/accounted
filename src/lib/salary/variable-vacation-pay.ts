@@ -325,6 +325,13 @@ export interface VariableVacationPayWindow {
   /** Payouts made in [paidFrom, paidTo) settle it. */
   paidFrom: string
   paidTo: string
+  /**
+   * The start of the second semesterår when the earned window spans two.
+   * What was paid with the salary settles its own year only: a year whose
+   * variable pay a later correction lowered below what was paid keeps the
+   * surplus, which is never set off against the next year's.
+   */
+  splitAt?: string
 }
 
 export interface VariableVacationPayOwed {
@@ -378,10 +385,25 @@ export function variableVacationPayOwed(input: {
       .filter((run) => run.status !== 'corrected' && run.paymentDate >= window.paidFrom && run.paymentDate < window.paidTo)
       .map((run) => run.payout),
   )
-  const paidWithSalary = sumOre([
-    ...dueInEarnedWindow.map((run) => settledWithSalary(run.paidWithSalary ?? 0, run.variablePay, rate)),
-    settledWithSalary(input.extraPaidWithSalary ?? 0, extra, rate),
-  ])
+  // Per semesterår, at most that year's own semesterlön: the extra payslip
+  // (a final pay) belongs to the last year of the window.
+  const years = window.splitAt
+    ? [
+        { from: window.earnedFrom, to: window.splitAt, last: false },
+        { from: window.splitAt, to: window.earnedTo, last: true },
+      ]
+    : [{ from: window.earnedFrom, to: window.earnedTo, last: true }]
+  const paidWithSalary = sumOre(
+    years.map((year) => {
+      const yearRuns = dueInEarnedWindow.filter((run) => run.paymentDate >= year.from && run.paymentDate < year.to)
+      const settled = sumOre([
+        ...yearRuns.map((run) => settledWithSalary(run.paidWithSalary ?? 0, run.variablePay, rate)),
+        year.last ? settledWithSalary(input.extraPaidWithSalary ?? 0, extra, rate) : 0,
+      ])
+      const yearVariablePay = sumOre([...yearRuns.map((run) => run.variablePay), year.last ? extra : 0])
+      return Math.min(settled, Math.max(0, roundOre(yearVariablePay * rate)))
+    }),
+  )
   const alreadyPaid = sumOre([paidOut, paidWithSalary])
   const owed = roundOre(variablePay * rate)
   return {
@@ -437,7 +459,13 @@ export function payslipVariableVacationPay(input: {
   const owed = variableVacationPayOwed({
     runs: input.runs,
     rate: input.rate,
-    window: { earnedFrom: previousStart, earnedTo: coveredTo, paidFrom: currentStart, paidTo: currentEnd },
+    window: {
+      earnedFrom: previousStart,
+      earnedTo: coveredTo,
+      paidFrom: currentStart,
+      paidTo: currentEnd,
+      ...(input.finalSettlement ? { splitAt: currentStart } : {}),
+    },
     extraVariablePay: input.finalSettlement ? input.thisRunVariablePay : 0,
     extraPaidWithSalary: input.finalSettlement ? (input.thisRunPaidWithSalary ?? 0) : 0,
   })
@@ -466,6 +494,7 @@ export function unpaidVariableVacationPayAtYearEnd(input: {
       earnedTo: closingEnd,
       paidFrom: input.closingYearStart,
       paidTo: closingEnd,
+      splitAt: input.closingYearStart,
     },
   })
 }
