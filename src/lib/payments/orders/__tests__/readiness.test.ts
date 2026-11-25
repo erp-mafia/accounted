@@ -82,13 +82,23 @@ describe('verificationStep', () => {
   it.each<[VerificationState, ReturnType<typeof verificationStep>]>([
     ['not_started', 'verify'],
     ['form_open', 'new_link'],
-    ['awaiting_signatory', 'wait'],
+    ['awaiting_signatory', 'new_link'],
     ['link_expired', 'new_link'],
     ['valid', 'none'],
     ['expiring', 'renew'],
     ['expired', 'renew'],
   ])('%s without a form at hand: %s', (state, step) => {
     expect(verificationStep(state)).toBe(step)
+  })
+
+  it('leaves no unverified state without a way forward when the link is not at hand', () => {
+    // A form handed to a firmatecknare (mailed or copied) whose link is lost
+    // must not hold the company until the 24 hours pass: the Koppla banken
+    // step offers a new link in that state, and so does every other surface.
+    for (const state of VERIFICATION_STATES) {
+      if (state === 'valid') continue
+      expect(['verify', 'new_link', 'renew']).toContain(verificationStep(state))
+    }
   })
 
   it('opens the form again while it is out and its link is at hand', () => {
